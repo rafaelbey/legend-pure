@@ -86,6 +86,9 @@ Class <<temporal.processingtemporal>> meta::relational::tests::milestoning::Trad
    kerberos : String[1];
    certifications : Certification[*];
    location : Location[0..1];
+
+   isEligible(processingDate: DateTime[1]){if($this.certifications($processingDate)->exists(c|$c.name->toOne()->equalIgnoreCase('SRCE')), |true, |false)}: Boolean[1];
+  //  isEligible(processingDate: DateTime[1]){if($this.certifications($processingDate)->exists(c|$c.name->toOne()->equalIgnoreCase('SRCE')), |true, |false)}: Boolean[1];
 }
 
 Class <<temporal.processingtemporal>> meta::relational::tests::milestoning::Certification{

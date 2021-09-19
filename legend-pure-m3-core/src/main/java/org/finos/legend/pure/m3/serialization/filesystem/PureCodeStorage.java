@@ -60,6 +60,7 @@ import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 
 public class PureCodeStorage implements MutableCodeStorage
 {
@@ -923,9 +924,22 @@ public class PureCodeStorage implements MutableCodeStorage
             {
                 svnCodeRepositories.add((SVNCodeRepository)repository);
             }
-            else if (repository instanceof PlatformCodeRepository || repository instanceof GenericCodeRepository)
+            else if (repository instanceof PlatformCodeRepository) // || repository instanceof GenericCodeRepository)
             {
                 codeStorages.add(new ClassLoaderCodeStorage(repository));
+            }
+            else if(repository instanceof GenericCodeRepository)
+            {
+                String repoLocation = System.getProperty("legend.pure.repo.location");
+                if (repoLocation != null)
+                {
+                    String repoName = repository.getName().replace('_', '-');
+                    codeStorages.add(new MutableFSCodeStorage(repository, Paths.get(repoLocation + "\\legend-pure-code-compiled-" + repoName + "\\src\\main\\resources\\" + repository.getName())));
+                }
+                else
+                {
+                    codeStorages.add(new ClassLoaderCodeStorage(repository));
+                }
             }
             else if (repository instanceof ScratchCodeRepository)
             {

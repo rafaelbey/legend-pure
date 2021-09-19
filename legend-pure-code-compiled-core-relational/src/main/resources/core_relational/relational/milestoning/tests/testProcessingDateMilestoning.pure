@@ -13,7 +13,10 @@
 // limitations under the License.
 
 import meta::relational::functions::asserts::*;
+import meta::relational::functions::pureToSqlQuery::*;
+import meta::relational::functions::sqlQueryToString::*;
 import meta::relational::mapping::*;
+import meta::relational::runtime::*;
 import meta::relational::tests::milestoning::*;
 import meta::relational::tests::*;
 
@@ -34,9 +37,49 @@ function <<test.Test>> meta::relational::tests::milestoning::processingDate::tes
 
 function <<test.Test>> meta::relational::tests::milestoning::processingDate::testProcessingTemporalPropertyQuery():Boolean[1]
 {
-   let processingDate = %2015-10-16;
-   let result = execute(|Trader.all($processingDate)->filter(t|$t.certifications($processingDate).name->contains(['SRCE'])), milestoningmap, testRuntime(), meta::pure::router::extension::defaultRelationalExtensions());
-   assertSameSQL('select "root".kerberos as "pk_0", "root".kerberos as "kerberos", \'2015-10-16\' as "k_processingDate" from TraderTable as "root" where exists(select 1 from CertificationTable as "certificationtable_0" where "certificationtable_0".name = \'SRCE\' and "root".kerberos = "certificationtable_0".kerberos and "certificationtable_0".in_z <= \'2015-10-16\' and "certificationtable_0".out_z > \'2015-10-16\') and "root".in_z <= \'2015-10-16\' and "root".out_z > \'2015-10-16\'', $result);
+  //  meta::relational::tests::milestoning::initDatabase();
+  //  let processingDate = %2015-10-16;
+  //  let processingDate = %2022-10-16;
+  let processingDate = %8888-12-01T00:00:00.000;
+  //  let result = execute(|Trader.all($processingDate)->filter(t|$t.certifications($processingDate).name->contains(['SRCE'])), milestoningmap, testRuntime(), meta::pure::router::extension::defaultRelationalExtensions());
+  //  assertSameSQL('select "root".kerberos as "pk_0", "root".kerberos as "kerberos", \'2015-10-16\' as "k_processingDate" from TraderTable as "root" where exists(select 1 from CertificationTable as "certificationtable_0" where "certificationtable_0".name = \'SRCE\' and "root".kerberos = "certificationtable_0".kerberos and "certificationtable_0".in_z <= \'2015-10-16\' and "certificationtable_0".out_z > \'2015-10-16\') and "root".in_z <= \'2015-10-16\' and "root".out_z > \'2015-10-16\'', $result);
+   let extensions = meta::pure::router::extension::defaultRelationalExtensions();
+   let runtime = testRuntime();
+   let mapping = milestoningmap;
+   let context = ^RelationalExecutionContext();   
+   let debug = noDebug();
+
+   let op = {|
+              Trader.all($processingDate)
+                    // ->filter(t|$t.certifications($processingDate).name->contains(['SRCE']))
+                    ->project(
+                        [ 
+                            t| $t.kerberos,
+                            // t| if($t.certifications($processingDate)->exists(c|$c.name->toOne()->equalIgnoreCase('SRCE')), |true, |false),
+                            t| $t.isEligible($processingDate),
+                            t| if($t.kerberos->equal(true), |true, |false)
+                        ], 
+                        [ 
+                            'kerberos',
+                            'isEligible',
+                            'isCompliant'
+                        ]
+                      )
+                    ->distinct()
+            }->evaluateAndDeactivate();
+   
+   let routed = $op->routeFunction($mapping, $runtime, $context, $extensions, $debug);
+   let routedFunction = $routed.functions->evaluateAndDeactivate();
+   let cluster = $routedFunction.expressionSequence->evaluateAndDeactivate()->cast(@meta::pure::router::clustering::ClusteredValueSpecification);
+   let fe = $cluster.val->toOne()->cast(@FunctionExpression);
+      
+   let sql = toSQLQuery($fe, $mapping, ^Map<String, List<Any>>(), $context, $debug, $extensions);
+   
+   let sqlString = $sql->sqlQueryToString(DatabaseType.MemSQL, $extensions);
+
+   print($sqlString);
+
+   true;
 }
 
 function <<test.Test>> meta::relational::tests::milestoning::processingDate::testProcessingTemporalPropertyPropagationInQuery():Boolean[1]
