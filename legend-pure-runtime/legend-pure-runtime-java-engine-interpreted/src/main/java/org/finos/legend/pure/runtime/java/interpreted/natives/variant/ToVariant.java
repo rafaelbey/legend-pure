@@ -54,7 +54,7 @@ public class ToVariant extends NativeFunction
 
         if (values.isEmpty())
         {
-            variantInstance = VariantInstanceImpl.newVariant(VariantInstanceImpl.OBJECT_MAPPER.nullNode(), this.repository, processorSupport);
+            variantInstance = null;
         }
         else if (values.size() == 1)
         {

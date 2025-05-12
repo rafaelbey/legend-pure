@@ -39,7 +39,7 @@ public class ToVariant extends AbstractNativeFunctionGeneric
 
         if (CompiledSupport.isEmpty(object))
         {
-            node = VariantInstanceImpl.OBJECT_MAPPER.nullNode();
+            return null;
         }
         else
         {

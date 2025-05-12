@@ -21,11 +21,11 @@ native function
     {
         doc.doc='Converts the given value to its variant representation.'
     }
-meta::pure::functions::variant::convert::toVariant(value: Any[*]): Variant[1];
+meta::pure::functions::variant::convert::toVariant(value: Any[*]): Variant[0..1];
 
 function <<PCT.test>> meta::pure::functions::variant::convert::tests::toVariant::testEmpty<Z|y>(f:Function<{Function<{->Z[y]}>[1]->Z[y]}>[1]):Boolean[1]
 {
-    assertEquals('null', $f->eval(|toVariant([]))->toString());
+    assertEquals([], $f->eval(|toVariant([])));
 }
 
 function <<PCT.test>> meta::pure::functions::variant::convert::tests::toVariant::testInteger<Z|y>(f:Function<{Function<{->Z[y]}>[1]->Z[y]}>[1]):Boolean[1]
@@ -65,7 +65,7 @@ function <<PCT.test>> meta::pure::functions::variant::convert::tests::toVariant:
 
 function <<PCT.test>> meta::pure::functions::variant::convert::tests::toVariant::testListOfVariants<Z|y>(f:Function<{Function<{->Z[y]}>[1]->Z[y]}>[1]):Boolean[1]
 {
-    assertEquals('[1,2,3]', $f->eval(|toVariant(list([1,2,3]->map(x | $x->toVariant()))))->toString());
+    assertEquals('[1,2,3]', $f->eval(|toVariant(list([1->toVariant(), 2->toVariant(), 3->toVariant()])))->toString());
 }
 
 function <<PCT.test>> meta::pure::functions::variant::convert::tests::toVariant::testMapWithPrimitiveValues<Z|y>(f:Function<{Function<{->Z[y]}>[1]->Z[y]}>[1]):Boolean[1]
