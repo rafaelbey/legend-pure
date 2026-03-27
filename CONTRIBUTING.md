@@ -46,7 +46,7 @@ Run the validation: `./scripts/check-copyright.sh`
 2. **Tests** (`tests/`): Write failing tests first (TDD)
 3. **Lexer** (`crates/lexer/`): Add tokens if new syntax requires them
 4. **Parser** (`crates/parser/`): Implement parsing to produce AST nodes
-5. **Emitter** (`crates/emitter/`): Implement AST → Protocol JSON conversion
+5. **Protocol** (`crates/protocol/`): Implement AST ↔ Protocol JSON conversion
 6. **Snapshots**: Run `cargo insta review` to approve new golden files
 
 ## Tracing Guidelines
@@ -54,6 +54,6 @@ Run the validation: `./scripts/check-copyright.sh`
 - `ast` crate: No tracing (pure data)
 - `lexer`: `trace` for tokens, `debug` for state transitions
 - `parser`: `#[instrument]` on grammar rule methods (`debug` level)
-- `emitter`: `debug` per element emission
+- `protocol`: `debug` per element conversion
 - `jni`: `info` for call boundaries, `error` for failures
 - **Never** log at `info` or above in hot paths

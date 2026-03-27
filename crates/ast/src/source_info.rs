@@ -125,31 +125,6 @@ pub trait Spanned {
     fn source_info(&self) -> &SourceInfo;
 }
 
-/// Convenience macro to implement [`Spanned`] for a struct that has a
-/// `source_info: SourceInfo` field.
-///
-/// # Examples
-///
-/// ```ignore
-/// impl_spanned!(MyNode);
-/// // expands to:
-/// // impl Spanned for MyNode {
-/// //     fn source_info(&self) -> &SourceInfo { &self.source_info }
-/// // }
-/// ```
-#[macro_export]
-macro_rules! impl_spanned {
-    ($($t:ty),+ $(,)?) => {
-        $(
-            impl $crate::source_info::Spanned for $t {
-                fn source_info(&self) -> &$crate::source_info::SourceInfo {
-                    &self.source_info
-                }
-            }
-        )+
-    };
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,11 +159,10 @@ mod tests {
         assert_eq!(merged.end_column, 20);
     }
 
+    #[derive(crate::Spanned)]
     struct TestNode {
         source_info: SourceInfo,
     }
-
-    impl_spanned!(TestNode);
 
     #[test]
     fn test_impl_spanned_macro() {

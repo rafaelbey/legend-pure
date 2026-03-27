@@ -13,20 +13,16 @@
 # limitations under the License.
 
 [package]
-name = "legend-pure-parser-jni"
-description = "JNI bridge exposing the Rust Pure parser to Java"
+name = "legend-pure-parser-ast-derive"
+description = "Derive macros for the Legend Pure parser AST"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 
 [lib]
-crate-type = ["cdylib"]
+proc-macro = true
 
 [dependencies]
-legend-pure-parser-ast = { path = "../ast" }
-legend-pure-parser-lexer = { path = "../lexer" }
-legend-pure-parser-parser = { path = "../parser" }
-legend-pure-parser-protocol = { path = "../protocol" }
-jni = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+syn = "2"
+quote = "1"
+proc-macro2 = "1"

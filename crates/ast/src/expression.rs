@@ -164,7 +164,7 @@ impl Spanned for Literal {
 // ---------------------------------------------------------------------------
 
 /// Integer literal: `42`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::Spanned)]
 pub struct IntegerLiteral {
     /// The integer value.
     pub value: i64,
@@ -173,7 +173,7 @@ pub struct IntegerLiteral {
 }
 
 /// Float literal: `3.14`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct FloatLiteral {
     /// The float value.
     pub value: f64,
@@ -182,7 +182,7 @@ pub struct FloatLiteral {
 }
 
 /// Decimal literal: `3.14D`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct DecimalLiteral {
     /// The raw decimal string (preserves precision beyond f64).
     pub value: String,
@@ -191,7 +191,7 @@ pub struct DecimalLiteral {
 }
 
 /// String literal: `'hello'`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::Spanned)]
 pub struct StringLiteral {
     /// The string value (unescaped).
     pub value: String,
@@ -200,7 +200,7 @@ pub struct StringLiteral {
 }
 
 /// Boolean literal: `true` or `false`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::Spanned)]
 pub struct BooleanLiteral {
     /// The boolean value.
     pub value: bool,
@@ -209,7 +209,7 @@ pub struct BooleanLiteral {
 }
 
 /// Strict date literal: `%2024-01-15`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::Spanned)]
 pub struct StrictDateLiteral {
     /// The raw date string.
     pub value: String,
@@ -218,7 +218,7 @@ pub struct StrictDateLiteral {
 }
 
 /// Date-time literal: `%2024-01-15T10:30:00`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::Spanned)]
 pub struct DateTimeLiteral {
     /// The raw datetime string.
     pub value: String,
@@ -227,7 +227,7 @@ pub struct DateTimeLiteral {
 }
 
 /// Strict time literal: `%10:30:00`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::Spanned)]
 pub struct StrictTimeLiteral {
     /// The raw time string.
     pub value: String,
@@ -235,31 +235,18 @@ pub struct StrictTimeLiteral {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(
-    IntegerLiteral,
-    FloatLiteral,
-    DecimalLiteral,
-    StringLiteral,
-    BooleanLiteral,
-    StrictDateLiteral,
-    DateTimeLiteral,
-    StrictTimeLiteral,
-);
-
 // ---------------------------------------------------------------------------
 // Variable
 // ---------------------------------------------------------------------------
 
 /// A variable reference: `$name`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::Spanned)]
 pub struct Variable {
     /// Variable name (without the `$` prefix).
     pub name: Identifier,
     /// Source location.
     pub source_info: SourceInfo,
 }
-
-crate::impl_spanned!(Variable);
 
 // ---------------------------------------------------------------------------
 // Operators
@@ -279,7 +266,7 @@ pub enum ArithmeticOp {
 }
 
 /// An arithmetic expression: `left op right`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct ArithmeticExpr {
     /// Left operand.
     pub left: Box<Expression>,
@@ -309,7 +296,7 @@ pub enum ComparisonOp {
 }
 
 /// A comparison expression: `left op right`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct ComparisonExpr {
     /// Left operand.
     pub left: Box<Expression>,
@@ -331,7 +318,7 @@ pub enum LogicalOp {
 }
 
 /// A logical expression: `left op right`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct LogicalExpr {
     /// Left operand.
     pub left: Box<Expression>,
@@ -359,7 +346,7 @@ pub enum BitwiseOp {
 }
 
 /// A bitwise expression: `left op right`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct BitwiseExpr {
     /// Left operand.
     pub left: Box<Expression>,
@@ -372,7 +359,7 @@ pub struct BitwiseExpr {
 }
 
 /// Unary not: `!expr`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct NotExpr {
     /// The operand.
     pub operand: Box<Expression>,
@@ -381,7 +368,7 @@ pub struct NotExpr {
 }
 
 /// Unary minus: `-expr`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct UnaryMinusExpr {
     /// The operand.
     pub operand: Box<Expression>,
@@ -390,7 +377,7 @@ pub struct UnaryMinusExpr {
 }
 
 /// Bitwise complement: `~expr`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct BitwiseNotExpr {
     /// The operand.
     pub operand: Box<Expression>,
@@ -398,22 +385,12 @@ pub struct BitwiseNotExpr {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(
-    ArithmeticExpr,
-    ComparisonExpr,
-    LogicalExpr,
-    BitwiseExpr,
-    NotExpr,
-    UnaryMinusExpr,
-    BitwiseNotExpr,
-);
-
 // ---------------------------------------------------------------------------
 // Function & member access
 // ---------------------------------------------------------------------------
 
 /// A function application: `func(args)` or `pkg::func(args)`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct FunctionApplication {
     /// The function being called (a packageable element reference).
     pub function: PackageableElementPtr,
@@ -424,7 +401,7 @@ pub struct FunctionApplication {
 }
 
 /// Arrow (collection) function: `expr->func(args)`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct ArrowFunction {
     /// The left-hand side expression.
     pub target: Box<Expression>,
@@ -462,7 +439,7 @@ impl Spanned for MemberAccess {
 /// Simple member access: `expr.member` (no arguments).
 ///
 /// Covers property access (`$x.name`) and enum value reference (`MyEnum.VALUE`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct SimpleMemberAccess {
     /// The target expression (left of the dot).
     pub target: Box<Expression>,
@@ -475,7 +452,7 @@ pub struct SimpleMemberAccess {
 /// Qualified member access: `expr.member(args)` (with arguments).
 ///
 /// Covers qualified property calls like `$x.derivedProp('arg')`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct QualifiedMemberAccess {
     /// The target expression (left of the dot).
     pub target: Box<Expression>,
@@ -487,13 +464,6 @@ pub struct QualifiedMemberAccess {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(
-    FunctionApplication,
-    ArrowFunction,
-    SimpleMemberAccess,
-    QualifiedMemberAccess,
-);
-
 // ---------------------------------------------------------------------------
 // Type reference expression
 // ---------------------------------------------------------------------------
@@ -502,7 +472,7 @@ crate::impl_spanned!(
 ///
 /// Used as an argument to `cast` and `instanceOf` arrow functions:
 /// `$x->cast(@MyType)`, `$x->instanceOf(@MyType)`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct TypeReferenceExpr {
     /// The referenced type.
     pub type_ref: TypeReference,
@@ -510,14 +480,12 @@ pub struct TypeReferenceExpr {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(TypeReferenceExpr);
-
 // ---------------------------------------------------------------------------
 // Complex expressions
 // ---------------------------------------------------------------------------
 
 /// A lambda expression: `{params | body}` or `params | body`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct Lambda {
     /// Lambda parameters.
     pub parameters: Vec<Parameter>,
@@ -528,7 +496,7 @@ pub struct Lambda {
 }
 
 /// A let binding: `let x = expr`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct LetExpr {
     /// Variable name being bound.
     pub name: Identifier,
@@ -539,7 +507,7 @@ pub struct LetExpr {
 }
 
 /// A collection literal: `[1, 2, 3]`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct CollectionExpr {
     /// Elements of the collection.
     pub elements: Vec<Expression>,
@@ -550,7 +518,7 @@ pub struct CollectionExpr {
 }
 
 /// A new instance expression: `^MyClass(prop1='val', prop2=42)`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct NewInstanceExpr {
     /// The class being instantiated (a packageable element reference).
     pub class: PackageableElementPtr,
@@ -561,7 +529,7 @@ pub struct NewInstanceExpr {
 }
 
 /// A key-value pair in a new instance: `propName = expr`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct KeyValuePair {
     /// The property name.
     pub key: Identifier,
@@ -570,8 +538,6 @@ pub struct KeyValuePair {
     /// Source location.
     pub source_info: SourceInfo,
 }
-
-crate::impl_spanned!(Lambda, LetExpr, CollectionExpr, NewInstanceExpr, KeyValuePair);
 
 // ---------------------------------------------------------------------------
 // Column specification
@@ -608,7 +574,7 @@ impl Spanned for ColumnExpression {
 }
 
 /// Simple column reference: `~colName`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct ColumnName {
     /// Column name.
     pub name: Identifier,
@@ -617,7 +583,7 @@ pub struct ColumnName {
 }
 
 /// Column with inline lambda: `~colName: x | $x.prop`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct ColumnWithLambda {
     /// Column name.
     pub name: Identifier,
@@ -628,7 +594,7 @@ pub struct ColumnWithLambda {
 }
 
 /// Typed column: `~[colName: Type]`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct ColumnTyped {
     /// Column name.
     pub name: Identifier,
@@ -639,7 +605,7 @@ pub struct ColumnTyped {
 }
 
 /// Column with function reference: `~colName: funcRef`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct ColumnWithFunction {
     /// Column name.
     pub name: Identifier,
@@ -648,8 +614,6 @@ pub struct ColumnWithFunction {
     /// Source location.
     pub source_info: SourceInfo,
 }
-
-crate::impl_spanned!(ColumnName, ColumnWithLambda, ColumnTyped, ColumnWithFunction);
 
 // ---------------------------------------------------------------------------
 // Visitor

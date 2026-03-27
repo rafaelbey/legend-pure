@@ -32,6 +32,7 @@
 use crate::element::Element;
 use crate::source_info::SourceInfo;
 use crate::type_ref::{Identifier, Package};
+use crate::Spanned;
 
 // ---------------------------------------------------------------------------
 // SourceFile
@@ -40,21 +41,19 @@ use crate::type_ref::{Identifier, Package};
 /// The top-level parse result — a complete Pure source file.
 ///
 /// Contains one or more sections, each with its own import scope and elements.
-/// The parser produces a `SourceFile`; the emitter consumes it.
+/// The parser produces a `SourceFile`; the protocol crate consumes it.
 ///
 /// # Convenience
 ///
 /// Use [`all_elements()`](Self::all_elements) to iterate all elements across
 /// sections when import context is not needed.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Spanned)]
 pub struct SourceFile {
     /// The sections in this source file, in parse order.
     pub sections: Vec<Section>,
     /// Source location covering the entire file.
     pub source_info: SourceInfo,
 }
-
-crate::impl_spanned!(SourceFile);
 
 impl SourceFile {
     /// Iterates all elements across all sections (flat).
@@ -80,7 +79,7 @@ impl SourceFile {
 /// Each section has its own kind (Pure, Mapping, etc.), its own imports,
 /// and its own elements. Imports within a section only apply to that section's
 /// elements — they do not leak into other sections.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Spanned)]
 pub struct Section {
     /// The section grammar name as it appears after `###`.
     /// Common values: `"Pure"`, `"Mapping"`, `"Connection"`, `"Runtime"`.
@@ -93,8 +92,6 @@ pub struct Section {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(Section);
-
 // ---------------------------------------------------------------------------
 // ImportStatement
 // ---------------------------------------------------------------------------
@@ -103,15 +100,13 @@ crate::impl_spanned!(Section);
 ///
 /// The `path` represents the package being imported. In Pure, all imports
 /// are wildcard imports (`::*`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Spanned)]
 pub struct ImportStatement {
     /// The package being imported (e.g., `meta::pure::profiles`).
     pub path: Package,
     /// Source location of the full import statement.
     pub source_info: SourceInfo,
 }
-
-crate::impl_spanned!(ImportStatement);
 
 // ---------------------------------------------------------------------------
 // Tests

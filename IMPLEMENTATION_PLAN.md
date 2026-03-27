@@ -60,7 +60,7 @@ exclude = ["legend-pure-parser-jni"]
 |---------|---------|-----------|
 | **String interning** | [`smol_str`](https://crates.io/crates/smol_str) | 24-byte inline strings; `Clone` is `O(1)` |
 | **Error types** | [`thiserror`](https://crates.io/crates/thiserror) | Zero-cost derive for `std::error::Error` |
-| **JSON serialization** | [`serde`](https://crates.io/crates/serde) + [`serde_json`](https://crates.io/crates/serde_json) | Emitter crate only — **not** in AST |
+| **JSON serialization** | [`serde`](https://crates.io/crates/serde) + [`serde_json`](https://crates.io/crates/serde_json) | Protocol crate only — **not** in AST |
 | **JNI bridge** | [`jni`](https://crates.io/crates/jni) (0.21+) | De facto Rust-JNI bindings |
 | **Plugin discovery** | [`linkme`](https://crates.io/crates/linkme) | Distributed slices for link-time plugin registration |
 | **Snapshot testing** | [`insta`](https://crates.io/crates/insta) | Snapshot/golden file testing; `--review` workflow |
@@ -89,7 +89,7 @@ We use the **`tracing`** crate (not `log`) as our diagnostics facade. `tracing` 
 | **ast** | None — pure data, no behavior | — |
 | **lexer** | Token emission, error recovery | `trace` for each token; `debug` for tokenizer state transitions |
 | **parser** | Grammar rule entry/exit, dispatch decisions | `debug` span per rule; `trace` for token consumption |
-| **emitter** | AST → JSON conversion | `debug` per element emission |
+| **protocol** | AST ↔ JSON conversion | `debug` per element conversion |
 | **jni** | JNI call entry/exit, error propagation | `info` for parse calls; `error` for failures |
 | **plugins** | Plugin dispatch, island parsing | `debug` for dispatch; `trace` for content |
 
@@ -184,7 +184,7 @@ Deeper architecture reference for AI agents and new developers:
 
 #### [NEW] Per-crate `README.md`
 
-Each crate (`ast/`, `lexer/`, `parser/`, `emitter/`, `jni/`) gets a short `README.md` with:
+Each crate (`ast/`, `lexer/`, `parser/`, `protocol/`, `jni/`) gets a short `README.md` with:
 - Purpose and key types
 - Examples of usage
 - Links to related crates
@@ -201,7 +201,7 @@ Each crate (`ast/`, `lexer/`, `parser/`, `emitter/`, `jni/`) gets a short `READM
 4. **Immutability** — constructed once, never mutated after parse
 
 > [!IMPORTANT]
-> **No `serde` in the AST crate.** The AST is a pure data model with zero serialization concerns. Only the emitter depends on `serde`/`serde_json`.
+> **No `serde` in the AST crate.** The AST is a pure data model with zero serialization concerns. Only the protocol crate depends on `serde`/`serde_json`.
 
 ### Trait & Macro Patterns
 
@@ -229,7 +229,7 @@ pub trait Annotated {
 }
 
 /// Visitor pattern for AST traversal.
-/// Enables compiler passes, linters, and emitters to walk the tree.
+/// Enables compiler passes, linters, and protocol converters to walk the tree.
 pub trait ElementVisitor {
     fn visit_class(&mut self, class: &ClassDef);
     fn visit_enum(&mut self, enum_def: &EnumDef);
@@ -589,7 +589,14 @@ Reduced from 70 by merging related single/collection primitive tests and consoli
 
 Priority: Profiles → Enums → Classes → Associations → Measures → Functions → Expressions → Graph Fetch → Type System → Error Cases
 
-### Phase 5: Emitter + Snapshot Tests (Days 19-21)
+### Phase 5: Protocol + Snapshot Tests (Days 19-21)
+
+Protocol v1 model (`crates/protocol/`). See [crates/protocol/DESIGN.md](crates/protocol/DESIGN.md) for design.
+
+- [ ] Protocol v1 structs with serde (TDD: tests first, structs to pass)
+- [ ] AST → Protocol conversion
+- [ ] Snapshot tests against Java-generated golden files
+- [ ] Extension handling (custom Deserialize for unknown `_type`)
 
 ### Phase 6: JNI Bridge + Java Integration (Days 22-24)
 

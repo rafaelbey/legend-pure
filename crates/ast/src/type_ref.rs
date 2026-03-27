@@ -324,7 +324,7 @@ impl std::fmt::Display for Multiplicity {
 /// - `VARCHAR(200)` → path + type variable values
 /// - `Res<String>(1, 'a')` → path + type arguments + type variable values
 /// - `Relation<(a:Integer, b:String)>` → path + type arguments (column specs)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct TypeReference {
     /// The type path, e.g., `Result`, `meta::pure::String`.
     pub path: Package,
@@ -335,8 +335,6 @@ pub struct TypeReference {
     /// Source location.
     pub source_info: SourceInfo,
 }
-
-crate::impl_spanned!(TypeReference);
 
 /// A value in a type variable position, e.g., `VARCHAR(200)` or `Res(1, 'ok')`.
 #[derive(Debug, Clone, PartialEq)]

@@ -16,14 +16,14 @@
 //!
 //! Core data model for the Pure grammar parser. This crate defines all AST types
 //! used to represent parsed Pure source code. It has zero serialization dependencies
-//! and is designed for direct consumption by both the emitter (for Protocol JSON output)
+//! and is designed for direct consumption by both the protocol crate (for Protocol JSON output)
 //! and a future Rust-based compiler.
 //!
 //! ## Design Principles
 //!
 //! - **Everything is `Spanned`** — every AST node carries a [`SourceInfo`] for precise error
 //!   reporting and IDE integration. No node exists without a known source position.
-//! - **No `serde`** — AST is a pure data model, serialization lives in the emitter
+//! - **No `serde`** — AST is a pure data model, serialization lives in the protocol crate
 //! - **Immutable** — All types are constructed once during parsing, never mutated
 //! - **Type-safe** — Rust enums with data, not stringly-typed maps
 //! - **Compiler-ready** — AST ≠ Protocol JSON; designed for parser efficiency and future compiler use
@@ -38,6 +38,7 @@ pub mod section;
 pub mod source_info;
 pub mod type_ref;
 
+pub use legend_pure_parser_ast_derive::{Annotated, PackageableElement, Spanned};
 pub use section::{ImportStatement, Section, SourceFile};
 pub use source_info::SourceInfo;
 pub use type_ref::{HasMultiplicity, Identifier, Multiplicity, Package, TypeReference};

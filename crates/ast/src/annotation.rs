@@ -20,6 +20,7 @@
 use crate::element::PackageableElement;
 use crate::source_info::SourceInfo;
 use crate::type_ref::{Identifier, Multiplicity, Package, TypeReference};
+use crate::Spanned;
 
 // ---------------------------------------------------------------------------
 // Packageable Element Pointer
@@ -35,7 +36,7 @@ use crate::type_ref::{Identifier, Multiplicity, Package, TypeReference};
 /// reference `meta::pure::profiles::doc` is a `PackageableElementPtr` with:
 /// - `package`: `meta::pure::profiles`
 /// - `name`: `doc`
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Spanned)]
 pub struct PackageableElementPtr {
     /// The package the element belongs to, or `None` for root-level elements.
     pub package: Option<Package>,
@@ -45,8 +46,6 @@ pub struct PackageableElementPtr {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(PackageableElementPtr);
-
 impl PackageableElement for PackageableElementPtr {
     fn package(&self) -> Option<&Package> {
         self.package.as_ref()
@@ -54,6 +53,15 @@ impl PackageableElement for PackageableElementPtr {
 
     fn name(&self) -> &Identifier {
         &self.name
+    }
+}
+
+impl crate::element::Annotated for PackageableElementPtr {
+    fn stereotypes(&self) -> &[StereotypePtr] {
+        &[]
+    }
+    fn tagged_values(&self) -> &[TaggedValue] {
+        &[]
     }
 }
 
@@ -66,7 +74,7 @@ impl PackageableElement for PackageableElementPtr {
 /// For example, `<<temporal.businesstemporal>>` has:
 /// - `profile`: reference to the profile element (`temporal`)
 /// - `value`: the stereotype name (`businesstemporal`)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Spanned)]
 pub struct StereotypePtr {
     /// Reference to the profile this stereotype belongs to.
     pub profile: PackageableElementPtr,
@@ -76,14 +84,12 @@ pub struct StereotypePtr {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(StereotypePtr);
-
 /// A tagged value on an element: `{profile.tagName = 'value'}`.
 ///
 /// For example, `{doc.description = 'A person'}` has:
 /// - `tag`: a [`TagPtr`] pointing to `doc.description`
 /// - `value`: the string `"A person"`
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Spanned)]
 pub struct TaggedValue {
     /// The tag reference (profile + tag name).
     pub tag: TagPtr,
@@ -93,10 +99,8 @@ pub struct TaggedValue {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(TaggedValue);
-
 /// A reference to a tag on a profile: `profile.tagName`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Spanned)]
 pub struct TagPtr {
     /// Reference to the profile this tag belongs to.
     pub profile: PackageableElementPtr,
@@ -105,8 +109,6 @@ pub struct TagPtr {
     /// Source location of this tag reference.
     pub source_info: SourceInfo,
 }
-
-crate::impl_spanned!(TagPtr);
 
 // ---------------------------------------------------------------------------
 // Parameters
@@ -118,7 +120,7 @@ crate::impl_spanned!(TagPtr);
 /// - `name`: `"name"`
 /// - `type_ref`: `String`
 /// - `multiplicity`: `[1]`
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Spanned)]
 pub struct Parameter {
     /// Parameter name (may be quoted, e.g., `'1,2,3'`).
     pub name: Identifier,
@@ -130,8 +132,6 @@ pub struct Parameter {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(Parameter);
-
 // ---------------------------------------------------------------------------
 // String with source info (used in profiles for tag/stereotype names)
 // ---------------------------------------------------------------------------
@@ -140,15 +140,13 @@ crate::impl_spanned!(Parameter);
 ///
 /// Used in profile definitions where stereotype names and tag names
 /// are plain strings that need source tracking.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Spanned)]
 pub struct SpannedString {
     /// The string value.
     pub value: Identifier,
     /// Source location.
     pub source_info: SourceInfo,
 }
-
-crate::impl_spanned!(SpannedString);
 
 #[cfg(test)]
 mod tests {

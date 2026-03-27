@@ -14,7 +14,7 @@
 
 //! Top-level packageable elements: Class, Enum, Function, Profile, Association, Measure.
 //!
-//! Every element is [`Spanned`], [`PackageableElement`], and optionally [`Annotated`].
+//! Every element is [`Spanned`], [`Annotated`], and [`PackageableElement`].
 //! The [`Element`] enum wraps all element types for uniform handling.
 
 use crate::annotation::{Parameter, SpannedString, StereotypePtr, TaggedValue};
@@ -30,7 +30,7 @@ use crate::type_ref::{Identifier, Multiplicity, Package, TypeReference};
 ///
 /// Named `PackageableElement` to match the Java convention, easing transition
 /// for developers moving between the Java and Rust implementations.
-pub trait PackageableElement: Spanned {
+pub trait PackageableElement: Spanned + Annotated {
     /// Returns the package this element belongs to.
     fn package(&self) -> Option<&Package>;
     /// Returns the name of this element.
@@ -106,48 +106,37 @@ impl PackageableElement for Element {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Convenience macros for trait impls on element structs
-// ---------------------------------------------------------------------------
+impl Annotated for Element {
+    fn stereotypes(&self) -> &[StereotypePtr] {
+        match self {
+            Self::Class(e) => e.stereotypes(),
+            Self::Enumeration(e) => e.stereotypes(),
+            Self::Function(e) => e.stereotypes(),
+            Self::Profile(e) => e.stereotypes(),
+            Self::Association(e) => e.stereotypes(),
+            Self::Measure(e) => e.stereotypes(),
+        }
+    }
 
-/// Implements `PackageableElement` for a struct with `package`, `name`, `source_info`.
-macro_rules! impl_packageable_element {
-    ($($t:ty),+ $(,)?) => {
-        $(
-            impl PackageableElement for $t {
-                fn package(&self) -> Option<&Package> {
-                    self.package.as_ref()
-                }
-                fn name(&self) -> &Identifier {
-                    &self.name
-                }
-            }
-        )+
-    };
+    fn tagged_values(&self) -> &[TaggedValue] {
+        match self {
+            Self::Class(e) => e.tagged_values(),
+            Self::Enumeration(e) => e.tagged_values(),
+            Self::Function(e) => e.tagged_values(),
+            Self::Profile(e) => e.tagged_values(),
+            Self::Association(e) => e.tagged_values(),
+            Self::Measure(e) => e.tagged_values(),
+        }
+    }
 }
 
-/// Implements `Annotated` for a struct with `stereotypes`, `tagged_values`.
-macro_rules! impl_annotated {
-    ($($t:ty),+ $(,)?) => {
-        $(
-            impl Annotated for $t {
-                fn stereotypes(&self) -> &[StereotypePtr] {
-                    &self.stereotypes
-                }
-                fn tagged_values(&self) -> &[TaggedValue] {
-                    &self.tagged_values
-                }
-            }
-        )+
-    };
-}
 
 // ---------------------------------------------------------------------------
 // ProfileDef
 // ---------------------------------------------------------------------------
 
 /// A profile definition: `Profile meta::pure::profiles::doc { stereotypes: [...]; tags: [...]; }`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::PackageableElement)]
 pub struct ProfileDef {
     /// The package this profile belongs to.
     pub package: Option<Package>,
@@ -161,18 +150,12 @@ pub struct ProfileDef {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(ProfileDef);
-impl_packageable_element!(ProfileDef);
-
-// ProfileDef does NOT implement Annotated — profiles *define* stereotypes/tags
-// for other elements, they don't carry them themselves.
-
 // ---------------------------------------------------------------------------
 // EnumDef
 // ---------------------------------------------------------------------------
 
 /// An enumeration definition: `Enum <<stereo>> {tag='val'} MyEnum { A, B, C }`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::PackageableElement)]
 pub struct EnumDef {
     /// The package.
     pub package: Option<Package>,
@@ -188,12 +171,8 @@ pub struct EnumDef {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(EnumDef);
-impl_packageable_element!(EnumDef);
-impl_annotated!(EnumDef);
-
 /// A single value (member) in an enumeration: `<<stereo>> {tag='val'} ValueName`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Annotated)]
 pub struct EnumValue {
     /// The value name.
     pub name: Identifier,
@@ -204,9 +183,6 @@ pub struct EnumValue {
     /// Source location.
     pub source_info: SourceInfo,
 }
-
-crate::impl_spanned!(EnumValue);
-impl_annotated!(EnumValue);
 
 // ---------------------------------------------------------------------------
 // ClassDef & related
@@ -224,7 +200,7 @@ pub enum AggregationKind {
 }
 
 /// A class property: `<<stereo>> {tag='val'} name: Type[mult]`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Annotated)]
 pub struct Property {
     /// Property name.
     pub name: Identifier,
@@ -244,11 +220,8 @@ pub struct Property {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(Property);
-impl_annotated!(Property);
-
 /// A qualified (derived) property: `name(params) { body }: ReturnType[mult]`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Annotated)]
 pub struct QualifiedProperty {
     /// Property name.
     pub name: Identifier,
@@ -268,14 +241,11 @@ pub struct QualifiedProperty {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(QualifiedProperty);
-impl_annotated!(QualifiedProperty);
-
 /// A class constraint.
 ///
 /// Constraints can be unnamed (just an expression) or named with optional
 /// enforcement level, external ID, and message function.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct Constraint {
     /// Constraint name (optional — unnamed constraints are allowed).
     pub name: Option<Identifier>,
@@ -290,8 +260,6 @@ pub struct Constraint {
     /// Source location.
     pub source_info: SourceInfo,
 }
-
-crate::impl_spanned!(Constraint);
 
 /// A class definition with properties, constraints, stereotypes, tagged values,
 /// qualified properties, and type parameters.
@@ -309,7 +277,7 @@ crate::impl_spanned!(Constraint);
 ///   fullName(sep: String[1]) { $this.firstName + $sep + $this.lastName }: String[1];
 /// }
 /// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::PackageableElement)]
 pub struct ClassDef {
     /// The package.
     pub package: Option<Package>,
@@ -333,10 +301,6 @@ pub struct ClassDef {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(ClassDef);
-impl_packageable_element!(ClassDef);
-impl_annotated!(ClassDef);
-
 // ---------------------------------------------------------------------------
 // AssociationDef
 // ---------------------------------------------------------------------------
@@ -349,7 +313,7 @@ impl_annotated!(ClassDef);
 ///   employer: model::Firm[*];
 /// }
 /// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::PackageableElement)]
 pub struct AssociationDef {
     /// The package.
     pub package: Option<Package>,
@@ -367,10 +331,6 @@ pub struct AssociationDef {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(AssociationDef);
-impl_packageable_element!(AssociationDef);
-impl_annotated!(AssociationDef);
-
 // ---------------------------------------------------------------------------
 // MeasureDef
 // ---------------------------------------------------------------------------
@@ -378,7 +338,7 @@ impl_annotated!(AssociationDef);
 /// A unit definition within a measure.
 ///
 /// Can be canonical (the `*` unit) or non-canonical with a conversion function.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct UnitDef {
     /// Unit name.
     pub name: Identifier,
@@ -390,8 +350,6 @@ pub struct UnitDef {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(UnitDef);
-
 /// A measure definition with a canonical unit and non-canonical units.
 ///
 /// ```text
@@ -400,7 +358,7 @@ crate::impl_spanned!(UnitDef);
 ///   UnitTwo: x -> $x * 1000;
 /// }
 /// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::PackageableElement)]
 pub struct MeasureDef {
     /// The package.
     pub package: Option<Package>,
@@ -414,15 +372,12 @@ pub struct MeasureDef {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(MeasureDef);
-impl_packageable_element!(MeasureDef);
-
 // ---------------------------------------------------------------------------
 // FunctionDef
 // ---------------------------------------------------------------------------
 
 /// Test data for a function test — either inline or reference.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct FunctionTestData {
     /// The store reference (e.g., `ModelStore`, `store::MyStore`).
     pub store: Package,
@@ -434,8 +389,6 @@ pub struct FunctionTestData {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(FunctionTestData);
-
 /// The value of function test data — either inline content or a reference.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FunctionTestDataValue {
@@ -446,7 +399,7 @@ pub enum FunctionTestDataValue {
 }
 
 /// An assertion in a function test: `testName | funcName(args) => expectedResult`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct FunctionTestAssertion {
     /// Test assertion name.
     pub name: Identifier,
@@ -460,10 +413,8 @@ pub struct FunctionTestAssertion {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(FunctionTestAssertion);
-
 /// A function test block (named test suite).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct FunctionTest {
     /// Test suite name (optional — unnamed suites are allowed).
     pub name: Option<Identifier>,
@@ -474,8 +425,6 @@ pub struct FunctionTest {
     /// Source location.
     pub source_info: SourceInfo,
 }
-
-crate::impl_spanned!(FunctionTest);
 
 /// A function definition.
 ///
@@ -489,7 +438,7 @@ crate::impl_spanned!(FunctionTest);
 ///   myTest | hello('World') => 'Hello World';
 /// }
 /// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, crate::PackageableElement)]
 pub struct FunctionDef {
     /// The package.
     pub package: Option<Package>,
@@ -513,17 +462,13 @@ pub struct FunctionDef {
     pub source_info: SourceInfo,
 }
 
-crate::impl_spanned!(FunctionDef);
-impl_packageable_element!(FunctionDef);
-impl_annotated!(FunctionDef);
-
 // ---------------------------------------------------------------------------
 // Visitor
 // ---------------------------------------------------------------------------
 
 /// Visitor pattern for walking top-level elements.
 ///
-/// Implement this for compiler passes, linters, emitters, etc.
+/// Implement this for compiler passes, linters, protocol converters, etc.
 pub trait ElementVisitor {
     /// Visit a class definition.
     fn visit_class(&mut self, class: &ClassDef);
