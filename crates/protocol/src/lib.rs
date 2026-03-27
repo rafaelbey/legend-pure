@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # Legend Pure Parser — Emitter
+//! # Legend Pure Parser — Protocol
 //!
-//! Converts the AST into Protocol v1 JSON, producing output byte-compatible with
-//! the existing Java/ANTLR4 parser. This is the only crate that depends on `serde`.
+//! Defines the Protocol v1 JSON model and provides bidirectional conversion
+//! between the parser AST and the protocol model. The protocol model mirrors
+//! the Java `org.finos.legend.engine.protocol.pure.m3` package to produce
+//! JSON byte-compatible with the existing Java/ANTLR4 parser.
+//!
+//! This is the only crate that depends on `serde`/`serde_json`.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
