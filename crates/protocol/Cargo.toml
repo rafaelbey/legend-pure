@@ -13,8 +13,8 @@
 # limitations under the License.
 
 [package]
-name = "legend-pure-parser-emitter"
-description = "AST to Protocol v1 JSON emitter for the Legend Pure parser"
+name = "legend-pure-parser-protocol"
+description = "Protocol v1 JSON model and bidirectional AST conversion for the Legend Pure parser"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
