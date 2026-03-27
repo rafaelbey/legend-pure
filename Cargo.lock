@@ -228,19 +228,17 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 name = "legend-pure-parser-ast"
 version = "0.1.0"
 dependencies = [
+ "legend-pure-parser-ast-derive",
  "smol_str",
 ]
 
 [[package]]
-name = "legend-pure-parser-emitter"
+name = "legend-pure-parser-ast-derive"
 version = "0.1.0"
 dependencies = [
- "insta",
- "legend-pure-parser-ast",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tracing",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -249,9 +247,9 @@ version = "0.1.0"
 dependencies = [
  "jni",
  "legend-pure-parser-ast",
- "legend-pure-parser-emitter",
  "legend-pure-parser-lexer",
  "legend-pure-parser-parser",
+ "legend-pure-parser-protocol",
  "tracing",
  "tracing-subscriber",
 ]
@@ -273,6 +271,18 @@ dependencies = [
  "legend-pure-parser-ast",
  "legend-pure-parser-lexer",
  "smol_str",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "legend-pure-parser-protocol"
+version = "0.1.0"
+dependencies = [
+ "insta",
+ "legend-pure-parser-ast",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tracing",
 ]

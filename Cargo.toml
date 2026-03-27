@@ -16,9 +16,10 @@
 resolver = "2"
 members = [
     "crates/ast",
+    "crates/ast-derive",
     "crates/lexer",
     "crates/parser",
-    "crates/emitter",
+    "crates/protocol",
     "crates/jni",
 ]
 
@@ -32,12 +33,13 @@ repository = "https://github.com/finos/legend-engine"
 # Core
 smol_str = "0.2"
 thiserror = "2"
+legend-pure-parser-ast-derive = { path = "crates/ast-derive" }
 
 # Tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Serialization (emitter only)
+# Serialization (protocol crate only)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
