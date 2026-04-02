@@ -124,10 +124,10 @@ pub struct TagPtr {
 pub struct Parameter {
     /// Parameter name (may be quoted, e.g., `'1,2,3'`).
     pub name: Identifier,
-    /// Parameter type.
-    pub type_ref: TypeReference,
-    /// Parameter multiplicity.
-    pub multiplicity: Multiplicity,
+    /// Parameter type. `None` for untyped lambda parameters (e.g., `{x | ...}`).
+    pub type_ref: Option<TypeReference>,
+    /// Parameter multiplicity. `None` for untyped lambda parameters.
+    pub multiplicity: Option<Multiplicity>,
     /// Source location of this parameter.
     pub source_info: SourceInfo,
 }
@@ -224,13 +224,13 @@ mod tests {
     fn test_parameter_is_spanned() {
         let param = Parameter {
             name: SmolStr::new("name"),
-            type_ref: TypeReference {
+            type_ref: Some(TypeReference {
                 path: Package::root(SmolStr::new("String"), src()),
                 type_arguments: vec![],
                 type_variable_values: vec![],
                 source_info: src(),
-            },
-            multiplicity: Multiplicity::pure_one(),
+            }),
+            multiplicity: Some(Multiplicity::pure_one()),
             source_info: SourceInfo::new("test.pure", 3, 5, 3, 20),
         };
         assert_eq!(param.source_info().start_line, 3);
