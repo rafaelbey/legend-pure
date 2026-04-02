@@ -17,6 +17,52 @@
 //! Hand-written tokenizer for the Pure grammar. Produces a flat `Vec<Token>` with spans
 //! from source text. Handles keywords, operators, literals, island grammar markers,
 //! and section headers.
+//!
+//! # Usage
+//!
+//! ```
+//! use legend_pure_parser_lexer::{tokenize, TokenKind};
+//!
+//! let tokens = tokenize("Class my::Person { }", "test.pure").unwrap();
+//! assert_eq!(tokens[0].kind, TokenKind::Class);
+//! assert_eq!(tokens[1].kind, TokenKind::Identifier);
+//! assert_eq!(tokens[1].text, "my");
+//! ```
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+
+pub mod token;
+mod lexer;
+
+pub use lexer::tokenize;
+pub use token::{Token, TokenKind};
+
+use legend_pure_parser_ast::SourceInfo;
+
+/// Errors produced during lexing.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum LexError {
+    /// An unterminated string literal.
+    #[error("Unterminated string literal at {source_info}")]
+    UnterminatedString {
+        /// Location of the opening quote.
+        source_info: SourceInfo,
+    },
+
+    /// An unterminated block comment.
+    #[error("Unterminated block comment at {source_info}")]
+    UnterminatedBlockComment {
+        /// Location of the opening `/*`.
+        source_info: SourceInfo,
+    },
+
+    /// An unexpected character.
+    #[error("Unexpected character '{ch}' at {source_info}")]
+    UnexpectedCharacter {
+        /// The unexpected character.
+        ch: char,
+        /// Location.
+        source_info: SourceInfo,
+    },
+}
