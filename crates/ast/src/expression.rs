@@ -857,13 +857,13 @@ mod tests {
         let lambda = Expression::Lambda(Lambda {
             parameters: vec![Parameter {
                 name: SmolStr::new("x"),
-                type_ref: TypeReference {
+                type_ref: Some(TypeReference {
                     path: Package::root(SmolStr::new("String"), src()),
                     type_arguments: vec![],
                     type_variable_values: vec![],
                     source_info: src(),
-                },
-                multiplicity: Multiplicity::pure_one(),
+                }),
+                multiplicity: Some(Multiplicity::pure_one()),
                 source_info: src(),
             }],
             body: vec![Expression::Variable(Variable {
