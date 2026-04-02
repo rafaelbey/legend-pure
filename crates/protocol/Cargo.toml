@@ -23,6 +23,7 @@ license.workspace = true
 legend-pure-parser-ast = { path = "../ast" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+smol_str = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
