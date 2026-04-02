@@ -12,16 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # Legend Pure Parser — Protocol
+//! Protocol v1 model — Rust structs mirroring the Java `m3` protocol package.
 //!
-//! Defines the Protocol v1 JSON model and provides bidirectional conversion
-//! between the parser AST and the protocol model. The protocol model mirrors
-//! the Java `org.finos.legend.engine.protocol.pure.m3` package to produce
-//! JSON byte-compatible with the existing Java/ANTLR4 parser.
-//!
-//! This is the only crate that depends on `serde`/`serde_json`.
+//! Each struct derives `Serialize`/`Deserialize` to produce JSON compatible with
+//! the Java protocol. See [`crate`] for design rationale.
 
-#![forbid(unsafe_code)]
-#![deny(missing_docs)]
-
-pub mod v1;
+pub mod annotation;
+pub mod context;
+pub mod convert;
+pub mod element;
+pub mod from_protocol;
+pub mod generic_type;
+pub mod multiplicity;
+pub mod property;
+pub mod source_info;
+pub mod value_spec;
