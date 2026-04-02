@@ -1,0 +1,277 @@
+// Copyright 2026 Goldman Sachs
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Token types for the Pure grammar lexer.
+
+use legend_pure_parser_ast::SourceInfo;
+use smol_str::SmolStr;
+
+/// A single token produced by the lexer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Token {
+    /// The kind of token.
+    pub kind: TokenKind,
+    /// The raw text of the token.
+    pub text: SmolStr,
+    /// Source location.
+    pub source_info: SourceInfo,
+}
+
+/// All token kinds in the Pure grammar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TokenKind {
+    // -- Element keywords --
+    /// `Class`
+    Class,
+    /// `Enum`
+    Enum,
+    /// `Profile`
+    Profile,
+    /// `Association`
+    Association,
+    /// `Measure`
+    Measure,
+    /// `function`
+    Function,
+
+    // -- Other keywords --
+    /// `import`
+    Import,
+    /// `extends`
+    Extends,
+    /// `let`
+    Let,
+    /// `native`
+    Native,
+
+    // -- Boolean literals --
+    /// `true`
+    True,
+    /// `false`
+    False,
+
+    // -- Profile body keywords --
+    /// `stereotypes`
+    Stereotypes,
+    /// `tags`
+    Tags,
+
+    // -- Aggregation keywords --
+    /// `shared`
+    Shared,
+    /// `composite`
+    Composite,
+    /// `none`
+    None,
+
+    // -- Identifiers & literals --
+    /// Regular identifier: `name`, `Person`, `myFunc`
+    Identifier,
+    /// Quoted identifier or string literal: `'hello'`, `'with spaces'`
+    StringLiteral,
+    /// Integer literal: `42`, `0`
+    IntegerLiteral,
+    /// Float literal: `3.14`
+    FloatLiteral,
+    /// Decimal literal: `1.0D`, `3.14D`
+    DecimalLiteral,
+    /// Date/time literal: `%2024-01-15`, `%2024-01-15T10:30:00`, `%10:30:00`
+    DateLiteral,
+
+    // -- Delimiters --
+    /// `(`
+    LParen,
+    /// `)`
+    RParen,
+    /// `{`
+    LBrace,
+    /// `}`
+    RBrace,
+    /// `[`
+    LBracket,
+    /// `]`
+    RBracket,
+    /// `;`
+    Semicolon,
+    /// `,`
+    Comma,
+    /// `:`
+    Colon,
+    /// `.`
+    Dot,
+
+    // -- Operators --
+    /// `+`
+    Plus,
+    /// `-`
+    Minus,
+    /// `*`
+    Star,
+    /// `/`
+    Slash,
+    /// `=`
+    Equals,
+    /// `==`
+    EqualEqual,
+    /// `!=`
+    BangEqual,
+    /// `<`
+    Less,
+    /// `<=`
+    LessEqual,
+    /// `<<`
+    LessLess,
+    /// `>`
+    Greater,
+    /// `>=`
+    GreaterEqual,
+    /// `>>`
+    GreaterGreater,
+    /// `&&`
+    AmpAmp,
+    /// `||`
+    PipePipe,
+    /// `!`
+    Bang,
+    /// `&`
+    Amp,
+    /// `|`
+    Pipe,
+    /// `^`
+    Caret,
+    /// `~`
+    Tilde,
+
+    // -- Special operators --
+    /// `->`
+    Arrow,
+    /// `=>`
+    FatArrow,
+    /// `::`
+    PathSep,
+    /// `@`
+    At,
+    /// `$`
+    Dollar,
+    /// `%`
+    Percent,
+
+    // -- Section & island markers --
+    /// `###` followed by section name (e.g., `###Pure`)
+    SectionHeader,
+    /// `#{`
+    HashLBrace,
+    /// `}#`
+    RBraceHash,
+
+    // -- End of file --
+    /// End of input.
+    Eof,
+}
+
+impl TokenKind {
+    /// Returns the keyword kind for the given identifier text, if any.
+    pub(crate) fn keyword(text: &str) -> Option<TokenKind> {
+        match text {
+            "Class" => Some(TokenKind::Class),
+            "Enum" => Some(TokenKind::Enum),
+            "Profile" => Some(TokenKind::Profile),
+            "Association" => Some(TokenKind::Association),
+            "Measure" => Some(TokenKind::Measure),
+            "function" => Some(TokenKind::Function),
+            "import" => Some(TokenKind::Import),
+            "extends" => Some(TokenKind::Extends),
+            "let" => Some(TokenKind::Let),
+            "native" => Some(TokenKind::Native),
+            "true" => Some(TokenKind::True),
+            "false" => Some(TokenKind::False),
+            "stereotypes" => Some(TokenKind::Stereotypes),
+            "tags" => Some(TokenKind::Tags),
+            "shared" => Some(TokenKind::Shared),
+            "composite" => Some(TokenKind::Composite),
+            "none" => Some(TokenKind::None),
+            _ => Option::None,
+        }
+    }
+
+    /// Returns a human-readable description of this token kind.
+    #[must_use]
+    pub fn description(&self) -> &'static str {
+        match self {
+            TokenKind::Class => "'Class'",
+            TokenKind::Enum => "'Enum'",
+            TokenKind::Profile => "'Profile'",
+            TokenKind::Association => "'Association'",
+            TokenKind::Measure => "'Measure'",
+            TokenKind::Function => "'function'",
+            TokenKind::Import => "'import'",
+            TokenKind::Extends => "'extends'",
+            TokenKind::Let => "'let'",
+            TokenKind::Native => "'native'",
+            TokenKind::True => "'true'",
+            TokenKind::False => "'false'",
+            TokenKind::Stereotypes => "'stereotypes'",
+            TokenKind::Tags => "'tags'",
+            TokenKind::Shared => "'shared'",
+            TokenKind::Composite => "'composite'",
+            TokenKind::None => "'none'",
+            TokenKind::Identifier => "identifier",
+            TokenKind::StringLiteral => "string literal",
+            TokenKind::IntegerLiteral => "integer literal",
+            TokenKind::FloatLiteral => "float literal",
+            TokenKind::DecimalLiteral => "decimal literal",
+            TokenKind::DateLiteral => "date literal",
+            TokenKind::LParen => "'('",
+            TokenKind::RParen => "')'",
+            TokenKind::LBrace => "'{'",
+            TokenKind::RBrace => "'}'",
+            TokenKind::LBracket => "'['",
+            TokenKind::RBracket => "']'",
+            TokenKind::Semicolon => "';'",
+            TokenKind::Comma => "','",
+            TokenKind::Colon => "':'",
+            TokenKind::Dot => "'.'",
+            TokenKind::Plus => "'+'",
+            TokenKind::Minus => "'-'",
+            TokenKind::Star => "'*'",
+            TokenKind::Slash => "'/'",
+            TokenKind::Equals => "'='",
+            TokenKind::EqualEqual => "'=='",
+            TokenKind::BangEqual => "'!='",
+            TokenKind::Less => "'<'",
+            TokenKind::LessEqual => "'<='",
+            TokenKind::LessLess => "'<<'",
+            TokenKind::Greater => "'>'",
+            TokenKind::GreaterEqual => "'>='",
+            TokenKind::GreaterGreater => "'>>'",
+            TokenKind::AmpAmp => "'&&'",
+            TokenKind::PipePipe => "'||'",
+            TokenKind::Bang => "'!'",
+            TokenKind::Amp => "'&'",
+            TokenKind::Pipe => "'|'",
+            TokenKind::Caret => "'^'",
+            TokenKind::Tilde => "'~'",
+            TokenKind::Arrow => "'->'",
+            TokenKind::FatArrow => "'=>'",
+            TokenKind::PathSep => "'::'",
+            TokenKind::At => "'@'",
+            TokenKind::Dollar => "'$'",
+            TokenKind::Percent => "'%'",
+            TokenKind::SectionHeader => "section header",
+            TokenKind::HashLBrace => "'#{'",
+            TokenKind::RBraceHash => "'}#'",
+            TokenKind::Eof => "end of file",
+        }
+    }
+}
