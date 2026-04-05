@@ -1,0 +1,8 @@
+###Pure
+function my::SimpleFunction(): String[1]
+{
+    'Hello World!'
+}
+{
+    myTest | SimpleFunction() => 'Hello World!';
+}

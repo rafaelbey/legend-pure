@@ -1,0 +1,6 @@
+###Pure
+Class <<temporal.businesstemporal>> {doc.description = 'A person entity'} model::domain::Person extends model::domain::LegalEntity
+{
+    name: String[1];
+    age: Integer[0..1];
+}

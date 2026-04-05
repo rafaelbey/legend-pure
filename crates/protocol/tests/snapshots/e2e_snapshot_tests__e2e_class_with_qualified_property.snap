@@ -1,0 +1,278 @@
+---
+source: crates/protocol/tests/e2e_snapshot_tests.rs
+expression: json
+---
+{
+  "elements": [
+    {
+      "_type": "class",
+      "name": "Person",
+      "package": "model::domain",
+      "properties": [
+        {
+          "genericType": {
+            "rawType": {
+              "fullPath": "String",
+              "sourceInformation": {
+                "endColumn": 21,
+                "endLine": 4,
+                "sourceId": "class_with_qualified_property.pure",
+                "startColumn": 16,
+                "startLine": 4
+              }
+            },
+            "sourceInformation": {
+              "endColumn": 21,
+              "endLine": 4,
+              "sourceId": "class_with_qualified_property.pure",
+              "startColumn": 16,
+              "startLine": 4
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "name": "firstName",
+          "sourceInformation": {
+            "endColumn": 13,
+            "endLine": 4,
+            "sourceId": "class_with_qualified_property.pure",
+            "startColumn": 5,
+            "startLine": 4
+          }
+        },
+        {
+          "genericType": {
+            "rawType": {
+              "fullPath": "String",
+              "sourceInformation": {
+                "endColumn": 20,
+                "endLine": 5,
+                "sourceId": "class_with_qualified_property.pure",
+                "startColumn": 15,
+                "startLine": 5
+              }
+            },
+            "sourceInformation": {
+              "endColumn": 20,
+              "endLine": 5,
+              "sourceId": "class_with_qualified_property.pure",
+              "startColumn": 15,
+              "startLine": 5
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "name": "lastName",
+          "sourceInformation": {
+            "endColumn": 12,
+            "endLine": 5,
+            "sourceId": "class_with_qualified_property.pure",
+            "startColumn": 5,
+            "startLine": 5
+          }
+        }
+      ],
+      "qualifiedProperties": [
+        {
+          "body": [
+            {
+              "_type": "func",
+              "function": "plus",
+              "parameters": [
+                {
+                  "_type": "func",
+                  "function": "plus",
+                  "parameters": [
+                    {
+                      "_type": "property",
+                      "parameters": [
+                        {
+                          "_type": "var",
+                          "name": "this",
+                          "sourceInformation": {
+                            "endColumn": 9,
+                            "endLine": 8,
+                            "sourceId": "class_with_qualified_property.pure",
+                            "startColumn": 9,
+                            "startLine": 8
+                          }
+                        }
+                      ],
+                      "property": "firstName",
+                      "sourceInformation": {
+                        "endColumn": 14,
+                        "endLine": 8,
+                        "sourceId": "class_with_qualified_property.pure",
+                        "startColumn": 14,
+                        "startLine": 8
+                      }
+                    },
+                    {
+                      "_type": "var",
+                      "name": "sep",
+                      "sourceInformation": {
+                        "endColumn": 27,
+                        "endLine": 8,
+                        "sourceId": "class_with_qualified_property.pure",
+                        "startColumn": 27,
+                        "startLine": 8
+                      }
+                    }
+                  ],
+                  "sourceInformation": {
+                    "endColumn": 25,
+                    "endLine": 8,
+                    "sourceId": "class_with_qualified_property.pure",
+                    "startColumn": 25,
+                    "startLine": 8
+                  }
+                },
+                {
+                  "_type": "property",
+                  "parameters": [
+                    {
+                      "_type": "var",
+                      "name": "this",
+                      "sourceInformation": {
+                        "endColumn": 34,
+                        "endLine": 8,
+                        "sourceId": "class_with_qualified_property.pure",
+                        "startColumn": 34,
+                        "startLine": 8
+                      }
+                    }
+                  ],
+                  "property": "lastName",
+                  "sourceInformation": {
+                    "endColumn": 39,
+                    "endLine": 8,
+                    "sourceId": "class_with_qualified_property.pure",
+                    "startColumn": 39,
+                    "startLine": 8
+                  }
+                }
+              ],
+              "sourceInformation": {
+                "endColumn": 32,
+                "endLine": 8,
+                "sourceId": "class_with_qualified_property.pure",
+                "startColumn": 32,
+                "startLine": 8
+              }
+            }
+          ],
+          "name": "fullName",
+          "parameters": [
+            {
+              "_type": "var",
+              "genericType": {
+                "rawType": {
+                  "fullPath": "String",
+                  "sourceInformation": {
+                    "endColumn": 24,
+                    "endLine": 6,
+                    "sourceId": "class_with_qualified_property.pure",
+                    "startColumn": 19,
+                    "startLine": 6
+                  }
+                },
+                "sourceInformation": {
+                  "endColumn": 24,
+                  "endLine": 6,
+                  "sourceId": "class_with_qualified_property.pure",
+                  "startColumn": 19,
+                  "startLine": 6
+                }
+              },
+              "multiplicity": {
+                "lowerBound": 1,
+                "upperBound": 1
+              },
+              "name": "sep",
+              "sourceInformation": {
+                "endColumn": 16,
+                "endLine": 6,
+                "sourceId": "class_with_qualified_property.pure",
+                "startColumn": 14,
+                "startLine": 6
+              }
+            }
+          ],
+          "returnGenericType": {
+            "rawType": {
+              "fullPath": "String",
+              "sourceInformation": {
+                "endColumn": 13,
+                "endLine": 9,
+                "sourceId": "class_with_qualified_property.pure",
+                "startColumn": 8,
+                "startLine": 9
+              }
+            },
+            "sourceInformation": {
+              "endColumn": 13,
+              "endLine": 9,
+              "sourceId": "class_with_qualified_property.pure",
+              "startColumn": 8,
+              "startLine": 9
+            }
+          },
+          "returnMultiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "endColumn": 12,
+            "endLine": 6,
+            "sourceId": "class_with_qualified_property.pure",
+            "startColumn": 5,
+            "startLine": 6
+          }
+        }
+      ],
+      "sourceInformation": {
+        "endColumn": 5,
+        "endLine": 2,
+        "sourceId": "class_with_qualified_property.pure",
+        "startColumn": 1,
+        "startLine": 2
+      }
+    },
+    {
+      "_type": "sectionIndex",
+      "name": "class_with_qualified_property.pure",
+      "package": "__internal__",
+      "sections": [
+        {
+          "_type": "default",
+          "elements": [
+            "model::domain::Person"
+          ],
+          "parserName": "Pure",
+          "sourceInformation": {
+            "endColumn": 7,
+            "endLine": 1,
+            "sourceId": "class_with_qualified_property.pure",
+            "startColumn": 1,
+            "startLine": 1
+          }
+        }
+      ],
+      "sourceInformation": {
+        "endColumn": 7,
+        "endLine": 1,
+        "sourceId": "class_with_qualified_property.pure",
+        "startColumn": 1,
+        "startLine": 1
+      }
+    }
+  ],
+  "serializer": {
+    "name": "pure",
+    "version": "vX_X_X"
+  }
+}

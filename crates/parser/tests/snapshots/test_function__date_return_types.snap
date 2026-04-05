@@ -1,0 +1,164 @@
+---
+source: crates/parser/tests/test_function.rs
+expression: file
+---
+SourceFile {
+    sections: [
+        Section {
+            kind: "Pure",
+            imports: [],
+            elements: [
+                Function(
+                    FunctionDef {
+                        package: Some(
+                            Package {
+                                name: "my",
+                                parent: None,
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 2,
+                                    start_column: 10,
+                                    end_line: 2,
+                                    end_column: 11,
+                                },
+                            },
+                        ),
+                        name: "getDate",
+                        parameters: [],
+                        return_type: TypeReference {
+                            path: Package {
+                                name: "StrictDate",
+                                parent: None,
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 2,
+                                    start_column: 25,
+                                    end_line: 2,
+                                    end_column: 34,
+                                },
+                            },
+                            type_arguments: [],
+                            type_variable_values: [],
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 2,
+                                start_column: 25,
+                                end_line: 2,
+                                end_column: 34,
+                            },
+                        },
+                        return_multiplicity: PureOne,
+                        body: [
+                            Literal(
+                                StrictDate(
+                                    StrictDateLiteral {
+                                        value: "2024-01-15",
+                                        source_info: SourceInfo {
+                                            source: "test.pure",
+                                            start_line: 4,
+                                            start_column: 5,
+                                            end_line: 4,
+                                            end_column: 15,
+                                        },
+                                    },
+                                ),
+                            ),
+                        ],
+                        stereotypes: [],
+                        tagged_values: [],
+                        tests: [],
+                        source_info: SourceInfo {
+                            source: "test.pure",
+                            start_line: 2,
+                            start_column: 1,
+                            end_line: 2,
+                            end_column: 8,
+                        },
+                    },
+                ),
+                Function(
+                    FunctionDef {
+                        package: Some(
+                            Package {
+                                name: "my",
+                                parent: None,
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 7,
+                                    start_column: 10,
+                                    end_line: 7,
+                                    end_column: 11,
+                                },
+                            },
+                        ),
+                        name: "getDateTime",
+                        parameters: [],
+                        return_type: TypeReference {
+                            path: Package {
+                                name: "DateTime",
+                                parent: None,
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 7,
+                                    start_column: 29,
+                                    end_line: 7,
+                                    end_column: 36,
+                                },
+                            },
+                            type_arguments: [],
+                            type_variable_values: [],
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 7,
+                                start_column: 29,
+                                end_line: 7,
+                                end_column: 36,
+                            },
+                        },
+                        return_multiplicity: PureOne,
+                        body: [
+                            Literal(
+                                DateTime(
+                                    DateTimeLiteral {
+                                        value: "2024-01-15T10:30:00",
+                                        source_info: SourceInfo {
+                                            source: "test.pure",
+                                            start_line: 9,
+                                            start_column: 5,
+                                            end_line: 9,
+                                            end_column: 24,
+                                        },
+                                    },
+                                ),
+                            ),
+                        ],
+                        stereotypes: [],
+                        tagged_values: [],
+                        tests: [],
+                        source_info: SourceInfo {
+                            source: "test.pure",
+                            start_line: 7,
+                            start_column: 1,
+                            end_line: 7,
+                            end_column: 8,
+                        },
+                    },
+                ),
+            ],
+            source_info: SourceInfo {
+                source: "test.pure",
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: 7,
+            },
+        },
+    ],
+    source_info: SourceInfo {
+        source: "test.pure",
+        start_line: 1,
+        start_column: 1,
+        end_line: 1,
+        end_column: 7,
+    },
+}

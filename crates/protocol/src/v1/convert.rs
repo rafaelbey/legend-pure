@@ -223,8 +223,8 @@ impl From<&ast::element::Constraint> for v1::property::Constraint {
 fn convert_parameter(p: &ast::annotation::Parameter) -> serde_json::Value {
     let var = v1::value_spec::Variable {
         name: p.name.to_string(),
-        generic_type: Some((&p.type_ref).into()),
-        multiplicity: Some((&p.multiplicity).into()),
+        generic_type: p.type_ref.as_ref().map(Into::into),
+        multiplicity: p.multiplicity.as_ref().map(Into::into),
         supports_stream: None,
         source_information: Some(p.source_info.clone().into()),
     };
@@ -366,8 +366,8 @@ pub fn convert_expression_typed(
                 .iter()
                 .map(|p| Variable {
                     name: p.name.to_string(),
-                    generic_type: Some((&p.type_ref).into()),
-                    multiplicity: Some((&p.multiplicity).into()),
+                    generic_type: p.type_ref.as_ref().map(Into::into),
+                    multiplicity: p.multiplicity.as_ref().map(Into::into),
                     supports_stream: None,
                     source_information: Some(p.source_info.clone().into()),
                 })
@@ -655,8 +655,8 @@ fn convert_function(f: &ast::element::FunctionDef) -> v1::element::ProtocolFunct
             .iter()
             .map(|p| v1::value_spec::Variable {
                 name: p.name.to_string(),
-                generic_type: Some((&p.type_ref).into()),
-                multiplicity: Some((&p.multiplicity).into()),
+                generic_type: p.type_ref.as_ref().map(Into::into),
+                multiplicity: p.multiplicity.as_ref().map(Into::into),
                 supports_stream: None,
                 source_information: Some(p.source_info.clone().into()),
             })

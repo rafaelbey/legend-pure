@@ -28,4 +28,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-insta = { workspace = true }
+insta = { workspace = true, features = ["json"] }
+legend-pure-parser-parser = { path = "../parser" }
+serde_json = { workspace = true }

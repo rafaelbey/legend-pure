@@ -1,0 +1,6 @@
+###Pure
+Profile meta::pure::profiles::doc
+{
+    stereotypes: [deprecated, experimental];
+    tags: [description, todo];
+}

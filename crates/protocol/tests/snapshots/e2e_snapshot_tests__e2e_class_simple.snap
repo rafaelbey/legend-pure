@@ -1,0 +1,153 @@
+---
+source: crates/protocol/tests/e2e_snapshot_tests.rs
+expression: json
+---
+{
+  "elements": [
+    {
+      "_type": "class",
+      "name": "Person",
+      "package": "model",
+      "properties": [
+        {
+          "genericType": {
+            "rawType": {
+              "fullPath": "String",
+              "sourceInformation": {
+                "endColumn": 21,
+                "endLine": 4,
+                "sourceId": "class_simple.pure",
+                "startColumn": 16,
+                "startLine": 4
+              }
+            },
+            "sourceInformation": {
+              "endColumn": 21,
+              "endLine": 4,
+              "sourceId": "class_simple.pure",
+              "startColumn": 16,
+              "startLine": 4
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "name": "firstName",
+          "sourceInformation": {
+            "endColumn": 13,
+            "endLine": 4,
+            "sourceId": "class_simple.pure",
+            "startColumn": 5,
+            "startLine": 4
+          }
+        },
+        {
+          "genericType": {
+            "rawType": {
+              "fullPath": "String",
+              "sourceInformation": {
+                "endColumn": 20,
+                "endLine": 5,
+                "sourceId": "class_simple.pure",
+                "startColumn": 15,
+                "startLine": 5
+              }
+            },
+            "sourceInformation": {
+              "endColumn": 20,
+              "endLine": 5,
+              "sourceId": "class_simple.pure",
+              "startColumn": 15,
+              "startLine": 5
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "name": "lastName",
+          "sourceInformation": {
+            "endColumn": 12,
+            "endLine": 5,
+            "sourceId": "class_simple.pure",
+            "startColumn": 5,
+            "startLine": 5
+          }
+        },
+        {
+          "genericType": {
+            "rawType": {
+              "fullPath": "Integer",
+              "sourceInformation": {
+                "endColumn": 16,
+                "endLine": 6,
+                "sourceId": "class_simple.pure",
+                "startColumn": 10,
+                "startLine": 6
+              }
+            },
+            "sourceInformation": {
+              "endColumn": 16,
+              "endLine": 6,
+              "sourceId": "class_simple.pure",
+              "startColumn": 10,
+              "startLine": 6
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 0,
+            "upperBound": 1
+          },
+          "name": "age",
+          "sourceInformation": {
+            "endColumn": 7,
+            "endLine": 6,
+            "sourceId": "class_simple.pure",
+            "startColumn": 5,
+            "startLine": 6
+          }
+        }
+      ],
+      "sourceInformation": {
+        "endColumn": 5,
+        "endLine": 2,
+        "sourceId": "class_simple.pure",
+        "startColumn": 1,
+        "startLine": 2
+      }
+    },
+    {
+      "_type": "sectionIndex",
+      "name": "class_simple.pure",
+      "package": "__internal__",
+      "sections": [
+        {
+          "_type": "default",
+          "elements": [
+            "model::Person"
+          ],
+          "parserName": "Pure",
+          "sourceInformation": {
+            "endColumn": 7,
+            "endLine": 1,
+            "sourceId": "class_simple.pure",
+            "startColumn": 1,
+            "startLine": 1
+          }
+        }
+      ],
+      "sourceInformation": {
+        "endColumn": 7,
+        "endLine": 1,
+        "sourceId": "class_simple.pure",
+        "startColumn": 1,
+        "startLine": 1
+      }
+    }
+  ],
+  "serializer": {
+    "name": "pure",
+    "version": "vX_X_X"
+  }
+}

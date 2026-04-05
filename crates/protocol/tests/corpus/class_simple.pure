@@ -1,0 +1,7 @@
+###Pure
+Class model::Person
+{
+    firstName: String[1];
+    lastName: String[1];
+    age: Integer[0..1];
+}

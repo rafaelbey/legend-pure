@@ -25,3 +25,7 @@ legend-pure-parser-lexer = { path = "../lexer" }
 smol_str = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+legend-pure-parser-ast = { path = "../ast" }
+insta = { workspace = true }

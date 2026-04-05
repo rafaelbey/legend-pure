@@ -1,0 +1,1575 @@
+// Copyright 2026 Goldman Sachs
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Recursive descent parser for the Pure grammar.
+//!
+//! This parser is strictly responsible for **syntax analysis** — converting a
+//! token stream into an AST. It does not perform semantic validation (e.g., type
+//! checking, name resolution, or structural constraints on graph fetch trees).
+//! See `docs/SEMANTIC_VALIDATIONS.md` for deferred validations.
+
+use legend_pure_parser_ast::annotation::{
+    PackageableElementPtr, Parameter, SpannedString, StereotypePtr, TagPtr, TaggedValue,
+};
+use legend_pure_parser_ast::element::{
+    AggregationKind, AssociationDef, ClassDef, Constraint, Element, EnumDef, EnumValue,
+    FunctionDef, FunctionTest, FunctionTestAssertion, MeasureDef, ProfileDef, Property,
+    QualifiedProperty, UnitDef,
+};
+use legend_pure_parser_ast::expression::{
+    ArithmeticExpr, ArithmeticOp, ArrowFunction, BooleanLiteral, CollectionExpr, ComparisonExpr,
+    ComparisonOp, DateTimeLiteral, DecimalLiteral, Expression, FloatLiteral, FunctionApplication,
+    IntegerLiteral, KeyValuePair, Lambda, LetExpr, Literal, LogicalExpr, LogicalOp, MemberAccess,
+    NewInstanceExpr, NotExpr, QualifiedMemberAccess, SimpleMemberAccess, StrictDateLiteral,
+    StrictTimeLiteral, StringLiteral, TypeReferenceExpr, UnaryMinusExpr, Variable,
+};
+use legend_pure_parser_ast::section::{ImportStatement, Section, SourceFile};
+use legend_pure_parser_ast::source_info::SourceInfo;
+use legend_pure_parser_ast::type_ref::{
+    Multiplicity, Package, TypeReference, TypeVariableValue,
+};
+use legend_pure_parser_lexer::TokenKind;
+use smol_str::SmolStr;
+
+use crate::cursor::Cursor;
+use crate::error::ParseError;
+
+type R<T> = Result<T, ParseError>;
+
+/// Main parser struct wrapping a token cursor.
+pub(crate) struct Parser {
+    cursor: Cursor,
+}
+
+impl Parser {
+    pub fn new(cursor: Cursor) -> Self {
+        Self { cursor }
+    }
+
+    // ── Top-level ───────────────────────────────────────────────────────
+
+    pub fn parse_source_file(&mut self) -> R<SourceFile> {
+        let start = self.cursor.current_source_info();
+        let mut sections = Vec::new();
+
+        while !self.cursor.check(TokenKind::Eof) {
+            sections.push(self.parse_section()?);
+        }
+
+        if sections.is_empty() {
+            sections.push(Section {
+                kind: SmolStr::new("Pure"),
+                imports: vec![],
+                elements: vec![],
+                source_info: start.clone(),
+            });
+        }
+
+        Ok(SourceFile {
+            sections,
+            source_info: start,
+        })
+    }
+
+    fn parse_section(&mut self) -> R<Section> {
+        let start = self.cursor.current_source_info();
+        let kind = if self.cursor.check(TokenKind::SectionHeader) {
+            let tok = self.cursor.advance().clone();
+            SmolStr::new(tok.text.trim_start_matches('#'))
+        } else {
+            SmolStr::new("Pure")
+        };
+
+        let mut imports = Vec::new();
+        while self.cursor.check(TokenKind::Import) {
+            imports.push(self.parse_import()?);
+        }
+
+        let mut elements = Vec::new();
+        while !self.cursor.check(TokenKind::SectionHeader) && !self.cursor.check(TokenKind::Eof) {
+            elements.push(self.parse_element()?);
+        }
+
+        Ok(Section {
+            kind,
+            imports,
+            elements,
+            source_info: start,
+        })
+    }
+
+    fn parse_import(&mut self) -> R<ImportStatement> {
+        let start = self.cursor.current_source_info();
+        self.cursor.expect(TokenKind::Import)?;
+        let path = self.parse_package_path()?;
+        // Consume ::* if present
+        if self.cursor.eat(TokenKind::PathSep) {
+            self.cursor.expect(TokenKind::Star)?;
+        }
+        self.cursor.expect(TokenKind::Semicolon)?;
+        Ok(ImportStatement {
+            path,
+            source_info: start,
+        })
+    }
+
+    fn parse_element(&mut self) -> R<Element> {
+        match self.cursor.peek_kind() {
+            TokenKind::Profile => self.parse_profile(),
+            TokenKind::Enum => self.parse_enum(),
+            TokenKind::Class => self.parse_class(),
+            TokenKind::Association => self.parse_association(),
+            TokenKind::Measure => self.parse_measure(),
+            TokenKind::Function => self.parse_function(),
+            _ => Err(ParseError::unexpected(
+                format!("Unexpected token {}", self.cursor.peek().text),
+                self.cursor.current_source_info(),
+            )),
+        }
+    }
+
+    // ── Package path: my::pkg::Name ─────────────────────────────────────
+
+    fn parse_package_path(&mut self) -> R<Package> {
+        let (name, si) = self.cursor.expect_identifier_or_keyword()?;
+        let mut pkg = Package::root(name, si);
+        while self.cursor.check(TokenKind::PathSep) && !is_wildcard_ahead(&self.cursor) {
+            self.cursor.advance();
+            let (seg, si) = self.cursor.expect_identifier_or_keyword()?;
+            pkg = pkg.child(seg, si);
+        }
+        Ok(pkg)
+    }
+
+    /// Parse a qualified name, returning (package, name).
+    fn parse_qualified_name(&mut self) -> R<(Option<Package>, SmolStr, SourceInfo)> {
+        let (first, first_si) = self.cursor.expect_identifier_or_keyword()?;
+        if !self.cursor.check(TokenKind::PathSep) {
+            return Ok((None, first, first_si));
+        }
+        let mut pkg = Package::root(first, first_si.clone());
+        while self.cursor.eat(TokenKind::PathSep) {
+            let (seg, si) = self.cursor.expect_identifier_or_keyword()?;
+            if self.cursor.check(TokenKind::PathSep) {
+                pkg = pkg.child(seg, si);
+            } else {
+                return Ok((Some(pkg), seg, first_si));
+            }
+        }
+        // Last segment in package is actually the name
+        let name = SmolStr::new(pkg.name());
+        Ok((pkg.parent().cloned(), name, first_si))
+    }
+
+    // ── Annotations ─────────────────────────────────────────────────────
+
+    fn parse_stereotypes(&mut self) -> R<Vec<StereotypePtr>> {
+        if !self.cursor.check(TokenKind::LessLess) {
+            return Ok(vec![]);
+        }
+        self.cursor.advance(); // <<
+        let mut result = Vec::new();
+        loop {
+            result.push(self.parse_stereotype_ptr()?);
+            if !self.cursor.eat(TokenKind::Comma) {
+                break;
+            }
+        }
+        self.cursor.expect(TokenKind::GreaterGreater)?;
+        Ok(result)
+    }
+
+    fn parse_stereotype_ptr(&mut self) -> R<StereotypePtr> {
+        let start = self.cursor.current_source_info();
+        let profile_path = self.parse_package_path()?;
+        self.cursor.expect(TokenKind::Dot)?;
+        let (value, _) = self.cursor.expect_identifier_or_keyword()?;
+        let (pkg, profile_name) = split_package_name(&profile_path);
+        let profile = PackageableElementPtr {
+            package: pkg,
+            name: profile_name,
+            source_info: start.clone(),
+        };
+        Ok(StereotypePtr {
+            profile,
+            value,
+            source_info: start,
+        })
+    }
+
+    fn parse_tagged_values(&mut self) -> R<Vec<TaggedValue>> {
+        if !self.cursor.check(TokenKind::LBrace) {
+            return Ok(vec![]);
+        }
+        // Lookahead: is this {profile.tag = 'val'} or a body {prop: Type}?
+        // Tagged values always start with identifier.identifier =
+        if !self.is_tagged_value_start() {
+            return Ok(vec![]);
+        }
+        self.cursor.advance(); // {
+        let mut result = Vec::new();
+        loop {
+            result.push(self.parse_tagged_value()?);
+            if !self.cursor.eat(TokenKind::Comma) {
+                break;
+            }
+        }
+        self.cursor.expect(TokenKind::RBrace)?;
+        Ok(result)
+    }
+
+    fn is_tagged_value_start(&self) -> bool {
+        // Pattern: { <ident> . <ident> = <string> }
+        if self.cursor.peek_kind() != TokenKind::LBrace {
+            return false;
+        }
+        let k1 = self.cursor.peek_kind_at(1);
+        let k2 = self.cursor.peek_kind_at(2);
+        (k1 == TokenKind::Identifier || k1 == TokenKind::StringLiteral)
+            && (k2 == TokenKind::Dot || k2 == TokenKind::PathSep)
+    }
+
+    fn parse_tagged_value(&mut self) -> R<TaggedValue> {
+        let start = self.cursor.current_source_info();
+        let profile_path = self.parse_package_path()?;
+        self.cursor.expect(TokenKind::Dot)?;
+        let (tag_name, _) = self.cursor.expect_identifier_or_keyword()?;
+        self.cursor.expect(TokenKind::Equals)?;
+        let value_tok = self.cursor.expect(TokenKind::StringLiteral)?;
+        let value = unquote_string(&value_tok.text);
+        let (pkg, profile_name) = split_package_name(&profile_path);
+        let profile = PackageableElementPtr {
+            package: pkg,
+            name: profile_name,
+            source_info: start.clone(),
+        };
+        let tag = TagPtr {
+            profile,
+            value: tag_name,
+            source_info: start.clone(),
+        };
+        Ok(TaggedValue {
+            tag,
+            value,
+            source_info: start,
+        })
+    }
+
+    // ── Profile ─────────────────────────────────────────────────────────
+
+    fn parse_profile(&mut self) -> R<Element> {
+        let start = self.cursor.current_source_info();
+        self.cursor.expect(TokenKind::Profile)?;
+        let (package, name, _) = self.parse_qualified_name()?;
+        self.cursor.expect(TokenKind::LBrace)?;
+
+        let mut stereotypes = Vec::new();
+        let mut tags = Vec::new();
+
+        while !self.cursor.check(TokenKind::RBrace) {
+            if self.cursor.check(TokenKind::Stereotypes) {
+                self.cursor.advance();
+                self.cursor.expect(TokenKind::Colon)?;
+                self.cursor.expect(TokenKind::LBracket)?;
+                loop {
+                    let (val, si) = self.cursor.expect_identifier_or_keyword()?;
+                    stereotypes.push(SpannedString {
+                        value: val,
+                        source_info: si,
+                    });
+                    if !self.cursor.eat(TokenKind::Comma) {
+                        break;
+                    }
+                }
+                self.cursor.expect(TokenKind::RBracket)?;
+                self.cursor.expect(TokenKind::Semicolon)?;
+            } else if self.cursor.check(TokenKind::Tags) {
+                self.cursor.advance();
+                self.cursor.expect(TokenKind::Colon)?;
+                self.cursor.expect(TokenKind::LBracket)?;
+                loop {
+                    let (val, si) = self.cursor.expect_identifier_or_keyword()?;
+                    tags.push(SpannedString {
+                        value: val,
+                        source_info: si,
+                    });
+                    if !self.cursor.eat(TokenKind::Comma) {
+                        break;
+                    }
+                }
+                self.cursor.expect(TokenKind::RBracket)?;
+                self.cursor.expect(TokenKind::Semicolon)?;
+            } else {
+                return Err(ParseError::expected(
+                    "'stereotypes' or 'tags'",
+                    self.cursor.peek_kind(),
+                    self.cursor.current_source_info(),
+                ));
+            }
+        }
+        self.cursor.expect(TokenKind::RBrace)?;
+        Ok(Element::Profile(ProfileDef {
+            package,
+            name,
+            stereotypes,
+            tags,
+            source_info: start,
+        }))
+    }
+
+    // ── Enum ────────────────────────────────────────────────────────────
+
+    fn parse_enum(&mut self) -> R<Element> {
+        let start = self.cursor.current_source_info();
+        self.cursor.expect(TokenKind::Enum)?;
+        let stereotypes = self.parse_stereotypes()?;
+        let tagged_values = self.parse_tagged_values()?;
+        let (package, name, _) = self.parse_qualified_name()?;
+        self.cursor.expect(TokenKind::LBrace)?;
+        let mut values = Vec::new();
+        while !self.cursor.check(TokenKind::RBrace) {
+            let val_stereos = self.parse_stereotypes()?;
+            let val_tvs = self.parse_tagged_values()?;
+            let (val_name, val_si) = self.cursor.expect_identifier_or_keyword()?;
+            values.push(EnumValue {
+                name: val_name,
+                stereotypes: val_stereos,
+                tagged_values: val_tvs,
+                source_info: val_si,
+            });
+            self.cursor.eat(TokenKind::Comma);
+        }
+        self.cursor.expect(TokenKind::RBrace)?;
+        Ok(Element::Enumeration(EnumDef {
+            package,
+            name,
+            values,
+            stereotypes,
+            tagged_values,
+            source_info: start,
+        }))
+    }
+
+    // ── Class ───────────────────────────────────────────────────────────
+
+    fn parse_class(&mut self) -> R<Element> {
+        let start = self.cursor.current_source_info();
+        self.cursor.expect(TokenKind::Class)?;
+        let stereotypes = self.parse_stereotypes()?;
+        let tagged_values = self.parse_tagged_values()?;
+        let (package, name, _) = self.parse_qualified_name()?;
+
+        let type_parameters = if self.cursor.eat(TokenKind::Less) {
+            let mut params = Vec::new();
+            loop {
+                let (p, _) = self.cursor.expect_identifier()?;
+                params.push(p);
+                if !self.cursor.eat(TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.cursor.expect(TokenKind::Greater)?;
+            params
+        } else {
+            vec![]
+        };
+
+        let super_types = if self.cursor.eat(TokenKind::Extends) {
+            let mut supers = Vec::new();
+            loop {
+                supers.push(self.parse_type_reference()?);
+                if !self.cursor.eat(TokenKind::Comma) {
+                    break;
+                }
+            }
+            supers
+        } else {
+            vec![]
+        };
+
+        let constraints = if self.cursor.check(TokenKind::LBracket) {
+            self.parse_constraints()?
+        } else {
+            vec![]
+        };
+
+        self.cursor.expect(TokenKind::LBrace)?;
+        let (properties, qualified_properties) = self.parse_class_body()?;
+        self.cursor.expect(TokenKind::RBrace)?;
+
+        Ok(Element::Class(ClassDef {
+            package,
+            name,
+            type_parameters,
+            super_types,
+            properties,
+            qualified_properties,
+            constraints,
+            stereotypes,
+            tagged_values,
+            source_info: start,
+        }))
+    }
+
+    fn parse_constraints(&mut self) -> R<Vec<Constraint>> {
+        self.cursor.expect(TokenKind::LBracket)?;
+        let mut result = Vec::new();
+        loop {
+            result.push(self.parse_constraint()?);
+            if !self.cursor.eat(TokenKind::Comma) {
+                break;
+            }
+        }
+        self.cursor.expect(TokenKind::RBracket)?;
+        Ok(result)
+    }
+
+    fn parse_constraint(&mut self) -> R<Constraint> {
+        let start = self.cursor.current_source_info();
+        let mut name = None;
+        let mut function_definition;
+        let mut enforcement_level = None;
+        let mut external_id = None;
+        let mut message = None;
+
+        if self.is_named_constraint() {
+            let (n, _) = self.cursor.expect_identifier()?;
+            if self.cursor.check(TokenKind::LParen) && self.cursor.peek_kind_at(1) == TokenKind::Tilde {
+                // Extended constraint: name ( ~function: ... ~enforcementLevel: ... )
+                self.cursor.advance(); // (
+                function_definition = Expression::Literal(Literal::Boolean(BooleanLiteral { value: true, source_info: start.clone() }));
+                while self.cursor.check(TokenKind::Tilde) {
+                    self.cursor.advance(); // ~
+                    let (key, _) = self.cursor.expect_identifier_or_keyword()?;
+                    self.cursor.expect(TokenKind::Colon)?;
+                    match key.as_str() {
+                        "function" => function_definition = self.parse_expression()?,
+                        "enforcementLevel" => {
+                            let (level, _) = self.cursor.expect_identifier_or_keyword()?;
+                            enforcement_level = Some(level);
+                        }
+                        "externalId" => {
+                            let tok = self.cursor.expect(TokenKind::StringLiteral)?;
+                            external_id = Some(unquote_string(&tok.text));
+                        }
+                        "message" => {
+                            if self.cursor.check(TokenKind::StringLiteral) {
+                                let tok = self.cursor.advance().clone();
+                                message = Some(Expression::Literal(Literal::String(StringLiteral { value: unquote_string(&tok.text), source_info: tok.source_info.clone() })));
+                            } else {
+                                message = Some(self.parse_expression()?);
+                            }
+                        }
+                        other => {
+                            return Err(ParseError::unexpected(
+                                format!("Unknown constraint field '~{other}'"),
+                                self.cursor.current_source_info(),
+                            ));
+                        }
+                    }
+                }
+                self.cursor.expect(TokenKind::RParen)?;
+                name = Some(n);
+            } else {
+                self.cursor.expect(TokenKind::Colon)?;
+                function_definition = self.parse_expression()?;
+                name = Some(n);
+            }
+        } else {
+            function_definition = self.parse_expression()?;
+        }
+        Ok(Constraint {
+            name, function_definition,
+            enforcement_level, external_id, message,
+            source_info: start,
+        })
+    }
+
+    fn is_named_constraint(&self) -> bool {
+        let k0 = self.cursor.peek_kind();
+        let k1 = self.cursor.peek_kind_at(1);
+        (k0 == TokenKind::Identifier || k0 == TokenKind::StringLiteral)
+            && (k1 == TokenKind::Colon || (k1 == TokenKind::LParen && self.cursor.peek_kind_at(2) == TokenKind::Tilde))
+    }
+
+    fn parse_class_body(&mut self) -> R<(Vec<Property>, Vec<QualifiedProperty>)> {
+        let mut props = Vec::new();
+        let mut qprops = Vec::new();
+        while !self.cursor.check(TokenKind::RBrace) {
+            let stereos = self.parse_stereotypes()?;
+            let tvs = self.parse_tagged_values()?;
+            let aggregation = self.parse_aggregation()?;
+            let (prop_name, prop_si) = self.cursor.expect_identifier_or_keyword()?;
+
+            if self.cursor.check(TokenKind::LParen) {
+                // Qualified property: name(params) { body }: RetType[mult];
+                qprops.push(self.parse_qualified_property(prop_name, prop_si, stereos, tvs)?);
+            } else {
+                // Regular property: name: Type[mult];
+                self.cursor.expect(TokenKind::Colon)?;
+                let type_ref = self.parse_type_reference()?;
+                self.cursor.expect(TokenKind::LBracket)?;
+                let multiplicity = self.parse_multiplicity()?;
+                self.cursor.expect(TokenKind::RBracket)?;
+                let default_value = if self.cursor.eat(TokenKind::Equals) {
+                    Some(self.parse_expression()?)
+                } else {
+                    None
+                };
+                self.cursor.expect(TokenKind::Semicolon)?;
+                props.push(Property {
+                    name: prop_name,
+                    type_ref,
+                    multiplicity,
+                    aggregation,
+                    default_value,
+                    stereotypes: stereos,
+                    tagged_values: tvs,
+                    source_info: prop_si,
+                });
+            }
+        }
+        Ok((props, qprops))
+    }
+
+    fn parse_aggregation(&mut self) -> R<Option<AggregationKind>> {
+        if !self.cursor.check(TokenKind::LParen) {
+            return Ok(None);
+        }
+        // Lookahead: (shared), (composite), (none) — vs regular parens
+        match self.cursor.peek_kind_at(1) {
+            TokenKind::Shared => {
+                self.cursor.advance();
+                self.cursor.advance();
+                self.cursor.expect(TokenKind::RParen)?;
+                Ok(Some(AggregationKind::Shared))
+            }
+            TokenKind::Composite => {
+                self.cursor.advance();
+                self.cursor.advance();
+                self.cursor.expect(TokenKind::RParen)?;
+                Ok(Some(AggregationKind::Composite))
+            }
+            TokenKind::None => {
+                self.cursor.advance();
+                self.cursor.advance();
+                self.cursor.expect(TokenKind::RParen)?;
+                Ok(Some(AggregationKind::None))
+            }
+            TokenKind::Identifier if self.cursor.peek_kind_at(2) == TokenKind::RParen => {
+                let si = self.cursor.current_source_info();
+                self.cursor.advance(); // (
+                let tok = self.cursor.advance().clone(); // bad keyword
+                self.cursor.advance(); // )
+                Err(ParseError::unexpected(
+                    format!("Invalid aggregation kind '{}'. Expected 'shared', 'composite', or 'none'", tok.text),
+                    si,
+                ))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn parse_qualified_property(
+        &mut self,
+        name: SmolStr,
+        si: SourceInfo,
+        stereotypes: Vec<StereotypePtr>,
+        tagged_values: Vec<TaggedValue>,
+    ) -> R<QualifiedProperty> {
+        self.cursor.expect(TokenKind::LParen)?;
+        let mut parameters = Vec::new();
+        while !self.cursor.check(TokenKind::RParen) {
+            parameters.push(self.parse_parameter()?);
+            self.cursor.eat(TokenKind::Comma);
+        }
+        self.cursor.expect(TokenKind::RParen)?;
+        self.cursor.expect(TokenKind::LBrace)?;
+        let body = self.parse_expression_list()?;
+        self.cursor.expect(TokenKind::RBrace)?;
+        self.cursor.expect(TokenKind::Colon)?;
+        let return_type = self.parse_type_reference()?;
+        self.cursor.expect(TokenKind::LBracket)?;
+        let return_multiplicity = self.parse_multiplicity()?;
+        self.cursor.expect(TokenKind::RBracket)?;
+        self.cursor.expect(TokenKind::Semicolon)?;
+        Ok(QualifiedProperty {
+            name,
+            parameters,
+            return_type,
+            return_multiplicity,
+            body,
+            stereotypes,
+            tagged_values,
+            source_info: si,
+        })
+    }
+
+    // ── Association ─────────────────────────────────────────────────────
+
+    fn parse_association(&mut self) -> R<Element> {
+        let start = self.cursor.current_source_info();
+        self.cursor.expect(TokenKind::Association)?;
+        let stereotypes = self.parse_stereotypes()?;
+        let tagged_values = self.parse_tagged_values()?;
+        let (package, name, _) = self.parse_qualified_name()?;
+        self.cursor.expect(TokenKind::LBrace)?;
+        let (properties, qualified_properties) = self.parse_class_body()?;
+        self.cursor.expect(TokenKind::RBrace)?;
+        Ok(Element::Association(AssociationDef {
+            package,
+            name,
+            properties,
+            qualified_properties,
+            stereotypes,
+            tagged_values,
+            source_info: start,
+        }))
+    }
+
+    // ── Measure ─────────────────────────────────────────────────────────
+
+    fn parse_measure(&mut self) -> R<Element> {
+        let start = self.cursor.current_source_info();
+        self.cursor.expect(TokenKind::Measure)?;
+        let (package, name, _) = self.parse_qualified_name()?;
+        self.cursor.expect(TokenKind::LBrace)?;
+        let mut canonical_unit = None;
+        let mut non_canonical_units = Vec::new();
+        while !self.cursor.check(TokenKind::RBrace) {
+            let is_canonical = self.cursor.eat(TokenKind::Star);
+            let unit = self.parse_unit_def()?;
+            if is_canonical {
+                canonical_unit = Some(unit);
+            } else {
+                non_canonical_units.push(unit);
+            }
+        }
+        self.cursor.expect(TokenKind::RBrace)?;
+        Ok(Element::Measure(MeasureDef {
+            package,
+            name,
+            canonical_unit,
+            non_canonical_units,
+            source_info: start,
+        }))
+    }
+
+    fn parse_unit_def(&mut self) -> R<UnitDef> {
+        let (name, si) = self.cursor.expect_identifier_or_keyword()?;
+        if self.cursor.eat(TokenKind::Colon) {
+            let (param, _) = self.cursor.expect_identifier()?;
+            self.cursor.expect(TokenKind::Arrow)?;
+            let body = self.parse_expression()?;
+            self.cursor.expect(TokenKind::Semicolon)?;
+            Ok(UnitDef {
+                name,
+                conversion_param: Some(param),
+                conversion_body: Some(body),
+                source_info: si,
+            })
+        } else {
+            self.cursor.expect(TokenKind::Semicolon)?;
+            Ok(UnitDef {
+                name,
+                conversion_param: None,
+                conversion_body: None,
+                source_info: si,
+            })
+        }
+    }
+
+    // ── Function ────────────────────────────────────────────────────────
+
+    fn parse_function(&mut self) -> R<Element> {
+        let start = self.cursor.current_source_info();
+        self.cursor.expect(TokenKind::Function)?;
+        let stereotypes = self.parse_stereotypes()?;
+        let tagged_values = self.parse_tagged_values()?;
+        let (package, name, _) = self.parse_qualified_name()?;
+        self.cursor.expect(TokenKind::LParen)?;
+        let mut parameters = Vec::new();
+        while !self.cursor.check(TokenKind::RParen) {
+            parameters.push(self.parse_parameter()?);
+            self.cursor.eat(TokenKind::Comma);
+        }
+        self.cursor.expect(TokenKind::RParen)?;
+        self.cursor.expect(TokenKind::Colon)?;
+        let return_type = self.parse_type_reference()?;
+        self.cursor.expect(TokenKind::LBracket)?;
+        let return_multiplicity = self.parse_multiplicity()?;
+        self.cursor.expect(TokenKind::RBracket)?;
+        self.cursor.expect(TokenKind::LBrace)?;
+        let body = self.parse_expression_list()?;
+        self.cursor.expect(TokenKind::RBrace)?;
+        // Parse optional function test block: { testName | func(args) => expected; }
+        let tests = if self.cursor.check(TokenKind::LBrace) {
+            self.parse_function_tests()?
+        } else {
+            vec![]
+        };
+        Ok(Element::Function(FunctionDef {
+            package,
+            name,
+            parameters,
+            return_type,
+            return_multiplicity,
+            body,
+            stereotypes,
+            tagged_values,
+            tests,
+            source_info: start,
+        }))
+    }
+
+    /// Parse function test block: { testName | funcCall(args) => expected; ... }
+    fn parse_function_tests(&mut self) -> R<Vec<FunctionTest>> {
+        let si = self.cursor.current_source_info();
+        self.cursor.expect(TokenKind::LBrace)?;
+        let mut assertions = Vec::new();
+        while !self.cursor.check(TokenKind::RBrace) {
+            assertions.push(self.parse_function_test_assertion()?);
+        }
+        self.cursor.expect(TokenKind::RBrace)?;
+        Ok(vec![FunctionTest {
+            name: None,
+            data: vec![],
+            assertions,
+            source_info: si,
+        }])
+    }
+
+    /// Parse: testName | funcCall(args) => expected;
+    fn parse_function_test_assertion(&mut self) -> R<FunctionTestAssertion> {
+        let si = self.cursor.current_source_info();
+        let (test_name, _) = self.cursor.expect_identifier_or_keyword()?;
+        self.cursor.expect(TokenKind::Pipe)?;
+        let invocation = self.parse_expression()?;
+        self.cursor.expect(TokenKind::FatArrow)?;
+        let expected = self.parse_expression()?;
+        self.cursor.expect(TokenKind::Semicolon)?;
+        Ok(FunctionTestAssertion {
+            name: test_name,
+            invocation,
+            expected_format: None,
+            expected,
+            source_info: si,
+        })
+    }
+
+    fn parse_parameter(&mut self) -> R<Parameter> {
+        let start = self.cursor.current_source_info();
+        let (name, _) = self.cursor.expect_identifier_or_keyword()?;
+        self.cursor.expect(TokenKind::Colon)?;
+        let type_ref = self.parse_type_reference()?;
+        self.cursor.expect(TokenKind::LBracket)?;
+        let multiplicity = self.parse_multiplicity()?;
+        self.cursor.expect(TokenKind::RBracket)?;
+        Ok(Parameter {
+            name,
+            type_ref: Some(type_ref),
+            multiplicity: Some(multiplicity),
+            source_info: start,
+        })
+    }
+
+    // ── Type references ─────────────────────────────────────────────────
+
+    fn parse_type_reference(&mut self) -> R<TypeReference> {
+        let start = self.cursor.current_source_info();
+        let mut path = self.parse_package_path()?;
+        // Handle Measure~Unit syntax: NewMeasure~UnitOne
+        if self.cursor.eat(TokenKind::Tilde) {
+            let (unit_name, unit_si) = self.cursor.expect_identifier_or_keyword()?;
+            let combined = SmolStr::new(format!("{}~{}", path.name(), unit_name));
+            path = if let Some(parent) = path.parent().cloned() {
+                parent.child(combined, unit_si)
+            } else {
+                Package::root(combined, unit_si)
+            };
+        }
+        let type_arguments = if self.cursor.eat(TokenKind::Less) {
+            let mut args = Vec::new();
+            if self.cursor.check(TokenKind::LParen) {
+                // Column specification: <(a:Integer, b:String)>
+                args = self.parse_column_spec()?;
+            } else {
+                loop {
+                    args.push(self.parse_type_reference()?);
+                    if !self.cursor.eat(TokenKind::Comma) {
+                        break;
+                    }
+                }
+            }
+            self.cursor.expect(TokenKind::Greater)?;
+            args
+        } else {
+            vec![]
+        };
+        let type_variable_values = if self.cursor.eat(TokenKind::LParen) {
+            let mut vals = Vec::new();
+            loop {
+                vals.push(self.parse_type_variable_value()?);
+                if !self.cursor.eat(TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.cursor.expect(TokenKind::RParen)?;
+            vals
+        } else {
+            vec![]
+        };
+        Ok(TypeReference {
+            path,
+            type_arguments,
+            type_variable_values,
+            source_info: start,
+        })
+    }
+
+    /// Parse column specification: (a:Integer, b:String)
+    /// Each column becomes a `TypeReference` where the column name is the path
+    /// and the column type is a nested type argument.
+    fn parse_column_spec(&mut self) -> R<Vec<TypeReference>> {
+        self.cursor.expect(TokenKind::LParen)?;
+        let mut cols = Vec::new();
+        loop {
+            let col_si = self.cursor.current_source_info();
+            let (col_name, _) = self.cursor.expect_identifier_or_keyword()?;
+            self.cursor.expect(TokenKind::Colon)?;
+            let col_type = self.parse_type_reference()?;
+            cols.push(TypeReference {
+                path: Package::root(col_name, col_si.clone()),
+                type_arguments: vec![col_type],
+                type_variable_values: vec![],
+                source_info: col_si,
+            });
+            if !self.cursor.eat(TokenKind::Comma) {
+                break;
+            }
+        }
+        self.cursor.expect(TokenKind::RParen)?;
+        Ok(cols)
+    }
+
+    fn parse_type_variable_value(&mut self) -> R<TypeVariableValue> {
+        let si = self.cursor.current_source_info();
+        match self.cursor.peek_kind() {
+            TokenKind::IntegerLiteral => {
+                let tok = self.cursor.advance().clone();
+                let val: i64 = tok.text.parse().unwrap_or(0);
+                Ok(TypeVariableValue::Integer(val, si))
+            }
+            TokenKind::StringLiteral => {
+                let tok = self.cursor.advance().clone();
+                Ok(TypeVariableValue::String(unquote_string(&tok.text), si))
+            }
+            _ => {
+                let (id, _) = self.cursor.expect_identifier()?;
+                Ok(TypeVariableValue::String(id.to_string(), si))
+            }
+        }
+    }
+
+    fn parse_multiplicity(&mut self) -> R<Multiplicity> {
+        match self.cursor.peek_kind() {
+            TokenKind::Star => {
+                self.cursor.advance();
+                Ok(Multiplicity::zero_or_many())
+            }
+            TokenKind::IntegerLiteral => {
+                let lo_tok = self.cursor.advance().clone();
+                let lo: u32 = lo_tok.text.parse().unwrap_or(0);
+                if self.cursor.eat(TokenKind::Dot) {
+                    self.cursor.expect(TokenKind::Dot)?;
+                    if self.cursor.check(TokenKind::Star) {
+                        self.cursor.advance();
+                        Ok(Multiplicity::range(lo, None))
+                    } else {
+                        let hi_tok = self.cursor.expect(TokenKind::IntegerLiteral)?;
+                        let hi: u32 = hi_tok.text.parse().unwrap_or(lo);
+                        Ok(Multiplicity::range(lo, Some(hi)))
+                    }
+                } else {
+                    Ok(Multiplicity::range(lo, Some(lo)))
+                }
+            }
+            _ => Err(ParseError::expected(
+                "multiplicity",
+                self.cursor.peek_kind(),
+                self.cursor.current_source_info(),
+            )),
+        }
+    }
+
+    // ── Expressions (precedence-climbing recursive descent) ─────────────
+
+    fn parse_expression_list(&mut self) -> R<Vec<Expression>> {
+        let mut exprs = Vec::new();
+        while !self.cursor.check(TokenKind::RBrace) && !self.cursor.check(TokenKind::Eof) {
+            exprs.push(self.parse_expression()?);
+            self.cursor.eat(TokenKind::Semicolon);
+        }
+        Ok(exprs)
+    }
+
+    /// Parse an expression (entry point — handles precedence via recursive descent).
+    pub fn parse_expression(&mut self) -> R<Expression> {
+        self.parse_or_expression()
+    }
+
+    fn parse_or_expression(&mut self) -> R<Expression> {
+        let mut left = self.parse_and_expression()?;
+        while self.cursor.check(TokenKind::PipePipe) {
+            let si = self.cursor.current_source_info();
+            self.cursor.advance();
+            let right = self.parse_and_expression()?;
+            left = Expression::Logical(LogicalExpr {
+                left: Box::new(left),
+                op: LogicalOp::Or,
+                right: Box::new(right),
+                source_info: si,
+            });
+        }
+        Ok(left)
+    }
+
+    fn parse_and_expression(&mut self) -> R<Expression> {
+        let mut left = self.parse_comparison()?;
+        while self.cursor.check(TokenKind::AmpAmp) {
+            let si = self.cursor.current_source_info();
+            self.cursor.advance();
+            let right = self.parse_comparison()?;
+            left = Expression::Logical(LogicalExpr {
+                left: Box::new(left),
+                op: LogicalOp::And,
+                right: Box::new(right),
+                source_info: si,
+            });
+        }
+        Ok(left)
+    }
+
+    fn parse_comparison(&mut self) -> R<Expression> {
+        let mut left = self.parse_additive()?;
+        if let Some(op) = self.comparison_op() {
+            let si = self.cursor.current_source_info();
+            self.cursor.advance();
+            let right = self.parse_additive()?;
+            left = Expression::Comparison(ComparisonExpr {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+                source_info: si,
+            });
+        }
+        Ok(left)
+    }
+
+    fn comparison_op(&self) -> Option<ComparisonOp> {
+        match self.cursor.peek_kind() {
+            TokenKind::EqualEqual => Some(ComparisonOp::Equal),
+            TokenKind::BangEqual => Some(ComparisonOp::NotEqual),
+            TokenKind::Less => Some(ComparisonOp::LessThan),
+            TokenKind::LessEqual => Some(ComparisonOp::LessThanOrEqual),
+            TokenKind::Greater => Some(ComparisonOp::GreaterThan),
+            TokenKind::GreaterEqual => Some(ComparisonOp::GreaterThanOrEqual),
+            _ => None,
+        }
+    }
+
+    fn parse_additive(&mut self) -> R<Expression> {
+        let mut left = self.parse_multiplicative()?;
+        while matches!(self.cursor.peek_kind(), TokenKind::Plus | TokenKind::Minus) {
+            let si = self.cursor.current_source_info();
+            let op = if self.cursor.peek_kind() == TokenKind::Plus {
+                ArithmeticOp::Plus
+            } else {
+                ArithmeticOp::Minus
+            };
+            self.cursor.advance();
+            let right = self.parse_multiplicative()?;
+            left = Expression::Arithmetic(ArithmeticExpr {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+                source_info: si,
+            });
+        }
+        Ok(left)
+    }
+
+    fn parse_multiplicative(&mut self) -> R<Expression> {
+        let mut left = self.parse_unary()?;
+        while matches!(self.cursor.peek_kind(), TokenKind::Star | TokenKind::Slash) {
+            let si = self.cursor.current_source_info();
+            let op = if self.cursor.peek_kind() == TokenKind::Star {
+                ArithmeticOp::Times
+            } else {
+                ArithmeticOp::Divide
+            };
+            self.cursor.advance();
+            let right = self.parse_unary()?;
+            left = Expression::Arithmetic(ArithmeticExpr {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+                source_info: si,
+            });
+        }
+        Ok(left)
+    }
+
+    fn parse_unary(&mut self) -> R<Expression> {
+        if self.cursor.check(TokenKind::Bang) {
+            let si = self.cursor.current_source_info();
+            self.cursor.advance();
+            let expr = self.parse_unary()?;
+            return Ok(Expression::Not(NotExpr {
+                operand: Box::new(expr),
+                source_info: si,
+            }));
+        }
+        if self.cursor.check(TokenKind::Minus) && !self.cursor.check(TokenKind::Arrow) {
+            let si = self.cursor.current_source_info();
+            self.cursor.advance();
+            let expr = self.parse_unary()?;
+            return Ok(Expression::UnaryMinus(UnaryMinusExpr {
+                operand: Box::new(expr),
+                source_info: si,
+            }));
+        }
+        self.parse_postfix()
+    }
+
+    fn parse_postfix(&mut self) -> R<Expression> {
+        let mut expr = self.parse_primary()?;
+        loop {
+            if self.cursor.check(TokenKind::Arrow) {
+                let si = self.cursor.current_source_info();
+                self.cursor.advance();
+                let (func_name, _) = self.cursor.expect_identifier_or_keyword()?;
+                // Check for path sep (fully qualified)
+                let mut path = Package::root(func_name, si.clone());
+                while self.cursor.eat(TokenKind::PathSep) {
+                    let (seg, seg_si) = self.cursor.expect_identifier_or_keyword()?;
+                    path = path.child(seg, seg_si);
+                }
+                let func_name = SmolStr::new(path.name());
+                self.cursor.expect(TokenKind::LParen)?;
+                let mut args = Vec::new();
+                while !self.cursor.check(TokenKind::RParen) {
+                    args.push(self.parse_expression()?);
+                    self.cursor.eat(TokenKind::Comma);
+                }
+                self.cursor.expect(TokenKind::RParen)?;
+                expr = Expression::ArrowFunction(ArrowFunction {
+                    target: Box::new(expr),
+                    function: func_name,
+                    arguments: args,
+                    source_info: si,
+                });
+            } else if self.cursor.check(TokenKind::Dot) {
+                let si = self.cursor.current_source_info();
+                self.cursor.advance();
+                let (member, _) = self.cursor.expect_identifier_or_keyword()?;
+                if self.cursor.check(TokenKind::LParen) {
+                    // Qualified member access: expr.member(args)
+                    self.cursor.advance();
+                    let mut args = Vec::new();
+                    while !self.cursor.check(TokenKind::RParen) {
+                        args.push(self.parse_expression()?);
+                        self.cursor.eat(TokenKind::Comma);
+                    }
+                    self.cursor.expect(TokenKind::RParen)?;
+                    expr =
+                        Expression::MemberAccess(MemberAccess::Qualified(QualifiedMemberAccess {
+                            target: Box::new(expr),
+                            member,
+                            arguments: args,
+                            source_info: si,
+                        }));
+                } else {
+                    expr = Expression::MemberAccess(MemberAccess::Simple(SimpleMemberAccess {
+                        target: Box::new(expr),
+                        member,
+                        source_info: si,
+                    }));
+                }
+            } else {
+                break;
+            }
+        }
+        Ok(expr)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn parse_primary(&mut self) -> R<Expression> {
+        let si = self.cursor.current_source_info();
+        match self.cursor.peek_kind() {
+            // Literals
+            TokenKind::IntegerLiteral => {
+                let tok = self.cursor.advance().clone();
+                let value: i64 = tok.text.parse().unwrap_or(0);
+                Ok(Expression::Literal(Literal::Integer(IntegerLiteral {
+                    value,
+                    source_info: si,
+                })))
+            }
+            TokenKind::FloatLiteral => {
+                let tok = self.cursor.advance().clone();
+                let value: f64 = tok.text.parse().unwrap_or(0.0);
+                Ok(Expression::Literal(Literal::Float(FloatLiteral {
+                    value,
+                    source_info: si,
+                })))
+            }
+            TokenKind::DecimalLiteral => {
+                let tok = self.cursor.advance().clone();
+                let text = tok.text.trim_end_matches(['D', 'd']);
+                Ok(Expression::Literal(Literal::Decimal(DecimalLiteral {
+                    value: text.to_string(),
+                    source_info: si,
+                })))
+            }
+            TokenKind::StringLiteral => {
+                let tok = self.cursor.advance().clone();
+                Ok(Expression::Literal(Literal::String(StringLiteral {
+                    value: unquote_string(&tok.text),
+                    source_info: si,
+                })))
+            }
+            TokenKind::True => {
+                self.cursor.advance();
+                Ok(Expression::Literal(Literal::Boolean(BooleanLiteral {
+                    value: true,
+                    source_info: si,
+                })))
+            }
+            TokenKind::False => {
+                self.cursor.advance();
+                Ok(Expression::Literal(Literal::Boolean(BooleanLiteral {
+                    value: false,
+                    source_info: si,
+                })))
+            }
+            TokenKind::DateLiteral => {
+                let tok = self.cursor.advance().clone();
+                let raw = tok.text.trim_start_matches('%');
+                if raw.contains('T') {
+                    Ok(Expression::Literal(Literal::DateTime(DateTimeLiteral {
+                        value: raw.to_string(),
+                        source_info: si,
+                    })))
+                } else if raw.starts_with(|c: char| c.is_ascii_digit()) && raw.contains('-') {
+                    Ok(Expression::Literal(Literal::StrictDate(
+                        StrictDateLiteral {
+                            value: raw.to_string(),
+                            source_info: si,
+                        },
+                    )))
+                } else {
+                    Ok(Expression::Literal(Literal::StrictTime(
+                        StrictTimeLiteral {
+                            value: raw.to_string(),
+                            source_info: si,
+                        },
+                    )))
+                }
+            }
+            // Variable: $name
+            TokenKind::Dollar => {
+                self.cursor.advance();
+                let (name, _) = self.cursor.expect_identifier_or_keyword()?;
+                Ok(Expression::Variable(Variable {
+                    name,
+                    source_info: si,
+                }))
+            }
+            // let binding
+            TokenKind::Let => {
+                self.cursor.advance();
+                let (name, _) = self.cursor.expect_identifier_or_keyword()?;
+                self.cursor.expect(TokenKind::Equals)?;
+                let value = self.parse_expression()?;
+                Ok(Expression::Let(LetExpr {
+                    name,
+                    value: Box::new(value),
+                    source_info: si,
+                }))
+            }
+            // Lambda: {x | body} or | body
+            TokenKind::Pipe => {
+                self.cursor.advance();
+                let body = self.parse_expression()?;
+                Ok(Expression::Lambda(Lambda {
+                    parameters: vec![],
+                    body: vec![body],
+                    source_info: si,
+                }))
+            }
+            // New instance: ^Type(props)
+            TokenKind::Caret => {
+                self.cursor.advance();
+                let path = self.parse_package_path()?;
+                let (pkg, name) = split_package_name(&path);
+                let class_ref = PackageableElementPtr {
+                    package: pkg,
+                    name,
+                    source_info: si.clone(),
+                };
+                self.cursor.expect(TokenKind::LParen)?;
+                let mut assignments = Vec::new();
+                while !self.cursor.check(TokenKind::RParen) {
+                    let kv_si = self.cursor.current_source_info();
+                    let (prop, _) = self.cursor.expect_identifier()?;
+                    self.cursor.expect(TokenKind::Equals)?;
+                    let val = self.parse_expression()?;
+                    assignments.push(KeyValuePair {
+                        key: prop,
+                        value: val,
+                        source_info: kv_si,
+                    });
+                    self.cursor.eat(TokenKind::Comma);
+                }
+                self.cursor.expect(TokenKind::RParen)?;
+                Ok(Expression::NewInstance(NewInstanceExpr {
+                    class: class_ref,
+                    assignments,
+                    source_info: si,
+                }))
+            }
+            // Cast: @Type
+            TokenKind::At => {
+                self.cursor.advance();
+                let type_ref = self.parse_type_reference()?;
+                Ok(Expression::TypeReferenceExpr(TypeReferenceExpr {
+                    type_ref,
+                    source_info: si,
+                }))
+            }
+            // Collection: [expr, ...]
+            TokenKind::LBracket => {
+                self.cursor.advance();
+                let mut elements = Vec::new();
+                while !self.cursor.check(TokenKind::RBracket) {
+                    elements.push(self.parse_expression()?);
+                    self.cursor.eat(TokenKind::Comma);
+                }
+                self.cursor.expect(TokenKind::RBracket)?;
+                Ok(Expression::Collection(CollectionExpr {
+                    elements,
+                    multiplicity: None,
+                    source_info: si,
+                }))
+            }
+            // Parenthesized expression: (expr)
+            TokenKind::LParen => {
+                self.cursor.advance();
+                let expr = self.parse_expression()?;
+                self.cursor.expect(TokenKind::RParen)?;
+                Ok(expr)
+            }
+            // Lambda or block: {x | body}, {x, y | body}, or {expr; expr}
+            TokenKind::LBrace => {
+                self.cursor.advance();
+                if self.is_lambda_start() {
+                    let mut params = Vec::new();
+                    loop {
+                        let (p, _) = self.cursor.expect_identifier()?;
+                        params.push(p);
+                        if !self.cursor.eat(TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                    self.cursor.expect(TokenKind::Pipe)?;
+                    let body = self.parse_expression_list()?;
+                    self.cursor.expect(TokenKind::RBrace)?;
+                    let parameters = params
+                        .into_iter()
+                        .map(|n| Parameter {
+                            name: n,
+                            type_ref: None,
+                            multiplicity: None,
+                            source_info: si.clone(),
+                        })
+                        .collect();
+                    Ok(Expression::Lambda(Lambda {
+                        parameters,
+                        body,
+                        source_info: si,
+                    }))
+                } else {
+                    let exprs = self.parse_expression_list()?;
+                    self.cursor.expect(TokenKind::RBrace)?;
+                    if exprs.len() == 1 {
+                        Ok(exprs.into_iter().next().unwrap())
+                    } else {
+                        Ok(Expression::Collection(CollectionExpr {
+                            elements: exprs,
+                            multiplicity: None,
+                            source_info: si,
+                        }))
+                    }
+                }
+            }
+            // Identifier or element keyword used as a name.
+            // Element keywords (Class, Enum, etc.) are valid identifiers in
+            // expression position — e.g., `Class('arg')` or `my::Enum::VAL`.
+            TokenKind::Identifier
+            | TokenKind::Class
+            | TokenKind::Enum
+            | TokenKind::Profile
+            | TokenKind::Function => {
+                let path = self.parse_package_path()?;
+                if self.cursor.check(TokenKind::LParen) {
+                    // Function call: name(args)
+                    self.cursor.advance();
+                    let mut args = Vec::new();
+                    while !self.cursor.check(TokenKind::RParen) {
+                        args.push(self.parse_expression()?);
+                        self.cursor.eat(TokenKind::Comma);
+                    }
+                    self.cursor.expect(TokenKind::RParen)?;
+                    let (pkg, name) = split_package_name(&path);
+                    let func = PackageableElementPtr {
+                        package: pkg,
+                        name,
+                        source_info: si.clone(),
+                    };
+                    Ok(Expression::FunctionApplication(FunctionApplication {
+                        function: func,
+                        arguments: args,
+                        source_info: si,
+                    }))
+                } else {
+                    let (pkg, name) = split_package_name(&path);
+                    let func = PackageableElementPtr {
+                        package: pkg,
+                        name,
+                        source_info: si.clone(),
+                    };
+                    Ok(Expression::FunctionApplication(FunctionApplication {
+                        function: func,
+                        arguments: vec![],
+                        source_info: si,
+                    }))
+                }
+            }
+            // Graph fetch island: #{ Type { fields } }#
+            TokenKind::HashLBrace => {
+                self.cursor.advance();
+                let tree = self.parse_graph_fetch_tree()?;
+                self.cursor.expect(TokenKind::RBraceHash)?;
+                Ok(tree)
+            }
+            _ => Err(ParseError::expected(
+                "expression",
+                self.cursor.peek_kind(),
+                si,
+            )),
+        }
+    }
+
+    fn is_lambda_start(&self) -> bool {
+        // {x | body} — identifier followed by | or comma
+        matches!(
+            self.cursor.peek_kind(),
+            TokenKind::Identifier | TokenKind::StringLiteral
+        ) && matches!(
+            self.cursor.peek_kind_at(1),
+            TokenKind::Pipe | TokenKind::Comma
+        )
+    }
+
+    // ── Graph Fetch Tree ────────────────────────────────────────────────
+
+    /// Parse a graph fetch tree: `Type { field, field { subfields } }`.
+    ///
+    /// Encoded as a `FunctionApplication` where the function is the root class
+    /// and the arguments are the parsed field expressions. This encoding is a
+    /// temporary representation until dedicated graph fetch AST types are added.
+    fn parse_graph_fetch_tree(&mut self) -> R<Expression> {
+        let si = self.cursor.current_source_info();
+        // Parse root class: my::Person
+        let path = self.parse_package_path()?;
+        let (pkg, name) = split_package_name(&path);
+        let class_ref = PackageableElementPtr {
+            package: pkg,
+            name,
+            source_info: si.clone(),
+        };
+        self.cursor.expect(TokenKind::LBrace)?;
+        let fields = self.parse_graph_fetch_fields()?;
+        self.cursor.expect(TokenKind::RBrace)?;
+
+        // Represent as FunctionApplication with the fields as arguments
+        Ok(Expression::FunctionApplication(FunctionApplication {
+            function: class_ref,
+            arguments: fields,
+            source_info: si,
+        }))
+    }
+
+    /// Parse comma-separated graph fetch fields inside `{ ... }`.
+    fn parse_graph_fetch_fields(&mut self) -> R<Vec<Expression>> {
+        let mut fields = Vec::new();
+        while !self.cursor.check(TokenKind::RBrace)
+            && !self.cursor.check(TokenKind::RBraceHash)
+            && !self.cursor.check(TokenKind::Eof)
+        {
+            if self.cursor.check(TokenKind::Arrow) {
+                // ->subType(@Type) { fields }
+                fields.push(self.parse_graph_fetch_subtype()?);
+            } else {
+                fields.push(self.parse_graph_fetch_field()?);
+            }
+            self.cursor.eat(TokenKind::Comma);
+        }
+        Ok(fields)
+    }
+
+    /// Parse a single field: `name` or `name(args) { subfields }` or `name { subfields }`
+    /// Optionally with alias: `'alias' : name ...`
+    fn parse_graph_fetch_field(&mut self) -> R<Expression> {
+        let si = self.cursor.current_source_info();
+
+        // Check for alias: 'alias' : fieldName
+        let alias = if self.cursor.check(TokenKind::StringLiteral)
+            && self.cursor.peek_kind_at(1) == TokenKind::Colon
+        {
+            let tok = self.cursor.advance().clone();
+            self.cursor.advance(); // :
+            Some(unquote_string(&tok.text))
+        } else {
+            None
+        };
+
+        let (field_name, _) = self.cursor.expect_identifier_or_keyword()?;
+
+        // Check for qualified property with args: field(args)
+        let args = if self.cursor.check(TokenKind::LParen) {
+            self.cursor.advance();
+            let mut a = Vec::new();
+            while !self.cursor.check(TokenKind::RParen) {
+                a.push(self.parse_expression()?);
+                self.cursor.eat(TokenKind::Comma);
+            }
+            self.cursor.expect(TokenKind::RParen)?;
+            a
+        } else {
+            vec![]
+        };
+
+        // Check for sub-tree: { subfields }
+        let sub_fields = if self.cursor.check(TokenKind::LBrace) {
+            self.cursor.advance();
+            let subs = self.parse_graph_fetch_fields()?;
+            self.cursor.expect(TokenKind::RBrace)?;
+            subs
+        } else {
+            vec![]
+        };
+
+        // Build field expression
+        let mut field_args = args;
+        field_args.extend(sub_fields);
+
+        if let Some(alias_str) = alias {
+            // Alias field: represent as Collection [alias_literal, field_expr]
+            let alias_expr = Expression::Literal(Literal::String(StringLiteral {
+                value: alias_str,
+                source_info: si.clone(),
+            }));
+            let field_expr = Expression::FunctionApplication(FunctionApplication {
+                function: PackageableElementPtr {
+                    package: None,
+                    name: field_name,
+                    source_info: si.clone(),
+                },
+                arguments: field_args,
+                source_info: si.clone(),
+            });
+            Ok(Expression::Collection(CollectionExpr {
+                elements: vec![alias_expr, field_expr],
+                multiplicity: None,
+                source_info: si,
+            }))
+        } else {
+            Ok(Expression::FunctionApplication(FunctionApplication {
+                function: PackageableElementPtr {
+                    package: None,
+                    name: field_name,
+                    source_info: si.clone(),
+                },
+                arguments: field_args,
+                source_info: si,
+            }))
+        }
+    }
+
+    /// Parse `->subType(@Type) { fields }` inside a graph fetch tree.
+    ///
+    /// Encoded as an `ArrowFunction` with the type cast as the first argument
+    /// and any sub-fields appended. The target is an empty collection (since
+    /// there is no explicit receiver in the graph fetch grammar — the parent
+    /// field is implicit).
+    fn parse_graph_fetch_subtype(&mut self) -> R<Expression> {
+        let si = self.cursor.current_source_info();
+        self.cursor.expect(TokenKind::Arrow)?;
+        let (func_name, _) = self.cursor.expect_identifier_or_keyword()?;
+        self.cursor.expect(TokenKind::LParen)?;
+        let type_cast = self.parse_expression()?;
+        self.cursor.expect(TokenKind::RParen)?;
+
+        let sub_fields = if self.cursor.check(TokenKind::LBrace) {
+            self.cursor.advance();
+            let subs = self.parse_graph_fetch_fields()?;
+            self.cursor.expect(TokenKind::RBrace)?;
+            subs
+        } else {
+            vec![]
+        };
+
+        let mut args = vec![type_cast];
+        args.extend(sub_fields);
+
+        Ok(Expression::ArrowFunction(ArrowFunction {
+            target: Box::new(Expression::Collection(CollectionExpr {
+                elements: vec![],
+                multiplicity: None,
+                source_info: si.clone(),
+            })),
+            function: func_name,
+            arguments: args,
+            source_info: si,
+        }))
+    }
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────
+
+fn split_package_name(pkg: &Package) -> (Option<Package>, SmolStr) {
+    let name = SmolStr::new(pkg.name());
+    (pkg.parent().cloned(), name)
+}
+
+fn unquote_string(s: &str) -> String {
+    let inner = &s[1..s.len() - 1]; // strip quotes
+    inner.replace("\\'", "'").replace("\\\\", "\\")
+}
+
+fn is_wildcard_ahead(cursor: &Cursor) -> bool {
+    cursor.peek_kind_at(1) == TokenKind::Star
+}

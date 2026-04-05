@@ -1,0 +1,160 @@
+---
+source: crates/protocol/tests/e2e_snapshot_tests.rs
+expression: json
+---
+{
+  "elements": [
+    {
+      "_type": "measure",
+      "canonicalUnit": {
+        "conversionFunction": {
+          "body": [
+            {
+              "_type": "var",
+              "name": "x",
+              "sourceInformation": {
+                "endColumn": 18,
+                "endLine": 4,
+                "sourceId": "measure.pure",
+                "startColumn": 18,
+                "startLine": 4
+              }
+            }
+          ],
+          "parameters": [
+            {
+              "name": "x"
+            }
+          ],
+          "sourceInformation": {
+            "endColumn": 10,
+            "endLine": 4,
+            "sourceId": "measure.pure",
+            "startColumn": 6,
+            "startLine": 4
+          }
+        },
+        "name": "pkg::Distance~Meter",
+        "package": "pkg",
+        "sourceInformation": {
+          "endColumn": 10,
+          "endLine": 4,
+          "sourceId": "measure.pure",
+          "startColumn": 6,
+          "startLine": 4
+        },
+        "superTypes": [
+          "pkg::Distance"
+        ]
+      },
+      "name": "Distance",
+      "nonCanonicalUnits": [
+        {
+          "conversionFunction": {
+            "body": [
+              {
+                "_type": "func",
+                "function": "times",
+                "parameters": [
+                  {
+                    "_type": "var",
+                    "name": "x",
+                    "sourceInformation": {
+                      "endColumn": 21,
+                      "endLine": 5,
+                      "sourceId": "measure.pure",
+                      "startColumn": 21,
+                      "startLine": 5
+                    }
+                  },
+                  {
+                    "_type": "integer",
+                    "sourceInformation": {
+                      "endColumn": 29,
+                      "endLine": 5,
+                      "sourceId": "measure.pure",
+                      "startColumn": 26,
+                      "startLine": 5
+                    },
+                    "value": 1000
+                  }
+                ],
+                "sourceInformation": {
+                  "endColumn": 24,
+                  "endLine": 5,
+                  "sourceId": "measure.pure",
+                  "startColumn": 24,
+                  "startLine": 5
+                }
+              }
+            ],
+            "parameters": [
+              {
+                "name": "x"
+              }
+            ],
+            "sourceInformation": {
+              "endColumn": 13,
+              "endLine": 5,
+              "sourceId": "measure.pure",
+              "startColumn": 5,
+              "startLine": 5
+            }
+          },
+          "name": "pkg::Distance~Kilometer",
+          "package": "pkg",
+          "sourceInformation": {
+            "endColumn": 13,
+            "endLine": 5,
+            "sourceId": "measure.pure",
+            "startColumn": 5,
+            "startLine": 5
+          },
+          "superTypes": [
+            "pkg::Distance"
+          ]
+        }
+      ],
+      "package": "pkg",
+      "sourceInformation": {
+        "endColumn": 7,
+        "endLine": 2,
+        "sourceId": "measure.pure",
+        "startColumn": 1,
+        "startLine": 2
+      }
+    },
+    {
+      "_type": "sectionIndex",
+      "name": "measure.pure",
+      "package": "__internal__",
+      "sections": [
+        {
+          "_type": "default",
+          "elements": [
+            "pkg::Distance"
+          ],
+          "parserName": "Pure",
+          "sourceInformation": {
+            "endColumn": 7,
+            "endLine": 1,
+            "sourceId": "measure.pure",
+            "startColumn": 1,
+            "startLine": 1
+          }
+        }
+      ],
+      "sourceInformation": {
+        "endColumn": 7,
+        "endLine": 1,
+        "sourceId": "measure.pure",
+        "startColumn": 1,
+        "startLine": 1
+      }
+    }
+  ],
+  "serializer": {
+    "name": "pure",
+    "version": "vX_X_X"
+  }
+}

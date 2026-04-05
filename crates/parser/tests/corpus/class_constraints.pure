@@ -1,0 +1,16 @@
+###Pure
+Class my::ConstrainedClass
+[
+    $this.name->isNotEmpty(),
+    named: $this.name->length() > 2,
+    custom
+    (
+        ~function: $this.name->startsWith('A')
+        ~enforcementLevel: Warn
+        ~externalId: 'RULE-001'
+        ~message: 'Name must start with A'
+    )
+]
+{
+    name: String[1];
+}

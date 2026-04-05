@@ -15,8 +15,37 @@
 //! # Legend Pure Parser — Parser
 //!
 //! Recursive descent parser for the Pure grammar. Consumes tokens from the lexer
-//! and produces an AST. Supports plugin dispatch for island grammars (`#>{}#`, `#s{}#`)
-//! and section grammars (`###Relational`, `###Connection`, etc.).
+//! and produces an AST.
+//!
+//! # Usage
+//!
+//! ```
+//! use legend_pure_parser_parser::parse;
+//!
+//! let source = "###Pure\nProfile my::doc { stereotypes: [deprecated]; tags: [todo]; }";
+//! let file = parse(source, "test.pure").unwrap();
+//! assert_eq!(file.element_count(), 1);
+//! ```
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+
+mod cursor;
+pub mod error;
+mod parser;
+
+use legend_pure_parser_ast::SourceFile;
+
+pub use error::ParseError;
+
+/// Parse Pure source text into an AST [`SourceFile`].
+///
+/// # Errors
+///
+/// Returns `Err` if the source contains lexer or parser errors.
+pub fn parse(source: &str, source_name: &str) -> Result<SourceFile, ParseError> {
+    let tokens = legend_pure_parser_lexer::tokenize(source, source_name)?;
+    let cursor = cursor::Cursor::new(tokens);
+    let mut p = parser::Parser::new(cursor);
+    p.parse_source_file()
+}

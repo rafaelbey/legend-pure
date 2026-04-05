@@ -330,8 +330,8 @@ fn convert_json_to_parameter(
             let si = source_info_or_synthetic(var.source_information.as_ref());
             Ok(ast::annotation::Parameter {
                 name: SmolStr::new(&var.name),
-                type_ref: convert_generic_type(gt)?,
-                multiplicity: mult.into(),
+                type_ref: Some(convert_generic_type(gt)?),
+                multiplicity: Some(mult.into()),
                 source_info: si,
             })
         }
@@ -462,8 +462,8 @@ pub fn convert_value_spec_to_expression(
                     let mult = v.multiplicity.as_ref().ok_or(ConversionError::UnsupportedValueSpec)?;
                     Ok(ast::annotation::Parameter {
                         name: SmolStr::new(&v.name),
-                        type_ref: convert_generic_type(gt)?,
-                        multiplicity: mult.into(),
+                        type_ref: Some(convert_generic_type(gt)?),
+                        multiplicity: Some(mult.into()),
                         source_info: vsi,
                     })
                 })
@@ -815,8 +815,8 @@ fn convert_function(f: &v1::element::ProtocolFunction) -> Result<ast::element::F
             let mult = v.multiplicity.as_ref().ok_or(ConversionError::UnsupportedValueSpec)?;
             Ok(ast::annotation::Parameter {
                 name: SmolStr::new(&v.name),
-                type_ref: convert_generic_type(gt)?,
-                multiplicity: mult.into(),
+                type_ref: Some(convert_generic_type(gt)?),
+                multiplicity: Some(mult.into()),
                 source_info: vsi,
             })
         })
