@@ -1,0 +1,29 @@
+###Pure
+
+// ─── Measure & Units ────────────────────────────────────────────────
+// Demonstrates the Measure element type with canonical and
+// non-canonical unit definitions and conversion functions.
+
+Measure model::units::Distance
+{
+  *Meter: x -> $x;
+  Kilometer: x -> $x * 1000;
+  Mile: x -> $x * 1609.344;
+  Foot: x -> $x * 0.3048;
+  Inch: x -> $x * 0.0254;
+}
+
+Measure model::units::Weight
+{
+  *Kilogram: x -> $x;
+  Gram: x -> $x * 0.001;
+  Pound: x -> $x * 0.453592;
+  Ounce: x -> $x * 0.0283495;
+}
+
+Measure model::units::Temperature
+{
+  *Celsius: x -> $x;
+  Fahrenheit: x -> ($x - 32) * 5 / 9;
+  Kelvin: x -> $x - 273.15;
+}

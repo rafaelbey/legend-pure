@@ -1,0 +1,89 @@
+// Copyright 2026 Goldman Sachs
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! File discovery for `.pure` source files.
+//!
+//! Walks directories recursively to find all `.pure` files,
+//! respecting ignore patterns.
+
+use std::path::{Path, PathBuf};
+
+use crate::diagnostics::CliError;
+
+/// Recursively find all `.pure` files in a directory.
+///
+/// Files are returned in sorted order for deterministic output.
+///
+/// # Errors
+///
+/// Returns an error if the directory doesn't exist or can't be read.
+pub fn find_pure_files(dir: &Path) -> Result<Vec<PathBuf>, CliError> {
+    if !dir.exists() {
+        return Err(CliError::FileNotFound(dir.to_path_buf()));
+    }
+    if !dir.is_dir() {
+        return Err(CliError::Custom(format!(
+            "'{}' is not a directory",
+            dir.display()
+        )));
+    }
+
+    let mut files: Vec<PathBuf> = walkdir::WalkDir::new(dir)
+        .follow_links(true)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| {
+            entry.file_type().is_file()
+                && entry
+                    .path()
+                    .extension()
+                    .is_some_and(|ext| ext == "pure")
+        })
+        .filter(|entry| !is_ignored(entry.path()))
+        .map(walkdir::DirEntry::into_path)
+        .collect();
+
+    files.sort();
+    Ok(files)
+}
+
+/// Checks if a path should be ignored.
+///
+/// Currently uses a hardcoded set of patterns. In the future, this will
+/// read from `.legendignore` files.
+fn is_ignored(path: &Path) -> bool {
+    let path_str = path.to_string_lossy();
+
+    // Skip common non-source directories
+    let ignored_dirs = ["target/", ".git/", ".idea/", ".vscode/", "node_modules/"];
+    for dir in &ignored_dirs {
+        if path_str.contains(dir) {
+            return true;
+        }
+    }
+
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_ignored() {
+        assert!(is_ignored(Path::new("project/target/debug/test.pure")));
+        assert!(is_ignored(Path::new("project/.git/hooks/test.pure")));
+        assert!(!is_ignored(Path::new("project/src/model.pure")));
+    }
+}

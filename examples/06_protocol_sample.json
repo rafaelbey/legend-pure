@@ -1,0 +1,48 @@
+{
+  "serializer": {
+    "name": "pure",
+    "version": "vX_X_X"
+  },
+  "elements": [
+    {
+      "_type": "class",
+      "package": "model::trading",
+      "name": "Instrument",
+      "properties": [
+        {
+          "name": "ticker",
+          "genericType": {
+            "rawType": { "fullPath": "String" }
+          },
+          "multiplicity": { "lowerBound": 1, "upperBound": 1 }
+        },
+        {
+          "name": "name",
+          "genericType": {
+            "rawType": { "fullPath": "String" }
+          },
+          "multiplicity": { "lowerBound": 1, "upperBound": 1 }
+        },
+        {
+          "name": "assetClass",
+          "genericType": {
+            "rawType": { "fullPath": "model::trading::AssetClass" }
+          },
+          "multiplicity": { "lowerBound": 1, "upperBound": 1 }
+        }
+      ]
+    },
+    {
+      "_type": "enumeration",
+      "package": "model::trading",
+      "name": "AssetClass",
+      "values": [
+        { "value": "Equity" },
+        { "value": "FixedIncome" },
+        { "value": "FX" },
+        { "value": "Commodity" },
+        { "value": "Crypto" }
+      ]
+    }
+  ]
+}

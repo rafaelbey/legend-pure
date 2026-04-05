@@ -1,0 +1,67 @@
+###Pure
+
+// ─── Data Model ─────────────────────────────────────────────────────
+// A simple trading domain model demonstrating classes, enums,
+// associations, and constraints.
+
+Enum model::trading::AssetClass
+{
+  Equity,
+  FixedIncome,
+  FX,
+  Commodity,
+  Crypto
+}
+
+Enum model::trading::OrderStatus
+{
+  Pending,
+  Filled,
+  PartiallyFilled,
+  Cancelled,
+  Rejected
+}
+
+Class model::trading::Instrument
+{
+  ticker: String[1];
+  name: String[1];
+  assetClass: model::trading::AssetClass[1];
+  isin: String[0..1];
+  currency: String[1];
+}
+
+Class <<meta::pure::profiles::doc.doc>> model::trading::Trade
+[
+  positiveQuantity: $this.quantity > 0,
+  priceNonNegative: $this.price >= 0.0
+]
+{
+  tradeId: String[1];
+  quantity: Integer[1];
+  price: Float[1];
+  tradeDate: StrictDate[1];
+  settlementDate: StrictDate[0..1];
+  status: model::trading::OrderStatus[1];
+}
+
+Class model::trading::Trader
+{
+  traderId: String[1];
+  firstName: String[1];
+  lastName: String[1];
+  email: String[0..1];
+  desk: String[1];
+}
+
+Association model::trading::TradeInstrument
+{
+  instrument: model::trading::Instrument[1];
+  trades: model::trading::Trade[*];
+}
+
+Association model::trading::TradeTrader
+{
+  trader: model::trading::Trader[1];
+  trades: model::trading::Trade[*];
+}

@@ -1,0 +1,8 @@
+###Pure
+
+// ERROR: Missing closing brace on class body
+Class model::errors::MissingBrace
+{
+  name: String[1];
+  age: Integer[1];
+
