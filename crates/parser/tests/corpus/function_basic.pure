@@ -1,0 +1,6 @@
+###Pure
+function my::hello(name: String[1]): String[1]
+{
+    'Hello ' + $name;
+    $name->toUpperCase()
+}

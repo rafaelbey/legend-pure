@@ -1,0 +1,207 @@
+---
+source: crates/parser/tests/test_measure.rs
+expression: file
+---
+SourceFile {
+    sections: [
+        Section {
+            kind: "Pure",
+            imports: [],
+            elements: [
+                Measure(
+                    MeasureDef {
+                        package: Some(
+                            Package {
+                                name: "pkg",
+                                parent: None,
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 2,
+                                    start_column: 9,
+                                    end_line: 2,
+                                    end_column: 11,
+                                },
+                            },
+                        ),
+                        name: "NewMeasure",
+                        canonical_unit: Some(
+                            UnitDef {
+                                name: "UnitOne",
+                                conversion_param: Some(
+                                    "x",
+                                ),
+                                conversion_body: Some(
+                                    Variable(
+                                        Variable {
+                                            name: "x",
+                                            source_info: SourceInfo {
+                                                source: "test.pure",
+                                                start_line: 4,
+                                                start_column: 20,
+                                                end_line: 4,
+                                                end_column: 20,
+                                            },
+                                        },
+                                    ),
+                                ),
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 4,
+                                    start_column: 6,
+                                    end_line: 4,
+                                    end_column: 12,
+                                },
+                            },
+                        ),
+                        non_canonical_units: [
+                            UnitDef {
+                                name: "UnitTwo",
+                                conversion_param: Some(
+                                    "x",
+                                ),
+                                conversion_body: Some(
+                                    Arithmetic(
+                                        ArithmeticExpr {
+                                            left: Variable(
+                                                Variable {
+                                                    name: "x",
+                                                    source_info: SourceInfo {
+                                                        source: "test.pure",
+                                                        start_line: 5,
+                                                        start_column: 19,
+                                                        end_line: 5,
+                                                        end_column: 19,
+                                                    },
+                                                },
+                                            ),
+                                            op: Times,
+                                            right: Literal(
+                                                Integer(
+                                                    IntegerLiteral {
+                                                        value: 1000,
+                                                        source_info: SourceInfo {
+                                                            source: "test.pure",
+                                                            start_line: 5,
+                                                            start_column: 24,
+                                                            end_line: 5,
+                                                            end_column: 27,
+                                                        },
+                                                    },
+                                                ),
+                                            ),
+                                            source_info: SourceInfo {
+                                                source: "test.pure",
+                                                start_line: 5,
+                                                start_column: 22,
+                                                end_line: 5,
+                                                end_column: 22,
+                                            },
+                                        },
+                                    ),
+                                ),
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 5,
+                                    start_column: 5,
+                                    end_line: 5,
+                                    end_column: 11,
+                                },
+                            },
+                        ],
+                        source_info: SourceInfo {
+                            source: "test.pure",
+                            start_line: 2,
+                            start_column: 1,
+                            end_line: 2,
+                            end_column: 7,
+                        },
+                    },
+                ),
+                Class(
+                    ClassDef {
+                        package: Some(
+                            Package {
+                                name: "pkg",
+                                parent: None,
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 8,
+                                    start_column: 7,
+                                    end_line: 8,
+                                    end_column: 9,
+                                },
+                            },
+                        ),
+                        name: "WithUnitProp",
+                        type_parameters: [],
+                        super_types: [],
+                        properties: [
+                            Property {
+                                name: "weight",
+                                type_ref: TypeReference {
+                                    path: Package {
+                                        name: "NewMeasure~UnitOne",
+                                        parent: None,
+                                        source_info: SourceInfo {
+                                            source: "test.pure",
+                                            start_line: 10,
+                                            start_column: 24,
+                                            end_line: 10,
+                                            end_column: 30,
+                                        },
+                                    },
+                                    type_arguments: [],
+                                    type_variable_values: [],
+                                    source_info: SourceInfo {
+                                        source: "test.pure",
+                                        start_line: 10,
+                                        start_column: 13,
+                                        end_line: 10,
+                                        end_column: 22,
+                                    },
+                                },
+                                multiplicity: ZeroOrOne,
+                                aggregation: None,
+                                default_value: None,
+                                stereotypes: [],
+                                tagged_values: [],
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 10,
+                                    start_column: 5,
+                                    end_line: 10,
+                                    end_column: 10,
+                                },
+                            },
+                        ],
+                        qualified_properties: [],
+                        constraints: [],
+                        stereotypes: [],
+                        tagged_values: [],
+                        source_info: SourceInfo {
+                            source: "test.pure",
+                            start_line: 8,
+                            start_column: 1,
+                            end_line: 8,
+                            end_column: 5,
+                        },
+                    },
+                ),
+            ],
+            source_info: SourceInfo {
+                source: "test.pure",
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: 7,
+            },
+        },
+    ],
+    source_info: SourceInfo {
+        source: "test.pure",
+        start_line: 1,
+        start_column: 1,
+        end_line: 1,
+        end_column: 7,
+    },
+}

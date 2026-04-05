@@ -1,0 +1,10 @@
+###Pure
+Class model::domain::Person
+{
+    firstName: String[1];
+    lastName: String[1];
+    fullName(sep: String[1])
+    {
+        $this.firstName + $sep + $this.lastName
+    }: String[1];
+}

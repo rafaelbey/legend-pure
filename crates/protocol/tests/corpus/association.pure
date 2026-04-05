@@ -1,0 +1,6 @@
+###Pure
+Association model::PersonAddress
+{
+    person: model::Person[1];
+    addresses: model::Address[*];
+}

@@ -1,0 +1,173 @@
+---
+source: crates/protocol/tests/e2e_snapshot_tests.rs
+expression: json
+---
+{
+  "elements": [
+    {
+      "_type": "class",
+      "name": "Person",
+      "package": "model::domain",
+      "properties": [
+        {
+          "genericType": {
+            "rawType": {
+              "fullPath": "String",
+              "sourceInformation": {
+                "endColumn": 16,
+                "endLine": 4,
+                "sourceId": "class_with_annotations.pure",
+                "startColumn": 11,
+                "startLine": 4
+              }
+            },
+            "sourceInformation": {
+              "endColumn": 16,
+              "endLine": 4,
+              "sourceId": "class_with_annotations.pure",
+              "startColumn": 11,
+              "startLine": 4
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "name": "name",
+          "sourceInformation": {
+            "endColumn": 8,
+            "endLine": 4,
+            "sourceId": "class_with_annotations.pure",
+            "startColumn": 5,
+            "startLine": 4
+          }
+        },
+        {
+          "genericType": {
+            "rawType": {
+              "fullPath": "Integer",
+              "sourceInformation": {
+                "endColumn": 16,
+                "endLine": 5,
+                "sourceId": "class_with_annotations.pure",
+                "startColumn": 10,
+                "startLine": 5
+              }
+            },
+            "sourceInformation": {
+              "endColumn": 16,
+              "endLine": 5,
+              "sourceId": "class_with_annotations.pure",
+              "startColumn": 10,
+              "startLine": 5
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 0,
+            "upperBound": 1
+          },
+          "name": "age",
+          "sourceInformation": {
+            "endColumn": 7,
+            "endLine": 5,
+            "sourceId": "class_with_annotations.pure",
+            "startColumn": 5,
+            "startLine": 5
+          }
+        }
+      ],
+      "sourceInformation": {
+        "endColumn": 5,
+        "endLine": 2,
+        "sourceId": "class_with_annotations.pure",
+        "startColumn": 1,
+        "startLine": 2
+      },
+      "stereotypes": [
+        {
+          "profile": "temporal",
+          "profileSourceInformation": {
+            "endColumn": 16,
+            "endLine": 2,
+            "sourceId": "class_with_annotations.pure",
+            "startColumn": 9,
+            "startLine": 2
+          },
+          "sourceInformation": {
+            "endColumn": 16,
+            "endLine": 2,
+            "sourceId": "class_with_annotations.pure",
+            "startColumn": 9,
+            "startLine": 2
+          },
+          "value": "businesstemporal"
+        }
+      ],
+      "superTypes": [
+        "model::domain::LegalEntity"
+      ],
+      "taggedValues": [
+        {
+          "sourceInformation": {
+            "endColumn": 40,
+            "endLine": 2,
+            "sourceId": "class_with_annotations.pure",
+            "startColumn": 38,
+            "startLine": 2
+          },
+          "tag": {
+            "profile": "doc",
+            "profileSourceInformation": {
+              "endColumn": 40,
+              "endLine": 2,
+              "sourceId": "class_with_annotations.pure",
+              "startColumn": 38,
+              "startLine": 2
+            },
+            "sourceInformation": {
+              "endColumn": 40,
+              "endLine": 2,
+              "sourceId": "class_with_annotations.pure",
+              "startColumn": 38,
+              "startLine": 2
+            },
+            "value": "description"
+          },
+          "value": "A person entity"
+        }
+      ]
+    },
+    {
+      "_type": "sectionIndex",
+      "name": "class_with_annotations.pure",
+      "package": "__internal__",
+      "sections": [
+        {
+          "_type": "default",
+          "elements": [
+            "model::domain::Person"
+          ],
+          "parserName": "Pure",
+          "sourceInformation": {
+            "endColumn": 7,
+            "endLine": 1,
+            "sourceId": "class_with_annotations.pure",
+            "startColumn": 1,
+            "startLine": 1
+          }
+        }
+      ],
+      "sourceInformation": {
+        "endColumn": 7,
+        "endLine": 1,
+        "sourceId": "class_with_annotations.pure",
+        "startColumn": 1,
+        "startLine": 1
+      }
+    }
+  ],
+  "serializer": {
+    "name": "pure",
+    "version": "vX_X_X"
+  }
+}

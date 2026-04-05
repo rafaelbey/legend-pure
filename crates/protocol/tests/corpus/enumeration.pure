@@ -1,0 +1,7 @@
+###Pure
+Enum model::Color
+{
+    RED,
+    GREEN,
+    BLUE
+}

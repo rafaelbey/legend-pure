@@ -1,0 +1,5 @@
+###Pure
+function my::greet(name: String[1]): String[1]
+{
+    'Hello ' + $name
+}

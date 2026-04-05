@@ -1,0 +1,119 @@
+---
+source: crates/protocol/tests/e2e_snapshot_tests.rs
+expression: json
+---
+{
+  "elements": [
+    {
+      "_type": "association",
+      "name": "PersonAddress",
+      "package": "model",
+      "properties": [
+        {
+          "genericType": {
+            "rawType": {
+              "fullPath": "model::Person",
+              "sourceInformation": {
+                "endColumn": 25,
+                "endLine": 4,
+                "sourceId": "association.pure",
+                "startColumn": 20,
+                "startLine": 4
+              }
+            },
+            "sourceInformation": {
+              "endColumn": 17,
+              "endLine": 4,
+              "sourceId": "association.pure",
+              "startColumn": 13,
+              "startLine": 4
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "name": "person",
+          "sourceInformation": {
+            "endColumn": 10,
+            "endLine": 4,
+            "sourceId": "association.pure",
+            "startColumn": 5,
+            "startLine": 4
+          }
+        },
+        {
+          "genericType": {
+            "rawType": {
+              "fullPath": "model::Address",
+              "sourceInformation": {
+                "endColumn": 29,
+                "endLine": 5,
+                "sourceId": "association.pure",
+                "startColumn": 23,
+                "startLine": 5
+              }
+            },
+            "sourceInformation": {
+              "endColumn": 20,
+              "endLine": 5,
+              "sourceId": "association.pure",
+              "startColumn": 16,
+              "startLine": 5
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 0
+          },
+          "name": "addresses",
+          "sourceInformation": {
+            "endColumn": 13,
+            "endLine": 5,
+            "sourceId": "association.pure",
+            "startColumn": 5,
+            "startLine": 5
+          }
+        }
+      ],
+      "sourceInformation": {
+        "endColumn": 11,
+        "endLine": 2,
+        "sourceId": "association.pure",
+        "startColumn": 1,
+        "startLine": 2
+      }
+    },
+    {
+      "_type": "sectionIndex",
+      "name": "association.pure",
+      "package": "__internal__",
+      "sections": [
+        {
+          "_type": "default",
+          "elements": [
+            "model::PersonAddress"
+          ],
+          "parserName": "Pure",
+          "sourceInformation": {
+            "endColumn": 7,
+            "endLine": 1,
+            "sourceId": "association.pure",
+            "startColumn": 1,
+            "startLine": 1
+          }
+        }
+      ],
+      "sourceInformation": {
+        "endColumn": 7,
+        "endLine": 1,
+        "sourceId": "association.pure",
+        "startColumn": 1,
+        "startLine": 1
+      }
+    }
+  ],
+  "serializer": {
+    "name": "pure",
+    "version": "vX_X_X"
+  }
+}

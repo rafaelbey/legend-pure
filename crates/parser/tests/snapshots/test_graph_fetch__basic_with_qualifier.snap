@@ -1,0 +1,326 @@
+---
+source: crates/parser/tests/test_graph_fetch.rs
+expression: file
+---
+SourceFile {
+    sections: [
+        Section {
+            kind: "Pure",
+            imports: [],
+            elements: [
+                Function(
+                    FunctionDef {
+                        package: Some(
+                            Package {
+                                name: "my",
+                                parent: None,
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 2,
+                                    start_column: 10,
+                                    end_line: 2,
+                                    end_column: 11,
+                                },
+                            },
+                        ),
+                        name: "test",
+                        parameters: [],
+                        return_type: TypeReference {
+                            path: Package {
+                                name: "Any",
+                                parent: None,
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 2,
+                                    start_column: 22,
+                                    end_line: 2,
+                                    end_column: 24,
+                                },
+                            },
+                            type_arguments: [],
+                            type_variable_values: [],
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 2,
+                                start_column: 22,
+                                end_line: 2,
+                                end_column: 24,
+                            },
+                        },
+                        return_multiplicity: ZeroOrMany,
+                        body: [
+                            ArrowFunction(
+                                ArrowFunction {
+                                    target: MemberAccess(
+                                        Qualified(
+                                            QualifiedMemberAccess {
+                                                target: FunctionApplication(
+                                                    FunctionApplication {
+                                                        function: PackageableElementPtr {
+                                                            package: Some(
+                                                                Package {
+                                                                    name: "my",
+                                                                    parent: None,
+                                                                    source_info: SourceInfo {
+                                                                        source: "test.pure",
+                                                                        start_line: 4,
+                                                                        start_column: 5,
+                                                                        end_line: 4,
+                                                                        end_column: 6,
+                                                                    },
+                                                                },
+                                                            ),
+                                                            name: "Person",
+                                                            source_info: SourceInfo {
+                                                                source: "test.pure",
+                                                                start_line: 4,
+                                                                start_column: 5,
+                                                                end_line: 4,
+                                                                end_column: 6,
+                                                            },
+                                                        },
+                                                        arguments: [],
+                                                        source_info: SourceInfo {
+                                                            source: "test.pure",
+                                                            start_line: 4,
+                                                            start_column: 5,
+                                                            end_line: 4,
+                                                            end_column: 6,
+                                                        },
+                                                    },
+                                                ),
+                                                member: "all",
+                                                arguments: [],
+                                                source_info: SourceInfo {
+                                                    source: "test.pure",
+                                                    start_line: 4,
+                                                    start_column: 15,
+                                                    end_line: 4,
+                                                    end_column: 15,
+                                                },
+                                            },
+                                        ),
+                                    ),
+                                    function: "graphFetch",
+                                    arguments: [
+                                        FunctionApplication(
+                                            FunctionApplication {
+                                                function: PackageableElementPtr {
+                                                    package: Some(
+                                                        Package {
+                                                            name: "my",
+                                                            parent: None,
+                                                            source_info: SourceInfo {
+                                                                source: "test.pure",
+                                                                start_line: 6,
+                                                                start_column: 13,
+                                                                end_line: 6,
+                                                                end_column: 14,
+                                                            },
+                                                        },
+                                                    ),
+                                                    name: "Person",
+                                                    source_info: SourceInfo {
+                                                        source: "test.pure",
+                                                        start_line: 6,
+                                                        start_column: 13,
+                                                        end_line: 6,
+                                                        end_column: 14,
+                                                    },
+                                                },
+                                                arguments: [
+                                                    FunctionApplication(
+                                                        FunctionApplication {
+                                                            function: PackageableElementPtr {
+                                                                package: None,
+                                                                name: "firstName",
+                                                                source_info: SourceInfo {
+                                                                    source: "test.pure",
+                                                                    start_line: 7,
+                                                                    start_column: 17,
+                                                                    end_line: 7,
+                                                                    end_column: 25,
+                                                                },
+                                                            },
+                                                            arguments: [],
+                                                            source_info: SourceInfo {
+                                                                source: "test.pure",
+                                                                start_line: 7,
+                                                                start_column: 17,
+                                                                end_line: 7,
+                                                                end_column: 25,
+                                                            },
+                                                        },
+                                                    ),
+                                                    FunctionApplication(
+                                                        FunctionApplication {
+                                                            function: PackageableElementPtr {
+                                                                package: None,
+                                                                name: "lastName",
+                                                                source_info: SourceInfo {
+                                                                    source: "test.pure",
+                                                                    start_line: 8,
+                                                                    start_column: 17,
+                                                                    end_line: 8,
+                                                                    end_column: 24,
+                                                                },
+                                                            },
+                                                            arguments: [],
+                                                            source_info: SourceInfo {
+                                                                source: "test.pure",
+                                                                start_line: 8,
+                                                                start_column: 17,
+                                                                end_line: 8,
+                                                                end_column: 24,
+                                                            },
+                                                        },
+                                                    ),
+                                                    FunctionApplication(
+                                                        FunctionApplication {
+                                                            function: PackageableElementPtr {
+                                                                package: None,
+                                                                name: "employeesByFirstName",
+                                                                source_info: SourceInfo {
+                                                                    source: "test.pure",
+                                                                    start_line: 9,
+                                                                    start_column: 17,
+                                                                    end_line: 9,
+                                                                    end_column: 36,
+                                                                },
+                                                            },
+                                                            arguments: [
+                                                                Collection(
+                                                                    CollectionExpr {
+                                                                        elements: [
+                                                                            Literal(
+                                                                                String(
+                                                                                    StringLiteral {
+                                                                                        value: "Peter",
+                                                                                        source_info: SourceInfo {
+                                                                                            source: "test.pure",
+                                                                                            start_line: 9,
+                                                                                            start_column: 39,
+                                                                                            end_line: 9,
+                                                                                            end_column: 45,
+                                                                                        },
+                                                                                    },
+                                                                                ),
+                                                                            ),
+                                                                        ],
+                                                                        multiplicity: None,
+                                                                        source_info: SourceInfo {
+                                                                            source: "test.pure",
+                                                                            start_line: 9,
+                                                                            start_column: 38,
+                                                                            end_line: 9,
+                                                                            end_column: 38,
+                                                                        },
+                                                                    },
+                                                                ),
+                                                                FunctionApplication(
+                                                                    FunctionApplication {
+                                                                        function: PackageableElementPtr {
+                                                                            package: None,
+                                                                            name: "firstName",
+                                                                            source_info: SourceInfo {
+                                                                                source: "test.pure",
+                                                                                start_line: 10,
+                                                                                start_column: 21,
+                                                                                end_line: 10,
+                                                                                end_column: 29,
+                                                                            },
+                                                                        },
+                                                                        arguments: [],
+                                                                        source_info: SourceInfo {
+                                                                            source: "test.pure",
+                                                                            start_line: 10,
+                                                                            start_column: 21,
+                                                                            end_line: 10,
+                                                                            end_column: 29,
+                                                                        },
+                                                                    },
+                                                                ),
+                                                                FunctionApplication(
+                                                                    FunctionApplication {
+                                                                        function: PackageableElementPtr {
+                                                                            package: None,
+                                                                            name: "lastName",
+                                                                            source_info: SourceInfo {
+                                                                                source: "test.pure",
+                                                                                start_line: 11,
+                                                                                start_column: 21,
+                                                                                end_line: 11,
+                                                                                end_column: 28,
+                                                                            },
+                                                                        },
+                                                                        arguments: [],
+                                                                        source_info: SourceInfo {
+                                                                            source: "test.pure",
+                                                                            start_line: 11,
+                                                                            start_column: 21,
+                                                                            end_line: 11,
+                                                                            end_column: 28,
+                                                                        },
+                                                                    },
+                                                                ),
+                                                            ],
+                                                            source_info: SourceInfo {
+                                                                source: "test.pure",
+                                                                start_line: 9,
+                                                                start_column: 17,
+                                                                end_line: 9,
+                                                                end_column: 36,
+                                                            },
+                                                        },
+                                                    ),
+                                                ],
+                                                source_info: SourceInfo {
+                                                    source: "test.pure",
+                                                    start_line: 6,
+                                                    start_column: 13,
+                                                    end_line: 6,
+                                                    end_column: 14,
+                                                },
+                                            },
+                                        ),
+                                    ],
+                                    source_info: SourceInfo {
+                                        source: "test.pure",
+                                        start_line: 4,
+                                        start_column: 21,
+                                        end_line: 4,
+                                        end_column: 22,
+                                    },
+                                },
+                            ),
+                        ],
+                        stereotypes: [],
+                        tagged_values: [],
+                        tests: [],
+                        source_info: SourceInfo {
+                            source: "test.pure",
+                            start_line: 2,
+                            start_column: 1,
+                            end_line: 2,
+                            end_column: 8,
+                        },
+                    },
+                ),
+            ],
+            source_info: SourceInfo {
+                source: "test.pure",
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: 7,
+            },
+        },
+    ],
+    source_info: SourceInfo {
+        source: "test.pure",
+        start_line: 1,
+        start_column: 1,
+        end_line: 1,
+        end_column: 7,
+    },
+}

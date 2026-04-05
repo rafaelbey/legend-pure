@@ -1,0 +1,82 @@
+---
+source: crates/parser/tests/test_class.rs
+expression: file
+---
+SourceFile {
+    sections: [
+        Section {
+            kind: "Pure",
+            imports: [],
+            elements: [
+                Class(
+                    ClassDef {
+                        package: Some(
+                            Package {
+                                name: "my",
+                                parent: None,
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 2,
+                                    start_column: 36,
+                                    end_line: 2,
+                                    end_column: 37,
+                                },
+                            },
+                        ),
+                        name: "QuotedClass",
+                        type_parameters: [],
+                        super_types: [],
+                        properties: [],
+                        qualified_properties: [],
+                        constraints: [],
+                        stereotypes: [
+                            StereotypePtr {
+                                profile: PackageableElementPtr {
+                                    package: None,
+                                    name: "'my profile'",
+                                    source_info: SourceInfo {
+                                        source: "test.pure",
+                                        start_line: 2,
+                                        start_column: 9,
+                                        end_line: 2,
+                                        end_column: 20,
+                                    },
+                                },
+                                value: "'my stereo'",
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 2,
+                                    start_column: 9,
+                                    end_line: 2,
+                                    end_column: 20,
+                                },
+                            },
+                        ],
+                        tagged_values: [],
+                        source_info: SourceInfo {
+                            source: "test.pure",
+                            start_line: 2,
+                            start_column: 1,
+                            end_line: 2,
+                            end_column: 5,
+                        },
+                    },
+                ),
+            ],
+            source_info: SourceInfo {
+                source: "test.pure",
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: 7,
+            },
+        },
+    ],
+    source_info: SourceInfo {
+        source: "test.pure",
+        start_line: 1,
+        start_column: 1,
+        end_line: 1,
+        end_column: 7,
+    },
+}

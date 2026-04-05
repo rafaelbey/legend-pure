@@ -1,0 +1,462 @@
+---
+source: crates/parser/tests/test_class.rs
+expression: file
+---
+SourceFile {
+    sections: [
+        Section {
+            kind: "Pure",
+            imports: [],
+            elements: [
+                Class(
+                    ClassDef {
+                        package: Some(
+                            Package {
+                                name: "my",
+                                parent: None,
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 2,
+                                    start_column: 7,
+                                    end_line: 2,
+                                    end_column: 8,
+                                },
+                            },
+                        ),
+                        name: "DefaultClass",
+                        type_parameters: [],
+                        super_types: [],
+                        properties: [
+                            Property {
+                                name: "stringProp",
+                                type_ref: TypeReference {
+                                    path: Package {
+                                        name: "String",
+                                        parent: None,
+                                        source_info: SourceInfo {
+                                            source: "test.pure",
+                                            start_line: 4,
+                                            start_column: 17,
+                                            end_line: 4,
+                                            end_column: 22,
+                                        },
+                                    },
+                                    type_arguments: [],
+                                    type_variable_values: [],
+                                    source_info: SourceInfo {
+                                        source: "test.pure",
+                                        start_line: 4,
+                                        start_column: 17,
+                                        end_line: 4,
+                                        end_column: 22,
+                                    },
+                                },
+                                multiplicity: PureOne,
+                                aggregation: None,
+                                default_value: Some(
+                                    Literal(
+                                        String(
+                                            StringLiteral {
+                                                value: "default",
+                                                source_info: SourceInfo {
+                                                    source: "test.pure",
+                                                    start_line: 4,
+                                                    start_column: 29,
+                                                    end_line: 4,
+                                                    end_column: 37,
+                                                },
+                                            },
+                                        ),
+                                    ),
+                                ),
+                                stereotypes: [],
+                                tagged_values: [],
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 4,
+                                    start_column: 5,
+                                    end_line: 4,
+                                    end_column: 14,
+                                },
+                            },
+                            Property {
+                                name: "intProp",
+                                type_ref: TypeReference {
+                                    path: Package {
+                                        name: "Integer",
+                                        parent: None,
+                                        source_info: SourceInfo {
+                                            source: "test.pure",
+                                            start_line: 5,
+                                            start_column: 14,
+                                            end_line: 5,
+                                            end_column: 20,
+                                        },
+                                    },
+                                    type_arguments: [],
+                                    type_variable_values: [],
+                                    source_info: SourceInfo {
+                                        source: "test.pure",
+                                        start_line: 5,
+                                        start_column: 14,
+                                        end_line: 5,
+                                        end_column: 20,
+                                    },
+                                },
+                                multiplicity: PureOne,
+                                aggregation: None,
+                                default_value: Some(
+                                    Literal(
+                                        Integer(
+                                            IntegerLiteral {
+                                                value: 42,
+                                                source_info: SourceInfo {
+                                                    source: "test.pure",
+                                                    start_line: 5,
+                                                    start_column: 27,
+                                                    end_line: 5,
+                                                    end_column: 28,
+                                                },
+                                            },
+                                        ),
+                                    ),
+                                ),
+                                stereotypes: [],
+                                tagged_values: [],
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 5,
+                                    start_column: 5,
+                                    end_line: 5,
+                                    end_column: 11,
+                                },
+                            },
+                            Property {
+                                name: "floatProp",
+                                type_ref: TypeReference {
+                                    path: Package {
+                                        name: "Float",
+                                        parent: None,
+                                        source_info: SourceInfo {
+                                            source: "test.pure",
+                                            start_line: 6,
+                                            start_column: 16,
+                                            end_line: 6,
+                                            end_column: 20,
+                                        },
+                                    },
+                                    type_arguments: [],
+                                    type_variable_values: [],
+                                    source_info: SourceInfo {
+                                        source: "test.pure",
+                                        start_line: 6,
+                                        start_column: 16,
+                                        end_line: 6,
+                                        end_column: 20,
+                                    },
+                                },
+                                multiplicity: PureOne,
+                                aggregation: None,
+                                default_value: Some(
+                                    Literal(
+                                        Float(
+                                            FloatLiteral {
+                                                value: 3.14,
+                                                source_info: SourceInfo {
+                                                    source: "test.pure",
+                                                    start_line: 6,
+                                                    start_column: 27,
+                                                    end_line: 6,
+                                                    end_column: 30,
+                                                },
+                                            },
+                                        ),
+                                    ),
+                                ),
+                                stereotypes: [],
+                                tagged_values: [],
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 6,
+                                    start_column: 5,
+                                    end_line: 6,
+                                    end_column: 13,
+                                },
+                            },
+                            Property {
+                                name: "boolProp",
+                                type_ref: TypeReference {
+                                    path: Package {
+                                        name: "Boolean",
+                                        parent: None,
+                                        source_info: SourceInfo {
+                                            source: "test.pure",
+                                            start_line: 7,
+                                            start_column: 15,
+                                            end_line: 7,
+                                            end_column: 21,
+                                        },
+                                    },
+                                    type_arguments: [],
+                                    type_variable_values: [],
+                                    source_info: SourceInfo {
+                                        source: "test.pure",
+                                        start_line: 7,
+                                        start_column: 15,
+                                        end_line: 7,
+                                        end_column: 21,
+                                    },
+                                },
+                                multiplicity: PureOne,
+                                aggregation: None,
+                                default_value: Some(
+                                    Literal(
+                                        Boolean(
+                                            BooleanLiteral {
+                                                value: true,
+                                                source_info: SourceInfo {
+                                                    source: "test.pure",
+                                                    start_line: 7,
+                                                    start_column: 28,
+                                                    end_line: 7,
+                                                    end_column: 31,
+                                                },
+                                            },
+                                        ),
+                                    ),
+                                ),
+                                stereotypes: [],
+                                tagged_values: [],
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 7,
+                                    start_column: 5,
+                                    end_line: 7,
+                                    end_column: 12,
+                                },
+                            },
+                            Property {
+                                name: "enumProp",
+                                type_ref: TypeReference {
+                                    path: Package {
+                                        name: "Color",
+                                        parent: Some(
+                                            Package {
+                                                name: "my",
+                                                parent: None,
+                                                source_info: SourceInfo {
+                                                    source: "test.pure",
+                                                    start_line: 8,
+                                                    start_column: 15,
+                                                    end_line: 8,
+                                                    end_column: 16,
+                                                },
+                                            },
+                                        ),
+                                        source_info: SourceInfo {
+                                            source: "test.pure",
+                                            start_line: 8,
+                                            start_column: 19,
+                                            end_line: 8,
+                                            end_column: 23,
+                                        },
+                                    },
+                                    type_arguments: [],
+                                    type_variable_values: [],
+                                    source_info: SourceInfo {
+                                        source: "test.pure",
+                                        start_line: 8,
+                                        start_column: 15,
+                                        end_line: 8,
+                                        end_column: 16,
+                                    },
+                                },
+                                multiplicity: PureOne,
+                                aggregation: None,
+                                default_value: Some(
+                                    MemberAccess(
+                                        Simple(
+                                            SimpleMemberAccess {
+                                                target: FunctionApplication(
+                                                    FunctionApplication {
+                                                        function: PackageableElementPtr {
+                                                            package: Some(
+                                                                Package {
+                                                                    name: "my",
+                                                                    parent: None,
+                                                                    source_info: SourceInfo {
+                                                                        source: "test.pure",
+                                                                        start_line: 8,
+                                                                        start_column: 30,
+                                                                        end_line: 8,
+                                                                        end_column: 31,
+                                                                    },
+                                                                },
+                                                            ),
+                                                            name: "Color",
+                                                            source_info: SourceInfo {
+                                                                source: "test.pure",
+                                                                start_line: 8,
+                                                                start_column: 30,
+                                                                end_line: 8,
+                                                                end_column: 31,
+                                                            },
+                                                        },
+                                                        arguments: [],
+                                                        source_info: SourceInfo {
+                                                            source: "test.pure",
+                                                            start_line: 8,
+                                                            start_column: 30,
+                                                            end_line: 8,
+                                                            end_column: 31,
+                                                        },
+                                                    },
+                                                ),
+                                                member: "RED",
+                                                source_info: SourceInfo {
+                                                    source: "test.pure",
+                                                    start_line: 8,
+                                                    start_column: 39,
+                                                    end_line: 8,
+                                                    end_column: 39,
+                                                },
+                                            },
+                                        ),
+                                    ),
+                                ),
+                                stereotypes: [],
+                                tagged_values: [],
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 8,
+                                    start_column: 5,
+                                    end_line: 8,
+                                    end_column: 12,
+                                },
+                            },
+                            Property {
+                                name: "collectionProp",
+                                type_ref: TypeReference {
+                                    path: Package {
+                                        name: "String",
+                                        parent: None,
+                                        source_info: SourceInfo {
+                                            source: "test.pure",
+                                            start_line: 9,
+                                            start_column: 21,
+                                            end_line: 9,
+                                            end_column: 26,
+                                        },
+                                    },
+                                    type_arguments: [],
+                                    type_variable_values: [],
+                                    source_info: SourceInfo {
+                                        source: "test.pure",
+                                        start_line: 9,
+                                        start_column: 21,
+                                        end_line: 9,
+                                        end_column: 26,
+                                    },
+                                },
+                                multiplicity: ZeroOrMany,
+                                aggregation: None,
+                                default_value: Some(
+                                    Collection(
+                                        CollectionExpr {
+                                            elements: [
+                                                Literal(
+                                                    String(
+                                                        StringLiteral {
+                                                            value: "a",
+                                                            source_info: SourceInfo {
+                                                                source: "test.pure",
+                                                                start_line: 9,
+                                                                start_column: 34,
+                                                                end_line: 9,
+                                                                end_column: 36,
+                                                            },
+                                                        },
+                                                    ),
+                                                ),
+                                                Literal(
+                                                    String(
+                                                        StringLiteral {
+                                                            value: "b",
+                                                            source_info: SourceInfo {
+                                                                source: "test.pure",
+                                                                start_line: 9,
+                                                                start_column: 39,
+                                                                end_line: 9,
+                                                                end_column: 41,
+                                                            },
+                                                        },
+                                                    ),
+                                                ),
+                                                Literal(
+                                                    String(
+                                                        StringLiteral {
+                                                            value: "c",
+                                                            source_info: SourceInfo {
+                                                                source: "test.pure",
+                                                                start_line: 9,
+                                                                start_column: 44,
+                                                                end_line: 9,
+                                                                end_column: 46,
+                                                            },
+                                                        },
+                                                    ),
+                                                ),
+                                            ],
+                                            multiplicity: None,
+                                            source_info: SourceInfo {
+                                                source: "test.pure",
+                                                start_line: 9,
+                                                start_column: 33,
+                                                end_line: 9,
+                                                end_column: 33,
+                                            },
+                                        },
+                                    ),
+                                ),
+                                stereotypes: [],
+                                tagged_values: [],
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 9,
+                                    start_column: 5,
+                                    end_line: 9,
+                                    end_column: 18,
+                                },
+                            },
+                        ],
+                        qualified_properties: [],
+                        constraints: [],
+                        stereotypes: [],
+                        tagged_values: [],
+                        source_info: SourceInfo {
+                            source: "test.pure",
+                            start_line: 2,
+                            start_column: 1,
+                            end_line: 2,
+                            end_column: 5,
+                        },
+                    },
+                ),
+            ],
+            source_info: SourceInfo {
+                source: "test.pure",
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: 7,
+            },
+        },
+    ],
+    source_info: SourceInfo {
+        source: "test.pure",
+        start_line: 1,
+        start_column: 1,
+        end_line: 1,
+        end_column: 7,
+    },
+}

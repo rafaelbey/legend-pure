@@ -1,0 +1,147 @@
+---
+source: crates/protocol/tests/e2e_snapshot_tests.rs
+expression: json
+---
+{
+  "elements": [
+    {
+      "_type": "function",
+      "body": [
+        {
+          "_type": "func",
+          "function": "plus",
+          "parameters": [
+            {
+              "_type": "string",
+              "sourceInformation": {
+                "endColumn": 12,
+                "endLine": 4,
+                "sourceId": "function.pure",
+                "startColumn": 5,
+                "startLine": 4
+              },
+              "value": "Hello "
+            },
+            {
+              "_type": "var",
+              "name": "name",
+              "sourceInformation": {
+                "endColumn": 16,
+                "endLine": 4,
+                "sourceId": "function.pure",
+                "startColumn": 16,
+                "startLine": 4
+              }
+            }
+          ],
+          "sourceInformation": {
+            "endColumn": 14,
+            "endLine": 4,
+            "sourceId": "function.pure",
+            "startColumn": 14,
+            "startLine": 4
+          }
+        }
+      ],
+      "name": "greet",
+      "package": "my",
+      "parameters": [
+        {
+          "genericType": {
+            "rawType": {
+              "fullPath": "String",
+              "sourceInformation": {
+                "endColumn": 31,
+                "endLine": 2,
+                "sourceId": "function.pure",
+                "startColumn": 26,
+                "startLine": 2
+              }
+            },
+            "sourceInformation": {
+              "endColumn": 31,
+              "endLine": 2,
+              "sourceId": "function.pure",
+              "startColumn": 26,
+              "startLine": 2
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "name": "name",
+          "sourceInformation": {
+            "endColumn": 23,
+            "endLine": 2,
+            "sourceId": "function.pure",
+            "startColumn": 20,
+            "startLine": 2
+          }
+        }
+      ],
+      "returnGenericType": {
+        "rawType": {
+          "fullPath": "String",
+          "sourceInformation": {
+            "endColumn": 43,
+            "endLine": 2,
+            "sourceId": "function.pure",
+            "startColumn": 38,
+            "startLine": 2
+          }
+        },
+        "sourceInformation": {
+          "endColumn": 43,
+          "endLine": 2,
+          "sourceId": "function.pure",
+          "startColumn": 38,
+          "startLine": 2
+        }
+      },
+      "returnMultiplicity": {
+        "lowerBound": 1,
+        "upperBound": 1
+      },
+      "sourceInformation": {
+        "endColumn": 8,
+        "endLine": 2,
+        "sourceId": "function.pure",
+        "startColumn": 1,
+        "startLine": 2
+      }
+    },
+    {
+      "_type": "sectionIndex",
+      "name": "function.pure",
+      "package": "__internal__",
+      "sections": [
+        {
+          "_type": "default",
+          "elements": [
+            "my::greet"
+          ],
+          "parserName": "Pure",
+          "sourceInformation": {
+            "endColumn": 7,
+            "endLine": 1,
+            "sourceId": "function.pure",
+            "startColumn": 1,
+            "startLine": 1
+          }
+        }
+      ],
+      "sourceInformation": {
+        "endColumn": 7,
+        "endLine": 1,
+        "sourceId": "function.pure",
+        "startColumn": 1,
+        "startLine": 1
+      }
+    }
+  ],
+  "serializer": {
+    "name": "pure",
+    "version": "vX_X_X"
+  }
+}

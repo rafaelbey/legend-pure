@@ -1,0 +1,6 @@
+###Pure
+Measure pkg::Distance
+{
+    *Meter: x -> $x;
+    Kilometer: x -> $x * 1000;
+}

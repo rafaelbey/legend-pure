@@ -1,0 +1,143 @@
+---
+source: crates/parser/tests/test_expression.rs
+expression: file
+---
+SourceFile {
+    sections: [
+        Section {
+            kind: "Pure",
+            imports: [],
+            elements: [
+                Function(
+                    FunctionDef {
+                        package: Some(
+                            Package {
+                                name: "my",
+                                parent: None,
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 2,
+                                    start_column: 10,
+                                    end_line: 2,
+                                    end_column: 11,
+                                },
+                            },
+                        ),
+                        name: "test",
+                        parameters: [],
+                        return_type: TypeReference {
+                            path: Package {
+                                name: "Color",
+                                parent: Some(
+                                    Package {
+                                        name: "my",
+                                        parent: None,
+                                        source_info: SourceInfo {
+                                            source: "test.pure",
+                                            start_line: 2,
+                                            start_column: 22,
+                                            end_line: 2,
+                                            end_column: 23,
+                                        },
+                                    },
+                                ),
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 2,
+                                    start_column: 26,
+                                    end_line: 2,
+                                    end_column: 30,
+                                },
+                            },
+                            type_arguments: [],
+                            type_variable_values: [],
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 2,
+                                start_column: 22,
+                                end_line: 2,
+                                end_column: 23,
+                            },
+                        },
+                        return_multiplicity: PureOne,
+                        body: [
+                            MemberAccess(
+                                Simple(
+                                    SimpleMemberAccess {
+                                        target: FunctionApplication(
+                                            FunctionApplication {
+                                                function: PackageableElementPtr {
+                                                    package: Some(
+                                                        Package {
+                                                            name: "my",
+                                                            parent: None,
+                                                            source_info: SourceInfo {
+                                                                source: "test.pure",
+                                                                start_line: 4,
+                                                                start_column: 5,
+                                                                end_line: 4,
+                                                                end_column: 6,
+                                                            },
+                                                        },
+                                                    ),
+                                                    name: "Color",
+                                                    source_info: SourceInfo {
+                                                        source: "test.pure",
+                                                        start_line: 4,
+                                                        start_column: 5,
+                                                        end_line: 4,
+                                                        end_column: 6,
+                                                    },
+                                                },
+                                                arguments: [],
+                                                source_info: SourceInfo {
+                                                    source: "test.pure",
+                                                    start_line: 4,
+                                                    start_column: 5,
+                                                    end_line: 4,
+                                                    end_column: 6,
+                                                },
+                                            },
+                                        ),
+                                        member: "RED",
+                                        source_info: SourceInfo {
+                                            source: "test.pure",
+                                            start_line: 4,
+                                            start_column: 14,
+                                            end_line: 4,
+                                            end_column: 14,
+                                        },
+                                    },
+                                ),
+                            ),
+                        ],
+                        stereotypes: [],
+                        tagged_values: [],
+                        tests: [],
+                        source_info: SourceInfo {
+                            source: "test.pure",
+                            start_line: 2,
+                            start_column: 1,
+                            end_line: 2,
+                            end_column: 8,
+                        },
+                    },
+                ),
+            ],
+            source_info: SourceInfo {
+                source: "test.pure",
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: 7,
+            },
+        },
+    ],
+    source_info: SourceInfo {
+        source: "test.pure",
+        start_line: 1,
+        start_column: 1,
+        end_line: 1,
+        end_column: 7,
+    },
+}
