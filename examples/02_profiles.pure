@@ -1,0 +1,37 @@
+###Pure
+
+// ─── Profile & Stereotypes ──────────────────────────────────────────
+// Demonstrates profiles with stereotypes and tags, and how they
+// annotate classes and properties.
+
+Profile model::profiles::temporal
+{
+  stereotypes: [bitemporal, businessTemporal, processingTemporal];
+  tags: [validFrom, validTo, processingDate];
+}
+
+Profile model::profiles::quality
+{
+  stereotypes: [validated, experimental, deprecated];
+  tags: [owner, reviewDate, sla];
+}
+
+Class <<model::profiles::quality.validated>> model::customer::Customer
+{
+  customerId: String[1];
+  legalName: String[1];
+  shortName: String[0..1];
+  dateOfIncorporation: StrictDate[0..1];
+  isActive: Boolean[1];
+  rating: String[0..1];
+}
+
+Class <<model::profiles::temporal.businessTemporal>> model::customer::Address
+{
+  line1: String[1];
+  line2: String[0..1];
+  city: String[1];
+  state: String[0..1];
+  postalCode: String[1];
+  country: String[1];
+}

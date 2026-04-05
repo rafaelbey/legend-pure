@@ -1,0 +1,9 @@
+###Pure
+
+// ERROR: Enum value with invalid syntax — using = for assignment
+Enum model::errors::EnumWithAssignment
+{
+  Red = 1,
+  Blue = 2,
+  Green = 3
+}

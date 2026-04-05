@@ -1,0 +1,8 @@
+###Pure
+
+// ERROR: Invalid multiplicity syntax
+Class model::errors::BadMultiplicity
+{
+  name: String[abc];
+  items: Integer[1..];
+}

@@ -1,0 +1,13 @@
+###Pure
+
+// ERROR: Mixing valid and invalid elements — parser stops at first error
+Class model::errors::ValidClass
+{
+  name: String[1];
+}
+
+// This one has a broken property type
+Class model::errors::BrokenClass
+{
+  data: [1];
+}

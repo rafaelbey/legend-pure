@@ -1,0 +1,1036 @@
+{
+  "serializer": {
+    "name": "pure",
+    "version": "vX_X_X"
+  },
+  "elements": [
+    {
+      "_type": "Enumeration",
+      "package": "model::trading",
+      "name": "AssetClass",
+      "values": [
+        {
+          "value": "Equity",
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 9,
+            "startColumn": 3,
+            "endLine": 9,
+            "endColumn": 8
+          }
+        },
+        {
+          "value": "FixedIncome",
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 10,
+            "startColumn": 3,
+            "endLine": 10,
+            "endColumn": 13
+          }
+        },
+        {
+          "value": "FX",
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 11,
+            "startColumn": 3,
+            "endLine": 11,
+            "endColumn": 4
+          }
+        },
+        {
+          "value": "Commodity",
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 12,
+            "startColumn": 3,
+            "endLine": 12,
+            "endColumn": 11
+          }
+        },
+        {
+          "value": "Crypto",
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 13,
+            "startColumn": 3,
+            "endLine": 13,
+            "endColumn": 8
+          }
+        }
+      ],
+      "sourceInformation": {
+        "sourceId": "01_trading_model.pure",
+        "startLine": 7,
+        "startColumn": 1,
+        "endLine": 7,
+        "endColumn": 4
+      }
+    },
+    {
+      "_type": "Enumeration",
+      "package": "model::trading",
+      "name": "OrderStatus",
+      "values": [
+        {
+          "value": "Pending",
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 18,
+            "startColumn": 3,
+            "endLine": 18,
+            "endColumn": 9
+          }
+        },
+        {
+          "value": "Filled",
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 19,
+            "startColumn": 3,
+            "endLine": 19,
+            "endColumn": 8
+          }
+        },
+        {
+          "value": "PartiallyFilled",
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 20,
+            "startColumn": 3,
+            "endLine": 20,
+            "endColumn": 17
+          }
+        },
+        {
+          "value": "Cancelled",
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 21,
+            "startColumn": 3,
+            "endLine": 21,
+            "endColumn": 11
+          }
+        },
+        {
+          "value": "Rejected",
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 22,
+            "startColumn": 3,
+            "endLine": 22,
+            "endColumn": 10
+          }
+        }
+      ],
+      "sourceInformation": {
+        "sourceId": "01_trading_model.pure",
+        "startLine": 16,
+        "startColumn": 1,
+        "endLine": 16,
+        "endColumn": 4
+      }
+    },
+    {
+      "_type": "class",
+      "package": "model::trading",
+      "name": "Instrument",
+      "properties": [
+        {
+          "name": "ticker",
+          "genericType": {
+            "rawType": {
+              "fullPath": "String",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 27,
+                "startColumn": 11,
+                "endLine": 27,
+                "endColumn": 16
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 27,
+              "startColumn": 11,
+              "endLine": 27,
+              "endColumn": 16
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 27,
+            "startColumn": 3,
+            "endLine": 27,
+            "endColumn": 8
+          }
+        },
+        {
+          "name": "name",
+          "genericType": {
+            "rawType": {
+              "fullPath": "String",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 28,
+                "startColumn": 9,
+                "endLine": 28,
+                "endColumn": 14
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 28,
+              "startColumn": 9,
+              "endLine": 28,
+              "endColumn": 14
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 28,
+            "startColumn": 3,
+            "endLine": 28,
+            "endColumn": 6
+          }
+        },
+        {
+          "name": "assetClass",
+          "genericType": {
+            "rawType": {
+              "fullPath": "model::trading::AssetClass",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 29,
+                "startColumn": 31,
+                "endLine": 29,
+                "endColumn": 40
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 29,
+              "startColumn": 15,
+              "endLine": 29,
+              "endColumn": 19
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 29,
+            "startColumn": 3,
+            "endLine": 29,
+            "endColumn": 12
+          }
+        },
+        {
+          "name": "isin",
+          "genericType": {
+            "rawType": {
+              "fullPath": "String",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 30,
+                "startColumn": 9,
+                "endLine": 30,
+                "endColumn": 14
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 30,
+              "startColumn": 9,
+              "endLine": 30,
+              "endColumn": 14
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 0,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 30,
+            "startColumn": 3,
+            "endLine": 30,
+            "endColumn": 6
+          }
+        },
+        {
+          "name": "currency",
+          "genericType": {
+            "rawType": {
+              "fullPath": "String",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 31,
+                "startColumn": 13,
+                "endLine": 31,
+                "endColumn": 18
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 31,
+              "startColumn": 13,
+              "endLine": 31,
+              "endColumn": 18
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 31,
+            "startColumn": 3,
+            "endLine": 31,
+            "endColumn": 10
+          }
+        }
+      ],
+      "sourceInformation": {
+        "sourceId": "01_trading_model.pure",
+        "startLine": 25,
+        "startColumn": 1,
+        "endLine": 25,
+        "endColumn": 5
+      }
+    },
+    {
+      "_type": "class",
+      "package": "model::trading",
+      "name": "Trade",
+      "properties": [
+        {
+          "name": "tradeId",
+          "genericType": {
+            "rawType": {
+              "fullPath": "String",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 40,
+                "startColumn": 12,
+                "endLine": 40,
+                "endColumn": 17
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 40,
+              "startColumn": 12,
+              "endLine": 40,
+              "endColumn": 17
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 40,
+            "startColumn": 3,
+            "endLine": 40,
+            "endColumn": 9
+          }
+        },
+        {
+          "name": "quantity",
+          "genericType": {
+            "rawType": {
+              "fullPath": "Integer",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 41,
+                "startColumn": 13,
+                "endLine": 41,
+                "endColumn": 19
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 41,
+              "startColumn": 13,
+              "endLine": 41,
+              "endColumn": 19
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 41,
+            "startColumn": 3,
+            "endLine": 41,
+            "endColumn": 10
+          }
+        },
+        {
+          "name": "price",
+          "genericType": {
+            "rawType": {
+              "fullPath": "Float",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 42,
+                "startColumn": 10,
+                "endLine": 42,
+                "endColumn": 14
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 42,
+              "startColumn": 10,
+              "endLine": 42,
+              "endColumn": 14
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 42,
+            "startColumn": 3,
+            "endLine": 42,
+            "endColumn": 7
+          }
+        },
+        {
+          "name": "tradeDate",
+          "genericType": {
+            "rawType": {
+              "fullPath": "StrictDate",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 43,
+                "startColumn": 14,
+                "endLine": 43,
+                "endColumn": 23
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 43,
+              "startColumn": 14,
+              "endLine": 43,
+              "endColumn": 23
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 43,
+            "startColumn": 3,
+            "endLine": 43,
+            "endColumn": 11
+          }
+        },
+        {
+          "name": "settlementDate",
+          "genericType": {
+            "rawType": {
+              "fullPath": "StrictDate",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 44,
+                "startColumn": 19,
+                "endLine": 44,
+                "endColumn": 28
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 44,
+              "startColumn": 19,
+              "endLine": 44,
+              "endColumn": 28
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 0,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 44,
+            "startColumn": 3,
+            "endLine": 44,
+            "endColumn": 16
+          }
+        },
+        {
+          "name": "status",
+          "genericType": {
+            "rawType": {
+              "fullPath": "model::trading::OrderStatus",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 45,
+                "startColumn": 27,
+                "endLine": 45,
+                "endColumn": 37
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 45,
+              "startColumn": 11,
+              "endLine": 45,
+              "endColumn": 15
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 45,
+            "startColumn": 3,
+            "endLine": 45,
+            "endColumn": 8
+          }
+        }
+      ],
+      "constraints": [
+        {
+          "name": "positiveQuantity",
+          "functionDefinition": {
+            "_type": "func",
+            "function": "greaterThan",
+            "parameters": [
+              {
+                "_type": "property",
+                "parameters": [
+                  {
+                    "_type": "var",
+                    "name": "this",
+                    "sourceInformation": {
+                      "endColumn": 21,
+                      "endLine": 36,
+                      "sourceId": "01_trading_model.pure",
+                      "startColumn": 21,
+                      "startLine": 36
+                    }
+                  }
+                ],
+                "property": "quantity",
+                "sourceInformation": {
+                  "endColumn": 26,
+                  "endLine": 36,
+                  "sourceId": "01_trading_model.pure",
+                  "startColumn": 26,
+                  "startLine": 36
+                }
+              },
+              {
+                "_type": "integer",
+                "sourceInformation": {
+                  "endColumn": 38,
+                  "endLine": 36,
+                  "sourceId": "01_trading_model.pure",
+                  "startColumn": 38,
+                  "startLine": 36
+                },
+                "value": 0
+              }
+            ],
+            "sourceInformation": {
+              "endColumn": 36,
+              "endLine": 36,
+              "sourceId": "01_trading_model.pure",
+              "startColumn": 36,
+              "startLine": 36
+            }
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 36,
+            "startColumn": 3,
+            "endLine": 36,
+            "endColumn": 18
+          }
+        },
+        {
+          "name": "priceNonNegative",
+          "functionDefinition": {
+            "_type": "func",
+            "function": "greaterThanEqual",
+            "parameters": [
+              {
+                "_type": "property",
+                "parameters": [
+                  {
+                    "_type": "var",
+                    "name": "this",
+                    "sourceInformation": {
+                      "endColumn": 21,
+                      "endLine": 37,
+                      "sourceId": "01_trading_model.pure",
+                      "startColumn": 21,
+                      "startLine": 37
+                    }
+                  }
+                ],
+                "property": "price",
+                "sourceInformation": {
+                  "endColumn": 26,
+                  "endLine": 37,
+                  "sourceId": "01_trading_model.pure",
+                  "startColumn": 26,
+                  "startLine": 37
+                }
+              },
+              {
+                "_type": "float",
+                "sourceInformation": {
+                  "endColumn": 38,
+                  "endLine": 37,
+                  "sourceId": "01_trading_model.pure",
+                  "startColumn": 36,
+                  "startLine": 37
+                },
+                "value": 0.0
+              }
+            ],
+            "sourceInformation": {
+              "endColumn": 34,
+              "endLine": 37,
+              "sourceId": "01_trading_model.pure",
+              "startColumn": 33,
+              "startLine": 37
+            }
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 37,
+            "startColumn": 3,
+            "endLine": 37,
+            "endColumn": 18
+          }
+        }
+      ],
+      "stereotypes": [
+        {
+          "profile": "meta::pure::profiles::doc",
+          "value": "doc",
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 34,
+            "startColumn": 9,
+            "endLine": 34,
+            "endColumn": 12
+          },
+          "profileSourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 34,
+            "startColumn": 9,
+            "endLine": 34,
+            "endColumn": 12
+          }
+        }
+      ],
+      "sourceInformation": {
+        "sourceId": "01_trading_model.pure",
+        "startLine": 34,
+        "startColumn": 1,
+        "endLine": 34,
+        "endColumn": 5
+      }
+    },
+    {
+      "_type": "class",
+      "package": "model::trading",
+      "name": "Trader",
+      "properties": [
+        {
+          "name": "traderId",
+          "genericType": {
+            "rawType": {
+              "fullPath": "String",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 50,
+                "startColumn": 13,
+                "endLine": 50,
+                "endColumn": 18
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 50,
+              "startColumn": 13,
+              "endLine": 50,
+              "endColumn": 18
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 50,
+            "startColumn": 3,
+            "endLine": 50,
+            "endColumn": 10
+          }
+        },
+        {
+          "name": "firstName",
+          "genericType": {
+            "rawType": {
+              "fullPath": "String",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 51,
+                "startColumn": 14,
+                "endLine": 51,
+                "endColumn": 19
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 51,
+              "startColumn": 14,
+              "endLine": 51,
+              "endColumn": 19
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 51,
+            "startColumn": 3,
+            "endLine": 51,
+            "endColumn": 11
+          }
+        },
+        {
+          "name": "lastName",
+          "genericType": {
+            "rawType": {
+              "fullPath": "String",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 52,
+                "startColumn": 13,
+                "endLine": 52,
+                "endColumn": 18
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 52,
+              "startColumn": 13,
+              "endLine": 52,
+              "endColumn": 18
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 52,
+            "startColumn": 3,
+            "endLine": 52,
+            "endColumn": 10
+          }
+        },
+        {
+          "name": "email",
+          "genericType": {
+            "rawType": {
+              "fullPath": "String",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 53,
+                "startColumn": 10,
+                "endLine": 53,
+                "endColumn": 15
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 53,
+              "startColumn": 10,
+              "endLine": 53,
+              "endColumn": 15
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 0,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 53,
+            "startColumn": 3,
+            "endLine": 53,
+            "endColumn": 7
+          }
+        },
+        {
+          "name": "desk",
+          "genericType": {
+            "rawType": {
+              "fullPath": "String",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 54,
+                "startColumn": 9,
+                "endLine": 54,
+                "endColumn": 14
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 54,
+              "startColumn": 9,
+              "endLine": 54,
+              "endColumn": 14
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 54,
+            "startColumn": 3,
+            "endLine": 54,
+            "endColumn": 6
+          }
+        }
+      ],
+      "sourceInformation": {
+        "sourceId": "01_trading_model.pure",
+        "startLine": 48,
+        "startColumn": 1,
+        "endLine": 48,
+        "endColumn": 5
+      }
+    },
+    {
+      "_type": "association",
+      "package": "model::trading",
+      "name": "TradeInstrument",
+      "properties": [
+        {
+          "name": "instrument",
+          "genericType": {
+            "rawType": {
+              "fullPath": "model::trading::Instrument",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 59,
+                "startColumn": 31,
+                "endLine": 59,
+                "endColumn": 40
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 59,
+              "startColumn": 15,
+              "endLine": 59,
+              "endColumn": 19
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 59,
+            "startColumn": 3,
+            "endLine": 59,
+            "endColumn": 12
+          }
+        },
+        {
+          "name": "trades",
+          "genericType": {
+            "rawType": {
+              "fullPath": "model::trading::Trade",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 60,
+                "startColumn": 27,
+                "endLine": 60,
+                "endColumn": 31
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 60,
+              "startColumn": 11,
+              "endLine": 60,
+              "endColumn": 15
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 0
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 60,
+            "startColumn": 3,
+            "endLine": 60,
+            "endColumn": 8
+          }
+        }
+      ],
+      "sourceInformation": {
+        "sourceId": "01_trading_model.pure",
+        "startLine": 57,
+        "startColumn": 1,
+        "endLine": 57,
+        "endColumn": 11
+      }
+    },
+    {
+      "_type": "association",
+      "package": "model::trading",
+      "name": "TradeTrader",
+      "properties": [
+        {
+          "name": "trader",
+          "genericType": {
+            "rawType": {
+              "fullPath": "model::trading::Trader",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 65,
+                "startColumn": 27,
+                "endLine": 65,
+                "endColumn": 32
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 65,
+              "startColumn": 11,
+              "endLine": 65,
+              "endColumn": 15
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 65,
+            "startColumn": 3,
+            "endLine": 65,
+            "endColumn": 8
+          }
+        },
+        {
+          "name": "trades",
+          "genericType": {
+            "rawType": {
+              "fullPath": "model::trading::Trade",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 66,
+                "startColumn": 27,
+                "endLine": 66,
+                "endColumn": 31
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 66,
+              "startColumn": 11,
+              "endLine": 66,
+              "endColumn": 15
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 0
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 66,
+            "startColumn": 3,
+            "endLine": 66,
+            "endColumn": 8
+          }
+        }
+      ],
+      "sourceInformation": {
+        "sourceId": "01_trading_model.pure",
+        "startLine": 63,
+        "startColumn": 1,
+        "endLine": 63,
+        "endColumn": 11
+      }
+    },
+    {
+      "_type": "sectionIndex",
+      "package": "__internal__",
+      "name": "01_trading_model.pure",
+      "sections": [
+        {
+          "_type": "default",
+          "parserName": "Pure",
+          "elements": [
+            "model::trading::AssetClass",
+            "model::trading::OrderStatus",
+            "model::trading::Instrument",
+            "model::trading::Trade",
+            "model::trading::Trader",
+            "model::trading::TradeInstrument",
+            "model::trading::TradeTrader"
+          ],
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 1,
+            "startColumn": 1,
+            "endLine": 1,
+            "endColumn": 7
+          }
+        }
+      ],
+      "sourceInformation": {
+        "sourceId": "01_trading_model.pure",
+        "startLine": 1,
+        "startColumn": 1,
+        "endLine": 1,
+        "endColumn": 7
+      }
+    }
+  ]
+}

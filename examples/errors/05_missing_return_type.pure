@@ -1,0 +1,7 @@
+###Pure
+
+// ERROR: Missing return type on function signature
+function model::errors::noReturn(x: String[1])
+{
+  $x + ' world'
+}

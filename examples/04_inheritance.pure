@@ -1,0 +1,56 @@
+###Pure
+
+// ─── Inheritance & Constraints ──────────────────────────────────────
+// A more complex model demonstrating class inheritance, type
+// parameters, qualified properties, and advanced constraints.
+
+Class model::financial::Product
+{
+  productId: String[1];
+  name: String[1];
+  description: String[0..1];
+  isActive: Boolean[1];
+}
+
+Class model::financial::Bond extends model::financial::Product
+{
+  couponRate: Float[1];
+  maturityDate: StrictDate[1];
+  faceValue: Float[1];
+  issuer: String[1];
+}
+
+Class model::financial::Equity extends model::financial::Product
+{
+  exchange: String[1];
+  sector: String[0..1];
+  marketCap: Float[0..1];
+}
+
+Class model::financial::Portfolio
+[
+  nonEmpty: $this.holdings->size() > 0,
+  uniqueProducts: $this.holdings.product->distinct()->size() == $this.holdings->size()
+]
+{
+  portfolioId: String[1];
+  name: String[1];
+  currency: String[1];
+  inceptionDate: StrictDate[1];
+  holdings: model::financial::Holding[*];
+}
+
+Class model::financial::Holding
+{
+  product: model::financial::Product[1];
+  quantity: Float[1];
+  averageCost: Float[1];
+}
+
+Enum model::financial::RiskLevel
+{
+  Low,
+  Medium,
+  High,
+  Critical
+}

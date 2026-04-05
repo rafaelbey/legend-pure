@@ -17,10 +17,13 @@ resolver = "2"
 members = [
     "crates/ast",
     "crates/ast-derive",
+    "crates/compose",
     "crates/lexer",
     "crates/parser",
     "crates/protocol",
+    "crates/pure",
     "crates/jni",
+    "crates/cli",
 ]
 
 [workspace.package]
@@ -51,6 +54,12 @@ linkme = "0.3"
 
 # Testing
 insta = { version = "1", features = ["json"] }
+
+# CLI
+clap = { version = "4", features = ["derive", "color"] }
+miette = { version = "7", features = ["fancy"] }
+owo-colors = "4"
+walkdir = "2"
 
 [workspace.metadata.llvm-cov]
 # Exclude JNI bridge from coverage (FFI boundary, tested via Java integration)

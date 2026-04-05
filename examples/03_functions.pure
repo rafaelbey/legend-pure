@@ -1,0 +1,31 @@
+###Pure
+
+// ─── Functions ──────────────────────────────────────────────────────
+// Demonstrates function definitions with various expression types:
+// lambdas, arrow functions, let bindings, and collection operations.
+
+function model::trading::functions::totalValue(trades: model::trading::Trade[*]): Float[1]
+{
+  $trades->map(t | $t.price * $t.quantity)->sum()
+}
+
+function model::trading::functions::activeTrades(trades: model::trading::Trade[*]): model::trading::Trade[*]
+{
+  $trades->filter(t | $t.status != model::trading::OrderStatus.Cancelled)
+}
+
+function model::trading::functions::tradesByDesk(trades: model::trading::Trade[*], desk: String[1]): model::trading::Trade[*]
+{
+  let filtered = $trades->filter(t | $t.trader.desk == $desk);
+  $filtered->sortBy(t | $t.tradeDate);
+}
+
+function model::trading::functions::formatTradeId(prefix: String[1], sequence: Integer[1]): String[1]
+{
+  $prefix + '-' + $sequence->toString()
+}
+
+function model::util::greet(name: String[1]): String[1]
+{
+  'Hello, ' + $name + '! Welcome to Legend.'
+}

@@ -1,0 +1,7 @@
+###Pure
+
+// ERROR: Completely unrecognized element keyword
+Clazz model::errors::Typo
+{
+  name: String[1];
+}
