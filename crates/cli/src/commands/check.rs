@@ -52,7 +52,7 @@ pub struct CheckArgs {
 /// Execute the `legend check` command.
 #[allow(clippy::needless_pass_by_value)] // clap convention: Args are passed by value
 pub fn run(args: CheckArgs) -> Result<(), CliError> {
-    let files = resolve_paths(&args.paths)?;
+    let files = discovery::resolve_paths(&args.paths)?;
 
     if files.is_empty() {
         return Err(CliError::NoFilesFound);
@@ -121,19 +121,4 @@ pub fn run(args: CheckArgs) -> Result<(), CliError> {
         );
         Ok(())
     }
-}
-
-/// Resolves input paths: files are kept as-is, directories are walked for `.pure` files.
-fn resolve_paths(paths: &[PathBuf]) -> Result<Vec<PathBuf>, CliError> {
-    let mut files = Vec::new();
-    for path in paths {
-        if path.is_dir() {
-            files.extend(discovery::find_pure_files(path)?);
-        } else if path.exists() {
-            files.push(path.clone());
-        } else {
-            return Err(CliError::FileNotFound(path.clone()));
-        }
-    }
-    Ok(files)
 }

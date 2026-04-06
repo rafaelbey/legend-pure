@@ -397,6 +397,7 @@ dependencies = [
  "legend-pure-parser-lexer",
  "legend-pure-parser-parser",
  "legend-pure-parser-protocol",
+ "legend-pure-parser-pure",
  "miette",
  "owo-colors",
  "serde",

@@ -5,6 +5,26 @@
   },
   "elements": [
     {
+      "_type": "profile",
+      "package": "model::trading",
+      "name": "doc",
+      "stereotypes": [
+        "doc",
+        "internal"
+      ],
+      "tags": [
+        "description",
+        "author"
+      ],
+      "sourceInformation": {
+        "sourceId": "01_trading_model.pure",
+        "startLine": 7,
+        "startColumn": 1,
+        "endLine": 7,
+        "endColumn": 7
+      }
+    },
+    {
       "_type": "Enumeration",
       "package": "model::trading",
       "name": "AssetClass",
@@ -13,9 +33,9 @@
           "value": "Equity",
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 9,
+            "startLine": 15,
             "startColumn": 3,
-            "endLine": 9,
+            "endLine": 15,
             "endColumn": 8
           }
         },
@@ -23,9 +43,9 @@
           "value": "FixedIncome",
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 10,
+            "startLine": 16,
             "startColumn": 3,
-            "endLine": 10,
+            "endLine": 16,
             "endColumn": 13
           }
         },
@@ -33,9 +53,9 @@
           "value": "FX",
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 11,
+            "startLine": 17,
             "startColumn": 3,
-            "endLine": 11,
+            "endLine": 17,
             "endColumn": 4
           }
         },
@@ -43,9 +63,9 @@
           "value": "Commodity",
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 12,
+            "startLine": 18,
             "startColumn": 3,
-            "endLine": 12,
+            "endLine": 18,
             "endColumn": 11
           }
         },
@@ -53,18 +73,18 @@
           "value": "Crypto",
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 13,
+            "startLine": 19,
             "startColumn": 3,
-            "endLine": 13,
+            "endLine": 19,
             "endColumn": 8
           }
         }
       ],
       "sourceInformation": {
         "sourceId": "01_trading_model.pure",
-        "startLine": 7,
+        "startLine": 13,
         "startColumn": 1,
-        "endLine": 7,
+        "endLine": 13,
         "endColumn": 4
       }
     },
@@ -77,9 +97,9 @@
           "value": "Pending",
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 18,
+            "startLine": 24,
             "startColumn": 3,
-            "endLine": 18,
+            "endLine": 24,
             "endColumn": 9
           }
         },
@@ -87,9 +107,9 @@
           "value": "Filled",
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 19,
+            "startLine": 25,
             "startColumn": 3,
-            "endLine": 19,
+            "endLine": 25,
             "endColumn": 8
           }
         },
@@ -97,9 +117,9 @@
           "value": "PartiallyFilled",
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 20,
+            "startLine": 26,
             "startColumn": 3,
-            "endLine": 20,
+            "endLine": 26,
             "endColumn": 17
           }
         },
@@ -107,9 +127,9 @@
           "value": "Cancelled",
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 21,
+            "startLine": 27,
             "startColumn": 3,
-            "endLine": 21,
+            "endLine": 27,
             "endColumn": 11
           }
         },
@@ -117,18 +137,18 @@
           "value": "Rejected",
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 22,
+            "startLine": 28,
             "startColumn": 3,
-            "endLine": 22,
+            "endLine": 28,
             "endColumn": 10
           }
         }
       ],
       "sourceInformation": {
         "sourceId": "01_trading_model.pure",
-        "startLine": 16,
+        "startLine": 22,
         "startColumn": 1,
-        "endLine": 16,
+        "endLine": 22,
         "endColumn": 4
       }
     },
@@ -144,17 +164,17 @@
               "fullPath": "String",
               "sourceInformation": {
                 "sourceId": "01_trading_model.pure",
-                "startLine": 27,
+                "startLine": 33,
                 "startColumn": 11,
-                "endLine": 27,
+                "endLine": 33,
                 "endColumn": 16
               }
             },
             "sourceInformation": {
               "sourceId": "01_trading_model.pure",
-              "startLine": 27,
+              "startLine": 33,
               "startColumn": 11,
-              "endLine": 27,
+              "endLine": 33,
               "endColumn": 16
             }
           },
@@ -164,9 +184,9 @@
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 27,
+            "startLine": 33,
             "startColumn": 3,
-            "endLine": 27,
+            "endLine": 33,
             "endColumn": 8
           }
         },
@@ -177,17 +197,17 @@
               "fullPath": "String",
               "sourceInformation": {
                 "sourceId": "01_trading_model.pure",
-                "startLine": 28,
+                "startLine": 34,
                 "startColumn": 9,
-                "endLine": 28,
+                "endLine": 34,
                 "endColumn": 14
               }
             },
             "sourceInformation": {
               "sourceId": "01_trading_model.pure",
-              "startLine": 28,
+              "startLine": 34,
               "startColumn": 9,
-              "endLine": 28,
+              "endLine": 34,
               "endColumn": 14
             }
           },
@@ -197,9 +217,9 @@
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 28,
+            "startLine": 34,
             "startColumn": 3,
-            "endLine": 28,
+            "endLine": 34,
             "endColumn": 6
           }
         },
@@ -210,17 +230,17 @@
               "fullPath": "model::trading::AssetClass",
               "sourceInformation": {
                 "sourceId": "01_trading_model.pure",
-                "startLine": 29,
+                "startLine": 35,
                 "startColumn": 31,
-                "endLine": 29,
+                "endLine": 35,
                 "endColumn": 40
               }
             },
             "sourceInformation": {
               "sourceId": "01_trading_model.pure",
-              "startLine": 29,
+              "startLine": 35,
               "startColumn": 15,
-              "endLine": 29,
+              "endLine": 35,
               "endColumn": 19
             }
           },
@@ -230,9 +250,9 @@
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 29,
+            "startLine": 35,
             "startColumn": 3,
-            "endLine": 29,
+            "endLine": 35,
             "endColumn": 12
           }
         },
@@ -243,17 +263,17 @@
               "fullPath": "String",
               "sourceInformation": {
                 "sourceId": "01_trading_model.pure",
-                "startLine": 30,
+                "startLine": 36,
                 "startColumn": 9,
-                "endLine": 30,
+                "endLine": 36,
                 "endColumn": 14
               }
             },
             "sourceInformation": {
               "sourceId": "01_trading_model.pure",
-              "startLine": 30,
+              "startLine": 36,
               "startColumn": 9,
-              "endLine": 30,
+              "endLine": 36,
               "endColumn": 14
             }
           },
@@ -263,9 +283,9 @@
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 30,
+            "startLine": 36,
             "startColumn": 3,
-            "endLine": 30,
+            "endLine": 36,
             "endColumn": 6
           }
         },
@@ -276,17 +296,17 @@
               "fullPath": "String",
               "sourceInformation": {
                 "sourceId": "01_trading_model.pure",
-                "startLine": 31,
+                "startLine": 37,
                 "startColumn": 13,
-                "endLine": 31,
+                "endLine": 37,
                 "endColumn": 18
               }
             },
             "sourceInformation": {
               "sourceId": "01_trading_model.pure",
-              "startLine": 31,
+              "startLine": 37,
               "startColumn": 13,
-              "endLine": 31,
+              "endLine": 37,
               "endColumn": 18
             }
           },
@@ -296,18 +316,18 @@
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 31,
+            "startLine": 37,
             "startColumn": 3,
-            "endLine": 31,
+            "endLine": 37,
             "endColumn": 10
           }
         }
       ],
       "sourceInformation": {
         "sourceId": "01_trading_model.pure",
-        "startLine": 25,
+        "startLine": 31,
         "startColumn": 1,
-        "endLine": 25,
+        "endLine": 31,
         "endColumn": 5
       }
     },
@@ -323,17 +343,17 @@
               "fullPath": "String",
               "sourceInformation": {
                 "sourceId": "01_trading_model.pure",
-                "startLine": 40,
+                "startLine": 46,
                 "startColumn": 12,
-                "endLine": 40,
+                "endLine": 46,
                 "endColumn": 17
               }
             },
             "sourceInformation": {
               "sourceId": "01_trading_model.pure",
-              "startLine": 40,
+              "startLine": 46,
               "startColumn": 12,
-              "endLine": 40,
+              "endLine": 46,
               "endColumn": 17
             }
           },
@@ -343,9 +363,9 @@
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 40,
+            "startLine": 46,
             "startColumn": 3,
-            "endLine": 40,
+            "endLine": 46,
             "endColumn": 9
           }
         },
@@ -356,17 +376,17 @@
               "fullPath": "Integer",
               "sourceInformation": {
                 "sourceId": "01_trading_model.pure",
-                "startLine": 41,
+                "startLine": 47,
                 "startColumn": 13,
-                "endLine": 41,
+                "endLine": 47,
                 "endColumn": 19
               }
             },
             "sourceInformation": {
               "sourceId": "01_trading_model.pure",
-              "startLine": 41,
+              "startLine": 47,
               "startColumn": 13,
-              "endLine": 41,
+              "endLine": 47,
               "endColumn": 19
             }
           },
@@ -376,9 +396,9 @@
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 41,
+            "startLine": 47,
             "startColumn": 3,
-            "endLine": 41,
+            "endLine": 47,
             "endColumn": 10
           }
         },
@@ -389,17 +409,17 @@
               "fullPath": "Float",
               "sourceInformation": {
                 "sourceId": "01_trading_model.pure",
-                "startLine": 42,
+                "startLine": 48,
                 "startColumn": 10,
-                "endLine": 42,
+                "endLine": 48,
                 "endColumn": 14
               }
             },
             "sourceInformation": {
               "sourceId": "01_trading_model.pure",
-              "startLine": 42,
+              "startLine": 48,
               "startColumn": 10,
-              "endLine": 42,
+              "endLine": 48,
               "endColumn": 14
             }
           },
@@ -409,9 +429,9 @@
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 42,
+            "startLine": 48,
             "startColumn": 3,
-            "endLine": 42,
+            "endLine": 48,
             "endColumn": 7
           }
         },
@@ -422,17 +442,17 @@
               "fullPath": "StrictDate",
               "sourceInformation": {
                 "sourceId": "01_trading_model.pure",
-                "startLine": 43,
+                "startLine": 49,
                 "startColumn": 14,
-                "endLine": 43,
+                "endLine": 49,
                 "endColumn": 23
               }
             },
             "sourceInformation": {
               "sourceId": "01_trading_model.pure",
-              "startLine": 43,
+              "startLine": 49,
               "startColumn": 14,
-              "endLine": 43,
+              "endLine": 49,
               "endColumn": 23
             }
           },
@@ -442,9 +462,9 @@
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 43,
+            "startLine": 49,
             "startColumn": 3,
-            "endLine": 43,
+            "endLine": 49,
             "endColumn": 11
           }
         },
@@ -455,17 +475,17 @@
               "fullPath": "StrictDate",
               "sourceInformation": {
                 "sourceId": "01_trading_model.pure",
-                "startLine": 44,
+                "startLine": 50,
                 "startColumn": 19,
-                "endLine": 44,
+                "endLine": 50,
                 "endColumn": 28
               }
             },
             "sourceInformation": {
               "sourceId": "01_trading_model.pure",
-              "startLine": 44,
+              "startLine": 50,
               "startColumn": 19,
-              "endLine": 44,
+              "endLine": 50,
               "endColumn": 28
             }
           },
@@ -475,9 +495,9 @@
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 44,
+            "startLine": 50,
             "startColumn": 3,
-            "endLine": 44,
+            "endLine": 50,
             "endColumn": 16
           }
         },
@@ -488,17 +508,17 @@
               "fullPath": "model::trading::OrderStatus",
               "sourceInformation": {
                 "sourceId": "01_trading_model.pure",
-                "startLine": 45,
+                "startLine": 51,
                 "startColumn": 27,
-                "endLine": 45,
+                "endLine": 51,
                 "endColumn": 37
               }
             },
             "sourceInformation": {
               "sourceId": "01_trading_model.pure",
-              "startLine": 45,
+              "startLine": 51,
               "startColumn": 11,
-              "endLine": 45,
+              "endLine": 51,
               "endColumn": 15
             }
           },
@@ -508,9 +528,9 @@
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 45,
+            "startLine": 51,
             "startColumn": 3,
-            "endLine": 45,
+            "endLine": 51,
             "endColumn": 8
           }
         }
@@ -530,47 +550,47 @@
                     "name": "this",
                     "sourceInformation": {
                       "endColumn": 21,
-                      "endLine": 36,
+                      "endLine": 42,
                       "sourceId": "01_trading_model.pure",
                       "startColumn": 21,
-                      "startLine": 36
+                      "startLine": 42
                     }
                   }
                 ],
                 "property": "quantity",
                 "sourceInformation": {
                   "endColumn": 26,
-                  "endLine": 36,
+                  "endLine": 42,
                   "sourceId": "01_trading_model.pure",
                   "startColumn": 26,
-                  "startLine": 36
+                  "startLine": 42
                 }
               },
               {
                 "_type": "integer",
                 "sourceInformation": {
                   "endColumn": 38,
-                  "endLine": 36,
+                  "endLine": 42,
                   "sourceId": "01_trading_model.pure",
                   "startColumn": 38,
-                  "startLine": 36
+                  "startLine": 42
                 },
                 "value": 0
               }
             ],
             "sourceInformation": {
               "endColumn": 36,
-              "endLine": 36,
+              "endLine": 42,
               "sourceId": "01_trading_model.pure",
               "startColumn": 36,
-              "startLine": 36
+              "startLine": 42
             }
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 36,
+            "startLine": 42,
             "startColumn": 3,
-            "endLine": 36,
+            "endLine": 42,
             "endColumn": 18
           }
         },
@@ -588,76 +608,106 @@
                     "name": "this",
                     "sourceInformation": {
                       "endColumn": 21,
-                      "endLine": 37,
+                      "endLine": 43,
                       "sourceId": "01_trading_model.pure",
                       "startColumn": 21,
-                      "startLine": 37
+                      "startLine": 43
                     }
                   }
                 ],
                 "property": "price",
                 "sourceInformation": {
                   "endColumn": 26,
-                  "endLine": 37,
+                  "endLine": 43,
                   "sourceId": "01_trading_model.pure",
                   "startColumn": 26,
-                  "startLine": 37
+                  "startLine": 43
                 }
               },
               {
                 "_type": "float",
                 "sourceInformation": {
                   "endColumn": 38,
-                  "endLine": 37,
+                  "endLine": 43,
                   "sourceId": "01_trading_model.pure",
                   "startColumn": 36,
-                  "startLine": 37
+                  "startLine": 43
                 },
                 "value": 0.0
               }
             ],
             "sourceInformation": {
               "endColumn": 34,
-              "endLine": 37,
+              "endLine": 43,
               "sourceId": "01_trading_model.pure",
               "startColumn": 33,
-              "startLine": 37
+              "startLine": 43
             }
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 37,
+            "startLine": 43,
             "startColumn": 3,
-            "endLine": 37,
+            "endLine": 43,
             "endColumn": 18
           }
         }
       ],
       "stereotypes": [
         {
-          "profile": "meta::pure::profiles::doc",
+          "profile": "model::trading::doc",
           "value": "doc",
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 34,
+            "startLine": 40,
             "startColumn": 9,
-            "endLine": 34,
-            "endColumn": 12
+            "endLine": 40,
+            "endColumn": 13
           },
           "profileSourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 34,
+            "startLine": 40,
             "startColumn": 9,
-            "endLine": 34,
-            "endColumn": 12
+            "endLine": 40,
+            "endColumn": 13
+          }
+        }
+      ],
+      "taggedValues": [
+        {
+          "tag": {
+            "profile": "model::trading::doc",
+            "value": "description",
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 40,
+              "startColumn": 36,
+              "endLine": 40,
+              "endColumn": 40
+            },
+            "profileSourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 40,
+              "startColumn": 36,
+              "endLine": 40,
+              "endColumn": 40
+            }
+          },
+          "value": "Represents a single trade execution",
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 40,
+            "startColumn": 36,
+            "endLine": 40,
+            "endColumn": 40
           }
         }
       ],
       "sourceInformation": {
         "sourceId": "01_trading_model.pure",
-        "startLine": 34,
+        "startLine": 40,
         "startColumn": 1,
-        "endLine": 34,
+        "endLine": 40,
         "endColumn": 5
       }
     },
@@ -673,17 +723,17 @@
               "fullPath": "String",
               "sourceInformation": {
                 "sourceId": "01_trading_model.pure",
-                "startLine": 50,
+                "startLine": 56,
                 "startColumn": 13,
-                "endLine": 50,
+                "endLine": 56,
                 "endColumn": 18
               }
             },
             "sourceInformation": {
               "sourceId": "01_trading_model.pure",
-              "startLine": 50,
+              "startLine": 56,
               "startColumn": 13,
-              "endLine": 50,
+              "endLine": 56,
               "endColumn": 18
             }
           },
@@ -693,9 +743,9 @@
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 50,
+            "startLine": 56,
             "startColumn": 3,
-            "endLine": 50,
+            "endLine": 56,
             "endColumn": 10
           }
         },
@@ -706,17 +756,17 @@
               "fullPath": "String",
               "sourceInformation": {
                 "sourceId": "01_trading_model.pure",
-                "startLine": 51,
+                "startLine": 57,
                 "startColumn": 14,
-                "endLine": 51,
+                "endLine": 57,
                 "endColumn": 19
               }
             },
             "sourceInformation": {
               "sourceId": "01_trading_model.pure",
-              "startLine": 51,
+              "startLine": 57,
               "startColumn": 14,
-              "endLine": 51,
+              "endLine": 57,
               "endColumn": 19
             }
           },
@@ -726,9 +776,9 @@
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 51,
+            "startLine": 57,
             "startColumn": 3,
-            "endLine": 51,
+            "endLine": 57,
             "endColumn": 11
           }
         },
@@ -739,17 +789,17 @@
               "fullPath": "String",
               "sourceInformation": {
                 "sourceId": "01_trading_model.pure",
-                "startLine": 52,
+                "startLine": 58,
                 "startColumn": 13,
-                "endLine": 52,
+                "endLine": 58,
                 "endColumn": 18
               }
             },
             "sourceInformation": {
               "sourceId": "01_trading_model.pure",
-              "startLine": 52,
+              "startLine": 58,
               "startColumn": 13,
-              "endLine": 52,
+              "endLine": 58,
               "endColumn": 18
             }
           },
@@ -759,9 +809,9 @@
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 52,
+            "startLine": 58,
             "startColumn": 3,
-            "endLine": 52,
+            "endLine": 58,
             "endColumn": 10
           }
         },
@@ -772,17 +822,17 @@
               "fullPath": "String",
               "sourceInformation": {
                 "sourceId": "01_trading_model.pure",
-                "startLine": 53,
+                "startLine": 59,
                 "startColumn": 10,
-                "endLine": 53,
+                "endLine": 59,
                 "endColumn": 15
               }
             },
             "sourceInformation": {
               "sourceId": "01_trading_model.pure",
-              "startLine": 53,
+              "startLine": 59,
               "startColumn": 10,
-              "endLine": 53,
+              "endLine": 59,
               "endColumn": 15
             }
           },
@@ -792,9 +842,9 @@
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 53,
+            "startLine": 59,
             "startColumn": 3,
-            "endLine": 53,
+            "endLine": 59,
             "endColumn": 7
           }
         },
@@ -805,17 +855,17 @@
               "fullPath": "String",
               "sourceInformation": {
                 "sourceId": "01_trading_model.pure",
-                "startLine": 54,
+                "startLine": 60,
                 "startColumn": 9,
-                "endLine": 54,
+                "endLine": 60,
                 "endColumn": 14
               }
             },
             "sourceInformation": {
               "sourceId": "01_trading_model.pure",
-              "startLine": 54,
+              "startLine": 60,
               "startColumn": 9,
-              "endLine": 54,
+              "endLine": 60,
               "endColumn": 14
             }
           },
@@ -825,18 +875,18 @@
           },
           "sourceInformation": {
             "sourceId": "01_trading_model.pure",
-            "startLine": 54,
+            "startLine": 60,
             "startColumn": 3,
-            "endLine": 54,
+            "endLine": 60,
             "endColumn": 6
           }
         }
       ],
       "sourceInformation": {
         "sourceId": "01_trading_model.pure",
-        "startLine": 48,
+        "startLine": 54,
         "startColumn": 1,
-        "endLine": 48,
+        "endLine": 54,
         "endColumn": 5
       }
     },
@@ -852,97 +902,18 @@
               "fullPath": "model::trading::Instrument",
               "sourceInformation": {
                 "sourceId": "01_trading_model.pure",
-                "startLine": 59,
+                "startLine": 65,
                 "startColumn": 31,
-                "endLine": 59,
+                "endLine": 65,
                 "endColumn": 40
               }
             },
             "sourceInformation": {
               "sourceId": "01_trading_model.pure",
-              "startLine": 59,
-              "startColumn": 15,
-              "endLine": 59,
-              "endColumn": 19
-            }
-          },
-          "multiplicity": {
-            "lowerBound": 1,
-            "upperBound": 1
-          },
-          "sourceInformation": {
-            "sourceId": "01_trading_model.pure",
-            "startLine": 59,
-            "startColumn": 3,
-            "endLine": 59,
-            "endColumn": 12
-          }
-        },
-        {
-          "name": "trades",
-          "genericType": {
-            "rawType": {
-              "fullPath": "model::trading::Trade",
-              "sourceInformation": {
-                "sourceId": "01_trading_model.pure",
-                "startLine": 60,
-                "startColumn": 27,
-                "endLine": 60,
-                "endColumn": 31
-              }
-            },
-            "sourceInformation": {
-              "sourceId": "01_trading_model.pure",
-              "startLine": 60,
-              "startColumn": 11,
-              "endLine": 60,
-              "endColumn": 15
-            }
-          },
-          "multiplicity": {
-            "lowerBound": 0
-          },
-          "sourceInformation": {
-            "sourceId": "01_trading_model.pure",
-            "startLine": 60,
-            "startColumn": 3,
-            "endLine": 60,
-            "endColumn": 8
-          }
-        }
-      ],
-      "sourceInformation": {
-        "sourceId": "01_trading_model.pure",
-        "startLine": 57,
-        "startColumn": 1,
-        "endLine": 57,
-        "endColumn": 11
-      }
-    },
-    {
-      "_type": "association",
-      "package": "model::trading",
-      "name": "TradeTrader",
-      "properties": [
-        {
-          "name": "trader",
-          "genericType": {
-            "rawType": {
-              "fullPath": "model::trading::Trader",
-              "sourceInformation": {
-                "sourceId": "01_trading_model.pure",
-                "startLine": 65,
-                "startColumn": 27,
-                "endLine": 65,
-                "endColumn": 32
-              }
-            },
-            "sourceInformation": {
-              "sourceId": "01_trading_model.pure",
               "startLine": 65,
-              "startColumn": 11,
+              "startColumn": 15,
               "endLine": 65,
-              "endColumn": 15
+              "endColumn": 19
             }
           },
           "multiplicity": {
@@ -954,7 +925,7 @@
             "startLine": 65,
             "startColumn": 3,
             "endLine": 65,
-            "endColumn": 8
+            "endColumn": 12
           }
         },
         {
@@ -999,6 +970,85 @@
       }
     },
     {
+      "_type": "association",
+      "package": "model::trading",
+      "name": "TradeTrader",
+      "properties": [
+        {
+          "name": "trader",
+          "genericType": {
+            "rawType": {
+              "fullPath": "model::trading::Trader",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 71,
+                "startColumn": 27,
+                "endLine": 71,
+                "endColumn": 32
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 71,
+              "startColumn": 11,
+              "endLine": 71,
+              "endColumn": 15
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 1,
+            "upperBound": 1
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 71,
+            "startColumn": 3,
+            "endLine": 71,
+            "endColumn": 8
+          }
+        },
+        {
+          "name": "trades",
+          "genericType": {
+            "rawType": {
+              "fullPath": "model::trading::Trade",
+              "sourceInformation": {
+                "sourceId": "01_trading_model.pure",
+                "startLine": 72,
+                "startColumn": 27,
+                "endLine": 72,
+                "endColumn": 31
+              }
+            },
+            "sourceInformation": {
+              "sourceId": "01_trading_model.pure",
+              "startLine": 72,
+              "startColumn": 11,
+              "endLine": 72,
+              "endColumn": 15
+            }
+          },
+          "multiplicity": {
+            "lowerBound": 0
+          },
+          "sourceInformation": {
+            "sourceId": "01_trading_model.pure",
+            "startLine": 72,
+            "startColumn": 3,
+            "endLine": 72,
+            "endColumn": 8
+          }
+        }
+      ],
+      "sourceInformation": {
+        "sourceId": "01_trading_model.pure",
+        "startLine": 69,
+        "startColumn": 1,
+        "endLine": 69,
+        "endColumn": 11
+      }
+    },
+    {
       "_type": "sectionIndex",
       "package": "__internal__",
       "name": "01_trading_model.pure",
@@ -1007,6 +1057,7 @@
           "_type": "default",
           "parserName": "Pure",
           "elements": [
+            "model::trading::doc",
             "model::trading::AssetClass",
             "model::trading::OrderStatus",
             "model::trading::Instrument",

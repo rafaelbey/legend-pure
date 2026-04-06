@@ -3,29 +3,34 @@
 // ─── Functions ──────────────────────────────────────────────────────
 // Demonstrates function definitions with various expression types:
 // lambdas, arrow functions, let bindings, and collection operations.
-
-function model::trading::functions::totalValue(trades: model::trading::Trade[*]): Float[1]
-{
-  $trades->map(t | $t.price * $t.quantity)->sum()
-}
-
-function model::trading::functions::activeTrades(trades: model::trading::Trade[*]): model::trading::Trade[*]
-{
-  $trades->filter(t | $t.status != model::trading::OrderStatus.Cancelled)
-}
-
-function model::trading::functions::tradesByDesk(trades: model::trading::Trade[*], desk: String[1]): model::trading::Trade[*]
-{
-  let filtered = $trades->filter(t | $t.trader.desk == $desk);
-  $filtered->sortBy(t | $t.tradeDate);
-}
-
-function model::trading::functions::formatTradeId(prefix: String[1], sequence: Integer[1]): String[1]
-{
-  $prefix + '-' + $sequence->toString()
-}
+//
+// These functions use only bootstrap types (String, Integer, Float,
+// Boolean) so they compile independently.
+// To compile functions that reference the trading model, compile
+// both files together:
+//   legend compile examples/01_trading_model.pure examples/03_functions.pure
 
 function model::util::greet(name: String[1]): String[1]
 {
   'Hello, ' + $name + '! Welcome to Legend.'
+}
+
+function model::util::formatId(prefix: String[1], sequence: Integer[1]): String[1]
+{
+  $prefix + '-' + $sequence->toString()
+}
+
+function model::util::isPositive(value: Integer[1]): Boolean[1]
+{
+  $value > 0
+}
+
+function model::util::clampToRange(value: Float[1], min: Float[1], max: Float[1]): Float[1]
+{
+  if($value < $min, |$min, |if($value > $max, |$max, |$value))
+}
+
+function model::util::fullName(first: String[1], last: String[1]): String[1]
+{
+  $first + ' ' + $last
 }

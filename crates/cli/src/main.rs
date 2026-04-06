@@ -134,7 +134,7 @@ fn print_version() {
     println!();
     println!("  {} Pure grammar parser", "✓".green());
     println!("  {} Protocol JSON ↔ Grammar conversion", "✓".green());
-    println!("  {} Compile Pure models  {}", "◌".yellow(), "(coming soon)".dimmed());
+    println!("  {} Compile Pure models", "✓".green());
     println!("  {} Package artifacts    {}", "◌".yellow(), "(coming soon)".dimmed());
     println!("  {} Publish to depot     {}", "◌".yellow(), "(coming soon)".dimmed());
     println!("  {} Run Pure tests       {}", "◌".yellow(), "(coming soon)".dimmed());

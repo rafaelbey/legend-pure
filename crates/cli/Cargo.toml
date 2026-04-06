@@ -28,6 +28,7 @@ legend-pure-parser-ast = { path = "../ast" }
 legend-pure-parser-compose = { path = "../compose" }
 legend-pure-parser-lexer = { path = "../lexer" }
 legend-pure-parser-parser = { path = "../parser" }
+legend-pure-parser-pure = { path = "../pure" }
 legend-pure-parser-protocol = { path = "../protocol" }
 
 # CLI framework

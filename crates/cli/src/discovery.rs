@@ -58,6 +58,27 @@ pub fn find_pure_files(dir: &Path) -> Result<Vec<PathBuf>, CliError> {
     Ok(files)
 }
 
+/// Resolves input paths to a flat list of `.pure` files.
+///
+/// Files are kept as-is. Directories are recursively walked for `.pure` files.
+///
+/// # Errors
+///
+/// Returns `FileNotFound` if any specified path doesn't exist.
+pub fn resolve_paths(paths: &[PathBuf]) -> Result<Vec<PathBuf>, CliError> {
+    let mut files = Vec::new();
+    for path in paths {
+        if path.is_dir() {
+            files.extend(find_pure_files(path)?);
+        } else if path.exists() {
+            files.push(path.clone());
+        } else {
+            return Err(CliError::FileNotFound(path.clone()));
+        }
+    }
+    Ok(files)
+}
+
 /// Checks if a path should be ignored.
 ///
 /// Currently uses a hardcoded set of patterns. In the future, this will
