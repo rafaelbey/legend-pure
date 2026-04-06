@@ -169,6 +169,23 @@ legend parse --help        # Parse-specific options
 legend version             # Version + capability matrix
 ```
 
+### 8. Enable shell completions
+
+```bash
+# Zsh (macOS)
+legend completions zsh > ~/.zfunc/_legend
+source ~/.zshrc
+
+# Bash
+legend completions bash >> ~/.bashrc
+source ~/.bashrc
+
+# Fish
+legend completions fish > ~/.config/fish/completions/legend.fish
+```
+
+Now `legend <TAB>` completes commands, `legend check --<TAB>` completes flags.
+
 ---
 
 ## Example: Trading Model
@@ -221,4 +238,5 @@ full output.
 5. **Mix valid + invalid** — `legend check --show-source examples/` shows ✓ and ✗ with inline snippets
 6. **Pipe JSON through `jq`** — `legend parse examples/01_trading_model.pure | jq '.elements | length'` → `7`
 7. **Scaffold a project** — `legend init` shows the full project structure instantly
-8. **Show future commands** — `legend compile`, `legend test`, `legend package`, `legend publish` all have help text and friendly TODO messages
+8. **Enable tab-completion** — `legend completions zsh > ~/.zfunc/_legend` for instant command/flag completion
+9. **Show future commands** — `legend compile`, `legend test`, `legend package`, `legend publish` all have help text and friendly TODO messages
