@@ -2,7 +2,13 @@
 
 // ─── Data Model ─────────────────────────────────────────────────────
 // A simple trading domain model demonstrating classes, enums,
-// associations, and constraints.
+// associations, profiles, and constraints.
+
+Profile model::trading::doc
+{
+  stereotypes: [doc, internal];
+  tags: [description, author];
+}
 
 Enum model::trading::AssetClass
 {
@@ -31,7 +37,7 @@ Class model::trading::Instrument
   currency: String[1];
 }
 
-Class <<meta::pure::profiles::doc.doc>> model::trading::Trade
+Class <<model::trading::doc.doc>> {model::trading::doc.description = 'Represents a single trade execution'} model::trading::Trade
 [
   positiveQuantity: $this.quantity > 0,
   priceNonNegative: $this.price >= 0.0

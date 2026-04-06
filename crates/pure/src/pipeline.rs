@@ -641,7 +641,6 @@ fn ast_element_name(element: &ast::Element) -> SmolStr {
 
 /// Extracts the source info from an AST element.
 fn ast_element_source(element: &ast::Element) -> &SourceInfo {
-    use legend_pure_parser_ast::source_info::Spanned;
     element.source_info()
 }
 

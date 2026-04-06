@@ -53,6 +53,9 @@ pub enum CliError {
 
     /// Protocol conversion error (e.g., from JSON → AST).
     Protocol(String),
+
+    /// One or more files had compilation errors.
+    CompilationErrors(usize),
 }
 
 impl std::fmt::Display for CliError {
@@ -85,6 +88,9 @@ impl std::fmt::Display for CliError {
             }
             Self::Custom(msg) => write!(f, "{msg}"),
             Self::Protocol(msg) => write!(f, "protocol conversion error: {msg}"),
+            Self::CompilationErrors(count) => {
+                write!(f, "{count} compilation error(s)")
+            }
         }
     }
 }
@@ -126,8 +132,8 @@ pub fn print_error(error: &CliError) {
             );
             eprintln!();
         }
-        CliError::ParseErrors(_) => {
-            // Parse errors are already printed inline during processing.
+        CliError::ParseErrors(_) | CliError::CompilationErrors(_) => {
+            // Errors are already printed inline during processing.
             // Just print the summary here.
             eprintln!(
                 "\n{} {}",
@@ -197,11 +203,68 @@ pub fn render_source_snippet(
     let Some(si) = error.source_info() else {
         return;
     };
+    let msg = error.message();
+    render_snippet_inner(
+        source,
+        path,
+        si.start_line as usize,
+        si.start_column as usize,
+        si.end_column as usize,
+        &msg,
+    );
+}
 
+/// Renders a compilation error with a source code snippet.
+///
+/// Produces output similar to `render_source_snippet` but works with
+/// `CompilationError` from the Pure semantic layer.
+///
+/// ```text
+///    --> /absolute/path/to/file.pure:5:12
+///     |
+///   4 |   Class Person {
+///   5 |     boss: NonExistent[1];
+///     |           ^^^^^^^^^^^ Cannot resolve type 'NonExistent'
+///   6 |   }
+///     |
+/// ```
+pub fn render_compilation_snippet(
+    source: &str,
+    path: &std::path::Path,
+    error: &legend_pure_parser_pure::error::CompilationError,
+) {
+    let si = &error.source_info;
+
+    if si.start_line == 0 {
+        // Can't render snippet — just print the message
+        eprintln!(
+            "      {} {}",
+            "error:".red().bold(),
+            error.message
+        );
+        return;
+    }
+
+    render_snippet_inner(
+        source,
+        path,
+        si.start_line as usize,
+        si.start_column as usize,
+        si.end_column as usize,
+        &error.message,
+    );
+}
+
+/// Shared implementation for rendering a source snippet with carets.
+fn render_snippet_inner(
+    source: &str,
+    path: &std::path::Path,
+    error_line: usize,
+    error_col_start: usize,
+    error_col_end: usize,
+    message: &str,
+) {
     let lines: Vec<&str> = source.lines().collect();
-    let error_line = si.start_line as usize;
-    let error_col_start = si.start_column as usize;
-    let error_col_end = si.end_column as usize;
 
     if error_line == 0 || error_line > lines.len() + 1 {
         return;
@@ -216,8 +279,8 @@ pub fn render_source_snippet(
         "     {} {}:{}:{}",
         "-->".cyan().bold(),
         abs_path.display(),
-        si.start_line,
-        si.start_column
+        error_line,
+        error_col_start
     );
 
     // Determine context window: 1 line before and 1 line after the error
@@ -264,7 +327,7 @@ pub fn render_source_snippet(
                 gutter_pad,
                 "|".cyan(),
                 padding,
-                format!("{carets} {}", error.message()).red().bold()
+                format!("{carets} {message}").red().bold()
             );
         } else {
             // Context line
@@ -281,3 +344,19 @@ pub fn render_source_snippet(
     eprintln!("     {gutter_pad}{}", "|".cyan());
 }
 
+/// Formats a compilation error as a clickable path string.
+pub fn format_compilation_error_with_path(
+    path: &std::path::Path,
+    error: &legend_pure_parser_pure::error::CompilationError,
+) -> String {
+    let abs_path = std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf());
+
+    format!(
+        "{} at {}:{}:{}",
+        error.message,
+        abs_path.display(),
+        error.source_info.start_line,
+        error.source_info.start_column
+    )
+}

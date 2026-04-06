@@ -1,0 +1,38 @@
+###Pure
+
+// ─── Compilation Errors ─────────────────────────────────────────────
+// These elements have SEMANTIC errors — they parse successfully but
+// fail during compilation. Use with `legend compile --show-source`.
+
+// ERROR: References a type that doesn't exist
+Class model::errors::BadReference
+{
+  name: String[1];
+  address: model::nonexistent::Address[1];
+}
+
+// ERROR: Duplicate element name
+Class model::errors::Duplicate
+{
+  x: Integer[1];
+}
+Class model::errors::Duplicate
+{
+  y: Integer[1];
+}
+
+// ERROR: Cyclic inheritance
+Class model::errors::CycleA extends model::errors::CycleB
+{
+  a: String[1];
+}
+Class model::errors::CycleB extends model::errors::CycleA
+{
+  b: String[1];
+}
+
+// ERROR: Annotation references a profile that doesn't exist
+Class <<nonexistent::profileName.stereo>> model::errors::BadAnnotation
+{
+  value: Integer[1];
+}
