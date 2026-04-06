@@ -1209,7 +1209,7 @@ impl Parser {
                     source_info: si,
                 }))
             }
-            // Lambda: {x | body} or | body
+            // No-param bare lambda: | body
             TokenKind::Pipe => {
                 self.cursor.advance();
                 let body = self.parse_expression()?;
@@ -1281,32 +1281,25 @@ impl Parser {
                 self.cursor.expect(TokenKind::RParen)?;
                 Ok(expr)
             }
-            // Lambda or block: {x | body}, {x, y | body}, or {expr; expr}
+            // Lambda or block: {x | body}, {| body}, {x: String[1], y | body}, or {expr; expr}
             TokenKind::LBrace => {
                 self.cursor.advance();
                 if self.is_lambda_start() {
                     let mut params = Vec::new();
-                    loop {
-                        let (p, _) = self.cursor.expect_identifier()?;
-                        params.push(p);
-                        if !self.cursor.eat(TokenKind::Comma) {
-                            break;
+                    // Only parse params if the next token isn't pipe ({|body})
+                    if !self.cursor.check(TokenKind::Pipe) {
+                        loop {
+                            params.push(self.parse_lambda_param()?);
+                            if !self.cursor.eat(TokenKind::Comma) {
+                                break;
+                            }
                         }
                     }
                     self.cursor.expect(TokenKind::Pipe)?;
                     let body = self.parse_expression_list()?;
                     self.cursor.expect(TokenKind::RBrace)?;
-                    let parameters = params
-                        .into_iter()
-                        .map(|n| Parameter {
-                            name: n,
-                            type_ref: None,
-                            multiplicity: None,
-                            source_info: si.clone(),
-                        })
-                        .collect();
                     Ok(Expression::Lambda(Lambda {
-                        parameters,
+                        parameters: params,
                         body,
                         source_info: si,
                     }))
@@ -1323,6 +1316,11 @@ impl Parser {
                         }))
                     }
                 }
+            }
+            // Bare lambda: x|body or x: Type[1]|body
+            // Must be checked before identifier since both start with an identifier.
+            TokenKind::Identifier if self.is_bare_lambda() => {
+                self.parse_bare_lambda()
             }
             // Identifier or element keyword used as a name.
             // Element keywords (Class, Enum, etc.) are valid identifiers in
@@ -1382,15 +1380,136 @@ impl Parser {
         }
     }
 
+    /// Detects whether the current token starts a lambda inside braces.
+    ///
+    /// Matches patterns after `{` has been consumed:
+    /// - `{x |`            — untyped single param
+    /// - `{x, y |`         — untyped multi param
+    /// - `{x: Type[1] |`   — typed param
+    /// - `{|`              — no-param braced lambda
     fn is_lambda_start(&self) -> bool {
-        // {x | body} — identifier followed by | or comma
+        // {| body}
+        if self.cursor.check(TokenKind::Pipe) {
+            return true;
+        }
+        // {ident ... |}
         matches!(
             self.cursor.peek_kind(),
             TokenKind::Identifier | TokenKind::StringLiteral
         ) && matches!(
             self.cursor.peek_kind_at(1),
-            TokenKind::Pipe | TokenKind::Comma
+            TokenKind::Pipe | TokenKind::Comma | TokenKind::Colon
         )
+    }
+
+    /// Detects bare lambda in expression position (outside braces).
+    ///
+    /// Only single-param bare lambdas are valid (matching Java grammar):
+    /// - `x|body`              — untyped
+    /// - `x: Type[mult]|body`  — typed
+    fn is_bare_lambda(&self) -> bool {
+        // ident followed by pipe: x|body
+        if matches!(self.cursor.peek_kind_at(1), TokenKind::Pipe) {
+            return true;
+        }
+        // ident followed by colon: x: Type[mult]|body
+        // We need to scan past the type + multiplicity to check for pipe
+        if matches!(self.cursor.peek_kind_at(1), TokenKind::Colon) {
+            return self.scan_past_type_for_pipe(2);
+        }
+        false
+    }
+
+    /// Scans forward from `offset` past a type reference and multiplicity
+    /// bracket to check if the next token is `|` (pipe).
+    ///
+    /// Used to detect typed bare lambdas: `x: path::Type<Args>[mult]|body`.
+    fn scan_past_type_for_pipe(&self, start_offset: usize) -> bool {
+        let mut offset = start_offset;
+        // Skip the type path: identifier (:: identifier)*
+        if !matches!(
+            self.cursor.peek_kind_at(offset),
+            TokenKind::Identifier | TokenKind::StringLiteral
+        ) {
+            return false;
+        }
+        offset += 1;
+        // Skip :: segments
+        while matches!(self.cursor.peek_kind_at(offset), TokenKind::PathSep) {
+            offset += 1; // ::
+            offset += 1; // ident
+        }
+        // Skip <TypeArgs>
+        if matches!(self.cursor.peek_kind_at(offset), TokenKind::Less) {
+            let mut depth = 1;
+            offset += 1;
+            while depth > 0 {
+                match self.cursor.peek_kind_at(offset) {
+                    TokenKind::Less => depth += 1,
+                    TokenKind::Greater => depth -= 1,
+                    TokenKind::Eof => return false,
+                    _ => {}
+                }
+                offset += 1;
+            }
+        }
+        // Expect [multiplicity]
+        if !matches!(self.cursor.peek_kind_at(offset), TokenKind::LBracket) {
+            return false;
+        }
+        offset += 1;
+        // Skip multiplicity content until ]
+        while !matches!(
+            self.cursor.peek_kind_at(offset),
+            TokenKind::RBracket | TokenKind::Eof
+        ) {
+            offset += 1;
+        }
+        if matches!(self.cursor.peek_kind_at(offset), TokenKind::RBracket) {
+            offset += 1;
+        }
+        // Check for pipe
+        matches!(self.cursor.peek_kind_at(offset), TokenKind::Pipe)
+    }
+
+    /// Parses a bare lambda: `x|body` or `x: Type[mult]|body`.
+    ///
+    /// Only single-param bare lambdas are valid per the Java grammar.
+    fn parse_bare_lambda(&mut self) -> R<Expression> {
+        let si = self.cursor.current_source_info();
+        let param = self.parse_lambda_param()?;
+        self.cursor.expect(TokenKind::Pipe)?;
+        let body = self.parse_expression()?;
+        Ok(Expression::Lambda(Lambda {
+            parameters: vec![param],
+            body: vec![body],
+            source_info: si,
+        }))
+    }
+
+    /// Parses a lambda parameter: `name` or `name: Type[multiplicity]`.
+    fn parse_lambda_param(&mut self) -> R<Parameter> {
+        let si = self.cursor.current_source_info();
+        let (name, _) = self.cursor.expect_identifier()?;
+        if self.cursor.eat(TokenKind::Colon) {
+            let type_ref = self.parse_type_reference()?;
+            self.cursor.expect(TokenKind::LBracket)?;
+            let multiplicity = self.parse_multiplicity()?;
+            self.cursor.expect(TokenKind::RBracket)?;
+            Ok(Parameter {
+                name,
+                type_ref: Some(type_ref),
+                multiplicity: Some(multiplicity),
+                source_info: si,
+            })
+        } else {
+            Ok(Parameter {
+                name,
+                type_ref: None,
+                multiplicity: None,
+                source_info: si,
+            })
+        }
     }
 
     // ── Graph Fetch Tree ────────────────────────────────────────────────
