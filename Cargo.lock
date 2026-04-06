@@ -488,6 +488,7 @@ name = "legend-pure-parser-pure"
 version = "0.1.0"
 dependencies = [
  "legend-pure-parser-ast",
+ "legend-pure-parser-parser",
  "smol_str",
 ]
 
