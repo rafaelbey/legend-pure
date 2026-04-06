@@ -48,6 +48,10 @@ pub fn parse_err(source: &str, expected_msg: &str) {
 }
 
 /// Load a `.pure` corpus file from the `tests/corpus/` directory.
+///
+/// # Panics
+///
+/// Panics if the corpus file cannot be read.
 #[allow(dead_code)]
 #[must_use] 
 pub fn corpus(name: &str) -> String {

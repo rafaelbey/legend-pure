@@ -25,10 +25,12 @@ SourceFile {
                         ),
                         name: "test",
                         parameters: [],
-                        return_type: TypeReference {
-                            path: Package {
+                        return_type: Type(
+                            TypeReference {
+                                package: None,
                                 name: "Any",
-                                parent: None,
+                                type_arguments: [],
+                                type_variable_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",
                                     start_line: 2,
@@ -37,16 +39,7 @@ SourceFile {
                                     end_column: 24,
                                 },
                             },
-                            type_arguments: [],
-                            type_variable_values: [],
-                            source_info: SourceInfo {
-                                source: "test.pure",
-                                start_line: 2,
-                                start_column: 22,
-                                end_line: 2,
-                                end_column: 24,
-                            },
-                        },
+                        ),
                         return_multiplicity: ZeroOrMany,
                         body: [
                             ArrowFunction(
@@ -54,9 +47,9 @@ SourceFile {
                                     target: MemberAccess(
                                         Qualified(
                                             QualifiedMemberAccess {
-                                                target: FunctionApplication(
-                                                    FunctionApplication {
-                                                        function: PackageableElementPtr {
+                                                target: PackageableElementRef(
+                                                    PackageableElementRef {
+                                                        element: PackageableElementPtr {
                                                             package: Some(
                                                                 Package {
                                                                     name: "my",
@@ -79,7 +72,6 @@ SourceFile {
                                                                 end_column: 6,
                                                             },
                                                         },
-                                                        arguments: [],
                                                         source_info: SourceInfo {
                                                             source: "test.pure",
                                                             start_line: 4,
@@ -101,7 +93,17 @@ SourceFile {
                                             },
                                         ),
                                     ),
-                                    function: "graphFetch",
+                                    function: PackageableElementPtr {
+                                        package: None,
+                                        name: "graphFetch",
+                                        source_info: SourceInfo {
+                                            source: "test.pure",
+                                            start_line: 4,
+                                            start_column: 19,
+                                            end_line: 4,
+                                            end_column: 20,
+                                        },
+                                    },
                                     arguments: [
                                         FunctionApplication(
                                             FunctionApplication {
@@ -167,34 +169,35 @@ SourceFile {
                                                                     },
                                                                 },
                                                             ),
-                                                            function: "subType",
+                                                            function: PackageableElementPtr {
+                                                                package: None,
+                                                                name: "subType",
+                                                                source_info: SourceInfo {
+                                                                    source: "test.pure",
+                                                                    start_line: 8,
+                                                                    start_column: 17,
+                                                                    end_line: 8,
+                                                                    end_column: 18,
+                                                                },
+                                                            },
                                                             arguments: [
                                                                 TypeReferenceExpr(
                                                                     TypeReferenceExpr {
                                                                         type_ref: TypeReference {
-                                                                            path: Package {
-                                                                                name: "FirmSubType",
-                                                                                parent: Some(
-                                                                                    Package {
-                                                                                        name: "my",
-                                                                                        parent: None,
-                                                                                        source_info: SourceInfo {
-                                                                                            source: "test.pure",
-                                                                                            start_line: 8,
-                                                                                            start_column: 28,
-                                                                                            end_line: 8,
-                                                                                            end_column: 29,
-                                                                                        },
+                                                                            package: Some(
+                                                                                Package {
+                                                                                    name: "my",
+                                                                                    parent: None,
+                                                                                    source_info: SourceInfo {
+                                                                                        source: "test.pure",
+                                                                                        start_line: 8,
+                                                                                        start_column: 28,
+                                                                                        end_line: 8,
+                                                                                        end_column: 29,
                                                                                     },
-                                                                                ),
-                                                                                source_info: SourceInfo {
-                                                                                    source: "test.pure",
-                                                                                    start_line: 8,
-                                                                                    start_column: 32,
-                                                                                    end_line: 8,
-                                                                                    end_column: 42,
                                                                                 },
-                                                                            },
+                                                                            ),
+                                                                            name: "FirmSubType",
                                                                             type_arguments: [],
                                                                             type_variable_values: [],
                                                                             source_info: SourceInfo {

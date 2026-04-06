@@ -19,7 +19,6 @@ mod helpers;
 use helpers::parse_ok;
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn basic() {
     let file = parse_ok(
         r"###Pure
@@ -33,7 +32,6 @@ Association model::Person_Firm
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn aggregation_kinds() {
     let file = parse_ok(
         r"###Pure
@@ -47,7 +45,6 @@ Association model::SharedAssoc
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn with_annotations_and_import() {
     let file = parse_ok(
         r"###Pure

@@ -22,7 +22,6 @@ mod helpers;
 use helpers::{parse_err, parse_ok};
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn unexpected_token() {
     parse_err(
         r"###Pure
@@ -34,7 +33,6 @@ asd Class my::Foo
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn reserved_keywords() {
     // In the Java Pure grammar, keywords like 'false' can appear in path segments.
     // This test verifies the parser accepts them (matching Java engine behavior).
@@ -48,7 +46,6 @@ Class false::me
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn invalid_aggregation_kind() {
     parse_err(
         r"###Pure
@@ -61,7 +58,6 @@ Class my::Foo
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn function_test_name_mismatch() {
     // Function test name validation is a semantic concern, not a parser concern.
     // The parser accepts syntactically valid test blocks; the semantic layer

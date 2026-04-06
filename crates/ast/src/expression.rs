@@ -71,6 +71,11 @@ pub enum Expression {
     ArrowFunction(ArrowFunction),
     /// Member access (dot): `$x.name` or `$x.derived('arg')`.
     MemberAccess(MemberAccess),
+    /// Bare packageable element reference: `String`, `my::Enum`, `MyClass`.
+    ///
+    /// Distinguished from `FunctionApplication` by having no argument list.
+    /// Java grammar: `instanceReference: qualifiedName` (without `allOrFunction`).
+    PackageableElementRef(PackageableElementRef),
 
     // -- Type reference --
     /// Type reference expression: `@MyType`.
@@ -89,6 +94,13 @@ pub enum Expression {
     // -- Column specification (TDS) --
     /// Column expression covering all column syntax variants.
     Column(ColumnExpression),
+
+    // -- Grouping --
+    /// Explicit parenthesized grouping: `(expr)`.
+    ///
+    /// Preserves source parentheses for faithful roundtripping. Semantically
+    /// transparent — the inner expression is the value.
+    Group(Box<Expression>),
 }
 
 impl Spanned for Expression {
@@ -106,12 +118,14 @@ impl Spanned for Expression {
             Self::FunctionApplication(e) => &e.source_info,
             Self::ArrowFunction(e) => &e.source_info,
             Self::MemberAccess(e) => e.source_info(),
+            Self::PackageableElementRef(e) => &e.source_info,
             Self::TypeReferenceExpr(e) => &e.source_info,
             Self::Lambda(e) => &e.source_info,
             Self::Let(e) => &e.source_info,
             Self::Collection(e) => &e.source_info,
             Self::NewInstance(e) => &e.source_info,
             Self::Column(e) => e.source_info(),
+            Self::Group(e) => e.source_info(),
         }
     }
 }
@@ -409,10 +423,23 @@ pub struct FunctionApplication {
 pub struct ArrowFunction {
     /// The left-hand side expression.
     pub target: Box<Expression>,
-    /// The function name.
-    pub function: Identifier,
+    /// The function being called (may be fully qualified, e.g., `meta::pure::functions::math::max`).
+    pub function: PackageableElementPtr,
     /// Arguments (not including the implicit first argument).
     pub arguments: Vec<Expression>,
+    /// Source location.
+    pub source_info: SourceInfo,
+}
+
+/// A bare reference to a packageable element: `String`, `my::Enum`, `MyClass`.
+///
+/// This represents a name without an argument list — distinct from
+/// `FunctionApplication` which always has parens.
+/// Corresponds to Java grammar rule `instanceReference: qualifiedName`.
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
+pub struct PackageableElementRef {
+    /// The element being referenced.
+    pub element: PackageableElementPtr,
     /// Source location.
     pub source_info: SourceInfo,
 }
@@ -649,6 +676,8 @@ pub trait ExpressionVisitor {
             Expression::Collection(e) => self.visit_collection(e),
             Expression::NewInstance(e) => self.visit_new_instance(e),
             Expression::Column(e) => self.visit_column(e),
+            Expression::PackageableElementRef(e) => self.visit_element_ref(e),
+            Expression::Group(e) => self.visit(e),
         }
     }
 
@@ -688,6 +717,8 @@ pub trait ExpressionVisitor {
     fn visit_new_instance(&mut self, expr: &NewInstanceExpr) {}
     /// Visit a column expression.
     fn visit_column(&mut self, expr: &ColumnExpression) {}
+    /// Visit a bare packageable element reference.
+    fn visit_element_ref(&mut self, expr: &PackageableElementRef) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -842,7 +873,8 @@ mod tests {
     fn test_type_reference_expr() {
         let expr = Expression::TypeReferenceExpr(TypeReferenceExpr {
             type_ref: TypeReference {
-                path: Package::root(SmolStr::new("MyType"), src()),
+                package: None,
+                name: SmolStr::new("MyType"),
                 type_arguments: vec![],
                 type_variable_values: vec![],
                 source_info: src(),
@@ -850,7 +882,7 @@ mod tests {
             source_info: src(),
         });
         if let Expression::TypeReferenceExpr(tr) = &expr {
-            assert_eq!(tr.type_ref.path.to_string(), "MyType");
+            assert_eq!(tr.type_ref.full_path(), "MyType");
         }
     }
 
@@ -860,7 +892,8 @@ mod tests {
             parameters: vec![Parameter {
                 name: SmolStr::new("x"),
                 type_ref: Some(TypeReference {
-                    path: Package::root(SmolStr::new("String"), src()),
+                    package: None,
+                    name: SmolStr::new("String"),
                     type_arguments: vec![],
                     type_variable_values: vec![],
                     source_info: src(),
@@ -892,7 +925,8 @@ mod tests {
         let col_typed = Expression::Column(ColumnExpression::Typed(ColumnTyped {
             name: SmolStr::new("age"),
             type_ref: TypeReference {
-                path: Package::root(SmolStr::new("Integer"), src()),
+                package: None,
+                name: SmolStr::new("Integer"),
                 type_arguments: vec![],
                 type_variable_values: vec![],
                 source_info: src(),

@@ -16,9 +16,9 @@ SourceFile {
                                 parent: None,
                                 source_info: SourceInfo {
                                     source: "test.pure",
-                                    start_line: 2,
+                                    start_line: 17,
                                     start_column: 7,
-                                    end_line: 2,
+                                    end_line: 17,
                                     end_column: 8,
                                 },
                             },
@@ -29,28 +29,21 @@ SourceFile {
                         properties: [
                             Property {
                                 name: "stringProp",
-                                type_ref: TypeReference {
-                                    path: Package {
+                                type_ref: Type(
+                                    TypeReference {
+                                        package: None,
                                         name: "String",
-                                        parent: None,
+                                        type_arguments: [],
+                                        type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
-                                            start_line: 4,
+                                            start_line: 19,
                                             start_column: 17,
-                                            end_line: 4,
+                                            end_line: 19,
                                             end_column: 22,
                                         },
                                     },
-                                    type_arguments: [],
-                                    type_variable_values: [],
-                                    source_info: SourceInfo {
-                                        source: "test.pure",
-                                        start_line: 4,
-                                        start_column: 17,
-                                        end_line: 4,
-                                        end_column: 22,
-                                    },
-                                },
+                                ),
                                 multiplicity: PureOne,
                                 aggregation: None,
                                 default_value: Some(
@@ -60,9 +53,9 @@ SourceFile {
                                                 value: "default",
                                                 source_info: SourceInfo {
                                                     source: "test.pure",
-                                                    start_line: 4,
+                                                    start_line: 19,
                                                     start_column: 29,
-                                                    end_line: 4,
+                                                    end_line: 19,
                                                     end_column: 37,
                                                 },
                                             },
@@ -73,36 +66,29 @@ SourceFile {
                                 tagged_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",
-                                    start_line: 4,
+                                    start_line: 19,
                                     start_column: 5,
-                                    end_line: 4,
+                                    end_line: 19,
                                     end_column: 14,
                                 },
                             },
                             Property {
                                 name: "intProp",
-                                type_ref: TypeReference {
-                                    path: Package {
+                                type_ref: Type(
+                                    TypeReference {
+                                        package: None,
                                         name: "Integer",
-                                        parent: None,
+                                        type_arguments: [],
+                                        type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
-                                            start_line: 5,
+                                            start_line: 20,
                                             start_column: 14,
-                                            end_line: 5,
+                                            end_line: 20,
                                             end_column: 20,
                                         },
                                     },
-                                    type_arguments: [],
-                                    type_variable_values: [],
-                                    source_info: SourceInfo {
-                                        source: "test.pure",
-                                        start_line: 5,
-                                        start_column: 14,
-                                        end_line: 5,
-                                        end_column: 20,
-                                    },
-                                },
+                                ),
                                 multiplicity: PureOne,
                                 aggregation: None,
                                 default_value: Some(
@@ -112,9 +98,9 @@ SourceFile {
                                                 value: 42,
                                                 source_info: SourceInfo {
                                                     source: "test.pure",
-                                                    start_line: 5,
+                                                    start_line: 20,
                                                     start_column: 27,
-                                                    end_line: 5,
+                                                    end_line: 20,
                                                     end_column: 28,
                                                 },
                                             },
@@ -125,36 +111,29 @@ SourceFile {
                                 tagged_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",
-                                    start_line: 5,
+                                    start_line: 20,
                                     start_column: 5,
-                                    end_line: 5,
+                                    end_line: 20,
                                     end_column: 11,
                                 },
                             },
                             Property {
                                 name: "floatProp",
-                                type_ref: TypeReference {
-                                    path: Package {
+                                type_ref: Type(
+                                    TypeReference {
+                                        package: None,
                                         name: "Float",
-                                        parent: None,
+                                        type_arguments: [],
+                                        type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
-                                            start_line: 6,
+                                            start_line: 21,
                                             start_column: 16,
-                                            end_line: 6,
+                                            end_line: 21,
                                             end_column: 20,
                                         },
                                     },
-                                    type_arguments: [],
-                                    type_variable_values: [],
-                                    source_info: SourceInfo {
-                                        source: "test.pure",
-                                        start_line: 6,
-                                        start_column: 16,
-                                        end_line: 6,
-                                        end_column: 20,
-                                    },
-                                },
+                                ),
                                 multiplicity: PureOne,
                                 aggregation: None,
                                 default_value: Some(
@@ -164,9 +143,9 @@ SourceFile {
                                                 value: 3.14,
                                                 source_info: SourceInfo {
                                                     source: "test.pure",
-                                                    start_line: 6,
+                                                    start_line: 21,
                                                     start_column: 27,
-                                                    end_line: 6,
+                                                    end_line: 21,
                                                     end_column: 30,
                                                 },
                                             },
@@ -177,36 +156,29 @@ SourceFile {
                                 tagged_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",
-                                    start_line: 6,
+                                    start_line: 21,
                                     start_column: 5,
-                                    end_line: 6,
+                                    end_line: 21,
                                     end_column: 13,
                                 },
                             },
                             Property {
                                 name: "boolProp",
-                                type_ref: TypeReference {
-                                    path: Package {
+                                type_ref: Type(
+                                    TypeReference {
+                                        package: None,
                                         name: "Boolean",
-                                        parent: None,
+                                        type_arguments: [],
+                                        type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
-                                            start_line: 7,
+                                            start_line: 22,
                                             start_column: 15,
-                                            end_line: 7,
+                                            end_line: 22,
                                             end_column: 21,
                                         },
                                     },
-                                    type_arguments: [],
-                                    type_variable_values: [],
-                                    source_info: SourceInfo {
-                                        source: "test.pure",
-                                        start_line: 7,
-                                        start_column: 15,
-                                        end_line: 7,
-                                        end_column: 21,
-                                    },
-                                },
+                                ),
                                 multiplicity: PureOne,
                                 aggregation: None,
                                 default_value: Some(
@@ -216,9 +188,9 @@ SourceFile {
                                                 value: true,
                                                 source_info: SourceInfo {
                                                     source: "test.pure",
-                                                    start_line: 7,
+                                                    start_line: 22,
                                                     start_column: 28,
-                                                    end_line: 7,
+                                                    end_line: 22,
                                                     end_column: 31,
                                                 },
                                             },
@@ -229,66 +201,59 @@ SourceFile {
                                 tagged_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",
-                                    start_line: 7,
+                                    start_line: 22,
                                     start_column: 5,
-                                    end_line: 7,
+                                    end_line: 22,
                                     end_column: 12,
                                 },
                             },
                             Property {
                                 name: "enumProp",
-                                type_ref: TypeReference {
-                                    path: Package {
-                                        name: "Color",
-                                        parent: Some(
+                                type_ref: Type(
+                                    TypeReference {
+                                        package: Some(
                                             Package {
                                                 name: "my",
                                                 parent: None,
                                                 source_info: SourceInfo {
                                                     source: "test.pure",
-                                                    start_line: 8,
+                                                    start_line: 23,
                                                     start_column: 15,
-                                                    end_line: 8,
+                                                    end_line: 23,
                                                     end_column: 16,
                                                 },
                                             },
                                         ),
+                                        name: "Color",
+                                        type_arguments: [],
+                                        type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
-                                            start_line: 8,
-                                            start_column: 19,
-                                            end_line: 8,
-                                            end_column: 23,
+                                            start_line: 23,
+                                            start_column: 15,
+                                            end_line: 23,
+                                            end_column: 16,
                                         },
                                     },
-                                    type_arguments: [],
-                                    type_variable_values: [],
-                                    source_info: SourceInfo {
-                                        source: "test.pure",
-                                        start_line: 8,
-                                        start_column: 15,
-                                        end_line: 8,
-                                        end_column: 16,
-                                    },
-                                },
+                                ),
                                 multiplicity: PureOne,
                                 aggregation: None,
                                 default_value: Some(
                                     MemberAccess(
                                         Simple(
                                             SimpleMemberAccess {
-                                                target: FunctionApplication(
-                                                    FunctionApplication {
-                                                        function: PackageableElementPtr {
+                                                target: PackageableElementRef(
+                                                    PackageableElementRef {
+                                                        element: PackageableElementPtr {
                                                             package: Some(
                                                                 Package {
                                                                     name: "my",
                                                                     parent: None,
                                                                     source_info: SourceInfo {
                                                                         source: "test.pure",
-                                                                        start_line: 8,
+                                                                        start_line: 23,
                                                                         start_column: 30,
-                                                                        end_line: 8,
+                                                                        end_line: 23,
                                                                         end_column: 31,
                                                                     },
                                                                 },
@@ -296,18 +261,17 @@ SourceFile {
                                                             name: "Color",
                                                             source_info: SourceInfo {
                                                                 source: "test.pure",
-                                                                start_line: 8,
+                                                                start_line: 23,
                                                                 start_column: 30,
-                                                                end_line: 8,
+                                                                end_line: 23,
                                                                 end_column: 31,
                                                             },
                                                         },
-                                                        arguments: [],
                                                         source_info: SourceInfo {
                                                             source: "test.pure",
-                                                            start_line: 8,
+                                                            start_line: 23,
                                                             start_column: 30,
-                                                            end_line: 8,
+                                                            end_line: 23,
                                                             end_column: 31,
                                                         },
                                                     },
@@ -315,9 +279,9 @@ SourceFile {
                                                 member: "RED",
                                                 source_info: SourceInfo {
                                                     source: "test.pure",
-                                                    start_line: 8,
+                                                    start_line: 23,
                                                     start_column: 39,
-                                                    end_line: 8,
+                                                    end_line: 23,
                                                     end_column: 39,
                                                 },
                                             },
@@ -328,36 +292,29 @@ SourceFile {
                                 tagged_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",
-                                    start_line: 8,
+                                    start_line: 23,
                                     start_column: 5,
-                                    end_line: 8,
+                                    end_line: 23,
                                     end_column: 12,
                                 },
                             },
                             Property {
                                 name: "collectionProp",
-                                type_ref: TypeReference {
-                                    path: Package {
+                                type_ref: Type(
+                                    TypeReference {
+                                        package: None,
                                         name: "String",
-                                        parent: None,
+                                        type_arguments: [],
+                                        type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
-                                            start_line: 9,
+                                            start_line: 24,
                                             start_column: 21,
-                                            end_line: 9,
+                                            end_line: 24,
                                             end_column: 26,
                                         },
                                     },
-                                    type_arguments: [],
-                                    type_variable_values: [],
-                                    source_info: SourceInfo {
-                                        source: "test.pure",
-                                        start_line: 9,
-                                        start_column: 21,
-                                        end_line: 9,
-                                        end_column: 26,
-                                    },
-                                },
+                                ),
                                 multiplicity: ZeroOrMany,
                                 aggregation: None,
                                 default_value: Some(
@@ -370,9 +327,9 @@ SourceFile {
                                                             value: "a",
                                                             source_info: SourceInfo {
                                                                 source: "test.pure",
-                                                                start_line: 9,
+                                                                start_line: 24,
                                                                 start_column: 34,
-                                                                end_line: 9,
+                                                                end_line: 24,
                                                                 end_column: 36,
                                                             },
                                                         },
@@ -384,9 +341,9 @@ SourceFile {
                                                             value: "b",
                                                             source_info: SourceInfo {
                                                                 source: "test.pure",
-                                                                start_line: 9,
+                                                                start_line: 24,
                                                                 start_column: 39,
-                                                                end_line: 9,
+                                                                end_line: 24,
                                                                 end_column: 41,
                                                             },
                                                         },
@@ -398,9 +355,9 @@ SourceFile {
                                                             value: "c",
                                                             source_info: SourceInfo {
                                                                 source: "test.pure",
-                                                                start_line: 9,
+                                                                start_line: 24,
                                                                 start_column: 44,
-                                                                end_line: 9,
+                                                                end_line: 24,
                                                                 end_column: 46,
                                                             },
                                                         },
@@ -410,9 +367,9 @@ SourceFile {
                                             multiplicity: None,
                                             source_info: SourceInfo {
                                                 source: "test.pure",
-                                                start_line: 9,
+                                                start_line: 24,
                                                 start_column: 33,
-                                                end_line: 9,
+                                                end_line: 24,
                                                 end_column: 33,
                                             },
                                         },
@@ -422,9 +379,9 @@ SourceFile {
                                 tagged_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",
-                                    start_line: 9,
+                                    start_line: 24,
                                     start_column: 5,
-                                    end_line: 9,
+                                    end_line: 24,
                                     end_column: 18,
                                 },
                             },
@@ -435,9 +392,9 @@ SourceFile {
                         tagged_values: [],
                         source_info: SourceInfo {
                             source: "test.pure",
-                            start_line: 2,
+                            start_line: 17,
                             start_column: 1,
-                            end_line: 2,
+                            end_line: 17,
                             end_column: 5,
                         },
                     },
@@ -445,18 +402,18 @@ SourceFile {
             ],
             source_info: SourceInfo {
                 source: "test.pure",
-                start_line: 1,
+                start_line: 16,
                 start_column: 1,
-                end_line: 1,
+                end_line: 16,
                 end_column: 7,
             },
         },
     ],
     source_info: SourceInfo {
         source: "test.pure",
-        start_line: 1,
+        start_line: 16,
         start_column: 1,
-        end_line: 1,
+        end_line: 16,
         end_column: 7,
     },
 }

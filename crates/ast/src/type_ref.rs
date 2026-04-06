@@ -318,21 +318,96 @@ impl std::fmt::Display for Multiplicity {
 ///
 /// # Examples
 ///
-/// - `String` → path only
-/// - `Result<String>` → path + type arguments
-/// - `VARCHAR(200)` → path + type variable values
-/// - `Res<String>(1, 'a')` → path + type arguments + type variable values
-/// - `Relation<(a:Integer, b:String)>` → path + type arguments (column specs)
+/// - `String` → name only
+/// - `meta::pure::String` → package + name
+/// - `Result<String>` → name + type arguments
+/// - `VARCHAR(200)` → name + type variable values
+/// - `Relation<(a:Integer, b:String)>` → name + type arguments (column specs)
 #[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct TypeReference {
-    /// The type path, e.g., `Result`, `meta::pure::String`.
-    pub path: Package,
+    /// The package path, e.g., `meta::pure`. `None` for unqualified types.
+    pub package: Option<Package>,
+    /// The type name, e.g., `String`, `Result`, `Map`.
+    pub name: Identifier,
     /// Generic type arguments: `<String, Integer>`.
     pub type_arguments: Vec<TypeReference>,
     /// Type variable values: `(200, 'ok')`.
     pub type_variable_values: Vec<TypeVariableValue>,
     /// Source location.
     pub source_info: SourceInfo,
+}
+
+impl TypeReference {
+    /// Returns the fully qualified name as a string (e.g., `meta::pure::String`).
+    #[must_use]
+    pub fn full_path(&self) -> String {
+        if let Some(pkg) = &self.package {
+            format!("{pkg}::{}", self.name)
+        } else {
+            self.name.to_string()
+        }
+    }
+}
+
+/// A reference to a unit of a Measure type: `NewMeasure~UnitOne`.
+///
+/// Corresponds to Java grammar rule `unitName: qualifiedName TILDE identifier`.
+/// The measure is referenced as a [`TypeReference`], and the unit is a separate
+/// identifier.
+///
+/// # Examples
+///
+/// - `NewMeasure~UnitOne` → measure `NewMeasure`, unit `UnitOne`
+/// - `pkg::Measure~Kg` → measure `pkg::Measure`, unit `Kg`
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
+pub struct UnitReference {
+    /// The measure type being referenced.
+    pub measure: TypeReference,
+    /// The unit name within the measure.
+    pub unit: Identifier,
+    /// Source location.
+    pub source_info: SourceInfo,
+}
+
+/// A type specification that can be either a type or a unit reference.
+///
+/// Used in positions where the Pure grammar accepts both type references and
+/// unit names (e.g., property types, return types, parameter types).
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeSpec {
+    /// A regular type reference: `String`, `Map<K, V>`.
+    Type(TypeReference),
+    /// A unit reference: `NewMeasure~UnitOne`.
+    Unit(UnitReference),
+}
+
+impl TypeSpec {
+    /// Returns the underlying `TypeReference` (for units, returns the measure type).
+    #[must_use]
+    pub fn type_ref(&self) -> &TypeReference {
+        match self {
+            Self::Type(tr) => tr,
+            Self::Unit(ur) => &ur.measure,
+        }
+    }
+
+    /// Returns the fully qualified name as a string.
+    #[must_use]
+    pub fn full_path(&self) -> String {
+        match self {
+            Self::Type(tr) => tr.full_path(),
+            Self::Unit(ur) => format!("{}~{}", ur.measure.full_path(), ur.unit),
+        }
+    }
+}
+
+impl Spanned for TypeSpec {
+    fn source_info(&self) -> &SourceInfo {
+        match self {
+            Self::Type(tr) => &tr.source_info,
+            Self::Unit(ur) => &ur.source_info,
+        }
+    }
 }
 
 /// A value in a type variable position, e.g., `VARCHAR(200)` or `Res(1, 'ok')`.
@@ -477,19 +552,34 @@ mod tests {
     #[test]
     fn test_type_reference_simple() {
         let type_ref = TypeReference {
-            path: Package::root(SmolStr::new("String"), test_src()),
+            package: None,
+            name: SmolStr::new("String"),
             type_arguments: vec![],
             type_variable_values: vec![],
             source_info: test_src(),
         };
-        assert_eq!(type_ref.path.to_string(), "String");
+        assert_eq!(type_ref.full_path(), "String");
         assert!(type_ref.type_arguments.is_empty());
+    }
+
+    #[test]
+    fn test_type_reference_qualified() {
+        let type_ref = TypeReference {
+            package: Some(Package::root(SmolStr::new("meta"), test_src())
+                .child(SmolStr::new("pure"), test_src())),
+            name: SmolStr::new("String"),
+            type_arguments: vec![],
+            type_variable_values: vec![],
+            source_info: test_src(),
+        };
+        assert_eq!(type_ref.full_path(), "meta::pure::String");
     }
 
     #[test]
     fn test_type_reference_is_spanned() {
         let type_ref = TypeReference {
-            path: Package::root(SmolStr::new("String"), test_src()),
+            package: None,
+            name: SmolStr::new("String"),
             type_arguments: vec![],
             type_variable_values: vec![],
             source_info: SourceInfo::new("file.pure", 5, 3, 5, 9),

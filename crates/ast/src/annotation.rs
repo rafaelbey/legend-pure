@@ -223,7 +223,8 @@ mod tests {
         let param = Parameter {
             name: SmolStr::new("name"),
             type_ref: Some(TypeReference {
-                path: Package::root(SmolStr::new("String"), src()),
+                package: None,
+                name: SmolStr::new("String"),
                 type_arguments: vec![],
                 type_variable_values: vec![],
                 source_info: src(),

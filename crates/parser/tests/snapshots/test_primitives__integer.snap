@@ -25,10 +25,12 @@ SourceFile {
                         ),
                         name: "test",
                         parameters: [],
-                        return_type: TypeReference {
-                            path: Package {
+                        return_type: Type(
+                            TypeReference {
+                                package: None,
                                 name: "Any",
-                                parent: None,
+                                type_arguments: [],
+                                type_variable_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",
                                     start_line: 2,
@@ -37,16 +39,7 @@ SourceFile {
                                     end_column: 24,
                                 },
                             },
-                            type_arguments: [],
-                            type_variable_values: [],
-                            source_info: SourceInfo {
-                                source: "test.pure",
-                                start_line: 2,
-                                start_column: 22,
-                                end_line: 2,
-                                end_column: 24,
-                            },
-                        },
+                        ),
                         return_multiplicity: ZeroOrMany,
                         body: [
                             Literal(

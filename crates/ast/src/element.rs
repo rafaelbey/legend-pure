@@ -20,7 +20,7 @@
 use crate::annotation::{Parameter, SpannedString, StereotypePtr, TaggedValue};
 use crate::expression::Expression;
 use crate::source_info::{SourceInfo, Spanned};
-use crate::type_ref::{Identifier, Multiplicity, Package, TypeReference};
+use crate::type_ref::{Identifier, Multiplicity, Package, TypeReference, TypeSpec};
 
 // ---------------------------------------------------------------------------
 // Traits
@@ -204,8 +204,8 @@ pub enum AggregationKind {
 pub struct Property {
     /// Property name.
     pub name: Identifier,
-    /// Property type.
-    pub type_ref: TypeReference,
+    /// Property type (may be a regular type or a unit reference).
+    pub type_ref: TypeSpec,
     /// Multiplicity.
     pub multiplicity: Multiplicity,
     /// Aggregation kind (if specified).
@@ -227,8 +227,8 @@ pub struct QualifiedProperty {
     pub name: Identifier,
     /// Parameters.
     pub parameters: Vec<Parameter>,
-    /// Return type.
-    pub return_type: TypeReference,
+    /// Return type (may be a regular type or a unit reference).
+    pub return_type: TypeSpec,
     /// Return multiplicity.
     pub return_multiplicity: Multiplicity,
     /// Body expressions.
@@ -446,8 +446,8 @@ pub struct FunctionDef {
     pub name: Identifier,
     /// Parameters.
     pub parameters: Vec<Parameter>,
-    /// Return type.
-    pub return_type: TypeReference,
+    /// Return type (may be a regular type or a unit reference).
+    pub return_type: TypeSpec,
     /// Return multiplicity.
     pub return_multiplicity: Multiplicity,
     /// Body expressions.
@@ -570,12 +570,13 @@ mod tests {
             super_types: vec![],
             properties: vec![Property {
                 name: SmolStr::new("name"),
-                type_ref: TypeReference {
-                    path: Package::root(SmolStr::new("String"), src()),
+                type_ref: TypeSpec::Type(TypeReference {
+                    package: None,
+                    name: SmolStr::new("String"),
                     type_arguments: vec![],
                     type_variable_values: vec![],
                     source_info: src(),
-                },
+                }),
                 multiplicity: Multiplicity::one(),
                 aggregation: None,
                 default_value: None,

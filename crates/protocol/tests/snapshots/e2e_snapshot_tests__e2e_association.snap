@@ -14,10 +14,10 @@ expression: json
             "rawType": {
               "fullPath": "model::Person",
               "sourceInformation": {
-                "endColumn": 25,
+                "endColumn": 17,
                 "endLine": 19,
                 "sourceId": "association.pure",
-                "startColumn": 20,
+                "startColumn": 13,
                 "startLine": 19
               }
             },
@@ -47,10 +47,10 @@ expression: json
             "rawType": {
               "fullPath": "model::Address",
               "sourceInformation": {
-                "endColumn": 29,
+                "endColumn": 20,
                 "endLine": 20,
                 "sourceId": "association.pure",
-                "startColumn": 23,
+                "startColumn": 16,
                 "startLine": 20
               }
             },

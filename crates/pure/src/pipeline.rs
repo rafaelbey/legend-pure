@@ -273,7 +273,7 @@ fn extract_hard_dependencies(
         ast::Element::Class(class_def) => {
             class_def.super_types.iter()
                 .filter_map(|type_ref| {
-                    let fqn = SmolStr::new(type_ref.path.to_string());
+                    let fqn = SmolStr::new(type_ref.full_path());
                     declarations.get(&fqn).map(|d| d.id)
                 })
                 .collect()
@@ -460,7 +460,7 @@ fn hydrate_element(
         }
         ast::Element::Function(func_def) => {
             let parameters = lower_parameters(&func_def.parameters, ctx, errors);
-            let return_type = resolve::resolve_type_ref(
+            let return_type = resolve::resolve_type_spec(
                 &func_def.return_type, ctx, errors,
             ).unwrap_or(TypeExpr::Named {
                 element: bootstrap::ANY_ID,
@@ -528,7 +528,7 @@ fn lower_properties(
 ) -> Vec<class::Property> {
     props.iter()
         .filter_map(|p| {
-            let type_expr = resolve::resolve_type_ref(&p.type_ref, ctx, errors)?;
+            let type_expr = resolve::resolve_type_spec(&p.type_ref, ctx, errors)?;
             let multiplicity = resolve::lower_multiplicity(&p.multiplicity);
             let aggregation = p.aggregation.map(lower_aggregation_kind);
             let stereotypes = resolve::resolve_stereotypes(&p.stereotypes, ctx, errors);
@@ -558,7 +558,7 @@ fn lower_qualified_properties(
 ) -> Vec<class::QualifiedProperty> {
     qprops.iter()
         .filter_map(|qp| {
-            let return_type = resolve::resolve_type_ref(&qp.return_type, ctx, errors)?;
+            let return_type = resolve::resolve_type_spec(&qp.return_type, ctx, errors)?;
             let return_multiplicity = resolve::lower_multiplicity(&qp.return_multiplicity);
             let parameters = lower_parameters(&qp.parameters, ctx, errors);
             let stereotypes = resolve::resolve_stereotypes(&qp.stereotypes, ctx, errors);

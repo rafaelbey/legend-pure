@@ -19,14 +19,12 @@ mod helpers;
 use helpers::{corpus, parse_ok};
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn convertible() {
     let file = parse_ok(&corpus("measure_convertible.pure"));
     insta::assert_debug_snapshot!(file);
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn non_convertible() {
     let file = parse_ok(
         r"###Pure
@@ -40,7 +38,6 @@ Measure pkg::NonConvertible
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn quoted() {
     let file = parse_ok(
         r"###Pure
@@ -54,7 +51,6 @@ Measure pkg::'some measure'
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn class_with_unit_properties() {
     let file = parse_ok(
         r"###Pure

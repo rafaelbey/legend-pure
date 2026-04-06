@@ -29,43 +29,16 @@ SourceFile {
                                 name: "r",
                                 type_ref: Some(
                                     TypeReference {
-                                        path: Package {
-                                            name: "X",
-                                            parent: None,
-                                            source_info: SourceInfo {
-                                                source: "test.pure",
-                                                start_line: 2,
-                                                start_column: 22,
-                                                end_line: 2,
-                                                end_column: 22,
-                                            },
-                                        },
+                                        package: None,
+                                        name: "X",
                                         type_arguments: [
                                             TypeReference {
-                                                path: Package {
-                                                    name: "a",
-                                                    parent: None,
-                                                    source_info: SourceInfo {
-                                                        source: "test.pure",
-                                                        start_line: 2,
-                                                        start_column: 25,
-                                                        end_line: 2,
-                                                        end_column: 25,
-                                                    },
-                                                },
+                                                package: None,
+                                                name: "a",
                                                 type_arguments: [
                                                     TypeReference {
-                                                        path: Package {
-                                                            name: "Integer",
-                                                            parent: None,
-                                                            source_info: SourceInfo {
-                                                                source: "test.pure",
-                                                                start_line: 2,
-                                                                start_column: 27,
-                                                                end_line: 2,
-                                                                end_column: 33,
-                                                            },
-                                                        },
+                                                        package: None,
+                                                        name: "Integer",
                                                         type_arguments: [],
                                                         type_variable_values: [
                                                             Integer(
@@ -98,30 +71,12 @@ SourceFile {
                                                 },
                                             },
                                             TypeReference {
-                                                path: Package {
-                                                    name: "z",
-                                                    parent: None,
-                                                    source_info: SourceInfo {
-                                                        source: "test.pure",
-                                                        start_line: 2,
-                                                        start_column: 41,
-                                                        end_line: 2,
-                                                        end_column: 41,
-                                                    },
-                                                },
+                                                package: None,
+                                                name: "z",
                                                 type_arguments: [
                                                     TypeReference {
-                                                        path: Package {
-                                                            name: "V",
-                                                            parent: None,
-                                                            source_info: SourceInfo {
-                                                                source: "test.pure",
-                                                                start_line: 2,
-                                                                start_column: 43,
-                                                                end_line: 2,
-                                                                end_column: 43,
-                                                            },
-                                                        },
+                                                        package: None,
+                                                        name: "V",
                                                         type_arguments: [],
                                                         type_variable_values: [
                                                             String(
@@ -176,36 +131,31 @@ SourceFile {
                                 },
                             },
                         ],
-                        return_type: TypeReference {
-                            path: Package {
+                        return_type: Type(
+                            TypeReference {
+                                package: None,
                                 name: "X",
-                                parent: None,
-                                source_info: SourceInfo {
-                                    source: "test.pure",
-                                    start_line: 2,
-                                    start_column: 58,
-                                    end_line: 2,
-                                    end_column: 58,
-                                },
-                            },
-                            type_arguments: [
-                                TypeReference {
-                                    path: Package {
+                                type_arguments: [
+                                    TypeReference {
+                                        package: None,
                                         name: "a",
-                                        parent: None,
-                                        source_info: SourceInfo {
-                                            source: "test.pure",
-                                            start_line: 2,
-                                            start_column: 61,
-                                            end_line: 2,
-                                            end_column: 61,
-                                        },
-                                    },
-                                    type_arguments: [
-                                        TypeReference {
-                                            path: Package {
+                                        type_arguments: [
+                                            TypeReference {
+                                                package: None,
                                                 name: "Integer",
-                                                parent: None,
+                                                type_arguments: [],
+                                                type_variable_values: [
+                                                    Integer(
+                                                        200,
+                                                        SourceInfo {
+                                                            source: "test.pure",
+                                                            start_line: 2,
+                                                            start_column: 71,
+                                                            end_line: 2,
+                                                            end_column: 73,
+                                                        },
+                                                    ),
+                                                ],
                                                 source_info: SourceInfo {
                                                     source: "test.pure",
                                                     start_line: 2,
@@ -214,54 +164,36 @@ SourceFile {
                                                     end_column: 69,
                                                 },
                                             },
-                                            type_arguments: [],
-                                            type_variable_values: [
-                                                Integer(
-                                                    200,
-                                                    SourceInfo {
-                                                        source: "test.pure",
-                                                        start_line: 2,
-                                                        start_column: 71,
-                                                        end_line: 2,
-                                                        end_column: 73,
-                                                    },
-                                                ),
-                                            ],
-                                            source_info: SourceInfo {
-                                                source: "test.pure",
-                                                start_line: 2,
-                                                start_column: 63,
-                                                end_line: 2,
-                                                end_column: 69,
-                                            },
-                                        },
-                                    ],
-                                    type_variable_values: [],
-                                    source_info: SourceInfo {
-                                        source: "test.pure",
-                                        start_line: 2,
-                                        start_column: 61,
-                                        end_line: 2,
-                                        end_column: 61,
-                                    },
-                                },
-                                TypeReference {
-                                    path: Package {
-                                        name: "z",
-                                        parent: None,
+                                        ],
+                                        type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 2,
-                                            start_column: 77,
+                                            start_column: 61,
                                             end_line: 2,
-                                            end_column: 77,
+                                            end_column: 61,
                                         },
                                     },
-                                    type_arguments: [
-                                        TypeReference {
-                                            path: Package {
+                                    TypeReference {
+                                        package: None,
+                                        name: "z",
+                                        type_arguments: [
+                                            TypeReference {
+                                                package: None,
                                                 name: "V",
-                                                parent: None,
+                                                type_arguments: [],
+                                                type_variable_values: [
+                                                    String(
+                                                        "ok",
+                                                        SourceInfo {
+                                                            source: "test.pure",
+                                                            start_line: 2,
+                                                            start_column: 81,
+                                                            end_line: 2,
+                                                            end_column: 84,
+                                                        },
+                                                    ),
+                                                ],
                                                 source_info: SourceInfo {
                                                     source: "test.pure",
                                                     start_line: 2,
@@ -270,47 +202,27 @@ SourceFile {
                                                     end_column: 79,
                                                 },
                                             },
-                                            type_arguments: [],
-                                            type_variable_values: [
-                                                String(
-                                                    "ok",
-                                                    SourceInfo {
-                                                        source: "test.pure",
-                                                        start_line: 2,
-                                                        start_column: 81,
-                                                        end_line: 2,
-                                                        end_column: 84,
-                                                    },
-                                                ),
-                                            ],
-                                            source_info: SourceInfo {
-                                                source: "test.pure",
-                                                start_line: 2,
-                                                start_column: 79,
-                                                end_line: 2,
-                                                end_column: 79,
-                                            },
+                                        ],
+                                        type_variable_values: [],
+                                        source_info: SourceInfo {
+                                            source: "test.pure",
+                                            start_line: 2,
+                                            start_column: 77,
+                                            end_line: 2,
+                                            end_column: 77,
                                         },
-                                    ],
-                                    type_variable_values: [],
-                                    source_info: SourceInfo {
-                                        source: "test.pure",
-                                        start_line: 2,
-                                        start_column: 77,
-                                        end_line: 2,
-                                        end_column: 77,
                                     },
+                                ],
+                                type_variable_values: [],
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 2,
+                                    start_column: 58,
+                                    end_line: 2,
+                                    end_column: 58,
                                 },
-                            ],
-                            type_variable_values: [],
-                            source_info: SourceInfo {
-                                source: "test.pure",
-                                start_line: 2,
-                                start_column: 58,
-                                end_line: 2,
-                                end_column: 58,
                             },
-                        },
+                        ),
                         return_multiplicity: PureOne,
                         body: [
                             Variable(

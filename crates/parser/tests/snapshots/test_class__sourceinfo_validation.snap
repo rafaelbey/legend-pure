@@ -29,10 +29,12 @@ SourceFile {
                         properties: [
                             Property {
                                 name: "name",
-                                type_ref: TypeReference {
-                                    path: Package {
+                                type_ref: Type(
+                                    TypeReference {
+                                        package: None,
                                         name: "String",
-                                        parent: None,
+                                        type_arguments: [],
+                                        type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 4,
@@ -41,16 +43,7 @@ SourceFile {
                                             end_column: 16,
                                         },
                                     },
-                                    type_arguments: [],
-                                    type_variable_values: [],
-                                    source_info: SourceInfo {
-                                        source: "test.pure",
-                                        start_line: 4,
-                                        start_column: 11,
-                                        end_line: 4,
-                                        end_column: 16,
-                                    },
-                                },
+                                ),
                                 multiplicity: PureOne,
                                 aggregation: None,
                                 default_value: None,

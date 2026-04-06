@@ -29,10 +29,12 @@ SourceFile {
                         properties: [
                             Property {
                                 name: "sharedProp",
-                                type_ref: TypeReference {
-                                    path: Package {
+                                type_ref: Type(
+                                    TypeReference {
+                                        package: None,
                                         name: "String",
-                                        parent: None,
+                                        type_arguments: [],
+                                        type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 4,
@@ -41,16 +43,7 @@ SourceFile {
                                             end_column: 31,
                                         },
                                     },
-                                    type_arguments: [],
-                                    type_variable_values: [],
-                                    source_info: SourceInfo {
-                                        source: "test.pure",
-                                        start_line: 4,
-                                        start_column: 26,
-                                        end_line: 4,
-                                        end_column: 31,
-                                    },
-                                },
+                                ),
                                 multiplicity: ZeroOrMany,
                                 aggregation: Some(
                                     Shared,
@@ -68,10 +61,12 @@ SourceFile {
                             },
                             Property {
                                 name: "compositeProp",
-                                type_ref: TypeReference {
-                                    path: Package {
+                                type_ref: Type(
+                                    TypeReference {
+                                        package: None,
                                         name: "Integer",
-                                        parent: None,
+                                        type_arguments: [],
+                                        type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 5,
@@ -80,16 +75,7 @@ SourceFile {
                                             end_column: 38,
                                         },
                                     },
-                                    type_arguments: [],
-                                    type_variable_values: [],
-                                    source_info: SourceInfo {
-                                        source: "test.pure",
-                                        start_line: 5,
-                                        start_column: 32,
-                                        end_line: 5,
-                                        end_column: 38,
-                                    },
-                                },
+                                ),
                                 multiplicity: PureOne,
                                 aggregation: Some(
                                     Composite,
@@ -107,10 +93,12 @@ SourceFile {
                             },
                             Property {
                                 name: "noneProp",
-                                type_ref: TypeReference {
-                                    path: Package {
+                                type_ref: Type(
+                                    TypeReference {
+                                        package: None,
                                         name: "Boolean",
-                                        parent: None,
+                                        type_arguments: [],
+                                        type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 6,
@@ -119,16 +107,7 @@ SourceFile {
                                             end_column: 28,
                                         },
                                     },
-                                    type_arguments: [],
-                                    type_variable_values: [],
-                                    source_info: SourceInfo {
-                                        source: "test.pure",
-                                        start_line: 6,
-                                        start_column: 22,
-                                        end_line: 6,
-                                        end_column: 28,
-                                    },
-                                },
+                                ),
                                 multiplicity: ZeroOrOne,
                                 aggregation: Some(
                                     None,

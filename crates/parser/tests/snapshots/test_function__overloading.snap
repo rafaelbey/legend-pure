@@ -29,17 +29,8 @@ SourceFile {
                                 name: "a",
                                 type_ref: Some(
                                     TypeReference {
-                                        path: Package {
-                                            name: "Integer",
-                                            parent: None,
-                                            source_info: SourceInfo {
-                                                source: "test.pure",
-                                                start_line: 2,
-                                                start_column: 21,
-                                                end_line: 2,
-                                                end_column: 27,
-                                            },
-                                        },
+                                        package: None,
+                                        name: "Integer",
                                         type_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
@@ -63,10 +54,12 @@ SourceFile {
                                 },
                             },
                         ],
-                        return_type: TypeReference {
-                            path: Package {
+                        return_type: Type(
+                            TypeReference {
+                                package: None,
                                 name: "Integer",
-                                parent: None,
+                                type_arguments: [],
+                                type_variable_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",
                                     start_line: 2,
@@ -75,16 +68,7 @@ SourceFile {
                                     end_column: 40,
                                 },
                             },
-                            type_arguments: [],
-                            type_variable_values: [],
-                            source_info: SourceInfo {
-                                source: "test.pure",
-                                start_line: 2,
-                                start_column: 34,
-                                end_line: 2,
-                                end_column: 40,
-                            },
-                        },
+                        ),
                         return_multiplicity: PureOne,
                         body: [
                             Variable(
@@ -133,17 +117,8 @@ SourceFile {
                                 name: "a",
                                 type_ref: Some(
                                     TypeReference {
-                                        path: Package {
-                                            name: "Integer",
-                                            parent: None,
-                                            source_info: SourceInfo {
-                                                source: "test.pure",
-                                                start_line: 7,
-                                                start_column: 21,
-                                                end_line: 7,
-                                                end_column: 27,
-                                            },
-                                        },
+                                        package: None,
+                                        name: "Integer",
                                         type_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
@@ -170,17 +145,8 @@ SourceFile {
                                 name: "b",
                                 type_ref: Some(
                                     TypeReference {
-                                        path: Package {
-                                            name: "Integer",
-                                            parent: None,
-                                            source_info: SourceInfo {
-                                                source: "test.pure",
-                                                start_line: 7,
-                                                start_column: 36,
-                                                end_line: 7,
-                                                end_column: 42,
-                                            },
-                                        },
+                                        package: None,
+                                        name: "Integer",
                                         type_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
@@ -204,10 +170,12 @@ SourceFile {
                                 },
                             },
                         ],
-                        return_type: TypeReference {
-                            path: Package {
+                        return_type: Type(
+                            TypeReference {
+                                package: None,
                                 name: "Integer",
-                                parent: None,
+                                type_arguments: [],
+                                type_variable_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",
                                     start_line: 7,
@@ -216,16 +184,7 @@ SourceFile {
                                     end_column: 55,
                                 },
                             },
-                            type_arguments: [],
-                            type_variable_values: [],
-                            source_info: SourceInfo {
-                                source: "test.pure",
-                                start_line: 7,
-                                start_column: 49,
-                                end_line: 7,
-                                end_column: 55,
-                            },
-                        },
+                        ),
                         return_multiplicity: PureOne,
                         body: [
                             Arithmetic(
