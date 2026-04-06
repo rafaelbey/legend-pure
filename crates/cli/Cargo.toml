@@ -32,6 +32,7 @@ legend-pure-parser-protocol = { path = "../protocol" }
 
 # CLI framework
 clap = { workspace = true }
+clap_complete = { workspace = true }
 
 # Serialization
 serde = { workspace = true }

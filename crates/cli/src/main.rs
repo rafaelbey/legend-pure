@@ -48,7 +48,7 @@ use clap::{Parser, Subcommand};
                   legend check src/         Validate Pure files",
     after_help = "See 'legend <command> --help' for more information on a specific command."
 )]
-struct Cli {
+pub struct Cli {
     #[command(subcommand)]
     command: Commands,
 
@@ -86,6 +86,9 @@ enum Commands {
     /// Initialize a new Legend project
     Init(commands::init::InitArgs),
 
+    /// Generate shell completion scripts
+    Completions(commands::completions::CompletionsArgs),
+
     /// Print version information
     Version,
 }
@@ -104,6 +107,7 @@ fn main() {
         Commands::Package(args) => commands::package::run(args),
         Commands::Publish(args) => commands::publish::run(args),
         Commands::Init(args) => commands::init::run(args),
+        Commands::Completions(args) => commands::completions::run(args),
         Commands::Version => {
             print_version();
             Ok(())

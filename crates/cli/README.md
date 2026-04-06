@@ -34,12 +34,33 @@ legend --help
 | `legend check` | ✅ | Validate Pure files (parse-only) |
 | `legend init`  | ✅ | Scaffold a new Legend project |
 | `legend version` | ✅ | Print version information |
+| `legend completions` | ✅ | Generate shell completion scripts |
 | `legend emit` | 🚧 | Convert Protocol JSON back to Pure grammar |
 | `legend compile` | 🚧 | Compile Pure files with semantic analysis |
 | `legend test` | 🚧 | Run Pure tests on testable elements |
 | `legend plan` | 🚧 | Generate execution plans |
 | `legend package` | 🚧 | Parse, compile, and generate distributable artifacts |
 | `legend publish` | 🚧 | Package and publish artifacts to the depot repository |
+
+## Shell Completions
+
+Enable tab-completion for commands, flags, and arguments:
+
+```bash
+# Zsh (macOS / Linux)
+legend completions zsh > ~/.zfunc/_legend
+
+# Bash
+legend completions bash >> ~/.bashrc
+
+# Fish
+legend completions fish > ~/.config/fish/completions/legend.fish
+
+# PowerShell
+legend completions powershell >> $PROFILE
+```
+
+After sourcing the script, `legend <TAB>` completes commands and `legend check --<TAB>` completes flags.
 
 ## Diagnostics
 

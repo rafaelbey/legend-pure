@@ -20,6 +20,7 @@
 
 pub mod check;
 pub mod compile;
+pub mod completions;
 pub mod emit;
 pub mod init;
 pub mod package;
