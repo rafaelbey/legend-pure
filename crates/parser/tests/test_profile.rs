@@ -19,7 +19,6 @@ mod helpers;
 use helpers::parse_ok;
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn basic() {
     let file = parse_ok(
         r"###Pure
@@ -33,7 +32,6 @@ Profile meta::pure::profiles::doc
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn quoted() {
     let file = parse_ok(
         r"###Pure
@@ -47,7 +45,6 @@ Profile meta::pure::profiles::'with quotes'
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn empty() {
     let file = parse_ok(
         r"###Pure

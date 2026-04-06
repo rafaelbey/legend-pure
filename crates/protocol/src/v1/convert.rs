@@ -83,8 +83,8 @@ impl From<&ast::type_ref::TypeReference> for v1::generic_type::GenericType {
     fn from(tr: &ast::type_ref::TypeReference) -> Self {
         Self {
             raw_type: v1::generic_type::PackageableType {
-                full_path: tr.path.to_string(),
-                source_information: Some(tr.path.source_info().into()),
+                full_path: tr.full_path(),
+                source_information: Some(tr.source_info.clone().into()),
             },
             type_arguments: tr.type_arguments.iter().map(Into::into).collect(),
             multiplicity_arguments: vec![],
@@ -94,6 +94,19 @@ impl From<&ast::type_ref::TypeReference> for v1::generic_type::GenericType {
                 .map(type_variable_value_to_json)
                 .collect(),
             source_information: Some(tr.source_info.clone().into()),
+        }
+    }
+}
+
+impl From<&ast::type_ref::TypeSpec> for v1::generic_type::GenericType {
+    fn from(ts: &ast::type_ref::TypeSpec) -> Self {
+        match ts {
+            ast::type_ref::TypeSpec::Type(tr) => tr.into(),
+            ast::type_ref::TypeSpec::Unit(ur) => {
+                let mut gt: Self = (&ur.measure).into();
+                gt.raw_type.full_path = ts.full_path();
+                gt
+            }
         }
     }
 }
@@ -339,7 +352,7 @@ pub fn convert_expression_typed(
 
         // -- Arrow function: `expr->func(args)` desugars to func(expr, args) --
         Expression::ArrowFunction(e) => ValueSpecification::Func(AppliedFunction {
-            function: e.function.to_string(),
+            function: format_element_ptr(&e.function),
             f_control: None,
             parameters: std::iter::once(convert_expression_typed(&e.target))
                 .chain(e.arguments.iter().map(convert_expression_typed))
@@ -353,7 +366,7 @@ pub fn convert_expression_typed(
         // -- Type reference: `@MyType` → packageableElementPtr --
         Expression::TypeReferenceExpr(e) => {
             ValueSpecification::PackageableElementPtr(ProtocolPackageableElementPtr {
-                full_path: e.type_ref.path.to_string(),
+                full_path: e.type_ref.full_path(),
                 source_information: Some(e.source_info.clone().into()),
             })
         }
@@ -439,6 +452,19 @@ pub fn convert_expression_typed(
 
         // -- Column expressions → classInstance --
         Expression::Column(col) => convert_column(col),
+
+        // -- Bare element reference (no args): same as zero-arg function in protocol --
+        Expression::PackageableElementRef(e) => {
+            ValueSpecification::Func(AppliedFunction {
+                function: format_element_ptr(&e.element),
+                f_control: None,
+                parameters: vec![],
+                source_information: Some(e.source_info.clone().into()),
+            })
+        }
+
+        // -- Grouping (transparent) --
+        Expression::Group(inner) => convert_expression_typed(inner),
     }
 }
 
@@ -561,7 +587,7 @@ fn convert_column(
             type_name: "colSpec".to_string(),
             value: serde_json::json!({
                 "name": e.name.to_string(),
-                "type": e.type_ref.path.to_string(),
+                "type": e.type_ref.full_path(),
             }),
             source_information: Some(e.source_info.clone().into()),
         }),
@@ -615,7 +641,7 @@ fn convert_class(c: &ast::element::ClassDef) -> v1::element::ProtocolClass {
     v1::element::ProtocolClass {
         package_path: optional_package_to_path(c.package.as_ref()),
         name: c.name.to_string(),
-        super_types: c.super_types.iter().map(|t| t.path.to_string()).collect(),
+        super_types: c.super_types.iter().map(ast::type_ref::TypeReference::full_path).collect(),
         properties: c.properties.iter().map(Into::into).collect(),
         qualified_properties: c.qualified_properties.iter().map(Into::into).collect(),
         constraints: c.constraints.iter().map(Into::into).collect(),
@@ -863,7 +889,8 @@ mod tests {
     #[test]
     fn test_type_reference_conversion() {
         let tr = ast::type_ref::TypeReference {
-            path: ast::type_ref::Package::root(Identifier::new("String"), src()),
+            package: None,
+            name: Identifier::new("String"),
             type_arguments: vec![],
             type_variable_values: vec![],
             source_info: src(),

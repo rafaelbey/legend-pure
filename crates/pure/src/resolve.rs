@@ -62,14 +62,14 @@ pub(crate) fn resolve_type_ref(
     ctx: &ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<TypeExpr> {
-    let fqn = SmolStr::new(type_ref.path.to_string());
+    let fqn = SmolStr::new(type_ref.full_path());
 
     // 1. Try user declarations
     let element_id = if let Some(&id) = ctx.declarations.get(&fqn) {
         id
     } else {
         // 2. Try model path resolution (catches bootstrap primitives like String, Integer)
-        let segments: Vec<SmolStr> = collect_path_segments(&type_ref.path);
+        let segments = type_ref_segments(type_ref);
         if let Some(id) = ctx.model.resolve_by_path(&segments) {
             id
         } else {
@@ -97,6 +97,33 @@ pub(crate) fn resolve_type_ref(
         type_arguments,
         value_arguments,
     })
+}
+
+/// Resolves an AST `TypeSpec` (type or unit reference) to a Pure `TypeExpr`.
+///
+/// For unit references, resolves the measure type.
+pub(crate) fn resolve_type_spec(
+    type_spec: &ast_type::TypeSpec,
+    ctx: &ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<TypeExpr> {
+    match type_spec {
+        ast_type::TypeSpec::Type(tr) => resolve_type_ref(tr, ctx, errors),
+        ast_type::TypeSpec::Unit(ur) => {
+            // For now, resolve the measure type — full unit resolution is Phase 4+
+            resolve_type_ref(&ur.measure, ctx, errors)
+        }
+    }
+}
+
+/// Collects path segments from a `TypeReference`'s package + name.
+fn type_ref_segments(type_ref: &ast_type::TypeReference) -> Vec<SmolStr> {
+    let mut segments = Vec::new();
+    if let Some(pkg) = &type_ref.package {
+        segments.extend(collect_path_segments(pkg));
+    }
+    segments.push(type_ref.name.clone());
+    segments
 }
 
 /// Collects the path segments from an AST `Package` into a flat `Vec`.

@@ -48,10 +48,12 @@ SourceFile {
                         properties: [
                             Property {
                                 name: "left",
-                                type_ref: TypeReference {
-                                    path: Package {
+                                type_ref: Type(
+                                    TypeReference {
+                                        package: None,
                                         name: "A",
-                                        parent: None,
+                                        type_arguments: [],
+                                        type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 5,
@@ -60,16 +62,7 @@ SourceFile {
                                             end_column: 11,
                                         },
                                     },
-                                    type_arguments: [],
-                                    type_variable_values: [],
-                                    source_info: SourceInfo {
-                                        source: "test.pure",
-                                        start_line: 5,
-                                        start_column: 11,
-                                        end_line: 5,
-                                        end_column: 11,
-                                    },
-                                },
+                                ),
                                 multiplicity: PureOne,
                                 aggregation: None,
                                 default_value: None,
@@ -85,10 +78,12 @@ SourceFile {
                             },
                             Property {
                                 name: "right",
-                                type_ref: TypeReference {
-                                    path: Package {
+                                type_ref: Type(
+                                    TypeReference {
+                                        package: None,
                                         name: "B",
-                                        parent: None,
+                                        type_arguments: [],
+                                        type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 6,
@@ -97,16 +92,7 @@ SourceFile {
                                             end_column: 12,
                                         },
                                     },
-                                    type_arguments: [],
-                                    type_variable_values: [],
-                                    source_info: SourceInfo {
-                                        source: "test.pure",
-                                        start_line: 6,
-                                        start_column: 12,
-                                        end_line: 6,
-                                        end_column: 12,
-                                    },
-                                },
+                                ),
                                 multiplicity: PureOne,
                                 aggregation: None,
                                 default_value: None,

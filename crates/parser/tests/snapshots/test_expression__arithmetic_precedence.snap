@@ -25,10 +25,12 @@ SourceFile {
                         ),
                         name: "test",
                         parameters: [],
-                        return_type: TypeReference {
-                            path: Package {
+                        return_type: Type(
+                            TypeReference {
+                                package: None,
                                 name: "Integer",
-                                parent: None,
+                                type_arguments: [],
+                                type_variable_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",
                                     start_line: 2,
@@ -37,111 +39,106 @@ SourceFile {
                                     end_column: 28,
                                 },
                             },
-                            type_arguments: [],
-                            type_variable_values: [],
-                            source_info: SourceInfo {
-                                source: "test.pure",
-                                start_line: 2,
-                                start_column: 22,
-                                end_line: 2,
-                                end_column: 28,
-                            },
-                        },
+                        ),
                         return_multiplicity: PureOne,
                         body: [
                             Arithmetic(
                                 ArithmeticExpr {
-                                    left: Arithmetic(
-                                        ArithmeticExpr {
-                                            left: Literal(
-                                                Integer(
-                                                    IntegerLiteral {
-                                                        value: 1,
-                                                        source_info: SourceInfo {
-                                                            source: "test.pure",
-                                                            start_line: 4,
-                                                            start_column: 6,
-                                                            end_line: 4,
-                                                            end_column: 6,
-                                                        },
-                                                    },
-                                                ),
-                                            ),
-                                            op: Minus,
-                                            right: Arithmetic(
-                                                ArithmeticExpr {
-                                                    left: Literal(
-                                                        Integer(
-                                                            IntegerLiteral {
-                                                                value: 4,
-                                                                source_info: SourceInfo {
-                                                                    source: "test.pure",
-                                                                    start_line: 4,
-                                                                    start_column: 10,
-                                                                    end_line: 4,
-                                                                    end_column: 10,
-                                                                },
-                                                            },
-                                                        ),
-                                                    ),
-                                                    op: Times,
-                                                    right: Arithmetic(
-                                                        ArithmeticExpr {
-                                                            left: Literal(
-                                                                Integer(
-                                                                    IntegerLiteral {
-                                                                        value: 2,
-                                                                        source_info: SourceInfo {
-                                                                            source: "test.pure",
-                                                                            start_line: 4,
-                                                                            start_column: 15,
-                                                                            end_line: 4,
-                                                                            end_column: 15,
-                                                                        },
-                                                                    },
-                                                                ),
-                                                            ),
-                                                            op: Plus,
-                                                            right: Literal(
-                                                                Integer(
-                                                                    IntegerLiteral {
-                                                                        value: 3,
-                                                                        source_info: SourceInfo {
-                                                                            source: "test.pure",
-                                                                            start_line: 4,
-                                                                            start_column: 19,
-                                                                            end_line: 4,
-                                                                            end_column: 19,
-                                                                        },
-                                                                    },
-                                                                ),
-                                                            ),
+                                    left: Group(
+                                        Arithmetic(
+                                            ArithmeticExpr {
+                                                left: Literal(
+                                                    Integer(
+                                                        IntegerLiteral {
+                                                            value: 1,
                                                             source_info: SourceInfo {
                                                                 source: "test.pure",
                                                                 start_line: 4,
-                                                                start_column: 17,
+                                                                start_column: 6,
                                                                 end_line: 4,
-                                                                end_column: 17,
+                                                                end_column: 6,
                                                             },
                                                         },
                                                     ),
-                                                    source_info: SourceInfo {
-                                                        source: "test.pure",
-                                                        start_line: 4,
-                                                        start_column: 12,
-                                                        end_line: 4,
-                                                        end_column: 12,
+                                                ),
+                                                op: Minus,
+                                                right: Arithmetic(
+                                                    ArithmeticExpr {
+                                                        left: Literal(
+                                                            Integer(
+                                                                IntegerLiteral {
+                                                                    value: 4,
+                                                                    source_info: SourceInfo {
+                                                                        source: "test.pure",
+                                                                        start_line: 4,
+                                                                        start_column: 10,
+                                                                        end_line: 4,
+                                                                        end_column: 10,
+                                                                    },
+                                                                },
+                                                            ),
+                                                        ),
+                                                        op: Times,
+                                                        right: Group(
+                                                            Arithmetic(
+                                                                ArithmeticExpr {
+                                                                    left: Literal(
+                                                                        Integer(
+                                                                            IntegerLiteral {
+                                                                                value: 2,
+                                                                                source_info: SourceInfo {
+                                                                                    source: "test.pure",
+                                                                                    start_line: 4,
+                                                                                    start_column: 15,
+                                                                                    end_line: 4,
+                                                                                    end_column: 15,
+                                                                                },
+                                                                            },
+                                                                        ),
+                                                                    ),
+                                                                    op: Plus,
+                                                                    right: Literal(
+                                                                        Integer(
+                                                                            IntegerLiteral {
+                                                                                value: 3,
+                                                                                source_info: SourceInfo {
+                                                                                    source: "test.pure",
+                                                                                    start_line: 4,
+                                                                                    start_column: 19,
+                                                                                    end_line: 4,
+                                                                                    end_column: 19,
+                                                                                },
+                                                                            },
+                                                                        ),
+                                                                    ),
+                                                                    source_info: SourceInfo {
+                                                                        source: "test.pure",
+                                                                        start_line: 4,
+                                                                        start_column: 17,
+                                                                        end_line: 4,
+                                                                        end_column: 17,
+                                                                    },
+                                                                },
+                                                            ),
+                                                        ),
+                                                        source_info: SourceInfo {
+                                                            source: "test.pure",
+                                                            start_line: 4,
+                                                            start_column: 12,
+                                                            end_line: 4,
+                                                            end_column: 12,
+                                                        },
                                                     },
+                                                ),
+                                                source_info: SourceInfo {
+                                                    source: "test.pure",
+                                                    start_line: 4,
+                                                    start_column: 8,
+                                                    end_line: 4,
+                                                    end_column: 8,
                                                 },
-                                            ),
-                                            source_info: SourceInfo {
-                                                source: "test.pure",
-                                                start_line: 4,
-                                                start_column: 8,
-                                                end_line: 4,
-                                                end_column: 8,
                                             },
-                                        },
+                                        ),
                                     ),
                                     op: Times,
                                     right: Literal(

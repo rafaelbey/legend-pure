@@ -19,7 +19,6 @@ mod helpers;
 use helpers::parse_ok;
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn basic_with_annotations() {
     let file = parse_ok(
         r"###Pure
@@ -34,7 +33,6 @@ Enum <<meta::pure::profiles::doc.deprecated>> {meta::pure::profiles::doc.doc = '
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn quoted_names() {
     let file = parse_ok(
         r"###Pure
@@ -47,7 +45,6 @@ Enum '@'::'my Enum'
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn numeric_names() {
     let file = parse_ok(
         r"###Pure

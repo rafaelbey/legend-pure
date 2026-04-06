@@ -28,7 +28,7 @@ use crate::expression::{
     compose_body, compose_element_ptr, compose_expression, compose_package, compose_parameter,
 };
 use crate::identifier::{escape_pure_string, maybe_quote};
-use crate::type_ref::compose_type_reference;
+use crate::type_ref::{compose_type_reference, compose_type_spec};
 use crate::writer::IndentWriter;
 
 // ---------------------------------------------------------------------------
@@ -281,7 +281,7 @@ fn compose_property(w: &mut IndentWriter, p: &Property) {
 
     w.write(&maybe_quote(&p.name));
     w.write(": ");
-    compose_type_reference(w, &p.type_ref);
+    compose_type_spec(w, &p.type_ref);
     w.write(&p.multiplicity.to_string());
 
     // Default value
@@ -315,13 +315,15 @@ fn compose_qualified_property(w: &mut IndentWriter, qp: &QualifiedProperty) {
         w.write("}");
     } else if qp.body.len() > 1 {
         w.write_line("{");
-        compose_body(w, &qp.body);
+        w.push_indent();
+        compose_body(w, &qp.body, true);
+        w.pop_indent();
         w.write("}");
     }
 
     // Return type
     w.write(": ");
-    compose_type_reference(w, &qp.return_type);
+    compose_type_spec(w, &qp.return_type);
     w.write(&qp.return_multiplicity.to_string());
     w.write_line(";");
 }
@@ -406,14 +408,14 @@ fn compose_function(w: &mut IndentWriter, f: &FunctionDef) {
     w.write("): ");
 
     // Return type
-    compose_type_reference(w, &f.return_type);
+    compose_type_spec(w, &f.return_type);
     w.write(&f.return_multiplicity.to_string());
     w.newline();
 
     // Body
     w.write_line("{");
     w.push_indent();
-    compose_body(w, &f.body);
+    compose_body(w, &f.body, false);
     w.pop_indent();
     w.write_line("}");
 

@@ -24,7 +24,7 @@ use legend_pure_parser_ast::expression::{
     ArithmeticExpr, ArithmeticOp, ArrowFunction, BitwiseExpr, BitwiseNotExpr, BitwiseOp,
     CollectionExpr, ColumnExpression, ComparisonExpr, ComparisonOp, Expression, FunctionApplication,
     Lambda, LetExpr, Literal, LogicalExpr, LogicalOp, MemberAccess, NewInstanceExpr, NotExpr,
-    TypeReferenceExpr, UnaryMinusExpr, Variable,
+    PackageableElementRef, TypeReferenceExpr, UnaryMinusExpr, Variable,
 };
 
 use crate::identifier::{escape_pure_string, maybe_quote};
@@ -152,12 +152,18 @@ fn compose_expression_prec(
         Expression::FunctionApplication(e) => compose_function_application(w, e),
         Expression::ArrowFunction(e) => compose_arrow_function(w, e),
         Expression::MemberAccess(e) => compose_member_access(w, e),
+        Expression::PackageableElementRef(e) => compose_element_ref(w, e),
         Expression::TypeReferenceExpr(e) => compose_type_reference_expr(w, e),
         Expression::Lambda(e) => compose_lambda(w, e),
         Expression::Let(e) => compose_let(w, e),
         Expression::Collection(e) => compose_collection(w, e),
         Expression::NewInstance(e) => compose_new_instance(w, e),
         Expression::Column(e) => compose_column(w, e),
+        Expression::Group(inner) => {
+            w.write("(");
+            compose_expression_prec(w, inner, Precedence::None, false);
+            w.write(")");
+        }
     }
 
     if wrap {
@@ -306,10 +312,15 @@ fn compose_function_application(w: &mut IndentWriter, e: &FunctionApplication) {
 fn compose_arrow_function(w: &mut IndentWriter, e: &ArrowFunction) {
     compose_expression(w, &e.target);
     w.write("->");
-    w.write(&maybe_quote(&e.function));
+    compose_element_ptr(w, &e.function);
     w.write("(");
     compose_function_args(w, &e.arguments);
     w.write(")");
+}
+
+/// Composes a bare packageable element reference (no parens).
+fn compose_element_ref(w: &mut IndentWriter, e: &PackageableElementRef) {
+    compose_element_ptr(w, &e.element);
 }
 
 /// Composes function arguments as a comma-separated list.
@@ -501,12 +512,19 @@ pub fn compose_parameter(w: &mut IndentWriter, p: &Parameter) {
 
 /// Writes a body expression list (e.g., for function or qualified property bodies).
 ///
+/// Uses `;` as a **terminator** for statements in a body block.
+///
+/// When `terminate_last` is `false`, the last expression omits the trailing `;`
+/// (used for function bodies where the last expression is the implicit return).
+/// When `terminate_last` is `true`, ALL expressions get `;` (used for qualified
+/// property bodies).
+///
 /// Callers are responsible for calling `push_indent()`/`pop_indent()` to set
 /// the correct indentation level before and after this function.
-pub fn compose_body(w: &mut IndentWriter, body: &[Expression]) {
+pub fn compose_body(w: &mut IndentWriter, body: &[Expression], terminate_last: bool) {
     for (i, expr) in body.iter().enumerate() {
         compose_expression(w, expr);
-        if i < body.len() - 1 {
+        if terminate_last || i < body.len() - 1 {
             w.write(";");
         }
         w.newline();

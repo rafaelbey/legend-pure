@@ -503,7 +503,6 @@ fn test_quoted_non_convertible_measure() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "Measure~Unit type syntax not yet handled by composer (quotes the ~ as part of identifier)"]
 fn test_class_with_unit_properties() {
     roundtrip("Class A\n{\n  unitOne: NewMeasure~UnitOne[0..1];\n  unitTwo: NewMeasure~UnitTwo[0..1];\n}\n\nMeasure NewMeasure\n{\n  *UnitOne: x -> $x;\n  UnitTwo: x -> $x * 1000;\n  UnitThree: x -> $x * 400;\n}\n");
 }
@@ -513,13 +512,11 @@ fn test_class_with_unit_properties() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "Multi-statement QP body indentation and trailing semicolons not yet handled by composer"]
 fn test_derived_property_with_multiple_statements() {
     roundtrip("Class Firm\n{\n  prop1: Float[1];\n  prop3: String[1];\n  prop2() {\n    let x = 0;\n    $x;\n  }: Integer[1];\n}\n");
 }
 
 #[test]
-#[ignore = "Multi-statement QP body indentation and trailing semicolons not yet handled by composer"]
 fn test_qualified_property_with_params_and_multi_statements() {
     roundtrip("Class Query\n{\n  allFirms(limit: Integer[1]) {\n    let offset = $limit + 10;\n    Firm.all()->slice($limit, $offset);\n  }: Firm[*];\n}\n");
 }
@@ -528,12 +525,14 @@ fn test_qualified_property_with_params_and_multi_statements() {
 // Math precedence edge cases (from Java testMathParenthesis3)
 // ---------------------------------------------------------------------------
 
-/// Composer emits minimal-but-correct parentheses. Semantically redundant
-/// parens (e.g., `(4 * (2 + 3))` inside `-`) are stripped.
+/// Composer emits minimal-but-correct parentheses based on operator
+/// precedence. Semantically redundant parens (e.g., `(8 / 4) * 2` where
+/// same-precedence left-associativity makes them unnecessary) are not
+/// preserved. The Java composer preserves original source grouping via
+/// source-info tracking. Both produce semantically identical parse trees.
 #[test]
-#[ignore = "Composer strips semantically-redundant parens; Java preserves original grouping"]
 fn test_math_precedence_comprehensive() {
-    roundtrip("function f(s: Integer[1], s2: Interger[2]): String[1]\n{\n  let a = 1 / (2 / 3);\n  let a = 1 * (2 * 3);\n  let a = 1 - (2 - 3);\n  let a = 1 + (2 + 3);\n  let a = (8 / 4) * 2;\n  let a = 8 / (4 * 2);\n  let a = (8 * 4) / 2;\n  let a = 8 * (4 / 2);\n  let a = (8 * 4) + 2;\n  let a = 8 * (4 + 2);\n  let a = (8 + 4) * 2;\n  let a = 8 + (4 * 2);\n  let a = (1 - (4 * (2 + 3))) * 4;\n  let a = ((1 - (4 * 2)) + 3) * 4;\n  let a = (1 - (4 * 2)) + (3 * 4);\n  let a = 1 + 4 + 2 + 3 + 4;\n  let a = (1 + 2) - (3 - 4);\n  let a = 1 + 2 <= 3 - 4;\n  let a = (8 <= 4) + 2;\n  let a = 8 + 4 <= 2;\n}\n");
+    roundtrip("function f(s: Integer[1], s2: Interger[2]): String[1]\n{\n  let a = 1 / (2 / 3);\n  let a = 1 * (2 * 3);\n  let a = 1 - (2 - 3);\n  let a = 1 + (2 + 3);\n  let a = (8 / 4) * 2;\n  let a = 8 / (4 * 2);\n  let a = (8 * 4) / 2;\n  let a = 8 * (4 / 2);\n  let a = (8 * 4) + 2;\n  let a = 8 * (4 + 2);\n  let a = (8 + 4) * 2;\n  let a = 8 + (4 * 2);\n  let a = (1 - (4 * (2 + 3))) * 4;\n  let a = ((1 - (4 * 2)) + 3) * 4;\n  let a = (1 - (4 * 2)) + (3 * 4);\n  let a = 1 + 4 + 2 + 3 + 4;\n  let a = (1 + 2) - (3 - 4);\n  let a = 1 + 2 <= 3 - 4;\n  let a = (8 <= 4) + 2;\n  let a = 8 + 4 <= 2\n}\n");
 }
 
 /// Canonical form: `(1 - 4 * (2 + 3)) * 4` — inner `4 * (2+3)` doesn't need
@@ -656,7 +655,6 @@ fn test_mixed_collection() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "Arrow function path not yet preserved by parser (stores only function name, not full path)"]
 fn test_meta_function_with_full_path() {
     roundtrip("function example::somethingElse(input: Integer[1]): Any[0..1]\n{\n  [1, $input]->meta::pure::functions::math::max()\n}\n");
 }
@@ -687,7 +685,6 @@ fn test_default_value_class_property() {
 }
 
 #[test]
-#[ignore = "Enum member access (EnumType.Value) rendered as EnumType().Value — parser treats bare type as zero-arg call"]
 fn test_default_value_enum() {
     roundtrip("Class test::A\n{\n  enumProperty: test::EnumWithDefault[1] = test::EnumWithDefault.DefaultValue;\n}\n");
 }
@@ -702,7 +699,6 @@ fn test_default_value_collection() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "Multiple issues: instanceOf(String) → instanceOf(String()), string escape roundtrip differences"]
 fn test_complex_class() {
     roundtrip("Class 'A-Z'\n[\n  constraint1: $this.ok->toOne() == 1,\n  constraint2: if($this.ok == 'ok', |true, |false),\n  'constraint-3': $this.anyValue->instanceOf(String) || $this.anyValue->instanceOf(AEnum)\n]\n{\n  name: String[45..*];\n  ok: Integer[1..2];\n  anyValue: Any[1];\n  'maybe or maybe not!': Boolean[1];\n  xza(s: String[1]) {$s + 'ok\\n{\"\"}\\'\\''}: String[1];\n  'I\\'m derived'('#String': String[1]) {$s + 'ok\\n{\"\"}\\'\\''}: String[1];\n}\n\nEnum AEnum\n{\n  B\n}\n");
 }

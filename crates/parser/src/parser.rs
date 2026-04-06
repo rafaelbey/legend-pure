@@ -31,13 +31,14 @@ use legend_pure_parser_ast::expression::{
     ArithmeticExpr, ArithmeticOp, ArrowFunction, BooleanLiteral, CollectionExpr, ComparisonExpr,
     ComparisonOp, DateTimeLiteral, DecimalLiteral, Expression, FloatLiteral, FunctionApplication,
     IntegerLiteral, KeyValuePair, Lambda, LetExpr, Literal, LogicalExpr, LogicalOp, MemberAccess,
-    NewInstanceExpr, NotExpr, QualifiedMemberAccess, SimpleMemberAccess, StrictDateLiteral,
-    StrictTimeLiteral, StringLiteral, TypeReferenceExpr, UnaryMinusExpr, Variable,
+    NewInstanceExpr, NotExpr, PackageableElementRef, QualifiedMemberAccess, SimpleMemberAccess,
+    StrictDateLiteral, StrictTimeLiteral, StringLiteral, TypeReferenceExpr, UnaryMinusExpr,
+    Variable,
 };
 use legend_pure_parser_ast::section::{ImportStatement, Section, SourceFile};
 use legend_pure_parser_ast::source_info::SourceInfo;
 use legend_pure_parser_ast::type_ref::{
-    Multiplicity, Package, TypeReference, TypeVariableValue,
+    Multiplicity, Package, TypeReference, TypeSpec, TypeVariableValue, UnitReference,
 };
 use legend_pure_parser_lexer::TokenKind;
 use smol_str::SmolStr;
@@ -518,7 +519,7 @@ impl Parser {
             } else {
                 // Regular property: name: Type[mult];
                 self.cursor.expect(TokenKind::Colon)?;
-                let type_ref = self.parse_type_reference()?;
+                let type_ref = self.parse_type_spec()?;
                 self.cursor.expect(TokenKind::LBracket)?;
                 let multiplicity = self.parse_multiplicity()?;
                 self.cursor.expect(TokenKind::RBracket)?;
@@ -599,7 +600,7 @@ impl Parser {
         let body = self.parse_expression_list()?;
         self.cursor.expect(TokenKind::RBrace)?;
         self.cursor.expect(TokenKind::Colon)?;
-        let return_type = self.parse_type_reference()?;
+        let return_type = self.parse_type_spec()?;
         self.cursor.expect(TokenKind::LBracket)?;
         let return_multiplicity = self.parse_multiplicity()?;
         self.cursor.expect(TokenKind::RBracket)?;
@@ -706,7 +707,7 @@ impl Parser {
         }
         self.cursor.expect(TokenKind::RParen)?;
         self.cursor.expect(TokenKind::Colon)?;
-        let return_type = self.parse_type_reference()?;
+        let return_type = self.parse_type_spec()?;
         self.cursor.expect(TokenKind::LBracket)?;
         let return_multiplicity = self.parse_multiplicity()?;
         self.cursor.expect(TokenKind::RBracket)?;
@@ -788,17 +789,8 @@ impl Parser {
 
     fn parse_type_reference(&mut self) -> R<TypeReference> {
         let start = self.cursor.current_source_info();
-        let mut path = self.parse_package_path()?;
-        // Handle Measure~Unit syntax: NewMeasure~UnitOne
-        if self.cursor.eat(TokenKind::Tilde) {
-            let (unit_name, unit_si) = self.cursor.expect_identifier_or_keyword()?;
-            let combined = SmolStr::new(format!("{}~{}", path.name(), unit_name));
-            path = if let Some(parent) = path.parent().cloned() {
-                parent.child(combined, unit_si)
-            } else {
-                Package::root(combined, unit_si)
-            };
-        }
+        let path = self.parse_package_path()?;
+        let (pkg, name) = split_package_name(&path);
         let type_arguments = if self.cursor.eat(TokenKind::Less) {
             let mut args = Vec::new();
             if self.cursor.check(TokenKind::LParen) {
@@ -831,11 +823,32 @@ impl Parser {
             vec![]
         };
         Ok(TypeReference {
-            path,
+            package: pkg,
+            name,
             type_arguments,
             type_variable_values,
             source_info: start,
         })
+    }
+
+    /// Parses a type specification that can be either a type or a unit reference.
+    ///
+    /// Used in positions where the Pure grammar accepts both:
+    /// - Regular types: `String`, `Map<K, V>`
+    /// - Unit references: `NewMeasure~UnitOne`
+    fn parse_type_spec(&mut self) -> R<TypeSpec> {
+        let type_ref = self.parse_type_reference()?;
+        if self.cursor.eat(TokenKind::Tilde) {
+            let si = self.cursor.current_source_info();
+            let (unit_name, _) = self.cursor.expect_identifier_or_keyword()?;
+            Ok(TypeSpec::Unit(UnitReference {
+                measure: type_ref,
+                unit: unit_name,
+                source_info: si,
+            }))
+        } else {
+            Ok(TypeSpec::Type(type_ref))
+        }
     }
 
     /// Parse column specification: (a:Integer, b:String)
@@ -850,7 +863,8 @@ impl Parser {
             self.cursor.expect(TokenKind::Colon)?;
             let col_type = self.parse_type_reference()?;
             cols.push(TypeReference {
-                path: Package::root(col_name, col_si.clone()),
+                package: None,
+                name: col_name,
                 type_arguments: vec![col_type],
                 type_variable_values: vec![],
                 source_info: col_si,
@@ -1059,14 +1073,19 @@ impl Parser {
             if self.cursor.check(TokenKind::Arrow) {
                 let si = self.cursor.current_source_info();
                 self.cursor.advance();
-                let (func_name, _) = self.cursor.expect_identifier_or_keyword()?;
-                // Check for path sep (fully qualified)
-                let mut path = Package::root(func_name, si.clone());
+                let (func_name, func_si) = self.cursor.expect_identifier_or_keyword()?;
+                // Build fully qualified path for the function
+                let mut path = Package::root(func_name, func_si);
                 while self.cursor.eat(TokenKind::PathSep) {
                     let (seg, seg_si) = self.cursor.expect_identifier_or_keyword()?;
                     path = path.child(seg, seg_si);
                 }
-                let func_name = SmolStr::new(path.name());
+                let (pkg, name) = split_package_name(&path);
+                let func = PackageableElementPtr {
+                    package: pkg,
+                    name,
+                    source_info: si.clone(),
+                };
                 self.cursor.expect(TokenKind::LParen)?;
                 let mut args = Vec::new();
                 while !self.cursor.check(TokenKind::RParen) {
@@ -1076,7 +1095,7 @@ impl Parser {
                 self.cursor.expect(TokenKind::RParen)?;
                 expr = Expression::ArrowFunction(ArrowFunction {
                     target: Box::new(expr),
-                    function: func_name,
+                    function: func,
                     arguments: args,
                     source_info: si,
                 });
@@ -1279,7 +1298,7 @@ impl Parser {
                 self.cursor.advance();
                 let expr = self.parse_expression()?;
                 self.cursor.expect(TokenKind::RParen)?;
-                Ok(expr)
+                Ok(Expression::Group(Box::new(expr)))
             }
             // Lambda or block: {x | body}, {| body}, {x: String[1], y | body}, or {expr; expr}
             TokenKind::LBrace => {
@@ -1352,15 +1371,15 @@ impl Parser {
                         source_info: si,
                     }))
                 } else {
+                    // Bare element reference (no parens): String, my::Enum, MyClass
                     let (pkg, name) = split_package_name(&path);
-                    let func = PackageableElementPtr {
+                    let element = PackageableElementPtr {
                         package: pkg,
                         name,
                         source_info: si.clone(),
                     };
-                    Ok(Expression::FunctionApplication(FunctionApplication {
-                        function: func,
-                        arguments: vec![],
+                    Ok(Expression::PackageableElementRef(PackageableElementRef {
+                        element,
                         source_info: si,
                     }))
                 }
@@ -1670,7 +1689,11 @@ impl Parser {
                 multiplicity: None,
                 source_info: si.clone(),
             })),
-            function: func_name,
+            function: PackageableElementPtr {
+                package: None,
+                name: func_name,
+                source_info: si.clone(),
+            },
             arguments: args,
             source_info: si,
         }))
@@ -1685,8 +1708,30 @@ fn split_package_name(pkg: &Package) -> (Option<Package>, SmolStr) {
 }
 
 fn unquote_string(s: &str) -> String {
-    let inner = &s[1..s.len() - 1]; // strip quotes
-    inner.replace("\\'", "'").replace("\\\\", "\\")
+    let inner = &s[1..s.len() - 1]; // strip surrounding quotes
+    let mut result = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            #[allow(clippy::match_same_arms)] // Semantically distinct escapes
+            match chars.next() {
+                Some('\'') => result.push('\''),
+                Some('\\') => result.push('\\'),
+                Some('n') => result.push('\n'),
+                Some('t') => result.push('\t'),
+                Some('r') => result.push('\r'),
+                Some(other) => {
+                    // Unrecognized escape — preserve verbatim
+                    result.push('\\');
+                    result.push(other);
+                }
+                None => result.push('\\'), // trailing backslash
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 fn is_wildcard_ahead(cursor: &Cursor) -> bool {

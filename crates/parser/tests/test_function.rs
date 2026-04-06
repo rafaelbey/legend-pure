@@ -19,14 +19,12 @@ mod helpers;
 use helpers::{corpus, parse_ok};
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn basic_with_body() {
     let file = parse_ok(&corpus("function_basic.pure"));
     insta::assert_debug_snapshot!(file);
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn date_return_types() {
     let file = parse_ok(
         r"###Pure
@@ -44,7 +42,6 @@ function my::getDateTime(): DateTime[1]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn overloading() {
     let file = parse_ok(
         r"###Pure
@@ -62,7 +59,6 @@ function my::add(a: Integer[1], b: Integer[1]): Integer[1]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn with_new_instance() {
     let file = parse_ok(
         r"###Pure
@@ -75,7 +71,6 @@ function my::create(): Any[1]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn quoted_params_and_vars() {
     let file = parse_ok(
         r"###Pure
@@ -89,7 +84,6 @@ function my::func('1,2,3': Integer[3]): Integer[1]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn full_path_meta_execution() {
     let file = parse_ok(
         r"###Pure
@@ -102,14 +96,12 @@ function my::test(): Number[1]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn function_tests() {
     let file = parse_ok(&corpus("function_tests.pure"));
     insta::assert_debug_snapshot!(file);
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn derived_multiple_statements() {
     let file = parse_ok(
         r"###Pure
@@ -126,7 +118,6 @@ Class my::WithDerived
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn with_annotations_and_import() {
     let file = parse_ok(
         r"###Pure
@@ -140,7 +131,6 @@ function <<doc.deprecated>> {doc.description = 'Old func'} my::oldFunc(): String
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn multi_if_expressions() {
     let file = parse_ok(
         r"###Pure

@@ -12,19 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Type reference composer — renders `TypeReference` as Pure grammar text.
+//! Type reference and type spec composer — renders type information as Pure grammar text.
 //!
-//! Handles generic type arguments (`<T>`) and type variable values (`(200)`).
+//! Handles:
+//! - Type references: `String`, `Map<K, V>`, `VARCHAR(200)`
+//! - Unit references: `NewMeasure~UnitOne`
+//! - Type specs (either of the above)
 
-use legend_pure_parser_ast::type_ref::{TypeReference, TypeVariableValue};
+use legend_pure_parser_ast::type_ref::{TypeReference, TypeSpec, TypeVariableValue, UnitReference};
 
 use crate::expression::compose_package;
-use crate::identifier::escape_pure_string;
+use crate::identifier::{escape_pure_string, maybe_quote};
 use crate::writer::IndentWriter;
 
-/// Composes a type reference as `Path<TypeArgs>(TypeVarValues)`.
+/// Composes a type reference as `pkg::Name<TypeArgs>(TypeVarValues)`.
 pub fn compose_type_reference(w: &mut IndentWriter, tr: &TypeReference) {
-    compose_package(w, &tr.path);
+    if let Some(pkg) = &tr.package {
+        compose_package(w, pkg);
+        w.write("::");
+    }
+    w.write(&maybe_quote(&tr.name));
 
     if !tr.type_arguments.is_empty() {
         w.write("<");
@@ -56,4 +63,17 @@ pub fn compose_type_reference(w: &mut IndentWriter, tr: &TypeReference) {
     }
 }
 
+/// Composes a unit reference as `Measure~Unit`.
+pub fn compose_unit_reference(w: &mut IndentWriter, ur: &UnitReference) {
+    compose_type_reference(w, &ur.measure);
+    w.write("~");
+    w.write(&maybe_quote(&ur.unit));
+}
 
+/// Composes a type spec (either a type or unit reference).
+pub fn compose_type_spec(w: &mut IndentWriter, ts: &TypeSpec) {
+    match ts {
+        TypeSpec::Type(tr) => compose_type_reference(w, tr),
+        TypeSpec::Unit(ur) => compose_unit_reference(w, ur),
+    }
+}

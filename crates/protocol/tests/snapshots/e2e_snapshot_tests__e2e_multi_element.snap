@@ -145,10 +145,10 @@ expression: json
             "rawType": {
               "fullPath": "model::Person",
               "sourceInformation": {
-                "endColumn": 44,
+                "endColumn": 36,
                 "endLine": 28,
                 "sourceId": "multi_element.pure",
-                "startColumn": 39,
+                "startColumn": 32,
                 "startLine": 28
               }
             },

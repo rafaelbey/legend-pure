@@ -163,7 +163,7 @@ pub fn convert_generic_type(
     gt: &v1::generic_type::GenericType,
 ) -> Result<ast::type_ref::TypeReference> {
     let si = source_info_or_synthetic(gt.source_information.as_ref());
-    let path = parse_path(&gt.raw_type.full_path)?;
+    let (package, name) = parse_qualified_path(&gt.raw_type.full_path)?;
     let type_arguments: std::result::Result<Vec<_>, _> = gt
         .type_arguments
         .iter()
@@ -171,7 +171,8 @@ pub fn convert_generic_type(
         .collect();
 
     Ok(ast::type_ref::TypeReference {
-        path,
+        package,
+        name,
         type_arguments: type_arguments?,
         type_variable_values: vec![], // Simplified — type variable values rarely roundtrip
         source_info: si,
@@ -244,7 +245,7 @@ pub fn convert_property(p: &v1::property::Property) -> Result<ast::element::Prop
 
     Ok(ast::element::Property {
         name: SmolStr::new(&p.name),
-        type_ref: convert_generic_type(&p.generic_type)?,
+        type_ref: ast::type_ref::TypeSpec::Type(convert_generic_type(&p.generic_type)?),
         multiplicity: (&p.multiplicity).into(),
         aggregation: p.aggregation.map(|ak| match ak {
             v1::property::AggregationKind::NONE => ast::element::AggregationKind::None,
@@ -285,7 +286,7 @@ pub fn convert_qualified_property(
     Ok(ast::element::QualifiedProperty {
         name: SmolStr::new(&qp.name),
         parameters: parameters?,
-        return_type: convert_generic_type(&qp.return_generic_type)?,
+        return_type: ast::type_ref::TypeSpec::Type(convert_generic_type(&qp.return_generic_type)?),
         return_multiplicity: (&qp.return_multiplicity).into(),
         body: body?,
         stereotypes: stereotypes?,
@@ -481,8 +482,10 @@ pub fn convert_value_spec_to_expression(
         }
         ValueSpecification::PackageableElementPtr(p) => {
             let si = source_info_or_synthetic(p.source_information.as_ref());
+            let (package, name) = parse_qualified_path(&p.full_path)?;
             let type_ref = ast::type_ref::TypeReference {
-                path: parse_path(&p.full_path)?,
+                package,
+                name,
                 type_arguments: vec![],
                 type_variable_values: vec![],
                 source_info: si.clone(),
@@ -738,9 +741,10 @@ fn convert_class(c: &v1::element::ProtocolClass) -> Result<ast::element::ClassDe
         .super_types
         .iter()
         .map(|s| -> Result<ast::type_ref::TypeReference> {
-            let path = parse_path(s)?;
+            let (package, name) = parse_qualified_path(s)?;
             Ok(ast::type_ref::TypeReference {
-                path,
+                package,
+                name,
                 type_arguments: vec![],
                 type_variable_values: vec![],
                 source_info: si.clone(),
@@ -832,7 +836,7 @@ fn convert_function(f: &v1::element::ProtocolFunction) -> Result<ast::element::F
         package,
         name: SmolStr::new(&f.name),
         parameters: parameters?,
-        return_type: convert_generic_type(&f.return_generic_type)?,
+        return_type: ast::type_ref::TypeSpec::Type(convert_generic_type(&f.return_generic_type)?),
         return_multiplicity: (&f.return_multiplicity).into(),
         body: body?,
         stereotypes: stereotypes?,

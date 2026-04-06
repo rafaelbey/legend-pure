@@ -44,4 +44,6 @@ pub(crate) mod test_utils;
 pub use legend_pure_parser_ast_derive::{Annotated, PackageableElement, Spanned};
 pub use section::{ImportStatement, Section, SourceFile};
 pub use source_info::SourceInfo;
-pub use type_ref::{HasMultiplicity, Identifier, Multiplicity, Package, TypeReference};
+pub use type_ref::{
+    HasMultiplicity, Identifier, Multiplicity, Package, TypeReference, TypeSpec, UnitReference,
+};

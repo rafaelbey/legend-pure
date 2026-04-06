@@ -19,7 +19,6 @@ mod helpers;
 use helpers::parse_ok;
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn decimal() {
     let file = parse_ok(
         r"###Pure
@@ -33,7 +32,6 @@ function my::test(): Any[*]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn string() {
     let file = parse_ok(
         r"###Pure
@@ -47,7 +45,6 @@ function my::test(): Any[*]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn integer() {
     let file = parse_ok(
         r"###Pure
@@ -61,7 +58,6 @@ function my::test(): Any[*]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn boolean() {
     let file = parse_ok(
         r"###Pure
@@ -75,7 +71,6 @@ function my::test(): Any[*]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn mixed() {
     let file = parse_ok(
         r"###Pure

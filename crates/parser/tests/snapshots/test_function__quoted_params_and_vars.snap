@@ -29,17 +29,8 @@ SourceFile {
                                 name: "'1,2,3'",
                                 type_ref: Some(
                                     TypeReference {
-                                        path: Package {
-                                            name: "Integer",
-                                            parent: None,
-                                            source_info: SourceInfo {
-                                                source: "test.pure",
-                                                start_line: 2,
-                                                start_column: 28,
-                                                end_line: 2,
-                                                end_column: 34,
-                                            },
-                                        },
+                                        package: None,
+                                        name: "Integer",
                                         type_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
@@ -68,10 +59,12 @@ SourceFile {
                                 },
                             },
                         ],
-                        return_type: TypeReference {
-                            path: Package {
+                        return_type: Type(
+                            TypeReference {
+                                package: None,
                                 name: "Integer",
-                                parent: None,
+                                type_arguments: [],
+                                type_variable_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",
                                     start_line: 2,
@@ -80,16 +73,7 @@ SourceFile {
                                     end_column: 47,
                                 },
                             },
-                            type_arguments: [],
-                            type_variable_values: [],
-                            source_info: SourceInfo {
-                                source: "test.pure",
-                                start_line: 2,
-                                start_column: 41,
-                                end_line: 2,
-                                end_column: 47,
-                            },
-                        },
+                        ),
                         return_multiplicity: PureOne,
                         body: [
                             Let(
@@ -174,7 +158,17 @@ SourceFile {
                                             },
                                         },
                                     ),
-                                    function: "at",
+                                    function: PackageableElementPtr {
+                                        package: None,
+                                        name: "at",
+                                        source_info: SourceInfo {
+                                            source: "test.pure",
+                                            start_line: 5,
+                                            start_column: 13,
+                                            end_line: 5,
+                                            end_column: 14,
+                                        },
+                                    },
                                     arguments: [
                                         Literal(
                                             Integer(

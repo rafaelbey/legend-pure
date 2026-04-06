@@ -19,7 +19,6 @@ mod helpers;
 use helpers::parse_ok;
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn basic_with_qualifier() {
     let file = parse_ok(
         r"###Pure
@@ -43,7 +42,6 @@ function my::test(): Any[*]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn subtype_at_root() {
     let file = parse_ok(
         r"###Pure
@@ -65,7 +63,6 @@ function my::test(): Any[*]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn subtype_with_alias() {
     let file = parse_ok(
         r"###Pure
@@ -87,7 +84,6 @@ function my::test(): Any[*]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn subtype_not_at_root_error() {
     // SubType depth validation is a semantic concern, not a parser concern.
     // The parser accepts syntactically valid ->subType at any depth;

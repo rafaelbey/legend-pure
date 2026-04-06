@@ -19,21 +19,18 @@ mod helpers;
 use helpers::{corpus, parse_ok};
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn basic() {
     let file = parse_ok(&corpus("class_basic.pure"));
     insta::assert_debug_snapshot!(file);
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn complex_constraints() {
     let file = parse_ok(&corpus("class_constraints.pure"));
     insta::assert_debug_snapshot!(file);
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn aggregation_kinds() {
     let file = parse_ok(
         r"###Pure
@@ -48,7 +45,6 @@ Class my::AggTest
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn multiple_annotations() {
     let file = parse_ok(
         r"###Pure
@@ -61,7 +57,6 @@ Class <<temporal.businesstemporal, temporal.processingtemporal>> {doc.descriptio
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn quoted_annotations() {
     let file = parse_ok(
         r"###Pure
@@ -73,7 +68,6 @@ Class <<'my profile'.'my stereo'>> my::QuotedClass
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn escaped_tagged_values() {
     let file = parse_ok(
         r"###Pure
@@ -85,7 +79,6 @@ Class {doc.description = 'test1\'s'} my::EscapedClass
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn quoted_package() {
     let file = parse_ok(
         r"###Pure
@@ -97,7 +90,6 @@ Class test::'p a c k a g e'::A
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn with_import() {
     let file = parse_ok(
         r"###Pure
@@ -110,7 +102,6 @@ Class my::ImportedClass
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn unit_properties() {
     let file = parse_ok(
         r"###Pure
@@ -123,21 +114,18 @@ Class my::WithUnit
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn default_values() {
     let file = parse_ok(&corpus("class_default_values.pure"));
     insta::assert_debug_snapshot!(file);
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn sourceinfo_validation() {
     let file = parse_ok("###Pure\nClass my::Foo\n{\n    name: String[1];\n}\n");
     insta::assert_debug_snapshot!(file);
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn type_parameters() {
     let file = parse_ok(
         r"###Pure

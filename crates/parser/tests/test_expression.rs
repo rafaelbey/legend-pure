@@ -19,7 +19,6 @@ mod helpers;
 use helpers::parse_ok;
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn arithmetic_precedence() {
     let file = parse_ok(
         r"###Pure
@@ -33,7 +32,6 @@ function my::test(): Integer[1]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn boolean_precedence() {
     let file = parse_ok(
         r"###Pure
@@ -47,7 +45,6 @@ function my::test(): Boolean[1]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn comparison_with_arithmetic() {
     let file = parse_ok(
         r"###Pure
@@ -60,7 +57,6 @@ function my::test(): Boolean[1]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn or_with_arithmetic() {
     let file = parse_ok(
         r"###Pure
@@ -73,7 +69,6 @@ function my::validate(this: my::Validated[1]): Boolean[1]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn cast() {
     let file = parse_ok(
         r"###Pure
@@ -86,7 +81,6 @@ function my::test(x: Any[1]): Float[1]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn collection_with_function() {
     let file = parse_ok(
         r"###Pure
@@ -99,7 +93,6 @@ function my::test(): Boolean[1]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn new_instance_nested() {
     let file = parse_ok(
         r"###Pure
@@ -112,7 +105,6 @@ function my::test(): Any[1]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn let_binding() {
     let file = parse_ok(
         r"###Pure
@@ -126,7 +118,6 @@ function my::test(): String[1]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn lambda_variants() {
     let file = parse_ok(
         r"###Pure
@@ -139,7 +130,6 @@ function my::test(): Any[*]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn enum_value_access() {
     let file = parse_ok(
         r"###Pure

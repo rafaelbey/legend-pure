@@ -46,10 +46,12 @@ SourceFile {
                         ),
                         name: "oldFunc",
                         parameters: [],
-                        return_type: TypeReference {
-                            path: Package {
+                        return_type: Type(
+                            TypeReference {
+                                package: None,
                                 name: "String",
-                                parent: None,
+                                type_arguments: [],
+                                type_variable_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",
                                     start_line: 3,
@@ -58,16 +60,7 @@ SourceFile {
                                     end_column: 80,
                                 },
                             },
-                            type_arguments: [],
-                            type_variable_values: [],
-                            source_info: SourceInfo {
-                                source: "test.pure",
-                                start_line: 3,
-                                start_column: 75,
-                                end_line: 3,
-                                end_column: 80,
-                            },
-                        },
+                        ),
                         return_multiplicity: PureOne,
                         body: [
                             Literal(

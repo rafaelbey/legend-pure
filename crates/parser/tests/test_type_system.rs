@@ -19,7 +19,6 @@ mod helpers;
 use helpers::parse_ok;
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn type_arguments() {
     let file = parse_ok(
         r"###Pure
@@ -32,7 +31,6 @@ function my::test(r: Result<String>[1]): Result<String>[1]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn cast_with_relation() {
     let file = parse_ok(
         r"###Pure
@@ -45,7 +43,6 @@ function my::test(x: Any[1]): Any[1]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn type_variable_values() {
     let file = parse_ok(
         r"###Pure
@@ -58,7 +55,6 @@ function my::test(r: Res(1)[1], v: VARCHAR(200)[1]): Res(1)[1]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn generics_and_variables() {
     let file = parse_ok(
         r"###Pure
@@ -71,7 +67,6 @@ function my::test(r: Res<String>(1, 'a')[1]): Res<String>(1, 'a')[1]
 }
 
 #[test]
-#[ignore = "parser not yet implemented"]
 fn relation_column_types() {
     let file = parse_ok(
         r"###Pure

@@ -29,10 +29,22 @@ SourceFile {
                         properties: [
                             Property {
                                 name: "weight",
-                                type_ref: TypeReference {
-                                    path: Package {
-                                        name: "NewMeasure~UnitOne",
-                                        parent: None,
+                                type_ref: Unit(
+                                    UnitReference {
+                                        measure: TypeReference {
+                                            package: None,
+                                            name: "NewMeasure",
+                                            type_arguments: [],
+                                            type_variable_values: [],
+                                            source_info: SourceInfo {
+                                                source: "test.pure",
+                                                start_line: 4,
+                                                start_column: 13,
+                                                end_line: 4,
+                                                end_column: 22,
+                                            },
+                                        },
+                                        unit: "UnitOne",
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 4,
@@ -41,16 +53,7 @@ SourceFile {
                                             end_column: 30,
                                         },
                                     },
-                                    type_arguments: [],
-                                    type_variable_values: [],
-                                    source_info: SourceInfo {
-                                        source: "test.pure",
-                                        start_line: 4,
-                                        start_column: 13,
-                                        end_line: 4,
-                                        end_column: 22,
-                                    },
-                                },
+                                ),
                                 multiplicity: ZeroOrOne,
                                 aggregation: None,
                                 default_value: None,

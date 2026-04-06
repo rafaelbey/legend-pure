@@ -27,10 +27,9 @@ SourceFile {
                         properties: [
                             Property {
                                 name: "left",
-                                type_ref: TypeReference {
-                                    path: Package {
-                                        name: "A",
-                                        parent: Some(
+                                type_ref: Type(
+                                    TypeReference {
+                                        package: Some(
                                             Package {
                                                 name: "model",
                                                 parent: None,
@@ -43,24 +42,18 @@ SourceFile {
                                                 },
                                             },
                                         ),
+                                        name: "A",
+                                        type_arguments: [],
+                                        type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 4,
-                                            start_column: 27,
+                                            start_column: 20,
                                             end_line: 4,
-                                            end_column: 27,
+                                            end_column: 24,
                                         },
                                     },
-                                    type_arguments: [],
-                                    type_variable_values: [],
-                                    source_info: SourceInfo {
-                                        source: "test.pure",
-                                        start_line: 4,
-                                        start_column: 20,
-                                        end_line: 4,
-                                        end_column: 24,
-                                    },
-                                },
+                                ),
                                 multiplicity: ZeroOrMany,
                                 aggregation: Some(
                                     Shared,
@@ -78,10 +71,9 @@ SourceFile {
                             },
                             Property {
                                 name: "right",
-                                type_ref: TypeReference {
-                                    path: Package {
-                                        name: "B",
-                                        parent: Some(
+                                type_ref: Type(
+                                    TypeReference {
+                                        package: Some(
                                             Package {
                                                 name: "model",
                                                 parent: None,
@@ -94,24 +86,18 @@ SourceFile {
                                                 },
                                             },
                                         ),
+                                        name: "B",
+                                        type_arguments: [],
+                                        type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 5,
-                                            start_column: 26,
+                                            start_column: 19,
                                             end_line: 5,
-                                            end_column: 26,
+                                            end_column: 23,
                                         },
                                     },
-                                    type_arguments: [],
-                                    type_variable_values: [],
-                                    source_info: SourceInfo {
-                                        source: "test.pure",
-                                        start_line: 5,
-                                        start_column: 19,
-                                        end_line: 5,
-                                        end_column: 23,
-                                    },
-                                },
+                                ),
                                 multiplicity: ZeroOrMany,
                                 aggregation: Some(
                                     None,
