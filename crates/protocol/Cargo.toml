@@ -18,6 +18,7 @@ description = "Protocol v1 JSON model and bidirectional AST conversion for the L
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 legend-pure-parser-ast = { path = "../ast" }
@@ -30,4 +31,3 @@ tracing = { workspace = true }
 [dev-dependencies]
 insta = { workspace = true, features = ["json"] }
 legend-pure-parser-parser = { path = "../parser" }
-serde_json = { workspace = true }

@@ -18,6 +18,7 @@ description = "CLI for the Legend ecosystem — parse, compile, test, and publis
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "legend"
@@ -42,6 +43,7 @@ serde_json = { workspace = true }
 # Diagnostics & output
 miette = { workspace = true }
 owo-colors = { workspace = true }
+thiserror = { workspace = true }
 
 # File discovery
 walkdir = { workspace = true }

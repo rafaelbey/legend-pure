@@ -16,13 +16,13 @@
 
 mod helpers;
 
-use helpers::{parse_err, parse_ok};
+use helpers::parse_ok;
 
 #[test]
 #[ignore = "parser not yet implemented"]
 fn basic_with_qualifier() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::test(): Any[*]
 {
     my::Person.all()->graphFetch(
@@ -37,7 +37,7 @@ function my::test(): Any[*]
             }
         }#
     )
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -46,7 +46,7 @@ function my::test(): Any[*]
 #[ignore = "parser not yet implemented"]
 fn subtype_at_root() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::test(): Any[*]
 {
     my::Firm.all()->graphFetch(
@@ -59,7 +59,7 @@ function my::test(): Any[*]
             }
         }#
     )
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -68,7 +68,7 @@ function my::test(): Any[*]
 #[ignore = "parser not yet implemented"]
 fn subtype_with_alias() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::test(): Any[*]
 {
     my::Firm.all()->graphFetch(
@@ -81,7 +81,7 @@ function my::test(): Any[*]
             }
         }#
     )
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -93,7 +93,7 @@ fn subtype_not_at_root_error() {
     // The parser accepts syntactically valid ->subType at any depth;
     // the semantic layer validates graph fetch tree structural rules.
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::test(): Any[*]
 {
     my::Firm.all()->graphFetch(
@@ -107,7 +107,7 @@ function my::test(): Any[*]
             }
         }#
     )
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }

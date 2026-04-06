@@ -18,11 +18,12 @@ description = "Derive macros for the Legend Pure parser AST"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [lib]
 proc-macro = true
 
 [dependencies]
-syn = "2"
-quote = "1"
-proc-macro2 = "1"
+syn = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }

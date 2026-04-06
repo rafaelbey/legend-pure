@@ -22,12 +22,12 @@ use helpers::parse_ok;
 #[ignore = "parser not yet implemented"]
 fn basic() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Association model::Person_Firm
 {
     employee: model::Person[*];
     employer: model::Firm[*];
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -36,12 +36,12 @@ Association model::Person_Firm
 #[ignore = "parser not yet implemented"]
 fn aggregation_kinds() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Association model::SharedAssoc
 {
     (shared) left: model::A[*];
     (none) right: model::B[*];
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -50,13 +50,13 @@ Association model::SharedAssoc
 #[ignore = "parser not yet implemented"]
 fn with_annotations_and_import() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 import model::*;
 Association <<doc.deprecated>> {doc.description = 'Legacy'} model::OldAssoc
 {
     left: A[1];
     right: B[1];
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }

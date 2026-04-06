@@ -22,12 +22,12 @@ use helpers::parse_ok;
 #[ignore = "parser not yet implemented"]
 fn decimal() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::test(): Any[*]
 {
     1.0D;
     [1.0D, 3.0D]
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -36,12 +36,12 @@ function my::test(): Any[*]
 #[ignore = "parser not yet implemented"]
 fn string() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::test(): Any[*]
 {
     'ok';
     ['ok', 'bla']
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -50,12 +50,12 @@ function my::test(): Any[*]
 #[ignore = "parser not yet implemented"]
 fn integer() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::test(): Any[*]
 {
     1;
     [1, 2]
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -64,12 +64,12 @@ function my::test(): Any[*]
 #[ignore = "parser not yet implemented"]
 fn boolean() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::test(): Any[*]
 {
     true;
     [true, false, true]
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -78,11 +78,11 @@ function my::test(): Any[*]
 #[ignore = "parser not yet implemented"]
 fn mixed() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::test(): Any[*]
 {
     [1, 'a', true]
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }

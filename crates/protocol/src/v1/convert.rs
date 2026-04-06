@@ -840,7 +840,7 @@ mod tests {
     #[test]
     fn test_multiplicity_conversion() {
         let pure_one: v1::multiplicity::Multiplicity =
-            (&ast::Multiplicity::pure_one()).into();
+            (&ast::Multiplicity::one()).into();
         assert_eq!(pure_one, v1::multiplicity::Multiplicity::PURE_ONE);
 
         let zero_many: v1::multiplicity::Multiplicity =
@@ -848,7 +848,7 @@ mod tests {
         assert_eq!(zero_many, v1::multiplicity::Multiplicity::ZERO_MANY);
 
         let zero_one: v1::multiplicity::Multiplicity =
-            (&ast::Multiplicity::one()).into();
+            (&ast::Multiplicity::zero_or_one()).into();
         assert_eq!(zero_one, v1::multiplicity::Multiplicity::ZERO_ONE);
     }
 

@@ -40,13 +40,8 @@ use crate::discovery;
 /// Arguments for the `legend parse` command.
 #[derive(clap::Args)]
 pub struct ParseArgs {
-    /// Input `.pure` file(s) to parse.
-    #[arg(required_unless_present = "dir")]
-    files: Vec<PathBuf>,
-
-    /// Parse all `.pure` files in a directory (recursive).
-    #[arg(long, value_name = "PATH")]
-    dir: Option<PathBuf>,
+    /// Input `.pure` file(s) or directory to parse.
+    pub paths: Vec<PathBuf>,
 
     /// Write output to a file instead of stdout.
     #[arg(short, long, value_name = "FILE")]
@@ -68,7 +63,7 @@ pub struct ParseArgs {
 /// Execute the `legend parse` command.
 #[allow(clippy::needless_pass_by_value)] // clap convention: Args are passed by value
 pub fn run(args: ParseArgs) -> Result<(), CliError> {
-    let files = resolve_input_files(&args)?;
+    let files = discovery::resolve_paths(&args.paths)?;
 
     if files.is_empty() {
         return Err(CliError::NoFilesFound);
@@ -89,9 +84,7 @@ pub fn run(args: ParseArgs) -> Result<(), CliError> {
             source: e,
         })?;
 
-        let file_name = path
-            .file_name()
-            .map_or_else(|| "<unknown>".to_string(), |n| n.to_string_lossy().to_string());
+        let file_name = discovery::file_name(path);
 
         match legend_pure_parser_parser::parse(&source, &file_name) {
             Ok(source_file) => {
@@ -159,19 +152,4 @@ pub fn run(args: ParseArgs) -> Result<(), CliError> {
     }
 
     Ok(())
-}
-
-/// Resolves input files from either explicit paths or directory walking.
-fn resolve_input_files(args: &ParseArgs) -> Result<Vec<PathBuf>, CliError> {
-    if let Some(ref dir) = args.dir {
-        discovery::find_pure_files(dir)
-    } else {
-        // Validate that all provided files exist
-        for path in &args.files {
-            if !path.exists() {
-                return Err(CliError::FileNotFound(path.clone()));
-            }
-        }
-        Ok(args.files.clone())
-    }
 }

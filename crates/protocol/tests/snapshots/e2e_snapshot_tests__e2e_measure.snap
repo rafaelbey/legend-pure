@@ -14,10 +14,10 @@ expression: json
               "name": "x",
               "sourceInformation": {
                 "endColumn": 18,
-                "endLine": 4,
+                "endLine": 19,
                 "sourceId": "measure.pure",
                 "startColumn": 18,
-                "startLine": 4
+                "startLine": 19
               }
             }
           ],
@@ -28,20 +28,20 @@ expression: json
           ],
           "sourceInformation": {
             "endColumn": 10,
-            "endLine": 4,
+            "endLine": 19,
             "sourceId": "measure.pure",
             "startColumn": 6,
-            "startLine": 4
+            "startLine": 19
           }
         },
         "name": "pkg::Distance~Meter",
         "package": "pkg",
         "sourceInformation": {
           "endColumn": 10,
-          "endLine": 4,
+          "endLine": 19,
           "sourceId": "measure.pure",
           "startColumn": 6,
-          "startLine": 4
+          "startLine": 19
         },
         "superTypes": [
           "pkg::Distance"
@@ -61,30 +61,30 @@ expression: json
                     "name": "x",
                     "sourceInformation": {
                       "endColumn": 21,
-                      "endLine": 5,
+                      "endLine": 20,
                       "sourceId": "measure.pure",
                       "startColumn": 21,
-                      "startLine": 5
+                      "startLine": 20
                     }
                   },
                   {
                     "_type": "integer",
                     "sourceInformation": {
                       "endColumn": 29,
-                      "endLine": 5,
+                      "endLine": 20,
                       "sourceId": "measure.pure",
                       "startColumn": 26,
-                      "startLine": 5
+                      "startLine": 20
                     },
                     "value": 1000
                   }
                 ],
                 "sourceInformation": {
                   "endColumn": 24,
-                  "endLine": 5,
+                  "endLine": 20,
                   "sourceId": "measure.pure",
                   "startColumn": 24,
-                  "startLine": 5
+                  "startLine": 20
                 }
               }
             ],
@@ -95,20 +95,20 @@ expression: json
             ],
             "sourceInformation": {
               "endColumn": 13,
-              "endLine": 5,
+              "endLine": 20,
               "sourceId": "measure.pure",
               "startColumn": 5,
-              "startLine": 5
+              "startLine": 20
             }
           },
           "name": "pkg::Distance~Kilometer",
           "package": "pkg",
           "sourceInformation": {
             "endColumn": 13,
-            "endLine": 5,
+            "endLine": 20,
             "sourceId": "measure.pure",
             "startColumn": 5,
-            "startLine": 5
+            "startLine": 20
           },
           "superTypes": [
             "pkg::Distance"
@@ -118,10 +118,10 @@ expression: json
       "package": "pkg",
       "sourceInformation": {
         "endColumn": 7,
-        "endLine": 2,
+        "endLine": 17,
         "sourceId": "measure.pure",
         "startColumn": 1,
-        "startLine": 2
+        "startLine": 17
       }
     },
     {
@@ -137,19 +137,19 @@ expression: json
           "parserName": "Pure",
           "sourceInformation": {
             "endColumn": 7,
-            "endLine": 1,
+            "endLine": 16,
             "sourceId": "measure.pure",
             "startColumn": 1,
-            "startLine": 1
+            "startLine": 16
           }
         }
       ],
       "sourceInformation": {
         "endColumn": 7,
-        "endLine": 1,
+        "endLine": 16,
         "sourceId": "measure.pure",
         "startColumn": 1,
-        "startLine": 1
+        "startLine": 16
       }
     }
   ],

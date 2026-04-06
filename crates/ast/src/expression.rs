@@ -700,9 +700,7 @@ mod tests {
     use crate::type_ref::Package;
     use smol_str::SmolStr;
 
-    fn src() -> SourceInfo {
-        SourceInfo::new("test.pure", 1, 1, 1, 20)
-    }
+    use crate::test_utils::src;
 
     fn elem_ptr(name: &str) -> PackageableElementPtr {
         PackageableElementPtr {
@@ -867,7 +865,7 @@ mod tests {
                     type_variable_values: vec![],
                     source_info: src(),
                 }),
-                multiplicity: Some(Multiplicity::pure_one()),
+                multiplicity: Some(Multiplicity::one()),
                 source_info: src(),
             }],
             body: vec![Expression::Variable(Variable {

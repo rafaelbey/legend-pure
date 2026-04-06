@@ -508,9 +508,7 @@ mod tests {
     use crate::annotation::PackageableElementPtr;
     use smol_str::SmolStr;
 
-    fn src() -> SourceInfo {
-        SourceInfo::new("test.pure", 1, 1, 1, 20)
-    }
+    use crate::test_utils::src;
 
     #[test]
     fn test_profile_def() {
@@ -578,7 +576,7 @@ mod tests {
                     type_variable_values: vec![],
                     source_info: src(),
                 },
-                multiplicity: Multiplicity::pure_one(),
+                multiplicity: Multiplicity::one(),
                 aggregation: None,
                 default_value: None,
                 stereotypes: vec![],

@@ -29,12 +29,12 @@ fn convertible() {
 #[ignore = "parser not yet implemented"]
 fn non_convertible() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Measure pkg::NonConvertible
 {
     UnitOne;
     UnitTwo;
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -43,12 +43,12 @@ Measure pkg::NonConvertible
 #[ignore = "parser not yet implemented"]
 fn quoted() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Measure pkg::'some measure'
 {
     *'Unit One': x -> $x;
     'Unit Two': x -> $x * 1000;
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -57,7 +57,7 @@ Measure pkg::'some measure'
 #[ignore = "parser not yet implemented"]
 fn class_with_unit_properties() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Measure pkg::NewMeasure
 {
     *UnitOne: x -> $x;
@@ -67,7 +67,7 @@ Measure pkg::NewMeasure
 Class pkg::WithUnitProp
 {
     weight: NewMeasure~UnitOne[0..1];
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }

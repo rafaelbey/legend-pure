@@ -12,12 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Shared test utilities for AST tests.
+//!
+//! This module provides common helper functions used across multiple
+//! test modules in the `ast` crate to avoid duplication.
 
-###Pure
+use crate::SourceInfo;
 
-// ERROR: Missing closing brace on class body
-Class model::errors::MissingBrace
-{
-  name: String[1];
-  age: Integer[1];
-
+/// Creates a dummy [`SourceInfo`] for use in unit tests.
+///
+/// Returns a source location pointing to `test.pure:1:1-1:20`.
+#[must_use]
+pub fn src() -> SourceInfo {
+    SourceInfo::new("test.pure", 1, 1, 1, 20)
+}

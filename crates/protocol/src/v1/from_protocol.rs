@@ -1077,7 +1077,7 @@ mod tests {
 
     #[test]
     fn test_multiplicity_roundtrip() {
-        let ast_m = ast::Multiplicity::pure_one();
+        let ast_m = ast::Multiplicity::one();
         let proto: v1::multiplicity::Multiplicity = (&ast_m).into();
         let back: ast::Multiplicity = (&proto).into();
         assert_eq!(back.lower(), 1);

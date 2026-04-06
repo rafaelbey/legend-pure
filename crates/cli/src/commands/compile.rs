@@ -84,9 +84,7 @@ pub fn run(args: CompileArgs) -> Result<(), CliError> {
             source: e,
         })?;
 
-        let file_name = path
-            .file_name()
-            .map_or_else(|| "<unknown>".to_string(), |n| n.to_string_lossy().to_string());
+        let file_name = discovery::file_name(path);
 
         match legend_pure_parser_parser::parse(&source, &file_name) {
             Ok(sf) => {

@@ -55,6 +55,11 @@ linkme = "0.3"
 # Testing
 insta = { version = "1", features = ["json"] }
 
+# Proc-macro (ast-derive)
+syn = "2"
+quote = "1"
+proc-macro2 = "1"
+
 # CLI
 clap = { version = "4", features = ["derive", "color"] }
 clap_complete = "4"

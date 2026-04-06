@@ -22,13 +22,13 @@ use helpers::parse_ok;
 #[ignore = "parser not yet implemented"]
 fn basic_with_annotations() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Enum <<meta::pure::profiles::doc.deprecated>> {meta::pure::profiles::doc.doc = 'An enum'} my::Color
 {
     <<meta::pure::profiles::doc.deprecated>> RED,
     GREEN,
     BLUE
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -37,11 +37,11 @@ Enum <<meta::pure::profiles::doc.deprecated>> {meta::pure::profiles::doc.doc = '
 #[ignore = "parser not yet implemented"]
 fn quoted_names() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Enum '@'::'my Enum'
 {
     'Anything e'
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -50,13 +50,13 @@ Enum '@'::'my Enum'
 #[ignore = "parser not yet implemented"]
 fn numeric_names() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Enum my::DayCountConvention
 {
     '30_360',
     '30_ACT',
     ACT_365
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }

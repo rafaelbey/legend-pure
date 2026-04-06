@@ -18,6 +18,7 @@ description = "AST types for the Legend Pure grammar parser"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 smol_str = { workspace = true }

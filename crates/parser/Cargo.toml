@@ -18,6 +18,7 @@ description = "Recursive descent parser for the Legend Pure grammar"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 legend-pure-parser-ast = { path = "../ast" }
@@ -27,5 +28,4 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-legend-pure-parser-ast = { path = "../ast" }
 insta = { workspace = true }

@@ -18,6 +18,7 @@ description = "AST to Pure grammar text composer for the Legend Pure parser"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 legend-pure-parser-ast = { path = "../ast" }

@@ -79,6 +79,15 @@ pub fn resolve_paths(paths: &[PathBuf]) -> Result<Vec<PathBuf>, CliError> {
     Ok(files)
 }
 
+/// Extracts the file name from a path as a string.
+///
+/// Falls back to `"<unknown>"` if the path has no file name component.
+/// This is used as the `source_id` when parsing `.pure` files.
+pub fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map_or_else(|| "<unknown>".to_string(), |n| n.to_string_lossy().to_string())
+}
+
 /// Checks if a path should be ignored.
 ///
 /// Currently uses a hardcoded set of patterns. In the future, this will

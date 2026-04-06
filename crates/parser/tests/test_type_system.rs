@@ -22,11 +22,11 @@ use helpers::parse_ok;
 #[ignore = "parser not yet implemented"]
 fn type_arguments() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::test(r: Result<String>[1]): Result<String>[1]
 {
     $r
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -35,11 +35,11 @@ function my::test(r: Result<String>[1]): Result<String>[1]
 #[ignore = "parser not yet implemented"]
 fn cast_with_relation() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::test(x: Any[1]): Any[1]
 {
     $x->cast(@Relation<(a:Integer)>)
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -48,11 +48,11 @@ function my::test(x: Any[1]): Any[1]
 #[ignore = "parser not yet implemented"]
 fn type_variable_values() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::test(r: Res(1)[1], v: VARCHAR(200)[1]): Res(1)[1]
 {
     $r
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -61,11 +61,11 @@ function my::test(r: Res(1)[1], v: VARCHAR(200)[1]): Res(1)[1]
 #[ignore = "parser not yet implemented"]
 fn generics_and_variables() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::test(r: Res<String>(1, 'a')[1]): Res<String>(1, 'a')[1]
 {
     $r
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -74,11 +74,11 @@ function my::test(r: Res<String>(1, 'a')[1]): Res<String>(1, 'a')[1]
 #[ignore = "parser not yet implemented"]
 fn relation_column_types() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::test(r: X<(a:Integer(200), z:V('ok'))>[1]): X<(a:Integer(200), z:V('ok'))>[1]
 {
     $r
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }

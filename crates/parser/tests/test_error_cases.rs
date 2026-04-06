@@ -25,10 +25,10 @@ use helpers::{parse_err, parse_ok};
 #[ignore = "parser not yet implemented"]
 fn unexpected_token() {
     parse_err(
-        r#"###Pure
+        r"###Pure
 asd Class my::Foo
 {
-}"#,
+}",
         "Unexpected token",
     );
 }
@@ -39,10 +39,10 @@ fn reserved_keywords() {
     // In the Java Pure grammar, keywords like 'false' can appear in path segments.
     // This test verifies the parser accepts them (matching Java engine behavior).
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Class false::me
 {
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -51,11 +51,11 @@ Class false::me
 #[ignore = "parser not yet implemented"]
 fn invalid_aggregation_kind() {
     parse_err(
-        r#"###Pure
+        r"###Pure
 Class my::Foo
 {
     (tunnel) prop: String[1];
-}"#,
+}",
         "aggregation",
     );
 }
@@ -67,14 +67,14 @@ fn function_test_name_mismatch() {
     // The parser accepts syntactically valid test blocks; the semantic layer
     // will validate that the invocation matches the owning function.
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::hello(): String[1]
 {
     'Hello'
 }
 {
     myTest | goodbye() => 'Hello';
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
