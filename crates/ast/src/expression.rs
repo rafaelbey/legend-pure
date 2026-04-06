@@ -331,17 +331,21 @@ pub struct LogicalExpr {
 }
 
 /// Bitwise operator.
+///
+/// Uses F#-style triple operators to avoid ambiguity with existing Pure
+/// syntax: `|` (lambda pipe), `^` (new instance), `<<`/`>>` (stereotypes),
+/// and `&&`/`||` (logical AND/OR).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BitwiseOp {
-    /// `&`
+    /// `&&&`
     And,
-    /// `|`
+    /// `|||`
     Or,
-    /// `^`
+    /// `^^^`
     Xor,
-    /// `<<`
+    /// `<<<`
     ShiftLeft,
-    /// `>>`
+    /// `>>>`
     ShiftRight,
 }
 
