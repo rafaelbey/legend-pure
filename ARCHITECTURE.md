@@ -7,6 +7,7 @@ flowchart TD
     AST["ast<br/><i>Layer 0: Data model</i>"]
     LEX["lexer<br/><i>Layer 1: Tokenizer</i>"]
     PAR["parser<br/><i>Layer 2: Recursive descent</i>"]
+    COM["compose<br/><i>Layer 2b: AST → grammar text</i>"]
     PRO["protocol<br/><i>Layer 3: AST ↔ JSON</i>"]
     JNI["jni<br/><i>Layer 4a: Java FFI</i>"]
     CLI["cli<br/><i>Layer 4b: Developer CLI</i>"]
@@ -15,7 +16,9 @@ flowchart TD
     LEX --> AST
     PAR --> AST
     PAR --> LEX
+    COM --> AST
     PRO --> AST
+    PRO --> COM
     PURE --> AST
     PURE --> PAR
     JNI --> AST
@@ -27,9 +30,11 @@ flowchart TD
     CLI --> LEX
     CLI --> PAR
     CLI --> PRO
+    CLI --> COM
 
     style PURE fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
     style CLI fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    style COM fill:#fff3e0,stroke:#f57c00,stroke-width:2px
 ```
 
 ## Key Traits
@@ -75,10 +80,20 @@ Tokens:    [Class, Ident("model"), PathSep, Ident("Person"),
   ↓ Parser
 
 AST:       Element::Class(ClassDef {
-             package: ["model"],
+             package: Some(Package { name: "model", parent: None }),
              name: "Person",
-             properties: [Property { name: "name", type: String, mult: [1] }],
+             properties: [Property {
+               name: "name",
+               type_ref: TypeSpec::Type(TypeReference {
+                 package: None, name: "String", ...
+               }),
+               multiplicity: PureOne,
+             }],
            })
+
+  ↓ Compose
+
+Text:      "Class model::Person\n{\n  name: String[1];\n}\n"
 
   ↓ Protocol
 
