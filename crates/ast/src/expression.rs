@@ -380,7 +380,7 @@ pub struct UnaryMinusExpr {
     pub source_info: SourceInfo,
 }
 
-/// Bitwise complement: `~expr`.
+/// Bitwise complement: `~~~expr`.
 #[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct BitwiseNotExpr {
     /// The operand.

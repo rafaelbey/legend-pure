@@ -130,17 +130,17 @@ pub enum TokenKind {
     Less,
     /// `<=`
     LessEqual,
-    /// `<<`
+    /// `<<` (stereotype open — use `<<<` for bitwise shift left)
     LessLess,
     /// `>`
     Greater,
     /// `>=`
     GreaterEqual,
-    /// `>>`
+    /// `>>` (stereotype close — use `>>>` for bitwise shift right)
     GreaterGreater,
-    /// `&&`
+    /// `&&` (logical AND — use `&&&` for bitwise AND)
     AmpAmp,
-    /// `||`
+    /// `||` (logical OR — use `|||` for bitwise OR)
     PipePipe,
     /// `&&&` (bitwise AND, F#-style)
     AmpAmpAmp,
