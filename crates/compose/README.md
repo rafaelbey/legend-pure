@@ -31,43 +31,59 @@ src/
 ├── lib.rs          # Public API + compose_from_protocol(), compose_from_json()
 ├── writer.rs       # IndentWriter — manages 2-space canonical indentation
 ├── identifier.rs   # Quoting logic: [a-zA-Z_][a-zA-Z0-9_]* → unquoted, else 'quoted'
-├── type_ref.rs     # TypeReference → "Path<Args>(VarVals)"
-├── expression.rs   # All 17 expression variants + operator precedence
+├── type_ref.rs     # TypeReference, UnitReference, TypeSpec → grammar text
+├── expression.rs   # All 19 expression variants + operator precedence + Group
 ├── element.rs      # All 6 element types (Class, Enum, Function, Profile, Association, Measure)
 └── section.rs      # SourceFile → full grammar text (entry point)
 ```
 
+## Type Rendering
+
+The composer handles three type constructs via dedicated functions:
+
+| Function | Input | Output |
+|----------|-------|--------|
+| `compose_type_reference` | `TypeReference` | `pkg::Name<Args>` |
+| `compose_unit_reference` | `UnitReference` | `Measure~Unit` |
+| `compose_type_spec` | `TypeSpec` | Dispatches to either |
+
+Super types use `compose_type_reference` directly (always plain types).
+Property types and return types use `compose_type_spec` (may be units).
+
+## Body Composition
+
+The `compose_body` function handles expression list rendering with a `terminate_last`
+parameter:
+
+| Context | `terminate_last` | Behavior |
+|---------|-------------------|----------|
+| Function body | `false` | Last expression has no `;` (implicit return) |
+| Qualified property body | `true` | ALL expressions get `;` (statement terminators) |
+
 ## Design Decisions
+
+### Source Parenthesis Preservation
+
+`Expression::Group` preserves explicit parentheses from the original source. The
+composer emits `(...)` for Group nodes, ensuring faithful roundtripping of expressions
+like `(8 / 4) * 2` even when the parentheses are semantically redundant.
 
 ### Canonical Formatting (Current)
 
-The composer currently produces **deterministic, canonically formatted** output with
-2-space indentation, matching the Java `PureGrammarComposer`. It does not attempt to
-preserve original source formatting.
+The composer produces **deterministic, canonically formatted** output with 2-space
+indentation, matching the Java `PureGrammarComposer`. It does not attempt to preserve
+original source formatting.
 
-### Source-Info-Aware Formatting (Planned)
+### String Escaping
 
-The AST carries `SourceInfo` on every node, which contains the original line/column
-offsets from parsing. The composer should use this to reproduce the user's original
-formatting (indentation, spacing, line breaks) when source info is available.
-
-When source info is **absent** — as happens with protocol→AST conversion, where nodes
-are constructed programmatically — the composer falls back to canonical 2-space
-indentation.
-
-This enables two modes:
-- **Parse → compose**: Faithful reproduction of the user's original `.pure` files
-- **Protocol → compose**: Clean canonical formatting for machine-generated AST
-
-Key design questions still open:
-- At what granularity do we use source info? (element-level, property-level, expression-level)
-- Does `IndentWriter` need a mode switch, or do we need a separate formatting strategy?
-- How do we handle partially-present source info (e.g., element has source info but its child expressions don't)?
+The composer's `escape_pure_string` re-escapes strings for Pure single-quoted literals.
+The parser's `unquote_string` handles the inverse, supporting all escape sequences:
+`\'`, `\\`, `\n`, `\t`, `\r`.
 
 ### Operator Precedence
 
 The composer implements a 6-level precedence model to emit minimal-but-correct
-parentheses:
+parentheses for expressions that are NOT wrapped in `Group`:
 
 | Level | Operators |
 |-------|-----------|
@@ -112,22 +128,10 @@ Graph fetch trees (`#{Type{field1, field2{sub}}}#`) are represented as
 function calls rather than the `#{...}#` syntax. This needs dedicated handling
 once the AST has proper graph fetch types.
 
-### Untested Areas
-
-The following are implemented but lack roundtrip test coverage:
-
-- Complex constraints (`~externalId`, `~enforcementLevel`, `~message`)
-- Function tests (data bindings, assertions)
-- Aggregation kinds (`(shared)`, `(composite)`) on properties
-- Date/time literals (`%2024-01-01`, `%2024-01-01T12:00:00`)
-- Decimal literals (`1.5D`)
-- Type variable values (`VARCHAR(200)`)
-- Arithmetic precedence edge cases (`1 - (2 - 3)`)
-
 ## Testing
 
 ```bash
-# Run all tests (96 total: 5 unit + 91 roundtrip passing, 7 roundtrip ignored)
+# Run all tests (98 roundtrip + unit tests, 0 ignored)
 cargo test -p legend-pure-parser-compose
 
 # Run with clippy
