@@ -142,16 +142,28 @@ pub enum TokenKind {
     AmpAmp,
     /// `||`
     PipePipe,
+    /// `&&&` (bitwise AND, F#-style)
+    AmpAmpAmp,
+    /// `|||` (bitwise OR, F#-style)
+    PipePipePipe,
+    /// `^^^` (bitwise XOR, F#-style)
+    CaretCaretCaret,
+    /// `<<<` (bitwise shift left, F#-style)
+    LessLessLess,
+    /// `>>>` (bitwise shift right, F#-style)
+    GreaterGreaterGreater,
     /// `!`
     Bang,
-    /// `&`
+    /// `&` (reserved — use `&&&` for bitwise AND)
     Amp,
-    /// `|`
+    /// `|` (lambda pipe)
     Pipe,
-    /// `^`
+    /// `^` (new instance prefix)
     Caret,
-    /// `~`
+    /// `~` (column builder prefix, Measure~Unit)
     Tilde,
+    /// `~~~` (bitwise NOT, F#-style — reserved for future use)
+    TildeTildeTilde,
 
     // -- Special operators --
     /// `->`
@@ -257,11 +269,17 @@ impl TokenKind {
             TokenKind::GreaterGreater => "'>>'",
             TokenKind::AmpAmp => "'&&'",
             TokenKind::PipePipe => "'||'",
+            TokenKind::AmpAmpAmp => "'&&&'",
+            TokenKind::PipePipePipe => "'|||'",
+            TokenKind::CaretCaretCaret => "'^^^'",
+            TokenKind::LessLessLess => "'<<<'",
+            TokenKind::GreaterGreaterGreater => "'>>>'",
             TokenKind::Bang => "'!'",
             TokenKind::Amp => "'&'",
             TokenKind::Pipe => "'|'",
             TokenKind::Caret => "'^'",
             TokenKind::Tilde => "'~'",
+            TokenKind::TildeTildeTilde => "'~~~'",
             TokenKind::Arrow => "'->'",
             TokenKind::FatArrow => "'=>'",
             TokenKind::PathSep => "'::'",

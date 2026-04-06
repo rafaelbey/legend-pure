@@ -253,6 +253,11 @@ impl<'a> Lexer<'a> {
             '.' => TokenKind::Dot,
             '@' => TokenKind::At,
             '$' => TokenKind::Dollar,
+            '~' if self.peek() == Some('~') && self.peek_at(1) == Some('~') => {
+                self.advance();
+                self.advance();
+                TokenKind::TildeTildeTilde
+            }
             '~' => TokenKind::Tilde,
             '+' => TokenKind::Plus,
             '*' => TokenKind::Star,
@@ -289,7 +294,12 @@ impl<'a> Lexer<'a> {
             }
             '!' => TokenKind::Bang,
 
-            // -- < or <= or << --
+            // -- < or <= or << or <<< --
+            '<' if self.peek() == Some('<') && self.peek_at(1) == Some('<') => {
+                self.advance();
+                self.advance();
+                TokenKind::LessLessLess
+            }
             '<' if self.peek() == Some('=') => {
                 self.advance();
                 TokenKind::LessEqual
@@ -300,7 +310,12 @@ impl<'a> Lexer<'a> {
             }
             '<' => TokenKind::Less,
 
-            // -- > or >= or >> --
+            // -- > or >= or >> or >>> --
+            '>' if self.peek() == Some('>') && self.peek_at(1) == Some('>') => {
+                self.advance();
+                self.advance();
+                TokenKind::GreaterGreaterGreater
+            }
             '>' if self.peek() == Some('=') => {
                 self.advance();
                 TokenKind::GreaterEqual
@@ -311,21 +326,36 @@ impl<'a> Lexer<'a> {
             }
             '>' => TokenKind::Greater,
 
-            // -- & or && --
+            // -- & or && or &&& --
+            '&' if self.peek() == Some('&') && self.peek_at(1) == Some('&') => {
+                self.advance();
+                self.advance();
+                TokenKind::AmpAmpAmp
+            }
             '&' if self.peek() == Some('&') => {
                 self.advance();
                 TokenKind::AmpAmp
             }
             '&' => TokenKind::Amp,
 
-            // -- | or || --
+            // -- | or || or ||| --
+            '|' if self.peek() == Some('|') && self.peek_at(1) == Some('|') => {
+                self.advance();
+                self.advance();
+                TokenKind::PipePipePipe
+            }
             '|' if self.peek() == Some('|') => {
                 self.advance();
                 TokenKind::PipePipe
             }
             '|' => TokenKind::Pipe,
 
-            // -- ^ (caret/xor) --
+            // -- ^ or ^^^ --
+            '^' if self.peek() == Some('^') && self.peek_at(1) == Some('^') => {
+                self.advance();
+                self.advance();
+                TokenKind::CaretCaretCaret
+            }
             '^' => TokenKind::Caret,
 
             // -- / (slash, comments already handled above) --
@@ -630,6 +660,51 @@ mod tests {
                 TokenKind::FatArrow,
                 TokenKind::Eof,
             ]
+        );
+    }
+
+    #[test]
+    fn triple_char_operators() {
+        assert_eq!(
+            kinds("&&& ||| ^^^ <<< >>> ~~~"),
+            vec![
+                TokenKind::AmpAmpAmp,
+                TokenKind::PipePipePipe,
+                TokenKind::CaretCaretCaret,
+                TokenKind::LessLessLess,
+                TokenKind::GreaterGreaterGreater,
+                TokenKind::TildeTildeTilde,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn triple_vs_double_operators() {
+        // Ensure longest match wins
+        assert_eq!(
+            kinds("&&&&"),
+            vec![TokenKind::AmpAmpAmp, TokenKind::Amp, TokenKind::Eof]
+        );
+        assert_eq!(
+            kinds("||||"),
+            vec![TokenKind::PipePipePipe, TokenKind::Pipe, TokenKind::Eof]
+        );
+        assert_eq!(
+            kinds("^^^^"),
+            vec![TokenKind::CaretCaretCaret, TokenKind::Caret, TokenKind::Eof]
+        );
+        assert_eq!(
+            kinds("<<<<"),
+            vec![TokenKind::LessLessLess, TokenKind::Less, TokenKind::Eof]
+        );
+        assert_eq!(
+            kinds(">>>>"),
+            vec![TokenKind::GreaterGreaterGreater, TokenKind::Greater, TokenKind::Eof]
+        );
+        assert_eq!(
+            kinds("~~~~"),
+            vec![TokenKind::TildeTildeTilde, TokenKind::Tilde, TokenKind::Eof]
         );
     }
 
