@@ -74,14 +74,16 @@ legend check --show-source examples/errors/
 
 ```
 Checking 7 .pure file(s)...
-  ✗ examples/errors/02_missing_semicolons.pure — Expected ';', found identifier at ...:7:3
+  ✗ examples/errors/02_missing_semicolons.pure — Expected ';', found identifier at /full/path/...:7:3
+     --> /full/path/to/02_missing_semicolons.pure:7:3
       |
      6 |   name: String[1]
      7 |   age: Integer[1]
        |   ^^^ Expected ';', found identifier
      8 |   active: Boolean[1]
       |
-  ✗ examples/errors/04_unknown_keyword.pure — Unexpected token Clazz at ...:4:1
+  ✗ examples/errors/04_unknown_keyword.pure — Unexpected token Clazz at /full/path/...:4:1
+     --> /full/path/to/04_unknown_keyword.pure:4:1
       |
      3 | // ERROR: Completely unrecognized element keyword
      4 | Clazz model::errors::Typo
@@ -90,6 +92,10 @@ Checking 7 .pure file(s)...
       |
   ...
 ```
+
+The `-->` line and the error location use absolute paths — in IDE terminals
+(VS Code, IntelliJ, iTerm2), these are **clickable links** that jump
+directly to the error in your editor.
 
 Or mix valid + invalid files together:
 
@@ -102,7 +108,8 @@ Checking 12 .pure file(s)...
   ✓ examples/01_trading_model.pure (7 elements)
   ✓ examples/02_profiles.pure (4 elements)
   ...
-  ✗ examples/errors/02_missing_semicolons.pure — Expected ';', found identifier at ...:7:3
+  ✗ examples/errors/02_missing_semicolons.pure — Expected ';', found identifier at /full/path/...:7:3
+     --> /full/path/to/02_missing_semicolons.pure:7:3
       |
      6 |   name: String[1]
      7 |   age: Integer[1]

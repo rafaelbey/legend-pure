@@ -30,12 +30,13 @@ legend check --show-source examples/errors/01_missing_brace.pure
 
 ## What to notice
 
-1. **Location precision** — every error includes `file:line:column-line:column`
-2. **Expected vs found** — messages say what was expected and what was actually encountered
-3. **Source snippets** — `--show-source` renders the error line with context and `^^^` carets
-4. **Per-file reporting** — when checking a directory, valid files show ✓ and broken files show ✗
-5. **Summary** — final line reports total passed vs failed
-6. **Exit code** — exits 0 on success, 1 if any file fails (CI-friendly)
+1. **Clickable file links** — errors use absolute `path:line:col` format, auto-linked in IDE terminals (VS Code, IntelliJ, iTerm2)
+2. **Location precision** — every error pinpoints the exact line and column
+3. **Expected vs found** — messages say what was expected and what was actually encountered
+4. **Source snippets** — `--show-source` renders the error line with context, `^^^` carets, and a clickable `-->` header
+5. **Per-file reporting** — when checking a directory, valid files show ✓ and broken files show ✗
+6. **Summary** — final line reports total passed vs failed
+7. **Exit code** — exits 0 on success, 1 if any file fails (CI-friendly)
 
 ## Mix valid + error files
 
