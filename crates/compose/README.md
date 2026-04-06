@@ -127,7 +127,7 @@ The following are implemented but lack roundtrip test coverage:
 ## Testing
 
 ```bash
-# Run all tests (57 total: 5 unit + 52 roundtrip)
+# Run all tests (96 total: 5 unit + 91 roundtrip passing, 7 roundtrip ignored)
 cargo test -p legend-pure-parser-compose
 
 # Run with clippy

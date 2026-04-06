@@ -23,8 +23,15 @@
 /// An identifier needs quoting if:
 /// - It's empty
 /// - It doesn't match `[a-zA-Z_][a-zA-Z0-9_]*`
+///
+/// If the identifier is already quoted (starts and ends with `'`),
+/// it's returned as-is to avoid double-quoting.
 #[must_use]
 pub fn maybe_quote(id: &str) -> String {
+    // If already quoted by the parser, return as-is
+    if id.starts_with('\'') && id.ends_with('\'') && id.len() >= 2 {
+        return id.to_string();
+    }
     if needs_quoting(id) {
         format!("'{id}'")
     } else {
