@@ -381,3 +381,337 @@ fn test_lambda_nested() {
 fn test_lambda_multiple_args() {
     roundtrip("function f(): Any[*]\n{\n  something()->func(x|$x + 1, 'hello', y|$y * 2)\n}\n");
 }
+
+// ---------------------------------------------------------------------------
+// Quoted identifiers (from Java testPackageWithQuotedIdentifier, testQuotedEnumerations,
+// testNumbersInEnumerationName, testQuotedProfile, etc.)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_package_with_quoted_identifier() {
+    roundtrip("Class test::'p a c k a g e'::A\n{\n  's t r i n g': String[1];\n}\n");
+}
+
+#[test]
+fn test_quoted_enumerations() {
+    roundtrip("Enum <<st.test>> {doc.doc = 'bla'} '@'::'my Enum'\n{\n  'Anything e',\n  'A g',\n  'Anything r'\n}\n");
+}
+
+#[test]
+fn test_numbers_in_enumeration_name() {
+    roundtrip("Enum my::Enum\n{\n  '30_360',\n  '30_ACT'\n}\n");
+}
+
+#[test]
+fn test_quoted_profile() {
+    roundtrip("Profile meta::pure::profiles::'with quotes'\n{\n  stereotypes: ['two words'];\n  tags: ['s tag', 'another tag'];\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Multiple stereotypes & tagged values (from Java testClassWithMultipleTaggedAndStereotypes,
+// testClassWithQuotedTagsAndStereotypes, testTaggedValuesSpecialChar)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_class_with_multiple_tagged_and_stereotypes() {
+    roundtrip("Class <<temporal.businesstemporal, taggedValue.Number2>> {doc.test1 = 'up1', doc.test2 = 'up2'} meta::this::class::has::path::A extends B\n{\n  <<equality.Key, taggedValue.test>> {doc.doc = 'Borrowers date of birth'} name: e::R[*];\n  {Descriptor.descriptionA = 'test1', Descriptor.descriptionB = 'test2'} ok: Integer[1..2];\n  <<devStatus.inProgress>> q(s: String[1]) {$s + 'ok'}: c::d::R[1];\n  {doc.test1 = 'test1', doc.test2 = 'test2'} xza(s: z::k::B[1]) {$s + 'ok'}: String[1];\n}\n");
+}
+
+#[test]
+fn test_class_with_quoted_tags_and_stereotypes() {
+    roundtrip("Class <<temporal.businesstemporal, taggedValue.Number2>> {doc.test1 = 'up1', doc.test2 = 'up2'} meta::this::class::has::path::A extends B\n{\n  <<'a profile'.'1>stereo'>> {'a profile'.'2>tag' = 'Borrowers date of birth'} name: e::R[*];\n  {Descriptor.descriptionA = 'test1', Descriptor.descriptionB = 'test2'} ok: Integer[1..2];\n}\n");
+}
+
+#[test]
+fn test_tagged_values_special_char() {
+    roundtrip("Class <<temporal.businesstemporal, taggedValue.Number2>> {doc.test1 = 'test1\\'s', doc.test2 = 'm\\'s test'} meta::this::class::has::path::A\n{\n  <<equality.Key, taggedValue.test>> {doc.doc = 'uyaguari\\'s test', doc.test2 = 'm\\'s test'} name: e::R[*];\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Complex constraints (from Java testComplexConstraints, testAppliedFunctionAsParameters, etc.)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_complex_constraints() {
+    roundtrip("Class A\n[\n  c1\n  (\n    ~function: if($this.'O.K.' == 'ok', |true, |false)\n    ~enforcementLevel: Warn\n  ),\n  c2\n  (\n    ~externalId: 'ext ID'\n    ~function: if($this.'O.K.' == 'ok', |true, |false)\n  ),\n  c3\n  (\n    ~function: if($this.'O.K.' == 'ok', |true, |false)\n    ~message: $this.'O.K.' + ' is not ok'\n  ),\n  c4\n  (\n    ~externalId: 'ext ID'\n    ~function: if($this.'O.K.' == 'ok', |true, |false)\n    ~enforcementLevel: Warn\n    ~message: $this.'O.K.' + ' is not ok'\n  )\n]\n{\n  name: String[45..*];\n  'O.K.': Integer[1..2];\n  xza(s: String[1]) {$s + 'ok'}: String[1];\n}\n");
+}
+
+#[test]
+fn test_unnamed_constraints_and_empty_profile() {
+    roundtrip("Class A\n[\n  $this.ok->toOne() == 1,\n  named: if($this.ok == 'ok', |true, |false),\n  $this.ok->toOne()->toString() == $this.name\n]\n{\n  name: String[45..*];\n  ok: Integer[1..2];\n  xza(s: String[1]) {$s + 'ok'}: String[1];\n}\n\nProfile meta::pure::profiles::doc\n{\n}\n");
+}
+
+#[test]
+fn test_or_with_arithmetic_in_constraint() {
+    roundtrip("Class test::C\n[\n  $this.id->isEmpty() || $this.id >= 0\n]\n{\n  id: Integer[0..1];\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Aggregation types (from Java testClassPropertiesWithAggregationType,
+// testAssociationPropertiesWithAggregationType)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_class_properties_with_aggregation_type() {
+    roundtrip("Class my::Class\n{\n  (shared) prop1: String[1];\n  (none) prop2: String[1];\n  (composite) prop3: String[1];\n  prop4: String[1];\n}\n");
+}
+
+#[test]
+fn test_association_properties_with_aggregation_type() {
+    roundtrip("Association my::Assoc\n{\n  (shared) prop1: String[1];\n  (none) prop2: String[1];\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Enumerations with annotations (from Java testEnumerations)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_enumerations_with_annotations() {
+    roundtrip("Enum <<st.test>> {doc.doc = 'bla'} myEnum\n{\n  <<equality.Key, taggedValue.test>> {doc.doc = 'Tag Value for enum Value'} a,\n  <<equality.Key, taggedValue.test>> {doc.doc = 'Tag Value for enum Value'} b,\n  c\n}\n\nEnum <<st.test>> {doc.doc = 'bla'} zz::MyOther\n{\n  e,\n  g,\n  r\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Associations with annotations (from Java testAssociations)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_associations_with_annotations() {
+    roundtrip("Association myAsso\n{\n  a: String[1];\n  b: a::c::A[1];\n}\n\nAssociation {doc.doc = 'bla'} k::p::Asso\n{\n  a: Integer[1];\n  b: a::c::B[1];\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Measure — convertible (from Java testMeasure)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_measure_convertible() {
+    roundtrip("Measure NewMeasure\n{\n  *UnitOne: x -> $x;\n  UnitTwo: x -> $x * 1000;\n  UnitThree: x -> $x * 400;\n}\n");
+}
+
+#[test]
+fn test_quoted_measure() {
+    roundtrip("Measure 'some measure'\n{\n  *'Unit One': x -> $x;\n  'Unit Two': x -> $x * 1000;\n  'Unit Three': x -> $x * 400;\n}\n");
+}
+
+#[test]
+fn test_quoted_non_convertible_measure() {
+    roundtrip("Measure 'some measure'\n{\n  'Unit One';\n  'Unit Two';\n  'Unit Three';\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Measure units in types (from Java testClassWithUnitRelatedProperties)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "Measure~Unit type syntax not yet handled by composer (quotes the ~ as part of identifier)"]
+fn test_class_with_unit_properties() {
+    roundtrip("Class A\n{\n  unitOne: NewMeasure~UnitOne[0..1];\n  unitTwo: NewMeasure~UnitTwo[0..1];\n}\n\nMeasure NewMeasure\n{\n  *UnitOne: x -> $x;\n  UnitTwo: x -> $x * 1000;\n  UnitThree: x -> $x * 400;\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Derived properties with multiple statements (from Java)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "Multi-statement QP body indentation and trailing semicolons not yet handled by composer"]
+fn test_derived_property_with_multiple_statements() {
+    roundtrip("Class Firm\n{\n  prop1: Float[1];\n  prop3: String[1];\n  prop2() {\n    let x = 0;\n    $x;\n  }: Integer[1];\n}\n");
+}
+
+#[test]
+#[ignore = "Multi-statement QP body indentation and trailing semicolons not yet handled by composer"]
+fn test_qualified_property_with_params_and_multi_statements() {
+    roundtrip("Class Query\n{\n  allFirms(limit: Integer[1]) {\n    let offset = $limit + 10;\n    Firm.all()->slice($limit, $offset);\n  }: Firm[*];\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Math precedence edge cases (from Java testMathParenthesis3)
+// ---------------------------------------------------------------------------
+
+/// Composer emits minimal-but-correct parentheses. Semantically redundant
+/// parens (e.g., `(4 * (2 + 3))` inside `-`) are stripped.
+#[test]
+#[ignore = "Composer strips semantically-redundant parens; Java preserves original grouping"]
+fn test_math_precedence_comprehensive() {
+    roundtrip("function f(s: Integer[1], s2: Interger[2]): String[1]\n{\n  let a = 1 / (2 / 3);\n  let a = 1 * (2 * 3);\n  let a = 1 - (2 - 3);\n  let a = 1 + (2 + 3);\n  let a = (8 / 4) * 2;\n  let a = 8 / (4 * 2);\n  let a = (8 * 4) / 2;\n  let a = 8 * (4 / 2);\n  let a = (8 * 4) + 2;\n  let a = 8 * (4 + 2);\n  let a = (8 + 4) * 2;\n  let a = 8 + (4 * 2);\n  let a = (1 - (4 * (2 + 3))) * 4;\n  let a = ((1 - (4 * 2)) + 3) * 4;\n  let a = (1 - (4 * 2)) + (3 * 4);\n  let a = 1 + 4 + 2 + 3 + 4;\n  let a = (1 + 2) - (3 - 4);\n  let a = 1 + 2 <= 3 - 4;\n  let a = (8 <= 4) + 2;\n  let a = 8 + 4 <= 2;\n}\n");
+}
+
+/// Canonical form: `(1 - 4 * (2 + 3)) * 4` — inner `4 * (2+3)` doesn't need
+/// parens inside `-` since `*` binds tighter.
+#[test]
+fn test_math_parenthesis_nested() {
+    roundtrip("function f(s: Integer[1], s2: Interger[2]): String[1]\n{\n  let a = (1 - 4 * (2 + 3)) * 4\n}\n");
+}
+
+/// Canonical form strips redundant inner parens around `*` inside `+`.
+#[test]
+fn test_math_parenthesis_complex_nested() {
+    roundtrip("function f(s: Integer[1], s2: Interger[2]): String[1]\n{\n  let a = 4 + 1 * (2 + 3) * 4 + (2 + 3) * 4\n}\n");
+}
+
+/// Canonical form: `((1 - 2) / (2 + 3))` inside `*` strips outer parens.
+#[test]
+fn test_math_parenthesis_division_grouped() {
+    roundtrip("function f(s: Integer[1], s2: Interger[2]): String[1]\n{\n  let a = 4 + (1 - 2) / (2 + 3) * (1 - 4 - 5)\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// New instance (from Java testFunctionWithNewAlltypes, testFunctionWithNewAndNewValue)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_new_instance_all_types() {
+    roundtrip("Class anything::goes\n{\n  v: String[1];\n  v2: Integer[0..1];\n  v3: Boolean[*];\n}\n\nfunction f(): Any[1]\n{\n  let x = ^anything::goes(v='value' , v2=17 , v3=[true, false])\n}\n");
+}
+
+#[test]
+fn test_new_instance_nested() {
+    roundtrip("Class anything::goes\n{\n  v: String[1];\n}\n\nClass anything::goes2\n{\n  v2: anything::goes[1];\n}\n\nfunction f(): Any[1]\n{\n  let x = ^anything::goes2(v2=^anything::goes(v='value'))\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Collection with function (from Java testCollectionWithFunction)
+// ---------------------------------------------------------------------------
+
+/// Canonical form strips redundant outer parens inside collection: `(true && ...)` → `true && ...`.
+#[test]
+fn test_collection_with_function() {
+    roundtrip("function package::test(value: meta::pure::metamodel::type::Any[0..1]): Boolean[1]\n{\n  [true && (false && false), false]->oneOf()\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Cast / type reference (from Java testCast)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cast_with_type_ref() {
+    roundtrip("function abc::cast(): Float[1]\n{\n  1->cast(@Float)\n}\n");
+}
+
+#[test]
+fn test_cast_with_literal() {
+    roundtrip("function abc::cast(): Float[1]\n{\n  1->cast(1.0)\n}\n");
+}
+
+#[test]
+fn test_cast_with_string() {
+    roundtrip("function abc::cast(): String[1]\n{\n  1->cast('String')\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Function signature variants (from Java testFunction2, testDecimalWithScale)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_function_with_multiple_params() {
+    roundtrip("function f(s: Integer[1], s2: Interger[2]): String[1]\n{\n  println('ok')\n}\n");
+}
+
+/// Last expression in body drops trailing semicolon (it's used as separator, not terminator).
+#[test]
+fn test_function_with_path() {
+    roundtrip("function withPath::f(s: Integer[1]): String[1]\n{\n  println('ok');\n  'a'\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Decimal literal (from Java testDecimalWithScale, TestPrimitives.testDecimaOne)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_decimal_literal_one() {
+    roundtrip("function a::a(): Decimal[1]\n{\n  1.0D\n}\n");
+}
+
+#[test]
+fn test_decimal_literal_many() {
+    roundtrip("function a::a(): Decimal[*]\n{\n  [1.0D, 3.0D]\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Primitive literals (from Java TestPrimitives)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_string_many() {
+    roundtrip("function a::a(): String[*]\n{\n  ['ok', 'bla']\n}\n");
+}
+
+#[test]
+fn test_integer_many() {
+    roundtrip("function a::a(): String[*]\n{\n  [1, 2]\n}\n");
+}
+
+#[test]
+fn test_boolean_many() {
+    roundtrip("function a::a(): String[*]\n{\n  [true, false, true]\n}\n");
+}
+
+#[test]
+fn test_mixed_collection() {
+    roundtrip("function a::a(): String[*]\n{\n  [1, 'a', true]\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Full-path arrow function (from Java testMetaFunctionExecutionWithFullPath)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "Arrow function path not yet preserved by parser (stores only function name, not full path)"]
+fn test_meta_function_with_full_path() {
+    roundtrip("function example::somethingElse(input: Integer[1]): Any[0..1]\n{\n  [1, $input]->meta::pure::functions::math::max()\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Quoted function parameters and variables
+// (from Java testFunctionWithQuotedParameters, testFunctionWithQuotedVariables)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_function_with_quoted_parameters() {
+    roundtrip("function test::qoutedParams('1,2,3': Integer[3]): String[0..1]\n{\n  $'1,2,3'->map(n|$n->toString())->joinStrings(',')\n}\n");
+}
+
+/// Last expression drops trailing semicolon.
+#[test]
+fn test_function_with_quoted_variables() {
+    roundtrip("function test::qoutedParams(): String[0..1]\n{\n  let '1,2,3' = [1, 2, 3];\n  $'1,2,3'->map(n|$n->toString())->joinStrings(',')\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Default values — comprehensive (from Java testDefaultValue)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_default_value_class_property() {
+    roundtrip("Class test::A\n{\n  classProperty: my::exampleRootType[1] = ^my::exampleRootType();\n}\n");
+}
+
+#[test]
+#[ignore = "Enum member access (EnumType.Value) rendered as EnumType().Value — parser treats bare type as zero-arg call"]
+fn test_default_value_enum() {
+    roundtrip("Class test::A\n{\n  enumProperty: test::EnumWithDefault[1] = test::EnumWithDefault.DefaultValue;\n}\n");
+}
+
+#[test]
+fn test_default_value_collection() {
+    roundtrip("Class test::A\n{\n  collectionProperty: String[1..*] = ['one', 'two'];\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Complex class (from Java testComplexClass)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "Multiple issues: instanceOf(String) → instanceOf(String()), string escape roundtrip differences"]
+fn test_complex_class() {
+    roundtrip("Class 'A-Z'\n[\n  constraint1: $this.ok->toOne() == 1,\n  constraint2: if($this.ok == 'ok', |true, |false),\n  'constraint-3': $this.anyValue->instanceOf(String) || $this.anyValue->instanceOf(AEnum)\n]\n{\n  name: String[45..*];\n  ok: Integer[1..2];\n  anyValue: Any[1];\n  'maybe or maybe not!': Boolean[1];\n  xza(s: String[1]) {$s + 'ok\\n{\"\"}\\'\\''}: String[1];\n  'I\\'m derived'('#String': String[1]) {$s + 'ok\\n{\"\"}\\'\\''}: String[1];\n}\n\nEnum AEnum\n{\n  B\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Large mixed domain (from Java testDomainMixed)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_domain_mixed() {
+    roundtrip("Class <<temporal.businesstemporal>> {doc.doc = 'bla'} A extends B\n[\n  constraint1: $this.ok->toOne() == 1,\n  constraint2: $this.ok->toOne()->toString() == $this.name\n]\n{\n  <<equality.Key>> {doc.doc = 'bla'} name: e::R[*];\n  {doc.doc = 'bla'} ok: Integer[1..2];\n  <<devStatus.inProgress>> q(s: String[1]) {$s + 'ok'}: c::d::R[1];\n  {doc.doc = 'bla'} xza(s: z::k::B[1]) {$s + 'ok'}: String[1];\n}\n\nAssociation myAsso\n{\n  a: String[1];\n  b: a::c::A[1];\n}\n\nEnum <<st.test>> {doc.doc = 'bla'} z::k::B\n{\n  <<equality.Key, taggedValue.test>> {doc.doc = 'Tag Value for enum Value'} a,\n  b,\n  c\n}\n\nProfile meta::pure::profiles::doc\n{\n  stereotypes: [deprecated];\n  tags: [doc, todo];\n}\n\nProfile meta::pure::profiles::profile2\n{\n  tags: [doc, todo];\n}\n");
+}
