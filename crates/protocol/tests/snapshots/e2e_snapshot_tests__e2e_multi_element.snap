@@ -15,18 +15,18 @@ expression: json
               "fullPath": "String",
               "sourceInformation": {
                 "endColumn": 16,
-                "endLine": 4,
+                "endLine": 19,
                 "sourceId": "multi_element.pure",
                 "startColumn": 11,
-                "startLine": 4
+                "startLine": 19
               }
             },
             "sourceInformation": {
               "endColumn": 16,
-              "endLine": 4,
+              "endLine": 19,
               "sourceId": "multi_element.pure",
               "startColumn": 11,
-              "startLine": 4
+              "startLine": 19
             }
           },
           "multiplicity": {
@@ -36,19 +36,19 @@ expression: json
           "name": "name",
           "sourceInformation": {
             "endColumn": 8,
-            "endLine": 4,
+            "endLine": 19,
             "sourceId": "multi_element.pure",
             "startColumn": 5,
-            "startLine": 4
+            "startLine": 19
           }
         }
       ],
       "sourceInformation": {
         "endColumn": 5,
-        "endLine": 2,
+        "endLine": 17,
         "sourceId": "multi_element.pure",
         "startColumn": 1,
-        "startLine": 2
+        "startLine": 17
       }
     },
     {
@@ -57,29 +57,29 @@ expression: json
       "package": "model",
       "sourceInformation": {
         "endColumn": 4,
-        "endLine": 7,
+        "endLine": 22,
         "sourceId": "multi_element.pure",
         "startColumn": 1,
-        "startLine": 7
+        "startLine": 22
       },
       "values": [
         {
           "sourceInformation": {
             "endColumn": 10,
-            "endLine": 9,
+            "endLine": 24,
             "sourceId": "multi_element.pure",
             "startColumn": 5,
-            "startLine": 9
+            "startLine": 24
           },
           "value": "ACTIVE"
         },
         {
           "sourceInformation": {
             "endColumn": 12,
-            "endLine": 10,
+            "endLine": 25,
             "sourceId": "multi_element.pure",
             "startColumn": 5,
-            "startLine": 10
+            "startLine": 25
           },
           "value": "INACTIVE"
         }
@@ -96,10 +96,10 @@ expression: json
               "_type": "string",
               "sourceInformation": {
                 "endColumn": 12,
-                "endLine": 15,
+                "endLine": 30,
                 "sourceId": "multi_element.pure",
                 "startColumn": 5,
-                "startLine": 15
+                "startLine": 30
               },
               "value": "Hello "
             },
@@ -111,29 +111,29 @@ expression: json
                   "name": "p",
                   "sourceInformation": {
                     "endColumn": 16,
-                    "endLine": 15,
+                    "endLine": 30,
                     "sourceId": "multi_element.pure",
                     "startColumn": 16,
-                    "startLine": 15
+                    "startLine": 30
                   }
                 }
               ],
               "property": "name",
               "sourceInformation": {
                 "endColumn": 18,
-                "endLine": 15,
+                "endLine": 30,
                 "sourceId": "multi_element.pure",
                 "startColumn": 18,
-                "startLine": 15
+                "startLine": 30
               }
             }
           ],
           "sourceInformation": {
             "endColumn": 14,
-            "endLine": 15,
+            "endLine": 30,
             "sourceId": "multi_element.pure",
             "startColumn": 14,
-            "startLine": 15
+            "startLine": 30
           }
         }
       ],
@@ -146,18 +146,18 @@ expression: json
               "fullPath": "model::Person",
               "sourceInformation": {
                 "endColumn": 44,
-                "endLine": 13,
+                "endLine": 28,
                 "sourceId": "multi_element.pure",
                 "startColumn": 39,
-                "startLine": 13
+                "startLine": 28
               }
             },
             "sourceInformation": {
               "endColumn": 36,
-              "endLine": 13,
+              "endLine": 28,
               "sourceId": "multi_element.pure",
               "startColumn": 32,
-              "startLine": 13
+              "startLine": 28
             }
           },
           "multiplicity": {
@@ -167,10 +167,10 @@ expression: json
           "name": "p",
           "sourceInformation": {
             "endColumn": 29,
-            "endLine": 13,
+            "endLine": 28,
             "sourceId": "multi_element.pure",
             "startColumn": 29,
-            "startLine": 13
+            "startLine": 28
           }
         }
       ],
@@ -179,18 +179,18 @@ expression: json
           "fullPath": "String",
           "sourceInformation": {
             "endColumn": 56,
-            "endLine": 13,
+            "endLine": 28,
             "sourceId": "multi_element.pure",
             "startColumn": 51,
-            "startLine": 13
+            "startLine": 28
           }
         },
         "sourceInformation": {
           "endColumn": 56,
-          "endLine": 13,
+          "endLine": 28,
           "sourceId": "multi_element.pure",
           "startColumn": 51,
-          "startLine": 13
+          "startLine": 28
         }
       },
       "returnMultiplicity": {
@@ -199,10 +199,10 @@ expression: json
       },
       "sourceInformation": {
         "endColumn": 8,
-        "endLine": 13,
+        "endLine": 28,
         "sourceId": "multi_element.pure",
         "startColumn": 1,
-        "startLine": 13
+        "startLine": 28
       }
     },
     {
@@ -220,19 +220,19 @@ expression: json
           "parserName": "Pure",
           "sourceInformation": {
             "endColumn": 7,
-            "endLine": 1,
+            "endLine": 16,
             "sourceId": "multi_element.pure",
             "startColumn": 1,
-            "startLine": 1
+            "startLine": 16
           }
         }
       ],
       "sourceInformation": {
         "endColumn": 7,
-        "endLine": 1,
+        "endLine": 16,
         "sourceId": "multi_element.pure",
         "startColumn": 1,
-        "startLine": 1
+        "startLine": 16
       }
     }
   ],

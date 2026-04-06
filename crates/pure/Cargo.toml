@@ -18,6 +18,7 @@ description = "Pure Semantic Layer — the compiled PureModel graph for the Lege
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 legend-pure-parser-ast = { path = "../ast" }

@@ -10,39 +10,39 @@ expression: json
       "package": "model",
       "sourceInformation": {
         "endColumn": 4,
-        "endLine": 2,
+        "endLine": 17,
         "sourceId": "enumeration.pure",
         "startColumn": 1,
-        "startLine": 2
+        "startLine": 17
       },
       "values": [
         {
           "sourceInformation": {
             "endColumn": 7,
-            "endLine": 4,
+            "endLine": 19,
             "sourceId": "enumeration.pure",
             "startColumn": 5,
-            "startLine": 4
+            "startLine": 19
           },
           "value": "RED"
         },
         {
           "sourceInformation": {
             "endColumn": 9,
-            "endLine": 5,
+            "endLine": 20,
             "sourceId": "enumeration.pure",
             "startColumn": 5,
-            "startLine": 5
+            "startLine": 20
           },
           "value": "GREEN"
         },
         {
           "sourceInformation": {
             "endColumn": 8,
-            "endLine": 6,
+            "endLine": 21,
             "sourceId": "enumeration.pure",
             "startColumn": 5,
-            "startLine": 6
+            "startLine": 21
           },
           "value": "BLUE"
         }
@@ -61,19 +61,19 @@ expression: json
           "parserName": "Pure",
           "sourceInformation": {
             "endColumn": 7,
-            "endLine": 1,
+            "endLine": 16,
             "sourceId": "enumeration.pure",
             "startColumn": 1,
-            "startLine": 1
+            "startLine": 16
           }
         }
       ],
       "sourceInformation": {
         "endColumn": 7,
-        "endLine": 1,
+        "endLine": 16,
         "sourceId": "enumeration.pure",
         "startColumn": 1,
-        "startLine": 1
+        "startLine": 16
       }
     }
   ],

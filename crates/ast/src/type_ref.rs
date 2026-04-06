@@ -171,14 +171,13 @@ impl Spanned for Package {
 /// ```
 /// use legend_pure_parser_ast::type_ref::{Multiplicity, HasMultiplicity};
 ///
-/// let one = Multiplicity::one();
-/// assert_eq!(one.lower(), 0);
-/// assert_eq!(one.upper(), Some(1));
-///
-/// // Wait - [1] means exactly one, not zero-to-one
-/// let exactly_one = Multiplicity::pure_one();
+/// let exactly_one = Multiplicity::one();
 /// assert_eq!(exactly_one.lower(), 1);
 /// assert_eq!(exactly_one.upper(), Some(1));
+///
+/// let optional = Multiplicity::zero_or_one();
+/// assert_eq!(optional.lower(), 0);
+/// assert_eq!(optional.upper(), Some(1));
 ///
 /// let many = Multiplicity::zero_or_many();
 /// assert_eq!(many.lower(), 0);
@@ -229,13 +228,13 @@ pub trait HasMultiplicity {
 impl Multiplicity {
     /// Creates `[1]` — exactly one.
     #[must_use]
-    pub fn pure_one() -> Self {
+    pub fn one() -> Self {
         Self::PureOne
     }
 
     /// Creates `[0..1]` — zero or one (optional).
     #[must_use]
-    pub fn one() -> Self {
+    pub fn zero_or_one() -> Self {
         Self::ZeroOrOne
     }
 
@@ -408,7 +407,7 @@ mod tests {
 
     #[test]
     fn test_multiplicity_pure_one() {
-        let m = Multiplicity::pure_one();
+        let m = Multiplicity::one();
         assert_eq!(m.lower(), 1);
         assert_eq!(m.upper(), Some(1));
         assert!(m.is_required_single());
@@ -419,7 +418,7 @@ mod tests {
 
     #[test]
     fn test_multiplicity_zero_or_one() {
-        let m = Multiplicity::one();
+        let m = Multiplicity::zero_or_one();
         assert_eq!(m.lower(), 0);
         assert_eq!(m.upper(), Some(1));
         assert!(m.is_optional());

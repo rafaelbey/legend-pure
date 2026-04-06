@@ -154,9 +154,7 @@ mod tests {
     use crate::source_info::Spanned;
     use smol_str::SmolStr;
 
-    fn src() -> SourceInfo {
-        SourceInfo::new("test.pure", 1, 1, 1, 20)
-    }
+    use crate::test_utils::src;
 
     fn profile_ref(name: &str) -> PackageableElementPtr {
         PackageableElementPtr {
@@ -230,7 +228,7 @@ mod tests {
                 type_variable_values: vec![],
                 source_info: src(),
             }),
-            multiplicity: Some(Multiplicity::pure_one()),
+            multiplicity: Some(Multiplicity::one()),
             source_info: SourceInfo::new("test.pure", 3, 5, 3, 20),
         };
         assert_eq!(param.source_info().start_line, 3);

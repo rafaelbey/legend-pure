@@ -15,18 +15,18 @@ expression: json
               "fullPath": "model::Person",
               "sourceInformation": {
                 "endColumn": 25,
-                "endLine": 4,
+                "endLine": 19,
                 "sourceId": "association.pure",
                 "startColumn": 20,
-                "startLine": 4
+                "startLine": 19
               }
             },
             "sourceInformation": {
               "endColumn": 17,
-              "endLine": 4,
+              "endLine": 19,
               "sourceId": "association.pure",
               "startColumn": 13,
-              "startLine": 4
+              "startLine": 19
             }
           },
           "multiplicity": {
@@ -36,10 +36,10 @@ expression: json
           "name": "person",
           "sourceInformation": {
             "endColumn": 10,
-            "endLine": 4,
+            "endLine": 19,
             "sourceId": "association.pure",
             "startColumn": 5,
-            "startLine": 4
+            "startLine": 19
           }
         },
         {
@@ -48,18 +48,18 @@ expression: json
               "fullPath": "model::Address",
               "sourceInformation": {
                 "endColumn": 29,
-                "endLine": 5,
+                "endLine": 20,
                 "sourceId": "association.pure",
                 "startColumn": 23,
-                "startLine": 5
+                "startLine": 20
               }
             },
             "sourceInformation": {
               "endColumn": 20,
-              "endLine": 5,
+              "endLine": 20,
               "sourceId": "association.pure",
               "startColumn": 16,
-              "startLine": 5
+              "startLine": 20
             }
           },
           "multiplicity": {
@@ -68,19 +68,19 @@ expression: json
           "name": "addresses",
           "sourceInformation": {
             "endColumn": 13,
-            "endLine": 5,
+            "endLine": 20,
             "sourceId": "association.pure",
             "startColumn": 5,
-            "startLine": 5
+            "startLine": 20
           }
         }
       ],
       "sourceInformation": {
         "endColumn": 11,
-        "endLine": 2,
+        "endLine": 17,
         "sourceId": "association.pure",
         "startColumn": 1,
-        "startLine": 2
+        "startLine": 17
       }
     },
     {
@@ -96,19 +96,19 @@ expression: json
           "parserName": "Pure",
           "sourceInformation": {
             "endColumn": 7,
-            "endLine": 1,
+            "endLine": 16,
             "sourceId": "association.pure",
             "startColumn": 1,
-            "startLine": 1
+            "startLine": 16
           }
         }
       ],
       "sourceInformation": {
         "endColumn": 7,
-        "endLine": 1,
+        "endLine": 16,
         "sourceId": "association.pure",
         "startColumn": 1,
-        "startLine": 1
+        "startLine": 16
       }
     }
   ],

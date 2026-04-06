@@ -15,18 +15,18 @@ expression: json
               "fullPath": "String",
               "sourceInformation": {
                 "endColumn": 16,
-                "endLine": 4,
+                "endLine": 19,
                 "sourceId": "class_with_annotations.pure",
                 "startColumn": 11,
-                "startLine": 4
+                "startLine": 19
               }
             },
             "sourceInformation": {
               "endColumn": 16,
-              "endLine": 4,
+              "endLine": 19,
               "sourceId": "class_with_annotations.pure",
               "startColumn": 11,
-              "startLine": 4
+              "startLine": 19
             }
           },
           "multiplicity": {
@@ -36,10 +36,10 @@ expression: json
           "name": "name",
           "sourceInformation": {
             "endColumn": 8,
-            "endLine": 4,
+            "endLine": 19,
             "sourceId": "class_with_annotations.pure",
             "startColumn": 5,
-            "startLine": 4
+            "startLine": 19
           }
         },
         {
@@ -48,18 +48,18 @@ expression: json
               "fullPath": "Integer",
               "sourceInformation": {
                 "endColumn": 16,
-                "endLine": 5,
+                "endLine": 20,
                 "sourceId": "class_with_annotations.pure",
                 "startColumn": 10,
-                "startLine": 5
+                "startLine": 20
               }
             },
             "sourceInformation": {
               "endColumn": 16,
-              "endLine": 5,
+              "endLine": 20,
               "sourceId": "class_with_annotations.pure",
               "startColumn": 10,
-              "startLine": 5
+              "startLine": 20
             }
           },
           "multiplicity": {
@@ -69,36 +69,36 @@ expression: json
           "name": "age",
           "sourceInformation": {
             "endColumn": 7,
-            "endLine": 5,
+            "endLine": 20,
             "sourceId": "class_with_annotations.pure",
             "startColumn": 5,
-            "startLine": 5
+            "startLine": 20
           }
         }
       ],
       "sourceInformation": {
         "endColumn": 5,
-        "endLine": 2,
+        "endLine": 17,
         "sourceId": "class_with_annotations.pure",
         "startColumn": 1,
-        "startLine": 2
+        "startLine": 17
       },
       "stereotypes": [
         {
           "profile": "temporal",
           "profileSourceInformation": {
             "endColumn": 16,
-            "endLine": 2,
+            "endLine": 17,
             "sourceId": "class_with_annotations.pure",
             "startColumn": 9,
-            "startLine": 2
+            "startLine": 17
           },
           "sourceInformation": {
             "endColumn": 16,
-            "endLine": 2,
+            "endLine": 17,
             "sourceId": "class_with_annotations.pure",
             "startColumn": 9,
-            "startLine": 2
+            "startLine": 17
           },
           "value": "businesstemporal"
         }
@@ -110,26 +110,26 @@ expression: json
         {
           "sourceInformation": {
             "endColumn": 40,
-            "endLine": 2,
+            "endLine": 17,
             "sourceId": "class_with_annotations.pure",
             "startColumn": 38,
-            "startLine": 2
+            "startLine": 17
           },
           "tag": {
             "profile": "doc",
             "profileSourceInformation": {
               "endColumn": 40,
-              "endLine": 2,
+              "endLine": 17,
               "sourceId": "class_with_annotations.pure",
               "startColumn": 38,
-              "startLine": 2
+              "startLine": 17
             },
             "sourceInformation": {
               "endColumn": 40,
-              "endLine": 2,
+              "endLine": 17,
               "sourceId": "class_with_annotations.pure",
               "startColumn": 38,
-              "startLine": 2
+              "startLine": 17
             },
             "value": "description"
           },
@@ -150,19 +150,19 @@ expression: json
           "parserName": "Pure",
           "sourceInformation": {
             "endColumn": 7,
-            "endLine": 1,
+            "endLine": 16,
             "sourceId": "class_with_annotations.pure",
             "startColumn": 1,
-            "startLine": 1
+            "startLine": 16
           }
         }
       ],
       "sourceInformation": {
         "endColumn": 7,
-        "endLine": 1,
+        "endLine": 16,
         "sourceId": "class_with_annotations.pure",
         "startColumn": 1,
-        "startLine": 1
+        "startLine": 16
       }
     }
   ],

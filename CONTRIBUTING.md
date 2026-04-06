@@ -2,7 +2,9 @@
 
 ## Copyright Requirements
 
-All source files (`.rs`, `.toml`) **must** have a copyright header in the first 5 lines. The check validates the pattern `Copyright <YEAR>` — the entity name is contributor-specific.
+All source files (`.rs`, `.toml`, `.pure`, `.sh`) **must** have a copyright header in the first 5 lines. The check validates the pattern `Copyright <YEAR>` — the entity name is contributor-specific.
+
+**Exempt**: Markdown (`.md`) and JSON (`.json`) files do not require copyright headers.
 
 For `.rs` files:
 ```rust
@@ -18,6 +20,14 @@ For `.toml` files:
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # ...
+```
+
+For `.pure` files:
+```pure
+// Copyright 2026 <Your Name or Organization>
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// ...
 ```
 
 Run the validation: `./scripts/check-copyright.sh`
@@ -38,7 +48,7 @@ Run the validation: `./scripts/check-copyright.sh`
 - [ ] New public items have doc comments
 - [ ] No `unwrap()` / `expect()` in library code (tests are fine)
 - [ ] Snapshot tests updated if Protocol JSON output changed (`cargo insta review`)
-- [ ] `./scripts/check-copyright.sh` passes (all `.rs` and `.toml` files have copyright headers)
+- [ ] `./scripts/check-copyright.sh` passes (all `.rs`, `.toml`, `.pure`, `.sh` files have copyright headers)
 
 ## Adding a Grammar Feature End-to-End
 

@@ -23,6 +23,8 @@
 //! legend init my-project            # Scaffold a new project
 //! ```
 
+#![forbid(unsafe_code)]
+
 mod commands;
 mod diagnostics;
 mod discovery;

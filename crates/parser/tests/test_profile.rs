@@ -22,12 +22,12 @@ use helpers::parse_ok;
 #[ignore = "parser not yet implemented"]
 fn basic() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Profile meta::pure::profiles::doc
 {
     stereotypes: [deprecated, experimental];
     tags: [doc, todo];
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -36,12 +36,12 @@ Profile meta::pure::profiles::doc
 #[ignore = "parser not yet implemented"]
 fn quoted() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Profile meta::pure::profiles::'with quotes'
 {
     stereotypes: [deprecated];
     tags: [doc];
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -50,10 +50,10 @@ Profile meta::pure::profiles::'with quotes'
 #[ignore = "parser not yet implemented"]
 fn empty() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Profile my::EmptyProfile
 {
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }

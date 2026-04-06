@@ -120,9 +120,7 @@ mod tests {
     use crate::source_info::Spanned;
     use smol_str::SmolStr;
 
-    fn src() -> SourceInfo {
-        SourceInfo::new("test.pure", 1, 1, 1, 20)
-    }
+    use crate::test_utils::src;
 
     #[test]
     fn test_source_file_with_sections() {

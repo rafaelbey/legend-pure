@@ -39,7 +39,7 @@ done < <(find "$PROJECT_ROOT/crates" -name "*.rs" -type f)
 # Check .toml files (Cargo.toml, rustfmt.toml, config.toml, etc.)
 while IFS= read -r file; do
     # Skip files under target/
-    if [[ "$file" == *"/target/"* ]]; then
+    if [[ "$file" == */target/* ]]; then
         continue
     fi
     TOTAL=$((TOTAL + 1))
@@ -47,6 +47,29 @@ while IFS= read -r file; do
         MISSING+=("$file")
     fi
 done < <(find "$PROJECT_ROOT" -name "*.toml" -type f)
+
+# Check .pure files (test corpus, examples)
+while IFS= read -r file; do
+    # Skip files under target/
+    if [[ "$file" == */target/* ]]; then
+        continue
+    fi
+    TOTAL=$((TOTAL + 1))
+    if ! head -n 5 "$file" | grep -qE "$PATTERN"; then
+        MISSING+=("$file")
+    fi
+done < <(find "$PROJECT_ROOT" -name "*.pure" -type f)
+
+# Check .sh files (scripts)
+while IFS= read -r file; do
+    TOTAL=$((TOTAL + 1))
+    if ! head -n 5 "$file" | grep -qE "$PATTERN"; then
+        MISSING+=("$file")
+    fi
+done < <(find "$PROJECT_ROOT/scripts" -name "*.sh" -type f)
+
+# NOTE: .md files are exempted from copyright headers by project policy.
+# See CONTRIBUTING.md for details.
 
 if [ ${#MISSING[@]} -gt 0 ]; then
     echo "ERROR: The following files are missing a copyright header:"
@@ -69,4 +92,4 @@ if [ ${#MISSING[@]} -gt 0 ]; then
     exit 1
 fi
 
-echo "✅ All $TOTAL source files (.rs, .toml) have copyright headers."
+echo "✅ All $TOTAL source files (.rs, .toml, .pure, .sh) have copyright headers."

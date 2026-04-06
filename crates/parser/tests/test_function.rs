@@ -29,7 +29,7 @@ fn basic_with_body() {
 #[ignore = "parser not yet implemented"]
 fn date_return_types() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::getDate(): StrictDate[1]
 {
     %2024-01-15
@@ -38,7 +38,7 @@ function my::getDate(): StrictDate[1]
 function my::getDateTime(): DateTime[1]
 {
     %2024-01-15T10:30:00
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -47,7 +47,7 @@ function my::getDateTime(): DateTime[1]
 #[ignore = "parser not yet implemented"]
 fn overloading() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::add(a: Integer[1]): Integer[1]
 {
     $a
@@ -56,7 +56,7 @@ function my::add(a: Integer[1]): Integer[1]
 function my::add(a: Integer[1], b: Integer[1]): Integer[1]
 {
     $a + $b
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -65,11 +65,11 @@ function my::add(a: Integer[1], b: Integer[1]): Integer[1]
 #[ignore = "parser not yet implemented"]
 fn with_new_instance() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::create(): Any[1]
 {
     ^my::Person(name='John', address=^my::Address(city='NYC'))
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -78,12 +78,12 @@ function my::create(): Any[1]
 #[ignore = "parser not yet implemented"]
 fn quoted_params_and_vars() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::func('1,2,3': Integer[3]): Integer[1]
 {
     let '1,2,3' = [1, 2, 3];
     $'1,2,3'->at(0)
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -92,11 +92,11 @@ function my::func('1,2,3': Integer[3]): Integer[1]
 #[ignore = "parser not yet implemented"]
 fn full_path_meta_execution() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::test(): Number[1]
 {
     [1, 2, 3]->meta::pure::functions::math::max()
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -112,7 +112,7 @@ fn function_tests() {
 #[ignore = "parser not yet implemented"]
 fn derived_multiple_statements() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Class my::WithDerived
 {
     derived(s: String[1])
@@ -120,7 +120,7 @@ Class my::WithDerived
         let x = 0;
         $x
     }: Integer[1];
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -129,12 +129,12 @@ Class my::WithDerived
 #[ignore = "parser not yet implemented"]
 fn with_annotations_and_import() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 import model::*;
 function <<doc.deprecated>> {doc.description = 'Old func'} my::oldFunc(): String[1]
 {
     'deprecated'
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -143,7 +143,7 @@ function <<doc.deprecated>> {doc.description = 'Old func'} my::oldFunc(): String
 #[ignore = "parser not yet implemented"]
 fn multi_if_expressions() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 function my::classify(x: Integer[1]): String[1]
 {
     if($x > 0,
@@ -151,7 +151,7 @@ function my::classify(x: Integer[1]): String[1]
        | if($x < 0,
             | 'negative',
             | 'zero'))
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }

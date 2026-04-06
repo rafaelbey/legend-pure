@@ -21,27 +21,33 @@ use std::path::PathBuf;
 use owo_colors::OwoColorize;
 
 /// Errors that can occur during CLI execution.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum CliError {
     /// A file was not found at the specified path.
+    #[error("file not found: {}", .0.display())]
     FileNotFound(PathBuf),
 
     /// No `.pure` files were found in the specified location.
+    #[error("no .pure files found")]
     NoFilesFound,
 
     /// An I/O error occurred while reading/writing a file.
+    #[error("I/O error on '{}': {source}", path.display())]
     Io {
         path: PathBuf,
         source: std::io::Error,
     },
 
     /// One or more files had parse errors.
+    #[error("{0} file(s) had parse errors")]
     ParseErrors(usize),
 
     /// JSON serialization error.
-    Serialization(serde_json::Error),
+    #[error("JSON serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
 
     /// A command is not yet implemented.
+    #[error("command '{command}' is not yet implemented: {description}. {reason}")]
     NotImplemented {
         command: &'static str,
         description: &'static str,
@@ -49,60 +55,16 @@ pub enum CliError {
     },
 
     /// A custom error message.
+    #[error("{0}")]
     Custom(String),
 
     /// Protocol conversion error (e.g., from JSON → AST).
+    #[error("protocol conversion error: {0}")]
     Protocol(String),
 
     /// One or more files had compilation errors.
+    #[error("{0} compilation error(s)")]
     CompilationErrors(usize),
-}
-
-impl std::fmt::Display for CliError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::FileNotFound(path) => {
-                write!(f, "file not found: {}", path.display())
-            }
-            Self::NoFilesFound => {
-                write!(f, "no .pure files found")
-            }
-            Self::Io { path, source } => {
-                write!(f, "I/O error on '{}': {}", path.display(), source)
-            }
-            Self::ParseErrors(count) => {
-                write!(f, "{count} file(s) had parse errors")
-            }
-            Self::Serialization(e) => {
-                write!(f, "JSON serialization error: {e}")
-            }
-            Self::NotImplemented {
-                command,
-                description,
-                reason,
-            } => {
-                write!(
-                    f,
-                    "command '{command}' is not yet implemented: {description}. {reason}"
-                )
-            }
-            Self::Custom(msg) => write!(f, "{msg}"),
-            Self::Protocol(msg) => write!(f, "protocol conversion error: {msg}"),
-            Self::CompilationErrors(count) => {
-                write!(f, "{count} compilation error(s)")
-            }
-        }
-    }
-}
-
-impl std::error::Error for CliError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Io { source, .. } => Some(source),
-            Self::Serialization(e) => Some(e),
-            _ => None,
-        }
-    }
 }
 
 /// Print a [`CliError`] to stderr with colored formatting.
@@ -150,6 +112,13 @@ pub fn print_error(error: &CliError) {
         }
     }
 }
+
+/// Resolves a path to its canonical (absolute) form, falling back to
+/// the original path if canonicalization fails (e.g., the file was deleted).
+fn canonical_or_original(path: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
 /// Formats a parse error message with a clickable file location.
 ///
 /// Produces output like:
@@ -163,8 +132,7 @@ pub fn format_error_with_path(
     path: &std::path::Path,
     error: &legend_pure_parser_parser::ParseError,
 ) -> String {
-    let abs_path = std::fs::canonicalize(path)
-        .unwrap_or_else(|_| path.to_path_buf());
+    let abs_path = canonical_or_original(path);
 
     if let Some(si) = error.source_info() {
         format!(
@@ -271,8 +239,7 @@ fn render_snippet_inner(
     }
 
     // Resolve to absolute path for IDE linking
-    let abs_path = std::fs::canonicalize(path)
-        .unwrap_or_else(|_| path.to_path_buf());
+    let abs_path = canonical_or_original(path);
 
     // Clickable location header
     eprintln!(
@@ -349,8 +316,7 @@ pub fn format_compilation_error_with_path(
     path: &std::path::Path,
     error: &legend_pure_parser_pure::error::CompilationError,
 ) -> String {
-    let abs_path = std::fs::canonicalize(path)
-        .unwrap_or_else(|_| path.to_path_buf());
+    let abs_path = canonical_or_original(path);
 
     format!(
         "{} at {}:{}:{}",

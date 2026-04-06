@@ -10,10 +10,10 @@ expression: json
       "package": "meta::pure::profiles",
       "sourceInformation": {
         "endColumn": 7,
-        "endLine": 2,
+        "endLine": 17,
         "sourceId": "profile.pure",
         "startColumn": 1,
-        "startLine": 2
+        "startLine": 17
       },
       "stereotypes": [
         "deprecated",
@@ -37,19 +37,19 @@ expression: json
           "parserName": "Pure",
           "sourceInformation": {
             "endColumn": 7,
-            "endLine": 1,
+            "endLine": 16,
             "sourceId": "profile.pure",
             "startColumn": 1,
-            "startLine": 1
+            "startLine": 16
           }
         }
       ],
       "sourceInformation": {
         "endColumn": 7,
-        "endLine": 1,
+        "endLine": 16,
         "sourceId": "profile.pure",
         "startColumn": 1,
-        "startLine": 1
+        "startLine": 16
       }
     }
   ],

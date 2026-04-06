@@ -34,6 +34,9 @@
 //! - **Operator precedence**: Emits minimal-but-correct parentheses.
 //! - **Identifier quoting**: Quotes identifiers that need it (`'30_360'`).
 
+#![forbid(unsafe_code)]
+#![deny(missing_docs)]
+
 pub mod element;
 pub mod expression;
 pub mod identifier;

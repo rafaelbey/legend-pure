@@ -36,13 +36,13 @@ fn complex_constraints() {
 #[ignore = "parser not yet implemented"]
 fn aggregation_kinds() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Class my::AggTest
 {
     (shared) sharedProp: String[*];
     (composite) compositeProp: Integer[1];
     (none) noneProp: Boolean[0..1];
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -51,11 +51,11 @@ Class my::AggTest
 #[ignore = "parser not yet implemented"]
 fn multiple_annotations() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Class <<temporal.businesstemporal, temporal.processingtemporal>> {doc.description = 'A person', doc.todo = 'Add more fields'} model::Person
 {
     <<doc.deprecated>> {doc.description = 'The name'} name: String[1];
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -64,10 +64,10 @@ Class <<temporal.businesstemporal, temporal.processingtemporal>> {doc.descriptio
 #[ignore = "parser not yet implemented"]
 fn quoted_annotations() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Class <<'my profile'.'my stereo'>> my::QuotedClass
 {
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -76,10 +76,10 @@ Class <<'my profile'.'my stereo'>> my::QuotedClass
 #[ignore = "parser not yet implemented"]
 fn escaped_tagged_values() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Class {doc.description = 'test1\'s'} my::EscapedClass
 {
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -88,10 +88,10 @@ Class {doc.description = 'test1\'s'} my::EscapedClass
 #[ignore = "parser not yet implemented"]
 fn quoted_package() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Class test::'p a c k a g e'::A
 {
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -100,11 +100,11 @@ Class test::'p a c k a g e'::A
 #[ignore = "parser not yet implemented"]
 fn with_import() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 import anything::*;
 Class my::ImportedClass
 {
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -113,11 +113,11 @@ Class my::ImportedClass
 #[ignore = "parser not yet implemented"]
 fn unit_properties() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Class my::WithUnit
 {
     weight: NewMeasure~UnitOne[0..1];
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }
@@ -140,11 +140,11 @@ fn sourceinfo_validation() {
 #[ignore = "parser not yet implemented"]
 fn type_parameters() {
     let file = parse_ok(
-        r#"###Pure
+        r"###Pure
 Class my::Generic<T>
 {
     value: T[1];
-}"#,
+}",
     );
     insta::assert_debug_snapshot!(file);
 }

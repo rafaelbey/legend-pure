@@ -15,18 +15,18 @@ expression: json
               "fullPath": "String",
               "sourceInformation": {
                 "endColumn": 21,
-                "endLine": 4,
+                "endLine": 19,
                 "sourceId": "class_simple.pure",
                 "startColumn": 16,
-                "startLine": 4
+                "startLine": 19
               }
             },
             "sourceInformation": {
               "endColumn": 21,
-              "endLine": 4,
+              "endLine": 19,
               "sourceId": "class_simple.pure",
               "startColumn": 16,
-              "startLine": 4
+              "startLine": 19
             }
           },
           "multiplicity": {
@@ -36,10 +36,10 @@ expression: json
           "name": "firstName",
           "sourceInformation": {
             "endColumn": 13,
-            "endLine": 4,
+            "endLine": 19,
             "sourceId": "class_simple.pure",
             "startColumn": 5,
-            "startLine": 4
+            "startLine": 19
           }
         },
         {
@@ -48,18 +48,18 @@ expression: json
               "fullPath": "String",
               "sourceInformation": {
                 "endColumn": 20,
-                "endLine": 5,
+                "endLine": 20,
                 "sourceId": "class_simple.pure",
                 "startColumn": 15,
-                "startLine": 5
+                "startLine": 20
               }
             },
             "sourceInformation": {
               "endColumn": 20,
-              "endLine": 5,
+              "endLine": 20,
               "sourceId": "class_simple.pure",
               "startColumn": 15,
-              "startLine": 5
+              "startLine": 20
             }
           },
           "multiplicity": {
@@ -69,10 +69,10 @@ expression: json
           "name": "lastName",
           "sourceInformation": {
             "endColumn": 12,
-            "endLine": 5,
+            "endLine": 20,
             "sourceId": "class_simple.pure",
             "startColumn": 5,
-            "startLine": 5
+            "startLine": 20
           }
         },
         {
@@ -81,18 +81,18 @@ expression: json
               "fullPath": "Integer",
               "sourceInformation": {
                 "endColumn": 16,
-                "endLine": 6,
+                "endLine": 21,
                 "sourceId": "class_simple.pure",
                 "startColumn": 10,
-                "startLine": 6
+                "startLine": 21
               }
             },
             "sourceInformation": {
               "endColumn": 16,
-              "endLine": 6,
+              "endLine": 21,
               "sourceId": "class_simple.pure",
               "startColumn": 10,
-              "startLine": 6
+              "startLine": 21
             }
           },
           "multiplicity": {
@@ -102,19 +102,19 @@ expression: json
           "name": "age",
           "sourceInformation": {
             "endColumn": 7,
-            "endLine": 6,
+            "endLine": 21,
             "sourceId": "class_simple.pure",
             "startColumn": 5,
-            "startLine": 6
+            "startLine": 21
           }
         }
       ],
       "sourceInformation": {
         "endColumn": 5,
-        "endLine": 2,
+        "endLine": 17,
         "sourceId": "class_simple.pure",
         "startColumn": 1,
-        "startLine": 2
+        "startLine": 17
       }
     },
     {
@@ -130,19 +130,19 @@ expression: json
           "parserName": "Pure",
           "sourceInformation": {
             "endColumn": 7,
-            "endLine": 1,
+            "endLine": 16,
             "sourceId": "class_simple.pure",
             "startColumn": 1,
-            "startLine": 1
+            "startLine": 16
           }
         }
       ],
       "sourceInformation": {
         "endColumn": 7,
-        "endLine": 1,
+        "endLine": 16,
         "sourceId": "class_simple.pure",
         "startColumn": 1,
-        "startLine": 1
+        "startLine": 16
       }
     }
   ],

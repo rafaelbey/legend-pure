@@ -18,6 +18,7 @@ description = "JNI bridge exposing the Rust Pure parser to Java"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [lib]
 crate-type = ["cdylib"]
