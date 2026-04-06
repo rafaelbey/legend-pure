@@ -71,7 +71,8 @@ legend check --show-source src/main/pure/
 ```
 
 ```
-  ✗ model.pure — Expected ';', found identifier at model.pure:7:3
+  ✗ src/main/pure/model.pure — Expected ';', found identifier at /path/to/model.pure:7:3
+     --> /path/to/model.pure:7:3
       |
      6 |   name: String[1]
      7 |   age: Integer[1]
@@ -79,6 +80,9 @@ legend check --show-source src/main/pure/
      8 |   active: Boolean[1]
       |
 ```
+
+Error locations use the absolute `path:line:col` format — clickable in IDE
+terminals (VS Code, IntelliJ, iTerm2) to jump directly to the error.
 
 ## Architecture
 

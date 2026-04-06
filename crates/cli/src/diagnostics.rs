@@ -144,12 +144,41 @@ pub fn print_error(error: &CliError) {
         }
     }
 }
+/// Formats a parse error message with a clickable file location.
+///
+/// Produces output like:
+/// ```text
+/// Expected ';', found identifier at /absolute/path/to/file.pure:7:3
+/// ```
+///
+/// IDE terminals (VS Code, `IntelliJ`, iTerm2) auto-detect `path:line:col`
+/// as a clickable hyperlink that opens the file at the error location.
+pub fn format_error_with_path(
+    path: &std::path::Path,
+    error: &legend_pure_parser_parser::ParseError,
+) -> String {
+    let abs_path = std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf());
+
+    if let Some(si) = error.source_info() {
+        format!(
+            "{} at {}:{}:{}",
+            error.message(),
+            abs_path.display(),
+            si.start_line,
+            si.start_column
+        )
+    } else {
+        format!("{} at {}", error.message(), abs_path.display())
+    }
+}
 
 /// Renders a source code snippet with line numbers and underline carets
 /// pointing to the error location.
 ///
 /// Produces output like:
 /// ```text
+///    --> /absolute/path/to/file.pure:7:3
 ///     |
 ///   6 |   name: String[1]
 ///   7 |   age: Integer[1]
@@ -157,8 +186,12 @@ pub fn print_error(error: &CliError) {
 ///   8 |   active: Boolean[1]
 ///     |
 /// ```
+///
+/// The `-->` header uses the absolute file path so IDE terminals can
+/// open the file at the error location with a click.
 pub fn render_source_snippet(
     source: &str,
+    path: &std::path::Path,
     error: &legend_pure_parser_parser::ParseError,
 ) {
     let Some(si) = error.source_info() else {
@@ -173,6 +206,19 @@ pub fn render_source_snippet(
     if error_line == 0 || error_line > lines.len() + 1 {
         return;
     }
+
+    // Resolve to absolute path for IDE linking
+    let abs_path = std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf());
+
+    // Clickable location header
+    eprintln!(
+        "     {} {}:{}:{}",
+        "-->".cyan().bold(),
+        abs_path.display(),
+        si.start_line,
+        si.start_column
+    );
 
     // Determine context window: 1 line before and 1 line after the error
     let ctx_start = error_line.saturating_sub(1).max(1);

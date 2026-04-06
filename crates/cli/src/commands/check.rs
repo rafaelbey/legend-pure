@@ -94,10 +94,10 @@ pub fn run(args: CheckArgs) -> Result<(), CliError> {
                     "  {} {} — {}",
                     "✗".red(),
                     path.display().dimmed(),
-                    e.to_string().red()
+                    diagnostics::format_error_with_path(path, &e).red()
                 );
                 if args.show_source {
-                    diagnostics::render_source_snippet(&source, &e);
+                    diagnostics::render_source_snippet(&source, path, &e);
                 }
                 error_count += 1;
             }
