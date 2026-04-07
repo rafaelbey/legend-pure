@@ -20,6 +20,7 @@
 //!
 //! The test naming follows the Java test method names for easy cross-referencing.
 
+use indoc::indoc;
 use legend_pure_parser_compose::compose_source_file;
 
 /// Parse source text, compose it back, and assert roundtrip equality.
@@ -29,7 +30,7 @@ use legend_pure_parser_compose::compose_source_file;
 /// 2. Compose AST → grammar text
 /// 3. Assert composed == original
 /// 4. Also verify idempotency: compose(parse(composed)) == composed
-fn roundtrip(source: &str) {
+fn round_trip(source: &str) {
     let ast = legend_pure_parser_parser::parse(source, "test.pure")
         .unwrap_or_else(|e| panic!("Parse failed:\n{e}\n\nSource:\n{source}"));
 
@@ -55,12 +56,24 @@ fn roundtrip(source: &str) {
 
 #[test]
 fn test_enumeration() {
-    roundtrip("Enum myEnum\n{\n  a,\n  b,\n  c\n}\n");
+    round_trip(indoc! {"
+        Enum myEnum
+        {
+          a,
+          b,
+          c
+        }
+    "});
 }
 
 #[test]
 fn test_enumeration_with_one_value() {
-    roundtrip("Enum myEnum\n{\n  a\n}\n");
+    round_trip(indoc! {"
+        Enum myEnum
+        {
+          a
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
@@ -69,7 +82,13 @@ fn test_enumeration_with_one_value() {
 
 #[test]
 fn test_profile() {
-    roundtrip("Profile meta::pure::profiles::doc\n{\n  stereotypes: [deprecated];\n  tags: [description, todo];\n}\n");
+    round_trip(indoc! {"
+        Profile meta::pure::profiles::doc
+        {
+          stereotypes: [deprecated];
+          tags: [description, todo];
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
@@ -78,27 +97,51 @@ fn test_profile() {
 
 #[test]
 fn test_simple_class() {
-    roundtrip("Class A\n{\n}\n");
+    round_trip(indoc! {"
+        Class A
+        {
+        }
+    "});
 }
 
 #[test]
 fn test_class_with_property() {
-    roundtrip("Class A\n{\n  name: String[1];\n}\n");
+    round_trip(indoc! {"
+        Class A
+        {
+          name: String[1];
+        }
+    "});
 }
 
 #[test]
 fn test_class_with_multiple_properties() {
-    roundtrip("Class model::Person\n{\n  name: String[1];\n  age: Integer[0..1];\n  active: Boolean[1];\n}\n");
+    round_trip(indoc! {"
+        Class model::Person
+        {
+          name: String[1];
+          age: Integer[0..1];
+          active: Boolean[1];
+        }
+    "});
 }
 
 #[test]
 fn test_class_with_super_type() {
-    roundtrip("Class my::A extends my::B\n{\n}\n");
+    round_trip(indoc! {"
+        Class my::A extends my::B
+        {
+        }
+    "});
 }
 
 #[test]
 fn test_class_with_multiple_super_types() {
-    roundtrip("Class my::A extends B, C\n{\n}\n");
+    round_trip(indoc! {"
+        Class my::A extends B, C
+        {
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
@@ -107,7 +150,13 @@ fn test_class_with_multiple_super_types() {
 
 #[test]
 fn test_association() {
-    roundtrip("Association myAsso\n{\n  a: String[1];\n  b: String[1];\n}\n");
+    round_trip(indoc! {"
+        Association myAsso
+        {
+          a: String[1];
+          b: String[1];
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
@@ -116,12 +165,22 @@ fn test_association() {
 
 #[test]
 fn test_simple_function() {
-    roundtrip("function f(): String[1]\n{\n  'hello'\n}\n");
+    round_trip(indoc! {"
+        function f(): String[1]
+        {
+          'hello'
+        }
+    "});
 }
 
 #[test]
 fn test_function_with_params() {
-    roundtrip("function f(s: Integer[1], s2: Integer[2]): String[1]\n{\n  println('ok')\n}\n");
+    round_trip(indoc! {"
+        function f(s: Integer[1], s2: Integer[2]): String[1]
+        {
+          println('ok')
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
@@ -130,14 +189,33 @@ fn test_function_with_params() {
 
 #[test]
 fn test_multiple_elements() {
-    roundtrip("Class A\n{\n  name: String[1];\n}\n\nClass B\n{\n  value: Integer[1];\n}\n");
+    round_trip(indoc! {"
+        Class A
+        {
+          name: String[1];
+        }
+
+        Class B
+        {
+          value: Integer[1];
+        }
+    "});
 }
 
 #[test]
 fn test_class_and_enum() {
-    roundtrip(
-        "Class my::A\n{\n  status: my::Status[1];\n}\n\nEnum my::Status\n{\n  Active,\n  Inactive\n}\n",
-    );
+    round_trip(indoc! {"
+        Class my::A
+        {
+          status: my::Status[1];
+        }
+
+        Enum my::Status
+        {
+          Active,
+          Inactive
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
@@ -146,22 +224,42 @@ fn test_class_and_enum() {
 
 #[test]
 fn test_class_with_stereotype() {
-    roundtrip("Class <<temporal.businesstemporal>> model::Person\n{\n  name: String[1];\n}\n");
+    round_trip(indoc! {"
+        Class <<temporal.businesstemporal>> model::Person
+        {
+          name: String[1];
+        }
+    "});
 }
 
 #[test]
 fn test_class_with_tagged_value() {
-    roundtrip("Class {doc.description = 'A person'} model::Person\n{\n  name: String[1];\n}\n");
+    round_trip(indoc! {"
+        Class {doc.description = 'A person'} model::Person
+        {
+          name: String[1];
+        }
+    "});
 }
 
 #[test]
 fn test_class_with_stereotype_and_tagged_value() {
-    roundtrip("Class <<temporal.businesstemporal>> {doc.description = 'A person'} model::Person\n{\n  name: String[1];\n}\n");
+    round_trip(indoc! {"
+        Class <<temporal.businesstemporal>> {doc.description = 'A person'} model::Person
+        {
+          name: String[1];
+        }
+    "});
 }
 
 #[test]
 fn test_property_with_stereotype_and_tagged_value() {
-    roundtrip("Class A\n{\n  <<doc.deprecated>> {doc.description = 'old name'} name: String[1];\n}\n");
+    round_trip(indoc! {"
+        Class A
+        {
+          <<doc.deprecated>> {doc.description = 'old name'} name: String[1];
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
@@ -170,12 +268,28 @@ fn test_property_with_stereotype_and_tagged_value() {
 
 #[test]
 fn test_simple_unnamed_constraint() {
-    roundtrip("Class A\n[\n  $this.name->isNotEmpty()\n]\n{\n  name: String[1];\n}\n");
+    round_trip(indoc! {"
+        Class A
+        [
+          $this.name->isNotEmpty()
+        ]
+        {
+          name: String[1];
+        }
+    "});
 }
 
 #[test]
 fn test_named_constraint() {
-    roundtrip("Class A\n[\n  nameNotEmpty: $this.name->isNotEmpty()\n]\n{\n  name: String[1];\n}\n");
+    round_trip(indoc! {"
+        Class A
+        [
+          nameNotEmpty: $this.name->isNotEmpty()
+        ]
+        {
+          name: String[1];
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +298,13 @@ fn test_named_constraint() {
 
 #[test]
 fn test_qualified_property() {
-    roundtrip("Class A\n{\n  name: String[1];\n  fullName(sep: String[1]) {$this.name + $sep}: String[1];\n}\n");
+    round_trip(indoc! {"
+        Class A
+        {
+          name: String[1];
+          fullName(sep: String[1]) {$this.name + $sep}: String[1];
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
@@ -193,83 +313,168 @@ fn test_qualified_property() {
 
 #[test]
 fn test_variable() {
-    roundtrip("function f(x: Integer[1]): Integer[1]\n{\n  $x\n}\n");
+    round_trip(indoc! {"
+        function f(x: Integer[1]): Integer[1]
+        {
+          $x
+        }
+    "});
 }
 
 #[test]
 fn test_string_literal() {
-    roundtrip("function f(): String[1]\n{\n  'Hello World!'\n}\n");
+    round_trip(indoc! {"
+        function f(): String[1]
+        {
+          'Hello World!'
+        }
+    "});
 }
 
 #[test]
 fn test_integer_literal() {
-    roundtrip("function f(): Integer[1]\n{\n  42\n}\n");
+    round_trip(indoc! {"
+        function f(): Integer[1]
+        {
+          42
+        }
+    "});
 }
 
 #[test]
 fn test_float_literal() {
-    roundtrip("function f(): Float[1]\n{\n  3.14\n}\n");
+    round_trip(indoc! {"
+        function f(): Float[1]
+        {
+          3.14
+        }
+    "});
 }
 
 #[test]
 fn test_boolean_literal() {
-    roundtrip("function f(): Boolean[1]\n{\n  true\n}\n");
+    round_trip(indoc! {"
+        function f(): Boolean[1]
+        {
+          true
+        }
+    "});
 }
 
 #[test]
 fn test_arithmetic_simple() {
-    roundtrip("function f(): Integer[1]\n{\n  1 + 2\n}\n");
+    round_trip(indoc! {"
+        function f(): Integer[1]
+        {
+          1 + 2
+        }
+    "});
 }
 
 #[test]
 fn test_arithmetic_precedence_mul_add() {
-    // `1 + 2 * 3` — no parens needed because * binds tighter
-    roundtrip("function f(): Integer[1]\n{\n  1 + 2 * 3\n}\n");
+    round_trip(indoc! {"
+        function f(): Integer[1]
+        {
+          1 + 2 * 3
+        }
+    "});
 }
 
 #[test]
 fn test_comparison() {
-    roundtrip("function f(): Boolean[1]\n{\n  1 == 2\n}\n");
+    round_trip(indoc! {"
+        function f(): Boolean[1]
+        {
+          1 == 2
+        }
+    "});
 }
 
 #[test]
 fn test_logical() {
-    roundtrip("function f(): Boolean[1]\n{\n  true && false\n}\n");
+    round_trip(indoc! {"
+        function f(): Boolean[1]
+        {
+          true && false
+        }
+    "});
 }
 
 #[test]
 fn test_not() {
-    roundtrip("function f(): Boolean[1]\n{\n  !true\n}\n");
+    round_trip(indoc! {"
+        function f(): Boolean[1]
+        {
+          !true
+        }
+    "});
 }
 
 #[test]
 fn test_let_binding() {
-    roundtrip("function f(): String[1]\n{\n  let x = 'hello';\n  $x\n}\n");
+    round_trip(indoc! {"
+        function f(): String[1]
+        {
+          let x = 'hello';
+          $x
+        }
+    "});
 }
 
 #[test]
 fn test_collection() {
-    roundtrip("function f(): Integer[*]\n{\n  [1, 2, 3]\n}\n");
+    round_trip(indoc! {"
+        function f(): Integer[*]
+        {
+          [1, 2, 3]
+        }
+    "});
 }
 
 #[test]
 fn test_arrow_function() {
-    roundtrip("function f(): Integer[*]\n{\n  [1, 2, 3]->filter(x|$x > 1)\n}\n");
+    round_trip(indoc! {"
+        function f(): Integer[*]
+        {
+          [1, 2, 3]->filter(x|$x > 1)
+        }
+    "});
 }
 
 #[test]
 fn test_member_access() {
-    roundtrip("function f(p: Person[1]): String[1]\n{\n  $p.name\n}\n");
+    round_trip(indoc! {"
+        function f(p: Person[1]): String[1]
+        {
+          $p.name
+        }
+    "});
 }
 
 #[test]
 fn test_lambda_in_arrow() {
-    roundtrip("function f(): Integer[*]\n{\n  [1, 2, 3]->map(x|$x + 1)\n}\n");
+    round_trip(indoc! {"
+        function f(): Integer[*]
+        {
+          [1, 2, 3]->map(x|$x + 1)
+        }
+    "});
 }
 
 #[test]
 fn test_function_overloading() {
-    roundtrip("function model::test(a: String[1]): String[1]\n{\n  'a'\n}\n\nfunction model::test(a: String[1], b: Integer[1]): String[1]\n{\n  'a'\n}\n");
+    round_trip(indoc! {"
+        function model::test(a: String[1]): String[1]
+        {
+          'a'
+        }
+
+        function model::test(a: String[1], b: Integer[1]): String[1]
+        {
+          'a'
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
@@ -278,22 +483,42 @@ fn test_function_overloading() {
 
 #[test]
 fn test_default_value_string() {
-    roundtrip("Class test::A\n{\n  stringProperty: String[1] = 'default';\n}\n");
+    round_trip(indoc! {"
+        Class test::A
+        {
+          stringProperty: String[1] = 'default';
+        }
+    "});
 }
 
 #[test]
 fn test_default_value_integer() {
-    roundtrip("Class test::A\n{\n  integerProperty: Integer[1] = 0;\n}\n");
+    round_trip(indoc! {"
+        Class test::A
+        {
+          integerProperty: Integer[1] = 0;
+        }
+    "});
 }
 
 #[test]
 fn test_default_value_boolean() {
-    roundtrip("Class test::A\n{\n  booleanProperty: Boolean[1] = false;\n}\n");
+    round_trip(indoc! {"
+        Class test::A
+        {
+          booleanProperty: Boolean[1] = false;
+        }
+    "});
 }
 
 #[test]
 fn test_default_value_float() {
-    roundtrip("Class test::A\n{\n  floatProperty: Float[1] = 0.12;\n}\n");
+    round_trip(indoc! {"
+        Class test::A
+        {
+          floatProperty: Float[1] = 0.12;
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
@@ -302,7 +527,17 @@ fn test_default_value_float() {
 
 #[test]
 fn test_new_instance() {
-    roundtrip("Class anything::goes\n{\n  v: String[1];\n}\n\nfunction f(): Any[1]\n{\n  let x = ^anything::goes(v='value')\n}\n");
+    round_trip(indoc! {"
+        Class anything::goes
+        {
+          v: String[1];
+        }
+
+        function f(): Any[1]
+        {
+          let x = ^anything::goes(v='value')
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +546,14 @@ fn test_new_instance() {
 
 #[test]
 fn test_measure_non_convertible() {
-    roundtrip("Measure pkg::Currency\n{\n  USD;\n  GBP;\n  EUR;\n}\n");
+    round_trip(indoc! {"
+        Measure pkg::Currency
+        {
+          USD;
+          GBP;
+          EUR;
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
@@ -320,7 +562,17 @@ fn test_measure_non_convertible() {
 
 #[test]
 fn test_underscores() {
-    roundtrip("function my::under_score::function_example(): Any[1]\n{\n  my::under_score::function_example2()\n}\n\nfunction my::under_score::function_example2(): Any[1]\n{\n  'a'\n}\n");
+    round_trip(indoc! {"
+        function my::under_score::function_example(): Any[1]
+        {
+          my::under_score::function_example2()
+        }
+
+        function my::under_score::function_example2(): Any[1]
+        {
+          'a'
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
@@ -330,368 +582,741 @@ fn test_underscores() {
 /// Bare single untyped lambda: `x|$x + 1`
 #[test]
 fn test_lambda_bare_single_untyped() {
-    roundtrip("function f(): Any[*]\n{\n  [1, 2, 3]->filter(x|$x > 1)\n}\n");
+    round_trip(indoc! {"
+        function f(): Any[*]
+        {
+          [1, 2, 3]->filter(x|$x > 1)
+        }
+    "});
 }
 
-/// Bare single typed lambda: `x: Integer[1]|$x + 1`
+/// Bare single typed lambda: `{x: Integer[1]|$x + 1}`
 #[test]
 fn test_lambda_bare_single_typed() {
-    roundtrip("function f(): Any[*]\n{\n  [1, 2, 3]->filter({x: Integer[1]|$x > 1})\n}\n");
+    round_trip(indoc! {"
+        function f(): Any[*]
+        {
+          [1, 2, 3]->filter({x: Integer[1]|$x > 1})
+        }
+    "});
 }
 
-/// Braced single untyped lambda: `{x|$x + 1}`
+/// Single untyped in braces roundtrips as bare form
 #[test]
 fn test_lambda_braced_single_untyped() {
-    // Single untyped in braces should roundtrip as bare form: x|$x
-    roundtrip("function f(): Any[*]\n{\n  [1, 2, 3]->map(x|$x + 10)\n}\n");
+    round_trip(indoc! {"
+        function f(): Any[*]
+        {
+          [1, 2, 3]->map(x|$x + 10)
+        }
+    "});
 }
 
 /// Braced multi untyped lambda: `{x, y|$x + $y}`
 #[test]
 fn test_lambda_braced_multi_untyped() {
-    roundtrip("function f(): Any[*]\n{\n  [1, 2]->fold({x, y|$x + $y}, 0)\n}\n");
+    round_trip(indoc! {"
+        function f(): Any[*]
+        {
+          [1, 2]->fold({x, y|$x + $y}, 0)
+        }
+    "});
 }
 
 /// Braced multi typed lambda: `{x: Integer[1], y: Integer[1]|$x + $y}`
 #[test]
 fn test_lambda_braced_multi_typed() {
-    roundtrip("function f(): Any[*]\n{\n  [1, 2]->fold({x: Integer[1], y: Integer[1]|$x + $y}, 0)\n}\n");
+    round_trip(indoc! {"
+        function f(): Any[*]
+        {
+          [1, 2]->fold({x: Integer[1], y: Integer[1]|$x + $y}, 0)
+        }
+    "});
 }
 
-/// No-param lambda: `|'hello'` (braced form `{|'hello'}` normalizes to bare)
+/// No-param lambda: `|'hello'`
 #[test]
 fn test_lambda_no_param() {
-    roundtrip("function f(): Any[1]\n{\n  |'hello'\n}\n");
+    round_trip(indoc! {"
+        function f(): Any[1]
+        {
+          |'hello'
+        }
+    "});
 }
 
 /// Lambda in let binding
 #[test]
 fn test_lambda_in_let() {
-    roundtrip("function f(): Any[1]\n{\n  let fn = {x: Integer[1]|$x + 1};\n  $fn\n}\n");
+    round_trip(indoc! {"
+        function f(): Any[1]
+        {
+          let fn = {x: Integer[1]|$x + 1};
+          $fn
+        }
+    "});
 }
 
 /// Nested lambdas
 #[test]
 fn test_lambda_nested() {
-    roundtrip("function f(): Any[*]\n{\n  [4, 5]->filter(x|[1, 2]->exists(y|$y == $x))\n}\n");
+    round_trip(indoc! {"
+        function f(): Any[*]
+        {
+          [4, 5]->filter(x|[1, 2]->exists(y|$y == $x))
+        }
+    "});
 }
 
 /// Multiple lambda args in arrow function
 #[test]
 fn test_lambda_multiple_args() {
-    roundtrip("function f(): Any[*]\n{\n  something()->func(x|$x + 1, 'hello', y|$y * 2)\n}\n");
+    round_trip(indoc! {"
+        function f(): Any[*]
+        {
+          something()->func(x|$x + 1, 'hello', y|$y * 2)
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// Quoted identifiers (from Java testPackageWithQuotedIdentifier, testQuotedEnumerations,
-// testNumbersInEnumerationName, testQuotedProfile, etc.)
+// Quoted identifiers
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_package_with_quoted_identifier() {
-    roundtrip("Class test::'p a c k a g e'::A\n{\n  's t r i n g': String[1];\n}\n");
+    round_trip(indoc! {"
+        Class test::'p a c k a g e'::A
+        {
+          's t r i n g': String[1];
+        }
+    "});
 }
 
 #[test]
 fn test_quoted_enumerations() {
-    roundtrip("Enum <<st.test>> {doc.doc = 'bla'} '@'::'my Enum'\n{\n  'Anything e',\n  'A g',\n  'Anything r'\n}\n");
+    round_trip(indoc! {"
+        Enum <<st.test>> {doc.doc = 'bla'} '@'::'my Enum'
+        {
+          'Anything e',
+          'A g',
+          'Anything r'
+        }
+    "});
 }
 
 #[test]
 fn test_numbers_in_enumeration_name() {
-    roundtrip("Enum my::Enum\n{\n  '30_360',\n  '30_ACT'\n}\n");
+    round_trip(indoc! {"
+        Enum my::Enum
+        {
+          '30_360',
+          '30_ACT'
+        }
+    "});
 }
 
 #[test]
 fn test_quoted_profile() {
-    roundtrip("Profile meta::pure::profiles::'with quotes'\n{\n  stereotypes: ['two words'];\n  tags: ['s tag', 'another tag'];\n}\n");
+    round_trip(indoc! {"
+        Profile meta::pure::profiles::'with quotes'
+        {
+          stereotypes: ['two words'];
+          tags: ['s tag', 'another tag'];
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// Multiple stereotypes & tagged values (from Java testClassWithMultipleTaggedAndStereotypes,
-// testClassWithQuotedTagsAndStereotypes, testTaggedValuesSpecialChar)
+// Multiple stereotypes & tagged values
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_class_with_multiple_tagged_and_stereotypes() {
-    roundtrip("Class <<temporal.businesstemporal, taggedValue.Number2>> {doc.test1 = 'up1', doc.test2 = 'up2'} meta::this::class::has::path::A extends B\n{\n  <<equality.Key, taggedValue.test>> {doc.doc = 'Borrowers date of birth'} name: e::R[*];\n  {Descriptor.descriptionA = 'test1', Descriptor.descriptionB = 'test2'} ok: Integer[1..2];\n  <<devStatus.inProgress>> q(s: String[1]) {$s + 'ok'}: c::d::R[1];\n  {doc.test1 = 'test1', doc.test2 = 'test2'} xza(s: z::k::B[1]) {$s + 'ok'}: String[1];\n}\n");
+    round_trip(indoc! {"
+        Class <<temporal.businesstemporal, taggedValue.Number2>> {doc.test1 = 'up1', doc.test2 = 'up2'} meta::this::class::has::path::A extends B
+        {
+          <<equality.Key, taggedValue.test>> {doc.doc = 'Borrowers date of birth'} name: e::R[*];
+          {Descriptor.descriptionA = 'test1', Descriptor.descriptionB = 'test2'} ok: Integer[1..2];
+          <<devStatus.inProgress>> q(s: String[1]) {$s + 'ok'}: c::d::R[1];
+          {doc.test1 = 'test1', doc.test2 = 'test2'} xza(s: z::k::B[1]) {$s + 'ok'}: String[1];
+        }
+    "});
 }
 
 #[test]
 fn test_class_with_quoted_tags_and_stereotypes() {
-    roundtrip("Class <<temporal.businesstemporal, taggedValue.Number2>> {doc.test1 = 'up1', doc.test2 = 'up2'} meta::this::class::has::path::A extends B\n{\n  <<'a profile'.'1>stereo'>> {'a profile'.'2>tag' = 'Borrowers date of birth'} name: e::R[*];\n  {Descriptor.descriptionA = 'test1', Descriptor.descriptionB = 'test2'} ok: Integer[1..2];\n}\n");
+    round_trip(indoc! {"
+        Class <<temporal.businesstemporal, taggedValue.Number2>> {doc.test1 = 'up1', doc.test2 = 'up2'} meta::this::class::has::path::A extends B
+        {
+          <<'a profile'.'1>stereo'>> {'a profile'.'2>tag' = 'Borrowers date of birth'} name: e::R[*];
+          {Descriptor.descriptionA = 'test1', Descriptor.descriptionB = 'test2'} ok: Integer[1..2];
+        }
+    "});
 }
 
 #[test]
 fn test_tagged_values_special_char() {
-    roundtrip("Class <<temporal.businesstemporal, taggedValue.Number2>> {doc.test1 = 'test1\\'s', doc.test2 = 'm\\'s test'} meta::this::class::has::path::A\n{\n  <<equality.Key, taggedValue.test>> {doc.doc = 'uyaguari\\'s test', doc.test2 = 'm\\'s test'} name: e::R[*];\n}\n");
+    // Note: Pure strings use \' for escaped single quotes inside single-quoted strings
+    round_trip("Class <<temporal.businesstemporal, taggedValue.Number2>> {doc.test1 = 'test1\\'s', doc.test2 = 'm\\'s test'} meta::this::class::has::path::A\n{\n  <<equality.Key, taggedValue.test>> {doc.doc = 'uyaguari\\'s test', doc.test2 = 'm\\'s test'} name: e::R[*];\n}\n");
 }
 
 // ---------------------------------------------------------------------------
-// Complex constraints (from Java testComplexConstraints, testAppliedFunctionAsParameters, etc.)
+// Complex constraints
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_complex_constraints() {
-    roundtrip("Class A\n[\n  c1\n  (\n    ~function: if($this.'O.K.' == 'ok', |true, |false)\n    ~enforcementLevel: Warn\n  ),\n  c2\n  (\n    ~externalId: 'ext ID'\n    ~function: if($this.'O.K.' == 'ok', |true, |false)\n  ),\n  c3\n  (\n    ~function: if($this.'O.K.' == 'ok', |true, |false)\n    ~message: $this.'O.K.' + ' is not ok'\n  ),\n  c4\n  (\n    ~externalId: 'ext ID'\n    ~function: if($this.'O.K.' == 'ok', |true, |false)\n    ~enforcementLevel: Warn\n    ~message: $this.'O.K.' + ' is not ok'\n  )\n]\n{\n  name: String[45..*];\n  'O.K.': Integer[1..2];\n  xza(s: String[1]) {$s + 'ok'}: String[1];\n}\n");
+    round_trip(indoc! {"
+        Class A
+        [
+          c1
+          (
+            ~function: if($this.'O.K.' == 'ok', |true, |false)
+            ~enforcementLevel: Warn
+          ),
+          c2
+          (
+            ~externalId: 'ext ID'
+            ~function: if($this.'O.K.' == 'ok', |true, |false)
+          ),
+          c3
+          (
+            ~function: if($this.'O.K.' == 'ok', |true, |false)
+            ~message: $this.'O.K.' + ' is not ok'
+          ),
+          c4
+          (
+            ~externalId: 'ext ID'
+            ~function: if($this.'O.K.' == 'ok', |true, |false)
+            ~enforcementLevel: Warn
+            ~message: $this.'O.K.' + ' is not ok'
+          )
+        ]
+        {
+          name: String[45..*];
+          'O.K.': Integer[1..2];
+          xza(s: String[1]) {$s + 'ok'}: String[1];
+        }
+    "});
 }
 
 #[test]
 fn test_unnamed_constraints_and_empty_profile() {
-    roundtrip("Class A\n[\n  $this.ok->toOne() == 1,\n  named: if($this.ok == 'ok', |true, |false),\n  $this.ok->toOne()->toString() == $this.name\n]\n{\n  name: String[45..*];\n  ok: Integer[1..2];\n  xza(s: String[1]) {$s + 'ok'}: String[1];\n}\n\nProfile meta::pure::profiles::doc\n{\n}\n");
+    round_trip(indoc! {"
+        Class A
+        [
+          $this.ok->toOne() == 1,
+          named: if($this.ok == 'ok', |true, |false),
+          $this.ok->toOne()->toString() == $this.name
+        ]
+        {
+          name: String[45..*];
+          ok: Integer[1..2];
+          xza(s: String[1]) {$s + 'ok'}: String[1];
+        }
+
+        Profile meta::pure::profiles::doc
+        {
+        }
+    "});
 }
 
 #[test]
 fn test_or_with_arithmetic_in_constraint() {
-    roundtrip("Class test::C\n[\n  $this.id->isEmpty() || $this.id >= 0\n]\n{\n  id: Integer[0..1];\n}\n");
+    round_trip(indoc! {"
+        Class test::C
+        [
+          $this.id->isEmpty() || $this.id >= 0
+        ]
+        {
+          id: Integer[0..1];
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// Aggregation types (from Java testClassPropertiesWithAggregationType,
-// testAssociationPropertiesWithAggregationType)
+// Aggregation types
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_class_properties_with_aggregation_type() {
-    roundtrip("Class my::Class\n{\n  (shared) prop1: String[1];\n  (none) prop2: String[1];\n  (composite) prop3: String[1];\n  prop4: String[1];\n}\n");
+    round_trip(indoc! {"
+        Class my::Class
+        {
+          (shared) prop1: String[1];
+          (none) prop2: String[1];
+          (composite) prop3: String[1];
+          prop4: String[1];
+        }
+    "});
 }
 
 #[test]
 fn test_association_properties_with_aggregation_type() {
-    roundtrip("Association my::Assoc\n{\n  (shared) prop1: String[1];\n  (none) prop2: String[1];\n}\n");
+    round_trip(indoc! {"
+        Association my::Assoc
+        {
+          (shared) prop1: String[1];
+          (none) prop2: String[1];
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// Enumerations with annotations (from Java testEnumerations)
+// Enumerations with annotations
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_enumerations_with_annotations() {
-    roundtrip("Enum <<st.test>> {doc.doc = 'bla'} myEnum\n{\n  <<equality.Key, taggedValue.test>> {doc.doc = 'Tag Value for enum Value'} a,\n  <<equality.Key, taggedValue.test>> {doc.doc = 'Tag Value for enum Value'} b,\n  c\n}\n\nEnum <<st.test>> {doc.doc = 'bla'} zz::MyOther\n{\n  e,\n  g,\n  r\n}\n");
+    round_trip(indoc! {"
+        Enum <<st.test>> {doc.doc = 'bla'} myEnum
+        {
+          <<equality.Key, taggedValue.test>> {doc.doc = 'Tag Value for enum Value'} a,
+          <<equality.Key, taggedValue.test>> {doc.doc = 'Tag Value for enum Value'} b,
+          c
+        }
+
+        Enum <<st.test>> {doc.doc = 'bla'} zz::MyOther
+        {
+          e,
+          g,
+          r
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// Associations with annotations (from Java testAssociations)
+// Associations with annotations
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_associations_with_annotations() {
-    roundtrip("Association myAsso\n{\n  a: String[1];\n  b: a::c::A[1];\n}\n\nAssociation {doc.doc = 'bla'} k::p::Asso\n{\n  a: Integer[1];\n  b: a::c::B[1];\n}\n");
+    round_trip(indoc! {"
+        Association myAsso
+        {
+          a: String[1];
+          b: a::c::A[1];
+        }
+
+        Association {doc.doc = 'bla'} k::p::Asso
+        {
+          a: Integer[1];
+          b: a::c::B[1];
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// Measure — convertible (from Java testMeasure)
+// Measure — convertible
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_measure_convertible() {
-    roundtrip("Measure NewMeasure\n{\n  *UnitOne: x -> $x;\n  UnitTwo: x -> $x * 1000;\n  UnitThree: x -> $x * 400;\n}\n");
+    round_trip(indoc! {"
+        Measure NewMeasure
+        {
+          *UnitOne: x -> $x;
+          UnitTwo: x -> $x * 1000;
+          UnitThree: x -> $x * 400;
+        }
+    "});
 }
 
 #[test]
 fn test_quoted_measure() {
-    roundtrip("Measure 'some measure'\n{\n  *'Unit One': x -> $x;\n  'Unit Two': x -> $x * 1000;\n  'Unit Three': x -> $x * 400;\n}\n");
+    round_trip(indoc! {"
+        Measure 'some measure'
+        {
+          *'Unit One': x -> $x;
+          'Unit Two': x -> $x * 1000;
+          'Unit Three': x -> $x * 400;
+        }
+    "});
 }
 
 #[test]
 fn test_quoted_non_convertible_measure() {
-    roundtrip("Measure 'some measure'\n{\n  'Unit One';\n  'Unit Two';\n  'Unit Three';\n}\n");
+    round_trip(indoc! {"
+        Measure 'some measure'
+        {
+          'Unit One';
+          'Unit Two';
+          'Unit Three';
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// Measure units in types (from Java testClassWithUnitRelatedProperties)
+// Measure units in types
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_class_with_unit_properties() {
-    roundtrip("Class A\n{\n  unitOne: NewMeasure~UnitOne[0..1];\n  unitTwo: NewMeasure~UnitTwo[0..1];\n}\n\nMeasure NewMeasure\n{\n  *UnitOne: x -> $x;\n  UnitTwo: x -> $x * 1000;\n  UnitThree: x -> $x * 400;\n}\n");
+    round_trip(indoc! {"
+        Class A
+        {
+          unitOne: NewMeasure~UnitOne[0..1];
+          unitTwo: NewMeasure~UnitTwo[0..1];
+        }
+
+        Measure NewMeasure
+        {
+          *UnitOne: x -> $x;
+          UnitTwo: x -> $x * 1000;
+          UnitThree: x -> $x * 400;
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// Derived properties with multiple statements (from Java)
+// Derived properties with multiple statements
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_derived_property_with_multiple_statements() {
-    roundtrip("Class Firm\n{\n  prop1: Float[1];\n  prop3: String[1];\n  prop2() {\n    let x = 0;\n    $x;\n  }: Integer[1];\n}\n");
+    round_trip(indoc! {"
+        Class Firm
+        {
+          prop1: Float[1];
+          prop3: String[1];
+          prop2() {
+            let x = 0;
+            $x;
+          }: Integer[1];
+        }
+    "});
 }
 
 #[test]
 fn test_qualified_property_with_params_and_multi_statements() {
-    roundtrip("Class Query\n{\n  allFirms(limit: Integer[1]) {\n    let offset = $limit + 10;\n    Firm.all()->slice($limit, $offset);\n  }: Firm[*];\n}\n");
+    round_trip(indoc! {"
+        Class Query
+        {
+          allFirms(limit: Integer[1]) {
+            let offset = $limit + 10;
+            Firm.all()->slice($limit, $offset);
+          }: Firm[*];
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// Math precedence edge cases (from Java testMathParenthesis3)
+// Math precedence edge cases
 // ---------------------------------------------------------------------------
 
-/// Composer emits minimal-but-correct parentheses based on operator
-/// precedence. Semantically redundant parens (e.g., `(8 / 4) * 2` where
-/// same-precedence left-associativity makes them unnecessary) are not
-/// preserved. The Java composer preserves original source grouping via
-/// source-info tracking. Both produce semantically identical parse trees.
 #[test]
 fn test_math_precedence_comprehensive() {
-    roundtrip("function f(s: Integer[1], s2: Interger[2]): String[1]\n{\n  let a = 1 / (2 / 3);\n  let a = 1 * (2 * 3);\n  let a = 1 - (2 - 3);\n  let a = 1 + (2 + 3);\n  let a = (8 / 4) * 2;\n  let a = 8 / (4 * 2);\n  let a = (8 * 4) / 2;\n  let a = 8 * (4 / 2);\n  let a = (8 * 4) + 2;\n  let a = 8 * (4 + 2);\n  let a = (8 + 4) * 2;\n  let a = 8 + (4 * 2);\n  let a = (1 - (4 * (2 + 3))) * 4;\n  let a = ((1 - (4 * 2)) + 3) * 4;\n  let a = (1 - (4 * 2)) + (3 * 4);\n  let a = 1 + 4 + 2 + 3 + 4;\n  let a = (1 + 2) - (3 - 4);\n  let a = 1 + 2 <= 3 - 4;\n  let a = (8 <= 4) + 2;\n  let a = 8 + 4 <= 2\n}\n");
+    round_trip(indoc! {"
+        function f(s: Integer[1], s2: Interger[2]): String[1]
+        {
+          let a = 1 / (2 / 3);
+          let a = 1 * (2 * 3);
+          let a = 1 - (2 - 3);
+          let a = 1 + (2 + 3);
+          let a = (8 / 4) * 2;
+          let a = 8 / (4 * 2);
+          let a = (8 * 4) / 2;
+          let a = 8 * (4 / 2);
+          let a = (8 * 4) + 2;
+          let a = 8 * (4 + 2);
+          let a = (8 + 4) * 2;
+          let a = 8 + (4 * 2);
+          let a = (1 - (4 * (2 + 3))) * 4;
+          let a = ((1 - (4 * 2)) + 3) * 4;
+          let a = (1 - (4 * 2)) + (3 * 4);
+          let a = 1 + 4 + 2 + 3 + 4;
+          let a = (1 + 2) - (3 - 4);
+          let a = 1 + 2 <= 3 - 4;
+          let a = (8 <= 4) + 2;
+          let a = 8 + 4 <= 2
+        }
+    "});
 }
 
-/// Canonical form: `(1 - 4 * (2 + 3)) * 4` — inner `4 * (2+3)` doesn't need
-/// parens inside `-` since `*` binds tighter.
 #[test]
 fn test_math_parenthesis_nested() {
-    roundtrip("function f(s: Integer[1], s2: Interger[2]): String[1]\n{\n  let a = (1 - 4 * (2 + 3)) * 4\n}\n");
+    round_trip(indoc! {"
+        function f(s: Integer[1], s2: Interger[2]): String[1]
+        {
+          let a = (1 - 4 * (2 + 3)) * 4
+        }
+    "});
 }
 
-/// Canonical form strips redundant inner parens around `*` inside `+`.
 #[test]
 fn test_math_parenthesis_complex_nested() {
-    roundtrip("function f(s: Integer[1], s2: Interger[2]): String[1]\n{\n  let a = 4 + 1 * (2 + 3) * 4 + (2 + 3) * 4\n}\n");
+    round_trip(indoc! {"
+        function f(s: Integer[1], s2: Interger[2]): String[1]
+        {
+          let a = 4 + 1 * (2 + 3) * 4 + (2 + 3) * 4
+        }
+    "});
 }
 
-/// Canonical form: `((1 - 2) / (2 + 3))` inside `*` strips outer parens.
 #[test]
 fn test_math_parenthesis_division_grouped() {
-    roundtrip("function f(s: Integer[1], s2: Interger[2]): String[1]\n{\n  let a = 4 + (1 - 2) / (2 + 3) * (1 - 4 - 5)\n}\n");
+    round_trip(indoc! {"
+        function f(s: Integer[1], s2: Interger[2]): String[1]
+        {
+          let a = 4 + (1 - 2) / (2 + 3) * (1 - 4 - 5)
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// New instance (from Java testFunctionWithNewAlltypes, testFunctionWithNewAndNewValue)
+// New instance variants
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_new_instance_all_types() {
-    roundtrip("Class anything::goes\n{\n  v: String[1];\n  v2: Integer[0..1];\n  v3: Boolean[*];\n}\n\nfunction f(): Any[1]\n{\n  let x = ^anything::goes(v='value', v2=17, v3=[true, false])\n}\n");
+    round_trip(indoc! {"
+        Class anything::goes
+        {
+          v: String[1];
+          v2: Integer[0..1];
+          v3: Boolean[*];
+        }
+
+        function f(): Any[1]
+        {
+          let x = ^anything::goes(v='value', v2=17, v3=[true, false])
+        }
+    "});
 }
 
 #[test]
 fn test_new_instance_nested() {
-    roundtrip("Class anything::goes\n{\n  v: String[1];\n}\n\nClass anything::goes2\n{\n  v2: anything::goes[1];\n}\n\nfunction f(): Any[1]\n{\n  let x = ^anything::goes2(v2=^anything::goes(v='value'))\n}\n");
+    round_trip(indoc! {"
+        Class anything::goes
+        {
+          v: String[1];
+        }
+
+        Class anything::goes2
+        {
+          v2: anything::goes[1];
+        }
+
+        function f(): Any[1]
+        {
+          let x = ^anything::goes2(v2=^anything::goes(v='value'))
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// Collection with function (from Java testCollectionWithFunction)
+// Collection with function
 // ---------------------------------------------------------------------------
 
-/// Canonical form strips redundant outer parens inside collection: `(true && ...)` → `true && ...`.
 #[test]
 fn test_collection_with_function() {
-    roundtrip("function package::test(value: meta::pure::metamodel::type::Any[0..1]): Boolean[1]\n{\n  [true && (false && false), false]->oneOf()\n}\n");
+    round_trip(indoc! {"
+        function package::test(value: meta::pure::metamodel::type::Any[0..1]): Boolean[1]
+        {
+          [true && (false && false), false]->oneOf()
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// Cast / type reference (from Java testCast)
+// Cast / type reference
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_cast_with_type_ref() {
-    roundtrip("function abc::cast(): Float[1]\n{\n  1->cast(@Float)\n}\n");
+    round_trip(indoc! {"
+        function abc::cast(): Float[1]
+        {
+          1->cast(@Float)
+        }
+    "});
 }
 
 #[test]
 fn test_cast_with_literal() {
-    roundtrip("function abc::cast(): Float[1]\n{\n  1->cast(1.0)\n}\n");
+    round_trip(indoc! {"
+        function abc::cast(): Float[1]
+        {
+          1->cast(1.0)
+        }
+    "});
 }
 
 #[test]
 fn test_cast_with_string() {
-    roundtrip("function abc::cast(): String[1]\n{\n  1->cast('String')\n}\n");
+    round_trip(indoc! {"
+        function abc::cast(): String[1]
+        {
+          1->cast('String')
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// Function signature variants (from Java testFunction2, testDecimalWithScale)
+// Function signature variants
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_function_with_multiple_params() {
-    roundtrip("function f(s: Integer[1], s2: Interger[2]): String[1]\n{\n  println('ok')\n}\n");
+    round_trip(indoc! {"
+        function f(s: Integer[1], s2: Interger[2]): String[1]
+        {
+          println('ok')
+        }
+    "});
 }
 
-/// Last expression in body drops trailing semicolon (it's used as separator, not terminator).
 #[test]
 fn test_function_with_path() {
-    roundtrip("function withPath::f(s: Integer[1]): String[1]\n{\n  println('ok');\n  'a'\n}\n");
+    round_trip(indoc! {"
+        function withPath::f(s: Integer[1]): String[1]
+        {
+          println('ok');
+          'a'
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// Decimal literal (from Java testDecimalWithScale, TestPrimitives.testDecimaOne)
+// Decimal literals
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_decimal_literal_one() {
-    roundtrip("function a::a(): Decimal[1]\n{\n  1.0D\n}\n");
+    round_trip(indoc! {"
+        function a::a(): Decimal[1]
+        {
+          1.0D
+        }
+    "});
 }
 
 #[test]
 fn test_decimal_literal_many() {
-    roundtrip("function a::a(): Decimal[*]\n{\n  [1.0D, 3.0D]\n}\n");
+    round_trip(indoc! {"
+        function a::a(): Decimal[*]
+        {
+          [1.0D, 3.0D]
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// Primitive literals (from Java TestPrimitives)
+// Primitive literals
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_string_many() {
-    roundtrip("function a::a(): String[*]\n{\n  ['ok', 'bla']\n}\n");
+    round_trip(indoc! {"
+        function a::a(): String[*]
+        {
+          ['ok', 'bla']
+        }
+    "});
 }
 
 #[test]
 fn test_integer_many() {
-    roundtrip("function a::a(): String[*]\n{\n  [1, 2]\n}\n");
+    round_trip(indoc! {"
+        function a::a(): String[*]
+        {
+          [1, 2]
+        }
+    "});
 }
 
 #[test]
 fn test_boolean_many() {
-    roundtrip("function a::a(): String[*]\n{\n  [true, false, true]\n}\n");
+    round_trip(indoc! {"
+        function a::a(): String[*]
+        {
+          [true, false, true]
+        }
+    "});
 }
 
 #[test]
 fn test_mixed_collection() {
-    roundtrip("function a::a(): String[*]\n{\n  [1, 'a', true]\n}\n");
+    round_trip(indoc! {"
+        function a::a(): String[*]
+        {
+          [1, 'a', true]
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// Full-path arrow function (from Java testMetaFunctionExecutionWithFullPath)
+// Full-path arrow function
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_meta_function_with_full_path() {
-    roundtrip("function example::somethingElse(input: Integer[1]): Any[0..1]\n{\n  [1, $input]->meta::pure::functions::math::max()\n}\n");
+    round_trip(indoc! {"
+        function example::somethingElse(input: Integer[1]): Any[0..1]
+        {
+          [1, $input]->meta::pure::functions::math::max()
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
 // Quoted function parameters and variables
-// (from Java testFunctionWithQuotedParameters, testFunctionWithQuotedVariables)
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_function_with_quoted_parameters() {
-    roundtrip("function test::qoutedParams('1,2,3': Integer[3]): String[0..1]\n{\n  $'1,2,3'->map(n|$n->toString())->joinStrings(',')\n}\n");
+    round_trip(indoc! {"
+        function test::qoutedParams('1,2,3': Integer[3]): String[0..1]
+        {
+          $'1,2,3'->map(n|$n->toString())->joinStrings(',')
+        }
+    "});
 }
 
-/// Last expression drops trailing semicolon.
 #[test]
 fn test_function_with_quoted_variables() {
-    roundtrip("function test::qoutedParams(): String[0..1]\n{\n  let '1,2,3' = [1, 2, 3];\n  $'1,2,3'->map(n|$n->toString())->joinStrings(',')\n}\n");
+    round_trip(indoc! {"
+        function test::qoutedParams(): String[0..1]
+        {
+          let '1,2,3' = [1, 2, 3];
+          $'1,2,3'->map(n|$n->toString())->joinStrings(',')
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// Default values — comprehensive (from Java testDefaultValue)
+// Default values — comprehensive
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_default_value_class_property() {
-    roundtrip("Class test::A\n{\n  classProperty: my::exampleRootType[1] = ^my::exampleRootType();\n}\n");
+    round_trip(indoc! {"
+        Class test::A
+        {
+          classProperty: my::exampleRootType[1] = ^my::exampleRootType();
+        }
+    "});
 }
 
 #[test]
 fn test_default_value_enum() {
-    roundtrip("Class test::A\n{\n  enumProperty: test::EnumWithDefault[1] = test::EnumWithDefault.DefaultValue;\n}\n");
+    round_trip(indoc! {"
+        Class test::A
+        {
+          enumProperty: test::EnumWithDefault[1] = test::EnumWithDefault.DefaultValue;
+        }
+    "});
 }
 
 #[test]
 fn test_default_value_collection() {
-    roundtrip("Class test::A\n{\n  collectionProperty: String[1..*] = ['one', 'two'];\n}\n");
+    round_trip(indoc! {"
+        Class test::A
+        {
+          collectionProperty: String[1..*] = ['one', 'two'];
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
@@ -700,40 +1325,103 @@ fn test_default_value_collection() {
 
 #[test]
 fn test_complex_class() {
-    roundtrip("Class 'A-Z'\n[\n  constraint1: $this.ok->toOne() == 1,\n  constraint2: if($this.ok == 'ok', |true, |false),\n  'constraint-3': $this.anyValue->instanceOf(String) || $this.anyValue->instanceOf(AEnum)\n]\n{\n  name: String[45..*];\n  ok: Integer[1..2];\n  anyValue: Any[1];\n  'maybe or maybe not!': Boolean[1];\n  xza(s: String[1]) {$s + 'ok\\n{\"\"}\\'\\''}: String[1];\n  'I\\'m derived'('#String': String[1]) {$s + 'ok\\n{\"\"}\\'\\''}: String[1];\n}\n\nEnum AEnum\n{\n  B\n}\n");
+    // This test uses inline \n because it contains complex escape sequences
+    // that interact with indoc's dedent logic
+    round_trip("Class 'A-Z'\n[\n  constraint1: $this.ok->toOne() == 1,\n  constraint2: if($this.ok == 'ok', |true, |false),\n  'constraint-3': $this.anyValue->instanceOf(String) || $this.anyValue->instanceOf(AEnum)\n]\n{\n  name: String[45..*];\n  ok: Integer[1..2];\n  anyValue: Any[1];\n  'maybe or maybe not!': Boolean[1];\n  xza(s: String[1]) {$s + 'ok\\n{\"\"}\\'\\''}: String[1];\n  'I\\'m derived'('#String': String[1]) {$s + 'ok\\n{\"\"}\\'\\''}: String[1];\n}\n\nEnum AEnum\n{\n  B\n}\n");
 }
 
 // ---------------------------------------------------------------------------
-// Large mixed domain (from Java testDomainMixed)
+// Large mixed domain
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_domain_mixed() {
-    roundtrip("Class <<temporal.businesstemporal>> {doc.doc = 'bla'} A extends B\n[\n  constraint1: $this.ok->toOne() == 1,\n  constraint2: $this.ok->toOne()->toString() == $this.name\n]\n{\n  <<equality.Key>> {doc.doc = 'bla'} name: e::R[*];\n  {doc.doc = 'bla'} ok: Integer[1..2];\n  <<devStatus.inProgress>> q(s: String[1]) {$s + 'ok'}: c::d::R[1];\n  {doc.doc = 'bla'} xza(s: z::k::B[1]) {$s + 'ok'}: String[1];\n}\n\nAssociation myAsso\n{\n  a: String[1];\n  b: a::c::A[1];\n}\n\nEnum <<st.test>> {doc.doc = 'bla'} z::k::B\n{\n  <<equality.Key, taggedValue.test>> {doc.doc = 'Tag Value for enum Value'} a,\n  b,\n  c\n}\n\nProfile meta::pure::profiles::doc\n{\n  stereotypes: [deprecated];\n  tags: [doc, todo];\n}\n\nProfile meta::pure::profiles::profile2\n{\n  tags: [doc, todo];\n}\n");
+    round_trip(indoc! {"
+        Class <<temporal.businesstemporal>> {doc.doc = 'bla'} A extends B
+        [
+          constraint1: $this.ok->toOne() == 1,
+          constraint2: $this.ok->toOne()->toString() == $this.name
+        ]
+        {
+          <<equality.Key>> {doc.doc = 'bla'} name: e::R[*];
+          {doc.doc = 'bla'} ok: Integer[1..2];
+          <<devStatus.inProgress>> q(s: String[1]) {$s + 'ok'}: c::d::R[1];
+          {doc.doc = 'bla'} xza(s: z::k::B[1]) {$s + 'ok'}: String[1];
+        }
+
+        Association myAsso
+        {
+          a: String[1];
+          b: a::c::A[1];
+        }
+
+        Enum <<st.test>> {doc.doc = 'bla'} z::k::B
+        {
+          <<equality.Key, taggedValue.test>> {doc.doc = 'Tag Value for enum Value'} a,
+          b,
+          c
+        }
+
+        Profile meta::pure::profiles::doc
+        {
+          stereotypes: [deprecated];
+          tags: [doc, todo];
+        }
+
+        Profile meta::pure::profiles::profile2
+        {
+          tags: [doc, todo];
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
-// Import statements (from Java testClassWithImport, etc.)
+// Import statements
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_class_with_import() {
-    roundtrip("import anything::*;\nClass anything::goes2\n{\n}\n");
+    round_trip(indoc! {"
+        import anything::*;
+        Class anything::goes2
+        {
+        }
+    "});
 }
 
 #[test]
 fn test_enum_with_import() {
-    roundtrip("import my::models::*;\nEnum my::models::Color\n{\n  Red,\n  Green,\n  Blue\n}\n");
+    round_trip(indoc! {"
+        import my::models::*;
+        Enum my::models::Color
+        {
+          Red,
+          Green,
+          Blue
+        }
+    "});
 }
 
 #[test]
 fn test_function_with_import() {
-    roundtrip("import meta::pure::functions::*;\nfunction my::add(a: Integer[1], b: Integer[1]): Integer[1]\n{\n  $a + $b\n}\n");
+    round_trip(indoc! {"
+        import meta::pure::functions::*;
+        function my::add(a: Integer[1], b: Integer[1]): Integer[1]
+        {
+          $a + $b
+        }
+    "});
 }
 
 #[test]
 fn test_multiple_imports() {
-    roundtrip("import anything::*;\nimport other::stuff::*;\nClass anything::goes2\n{\n}\n");
+    round_trip(indoc! {"
+        import anything::*;
+        import other::stuff::*;
+        Class anything::goes2
+        {
+        }
+    "});
 }
 
 // ---------------------------------------------------------------------------
@@ -743,7 +1431,6 @@ fn test_multiple_imports() {
 /// Single Pure section: `###Pure` header is normalized away (it's the default).
 #[test]
 fn test_section_header_single_pure_normalized() {
-    // Input has ###Pure, but output omits it (single Pure section = default)
     let input = "###Pure\nClass my::Foo\n{\n}\n";
     let expected = "Class my::Foo\n{\n}\n";
     let ast = legend_pure_parser_parser::parse(input, "test.pure")
@@ -767,74 +1454,140 @@ fn test_section_header_with_import_normalized() {
 // More expression coverage (from Java TestDomainGrammarRoundtrip)
 // ---------------------------------------------------------------------------
 
-/// Java: testFunction2
 #[test]
 fn test_function_println() {
-    roundtrip("function f(s: Integer[1], s2: Interger[2]): String[1]\n{\n  println('ok')\n}\n");
+    round_trip(indoc! {"
+        function f(s: Integer[1], s2: Interger[2]): String[1]
+        {
+          println('ok')
+        }
+    "});
 }
 
-/// Java: testTo (type reference arg)
 #[test]
 fn test_to_with_type_ref() {
-    roundtrip("function abc::to(): Float[1]\n{\n  toVariant(1)->to(@Float)\n}\n");
+    round_trip(indoc! {"
+        function abc::to(): Float[1]
+        {
+          toVariant(1)->to(@Float)
+        }
+    "});
 }
 
-/// Java: testTo (literal arg)
 #[test]
 fn test_to_with_literal() {
-    roundtrip("function abc::to(): Float[1]\n{\n  toVariant(1)->to(1.0)\n}\n");
+    round_trip(indoc! {"
+        function abc::to(): Float[1]
+        {
+          toVariant(1)->to(1.0)
+        }
+    "});
 }
 
-/// Java: testTo (string arg)
 #[test]
 fn test_to_with_string() {
-    roundtrip("function abc::to(): String[1]\n{\n  toVariant(1)->to('String')\n}\n");
+    round_trip(indoc! {"
+        function abc::to(): String[1]
+        {
+          toVariant(1)->to('String')
+        }
+    "});
 }
 
-/// Java: testToMany
 #[test]
 fn test_to_many_with_type_ref() {
-    roundtrip("function abc::to(): Float[*]\n{\n  toVariant(1)->toMany(@Float)\n}\n");
+    round_trip(indoc! {"
+        function abc::to(): Float[*]
+        {
+          toVariant(1)->toMany(@Float)
+        }
+    "});
 }
 
-/// Java: testFunctionWithNew
 #[test]
 fn test_function_with_new() {
-    roundtrip("Class anything::goes\n{\n  v: String[1];\n}\n\nfunction f(): Any[1]\n{\n  let x = ^anything::goes(v='value')\n}\n");
+    round_trip(indoc! {"
+        Class anything::goes
+        {
+          v: String[1];
+        }
+
+        function f(): Any[1]
+        {
+          let x = ^anything::goes(v='value')
+        }
+    "});
 }
 
-/// Java: testFunctionWithNewAlltypes
 #[test]
 fn test_function_with_new_all_types() {
-    roundtrip("Class anything::goes\n{\n  v: String[1];\n  v2: Integer[0..1];\n  v3: Boolean[*];\n}\n\nfunction f(): Any[1]\n{\n  let x = ^anything::goes(v='value', v2=1, v3=[true, false])\n}\n");
+    round_trip(indoc! {"
+        Class anything::goes
+        {
+          v: String[1];
+          v2: Integer[0..1];
+          v3: Boolean[*];
+        }
+
+        function f(): Any[1]
+        {
+          let x = ^anything::goes(v='value', v2=1, v3=[true, false])
+        }
+    "});
 }
 
-/// Java: testFunctionTest
 #[test]
 fn test_function_test() {
-    roundtrip("function my::testFunc(s: String[1]): String[1]\n{\n  $s + ' world'\n}\n{\n  test1 | testFunc('hello') => 'hello world';\n}\n");
+    round_trip(indoc! {"
+        function my::testFunc(s: String[1]): String[1]
+        {
+          $s + ' world'
+        }
+        {
+          test1 | testFunc('hello') => 'hello world';
+        }
+    "});
 }
 
-/// Boolean precedence: || has lower precedence than &&, so parens around && are redundant
 #[test]
 fn test_boolean_precedence_or_and() {
-    roundtrip("function withPath::f(s: Integer[1]): String[1]\n{\n  false || true && false;\n  'a'\n}\n");
+    round_trip(indoc! {"
+        function withPath::f(s: Integer[1]): String[1]
+        {
+          false || true && false;
+          'a'
+        }
+    "});
 }
 
-/// Boolean precedence: && has higher precedence than ||
 #[test]
 fn test_boolean_precedence_and_or() {
-    roundtrip("function withPath::f(s: Integer[1]): String[1]\n{\n  (true || false) && true;\n  'a'\n}\n");
+    round_trip(indoc! {"
+        function withPath::f(s: Integer[1]): String[1]
+        {
+          (true || false) && true;
+          'a'
+        }
+    "});
 }
 
-/// Java: testMultiIFExpressions
 #[test]
 fn test_multi_if_expressions() {
-    roundtrip("function model::firms(): String[1]\n{\n  if($this.name == 'A', |'FirmA', |if($this.name == 'B', |'FirmB', |'Other'))\n}\n");
+    round_trip(indoc! {"
+        function model::firms(): String[1]
+        {
+          if($this.name == 'A', |'FirmA', |if($this.name == 'B', |'FirmB', |'Other'))
+        }
+    "});
 }
 
-/// Java: testInstanceWithDefaultValue
 #[test]
 fn test_instance_with_default_value() {
-    roundtrip("Class my::Address\n{\n  street: String[1] = 'Main St';\n  city: String[1] = 'NY';\n}\n");
+    round_trip(indoc! {"
+        Class my::Address
+        {
+          street: String[1] = 'Main St';
+          city: String[1] = 'NY';
+        }
+    "});
 }

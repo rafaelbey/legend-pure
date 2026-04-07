@@ -29,5 +29,6 @@ serde_json = { workspace = true, optional = true }
 protocol = ["dep:legend-pure-parser-protocol", "dep:serde_json"]
 
 [dev-dependencies]
+indoc = "2"
 insta = { workspace = true }
 legend-pure-parser-parser = { path = "../parser" }
