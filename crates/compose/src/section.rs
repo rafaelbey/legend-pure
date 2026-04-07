@@ -34,17 +34,23 @@ use crate::writer::IndentWriter;
 #[must_use]
 pub fn compose_source_file(sf: &SourceFile) -> String {
     let mut w = IndentWriter::new();
+    let is_single_pure_section =
+        sf.sections.len() == 1 && sf.sections[0].kind == "Pure";
 
     for (si, section) in sf.sections.iter().enumerate() {
         // Section headers (e.g., `###Pure`)
         //
-        // TODO: Emit `###SectionName` headers for multi-section files and
-        // non-Pure section types. Currently, single-section Pure files are
-        // the only supported case — the header is omitted because Pure is
-        // the default section type.
-        //
-        // This needs to be implemented when we support multi-parser grammars
-        // (e.g., `###Mapping`, `###Connection`) or import-aware sections.
+        // Single-section Pure files omit the header because Pure is the
+        // default section type. Multi-section files and non-Pure sections
+        // always emit the header.
+        if !is_single_pure_section {
+            if si > 0 {
+                w.newline();
+            }
+            w.write("###");
+            w.write(&section.kind);
+            w.newline();
+        }
 
         // Import statements
         for import in &section.imports {

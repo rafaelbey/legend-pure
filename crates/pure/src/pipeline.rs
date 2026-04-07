@@ -48,6 +48,7 @@ use crate::nodes::function::Function;
 use crate::nodes::measure::Measure;
 use crate::nodes::profile::Profile;
 use crate::nodes::association::Association;
+use crate::nodes::unit::Unit;
 use crate::resolve::{self, ResolutionContext};
 use crate::types::{Multiplicity, TypeExpr};
 
@@ -78,16 +79,19 @@ pub fn compile(source_files: &[SourceFile]) -> Result<PureModel, Vec<Compilation
     let mut errors = Vec::new();
 
     // ---- Pass 1: Declaration ----
-    let declarations = pass_declare(source_files, &mut model, &mut errors);
+    let (declarations, unit_mappings) = pass_declare(source_files, &mut model, &mut errors);
 
     // ---- Pass 1.5: Topological Sort ----
     let sorted = pass_topo_sort(&declarations, source_files, &model, &mut errors);
 
     // ---- Pass 2: Definition ----
-    pass_define(&sorted, source_files, &declarations, &mut model, &mut errors);
+    pass_define(&sorted, source_files, &declarations, &unit_mappings, &mut model, &mut errors);
 
     // ---- Freeze ----
     model.rebuild_derived_indexes();
+
+    // ---- Pass 3: Validation ----
+    errors.extend(crate::validate::validate(&model));
 
     if errors.is_empty() {
         Ok(model)
@@ -113,6 +117,15 @@ struct Declaration {
     element_idx: usize,
 }
 
+/// Tracks unit `ElementId`s allocated for a measure during Pass 1.
+#[derive(Debug, Clone)]
+struct UnitMapping {
+    /// The canonical unit's ElementId, if present.
+    canonical: Option<ElementId>,
+    /// Non-canonical unit ElementIds, in order.
+    non_canonical: Vec<ElementId>,
+}
+
 // ---------------------------------------------------------------------------
 // Pass 1: Declaration
 // ---------------------------------------------------------------------------
@@ -120,13 +133,15 @@ struct Declaration {
 /// Pass 1 — assigns `ElementId`s, allocates element shells, and builds the
 /// package tree.
 ///
-/// Returns a map from fully qualified name to Declaration.
+/// Returns a map from fully qualified name to Declaration, and a map from
+/// measure `ElementId` to its allocated unit `ElementId`s.
 fn pass_declare(
     source_files: &[SourceFile],
     model: &mut PureModel,
     errors: &mut Vec<CompilationError>,
-) -> HashMap<SmolStr, Declaration> {
+) -> (HashMap<SmolStr, Declaration>, HashMap<ElementId, UnitMapping>) {
     let mut declarations = HashMap::new();
+    let mut unit_mappings: HashMap<ElementId, UnitMapping> = HashMap::new();
     #[allow(clippy::cast_possible_truncation)] // chunks.len() is bounded by u16 in practice
     let chunk_id = model.chunks.len() as u16;
     let mut chunk = ModelChunk::new(chunk_id);
@@ -172,19 +187,96 @@ fn pass_declare(
                 let id = ElementId { chunk_id, local_idx };
                 model.register_element(package_id, id);
 
-                declarations.insert(fqn, Declaration {
+                declarations.insert(fqn.clone(), Declaration {
                     id,
                     file_idx,
                     section_idx,
                     element_idx,
                 });
+
+                // For Measures: allocate Unit shells now
+                if let ast::Element::Measure(measure_def) = element {
+                    let mapping = allocate_unit_shells(
+                        measure_def, id, &fqn, chunk_id, package_id,
+                        &mut chunk, model, &mut declarations,
+                        file_idx, section_idx, element_idx,
+                    );
+                    unit_mappings.insert(id, mapping);
+                }
             }
         }
     }
 
     model.chunks.push(chunk);
-    declarations
+    (declarations, unit_mappings)
 }
+
+/// Allocates `Element::Unit` shells for each unit in a measure definition.
+///
+/// Units get their own `ElementId` so they can be referenced in type positions
+/// (e.g., `prop: Kilogram[1]`). Each unit is registered in the same package
+/// as the parent measure.
+fn allocate_unit_shells(
+    measure_def: &ast::MeasureDef,
+    measure_id: ElementId,
+    measure_fqn: &str,
+    chunk_id: u16,
+    package_id: crate::ids::PackageId,
+    chunk: &mut ModelChunk,
+    model: &mut PureModel,
+    declarations: &mut HashMap<SmolStr, Declaration>,
+    file_idx: usize,
+    section_idx: usize,
+    element_idx: usize,
+) -> UnitMapping {
+    let mut canonical = None;
+    let mut non_canonical = Vec::new();
+
+    // Helper to allocate a single unit
+    let mut alloc_unit = |unit_def: &ast::UnitDef| -> ElementId {
+        let unit_name = &unit_def.name;
+        let unit_fqn = SmolStr::new(format!("{measure_fqn}~{unit_name}"));
+
+        let unit_shell = Element::Unit(Unit {
+            measure: measure_id,
+            conversion_expression: None, // Hydrated in Pass 2
+        });
+
+        let local_idx = chunk.alloc_element(
+            ElementNode {
+                name: unit_name.clone(),
+                source_info: unit_def.source_info.clone(),
+                parent_package: package_id,
+            },
+            unit_shell,
+        );
+
+        let unit_id = ElementId { chunk_id, local_idx };
+        model.register_element(package_id, unit_id);
+
+        declarations.insert(unit_fqn, Declaration {
+            id: unit_id,
+            file_idx,
+            section_idx,
+            element_idx,
+        });
+
+        unit_id
+    };
+
+    // Canonical unit
+    if let Some(ref canon) = measure_def.canonical_unit {
+        canonical = Some(alloc_unit(canon));
+    }
+
+    // Non-canonical units
+    for unit_def in &measure_def.non_canonical_units {
+        non_canonical.push(alloc_unit(unit_def));
+    }
+
+    UnitMapping { canonical, non_canonical }
+}
+
 
 // ---------------------------------------------------------------------------
 // Pass 1.5: Topological Sort (Hard Dependencies)
@@ -291,6 +383,7 @@ fn pass_define(
     sorted: &[ElementId],
     source_files: &[SourceFile],
     declarations: &HashMap<SmolStr, Declaration>,
+    unit_mappings: &HashMap<ElementId, UnitMapping>,
     model: &mut PureModel,
     errors: &mut Vec<CompilationError>,
 ) {
@@ -313,7 +406,7 @@ fn pass_define(
             model,
         };
 
-        let hydrated = hydrate_element(ast_element, &ctx, errors);
+        let hydrated = hydrate_element(ast_element, id, unit_mappings, &ctx, errors);
 
         // Replace the shell in the chunk
         let chunk = &mut model.chunks[id.chunk_id as usize];
@@ -380,6 +473,8 @@ fn create_shell(element: &ast::Element) -> Element {
 #[allow(clippy::too_many_lines)]
 fn hydrate_element(
     element: &ast::Element,
+    element_id: ElementId,
+    unit_mappings: &HashMap<ElementId, UnitMapping>,
     ctx: &ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Element {
@@ -481,7 +576,7 @@ fn hydrate_element(
                 parameters,
                 return_type,
                 return_multiplicity,
-                body: vec![], // Expression lowering deferred to Phase 4+
+                body: vec![], // Expression lowering deferred
                 stereotypes,
                 tagged_values,
             })
@@ -506,11 +601,13 @@ fn hydrate_element(
             })
         }
         ast::Element::Measure(_measure_def) => {
-            // Measure/Unit lowering deferred to Phase 4 — units need
-            // their own ElementIds allocated in Pass 1.
+            // Unit ElementIds were allocated in Pass 1; look them up
+            let mapping = unit_mappings.get(&element_id);
             Element::Measure(Measure {
-                canonical_unit: None,
-                non_canonical_units: vec![],
+                canonical_unit: mapping.and_then(|m| m.canonical),
+                non_canonical_units: mapping
+                    .map(|m| m.non_canonical.clone())
+                    .unwrap_or_default(),
             })
         }
     }

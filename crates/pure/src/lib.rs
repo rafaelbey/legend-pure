@@ -54,3 +54,4 @@ pub mod nodes;
 pub mod pipeline;
 pub(crate) mod resolve;
 pub mod types;
+pub(crate) mod validate;
