@@ -19,9 +19,8 @@
 //!
 //! ## Design Principles
 //!
-//! - **Infallible**: Every AST node can be represented in the protocol model.
-//!   Conversions use `From` (not `TryFrom`) because the protocol is strictly
-//!   more permissive than the AST.
+//! - **Fallible**: Conversion functions return `Result` so callers can handle
+//!   serialization errors rather than panicking.
 //! - **No state**: Conversions are pure functions with no shared mutable state.
 //! - **Recursive**: Complex types (expressions, elements) recurse into children.
 
@@ -30,6 +29,9 @@ use legend_pure_parser_ast::source_info::Spanned;
 use legend_pure_parser_ast::type_ref::HasMultiplicity;
 
 use crate::v1;
+
+/// Result alias for AST → Protocol conversions.
+pub type Result<T> = std::result::Result<T, serde_json::Error>;
 
 // ---------------------------------------------------------------------------
 // Leaf conversions
@@ -51,6 +53,16 @@ impl From<ast::SourceInfo> for v1::source_info::SourceInformation {
     fn from(si: ast::SourceInfo) -> Self {
         Self::from(&si)
     }
+}
+
+/// Converts a borrowed AST [`SourceInfo`](ast::SourceInfo) into a protocol
+/// `Option<SourceInformation>` without cloning.
+///
+/// This is the standard way to populate `source_information` fields during
+/// AST → Protocol conversion.
+#[allow(clippy::unnecessary_wraps)]
+fn source_information(source_info: &ast::SourceInfo) -> Option<v1::source_info::SourceInformation> {
+    Some(source_info.into())
 }
 
 impl From<&ast::Multiplicity> for v1::multiplicity::Multiplicity {
@@ -84,7 +96,7 @@ impl From<&ast::type_ref::TypeReference> for v1::generic_type::GenericType {
         Self {
             raw_type: v1::generic_type::PackageableType {
                 full_path: tr.full_path(),
-                source_information: Some(tr.source_info.clone().into()),
+                source_information: source_information(&tr.source_info),
             },
             type_arguments: tr.type_arguments.iter().map(Into::into).collect(),
             multiplicity_arguments: vec![],
@@ -93,7 +105,7 @@ impl From<&ast::type_ref::TypeReference> for v1::generic_type::GenericType {
                 .iter()
                 .map(type_variable_value_to_json)
                 .collect(),
-            source_information: Some(tr.source_info.clone().into()),
+            source_information: source_information(&tr.source_info),
         }
     }
 }
@@ -132,8 +144,8 @@ impl From<&ast::annotation::StereotypePtr> for v1::annotation::StereotypePtr {
         Self {
             profile: format_element_ptr(&s.profile),
             value: s.value.to_string(),
-            source_information: Some(s.source_info.clone().into()),
-            profile_source_information: Some(s.profile.source_info.clone().into()),
+            source_information: source_information(&s.source_info),
+            profile_source_information: source_information(&s.profile.source_info),
         }
     }
 }
@@ -143,8 +155,8 @@ impl From<&ast::annotation::TagPtr> for v1::annotation::TagPtr {
         Self {
             profile: format_element_ptr(&t.profile),
             value: t.value.to_string(),
-            source_information: Some(t.source_info.clone().into()),
-            profile_source_information: Some(t.profile.source_info.clone().into()),
+            source_information: source_information(&t.source_info),
+            profile_source_information: source_information(&t.profile.source_info),
         }
     }
 }
@@ -154,7 +166,7 @@ impl From<&ast::annotation::TaggedValue> for v1::annotation::TaggedValue {
         Self {
             tag: (&tv.tag).into(),
             value: tv.value.clone(),
-            source_information: Some(tv.source_info.clone().into()),
+            source_information: source_information(&tv.source_info),
         }
     }
 }
@@ -172,22 +184,29 @@ fn format_element_ptr(ptr: &ast::annotation::PackageableElementPtr) -> String {
 // Property conversions
 // ---------------------------------------------------------------------------
 
-impl From<&ast::element::Property> for v1::property::Property {
-    fn from(p: &ast::element::Property) -> Self {
-        Self {
-            name: p.name.to_string(),
-            generic_type: (&p.type_ref).into(),
-            multiplicity: (&p.multiplicity).into(),
-            default_value: p.default_value.as_ref().map(|dv| v1::property::DefaultValue {
-                value: convert_expression(dv),
-                source_information: Some(dv.source_info().clone().into()),
-            }),
-            stereotypes: p.stereotypes.iter().map(Into::into).collect(),
-            tagged_values: p.tagged_values.iter().map(Into::into).collect(),
-            aggregation: p.aggregation.map(std::convert::Into::into),
-            source_information: Some(p.source_info.clone().into()),
-        }
-    }
+/// Converts an AST `Property` into a protocol `Property`.
+///
+/// # Errors
+///
+/// Returns an error if expression serialization within default values fails.
+fn convert_property(p: &ast::element::Property) -> Result<v1::property::Property> {
+    let default_value = match &p.default_value {
+        Some(dv) => Some(v1::property::DefaultValue {
+            value: convert_expression(dv)?,
+            source_information: source_information(dv.source_info()),
+        }),
+        None => None,
+    };
+    Ok(v1::property::Property {
+        name: p.name.to_string(),
+        generic_type: (&p.type_ref).into(),
+        multiplicity: (&p.multiplicity).into(),
+        default_value,
+        stereotypes: p.stereotypes.iter().map(Into::into).collect(),
+        tagged_values: p.tagged_values.iter().map(Into::into).collect(),
+        aggregation: p.aggregation.map(std::convert::Into::into),
+        source_information: source_information(&p.source_info),
+    })
 }
 
 impl From<ast::element::AggregationKind> for v1::property::AggregationKind {
@@ -200,49 +219,65 @@ impl From<ast::element::AggregationKind> for v1::property::AggregationKind {
     }
 }
 
-impl From<&ast::element::QualifiedProperty> for v1::property::QualifiedProperty {
-    fn from(qp: &ast::element::QualifiedProperty) -> Self {
-        Self {
-            name: qp.name.to_string(),
-            parameters: qp.parameters.iter().map(convert_parameter).collect(),
-            return_generic_type: (&qp.return_type).into(),
-            return_multiplicity: (&qp.return_multiplicity).into(),
-            stereotypes: qp.stereotypes.iter().map(Into::into).collect(),
-            tagged_values: qp.tagged_values.iter().map(Into::into).collect(),
-            body: qp.body.iter().map(convert_expression).collect(),
-            source_information: Some(qp.source_info.clone().into()),
-        }
-    }
+/// Converts an AST `QualifiedProperty` into a protocol `QualifiedProperty`.
+///
+/// # Errors
+///
+/// Returns an error if parameter or body expression serialization fails.
+fn convert_qualified_property(
+    qp: &ast::element::QualifiedProperty,
+) -> Result<v1::property::QualifiedProperty> {
+    let parameters: std::result::Result<Vec<_>, _> =
+        qp.parameters.iter().map(convert_parameter).collect();
+    let body: std::result::Result<Vec<_>, _> =
+        qp.body.iter().map(convert_expression).collect();
+    Ok(v1::property::QualifiedProperty {
+        name: qp.name.to_string(),
+        parameters: parameters?,
+        return_generic_type: (&qp.return_type).into(),
+        return_multiplicity: (&qp.return_multiplicity).into(),
+        stereotypes: qp.stereotypes.iter().map(Into::into).collect(),
+        tagged_values: qp.tagged_values.iter().map(Into::into).collect(),
+        body: body?,
+        source_information: source_information(&qp.source_info),
+    })
 }
 
-impl From<&ast::element::Constraint> for v1::property::Constraint {
-    fn from(c: &ast::element::Constraint) -> Self {
-        Self {
-            name: c
-                .name
-                .as_ref()
-                .map_or_else(|| "constraint".to_string(), ToString::to_string),
-            owner: None,
-            function_definition: convert_expression(&c.function_definition),
-            source_information: Some(c.source_info.clone().into()),
-            external_id: c.external_id.clone(),
-            enforcement_level: c.enforcement_level.as_ref().map(ToString::to_string),
-            message_function: c.message.as_ref().map(convert_expression),
-        }
-    }
+/// Converts an AST `Constraint` into a protocol `Constraint`.
+///
+/// # Errors
+///
+/// Returns an error if constraint expression serialization fails.
+fn convert_constraint(c: &ast::element::Constraint) -> Result<v1::property::Constraint> {
+    Ok(v1::property::Constraint {
+        name: c
+            .name
+            .as_ref()
+            .map_or_else(|| "constraint".to_string(), ToString::to_string),
+        owner: None,
+        function_definition: convert_expression(&c.function_definition)?,
+        source_information: source_information(&c.source_info),
+        external_id: c.external_id.clone(),
+        enforcement_level: c.enforcement_level.as_ref().map(ToString::to_string),
+        message_function: c.message.as_ref().map(convert_expression).transpose()?,
+    })
 }
 
 /// Converts a `Parameter` to a serialized variable value specification.
-fn convert_parameter(p: &ast::annotation::Parameter) -> serde_json::Value {
+///
+/// # Errors
+///
+/// Returns an error if the variable serialization fails.
+fn convert_parameter(p: &ast::annotation::Parameter) -> Result<serde_json::Value> {
     let var = v1::value_spec::Variable {
         name: p.name.to_string(),
         generic_type: p.type_ref.as_ref().map(Into::into),
         multiplicity: p.multiplicity.as_ref().map(Into::into),
         supports_stream: None,
-        source_information: Some(p.source_info.clone().into()),
+        source_information: source_information(&p.source_info),
     };
     let vs = v1::value_spec::ValueSpecification::Var(var);
-    serde_json::to_value(&vs).expect("Variable serialization cannot fail")
+    serde_json::to_value(&vs)
 }
 
 // ---------------------------------------------------------------------------
@@ -255,14 +290,12 @@ fn convert_parameter(p: &ast::annotation::Parameter) -> serde_json::Value {
 /// because expressions can appear in contexts that expect `serde_json::Value`
 /// (e.g., constraint function definitions, qualified property bodies).
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if the `ValueSpecification` cannot be serialized to JSON, which
-/// should never happen for well-formed protocol types.
-#[must_use]
-pub fn convert_expression(expr: &ast::expression::Expression) -> serde_json::Value {
+/// Returns an error if the `ValueSpecification` cannot be serialized to JSON.
+pub fn convert_expression(expr: &ast::expression::Expression) -> Result<serde_json::Value> {
     let vs = convert_expression_typed(expr);
-    serde_json::to_value(&vs).expect("ValueSpecification serialization cannot fail")
+    serde_json::to_value(&vs)
 }
 
 /// Converts an AST `Expression` into a typed `ValueSpecification`.
@@ -291,7 +324,7 @@ pub fn convert_expression_typed(
             generic_type: None,
             multiplicity: None,
             supports_stream: None,
-            source_information: Some(var.source_info.clone().into()),
+            source_information: source_information(&var.source_info),
         }),
 
         // -- Operators (desugared to function applications) --
@@ -346,7 +379,7 @@ pub fn convert_expression_typed(
                     .iter()
                     .map(convert_expression_typed)
                     .collect(),
-                source_information: Some(e.source_info.clone().into()),
+                source_information: source_information(&e.source_info),
             })
         }
 
@@ -357,7 +390,7 @@ pub fn convert_expression_typed(
             parameters: std::iter::once(convert_expression_typed(&e.target))
                 .chain(e.arguments.iter().map(convert_expression_typed))
                 .collect(),
-            source_information: Some(e.source_info.clone().into()),
+            source_information: source_information(&e.source_info),
         }),
 
         // -- Member access --
@@ -367,7 +400,7 @@ pub fn convert_expression_typed(
         Expression::TypeReferenceExpr(e) => {
             ValueSpecification::PackageableElementPtr(ProtocolPackageableElementPtr {
                 full_path: e.type_ref.full_path(),
-                source_information: Some(e.source_info.clone().into()),
+                source_information: source_information(&e.source_info),
             })
         }
 
@@ -382,24 +415,24 @@ pub fn convert_expression_typed(
                     generic_type: p.type_ref.as_ref().map(Into::into),
                     multiplicity: p.multiplicity.as_ref().map(Into::into),
                     supports_stream: None,
-                    source_information: Some(p.source_info.clone().into()),
+                    source_information: source_information(&p.source_info),
                 })
                 .collect(),
-            source_information: Some(e.source_info.clone().into()),
+            source_information: source_information(&e.source_info),
         }),
 
         // -- Let: desugared to letFunction('name', expr) --
         Expression::Let(e) => {
             let name_val = ValueSpecification::String(CString {
                 value: e.name.to_string(),
-                source_information: Some(e.source_info.clone().into()),
+                source_information: source_information(&e.source_info),
             });
             let value_val = convert_expression_typed(&e.value);
             ValueSpecification::Func(AppliedFunction {
                 function: "letFunction".to_string(),
                 f_control: None,
                 parameters: vec![name_val, value_val],
-                source_information: Some(e.source_info.clone().into()),
+                source_information: source_information(&e.source_info),
             })
         }
 
@@ -407,7 +440,7 @@ pub fn convert_expression_typed(
         Expression::Collection(e) => ValueSpecification::Collection(ProtocolCollection {
             multiplicity: collection_multiplicity(e.elements.len()),
             values: e.elements.iter().map(convert_expression_typed).collect(),
-            source_information: Some(e.source_info.clone().into()),
+            source_information: source_information(&e.source_info),
         }),
 
         // -- New instance: `^MyClass(name='John')` → classInstance --
@@ -420,10 +453,10 @@ pub fn convert_expression_typed(
                         add: false,
                         key: Box::new(ValueSpecification::String(CString {
                             value: a.key.to_string(),
-                            source_information: Some(a.source_info.clone().into()),
+                            source_information: source_information(&a.source_info),
                         })),
                         expression: Box::new(convert_expression_typed(&a.value)),
-                        source_information: Some(a.source_info.clone().into()),
+                        source_information: source_information(&a.source_info),
                     })
                 })
                 .collect();
@@ -431,7 +464,7 @@ pub fn convert_expression_typed(
             let class_ref =
                 ValueSpecification::PackageableElementPtr(ProtocolPackageableElementPtr {
                     full_path: format_element_ptr(&e.class),
-                    source_information: Some(e.source_info.clone().into()),
+                    source_information: source_information(&e.source_info),
                 });
             let empty_name = ValueSpecification::String(CString {
                 value: String::new(),
@@ -440,13 +473,13 @@ pub fn convert_expression_typed(
             let keys_collection = ValueSpecification::Collection(ProtocolCollection {
                 multiplicity: collection_multiplicity(key_expressions.len()),
                 values: key_expressions,
-                source_information: Some(e.source_info.clone().into()),
+                source_information: source_information(&e.source_info),
             });
             ValueSpecification::Func(AppliedFunction {
                 function: "new".to_string(),
                 f_control: None,
                 parameters: vec![class_ref, empty_name, keys_collection],
-                source_information: Some(e.source_info.clone().into()),
+                source_information: source_information(&e.source_info),
             })
         }
 
@@ -459,7 +492,7 @@ pub fn convert_expression_typed(
                 function: format_element_ptr(&e.element),
                 f_control: None,
                 parameters: vec![],
-                source_information: Some(e.source_info.clone().into()),
+                source_information: source_information(&e.source_info),
             })
         }
 
@@ -484,35 +517,35 @@ fn convert_literal(lit: &ast::expression::Literal) -> v1::value_spec::ValueSpeci
     match lit {
         Literal::Integer(e) => ValueSpecification::Integer(CInteger {
             value: e.value,
-            source_information: Some(e.source_info.clone().into()),
+            source_information: source_information(&e.source_info),
         }),
         Literal::Float(e) => ValueSpecification::Float(CFloat {
             value: e.value,
-            source_information: Some(e.source_info.clone().into()),
+            source_information: source_information(&e.source_info),
         }),
         Literal::Decimal(e) => ValueSpecification::Decimal(CDecimal {
             value: e.value.parse::<f64>().unwrap_or(0.0),
-            source_information: Some(e.source_info.clone().into()),
+            source_information: source_information(&e.source_info),
         }),
         Literal::String(e) => ValueSpecification::String(CString {
             value: e.value.clone(),
-            source_information: Some(e.source_info.clone().into()),
+            source_information: source_information(&e.source_info),
         }),
         Literal::Boolean(e) => ValueSpecification::Boolean(CBoolean {
             value: e.value,
-            source_information: Some(e.source_info.clone().into()),
+            source_information: source_information(&e.source_info),
         }),
         Literal::StrictDate(e) => ValueSpecification::StrictDate(CStrictDate {
             value: e.value.clone(),
-            source_information: Some(e.source_info.clone().into()),
+            source_information: source_information(&e.source_info),
         }),
         Literal::DateTime(e) => ValueSpecification::DateTime(CDateTime {
             value: e.value.clone(),
-            source_information: Some(e.source_info.clone().into()),
+            source_information: source_information(&e.source_info),
         }),
         Literal::StrictTime(e) => ValueSpecification::StrictTime(CStrictTime {
             value: e.value.clone(),
-            source_information: Some(e.source_info.clone().into()),
+            source_information: source_information(&e.source_info),
         }),
     }
 }
@@ -527,7 +560,7 @@ fn make_func(
         function: name.to_string(),
         f_control: None,
         parameters: args.iter().copied().map(convert_expression_typed).collect(),
-        source_information: Some(source_info.clone().into()),
+        source_information: source_information(source_info),
     })
 }
 
@@ -554,7 +587,7 @@ fn convert_member_access(
             class: None,
             property: e.member.to_string(),
             parameters: vec![convert_expression_typed(&e.target)],
-            source_information: Some(e.source_info.clone().into()),
+            source_information: source_information(&e.source_info),
         }),
         MemberAccess::Qualified(e) => ValueSpecification::Property(AppliedProperty {
             class: None,
@@ -562,7 +595,7 @@ fn convert_member_access(
             parameters: std::iter::once(convert_expression_typed(&e.target))
                 .chain(e.arguments.iter().map(convert_expression_typed))
                 .collect(),
-            source_information: Some(e.source_info.clone().into()),
+            source_information: source_information(&e.source_info),
         }),
     }
 }
@@ -581,7 +614,7 @@ fn convert_column(
             value: serde_json::json!({
                 "name": e.name.to_string(),
             }),
-            source_information: Some(e.source_info.clone().into()),
+            source_information: source_information(&e.source_info),
         }),
         ColumnExpression::Typed(e) => ValueSpecification::ClassInstance(ClassInstance {
             type_name: "colSpec".to_string(),
@@ -589,19 +622,24 @@ fn convert_column(
                 "name": e.name.to_string(),
                 "type": e.type_ref.full_path(),
             }),
-            source_information: Some(e.source_info.clone().into()),
+            source_information: source_information(&e.source_info),
         }),
         ColumnExpression::WithLambda(e) => {
-            let lambda_json = convert_expression(
+            let lambda_spec = convert_expression_typed(
                 &ast::expression::Expression::Lambda(*e.lambda.clone()),
             );
+            // Serializing a well-formed ValueSpecification cannot fail —
+            // all fields are primitives or recursively serializable protocol types.
+            let Ok(lambda_val) = serde_json::to_value(&lambda_spec) else {
+                unreachable!("well-formed ValueSpecification serialization cannot fail");
+            };
             ValueSpecification::ClassInstance(ClassInstance {
                 type_name: "colSpec".to_string(),
                 value: serde_json::json!({
                     "name": e.name.to_string(),
-                    "function1": lambda_json,
+                    "function1": lambda_val,
                 }),
-                source_information: Some(e.source_info.clone().into()),
+                source_information: source_information(&e.source_info),
             })
         }
         ColumnExpression::WithFunction(e) => {
@@ -611,7 +649,7 @@ fn convert_column(
                     "name": e.name.to_string(),
                     "function1": format_element_ptr(&e.function),
                 }),
-                source_information: Some(e.source_info.clone().into()),
+                source_information: source_information(&e.source_info),
             })
         }
     }
@@ -622,34 +660,43 @@ fn convert_column(
 // ---------------------------------------------------------------------------
 
 /// Converts an AST `Element` into a protocol `PackageableElement`.
-#[must_use]
-pub fn convert_element(elem: &ast::element::Element) -> v1::element::PackageableElement {
+///
+/// # Errors
+///
+/// Returns an error if any expression serialization within the element fails.
+pub fn convert_element(elem: &ast::element::Element) -> Result<v1::element::PackageableElement> {
     use ast::element::Element;
     use v1::element::PackageableElement;
 
     match elem {
-        Element::Class(c) => PackageableElement::Class(convert_class(c)),
-        Element::Enumeration(e) => PackageableElement::Enumeration(convert_enumeration(e)),
-        Element::Function(f) => PackageableElement::Function(convert_function(f)),
-        Element::Profile(p) => PackageableElement::Profile(convert_profile(p)),
-        Element::Association(a) => PackageableElement::Association(convert_association(a)),
-        Element::Measure(m) => PackageableElement::Measure(convert_measure(m)),
+        Element::Class(c) => Ok(PackageableElement::Class(convert_class(c)?)),
+        Element::Enumeration(e) => Ok(PackageableElement::Enumeration(convert_enumeration(e))),
+        Element::Function(f) => Ok(PackageableElement::Function(convert_function(f))),
+        Element::Profile(p) => Ok(PackageableElement::Profile(convert_profile(p))),
+        Element::Association(a) => Ok(PackageableElement::Association(convert_association(a)?)),
+        Element::Measure(m) => Ok(PackageableElement::Measure(convert_measure(m))),
     }
 }
 
-fn convert_class(c: &ast::element::ClassDef) -> v1::element::ProtocolClass {
-    v1::element::ProtocolClass {
+fn convert_class(c: &ast::element::ClassDef) -> Result<v1::element::ProtocolClass> {
+    let properties: std::result::Result<Vec<_>, _> =
+        c.properties.iter().map(convert_property).collect();
+    let qualified_properties: std::result::Result<Vec<_>, _> =
+        c.qualified_properties.iter().map(convert_qualified_property).collect();
+    let constraints: std::result::Result<Vec<_>, _> =
+        c.constraints.iter().map(convert_constraint).collect();
+    Ok(v1::element::ProtocolClass {
         package_path: optional_package_to_path(c.package.as_ref()),
         name: c.name.to_string(),
         super_types: c.super_types.iter().map(ast::type_ref::TypeReference::full_path).collect(),
-        properties: c.properties.iter().map(Into::into).collect(),
-        qualified_properties: c.qualified_properties.iter().map(Into::into).collect(),
-        constraints: c.constraints.iter().map(Into::into).collect(),
+        properties: properties?,
+        qualified_properties: qualified_properties?,
+        constraints: constraints?,
         original_milestoned_properties: vec![],
         stereotypes: c.stereotypes.iter().map(Into::into).collect(),
         tagged_values: c.tagged_values.iter().map(Into::into).collect(),
-        source_information: Some(c.source_info.clone().into()),
-    }
+        source_information: source_information(&c.source_info),
+    })
 }
 
 fn convert_enumeration(e: &ast::element::EnumDef) -> v1::element::ProtocolEnumeration {
@@ -659,7 +706,7 @@ fn convert_enumeration(e: &ast::element::EnumDef) -> v1::element::ProtocolEnumer
         values: e.values.iter().map(convert_enum_value).collect(),
         stereotypes: e.stereotypes.iter().map(Into::into).collect(),
         tagged_values: e.tagged_values.iter().map(Into::into).collect(),
-        source_information: Some(e.source_info.clone().into()),
+        source_information: source_information(&e.source_info),
     }
 }
 
@@ -668,7 +715,7 @@ fn convert_enum_value(v: &ast::element::EnumValue) -> v1::element::ProtocolEnumM
         value: v.name.to_string(),
         stereotypes: v.stereotypes.iter().map(Into::into).collect(),
         tagged_values: v.tagged_values.iter().map(Into::into).collect(),
-        source_information: Some(v.source_info.clone().into()),
+        source_information: source_information(&v.source_info),
     }
 }
 
@@ -684,7 +731,7 @@ fn convert_function(f: &ast::element::FunctionDef) -> v1::element::ProtocolFunct
                 generic_type: p.type_ref.as_ref().map(Into::into),
                 multiplicity: p.multiplicity.as_ref().map(Into::into),
                 supports_stream: None,
-                source_information: Some(p.source_info.clone().into()),
+                source_information: source_information(&p.source_info),
             })
             .collect(),
         return_generic_type: (&f.return_type).into(),
@@ -695,7 +742,7 @@ fn convert_function(f: &ast::element::FunctionDef) -> v1::element::ProtocolFunct
         tests: vec![], // Function tests are not in scope for v1
         pre_constraints: vec![],
         post_constraints: vec![],
-        source_information: Some(f.source_info.clone().into()),
+        source_information: source_information(&f.source_info),
     }
 }
 
@@ -705,21 +752,25 @@ fn convert_profile(p: &ast::element::ProfileDef) -> v1::element::ProtocolProfile
         name: p.name.to_string(),
         stereotypes: p.stereotypes.iter().map(|s| s.value.to_string()).collect(),
         tags: p.tags.iter().map(|t| t.value.to_string()).collect(),
-        source_information: Some(p.source_info.clone().into()),
+        source_information: source_information(&p.source_info),
     }
 }
 
-fn convert_association(a: &ast::element::AssociationDef) -> v1::element::ProtocolAssociation {
-    v1::element::ProtocolAssociation {
+fn convert_association(a: &ast::element::AssociationDef) -> Result<v1::element::ProtocolAssociation> {
+    let properties: std::result::Result<Vec<_>, _> =
+        a.properties.iter().map(convert_property).collect();
+    let qualified_properties: std::result::Result<Vec<_>, _> =
+        a.qualified_properties.iter().map(convert_qualified_property).collect();
+    Ok(v1::element::ProtocolAssociation {
         package_path: optional_package_to_path(a.package.as_ref()),
         name: a.name.to_string(),
-        properties: a.properties.iter().map(Into::into).collect(),
-        qualified_properties: a.qualified_properties.iter().map(Into::into).collect(),
+        properties: properties?,
+        qualified_properties: qualified_properties?,
         original_milestoned_properties: vec![],
         stereotypes: a.stereotypes.iter().map(Into::into).collect(),
         tagged_values: a.tagged_values.iter().map(Into::into).collect(),
-        source_information: Some(a.source_info.clone().into()),
-    }
+        source_information: source_information(&a.source_info),
+    })
 }
 
 fn convert_measure(m: &ast::element::MeasureDef) -> v1::element::ProtocolMeasure {
@@ -732,7 +783,7 @@ fn convert_measure(m: &ast::element::MeasureDef) -> v1::element::ProtocolMeasure
             .iter()
             .map(|u| convert_unit(m, u))
             .collect(),
-        source_information: Some(m.source_info.clone().into()),
+        source_information: source_information(&m.source_info),
     }
 }
 
@@ -764,11 +815,11 @@ fn convert_unit(
                         }]
                     })
                     .unwrap_or_default(),
-                source_information: Some(unit.source_info.clone().into()),
+                source_information: source_information(&unit.source_info),
             }
         }),
         super_types: vec![measure_fqn],
-        source_information: Some(unit.source_info.clone().into()),
+        source_information: source_information(&unit.source_info),
     }
 }
 
@@ -779,15 +830,19 @@ fn convert_unit(
 /// Converts a parsed `SourceFile` into a `PureModelContextData`.
 ///
 /// This is the top-level entry point for AST → Protocol conversion.
+///
+/// # Errors
+///
+/// Returns an error if any expression serialization within the source file fails.
 pub fn convert_source_file(
     source_file: &ast::section::SourceFile,
-) -> v1::context::PureModelContextData {
+) -> Result<v1::context::PureModelContextData> {
     use ast::element::PackageableElement as _;
 
     let mut elements: Vec<v1::element::PackageableElement> = source_file
         .all_elements()
         .map(convert_element)
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     // Build a section index from the source file's sections
     let sections: Vec<v1::element::ProtocolSection> = source_file
@@ -809,7 +864,7 @@ pub fn convert_source_file(
                 v1::element::ProtocolSection::Default(v1::element::DefaultCodeSection {
                     parser_name: section.kind.to_string(),
                     elements: element_paths,
-                    source_information: Some(section.source_info.clone().into()),
+                    source_information: source_information(&section.source_info),
                 })
             } else {
                 v1::element::ProtocolSection::ImportAware(
@@ -821,7 +876,7 @@ pub fn convert_source_file(
                             .iter()
                             .map(|i| i.path.to_string())
                             .collect(),
-                        source_information: Some(section.source_info.clone().into()),
+                        source_information: source_information(&section.source_info),
                     },
                 )
             }
@@ -834,12 +889,12 @@ pub fn convert_source_file(
             package_path: "__internal__".to_string(),
             name: source_id,
             sections,
-            source_information: Some(source_file.source_info.clone().into()),
+            source_information: source_information(&source_file.source_info),
         },
     );
     elements.push(section_index);
 
-    v1::context::PureModelContextData::new(elements)
+    Ok(v1::context::PureModelContextData::new(elements))
 }
 
 #[cfg(test)]
@@ -995,7 +1050,7 @@ mod tests {
             }],
             source_info: src(),
         });
-        let pe = convert_element(&profile);
+        let pe = convert_element(&profile).unwrap();
         match pe {
             v1::element::PackageableElement::Profile(p) => {
                 assert_eq!(p.package_path, "meta");
@@ -1024,7 +1079,7 @@ mod tests {
             tagged_values: vec![],
             source_info: src(),
         });
-        let pe = convert_element(&class);
+        let pe = convert_element(&class).unwrap();
         match pe {
             v1::element::PackageableElement::Class(c) => {
                 assert_eq!(c.package_path, "model::domain");

@@ -1326,7 +1326,11 @@ impl Parser {
                     let exprs = self.parse_expression_list()?;
                     self.cursor.expect(TokenKind::RBrace)?;
                     if exprs.len() == 1 {
-                        Ok(exprs.into_iter().next().unwrap())
+                    if let Some(single) = exprs.into_iter().next() {
+                        Ok(single)
+                    } else {
+                        unreachable!("len() == 1 guarantees at least one element");
+                    }
                     } else {
                         Ok(Expression::Collection(CollectionExpr {
                             elements: exprs,

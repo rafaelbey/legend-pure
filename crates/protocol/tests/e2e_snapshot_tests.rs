@@ -39,11 +39,11 @@ fn corpus(name: &str) -> String {
 ///
 /// # Panics
 ///
-/// Panics if parsing or serialization fails.
+/// Panics if parsing, conversion, or serialization fails.
 fn parse_to_protocol_json(source: &str, source_name: &str) -> serde_json::Value {
     let ast = legend_pure_parser_parser::parse(source, source_name)
         .unwrap_or_else(|e| panic!("Parse failed for {source_name}: {e}"));
-    let protocol = convert_source_file(&ast);
+    let protocol = convert_source_file(&ast).unwrap();
     serde_json::to_value(&protocol).expect("Protocol serialization cannot fail")
 }
 

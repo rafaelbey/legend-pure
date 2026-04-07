@@ -326,7 +326,9 @@ fn pass_topo_sort(
         sorted.push(id);
         if let Some(deps) = dependents.get(&id) {
             for &dep_id in deps {
-                let deg = in_degree.get_mut(&dep_id).unwrap();
+                let Some(deg) = in_degree.get_mut(&dep_id) else {
+                    unreachable!("dep_id was inserted into in_degree during graph construction");
+                };
                 *deg -= 1;
                 if *deg == 0 {
                     queue.push_back(dep_id);

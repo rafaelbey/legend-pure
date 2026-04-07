@@ -17,3 +17,13 @@ rustflags = [
     "-Wclippy::all",
     "-Wclippy::pedantic",
 ]
+
+# Cargo aliases for quality gates.
+# Usage:
+#   cargo lint-lib    — strict lint (library code only, no unwrap/expect)
+#   cargo lint        — standard lint (all targets, general clippy)
+#   cargo audit       — full quality check (lint + copyright + build)
+[alias]
+lint-lib = "clippy --lib --all -- -D clippy::unwrap_used -D clippy::expect_used"
+lint     = "clippy --all-targets"
+audit    = ["lint-lib", "lint", "test --all"]
