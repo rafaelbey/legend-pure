@@ -89,7 +89,7 @@ pub fn run(args: ParseArgs) -> Result<(), CliError> {
         match legend_pure_parser_parser::parse(&source, &file_name) {
             Ok(source_file) => {
                 let pmcd =
-                    legend_pure_parser_protocol::v1::convert::convert_source_file(&source_file);
+                    legend_pure_parser_protocol::v1::convert::convert_source_file(&source_file)?;
                 all_elements.extend(pmcd.elements);
                 eprintln!(
                     "  {} {}",

@@ -213,7 +213,9 @@ impl<'a> Lexer<'a> {
         let start_col = self.column;
         let start_pos = self.pos;
 
-        let ch = self.advance().unwrap();
+        let Some(ch) = self.advance() else {
+            unreachable!("advance() called after is_at_end() check returned false");
+        };
 
         let kind = match ch {
             // -- Section header: ### --
