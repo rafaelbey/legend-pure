@@ -17,7 +17,7 @@
 use legend_pure_parser_ast::SourceInfo;
 use smol_str::SmolStr;
 
-/// A compilation error produced during AST → Pure lowering.
+/// A compilation error produced during AST → Pure lowering or validation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompilationError {
     /// Human-readable error message.
@@ -50,6 +50,34 @@ pub enum CompilationErrorKind {
     NotAType {
         /// The element name.
         name: SmolStr,
+    },
+    /// An association has invalid structure (e.g., wrong property count).
+    InvalidAssociation {
+        /// The association name.
+        name: SmolStr,
+        /// Human-readable reason.
+        reason: SmolStr,
+    },
+    /// A class's supertype is not a Class element.
+    InvalidSuperType {
+        /// The class name.
+        class_name: SmolStr,
+        /// The invalid supertype name.
+        super_name: SmolStr,
+    },
+    /// An annotation (stereotype or tagged value) is invalid.
+    InvalidAnnotation {
+        /// The element carrying the annotation.
+        element_name: SmolStr,
+        /// Human-readable reason.
+        reason: SmolStr,
+    },
+    /// Two properties in the same class have the same name.
+    DuplicateProperty {
+        /// The class name.
+        class_name: SmolStr,
+        /// The duplicate property name.
+        property_name: SmolStr,
     },
     /// Generic catch-all for other errors.
     Other,

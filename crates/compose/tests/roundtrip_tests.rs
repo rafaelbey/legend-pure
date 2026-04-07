@@ -711,3 +711,55 @@ fn test_complex_class() {
 fn test_domain_mixed() {
     roundtrip("Class <<temporal.businesstemporal>> {doc.doc = 'bla'} A extends B\n[\n  constraint1: $this.ok->toOne() == 1,\n  constraint2: $this.ok->toOne()->toString() == $this.name\n]\n{\n  <<equality.Key>> {doc.doc = 'bla'} name: e::R[*];\n  {doc.doc = 'bla'} ok: Integer[1..2];\n  <<devStatus.inProgress>> q(s: String[1]) {$s + 'ok'}: c::d::R[1];\n  {doc.doc = 'bla'} xza(s: z::k::B[1]) {$s + 'ok'}: String[1];\n}\n\nAssociation myAsso\n{\n  a: String[1];\n  b: a::c::A[1];\n}\n\nEnum <<st.test>> {doc.doc = 'bla'} z::k::B\n{\n  <<equality.Key, taggedValue.test>> {doc.doc = 'Tag Value for enum Value'} a,\n  b,\n  c\n}\n\nProfile meta::pure::profiles::doc\n{\n  stereotypes: [deprecated];\n  tags: [doc, todo];\n}\n\nProfile meta::pure::profiles::profile2\n{\n  tags: [doc, todo];\n}\n");
 }
+
+// ---------------------------------------------------------------------------
+// Import statements (from Java testClassWithImport, etc.)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_class_with_import() {
+    roundtrip("import anything::*;\nClass anything::goes2\n{\n}\n");
+}
+
+#[test]
+fn test_enum_with_import() {
+    roundtrip("import my::models::*;\nEnum my::models::Color\n{\n  Red,\n  Green,\n  Blue\n}\n");
+}
+
+#[test]
+fn test_function_with_import() {
+    roundtrip("import meta::pure::functions::*;\nfunction my::add(a: Integer[1], b: Integer[1]): Integer[1]\n{\n  $a + $b\n}\n");
+}
+
+#[test]
+fn test_multiple_imports() {
+    roundtrip("import anything::*;\nimport other::stuff::*;\nClass anything::goes2\n{\n}\n");
+}
+
+// ---------------------------------------------------------------------------
+// Section headers
+// ---------------------------------------------------------------------------
+
+/// Single Pure section: `###Pure` header is normalized away (it's the default).
+#[test]
+fn test_section_header_single_pure_normalized() {
+    // Input has ###Pure, but output omits it (single Pure section = default)
+    let input = "###Pure\nClass my::Foo\n{\n}\n";
+    let expected = "Class my::Foo\n{\n}\n";
+    let ast = legend_pure_parser_parser::parse(input, "test.pure")
+        .unwrap_or_else(|e| panic!("Parse failed: {e}"));
+    let composed = legend_pure_parser_compose::compose_source_file(&ast);
+    assert_eq!(composed, expected);
+}
+
+/// Single Pure section with import: `###Pure` header normalized away.
+#[test]
+fn test_section_header_with_import_normalized() {
+    let input = "###Pure\nimport anything::*;\nClass anything::goes2\n{\n}\n";
+    let expected = "import anything::*;\nClass anything::goes2\n{\n}\n";
+    let ast = legend_pure_parser_parser::parse(input, "test.pure")
+        .unwrap_or_else(|e| panic!("Parse failed: {e}"));
+    let composed = legend_pure_parser_compose::compose_source_file(&ast);
+    assert_eq!(composed, expected);
+}
+
