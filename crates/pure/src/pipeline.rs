@@ -120,9 +120,9 @@ struct Declaration {
 /// Tracks unit `ElementId`s allocated for a measure during Pass 1.
 #[derive(Debug, Clone)]
 struct UnitMapping {
-    /// The canonical unit's ElementId, if present.
+    /// The canonical unit's `ElementId`, if present.
     canonical: Option<ElementId>,
-    /// Non-canonical unit ElementIds, in order.
+    /// Non-canonical unit `ElementId`s, in order.
     non_canonical: Vec<ElementId>,
 }
 
@@ -216,6 +216,7 @@ fn pass_declare(
 /// Units get their own `ElementId` so they can be referenced in type positions
 /// (e.g., `prop: Kilogram[1]`). Each unit is registered in the same package
 /// as the parent measure.
+#[allow(clippy::too_many_arguments)]
 fn allocate_unit_shells(
     measure_def: &ast::MeasureDef,
     measure_id: ElementId,
@@ -254,6 +255,10 @@ fn allocate_unit_shells(
         let unit_id = ElementId { chunk_id, local_idx };
         model.register_element(package_id, unit_id);
 
+        // SAFETY INVARIANT: These AST coordinates point to the parent Measure
+        // element, not the unit itself. This is safe because `pass_define`
+        // skips `Element::Unit` before looking up the AST. If that skip is
+        // ever removed, units would be re-hydrated as duplicate Measures.
         declarations.insert(unit_fqn, Declaration {
             id: unit_id,
             file_idx,
@@ -398,6 +403,12 @@ fn pass_define(
         .collect();
 
     for &id in sorted {
+        // Skip units — they were fully populated during Pass 1 (allocate_unit_shells)
+        let chunk = &model.chunks[id.chunk_id as usize];
+        if matches!(chunk.elements.get(id.local_idx), Element::Unit(_)) {
+            continue;
+        }
+
         let Some(decl) = id_to_decl.get(&id) else { continue };
         let ast_element = get_ast_element(source_files, decl);
 
@@ -751,7 +762,7 @@ fn ast_element_package_path(element: &ast::Element) -> Vec<SmolStr> {
 }
 
 /// Collects all segments from a linked-list AST Package into a Vec.
-fn collect_package_segments(pkg: &AstPackage) -> Vec<SmolStr> {
+pub(crate) fn collect_package_segments(pkg: &AstPackage) -> Vec<SmolStr> {
     let mut segments = Vec::new();
     let mut current = Some(pkg);
     while let Some(p) = current {

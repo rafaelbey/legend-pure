@@ -46,11 +46,6 @@ pub enum CompilationErrorKind {
         /// The element that starts the cycle.
         element_name: SmolStr,
     },
-    /// A non-type element was used in a type position.
-    NotAType {
-        /// The element name.
-        name: SmolStr,
-    },
     /// An association has invalid structure (e.g., wrong property count).
     InvalidAssociation {
         /// The association name.
@@ -79,8 +74,6 @@ pub enum CompilationErrorKind {
         /// The duplicate property name.
         property_name: SmolStr,
     },
-    /// Generic catch-all for other errors.
-    Other,
 }
 
 impl std::fmt::Display for CompilationError {

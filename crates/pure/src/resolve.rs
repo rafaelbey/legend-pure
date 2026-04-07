@@ -101,7 +101,9 @@ pub(crate) fn resolve_type_ref(
 
 /// Resolves an AST `TypeSpec` (type or unit reference) to a Pure `TypeExpr`.
 ///
-/// For unit references, resolves the measure type.
+/// For regular types, delegates to [`resolve_type_ref`].
+/// For unit references (`Measure~UnitName`), resolves to the specific Unit
+/// element by looking up its `Measure~UnitName` FQN.
 pub(crate) fn resolve_type_spec(
     type_spec: &ast_type::TypeSpec,
     ctx: &ResolutionContext<'_>,
@@ -110,8 +112,34 @@ pub(crate) fn resolve_type_spec(
     match type_spec {
         ast_type::TypeSpec::Type(tr) => resolve_type_ref(tr, ctx, errors),
         ast_type::TypeSpec::Unit(ur) => {
-            // For now, resolve the measure type — full unit resolution is Phase 4+
-            resolve_type_ref(&ur.measure, ctx, errors)
+            // Build unit FQN: "pkg::Measure~UnitName"
+            let measure_fqn = SmolStr::new(ur.measure.full_path());
+            let unit_name = ur.unit.as_str();
+            let unit_fqn = SmolStr::new(format!("{measure_fqn}~{unit_name}"));
+
+            // Try user declarations first, then model
+            let element_id = if let Some(&id) = ctx.declarations.get(&unit_fqn) {
+                id
+            } else {
+                // Try model path resolution (for bootstrap or pre-compiled units)
+                let segments: Vec<SmolStr> = unit_fqn.split("::").map(SmolStr::new).collect();
+                if let Some(id) = ctx.model.resolve_by_path(&segments) {
+                    id
+                } else {
+                    errors.push(CompilationError {
+                        message: format!("Cannot resolve unit '{unit_fqn}'"),
+                        source_info: ur.source_info.clone(),
+                        kind: CompilationErrorKind::UnresolvedElement { path: unit_fqn },
+                    });
+                    return None;
+                }
+            };
+
+            Some(TypeExpr::Named {
+                element: element_id,
+                type_arguments: vec![],
+                value_arguments: vec![],
+            })
         }
     }
 }
@@ -120,23 +148,13 @@ pub(crate) fn resolve_type_spec(
 fn type_ref_segments(type_ref: &ast_type::TypeReference) -> Vec<SmolStr> {
     let mut segments = Vec::new();
     if let Some(pkg) = &type_ref.package {
-        segments.extend(collect_path_segments(pkg));
+        segments.extend(crate::pipeline::collect_package_segments(pkg));
     }
     segments.push(type_ref.name.clone());
     segments
 }
 
-/// Collects the path segments from an AST `Package` into a flat `Vec`.
-fn collect_path_segments(pkg: &ast_type::Package) -> Vec<SmolStr> {
-    let mut segments = Vec::new();
-    let mut current = Some(pkg);
-    while let Some(p) = current {
-        segments.push(p.name().clone());
-        current = p.parent();
-    }
-    segments.reverse();
-    segments
-}
+
 
 // ---------------------------------------------------------------------------
 // Multiplicity Lowering
@@ -265,7 +283,7 @@ fn resolve_element_by_fqn(
 fn element_ptr_fqn(ptr: &ast_ann::PackageableElementPtr) -> SmolStr {
     match ptr.package() {
         Some(pkg) => {
-            let segments = collect_path_segments(pkg);
+            let segments = crate::pipeline::collect_package_segments(pkg);
             let mut fqn = String::new();
             for (i, seg) in segments.iter().enumerate() {
                 if i > 0 {

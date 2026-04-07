@@ -247,6 +247,22 @@ impl PureModel {
         chunk.elements.get(id.local_idx)
     }
 
+    /// Returns the typed element for the given ID, or `None` if out of bounds.
+    ///
+    /// Use this when the ID might reference an unresolved or invalid element.
+    #[must_use]
+    pub fn try_get_element(&self, id: ElementId) -> Option<&Element> {
+        self.chunks
+            .get(id.chunk_id as usize)
+            .and_then(|chunk| {
+                if id.local_idx < chunk.elements.len() {
+                    Some(chunk.elements.get(id.local_idx))
+                } else {
+                    None
+                }
+            })
+    }
+
     /// Returns the package for the given ID.
     #[must_use]
     pub fn get_package(&self, id: PackageId) -> &Package {
@@ -292,7 +308,12 @@ impl PureModel {
                             }
                         }
                     }
-                    _ => {}
+                    Element::Enumeration(_)
+                    | Element::Function(_)
+                    | Element::Profile(_)
+                    | Element::Measure(_)
+                    | Element::Unit(_)
+                    | Element::PrimitiveType(_) => {}
                 }
             }
         }
