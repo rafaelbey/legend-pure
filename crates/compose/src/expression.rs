@@ -439,7 +439,7 @@ fn compose_new_instance(w: &mut IndentWriter, e: &NewInstanceExpr) {
     w.write("(");
     for (i, kv) in e.assignments.iter().enumerate() {
         if i > 0 {
-            w.write(" , ");
+            w.write(", ");
         }
         w.write(&maybe_quote(&kv.key));
         w.write("=");

@@ -560,7 +560,7 @@ fn test_math_parenthesis_division_grouped() {
 
 #[test]
 fn test_new_instance_all_types() {
-    roundtrip("Class anything::goes\n{\n  v: String[1];\n  v2: Integer[0..1];\n  v3: Boolean[*];\n}\n\nfunction f(): Any[1]\n{\n  let x = ^anything::goes(v='value' , v2=17 , v3=[true, false])\n}\n");
+    roundtrip("Class anything::goes\n{\n  v: String[1];\n  v2: Integer[0..1];\n  v3: Boolean[*];\n}\n\nfunction f(): Any[1]\n{\n  let x = ^anything::goes(v='value', v2=17, v3=[true, false])\n}\n");
 }
 
 #[test]
@@ -763,3 +763,78 @@ fn test_section_header_with_import_normalized() {
     assert_eq!(composed, expected);
 }
 
+// ---------------------------------------------------------------------------
+// More expression coverage (from Java TestDomainGrammarRoundtrip)
+// ---------------------------------------------------------------------------
+
+/// Java: testFunction2
+#[test]
+fn test_function_println() {
+    roundtrip("function f(s: Integer[1], s2: Interger[2]): String[1]\n{\n  println('ok')\n}\n");
+}
+
+/// Java: testTo (type reference arg)
+#[test]
+fn test_to_with_type_ref() {
+    roundtrip("function abc::to(): Float[1]\n{\n  toVariant(1)->to(@Float)\n}\n");
+}
+
+/// Java: testTo (literal arg)
+#[test]
+fn test_to_with_literal() {
+    roundtrip("function abc::to(): Float[1]\n{\n  toVariant(1)->to(1.0)\n}\n");
+}
+
+/// Java: testTo (string arg)
+#[test]
+fn test_to_with_string() {
+    roundtrip("function abc::to(): String[1]\n{\n  toVariant(1)->to('String')\n}\n");
+}
+
+/// Java: testToMany
+#[test]
+fn test_to_many_with_type_ref() {
+    roundtrip("function abc::to(): Float[*]\n{\n  toVariant(1)->toMany(@Float)\n}\n");
+}
+
+/// Java: testFunctionWithNew
+#[test]
+fn test_function_with_new() {
+    roundtrip("Class anything::goes\n{\n  v: String[1];\n}\n\nfunction f(): Any[1]\n{\n  let x = ^anything::goes(v='value')\n}\n");
+}
+
+/// Java: testFunctionWithNewAlltypes
+#[test]
+fn test_function_with_new_all_types() {
+    roundtrip("Class anything::goes\n{\n  v: String[1];\n  v2: Integer[0..1];\n  v3: Boolean[*];\n}\n\nfunction f(): Any[1]\n{\n  let x = ^anything::goes(v='value', v2=1, v3=[true, false])\n}\n");
+}
+
+/// Java: testFunctionTest
+#[test]
+fn test_function_test() {
+    roundtrip("function my::testFunc(s: String[1]): String[1]\n{\n  $s + ' world'\n}\n{\n  test1 | testFunc('hello') => 'hello world';\n}\n");
+}
+
+/// Boolean precedence: || has lower precedence than &&, so parens around && are redundant
+#[test]
+fn test_boolean_precedence_or_and() {
+    roundtrip("function withPath::f(s: Integer[1]): String[1]\n{\n  false || true && false;\n  'a'\n}\n");
+}
+
+/// Boolean precedence: && has higher precedence than ||
+#[test]
+fn test_boolean_precedence_and_or() {
+    roundtrip("function withPath::f(s: Integer[1]): String[1]\n{\n  (true || false) && true;\n  'a'\n}\n");
+}
+
+/// Java: testMultiIFExpressions
+#[test]
+fn test_multi_if_expressions() {
+    roundtrip("function model::firms(): String[1]\n{\n  if($this.name == 'A', |'FirmA', |if($this.name == 'B', |'FirmB', |'Other'))\n}\n");
+}
+
+/// Java: testInstanceWithDefaultValue
+#[test]
+fn test_instance_with_default_value() {
+    roundtrip("Class my::Address\n{\n  street: String[1] = 'Main St';\n  city: String[1] = 'NY';\n}\n");
+}
