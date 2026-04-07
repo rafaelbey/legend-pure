@@ -63,7 +63,7 @@ pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
                 Element::Class(class) => {
                     validate_super_types(model, id, node.name.clone(), class, &mut errors);
                     validate_duplicate_properties(
-                        &node.name, &class.properties, &node.source_info, &mut errors,
+                        &node.name, &class.properties, &mut errors,
                     );
                     validate_stereotypes(
                         model, &node.name, &class.stereotypes, &node.source_info, &mut errors,
@@ -97,7 +97,10 @@ pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
                         model, &node.name, &func.tagged_values, &node.source_info, &mut errors,
                     );
                 }
-                _ => {}
+                Element::Measure(_)
+                | Element::Unit(_)
+                | Element::Profile(_)
+                | Element::PrimitiveType(_) => {}
             }
         }
     }
@@ -112,6 +115,7 @@ pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
 /// Validates an association:
 /// - Must have exactly 2 properties
 /// - Each property must reference a Class
+#[allow(clippy::collapsible_if)]
 fn validate_association(
     model: &PureModel,
     assoc_name: &SmolStr,
@@ -138,9 +142,9 @@ fn validate_association(
     // Validate each property references a Class
     for prop in &assoc.properties {
         if let TypeExpr::Named { element: target_id, .. } = &prop.type_expr {
-            if let Some(target_element) = get_element(model, *target_id) {
+            if let Some(target_element) = model.try_get_element(*target_id) {
                 if !matches!(target_element, Element::Class(_)) {
-                    let target_name = get_element_name(model, *target_id);
+                    let target_name = model.get_node(*target_id).name.clone();
                     errors.push(CompilationError {
                         message: format!(
                             "Association '{assoc_name}' property '{}' must reference a Class, \
@@ -169,6 +173,7 @@ fn validate_association(
 /// Validates class super-types:
 /// - Must reference a Class (not Enum, Function, etc.)
 /// - Must not be self-referential
+#[allow(clippy::collapsible_if)]
 fn validate_super_types(
     model: &PureModel,
     class_id: ElementId,
@@ -195,9 +200,9 @@ fn validate_super_types(
             }
 
             // Kind check: super must be a Class
-            if let Some(super_element) = get_element(model, *super_id) {
+            if let Some(super_element) = model.try_get_element(*super_id) {
                 if !matches!(super_element, Element::Class(_)) {
-                    let super_name = get_element_name(model, *super_id);
+                    let super_name = model.get_node(*super_id).name.clone();
                     errors.push(CompilationError {
                         message: format!(
                             "Class '{class_name}' cannot extend '{super_name}': \
@@ -231,14 +236,14 @@ fn validate_stereotypes(
     errors: &mut Vec<CompilationError>,
 ) {
     for stereo in stereotypes {
-        match get_element(model, stereo.profile) {
+        match model.try_get_element(stereo.profile) {
             Some(Element::Profile(profile)) => {
                 validate_stereotype_exists(
                     element_name, &stereo.value, profile, source_info, errors,
                 );
             }
             Some(_) => {
-                let target_name = get_element_name(model, stereo.profile);
+                let target_name = model.get_node(stereo.profile).name.clone();
                 errors.push(CompilationError {
                     message: format!(
                         "Stereotype target '{target_name}' on '{element_name}' is not a Profile"
@@ -295,14 +300,14 @@ fn validate_tagged_values(
     errors: &mut Vec<CompilationError>,
 ) {
     for tv in tagged_values {
-        match get_element(model, tv.profile) {
+        match model.try_get_element(tv.profile) {
             Some(Element::Profile(profile)) => {
                 validate_tag_exists(
                     element_name, &tv.tag, profile, source_info, errors,
                 );
             }
             Some(_) => {
-                let target_name = get_element_name(model, tv.profile);
+                let target_name = model.get_node(tv.profile).name.clone();
                 errors.push(CompilationError {
                     message: format!(
                         "Tag target '{target_name}' on '{element_name}' is not a Profile"
@@ -356,7 +361,6 @@ fn validate_tag_exists(
 fn validate_duplicate_properties(
     class_name: &SmolStr,
     properties: &[crate::nodes::class::Property],
-    source_info: &legend_pure_parser_ast::SourceInfo,
     errors: &mut Vec<CompilationError>,
 ) {
     let mut seen = HashSet::new();
@@ -375,31 +379,9 @@ fn validate_duplicate_properties(
             });
         }
     }
-    // Suppress unused variable warning — source_info is kept for API consistency
-    let _ = source_info;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
-/// Retrieves an element from the model by its ID.
-fn get_element(model: &PureModel, id: ElementId) -> Option<&Element> {
-    model.chunks
-        .get(id.chunk_id as usize)
-        .and_then(|chunk| {
-            if id.local_idx < chunk.elements.len() {
-                Some(chunk.elements.get(id.local_idx))
-            } else {
-                None
-            }
-        })
-}
-
-/// Retrieves the simple name of an element by its ID.
-fn get_element_name(model: &PureModel, id: ElementId) -> SmolStr {
-    model.get_node(id).name.clone()
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -408,7 +390,7 @@ fn get_element_name(model: &PureModel, id: ElementId) -> SmolStr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nodes::class::{Class, Property};
+    use crate::nodes::class::Property;
     use crate::types::Multiplicity;
 
     #[test]
@@ -447,7 +429,7 @@ mod tests {
         ];
 
         let mut errors = Vec::new();
-        validate_duplicate_properties(&class_name, &props, &src, &mut errors);
+        validate_duplicate_properties(&class_name, &props, &mut errors);
         assert_eq!(errors.len(), 1);
         assert!(matches!(
             errors[0].kind,

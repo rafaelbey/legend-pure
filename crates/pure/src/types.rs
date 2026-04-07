@@ -152,7 +152,7 @@ pub struct Parameter {
 pub struct Expression {
     /// Source location of the expression.
     pub source_info: SourceInfo,
-    // TODO: Phase 4+ — recursive enum mirroring ast::Expression
+    // TODO: Phase 5 — recursive enum mirroring ast::Expression
     // with all names resolved to ElementIds.
 }
 

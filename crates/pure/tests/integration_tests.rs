@@ -420,3 +420,212 @@ fn class_in_package() {
         _ => panic!("expected Class"),
     }
 }
+
+// ===========================================================================
+// Phase 4: Validation Tests
+// ===========================================================================
+
+use legend_pure_parser_pure::error::CompilationErrorKind;
+
+// ---------------------------------------------------------------------------
+// Measure with Units (Positive)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn measure_with_units() {
+    let model = compile_one(
+        "Measure Distance {\n\
+           *Meter: x -> $x;\n\
+           Kilometer: x -> $x * 1000;\n\
+           Mile: x -> $x * 1609.344;\n\
+         }"
+    ).expect("should compile");
+
+    let measure_id = model.resolve_by_path(&["Distance".into()]).expect("Distance");
+    match model.get_element(measure_id) {
+        Element::Measure(m) => {
+            assert!(m.canonical_unit.is_some(), "should have canonical unit");
+            assert_eq!(m.non_canonical_units.len(), 2, "should have 2 non-canonical units");
+
+            // Verify each unit references back to its parent measure
+            let canon_id = m.canonical_unit.unwrap();
+            match model.get_element(canon_id) {
+                Element::Unit(u) => {
+                    assert_eq!(u.measure, measure_id, "canonical unit should reference parent");
+                }
+                _ => panic!("expected Unit element for canonical"),
+            }
+            let node = model.get_node(canon_id);
+            assert_eq!(node.name.as_str(), "Meter");
+
+            for &non_canon_id in &m.non_canonical_units {
+                match model.get_element(non_canon_id) {
+                    Element::Unit(u) => {
+                        assert_eq!(u.measure, measure_id, "non-canonical unit should reference parent");
+                    }
+                    _ => panic!("expected Unit element for non-canonical"),
+                }
+            }
+        }
+        _ => panic!("expected Measure"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Annotation Validation: Stereotype Exists (Positive)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn valid_stereotype_compiles() {
+    let model = compile_one(
+        "Profile doc { stereotypes: [deprecated, internal]; tags: [description]; }\n\
+         Class <<doc.deprecated>> {doc.description = 'A thing'} OldThing {}"
+    ).expect("valid annotation should compile");
+
+    let old_id = model.resolve_by_path(&["OldThing".into()]).expect("OldThing");
+    match model.get_element(old_id) {
+        Element::Class(class) => {
+            assert_eq!(class.stereotypes.len(), 1, "should have 1 stereotype");
+            assert_eq!(class.stereotypes[0].value.as_str(), "deprecated");
+            assert_eq!(class.tagged_values.len(), 1, "should have 1 tagged value");
+            assert_eq!(class.tagged_values[0].tag.as_str(), "description");
+            assert_eq!(class.tagged_values[0].value, "A thing");
+        }
+        _ => panic!("expected Class"),
+    }
+    drop(model);
+}
+
+// ---------------------------------------------------------------------------
+// Association Cardinality Error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn association_wrong_cardinality() {
+    // 1 property instead of 2
+    let result = compile_one(
+        "Class A {}\n\
+         Association Bad { a: A[1]; }"
+    );
+    assert!(result.is_err(), "association with 1 property should fail");
+    let errors = result.unwrap_err();
+    let assoc_errors: Vec<_> = errors.iter()
+        .filter(|e| matches!(&e.kind, CompilationErrorKind::InvalidAssociation { .. }))
+        .collect();
+    assert!(!assoc_errors.is_empty(), "should have InvalidAssociation error");
+}
+
+// ---------------------------------------------------------------------------
+// Association Property Not Class Error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn association_property_not_class() {
+    let result = compile_one(
+        "Class A {}\n\
+         Enum Status { Active, Inactive }\n\
+         Association Bad { a: A[1]; s: Status[1]; }"
+    );
+    assert!(result.is_err(), "association property pointing to Enum should fail");
+    let errors = result.unwrap_err();
+    let assoc_errors: Vec<_> = errors.iter()
+        .filter(|e| matches!(&e.kind, CompilationErrorKind::InvalidAssociation { .. }))
+        .collect();
+    assert!(!assoc_errors.is_empty(), "should have InvalidAssociation for non-Class property");
+}
+
+// ---------------------------------------------------------------------------
+// Super-type Not a Class Error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn super_type_not_class() {
+    let result = compile_one(
+        "Enum Color { RED, GREEN }\n\
+         Class Bad extends Color {}"
+    );
+    assert!(result.is_err(), "extending an Enum should fail");
+    let errors = result.unwrap_err();
+    let super_errors: Vec<_> = errors.iter()
+        .filter(|e| matches!(&e.kind, CompilationErrorKind::InvalidSuperType { .. }))
+        .collect();
+    assert!(!super_errors.is_empty(), "should have InvalidSuperType error");
+
+    // Verify error carries class and super names
+    match &super_errors[0].kind {
+        CompilationErrorKind::InvalidSuperType { class_name, super_name } => {
+            assert_eq!(class_name.as_str(), "Bad");
+            assert_eq!(super_name.as_str(), "Color");
+        }
+        _ => unreachable!(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stereotype Not in Profile Error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn stereotype_not_in_profile() {
+    let result = compile_one(
+        "Profile doc { stereotypes: [deprecated]; tags: [desc]; }\n\
+         Class <<doc.nonexistent>> Bad {}"
+    );
+    assert!(result.is_err(), "referencing nonexistent stereotype should fail");
+    let errors = result.unwrap_err();
+    let anno_errors: Vec<_> = errors.iter()
+        .filter(|e| matches!(&e.kind, CompilationErrorKind::InvalidAnnotation { .. }))
+        .collect();
+    assert!(!anno_errors.is_empty(), "should have InvalidAnnotation error");
+    assert!(
+        errors[0].message.contains("nonexistent"),
+        "error message should mention the missing stereotype name"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Tag Not in Profile Error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tag_not_in_profile() {
+    let result = compile_one(
+        "Profile doc { stereotypes: [deprecated]; tags: [description]; }\n\
+         Class {doc.missingTag = 'val'} Bad {}"
+    );
+    assert!(result.is_err(), "referencing nonexistent tag should fail");
+    let errors = result.unwrap_err();
+    let anno_errors: Vec<_> = errors.iter()
+        .filter(|e| matches!(&e.kind, CompilationErrorKind::InvalidAnnotation { .. }))
+        .collect();
+    assert!(!anno_errors.is_empty(), "should have InvalidAnnotation error");
+    assert!(
+        errors[0].message.contains("missingTag"),
+        "error message should mention the missing tag name"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Duplicate Property Names Error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn duplicate_property_names() {
+    let result = compile_one(
+        "Class Bad { name: String[1]; name: Integer[1]; }"
+    );
+    assert!(result.is_err(), "duplicate properties should fail");
+    let errors = result.unwrap_err();
+    let dupe_errors: Vec<_> = errors.iter()
+        .filter(|e| matches!(&e.kind, CompilationErrorKind::DuplicateProperty { .. }))
+        .collect();
+    assert_eq!(dupe_errors.len(), 1, "should have exactly 1 DuplicateProperty error");
+
+    match &dupe_errors[0].kind {
+        CompilationErrorKind::DuplicateProperty { class_name, property_name } => {
+            assert_eq!(class_name.as_str(), "Bad");
+            assert_eq!(property_name.as_str(), "name");
+        }
+        _ => unreachable!(),
+    }
+}

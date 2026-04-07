@@ -51,3 +51,33 @@ Class <<nonexistent::profileName.stereo>> model::errors::BadAnnotation
 {
   value: Integer[1];
 }
+
+// ─── Phase 4: Validation Errors ─────────────────────────────────────
+
+// Helper profile for annotation tests
+Profile model::errors::doc { stereotypes: [deprecated]; tags: [description]; }
+
+// ERROR: Association must have exactly 2 properties
+Class model::errors::Endpoint {}
+Association model::errors::BadAssoc
+{
+  only: model::errors::Endpoint[1];
+}
+
+// ERROR: Super-type must be a Class
+Enum model::errors::Color { Red, Blue }
+Class model::errors::ExtendEnum extends model::errors::Color
+{
+}
+
+// ERROR: Stereotype does not exist in the profile
+Class <<model::errors::doc.nonexistent>> model::errors::BadStereo
+{
+}
+
+// ERROR: Duplicate property names
+Class model::errors::DuplicateProps
+{
+  name: String[1];
+  name: Integer[1];
+}

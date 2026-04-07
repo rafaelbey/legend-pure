@@ -178,6 +178,7 @@ fn print_success_stats(
     let mut assoc_count = 0usize;
     let mut profile_count = 0usize;
     let mut measure_count = 0usize;
+    let mut unit_count = 0usize;
 
     for chunk in model.chunks.iter().skip(1) {
         for (_, element) in chunk.elements.iter() {
@@ -188,13 +189,14 @@ fn print_success_stats(
                 Element::Association(_) => assoc_count += 1,
                 Element::Profile(_) => profile_count += 1,
                 Element::Measure(_) => measure_count += 1,
-                _ => {}
+                Element::Unit(_) => unit_count += 1,
+                Element::PrimitiveType(_) => {}
             }
         }
     }
 
     let total_elements = class_count + enum_count + func_count
-        + assoc_count + profile_count + measure_count;
+        + assoc_count + profile_count + measure_count + unit_count;
 
     eprintln!();
     eprintln!(
@@ -213,6 +215,7 @@ fn print_success_stats(
     if assoc_count > 0 { breakdown.push(format!("{assoc_count} association(s)")); }
     if profile_count > 0 { breakdown.push(format!("{profile_count} profile(s)")); }
     if measure_count > 0 { breakdown.push(format!("{measure_count} measure(s)")); }
+    if unit_count > 0 { breakdown.push(format!("{unit_count} unit(s)")); }
 
     if !breakdown.is_empty() {
         eprintln!(
