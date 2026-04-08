@@ -77,21 +77,25 @@ flowchart TD
 
 ```rust
 pub enum Value {
-    Boolean(bool),        // inline, no heap allocation
-    Integer(i64),         // inline
-    Float(f64),           // inline
-    Decimal(SmolStr),     // string representation (for now)
-    String(SmolStr),      // inline ≤24 bytes, shared heap for longer
-    Date(SmolStr),        // string representation (for now)
-    Object(ObjectId),     // handle into RuntimeHeap
+    Boolean(bool),                    // inline, no heap allocation
+    Integer(i64),                     // inline
+    Float(f64),                       // inline
+    Decimal(rust_decimal::Decimal),   // 128-bit fixed-point, Copy, ~5ns arithmetic
+    String(SmolStr),                  // inline ≤24 bytes, shared heap for longer
+    Date(PureDate),                   // jiff-backed variable-precision temporal
+    StrictTime(StrictTime),           // jiff::civil::Time wrapper (4 bytes, Copy)
+    Object(ObjectId),                 // handle into RuntimeHeap
     Collection(PVector<Value>),       // RRB-tree persistent vector
     Map(PMap<ValueKey, Value>),       // HAMT persistent hash map
-    Unit,                 // empty/void
+    Unit,                             // empty/void
 }
 ```
 
 **Design decisions:**
 - Primitives are **unboxed** — no heap allocation for `Integer`, `Float`, `Boolean`
+- `Decimal` uses `rust_decimal::Decimal` — 128-bit, `Copy`, native arithmetic (~5ns)
+- `Date` uses `PureDate` (backed by `jiff::civil::DateTime`) — variable-precision, native calendar arithmetic
+- `StrictTime` uses `jiff::civil::Time` — 4 bytes, `Copy`, nanosecond precision
 - Collections use `im_rc` persistent structures — O(log N) structural sharing
 - Objects are **handles** (`ObjectId`) — not ownership, just identity reference
 
@@ -115,7 +119,12 @@ pub enum HeapEntry {
 
 ### VariableContext (`context.rs`)
 
-Push/pop scope chain for lexical scoping. Variables resolve innermost-first.
+Uses an **undo-log optimization** for O(1) variable lookups:
+- Single flat `HashMap<SmolStr, Value>` stores the current value of every visible variable
+- `Vec<Vec<UndoEntry>>` records what to undo when `pop_scope` is called
+- `set()` records either a `Remove` (new variable) or `Restore` (shadowed variable) entry
+- `pop_scope()` replays the undo log in reverse to restore the previous scope
+- `get()` is a single `HashMap` lookup — O(1) instead of scanning a scope chain
 
 ## Execution Model (Future)
 
@@ -156,6 +165,8 @@ First measured numbers (criterion.rs, release mode):
 |---|---|
 | `im-rc` | Persistent collections (HAMT HashMap, RRB Vector) |
 | `slotmap` | Generational arena for RuntimeHeap (ObjectId) |
+| `rust_decimal` | 128-bit fixed-point decimal arithmetic (financial precision) |
+| `jiff` | Calendar/time arithmetic for `PureDate` and `StrictTime` |
 | `smol_str` | Inline strings (≤24 bytes, no allocation) |
 | `thiserror` | Error derive macros |
 

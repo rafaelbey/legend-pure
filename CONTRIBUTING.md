@@ -35,18 +35,19 @@ Run the validation: `./scripts/check-copyright.sh`
 ## Code Style
 
 - **Format**: `cargo fmt` (config in `rustfmt.toml`)
-- **Lint**: `cargo clippy --workspace -- -D warnings` (pedantic lints enabled)
+- **Lint (strict)**: `cargo lint-lib` — no `unwrap()`/`expect()` in library code
+- **Lint (standard)**: `cargo lint` — standard clippy on all targets
 - **Docs**: All public items need `///` doc comments (`#![deny(missing_docs)]`)
 - **Unsafe**: Forbidden in all crates except `jni` (`#![forbid(unsafe_code)]`)
 
 ## PR Checklist
 
 - [ ] `cargo fmt --check` passes
-- [ ] `cargo clippy --workspace -- -D warnings` passes
+- [ ] `cargo lint-lib` passes (strict: no `unwrap()`/`expect()` in library code)
+- [ ] `cargo lint` passes (standard clippy on all targets)
 - [ ] `cargo test --workspace` passes
 - [ ] `cargo llvm-cov --workspace --fail-under-lines 90` passes
 - [ ] New public items have doc comments
-- [ ] No `unwrap()` / `expect()` in library code (tests are fine)
 - [ ] Snapshot tests updated if Protocol JSON output changed (`cargo insta review`)
 - [ ] `./scripts/check-copyright.sh` passes (all `.rs`, `.toml`, `.pure`, `.sh` files have copyright headers)
 
