@@ -16,8 +16,8 @@
 
 use legend_pure_parser_ast::section::SourceFile;
 use legend_pure_parser_pure::bootstrap;
+use legend_pure_parser_pure::compile;
 use legend_pure_parser_pure::model::Element;
-use legend_pure_parser_pure::pipeline::compile;
 use legend_pure_parser_pure::types::{Multiplicity, TypeExpr};
 
 /// Helper: parse a `.pure` string into a `SourceFile`.
@@ -26,9 +26,14 @@ fn parse(source: &str) -> SourceFile {
 }
 
 /// Helper: compile a single Pure source string.
-fn compile_one(source: &str) -> Result<legend_pure_parser_pure::model::PureModel, Vec<legend_pure_parser_pure::error::CompilationError>> {
+fn compile_one(
+    source: &str,
+) -> Result<
+    legend_pure_parser_pure::model::PureModel,
+    Vec<legend_pure_parser_pure::error::CompilationError>,
+> {
     let sf = parse(source);
-    compile(&[sf])
+    compile!(&[sf])
 }
 
 // ---------------------------------------------------------------------------
@@ -37,12 +42,13 @@ fn compile_one(source: &str) -> Result<legend_pure_parser_pure::model::PureModel
 
 #[test]
 fn class_with_properties() {
-    let model = compile_one(
-        "Class Person { name: String[1]; age: Integer[0..1]; }"
-    ).expect("should compile");
+    let model = compile_one("Class Person { name: String[1]; age: Integer[0..1]; }")
+        .expect("should compile");
 
     // Find Person
-    let person_id = model.resolve_by_path(&["Person".into()]).expect("Person should exist");
+    let person_id = model
+        .resolve_by_path(&["Person".into()])
+        .expect("Person should exist");
     let element = model.get_element(person_id);
 
     match element {
@@ -84,8 +90,9 @@ fn inheritance_chain_and_specializations() {
     let model = compile_one(
         "Class A extends B {}\n\
          Class B extends C {}\n\
-         Class C {}"
-    ).expect("should compile");
+         Class C {}",
+    )
+    .expect("should compile");
 
     let a_id = model.resolve_by_path(&["A".into()]).expect("A");
     let b_id = model.resolve_by_path(&["B".into()]).expect("B");
@@ -124,9 +131,7 @@ fn inheritance_chain_and_specializations() {
 
 #[test]
 fn enumeration_with_values() {
-    let model = compile_one(
-        "Enum Color { RED, GREEN, BLUE }"
-    ).expect("should compile");
+    let model = compile_one("Enum Color { RED, GREEN, BLUE }").expect("should compile");
 
     let color_id = model.resolve_by_path(&["Color".into()]).expect("Color");
     match model.get_element(color_id) {
@@ -146,9 +151,8 @@ fn enumeration_with_values() {
 
 #[test]
 fn function_with_params() {
-    let model = compile_one(
-        "function greet(name: String[1]): String[1] { 'hello' }"
-    ).expect("should compile");
+    let model = compile_one("function greet(name: String[1]): String[1] { 'hello' }")
+        .expect("should compile");
 
     let fn_id = model.resolve_by_path(&["greet".into()]).expect("greet");
     match model.get_element(fn_id) {
@@ -185,12 +189,15 @@ fn association_with_properties() {
          Association Person_Firm {\n\
            employee: Person[*];\n\
            employer: Firm[1];\n\
-         }"
-    ).expect("should compile");
+         }",
+    )
+    .expect("should compile");
 
     let person_id = model.resolve_by_path(&["Person".into()]).expect("Person");
     let firm_id = model.resolve_by_path(&["Firm".into()]).expect("Firm");
-    let assoc_id = model.resolve_by_path(&["Person_Firm".into()]).expect("Person_Firm");
+    let assoc_id = model
+        .resolve_by_path(&["Person_Firm".into()])
+        .expect("Person_Firm");
 
     match model.get_element(assoc_id) {
         Element::Association(assoc) => {
@@ -232,20 +239,24 @@ fn association_with_properties() {
 
 #[test]
 fn cyclic_inheritance_error() {
-    let result = compile_one(
-        "Class A extends B {}\nClass B extends A {}"
-    );
+    let result = compile_one("Class A extends B {}\nClass B extends A {}");
     assert!(result.is_err(), "cyclic inheritance should fail");
     let errors = result.unwrap_err();
 
-    let cycle_errors: Vec<_> = errors.iter()
-        .filter(|e| matches!(
-            &e.kind,
-            legend_pure_parser_pure::error::CompilationErrorKind::CyclicInheritance { .. }
-        ))
+    let cycle_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                &e.kind,
+                legend_pure_parser_pure::error::CompilationErrorKind::CyclicInheritance { .. }
+            )
+        })
         .collect();
 
-    assert!(!cycle_errors.is_empty(), "should have CyclicInheritance error");
+    assert!(
+        !cycle_errors.is_empty(),
+        "should have CyclicInheritance error"
+    );
 
     // Verify source info is present and points to the right file
     for err in &cycle_errors {
@@ -272,20 +283,25 @@ fn cyclic_inheritance_error() {
 
 #[test]
 fn unresolved_type_error() {
-    let result = compile_one(
-        "Class Bad { x: NonExistent[1]; }"
-    );
+    let result = compile_one("Class Bad { x: NonExistent[1]; }");
     assert!(result.is_err(), "unresolved type should fail");
     let errors = result.unwrap_err();
 
-    let unresolved: Vec<_> = errors.iter()
-        .filter(|e| matches!(
-            &e.kind,
-            legend_pure_parser_pure::error::CompilationErrorKind::UnresolvedElement { .. }
-        ))
+    let unresolved: Vec<_> = errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                &e.kind,
+                legend_pure_parser_pure::error::CompilationErrorKind::UnresolvedElement { .. }
+            )
+        })
         .collect();
 
-    assert_eq!(unresolved.len(), 1, "should have exactly 1 UnresolvedElement error");
+    assert_eq!(
+        unresolved.len(),
+        1,
+        "should have exactly 1 UnresolvedElement error"
+    );
 
     let err = &unresolved[0];
 
@@ -299,10 +315,7 @@ fn unresolved_type_error() {
 
     // Verify source info points to the type reference, not the element
     assert_eq!(err.source_info.source, "test.pure");
-    assert_eq!(
-        err.source_info.start_line, 1,
-        "error should be on line 1"
-    );
+    assert_eq!(err.source_info.start_line, 1, "error should be on line 1");
     // Column should point to 'NonExistent' (col 16 in "Class Bad { x: NonExistent[1]; }")
     assert!(
         err.source_info.start_column > 1,
@@ -317,20 +330,25 @@ fn unresolved_type_error() {
 
 #[test]
 fn duplicate_element_error() {
-    let result = compile_one(
-        "Class Foo {}\nClass Foo {}"
-    );
+    let result = compile_one("Class Foo {}\nClass Foo {}");
     assert!(result.is_err(), "duplicate element should fail");
     let errors = result.unwrap_err();
 
-    let dupes: Vec<_> = errors.iter()
-        .filter(|e| matches!(
-            &e.kind,
-            legend_pure_parser_pure::error::CompilationErrorKind::DuplicateElement { .. }
-        ))
+    let dupes: Vec<_> = errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                &e.kind,
+                legend_pure_parser_pure::error::CompilationErrorKind::DuplicateElement { .. }
+            )
+        })
         .collect();
 
-    assert_eq!(dupes.len(), 1, "should have exactly 1 DuplicateElement error");
+    assert_eq!(
+        dupes.len(),
+        1,
+        "should have exactly 1 DuplicateElement error"
+    );
 
     let err = &dupes[0];
     match &err.kind {
@@ -342,7 +360,10 @@ fn duplicate_element_error() {
 
     // Duplicate is the second declaration (line 2)
     assert_eq!(err.source_info.source, "test.pure");
-    assert_eq!(err.source_info.start_line, 2, "duplicate should be on line 2");
+    assert_eq!(
+        err.source_info.start_line, 2,
+        "duplicate should be on line 2"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -351,20 +372,24 @@ fn duplicate_element_error() {
 
 #[test]
 fn unresolved_profile_error() {
-    let result = compile_one(
-        "Class <<nonexistent::profile.stereo>> Annotated {}"
-    );
+    let result = compile_one("Class <<nonexistent::profile.stereo>> Annotated {}");
     assert!(result.is_err(), "unresolved profile should fail");
     let errors = result.unwrap_err();
 
-    let unresolved: Vec<_> = errors.iter()
-        .filter(|e| matches!(
-            &e.kind,
-            legend_pure_parser_pure::error::CompilationErrorKind::UnresolvedElement { .. }
-        ))
+    let unresolved: Vec<_> = errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                &e.kind,
+                legend_pure_parser_pure::error::CompilationErrorKind::UnresolvedElement { .. }
+            )
+        })
         .collect();
 
-    assert!(!unresolved.is_empty(), "should have UnresolvedElement for the profile");
+    assert!(
+        !unresolved.is_empty(),
+        "should have UnresolvedElement for the profile"
+    );
 
     // Verify source info is valid
     for err in &unresolved {
@@ -379,9 +404,8 @@ fn unresolved_profile_error() {
 
 #[test]
 fn profile_with_stereotypes_and_tags() {
-    let model = compile_one(
-        "Profile doc { stereotypes: [deprecated]; tags: [description]; }"
-    ).expect("should compile");
+    let model = compile_one("Profile doc { stereotypes: [deprecated]; tags: [description]; }")
+        .expect("should compile");
 
     let profile_id = model.resolve_by_path(&["doc".into()]).expect("doc");
     match model.get_element(profile_id) {
@@ -401,13 +425,12 @@ fn profile_with_stereotypes_and_tags() {
 
 #[test]
 fn class_in_package() {
-    let model = compile_one(
-        "Class model::domain::Person { name: String[1]; }"
-    ).expect("should compile");
+    let model =
+        compile_one("Class model::domain::Person { name: String[1]; }").expect("should compile");
 
-    let person_id = model.resolve_by_path(
-        &["model".into(), "domain".into(), "Person".into()]
-    ).expect("model::domain::Person should exist");
+    let person_id = model
+        .resolve_by_path(&["model".into(), "domain".into(), "Person".into()])
+        .expect("model::domain::Person should exist");
 
     let node = model.get_node(person_id);
     assert_eq!(node.name.as_str(), "Person");
@@ -438,20 +461,30 @@ fn measure_with_units() {
            *Meter: x -> $x;\n\
            Kilometer: x -> $x * 1000;\n\
            Mile: x -> $x * 1609.344;\n\
-         }"
-    ).expect("should compile");
+         }",
+    )
+    .expect("should compile");
 
-    let measure_id = model.resolve_by_path(&["Distance".into()]).expect("Distance");
+    let measure_id = model
+        .resolve_by_path(&["Distance".into()])
+        .expect("Distance");
     match model.get_element(measure_id) {
         Element::Measure(m) => {
             assert!(m.canonical_unit.is_some(), "should have canonical unit");
-            assert_eq!(m.non_canonical_units.len(), 2, "should have 2 non-canonical units");
+            assert_eq!(
+                m.non_canonical_units.len(),
+                2,
+                "should have 2 non-canonical units"
+            );
 
             // Verify each unit references back to its parent measure
             let canon_id = m.canonical_unit.unwrap();
             match model.get_element(canon_id) {
                 Element::Unit(u) => {
-                    assert_eq!(u.measure, measure_id, "canonical unit should reference parent");
+                    assert_eq!(
+                        u.measure, measure_id,
+                        "canonical unit should reference parent"
+                    );
                 }
                 _ => panic!("expected Unit element for canonical"),
             }
@@ -461,7 +494,10 @@ fn measure_with_units() {
             for &non_canon_id in &m.non_canonical_units {
                 match model.get_element(non_canon_id) {
                     Element::Unit(u) => {
-                        assert_eq!(u.measure, measure_id, "non-canonical unit should reference parent");
+                        assert_eq!(
+                            u.measure, measure_id,
+                            "non-canonical unit should reference parent"
+                        );
                     }
                     _ => panic!("expected Unit element for non-canonical"),
                 }
@@ -479,10 +515,13 @@ fn measure_with_units() {
 fn valid_stereotype_compiles() {
     let model = compile_one(
         "Profile doc { stereotypes: [deprecated, internal]; tags: [description]; }\n\
-         Class <<doc.deprecated>> {doc.description = 'A thing'} OldThing {}"
-    ).expect("valid annotation should compile");
+         Class <<doc.deprecated>> {doc.description = 'A thing'} OldThing {}",
+    )
+    .expect("valid annotation should compile");
 
-    let old_id = model.resolve_by_path(&["OldThing".into()]).expect("OldThing");
+    let old_id = model
+        .resolve_by_path(&["OldThing".into()])
+        .expect("OldThing");
     match model.get_element(old_id) {
         Element::Class(class) => {
             assert_eq!(class.stereotypes.len(), 1, "should have 1 stereotype");
@@ -505,14 +544,18 @@ fn association_wrong_cardinality() {
     // 1 property instead of 2
     let result = compile_one(
         "Class A {}\n\
-         Association Bad { a: A[1]; }"
+         Association Bad { a: A[1]; }",
     );
     assert!(result.is_err(), "association with 1 property should fail");
     let errors = result.unwrap_err();
-    let assoc_errors: Vec<_> = errors.iter()
+    let assoc_errors: Vec<_> = errors
+        .iter()
         .filter(|e| matches!(&e.kind, CompilationErrorKind::InvalidAssociation { .. }))
         .collect();
-    assert!(!assoc_errors.is_empty(), "should have InvalidAssociation error");
+    assert!(
+        !assoc_errors.is_empty(),
+        "should have InvalidAssociation error"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -524,14 +567,21 @@ fn association_property_not_class() {
     let result = compile_one(
         "Class A {}\n\
          Enum Status { Active, Inactive }\n\
-         Association Bad { a: A[1]; s: Status[1]; }"
+         Association Bad { a: A[1]; s: Status[1]; }",
     );
-    assert!(result.is_err(), "association property pointing to Enum should fail");
+    assert!(
+        result.is_err(),
+        "association property pointing to Enum should fail"
+    );
     let errors = result.unwrap_err();
-    let assoc_errors: Vec<_> = errors.iter()
+    let assoc_errors: Vec<_> = errors
+        .iter()
         .filter(|e| matches!(&e.kind, CompilationErrorKind::InvalidAssociation { .. }))
         .collect();
-    assert!(!assoc_errors.is_empty(), "should have InvalidAssociation for non-Class property");
+    assert!(
+        !assoc_errors.is_empty(),
+        "should have InvalidAssociation for non-Class property"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -542,18 +592,25 @@ fn association_property_not_class() {
 fn super_type_not_class() {
     let result = compile_one(
         "Enum Color { RED, GREEN }\n\
-         Class Bad extends Color {}"
+         Class Bad extends Color {}",
     );
     assert!(result.is_err(), "extending an Enum should fail");
     let errors = result.unwrap_err();
-    let super_errors: Vec<_> = errors.iter()
+    let super_errors: Vec<_> = errors
+        .iter()
         .filter(|e| matches!(&e.kind, CompilationErrorKind::InvalidSuperType { .. }))
         .collect();
-    assert!(!super_errors.is_empty(), "should have InvalidSuperType error");
+    assert!(
+        !super_errors.is_empty(),
+        "should have InvalidSuperType error"
+    );
 
     // Verify error carries class and super names
     match &super_errors[0].kind {
-        CompilationErrorKind::InvalidSuperType { class_name, super_name } => {
+        CompilationErrorKind::InvalidSuperType {
+            class_name,
+            super_name,
+        } => {
             assert_eq!(class_name.as_str(), "Bad");
             assert_eq!(super_name.as_str(), "Color");
         }
@@ -569,14 +626,21 @@ fn super_type_not_class() {
 fn stereotype_not_in_profile() {
     let result = compile_one(
         "Profile doc { stereotypes: [deprecated]; tags: [desc]; }\n\
-         Class <<doc.nonexistent>> Bad {}"
+         Class <<doc.nonexistent>> Bad {}",
     );
-    assert!(result.is_err(), "referencing nonexistent stereotype should fail");
+    assert!(
+        result.is_err(),
+        "referencing nonexistent stereotype should fail"
+    );
     let errors = result.unwrap_err();
-    let anno_errors: Vec<_> = errors.iter()
+    let anno_errors: Vec<_> = errors
+        .iter()
         .filter(|e| matches!(&e.kind, CompilationErrorKind::InvalidAnnotation { .. }))
         .collect();
-    assert!(!anno_errors.is_empty(), "should have InvalidAnnotation error");
+    assert!(
+        !anno_errors.is_empty(),
+        "should have InvalidAnnotation error"
+    );
     assert!(
         errors[0].message.contains("nonexistent"),
         "error message should mention the missing stereotype name"
@@ -591,14 +655,18 @@ fn stereotype_not_in_profile() {
 fn tag_not_in_profile() {
     let result = compile_one(
         "Profile doc { stereotypes: [deprecated]; tags: [description]; }\n\
-         Class {doc.missingTag = 'val'} Bad {}"
+         Class {doc.missingTag = 'val'} Bad {}",
     );
     assert!(result.is_err(), "referencing nonexistent tag should fail");
     let errors = result.unwrap_err();
-    let anno_errors: Vec<_> = errors.iter()
+    let anno_errors: Vec<_> = errors
+        .iter()
         .filter(|e| matches!(&e.kind, CompilationErrorKind::InvalidAnnotation { .. }))
         .collect();
-    assert!(!anno_errors.is_empty(), "should have InvalidAnnotation error");
+    assert!(
+        !anno_errors.is_empty(),
+        "should have InvalidAnnotation error"
+    );
     assert!(
         errors[0].message.contains("missingTag"),
         "error message should mention the missing tag name"
@@ -611,21 +679,191 @@ fn tag_not_in_profile() {
 
 #[test]
 fn duplicate_property_names() {
-    let result = compile_one(
-        "Class Bad { name: String[1]; name: Integer[1]; }"
-    );
+    let result = compile_one("Class Bad { name: String[1]; name: Integer[1]; }");
     assert!(result.is_err(), "duplicate properties should fail");
     let errors = result.unwrap_err();
-    let dupe_errors: Vec<_> = errors.iter()
+    let dupe_errors: Vec<_> = errors
+        .iter()
         .filter(|e| matches!(&e.kind, CompilationErrorKind::DuplicateProperty { .. }))
         .collect();
-    assert_eq!(dupe_errors.len(), 1, "should have exactly 1 DuplicateProperty error");
+    assert_eq!(
+        dupe_errors.len(),
+        1,
+        "should have exactly 1 DuplicateProperty error"
+    );
 
     match &dupe_errors[0].kind {
-        CompilationErrorKind::DuplicateProperty { class_name, property_name } => {
+        CompilationErrorKind::DuplicateProperty {
+            class_name,
+            property_name,
+        } => {
             assert_eq!(class_name.as_str(), "Bad");
             assert_eq!(property_name.as_str(), "name");
         }
         _ => unreachable!(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Import Resolution
+// ---------------------------------------------------------------------------
+
+/// Helper: compile multiple Pure source strings together with auto-imports.
+fn compile_with_imports(
+    sources: &[&str],
+    auto_imports: &[&str],
+) -> Result<
+    legend_pure_parser_pure::model::PureModel,
+    Vec<legend_pure_parser_pure::error::CompilationError>,
+> {
+    let sfs: Vec<SourceFile> = sources
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            legend_pure_parser_parser::parse(s, &format!("test{i}.pure")).expect("parse failed")
+        })
+        .collect();
+    let imports: Vec<smol_str::SmolStr> = auto_imports.iter().map(smol_str::SmolStr::new).collect();
+    legend_pure_parser_pure::pipeline::compile(&sfs, &imports)
+}
+
+#[test]
+fn compile_with_import_resolves_unqualified() {
+    // Section with explicit import — `Instrument` resolves without FQN
+    let source = r"
+###Pure
+import model::trading::*;
+
+Class model::trading::Instrument {
+  ticker: String[1];
+}
+
+Class model::trading::Trade {
+  instrument: Instrument[1];
+}
+";
+    let model = compile_with_imports(&[source], &[]).expect("should compile");
+    let trade_id = model
+        .resolve_by_path(&["model".into(), "trading".into(), "Trade".into()])
+        .expect("Trade should exist");
+    let instr_id = model
+        .resolve_by_path(&["model".into(), "trading".into(), "Instrument".into()])
+        .expect("Instrument should exist");
+
+    match model.get_element(trade_id) {
+        Element::Class(c) => {
+            assert_eq!(c.properties.len(), 1);
+            match &c.properties[0].type_expr {
+                TypeExpr::Named { element, .. } => assert_eq!(*element, instr_id),
+                _ => panic!("expected Named type"),
+            }
+        }
+        _ => panic!("Trade should be a Class"),
+    }
+}
+
+#[test]
+fn compile_import_isolation_across_sections() {
+    // Import in section 1 does NOT apply to section 2
+    let source = r"
+###Pure
+import model::domain::*;
+
+Class model::domain::Address {
+  city: String[1];
+}
+
+###Pure
+
+Class model::domain::Person {
+  home: Address[1];
+}
+";
+    // Section 2 has no import — `Address` is unqualified and should fail
+    let result = compile_with_imports(&[source], &[]);
+    assert!(
+        result.is_err(),
+        "should fail because section 2 has no import for Address"
+    );
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| e.message.contains("Address")));
+}
+
+#[test]
+fn compile_unresolved_with_wrong_import() {
+    let source = r"
+###Pure
+import wrong::pkg::*;
+
+Class model::domain::Person {
+  name: SomeType[1];
+}
+";
+    let result = compile_with_imports(&[source], &[]);
+    assert!(result.is_err());
+    let errors = result.unwrap_err();
+    assert!(errors.iter().any(|e| e.message.contains("SomeType")));
+}
+
+#[test]
+fn compile_ambiguous_import() {
+    // Two imports both provide `Foo` — should produce AmbiguousImport error
+    let source = r"
+###Pure
+import pkg_a::*;
+import pkg_b::*;
+
+Class pkg_a::Foo {
+  x: String[1];
+}
+
+Class pkg_b::Foo {
+  y: String[1];
+}
+
+Class test::Bar {
+  f: Foo[1];
+}
+";
+    let result = compile_with_imports(&[source], &[]);
+    assert!(result.is_err(), "should fail with ambiguous import");
+    let errors = result.unwrap_err();
+    let ambig = errors
+        .iter()
+        .find(|e| matches!(&e.kind, CompilationErrorKind::AmbiguousImport { .. }));
+    assert!(
+        ambig.is_some(),
+        "should have AmbiguousImport error, got: {errors:?}"
+    );
+}
+
+#[test]
+fn compile_import_for_annotations() {
+    // Import resolves profile references in stereotypes
+    let source = r"
+###Pure
+import model::meta::*;
+
+Profile model::meta::doc {
+  stereotypes: [deprecated];
+  tags: [description];
+}
+
+Class <<doc.deprecated>> {model::meta::doc.description = 'old'} model::domain::LegacyThing {
+  name: String[1];
+}
+";
+    let model = compile_with_imports(&[source], &[]).expect("should compile with imported profile");
+    let legacy_id = model
+        .resolve_by_path(&["model".into(), "domain".into(), "LegacyThing".into()])
+        .expect("LegacyThing should exist");
+    match model.get_element(legacy_id) {
+        Element::Class(c) => {
+            assert_eq!(c.stereotypes.len(), 1);
+            assert_eq!(c.stereotypes[0].value.as_str(), "deprecated");
+            assert_eq!(c.tagged_values.len(), 1);
+            assert_eq!(c.tagged_values[0].tag.as_str(), "description");
+        }
+        _ => panic!("LegacyThing should be a Class"),
     }
 }

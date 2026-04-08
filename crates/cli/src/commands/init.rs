@@ -61,11 +61,7 @@ pub fn run(args: InitArgs) -> Result<(), CliError> {
         )));
     }
 
-    eprintln!(
-        "{} project '{}'...",
-        "Creating".green().bold(),
-        args.name,
-    );
+    eprintln!("{} project '{}'...", "Creating".green().bold(), args.name,);
 
     // Create directory structure
     let pure_dir = project_dir.join("src").join("main").join("pure");
@@ -86,7 +82,11 @@ pub fn run(args: InitArgs) -> Result<(), CliError> {
     eprintln!();
     eprintln!("  {} {}/", "📁".dimmed(), args.name);
     eprintln!("  {}   src/main/pure/", "  ".dimmed());
-    eprintln!("  {}     {} (starter model)", "  ".dimmed(), "model.pure".cyan());
+    eprintln!(
+        "  {}     {} (starter model)",
+        "  ".dimmed(),
+        "model.pure".cyan()
+    );
     eprintln!("  {}   {}", "  ".dimmed(), ".legendignore".dimmed());
     eprintln!();
     eprintln!("{}", "Get started:".bold());

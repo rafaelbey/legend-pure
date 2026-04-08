@@ -74,6 +74,13 @@ pub enum CompilationErrorKind {
         /// The duplicate property name.
         property_name: SmolStr,
     },
+    /// An unqualified name resolves to multiple elements via imports.
+    AmbiguousImport {
+        /// The ambiguous simple name.
+        name: SmolStr,
+        /// Fully qualified paths of the matching candidates.
+        candidates: Vec<SmolStr>,
+    },
 }
 
 impl std::fmt::Display for CompilationError {

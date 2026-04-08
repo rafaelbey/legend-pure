@@ -62,39 +62,69 @@ pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
             match element {
                 Element::Class(class) => {
                     validate_super_types(model, id, node.name.clone(), class, &mut errors);
-                    validate_duplicate_properties(
-                        &node.name, &class.properties, &mut errors,
-                    );
+                    validate_duplicate_properties(&node.name, &class.properties, &mut errors);
                     validate_stereotypes(
-                        model, &node.name, &class.stereotypes, &node.source_info, &mut errors,
+                        model,
+                        &node.name,
+                        &class.stereotypes,
+                        &node.source_info,
+                        &mut errors,
                     );
                     validate_tagged_values(
-                        model, &node.name, &class.tagged_values, &node.source_info, &mut errors,
+                        model,
+                        &node.name,
+                        &class.tagged_values,
+                        &node.source_info,
+                        &mut errors,
                     );
                 }
                 Element::Association(assoc) => {
                     validate_association(model, &node.name, assoc, &node.source_info, &mut errors);
                     validate_stereotypes(
-                        model, &node.name, &assoc.stereotypes, &node.source_info, &mut errors,
+                        model,
+                        &node.name,
+                        &assoc.stereotypes,
+                        &node.source_info,
+                        &mut errors,
                     );
                     validate_tagged_values(
-                        model, &node.name, &assoc.tagged_values, &node.source_info, &mut errors,
+                        model,
+                        &node.name,
+                        &assoc.tagged_values,
+                        &node.source_info,
+                        &mut errors,
                     );
                 }
                 Element::Enumeration(enum_def) => {
                     validate_stereotypes(
-                        model, &node.name, &enum_def.stereotypes, &node.source_info, &mut errors,
+                        model,
+                        &node.name,
+                        &enum_def.stereotypes,
+                        &node.source_info,
+                        &mut errors,
                     );
                     validate_tagged_values(
-                        model, &node.name, &enum_def.tagged_values, &node.source_info, &mut errors,
+                        model,
+                        &node.name,
+                        &enum_def.tagged_values,
+                        &node.source_info,
+                        &mut errors,
                     );
                 }
                 Element::Function(func) => {
                     validate_stereotypes(
-                        model, &node.name, &func.stereotypes, &node.source_info, &mut errors,
+                        model,
+                        &node.name,
+                        &func.stereotypes,
+                        &node.source_info,
+                        &mut errors,
                     );
                     validate_tagged_values(
-                        model, &node.name, &func.tagged_values, &node.source_info, &mut errors,
+                        model,
+                        &node.name,
+                        &func.tagged_values,
+                        &node.source_info,
+                        &mut errors,
                     );
                 }
                 Element::Measure(_)
@@ -132,16 +162,17 @@ fn validate_association(
             source_info: source_info.clone(),
             kind: CompilationErrorKind::InvalidAssociation {
                 name: assoc_name.clone(),
-                reason: SmolStr::new(format!(
-                    "expected 2 properties, found {prop_count}"
-                )),
+                reason: SmolStr::new(format!("expected 2 properties, found {prop_count}")),
             },
         });
     }
 
     // Validate each property references a Class
     for prop in &assoc.properties {
-        if let TypeExpr::Named { element: target_id, .. } = &prop.type_expr {
+        if let TypeExpr::Named {
+            element: target_id, ..
+        } = &prop.type_expr
+        {
             if let Some(target_element) = model.try_get_element(*target_id) {
                 if !matches!(target_element, Element::Class(_)) {
                     let target_name = model.get_node(*target_id).name.clone();
@@ -183,13 +214,14 @@ fn validate_super_types(
 ) {
     let class_node = model.get_node(class_id);
     for super_type in &class.super_types {
-        if let TypeExpr::Named { element: super_id, .. } = super_type {
+        if let TypeExpr::Named {
+            element: super_id, ..
+        } = super_type
+        {
             // Self-inheritance check
             if *super_id == class_id {
                 errors.push(CompilationError {
-                    message: format!(
-                        "Class '{class_name}' cannot extend itself"
-                    ),
+                    message: format!("Class '{class_name}' cannot extend itself"),
                     source_info: class_node.source_info.clone(),
                     kind: CompilationErrorKind::InvalidSuperType {
                         class_name: class_name.clone(),
@@ -239,7 +271,11 @@ fn validate_stereotypes(
         match model.try_get_element(stereo.profile) {
             Some(Element::Profile(profile)) => {
                 validate_stereotype_exists(
-                    element_name, &stereo.value, profile, source_info, errors,
+                    element_name,
+                    &stereo.value,
+                    profile,
+                    source_info,
+                    errors,
                 );
             }
             Some(_) => {
@@ -251,9 +287,7 @@ fn validate_stereotypes(
                     source_info: source_info.clone(),
                     kind: CompilationErrorKind::InvalidAnnotation {
                         element_name: element_name.clone(),
-                        reason: SmolStr::new(format!(
-                            "'{target_name}' is not a Profile"
-                        )),
+                        reason: SmolStr::new(format!("'{target_name}' is not a Profile")),
                     },
                 });
             }
@@ -281,9 +315,7 @@ fn validate_stereotype_exists(
             source_info: source_info.clone(),
             kind: CompilationErrorKind::InvalidAnnotation {
                 element_name: element_name.clone(),
-                reason: SmolStr::new(format!(
-                    "stereotype '{stereotype_name}' not found"
-                )),
+                reason: SmolStr::new(format!("stereotype '{stereotype_name}' not found")),
             },
         });
     }
@@ -302,9 +334,7 @@ fn validate_tagged_values(
     for tv in tagged_values {
         match model.try_get_element(tv.profile) {
             Some(Element::Profile(profile)) => {
-                validate_tag_exists(
-                    element_name, &tv.tag, profile, source_info, errors,
-                );
+                validate_tag_exists(element_name, &tv.tag, profile, source_info, errors);
             }
             Some(_) => {
                 let target_name = model.get_node(tv.profile).name.clone();
@@ -315,9 +345,7 @@ fn validate_tagged_values(
                     source_info: source_info.clone(),
                     kind: CompilationErrorKind::InvalidAnnotation {
                         element_name: element_name.clone(),
-                        reason: SmolStr::new(format!(
-                            "'{target_name}' is not a Profile"
-                        )),
+                        reason: SmolStr::new(format!("'{target_name}' is not a Profile")),
                     },
                 });
             }
@@ -345,9 +373,7 @@ fn validate_tag_exists(
             source_info: source_info.clone(),
             kind: CompilationErrorKind::InvalidAnnotation {
                 element_name: element_name.clone(),
-                reason: SmolStr::new(format!(
-                    "tag '{tag_name}' not found"
-                )),
+                reason: SmolStr::new(format!("tag '{tag_name}' not found")),
             },
         });
     }
@@ -381,8 +407,6 @@ fn validate_duplicate_properties(
     }
 }
 
-
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -402,7 +426,10 @@ mod tests {
                 name: SmolStr::new("name"),
                 source_info: src.clone(),
                 type_expr: TypeExpr::Named {
-                    element: ElementId { chunk_id: 0, local_idx: 0 },
+                    element: ElementId {
+                        chunk_id: 0,
+                        local_idx: 0,
+                    },
                     type_arguments: vec![],
                     value_arguments: vec![],
                 },
@@ -416,7 +443,10 @@ mod tests {
                 name: SmolStr::new("name"), // duplicate!
                 source_info: src.clone(),
                 type_expr: TypeExpr::Named {
-                    element: ElementId { chunk_id: 0, local_idx: 0 },
+                    element: ElementId {
+                        chunk_id: 0,
+                        local_idx: 0,
+                    },
                     type_arguments: vec![],
                     value_arguments: vec![],
                 },

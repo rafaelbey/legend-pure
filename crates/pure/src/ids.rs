@@ -89,7 +89,10 @@ mod tests {
 
     #[test]
     fn element_id_is_copy_and_eq() {
-        let a = ElementId { chunk_id: 0, local_idx: 5 };
+        let a = ElementId {
+            chunk_id: 0,
+            local_idx: 5,
+        };
         let b = a; // Copy
         assert_eq!(a, b);
         assert_eq!(a.to_string(), "0:5");
@@ -99,16 +102,31 @@ mod tests {
     fn element_id_hash_works() {
         use std::collections::HashSet;
         let mut set = HashSet::new();
-        set.insert(ElementId { chunk_id: 0, local_idx: 0 });
-        set.insert(ElementId { chunk_id: 0, local_idx: 1 });
-        set.insert(ElementId { chunk_id: 0, local_idx: 0 }); // duplicate
+        set.insert(ElementId {
+            chunk_id: 0,
+            local_idx: 0,
+        });
+        set.insert(ElementId {
+            chunk_id: 0,
+            local_idx: 1,
+        });
+        set.insert(ElementId {
+            chunk_id: 0,
+            local_idx: 0,
+        }); // duplicate
         assert_eq!(set.len(), 2);
     }
 
     #[test]
     fn element_id_different_chunks_not_equal() {
-        let a = ElementId { chunk_id: 0, local_idx: 0 };
-        let b = ElementId { chunk_id: 1, local_idx: 0 };
+        let a = ElementId {
+            chunk_id: 0,
+            local_idx: 0,
+        };
+        let b = ElementId {
+            chunk_id: 1,
+            local_idx: 0,
+        };
         assert_ne!(a, b);
     }
 

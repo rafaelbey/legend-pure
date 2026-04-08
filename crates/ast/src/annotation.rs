@@ -17,10 +17,10 @@
 //! These types are used across multiple elements (classes, enums, functions,
 //! associations, properties) and are factored out here to avoid duplication.
 
+use crate::Spanned;
 use crate::element::PackageableElement;
 use crate::source_info::SourceInfo;
 use crate::type_ref::{Identifier, Multiplicity, Package, TypeReference};
-use crate::Spanned;
 
 // ---------------------------------------------------------------------------
 // Packageable Element Pointer

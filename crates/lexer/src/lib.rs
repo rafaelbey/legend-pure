@@ -32,8 +32,8 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-pub mod token;
 mod lexer;
+pub mod token;
 
 pub use lexer::tokenize;
 pub use token::{Token, TokenKind};

@@ -85,4 +85,3 @@ pub fn compose_from_json(json: &str) -> Result<String, Box<dyn std::error::Error
     let grammar = compose_from_protocol(&pmcd)?;
     Ok(grammar)
 }
-

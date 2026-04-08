@@ -43,11 +43,12 @@ impl ParseError {
             Self::Lex(lex_err) => match lex_err {
                 legend_pure_parser_lexer::LexError::UnterminatedString { source_info, .. }
                 | legend_pure_parser_lexer::LexError::UnterminatedBlockComment {
-                    source_info, ..
+                    source_info,
+                    ..
                 }
-                | legend_pure_parser_lexer::LexError::UnexpectedCharacter {
-                    source_info, ..
-                } => Some(source_info),
+                | legend_pure_parser_lexer::LexError::UnexpectedCharacter { source_info, .. } => {
+                    Some(source_info)
+                }
             },
         }
     }

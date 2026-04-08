@@ -73,7 +73,10 @@ impl<T> Arena<T> {
     /// Panics if the arena exceeds `u32::MAX` items.
     pub fn alloc(&mut self, item: T) -> u32 {
         let idx = self.items.len();
-        assert!(u32::try_from(idx).is_ok(), "Arena overflow: exceeded u32::MAX items");
+        assert!(
+            u32::try_from(idx).is_ok(),
+            "Arena overflow: exceeded u32::MAX items"
+        );
         self.items.push(item);
         #[allow(clippy::cast_possible_truncation)] // Guarded by assert above
         let result = idx as u32;
@@ -116,15 +119,12 @@ impl<T> Arena<T> {
 
     /// Iterates over `(index, &item)` pairs.
     pub fn iter(&self) -> impl Iterator<Item = (u32, &T)> {
-        self.items
-            .iter()
-            .enumerate()
-            .map(|(i, item)| {
-                // Safe: alloc() asserts len <= u32::MAX.
-                #[allow(clippy::cast_possible_truncation)]
-                let idx = i as u32;
-                (idx, item)
-            })
+        self.items.iter().enumerate().map(|(i, item)| {
+            // Safe: alloc() asserts len <= u32::MAX.
+            #[allow(clippy::cast_possible_truncation)]
+            let idx = i as u32;
+            (idx, item)
+        })
     }
 
     /// Iterates over all items (without indices).

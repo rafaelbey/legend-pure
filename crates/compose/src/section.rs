@@ -34,8 +34,7 @@ use crate::writer::IndentWriter;
 #[must_use]
 pub fn compose_source_file(sf: &SourceFile) -> String {
     let mut w = IndentWriter::new();
-    let is_single_pure_section =
-        sf.sections.len() == 1 && sf.sections[0].kind == "Pure";
+    let is_single_pure_section = sf.sections.len() == 1 && sf.sections[0].kind == "Pure";
 
     for (si, section) in sf.sections.iter().enumerate() {
         // Section headers (e.g., `###Pure`)

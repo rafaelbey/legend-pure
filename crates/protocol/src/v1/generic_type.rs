@@ -138,7 +138,10 @@ mod tests {
         };
         let json = serde_json::to_value(&gt).unwrap();
 
-        assert_eq!(json["rawType"]["fullPath"], "meta::pure::metamodel::type::List");
+        assert_eq!(
+            json["rawType"]["fullPath"],
+            "meta::pure::metamodel::type::List"
+        );
         let args = json["typeArguments"].as_array().unwrap();
         assert_eq!(args.len(), 1);
         assert_eq!(args[0]["rawType"]["fullPath"], "String");
@@ -151,7 +154,10 @@ mod tests {
                 full_path: "Integer".into(),
                 source_information: Some(SourceInformation {
                     source_id: "test.pure".into(),
-                    start_line: 1, start_column: 5, end_line: 1, end_column: 12,
+                    start_line: 1,
+                    start_column: 5,
+                    end_line: 1,
+                    end_column: 12,
                 }),
             },
             type_arguments: vec![],

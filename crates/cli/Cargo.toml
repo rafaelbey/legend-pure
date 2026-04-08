@@ -31,6 +31,7 @@ legend-pure-parser-lexer = { path = "../lexer" }
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-pure = { path = "../pure" }
 legend-pure-parser-protocol = { path = "../protocol" }
+smol_str = { workspace = true }
 
 # CLI framework
 clap = { workspace = true }

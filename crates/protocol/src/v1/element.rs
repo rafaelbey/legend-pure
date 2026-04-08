@@ -24,7 +24,7 @@ use super::generic_type::GenericType;
 use super::multiplicity::Multiplicity;
 use super::property::{Constraint, Property, QualifiedProperty};
 use super::source_info::SourceInformation;
-use super::value_spec::{LambdaFunction, Variable, ValueSpecification};
+use super::value_spec::{LambdaFunction, ValueSpecification, Variable};
 
 /// Top-level packageable element — discriminated by `_type` in JSON.
 ///
@@ -328,14 +328,19 @@ pub struct ProtocolSectionIndex {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::generic_type::PackageableType;
+    use super::*;
 
     fn simple_type(path: &str) -> GenericType {
         GenericType {
-            raw_type: PackageableType { full_path: path.into(), source_information: None },
-            type_arguments: vec![], multiplicity_arguments: vec![],
-            type_variable_values: vec![], source_information: None,
+            raw_type: PackageableType {
+                full_path: path.into(),
+                source_information: None,
+            },
+            type_arguments: vec![],
+            multiplicity_arguments: vec![],
+            type_variable_values: vec![],
+            source_information: None,
         }
     }
 
@@ -344,9 +349,14 @@ mod tests {
         let e = PackageableElement::Class(ProtocolClass {
             package_path: "model".into(),
             name: "Person".into(),
-            super_types: vec![], properties: vec![], qualified_properties: vec![],
-            constraints: vec![], original_milestoned_properties: vec![],
-            stereotypes: vec![], tagged_values: vec![], source_information: None,
+            super_types: vec![],
+            properties: vec![],
+            qualified_properties: vec![],
+            constraints: vec![],
+            original_milestoned_properties: vec![],
+            stereotypes: vec![],
+            tagged_values: vec![],
+            source_information: None,
         });
         let json = serde_json::to_value(&e).unwrap();
         assert_eq!(json["_type"], "class");
@@ -359,13 +369,15 @@ mod tests {
         let e = PackageableElement::Enumeration(ProtocolEnumeration {
             package_path: "model".into(),
             name: "Color".into(),
-            values: vec![
-                ProtocolEnumMember {
-                    value: "RED".into(), stereotypes: vec![], tagged_values: vec![],
-                    source_information: None,
-                },
-            ],
-            stereotypes: vec![], tagged_values: vec![], source_information: None,
+            values: vec![ProtocolEnumMember {
+                value: "RED".into(),
+                stereotypes: vec![],
+                tagged_values: vec![],
+                source_information: None,
+            }],
+            stereotypes: vec![],
+            tagged_values: vec![],
+            source_information: None,
         });
         let json = serde_json::to_value(&e).unwrap();
         assert_eq!(json["_type"], "Enumeration"); // Capital E!
@@ -395,8 +407,12 @@ mod tests {
             parameters: vec![],
             return_generic_type: simple_type("String"),
             return_multiplicity: Multiplicity::PURE_ONE,
-            body: vec![], stereotypes: vec![], tagged_values: vec![],
-            tests: vec![], pre_constraints: vec![], post_constraints: vec![],
+            body: vec![],
+            stereotypes: vec![],
+            tagged_values: vec![],
+            tests: vec![],
+            pre_constraints: vec![],
+            post_constraints: vec![],
             source_information: None,
         });
         let json = serde_json::to_value(&e).unwrap();
@@ -407,10 +423,16 @@ mod tests {
     #[test]
     fn test_class_empty_vecs_omitted() {
         let e = PackageableElement::Class(ProtocolClass {
-            package_path: "model".into(), name: "Empty".into(),
-            super_types: vec![], properties: vec![], qualified_properties: vec![],
-            constraints: vec![], original_milestoned_properties: vec![],
-            stereotypes: vec![], tagged_values: vec![], source_information: None,
+            package_path: "model".into(),
+            name: "Empty".into(),
+            super_types: vec![],
+            properties: vec![],
+            qualified_properties: vec![],
+            constraints: vec![],
+            original_milestoned_properties: vec![],
+            stereotypes: vec![],
+            tagged_values: vec![],
+            source_information: None,
         });
         let json = serde_json::to_value(&e).unwrap();
         assert!(json.get("properties").is_none());
@@ -455,14 +477,21 @@ mod tests {
     #[test]
     fn test_roundtrip_class() {
         let e = PackageableElement::Class(ProtocolClass {
-            package_path: "model".into(), name: "Person".into(),
+            package_path: "model".into(),
+            name: "Person".into(),
             super_types: vec!["model::LegalEntity".into()],
-            properties: vec![], qualified_properties: vec![],
-            constraints: vec![], original_milestoned_properties: vec![],
-            stereotypes: vec![], tagged_values: vec![],
+            properties: vec![],
+            qualified_properties: vec![],
+            constraints: vec![],
+            original_milestoned_properties: vec![],
+            stereotypes: vec![],
+            tagged_values: vec![],
             source_information: Some(SourceInformation {
                 source_id: "test.pure".into(),
-                start_line: 1, start_column: 1, end_line: 5, end_column: 1,
+                start_line: 1,
+                start_column: 1,
+                end_line: 5,
+                end_column: 1,
             }),
         });
         let json_str = serde_json::to_string(&e).unwrap();

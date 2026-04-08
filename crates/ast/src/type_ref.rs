@@ -300,10 +300,7 @@ impl std::fmt::Display for Multiplicity {
                     write!(f, "[{lower}..{u}]")
                 }
             }
-            Self::Range {
-                lower,
-                upper: None,
-            } => write!(f, "[{lower}..*]"),
+            Self::Range { lower, upper: None } => write!(f, "[{lower}..*]"),
         }
     }
 }
@@ -473,7 +470,10 @@ mod tests {
 
     #[test]
     fn test_package_is_spanned() {
-        let pkg = Package::root(SmolStr::new("meta"), SourceInfo::new("file.pure", 3, 5, 3, 9));
+        let pkg = Package::root(
+            SmolStr::new("meta"),
+            SourceInfo::new("file.pure", 3, 5, 3, 9),
+        );
         assert_eq!(pkg.source_info().start_line, 3);
         assert_eq!(pkg.source_info().start_column, 5);
     }
@@ -565,8 +565,10 @@ mod tests {
     #[test]
     fn test_type_reference_qualified() {
         let type_ref = TypeReference {
-            package: Some(Package::root(SmolStr::new("meta"), test_src())
-                .child(SmolStr::new("pure"), test_src())),
+            package: Some(
+                Package::root(SmolStr::new("meta"), test_src())
+                    .child(SmolStr::new("pure"), test_src()),
+            ),
             name: SmolStr::new("String"),
             type_arguments: vec![],
             type_variable_values: vec![],
@@ -592,7 +594,8 @@ mod tests {
         let val = TypeVariableValue::Integer(200, SourceInfo::new("f.pure", 1, 10, 1, 13));
         assert_eq!(val.source_info().start_column, 10);
 
-        let val = TypeVariableValue::String("ok".to_string(), SourceInfo::new("f.pure", 2, 5, 2, 9));
+        let val =
+            TypeVariableValue::String("ok".to_string(), SourceInfo::new("f.pure", 2, 5, 2, 9));
         assert_eq!(val.source_info().start_line, 2);
     }
 }

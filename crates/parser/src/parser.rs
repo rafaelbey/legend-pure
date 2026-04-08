@@ -446,10 +446,15 @@ impl Parser {
 
         if self.is_named_constraint() {
             let (n, _) = self.cursor.expect_identifier()?;
-            if self.cursor.check(TokenKind::LParen) && self.cursor.peek_kind_at(1) == TokenKind::Tilde {
+            if self.cursor.check(TokenKind::LParen)
+                && self.cursor.peek_kind_at(1) == TokenKind::Tilde
+            {
                 // Extended constraint: name ( ~function: ... ~enforcementLevel: ... )
                 self.cursor.advance(); // (
-                function_definition = Expression::Literal(Literal::Boolean(BooleanLiteral { value: true, source_info: start.clone() }));
+                function_definition = Expression::Literal(Literal::Boolean(BooleanLiteral {
+                    value: true,
+                    source_info: start.clone(),
+                }));
                 while self.cursor.check(TokenKind::Tilde) {
                     self.cursor.advance(); // ~
                     let (key, _) = self.cursor.expect_identifier_or_keyword()?;
@@ -467,7 +472,11 @@ impl Parser {
                         "message" => {
                             if self.cursor.check(TokenKind::StringLiteral) {
                                 let tok = self.cursor.advance().clone();
-                                message = Some(Expression::Literal(Literal::String(StringLiteral { value: unquote_string(&tok.text), source_info: tok.source_info.clone() })));
+                                message =
+                                    Some(Expression::Literal(Literal::String(StringLiteral {
+                                        value: unquote_string(&tok.text),
+                                        source_info: tok.source_info.clone(),
+                                    })));
                             } else {
                                 message = Some(self.parse_expression()?);
                             }
@@ -491,8 +500,11 @@ impl Parser {
             function_definition = self.parse_expression()?;
         }
         Ok(Constraint {
-            name, function_definition,
-            enforcement_level, external_id, message,
+            name,
+            function_definition,
+            enforcement_level,
+            external_id,
+            message,
             source_info: start,
         })
     }
@@ -501,7 +513,8 @@ impl Parser {
         let k0 = self.cursor.peek_kind();
         let k1 = self.cursor.peek_kind_at(1);
         (k0 == TokenKind::Identifier || k0 == TokenKind::StringLiteral)
-            && (k1 == TokenKind::Colon || (k1 == TokenKind::LParen && self.cursor.peek_kind_at(2) == TokenKind::Tilde))
+            && (k1 == TokenKind::Colon
+                || (k1 == TokenKind::LParen && self.cursor.peek_kind_at(2) == TokenKind::Tilde))
     }
 
     fn parse_class_body(&mut self) -> R<(Vec<Property>, Vec<QualifiedProperty>)> {
@@ -574,7 +587,10 @@ impl Parser {
                 let tok = self.cursor.advance().clone(); // bad keyword
                 self.cursor.advance(); // )
                 Err(ParseError::unexpected(
-                    format!("Invalid aggregation kind '{}'. Expected 'shared', 'composite', or 'none'", tok.text),
+                    format!(
+                        "Invalid aggregation kind '{}'. Expected 'shared', 'composite', or 'none'",
+                        tok.text
+                    ),
                     si,
                 ))
             }
@@ -1326,11 +1342,11 @@ impl Parser {
                     let exprs = self.parse_expression_list()?;
                     self.cursor.expect(TokenKind::RBrace)?;
                     if exprs.len() == 1 {
-                    if let Some(single) = exprs.into_iter().next() {
-                        Ok(single)
-                    } else {
-                        unreachable!("len() == 1 guarantees at least one element");
-                    }
+                        if let Some(single) = exprs.into_iter().next() {
+                            Ok(single)
+                        } else {
+                            unreachable!("len() == 1 guarantees at least one element");
+                        }
                     } else {
                         Ok(Expression::Collection(CollectionExpr {
                             elements: exprs,
@@ -1342,9 +1358,7 @@ impl Parser {
             }
             // Bare lambda: x|body or x: Type[1]|body
             // Must be checked before identifier since both start with an identifier.
-            TokenKind::Identifier if self.is_bare_lambda() => {
-                self.parse_bare_lambda()
-            }
+            TokenKind::Identifier if self.is_bare_lambda() => self.parse_bare_lambda(),
             // Identifier or element keyword used as a name.
             // Element keywords (Class, Enum, etc.) are valid identifiers in
             // expression position — e.g., `Class('arg')` or `my::Enum::VAL`.
