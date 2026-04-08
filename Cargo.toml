@@ -22,6 +22,7 @@ members = [
     "crates/parser",
     "crates/protocol",
     "crates/pure",
+    "crates/runtime",
     "crates/jni",
     "crates/cli",
 ]
@@ -37,6 +38,12 @@ repository = "https://github.com/finos/legend-engine"
 smol_str = "0.2"
 thiserror = "2"
 legend-pure-parser-ast-derive = { path = "crates/ast-derive" }
+
+# Runtime (persistent data structures + heap + temporal + decimal)
+im-rc = "15"
+slotmap = "1"
+rust_decimal = "1"
+jiff = { version = "0.2", features = ["std"] }
 
 # Tracing
 tracing = "0.1"

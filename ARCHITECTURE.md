@@ -9,9 +9,10 @@ flowchart TD
     PAR["parser<br/><i>Layer 2: Recursive descent</i>"]
     COM["compose<br/><i>Layer 2b: AST → grammar text</i>"]
     PRO["protocol<br/><i>Layer 3: AST ↔ JSON</i>"]
-    JNI["jni<br/><i>Layer 4a: Java FFI</i>"]
-    CLI["cli<br/><i>Layer 4b: Developer CLI</i>"]
     PURE["pure<br/><i>Layer 5: Semantic Layer</i>"]
+    RT["runtime<br/><i>Layer 6: Interpreter + Heap</i>"]
+    JNI["jni<br/><i>Layer 7a: Java FFI</i>"]
+    CLI["cli<br/><i>Layer 7b: Developer CLI</i>"]
 
     LEX --> AST
     PAR --> AST
@@ -21,17 +22,21 @@ flowchart TD
     PRO --> COM
     PURE --> AST
     PURE --> PAR
+    RT --> PURE
+    RT --> AST
     JNI --> AST
     JNI --> LEX
     JNI --> PAR
     JNI --> PRO
-    JNI --> PURE
+    JNI --> RT
     CLI --> AST
     CLI --> LEX
     CLI --> PAR
     CLI --> PRO
     CLI --> COM
+    CLI --> RT
 
+    style RT fill:#e94560,stroke:#16213e,stroke-width:3px,color:#fff
     style PURE fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
     style CLI fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
     style COM fill:#fff3e0,stroke:#f57c00,stroke-width:2px
@@ -122,3 +127,24 @@ JSON:      { "_type": "class", "package": "model", "name": "Person",
 | Hard/Soft dependency classification | Supports cyclic data models (Person↔Company) while enforcing acyclic inheritance |
 | `bincode` for PureModel serialization | Near-instant startup from cached model; `serde` derives only on Pure nodes |
 | Global packages + chunked elements | Packages span chunks (unified namespace); elements stay local (O(1) merge) |
+| `im-rc` for runtime collections | HAMT/RRB persistent data structures; O(log N) fold+put; no GC |
+| `slotmap` for RuntimeHeap | Generational ObjectId handles; identity-preserving mutateAdd |
+| `HeapEntry::Dynamic \| Typed` | Dual representation allows hybrid interpreted+compiled object access |
+| Purity-gated memoization | `SideEffectFunction` transitive analysis at compile time; bool check at runtime |
+
+## Runtime Architecture
+
+The `runtime` crate implements the Pure interpreter. Detailed design documents:
+
+| Document | Topic |
+|---|---|
+| [`crates/runtime/ARCHITECTURE.md`](crates/runtime/ARCHITECTURE.md) | Runtime overview, four-layer model, benchmark baselines |
+| [`docs/runtime/architecture_deep_questions.md`](docs/runtime/architecture_deep_questions.md) | Bootstrap, threading, polyglot dispatch, grammar, Java interop |
+| [`docs/runtime/hybrid_compilation.md`](docs/runtime/hybrid_compilation.md) | Compiled functions, struct classes, codegen |
+| [`docs/runtime/performance_comparison.md`](docs/runtime/performance_comparison.md) | Java interpreted vs compiled vs Rust interpreter |
+| [`docs/runtime/benchmarking_strategy.md`](docs/runtime/benchmarking_strategy.md) | Three-tier benchmark framework |
+| [`docs/runtime/persistent_data_structures.md`](docs/runtime/persistent_data_structures.md) | HAMT/RRB for collections, columnar for Relation |
+| [`docs/runtime/memoization.md`](docs/runtime/memoization.md) | Purity analysis, cache strategies |
+| [`docs/runtime/metaprogramming.md`](docs/runtime/metaprogramming.md) | MetaAccessor, deactivate/reactivate |
+| [`docs/runtime/mutateadd_mechanics.md`](docs/runtime/mutateadd_mechanics.md) | Heap mutation strategy |
+| [`docs/runtime/convergence_analysis.md`](docs/runtime/convergence_analysis.md) | Gap analysis: Rust parser vs Java interpreter |
