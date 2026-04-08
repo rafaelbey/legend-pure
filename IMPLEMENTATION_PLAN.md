@@ -1,5 +1,10 @@
 # Rust Pure Parser — Implementation Plan
 
+> **Historical Document** — All phases described below have been completed.
+> This document is retained as an architectural reference for the original design
+> decisions, test catalog, and coding standards. For the current state of the
+> project, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Goal
 
 Build a **Rust-based Pure grammar parser** using an **AST-first, TDD-driven** approach. Before any parser code is written, we will: (1) agree on Rust coding practices & tooling, (2) build a strong AST foundation designed for the future compiler, and (3) establish a comprehensive test suite derived from the existing Java grammar tests.

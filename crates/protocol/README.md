@@ -8,7 +8,7 @@ This crate is the **serialization boundary** between the parser's AST and the Ja
 
 1. **Protocol v1 model** — Rust structs with `serde` that mirror `org.finos.legend.engine.protocol.pure.m3`
 2. **AST → Protocol conversion** — transforms the parser AST into the protocol model for JSON emission
-3. **Protocol → AST conversion** (future) — the reverse direction for round-tripping
+3. **Protocol → AST conversion** — reconstructs AST `SourceFile` from protocol JSON (used by the `compose` crate for round-tripping)
 
 ```
 Source → Parser → AST ←→ Protocol v1 Model ←→ JSON bytes (serde_json)
@@ -21,23 +21,22 @@ This is the **only crate** in the workspace that depends on `serde`/`serde_json`
 ```
 src/
 ├── lib.rs                    Crate root, re-exports
-├── v1/                       Protocol v1 model (mirrors Java m3 package)
-│   ├── mod.rs
-│   ├── source_info.rs        SourceInformation
-│   ├── multiplicity.rs       Multiplicity
-│   ├── generic_type.rs       GenericType, PackageableType
-│   ├── annotation.rs         StereotypePtr, TagPtr, TaggedValue
-│   ├── property.rs           Property, QualifiedProperty, Constraint, DefaultValue
-│   ├── value_spec.rs         ValueSpecification enum + all variant structs
-│   ├── element.rs            PackageableElement enum + all element structs
-│   └── context.rs            PureModelContextData, Protocol, Section
-└── convert/                  AST ↔ Protocol conversion (future)
+└── v1/                       Protocol v1 model (mirrors Java m3 package)
     ├── mod.rs
-    ├── source_info.rs
-    ├── multiplicity.rs
-    ├── element.rs
-    └── expression.rs
+    ├── source_info.rs        SourceInformation
+    ├── multiplicity.rs       Multiplicity
+    ├── generic_type.rs       GenericType, PackageableType
+    ├── annotation.rs         StereotypePtr, TagPtr, TaggedValue
+    ├── property.rs           Property, QualifiedProperty, Constraint, DefaultValue
+    ├── value_spec.rs         ValueSpecification enum + all variant structs
+    ├── element.rs            PackageableElement enum + all element structs
+    ├── context.rs            PureModelContextData, Protocol, Section
+    ├── convert.rs            AST → Protocol conversion (fallible, returns Result)
+    └── from_protocol.rs      Protocol → AST conversion
 ```
+
+> **Note:** `convert_source_file()`, `convert_element()`, and `convert_expression()` all
+> return `Result<T, serde_json::Error>` — callers must handle serialization errors.
 
 ## Java → Rust Type Mapping
 

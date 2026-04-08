@@ -18,8 +18,10 @@ flowchart TD
     PAR --> AST
     PAR --> LEX
     COM --> AST
+    COM --> PRO
+    COM --> PAR
     PRO --> AST
-    PRO --> COM
+    PRO --> PAR
     PURE --> AST
     PURE --> PAR
     RT --> PURE
@@ -28,13 +30,12 @@ flowchart TD
     JNI --> LEX
     JNI --> PAR
     JNI --> PRO
-    JNI --> RT
     CLI --> AST
     CLI --> LEX
     CLI --> PAR
     CLI --> PRO
     CLI --> COM
-    CLI --> RT
+    CLI --> PURE
 
     style RT fill:#e94560,stroke:#16213e,stroke-width:3px,color:#fff
     style PURE fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
