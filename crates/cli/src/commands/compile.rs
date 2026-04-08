@@ -32,8 +32,46 @@ use std::time::Instant;
 
 use owo_colors::OwoColorize;
 
+use smol_str::SmolStr;
+
 use crate::diagnostics::{self, CliError};
 use crate::discovery;
+
+/// The default auto-imported packages, matching the Java M3 definition.
+///
+/// These packages are implicitly imported in every section, so users can
+/// reference their elements (e.g., `String`, `Integer`) without an explicit
+/// `import` statement.
+const AUTO_IMPORT_PACKAGES: &[&str] = &[
+    "meta::pure::metamodel",
+    "meta::pure::metamodel::type",
+    "meta::pure::metamodel::type::generics",
+    "meta::pure::metamodel::relationship",
+    "meta::pure::metamodel::valuespecification",
+    "meta::pure::metamodel::multiplicity",
+    "meta::pure::metamodel::function",
+    "meta::pure::metamodel::function::property",
+    "meta::pure::metamodel::extension",
+    "meta::pure::metamodel::import",
+    "meta::pure::functions::date",
+    "meta::pure::functions::string",
+    "meta::pure::functions::collection",
+    "meta::pure::functions::meta",
+    "meta::pure::functions::constraints",
+    "meta::pure::functions::lang",
+    "meta::pure::functions::boolean",
+    "meta::pure::functions::tools",
+    "meta::pure::functions::io",
+    "meta::pure::functions::math",
+    "meta::pure::functions::asserts",
+    "meta::pure::functions::test",
+    "meta::pure::functions::multiplicity",
+    "meta::pure::router",
+    "meta::pure::service",
+    "meta::pure::tds",
+    "meta::pure::tools",
+    "meta::pure::profiles",
+];
 
 /// Arguments for the `legend compile` command.
 #[derive(clap::Args)]
@@ -65,11 +103,7 @@ pub fn run(args: CompileArgs) -> Result<(), CliError> {
     }
 
     let total = files.len();
-    eprintln!(
-        "{} {} .pure file(s)...",
-        "Compiling".cyan().bold(),
-        total
-    );
+    eprintln!("{} {} .pure file(s)...", "Compiling".cyan().bold(), total);
 
     let start = Instant::now();
 
@@ -120,12 +154,15 @@ pub fn run(args: CompileArgs) -> Result<(), CliError> {
 
     // -- Phase 2: Compile --
     eprintln!();
-    eprintln!(
-        "{} semantic analysis...",
-        "Running".cyan().bold()
-    );
+    eprintln!("{} semantic analysis...", "Running".cyan().bold());
 
-    match legend_pure_parser_pure::pipeline::compile(&source_files) {
+    let auto_imports: Vec<SmolStr> = AUTO_IMPORT_PACKAGES
+        .iter()
+        .copied()
+        .map(SmolStr::new)
+        .collect();
+
+    match legend_pure_parser_pure::pipeline::compile(&source_files, &auto_imports) {
         Ok(model) => {
             let elapsed = start.elapsed();
             print_success_stats(&model, total, elapsed);
@@ -150,11 +187,7 @@ pub fn run(args: CompileArgs) -> Result<(), CliError> {
                     }
                 } else {
                     // Fallback: error from a source we don't have (e.g., bootstrap)
-                    eprintln!(
-                        "  {} {}",
-                        "✗".red(),
-                        error.message.red()
-                    );
+                    eprintln!("  {} {}", "✗".red(), error.message.red());
                 }
             }
 
@@ -195,8 +228,13 @@ fn print_success_stats(
         }
     }
 
-    let total_elements = class_count + enum_count + func_count
-        + assoc_count + profile_count + measure_count + unit_count;
+    let total_elements = class_count
+        + enum_count
+        + func_count
+        + assoc_count
+        + profile_count
+        + measure_count
+        + unit_count;
 
     eprintln!();
     eprintln!(
@@ -209,18 +247,29 @@ fn print_success_stats(
 
     // Breakdown by type
     let mut breakdown = Vec::new();
-    if class_count > 0 { breakdown.push(format!("{class_count} class(es)")); }
-    if enum_count > 0 { breakdown.push(format!("{enum_count} enum(s)")); }
-    if func_count > 0 { breakdown.push(format!("{func_count} function(s)")); }
-    if assoc_count > 0 { breakdown.push(format!("{assoc_count} association(s)")); }
-    if profile_count > 0 { breakdown.push(format!("{profile_count} profile(s)")); }
-    if measure_count > 0 { breakdown.push(format!("{measure_count} measure(s)")); }
-    if unit_count > 0 { breakdown.push(format!("{unit_count} unit(s)")); }
+    if class_count > 0 {
+        breakdown.push(format!("{class_count} class(es)"));
+    }
+    if enum_count > 0 {
+        breakdown.push(format!("{enum_count} enum(s)"));
+    }
+    if func_count > 0 {
+        breakdown.push(format!("{func_count} function(s)"));
+    }
+    if assoc_count > 0 {
+        breakdown.push(format!("{assoc_count} association(s)"));
+    }
+    if profile_count > 0 {
+        breakdown.push(format!("{profile_count} profile(s)"));
+    }
+    if measure_count > 0 {
+        breakdown.push(format!("{measure_count} measure(s)"));
+    }
+    if unit_count > 0 {
+        breakdown.push(format!("{unit_count} unit(s)"));
+    }
 
     if !breakdown.is_empty() {
-        eprintln!(
-            "         {}",
-            breakdown.join(", ").dimmed()
-        );
+        eprintln!("         {}", breakdown.join(", ").dimmed());
     }
 }

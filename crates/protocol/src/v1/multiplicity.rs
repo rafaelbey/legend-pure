@@ -109,7 +109,10 @@ mod tests {
         let m = Multiplicity::ZERO_MANY;
         let json = serde_json::to_value(&m).unwrap();
         assert_eq!(json["lowerBound"], 0);
-        assert!(json.get("upperBound").is_none(), "upperBound must be omitted for [*]");
+        assert!(
+            json.get("upperBound").is_none(),
+            "upperBound must be omitted for [*]"
+        );
 
         let obj = json.as_object().unwrap();
         assert_eq!(obj.len(), 1, "only lowerBound should be present");

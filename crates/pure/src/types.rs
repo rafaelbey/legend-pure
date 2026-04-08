@@ -207,7 +207,10 @@ mod tests {
     #[test]
     fn type_expr_named_simple() {
         let ty = TypeExpr::Named {
-            element: ElementId { chunk_id: 0, local_idx: 2 },
+            element: ElementId {
+                chunk_id: 0,
+                local_idx: 2,
+            },
             type_arguments: vec![],
             value_arguments: vec![],
         };
@@ -218,12 +221,18 @@ mod tests {
     fn type_expr_named_with_type_args() {
         // List<String>
         let string_ty = TypeExpr::Named {
-            element: ElementId { chunk_id: 0, local_idx: 2 },
+            element: ElementId {
+                chunk_id: 0,
+                local_idx: 2,
+            },
             type_arguments: vec![],
             value_arguments: vec![],
         };
         let list_ty = TypeExpr::Named {
-            element: ElementId { chunk_id: 0, local_idx: 20 },
+            element: ElementId {
+                chunk_id: 0,
+                local_idx: 20,
+            },
             type_arguments: vec![string_ty],
             value_arguments: vec![],
         };
@@ -236,11 +245,17 @@ mod tests {
     fn type_expr_named_with_value_args() {
         // Varchar(255)
         let ty = TypeExpr::Named {
-            element: ElementId { chunk_id: 0, local_idx: 12 },
+            element: ElementId {
+                chunk_id: 0,
+                local_idx: 12,
+            },
             type_arguments: vec![],
             value_arguments: vec![ConstValue::Integer(255)],
         };
-        if let TypeExpr::Named { value_arguments, .. } = &ty {
+        if let TypeExpr::Named {
+            value_arguments, ..
+        } = &ty
+        {
             assert_eq!(value_arguments.len(), 1);
             assert!(matches!(&value_arguments[0], ConstValue::Integer(255)));
         }
@@ -250,12 +265,18 @@ mod tests {
     fn type_expr_function_type() {
         // {String[1] -> Boolean[1]}
         let string = TypeExpr::Named {
-            element: ElementId { chunk_id: 0, local_idx: 2 },
+            element: ElementId {
+                chunk_id: 0,
+                local_idx: 2,
+            },
             type_arguments: vec![],
             value_arguments: vec![],
         };
         let boolean = TypeExpr::Named {
-            element: ElementId { chunk_id: 0, local_idx: 5 },
+            element: ElementId {
+                chunk_id: 0,
+                local_idx: 5,
+            },
             type_arguments: vec![],
             value_arguments: vec![],
         };
@@ -279,7 +300,16 @@ mod tests {
         assert!(matches!(Multiplicity::ZeroOrOne, Multiplicity::ZeroOrOne));
         assert!(matches!(Multiplicity::ZeroOrMany, Multiplicity::ZeroOrMany));
         assert!(matches!(Multiplicity::OneOrMany, Multiplicity::OneOrMany));
-        let r = Multiplicity::Range { lower: 2, upper: Some(5) };
-        assert!(matches!(r, Multiplicity::Range { lower: 2, upper: Some(5) }));
+        let r = Multiplicity::Range {
+            lower: 2,
+            upper: Some(5),
+        };
+        assert!(matches!(
+            r,
+            Multiplicity::Range {
+                lower: 2,
+                upper: Some(5)
+            }
+        ));
     }
 }

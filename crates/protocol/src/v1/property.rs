@@ -150,8 +150,8 @@ pub struct Constraint {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::generic_type::PackageableType;
+    use super::*;
 
     fn simple_type(path: &str) -> GenericType {
         GenericType {

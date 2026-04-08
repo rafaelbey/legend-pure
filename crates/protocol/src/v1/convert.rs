@@ -229,8 +229,7 @@ fn convert_qualified_property(
 ) -> Result<v1::property::QualifiedProperty> {
     let parameters: std::result::Result<Vec<_>, _> =
         qp.parameters.iter().map(convert_parameter).collect();
-    let body: std::result::Result<Vec<_>, _> =
-        qp.body.iter().map(convert_expression).collect();
+    let body: std::result::Result<Vec<_>, _> = qp.body.iter().map(convert_expression).collect();
     Ok(v1::property::QualifiedProperty {
         name: qp.name.to_string(),
         parameters: parameters?,
@@ -370,18 +369,12 @@ pub fn convert_expression_typed(
         Expression::BitwiseNot(e) => make_func("bitwiseNot", &[&e.operand], &e.source_info),
 
         // -- Function application --
-        Expression::FunctionApplication(e) => {
-            ValueSpecification::Func(AppliedFunction {
-                function: format_element_ptr(&e.function),
-                f_control: None,
-                parameters: e
-                    .arguments
-                    .iter()
-                    .map(convert_expression_typed)
-                    .collect(),
-                source_information: source_information(&e.source_info),
-            })
-        }
+        Expression::FunctionApplication(e) => ValueSpecification::Func(AppliedFunction {
+            function: format_element_ptr(&e.function),
+            f_control: None,
+            parameters: e.arguments.iter().map(convert_expression_typed).collect(),
+            source_information: source_information(&e.source_info),
+        }),
 
         // -- Arrow function: `expr->func(args)` desugars to func(expr, args) --
         Expression::ArrowFunction(e) => ValueSpecification::Func(AppliedFunction {
@@ -487,14 +480,12 @@ pub fn convert_expression_typed(
         Expression::Column(col) => convert_column(col),
 
         // -- Bare element reference (no args): same as zero-arg function in protocol --
-        Expression::PackageableElementRef(e) => {
-            ValueSpecification::Func(AppliedFunction {
-                function: format_element_ptr(&e.element),
-                f_control: None,
-                parameters: vec![],
-                source_information: source_information(&e.source_info),
-            })
-        }
+        Expression::PackageableElementRef(e) => ValueSpecification::Func(AppliedFunction {
+            function: format_element_ptr(&e.element),
+            f_control: None,
+            parameters: vec![],
+            source_information: source_information(&e.source_info),
+        }),
 
         // -- Grouping (transparent) --
         Expression::Group(inner) => convert_expression_typed(inner),
@@ -575,9 +566,7 @@ fn collection_multiplicity(len: usize) -> v1::multiplicity::Multiplicity {
 }
 
 /// Converts a `MemberAccess` into a property value specification.
-fn convert_member_access(
-    ma: &ast::expression::MemberAccess,
-) -> v1::value_spec::ValueSpecification {
+fn convert_member_access(ma: &ast::expression::MemberAccess) -> v1::value_spec::ValueSpecification {
     use ast::expression::MemberAccess;
     use v1::value_spec::AppliedProperty;
     use v1::value_spec::ValueSpecification;
@@ -601,9 +590,7 @@ fn convert_member_access(
 }
 
 /// Converts a `ColumnExpression` into a `classInstance` value specification.
-fn convert_column(
-    col: &ast::expression::ColumnExpression,
-) -> v1::value_spec::ValueSpecification {
+fn convert_column(col: &ast::expression::ColumnExpression) -> v1::value_spec::ValueSpecification {
     use ast::expression::ColumnExpression;
     use v1::value_spec::ClassInstance;
     use v1::value_spec::ValueSpecification;
@@ -625,9 +612,8 @@ fn convert_column(
             source_information: source_information(&e.source_info),
         }),
         ColumnExpression::WithLambda(e) => {
-            let lambda_spec = convert_expression_typed(
-                &ast::expression::Expression::Lambda(*e.lambda.clone()),
-            );
+            let lambda_spec =
+                convert_expression_typed(&ast::expression::Expression::Lambda(*e.lambda.clone()));
             // Serializing a well-formed ValueSpecification cannot fail —
             // all fields are primitives or recursively serializable protocol types.
             let Ok(lambda_val) = serde_json::to_value(&lambda_spec) else {
@@ -642,16 +628,14 @@ fn convert_column(
                 source_information: source_information(&e.source_info),
             })
         }
-        ColumnExpression::WithFunction(e) => {
-            ValueSpecification::ClassInstance(ClassInstance {
-                type_name: "colSpec".to_string(),
-                value: serde_json::json!({
-                    "name": e.name.to_string(),
-                    "function1": format_element_ptr(&e.function),
-                }),
-                source_information: source_information(&e.source_info),
-            })
-        }
+        ColumnExpression::WithFunction(e) => ValueSpecification::ClassInstance(ClassInstance {
+            type_name: "colSpec".to_string(),
+            value: serde_json::json!({
+                "name": e.name.to_string(),
+                "function1": format_element_ptr(&e.function),
+            }),
+            source_information: source_information(&e.source_info),
+        }),
     }
 }
 
@@ -681,14 +665,21 @@ pub fn convert_element(elem: &ast::element::Element) -> Result<v1::element::Pack
 fn convert_class(c: &ast::element::ClassDef) -> Result<v1::element::ProtocolClass> {
     let properties: std::result::Result<Vec<_>, _> =
         c.properties.iter().map(convert_property).collect();
-    let qualified_properties: std::result::Result<Vec<_>, _> =
-        c.qualified_properties.iter().map(convert_qualified_property).collect();
+    let qualified_properties: std::result::Result<Vec<_>, _> = c
+        .qualified_properties
+        .iter()
+        .map(convert_qualified_property)
+        .collect();
     let constraints: std::result::Result<Vec<_>, _> =
         c.constraints.iter().map(convert_constraint).collect();
     Ok(v1::element::ProtocolClass {
         package_path: optional_package_to_path(c.package.as_ref()),
         name: c.name.to_string(),
-        super_types: c.super_types.iter().map(ast::type_ref::TypeReference::full_path).collect(),
+        super_types: c
+            .super_types
+            .iter()
+            .map(ast::type_ref::TypeReference::full_path)
+            .collect(),
         properties: properties?,
         qualified_properties: qualified_properties?,
         constraints: constraints?,
@@ -756,11 +747,16 @@ fn convert_profile(p: &ast::element::ProfileDef) -> v1::element::ProtocolProfile
     }
 }
 
-fn convert_association(a: &ast::element::AssociationDef) -> Result<v1::element::ProtocolAssociation> {
+fn convert_association(
+    a: &ast::element::AssociationDef,
+) -> Result<v1::element::ProtocolAssociation> {
     let properties: std::result::Result<Vec<_>, _> =
         a.properties.iter().map(convert_property).collect();
-    let qualified_properties: std::result::Result<Vec<_>, _> =
-        a.qualified_properties.iter().map(convert_qualified_property).collect();
+    let qualified_properties: std::result::Result<Vec<_>, _> = a
+        .qualified_properties
+        .iter()
+        .map(convert_qualified_property)
+        .collect();
     Ok(v1::element::ProtocolAssociation {
         package_path: optional_package_to_path(a.package.as_ref()),
         name: a.name.to_string(),
@@ -852,11 +848,9 @@ pub fn convert_source_file(
             let element_paths: Vec<String> = section
                 .elements
                 .iter()
-                .map(|e| {
-                    match e.package() {
-                        Some(pkg) => format!("{pkg}::{}", e.name()),
-                        None => e.name().to_string(),
-                    }
+                .map(|e| match e.package() {
+                    Some(pkg) => format!("{pkg}::{}", e.name()),
+                    None => e.name().to_string(),
                 })
                 .collect();
 
@@ -867,31 +861,24 @@ pub fn convert_source_file(
                     source_information: source_information(&section.source_info),
                 })
             } else {
-                v1::element::ProtocolSection::ImportAware(
-                    v1::element::ImportAwareCodeSection {
-                        parser_name: section.kind.to_string(),
-                        elements: element_paths,
-                        imports: section
-                            .imports
-                            .iter()
-                            .map(|i| i.path.to_string())
-                            .collect(),
-                        source_information: source_information(&section.source_info),
-                    },
-                )
+                v1::element::ProtocolSection::ImportAware(v1::element::ImportAwareCodeSection {
+                    parser_name: section.kind.to_string(),
+                    elements: element_paths,
+                    imports: section.imports.iter().map(|i| i.path.to_string()).collect(),
+                    source_information: source_information(&section.source_info),
+                })
             }
         })
         .collect();
 
     let source_id = source_file.source_info.source.to_string();
-    let section_index = v1::element::PackageableElement::SectionIndex(
-        v1::element::ProtocolSectionIndex {
+    let section_index =
+        v1::element::PackageableElement::SectionIndex(v1::element::ProtocolSectionIndex {
             package_path: "__internal__".to_string(),
             name: source_id,
             sections,
             source_information: source_information(&source_file.source_info),
-        },
-    );
+        });
     elements.push(section_index);
 
     Ok(v1::context::PureModelContextData::new(elements))
@@ -920,16 +907,13 @@ mod tests {
 
     #[test]
     fn test_multiplicity_conversion() {
-        let pure_one: v1::multiplicity::Multiplicity =
-            (&ast::Multiplicity::one()).into();
+        let pure_one: v1::multiplicity::Multiplicity = (&ast::Multiplicity::one()).into();
         assert_eq!(pure_one, v1::multiplicity::Multiplicity::PURE_ONE);
 
-        let zero_many: v1::multiplicity::Multiplicity =
-            (&ast::Multiplicity::zero_or_many()).into();
+        let zero_many: v1::multiplicity::Multiplicity = (&ast::Multiplicity::zero_or_many()).into();
         assert_eq!(zero_many, v1::multiplicity::Multiplicity::ZERO_MANY);
 
-        let zero_one: v1::multiplicity::Multiplicity =
-            (&ast::Multiplicity::zero_or_one()).into();
+        let zero_one: v1::multiplicity::Multiplicity = (&ast::Multiplicity::zero_or_one()).into();
         assert_eq!(zero_one, v1::multiplicity::Multiplicity::ZERO_ONE);
     }
 

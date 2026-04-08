@@ -22,7 +22,7 @@ use legend_pure_parser_ast::SourceFile;
 ///
 /// Panics if the source cannot be parsed.
 #[allow(dead_code)]
-#[must_use] 
+#[must_use]
 pub fn parse_ok(source: &str) -> SourceFile {
     legend_pure_parser_parser::parse(source, "test.pure")
         .unwrap_or_else(|e| panic!("Expected parse to succeed, but got error: {e}"))
@@ -53,7 +53,7 @@ pub fn parse_err(source: &str, expected_msg: &str) {
 ///
 /// Panics if the corpus file cannot be read.
 #[allow(dead_code)]
-#[must_use] 
+#[must_use]
 pub fn corpus(name: &str) -> String {
     let path = format!("{}/tests/corpus/{name}", env!("CARGO_MANIFEST_DIR"));
     std::fs::read_to_string(&path)

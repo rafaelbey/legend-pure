@@ -85,9 +85,7 @@ pub fn print_error(error: &CliError) {
             eprintln!();
             eprintln!("  {}", reason.dimmed());
             eprintln!();
-            eprintln!(
-                "  This feature is under development. Track progress at:"
-            );
+            eprintln!("  This feature is under development. Track progress at:");
             eprintln!(
                 "  {}",
                 "https://github.com/finos/legend-engine".cyan().underline()
@@ -97,18 +95,10 @@ pub fn print_error(error: &CliError) {
         CliError::ParseErrors(_) | CliError::CompilationErrors(_) => {
             // Errors are already printed inline during processing.
             // Just print the summary here.
-            eprintln!(
-                "\n{} {}",
-                "error:".red().bold(),
-                error
-            );
+            eprintln!("\n{} {}", "error:".red().bold(), error);
         }
         _ => {
-            eprintln!(
-                "{} {}",
-                "error:".red().bold(),
-                error
-            );
+            eprintln!("{} {}", "error:".red().bold(), error);
         }
     }
 }
@@ -205,11 +195,7 @@ pub fn render_compilation_snippet(
 
     if si.start_line == 0 {
         // Can't render snippet — just print the message
-        eprintln!(
-            "      {} {}",
-            "error:".red().bold(),
-            error.message
-        );
+        eprintln!("      {} {}", "error:".red().bold(), error.message);
         return;
     }
 

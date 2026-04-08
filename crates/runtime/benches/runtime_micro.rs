@@ -62,7 +62,9 @@ fn bench_value_ops(c: &mut Criterion) {
     });
 
     group.bench_function("string_clone_long", |b| {
-        let v = Value::String(SmolStr::new("this is a longer string that exceeds 24 bytes"));
+        let v = Value::String(SmolStr::new(
+            "this is a longer string that exceeds 24 bytes",
+        ));
         b.iter(|| black_box(v.clone()));
     });
 
@@ -206,11 +208,7 @@ fn bench_decimal_date(c: &mut Criterion) {
     // Date creation and arithmetic
     group.bench_function("date_create_strict", |b| {
         b.iter(|| {
-            black_box(PureDate::strict_date(
-                black_box(2024),
-                black_box(3),
-                black_box(15),
-            ).unwrap())
+            black_box(PureDate::strict_date(black_box(2024), black_box(3), black_box(15)).unwrap())
         });
     });
 

@@ -38,7 +38,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use im_rc::Vector as PVector;
-use slotmap::{new_key_type, SlotMap};
+use slotmap::{SlotMap, new_key_type};
 use smol_str::SmolStr;
 
 use crate::error::PureRuntimeError;
@@ -219,11 +219,7 @@ impl RuntimeHeap {
     /// # Errors
     /// Returns `InvalidObjectId` if the ID is stale or invalid.
     /// Returns `PropertyNotFound` if the property does not exist.
-    pub fn get_property(
-        &self,
-        id: ObjectId,
-        name: &str,
-    ) -> Result<Value, PureRuntimeError> {
+    pub fn get_property(&self, id: ObjectId, name: &str) -> Result<Value, PureRuntimeError> {
         let entry = self
             .objects
             .get(id)
@@ -239,12 +235,13 @@ impl RuntimeHeap {
                     property: name.into(),
                     classifier: obj.classifier.clone(),
                 }),
-            HeapEntry::Typed(obj) => obj.get_property(name).ok_or_else(|| {
-                PureRuntimeError::PropertyNotFound {
-                    property: name.into(),
-                    classifier: obj.classifier_path().into(),
-                }
-            }),
+            HeapEntry::Typed(obj) => {
+                obj.get_property(name)
+                    .ok_or_else(|| PureRuntimeError::PropertyNotFound {
+                        property: name.into(),
+                        classifier: obj.classifier_path().into(),
+                    })
+            }
         }
     }
 
@@ -263,11 +260,7 @@ impl RuntimeHeap {
             .ok_or(PureRuntimeError::InvalidObjectId(id))?;
 
         match entry {
-            HeapEntry::Dynamic(obj) => Ok(obj
-                .properties
-                .get(name)
-                .cloned()
-                .unwrap_or_default()),
+            HeapEntry::Dynamic(obj) => Ok(obj.properties.get(name).cloned().unwrap_or_default()),
             HeapEntry::Typed(obj) => {
                 // TypedObject returns a single Value; wrap in a vector
                 match obj.get_property(name) {
@@ -354,13 +347,14 @@ impl RuntimeHeap {
             .ok_or(PureRuntimeError::InvalidObjectId(id))?;
 
         match entry {
-            HeapEntry::Typed(obj) => obj
-                .as_any()
-                .downcast_ref::<T>()
-                .ok_or(PureRuntimeError::DowncastFailed {
-                    expected: std::any::type_name::<T>(),
-                    actual: obj.classifier_path().into(),
-                }),
+            HeapEntry::Typed(obj) => {
+                obj.as_any()
+                    .downcast_ref::<T>()
+                    .ok_or(PureRuntimeError::DowncastFailed {
+                        expected: std::any::type_name::<T>(),
+                        actual: obj.classifier_path().into(),
+                    })
+            }
             HeapEntry::Dynamic(obj) => Err(PureRuntimeError::DowncastFailed {
                 expected: std::any::type_name::<T>(),
                 actual: obj.classifier.clone().into(),

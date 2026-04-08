@@ -131,16 +131,37 @@ fn print_version() {
         "{} {} {}",
         "legend".bold(),
         version.green(),
-        format!("(rust/{} {})", env!("CARGO_PKG_NAME"), std::env::consts::ARCH).dimmed()
+        format!(
+            "(rust/{} {})",
+            env!("CARGO_PKG_NAME"),
+            std::env::consts::ARCH
+        )
+        .dimmed()
     );
     println!();
     println!("  {} Pure grammar parser", "✓".green());
     println!("  {} Protocol JSON ↔ Grammar conversion", "✓".green());
     println!("  {} Compile Pure models", "✓".green());
-    println!("  {} Package artifacts    {}", "◌".yellow(), "(coming soon)".dimmed());
-    println!("  {} Publish to depot     {}", "◌".yellow(), "(coming soon)".dimmed());
-    println!("  {} Run Pure tests       {}", "◌".yellow(), "(coming soon)".dimmed());
-    println!("  {} SDLC integration     {}", "◌".yellow(), "(coming soon)".dimmed());
+    println!(
+        "  {} Package artifacts    {}",
+        "◌".yellow(),
+        "(coming soon)".dimmed()
+    );
+    println!(
+        "  {} Publish to depot     {}",
+        "◌".yellow(),
+        "(coming soon)".dimmed()
+    );
+    println!(
+        "  {} Run Pure tests       {}",
+        "◌".yellow(),
+        "(coming soon)".dimmed()
+    );
+    println!(
+        "  {} SDLC integration     {}",
+        "◌".yellow(),
+        "(coming soon)".dimmed()
+    );
 }
 
 /// Initializes the tracing subscriber based on verbosity level.
@@ -154,8 +175,8 @@ fn init_tracing(verbosity: u8) {
         _ => "trace",
     };
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(default_level));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)

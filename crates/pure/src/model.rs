@@ -29,6 +29,7 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
 use legend_pure_parser_ast::SourceInfo;
+use legend_pure_parser_ast::type_ref::Package as AstPackage;
 use smol_str::SmolStr;
 
 use crate::arena::Arena;
@@ -155,7 +156,11 @@ impl ModelChunk {
     pub fn alloc_element(&mut self, node: ElementNode, element: Element) -> u32 {
         let node_idx = self.nodes.alloc(node);
         let elem_idx = self.elements.alloc(element);
-        debug_assert_eq!(node_idx, elem_idx, "Parallel arena desync in chunk {}", self.chunk_id);
+        debug_assert_eq!(
+            node_idx, elem_idx,
+            "Parallel arena desync in chunk {}",
+            self.chunk_id
+        );
         node_idx
     }
 }
@@ -252,15 +257,13 @@ impl PureModel {
     /// Use this when the ID might reference an unresolved or invalid element.
     #[must_use]
     pub fn try_get_element(&self, id: ElementId) -> Option<&Element> {
-        self.chunks
-            .get(id.chunk_id as usize)
-            .and_then(|chunk| {
-                if id.local_idx < chunk.elements.len() {
-                    Some(chunk.elements.get(id.local_idx))
-                } else {
-                    None
-                }
-            })
+        self.chunks.get(id.chunk_id as usize).and_then(|chunk| {
+            if id.local_idx < chunk.elements.len() {
+                Some(chunk.elements.get(id.local_idx))
+            } else {
+                None
+            }
+        })
     }
 
     /// Returns the package for the given ID.
@@ -289,8 +292,12 @@ impl PureModel {
                     Element::Class(class) => {
                         // Register specialization edges (reverse of super_types)
                         for super_type in &class.super_types {
-                            if let crate::types::TypeExpr::Named { element: parent_id, .. } = super_type {
-                                self.derived.specializations
+                            if let crate::types::TypeExpr::Named {
+                                element: parent_id, ..
+                            } = super_type
+                            {
+                                self.derived
+                                    .specializations
                                     .entry(*parent_id)
                                     .or_default()
                                     .push(id);
@@ -300,8 +307,12 @@ impl PureModel {
                     Element::Association(assoc) => {
                         // Register association-injected properties on target classes
                         for (prop_idx, prop) in assoc.properties.iter().enumerate() {
-                            if let crate::types::TypeExpr::Named { element: target_id, .. } = &prop.type_expr {
-                                self.derived.association_properties
+                            if let crate::types::TypeExpr::Named {
+                                element: target_id, ..
+                            } = &prop.type_expr
+                            {
+                                self.derived
+                                    .association_properties
                                     .entry(*target_id)
                                     .or_default()
                                     .push((id, prop_idx));
@@ -324,7 +335,9 @@ impl PureModel {
     /// Returns an empty slice if no specializations exist.
     #[must_use]
     pub fn specializations(&self, id: ElementId) -> &[ElementId] {
-        self.derived.specializations.get(&id)
+        self.derived
+            .specializations
+            .get(&id)
             .map_or(&[], Vec::as_slice)
     }
 
@@ -334,7 +347,9 @@ impl PureModel {
     /// `properties` vec.
     #[must_use]
     pub fn association_properties(&self, id: ElementId) -> &[(ElementId, usize)] {
-        self.derived.association_properties.get(&id)
+        self.derived
+            .association_properties
+            .get(&id)
             .map_or(&[], Vec::as_slice)
     }
 
@@ -352,7 +367,9 @@ impl PureModel {
         let mut current = self.root_package;
         for segment in path {
             // Check if child already exists
-            let existing = self.global_packages.get(current.0)
+            let existing = self
+                .global_packages
+                .get(current.0)
                 .children_packages
                 .iter()
                 .find(|&&child_id| self.global_packages.get(child_id.0).name == *segment)
@@ -367,8 +384,10 @@ impl PureModel {
                     children_packages: Vec::new(),
                     children_elements: Vec::new(),
                 }));
-                self.global_packages.get_mut(current.0)
-                    .children_packages.push(new_id);
+                self.global_packages
+                    .get_mut(current.0)
+                    .children_packages
+                    .push(new_id);
                 new_id
             };
         }
@@ -377,8 +396,10 @@ impl PureModel {
 
     /// Registers an element in a package's children list.
     pub fn register_element(&mut self, package: PackageId, element: ElementId) {
-        self.global_packages.get_mut(package.0)
-            .children_elements.push(element);
+        self.global_packages
+            .get_mut(package.0)
+            .children_elements
+            .push(element);
     }
 
     /// Resolves a fully qualified name to an `ElementId` by walking the package tree.
@@ -396,15 +417,53 @@ impl PureModel {
 
         for segment in pkg_path {
             let pkg = self.get_package(current);
-            current = *pkg.children_packages.iter()
+            current = *pkg
+                .children_packages
+                .iter()
                 .find(|&&child_id| self.global_packages.get(child_id.0).name == *segment)?;
         }
 
         // Find element by name in the target package
         let pkg = self.get_package(current);
         let target_name = &name[0];
-        pkg.children_elements.iter()
+        pkg.children_elements
+            .iter()
             .find(|&&eid| self.get_node(eid).name == *target_name)
+            .copied()
+    }
+
+    /// Resolves an AST `Package` to the corresponding model `PackageId`.
+    ///
+    /// Walks the recursive `Package` tree directly — no intermediate
+    /// `Vec<SmolStr>` allocation needed.
+    #[must_use]
+    pub fn resolve_package(&self, pkg: &AstPackage) -> Option<PackageId> {
+        let mut current = self.root_package;
+
+        // Walk parent chain first (recursive → iterative via segments)
+        for segment in pkg.segments() {
+            let model_pkg = self.get_package(current);
+            current = *model_pkg
+                .children_packages
+                .iter()
+                .find(|&&child_id| self.global_packages.get(child_id.0).name == *segment)?;
+        }
+
+        Some(current)
+    }
+
+    /// Resolves an element name within an AST `Package`.
+    ///
+    /// Equivalent to `resolve_by_path(&[...pkg_segments, name])` but walks
+    /// the AST `Package` tree directly with zero allocations.
+    #[must_use]
+    pub fn resolve_in_package(&self, pkg: &AstPackage, name: &SmolStr) -> Option<ElementId> {
+        let pkg_id = self.resolve_package(pkg)?;
+        let model_pkg = self.get_package(pkg_id);
+        model_pkg
+            .children_elements
+            .iter()
+            .find(|&&eid| self.get_node(eid).name == *name)
             .copied()
     }
 }
@@ -475,10 +534,15 @@ mod tests {
             source_info: test_source(),
             parent_package: model.root_package,
         });
-        chunk.elements.alloc(Element::PrimitiveType(PrimitiveType { super_type: None }));
+        chunk
+            .elements
+            .alloc(Element::PrimitiveType(PrimitiveType { super_type: None }));
         model.chunks.push(chunk);
 
-        let id = ElementId { chunk_id: 0, local_idx: 0 };
+        let id = ElementId {
+            chunk_id: 0,
+            local_idx: 0,
+        };
         assert_eq!(model.get_node(id).name, "String");
         assert!(matches!(model.get_element(id), Element::PrimitiveType(_)));
     }

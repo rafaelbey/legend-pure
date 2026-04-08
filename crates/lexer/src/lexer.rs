@@ -27,8 +27,8 @@
 use legend_pure_parser_ast::SourceInfo;
 use smol_str::SmolStr;
 
-use crate::token::{Token, TokenKind};
 use crate::LexError;
+use crate::token::{Token, TokenKind};
 
 /// Tokenizes Pure source text into a vector of tokens.
 ///
@@ -702,7 +702,11 @@ mod tests {
         );
         assert_eq!(
             kinds(">>>>"),
-            vec![TokenKind::GreaterGreaterGreater, TokenKind::Greater, TokenKind::Eof]
+            vec![
+                TokenKind::GreaterGreaterGreater,
+                TokenKind::Greater,
+                TokenKind::Eof
+            ]
         );
         assert_eq!(
             kinds("~~~~"),
@@ -825,8 +829,20 @@ mod tests {
         assert_eq!(
             tks,
             vec![
-                "###Pure", "Profile", "my", "::", "doc", "{", "stereotypes", ":", "[",
-                "deprecated", "]", ";", "}", ""
+                "###Pure",
+                "Profile",
+                "my",
+                "::",
+                "doc",
+                "{",
+                "stereotypes",
+                ":",
+                "[",
+                "deprecated",
+                "]",
+                ";",
+                "}",
+                ""
             ]
         );
     }

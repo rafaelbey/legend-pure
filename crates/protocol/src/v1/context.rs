@@ -77,9 +77,9 @@ impl PureModelContextData {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::element::{ProtocolClass, ProtocolProfile};
     use super::super::source_info::SourceInformation;
+    use super::*;
 
     #[test]
     fn test_empty_context_serialization() {
@@ -90,7 +90,10 @@ mod tests {
         let json = serde_json::to_value(&ctx).unwrap();
         assert_eq!(json["serializer"]["name"], "pure");
         assert_eq!(json["serializer"]["version"], "vX_X_X");
-        assert!(json.get("elements").is_none(), "empty elements should be omitted");
+        assert!(
+            json.get("elements").is_none(),
+            "empty elements should be omitted"
+        );
     }
 
     #[test]
@@ -106,9 +109,14 @@ mod tests {
             PackageableElement::Class(ProtocolClass {
                 package_path: "model".into(),
                 name: "Person".into(),
-                super_types: vec![], properties: vec![], qualified_properties: vec![],
-                constraints: vec![], original_milestoned_properties: vec![],
-                stereotypes: vec![], tagged_values: vec![], source_information: None,
+                super_types: vec![],
+                properties: vec![],
+                qualified_properties: vec![],
+                constraints: vec![],
+                original_milestoned_properties: vec![],
+                stereotypes: vec![],
+                tagged_values: vec![],
+                source_information: None,
             }),
         ]);
         let json = serde_json::to_value(&ctx).unwrap();
@@ -120,18 +128,24 @@ mod tests {
 
     #[test]
     fn test_roundtrip_context() {
-        let ctx = PureModelContextData::new(vec![
-            PackageableElement::Class(ProtocolClass {
-                package_path: "model".into(), name: "Foo".into(),
-                super_types: vec![], properties: vec![], qualified_properties: vec![],
-                constraints: vec![], original_milestoned_properties: vec![],
-                stereotypes: vec![], tagged_values: vec![],
-                source_information: Some(SourceInformation {
-                    source_id: "a.pure".into(),
-                    start_line: 1, start_column: 1, end_line: 3, end_column: 1,
-                }),
+        let ctx = PureModelContextData::new(vec![PackageableElement::Class(ProtocolClass {
+            package_path: "model".into(),
+            name: "Foo".into(),
+            super_types: vec![],
+            properties: vec![],
+            qualified_properties: vec![],
+            constraints: vec![],
+            original_milestoned_properties: vec![],
+            stereotypes: vec![],
+            tagged_values: vec![],
+            source_information: Some(SourceInformation {
+                source_id: "a.pure".into(),
+                start_line: 1,
+                start_column: 1,
+                end_line: 3,
+                end_column: 1,
             }),
-        ]);
+        })]);
         let json_str = serde_json::to_string(&ctx).unwrap();
         let back: PureModelContextData = serde_json::from_str(&json_str).unwrap();
         assert_eq!(back, ctx);

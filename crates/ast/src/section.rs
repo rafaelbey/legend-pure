@@ -29,10 +29,10 @@
 //! ...
 //! ```
 
+use crate::Spanned;
 use crate::element::Element;
 use crate::source_info::SourceInfo;
 use crate::type_ref::{Identifier, Package};
-use crate::Spanned;
 
 // ---------------------------------------------------------------------------
 // SourceFile
@@ -176,8 +176,7 @@ mod tests {
     #[test]
     fn test_import_statement() {
         let import = ImportStatement {
-            path: Package::root(SmolStr::new("model"), src())
-                .child(SmolStr::new("domain"), src()),
+            path: Package::root(SmolStr::new("model"), src()).child(SmolStr::new("domain"), src()),
             source_info: SourceInfo::new("test.pure", 2, 1, 2, 25),
         };
         assert_eq!(import.path.to_string(), "model::domain");

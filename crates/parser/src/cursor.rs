@@ -94,9 +94,7 @@ impl Cursor {
     pub fn expect_identifier(&mut self) -> Result<(SmolStr, SourceInfo), ParseError> {
         let tok = self.peek().clone();
         // Keywords can also be used as identifiers in certain positions
-        if tok.kind == TokenKind::Identifier
-            || tok.kind == TokenKind::StringLiteral
-        {
+        if tok.kind == TokenKind::Identifier || tok.kind == TokenKind::StringLiteral {
             self.advance();
             Ok((tok.text.clone(), tok.source_info.clone()))
         } else {

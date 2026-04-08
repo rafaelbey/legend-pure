@@ -62,12 +62,7 @@ fn generic(path: &str) -> v1::generic_type::GenericType {
     }
 }
 
-fn simple_prop(
-    name: &str,
-    type_path: &str,
-    lo: u32,
-    hi: Option<u32>,
-) -> v1::property::Property {
+fn simple_prop(name: &str, type_path: &str, lo: u32, hi: Option<u32>) -> v1::property::Property {
     v1::property::Property {
         name: name.to_string(),
         generic_type: generic(type_path),
@@ -90,12 +85,7 @@ fn var(name: &str) -> v1::value_spec::Variable {
     }
 }
 
-fn typed_var(
-    name: &str,
-    type_path: &str,
-    lo: u32,
-    hi: Option<u32>,
-) -> v1::value_spec::Variable {
+fn typed_var(name: &str, type_path: &str, lo: u32, hi: Option<u32>) -> v1::value_spec::Variable {
     v1::value_spec::Variable {
         name: name.to_string(),
         generic_type: Some(generic(type_path)),
@@ -279,20 +269,19 @@ fn snapshot_function() {
 
 #[test]
 fn snapshot_association() {
-    let assoc =
-        v1::element::PackageableElement::Association(v1::element::ProtocolAssociation {
-            package_path: "model".to_string(),
-            name: "Person_Address".to_string(),
-            properties: vec![
-                simple_prop("addresses", "model::Address", 0, None),
-                simple_prop("person", "model::Person", 1, Some(1)),
-            ],
-            qualified_properties: vec![],
-            original_milestoned_properties: vec![],
-            stereotypes: vec![],
-            tagged_values: vec![],
-            source_information: Some(si("test.pure", 1, 1, 5, 1)),
-        });
+    let assoc = v1::element::PackageableElement::Association(v1::element::ProtocolAssociation {
+        package_path: "model".to_string(),
+        name: "Person_Address".to_string(),
+        properties: vec![
+            simple_prop("addresses", "model::Address", 0, None),
+            simple_prop("person", "model::Person", 1, Some(1)),
+        ],
+        qualified_properties: vec![],
+        original_milestoned_properties: vec![],
+        stereotypes: vec![],
+        tagged_values: vec![],
+        source_information: Some(si("test.pure", 1, 1, 5, 1)),
+    });
     let json = serde_json::to_value(&assoc).unwrap();
     insta::assert_json_snapshot!("association", json);
 }
@@ -324,12 +313,10 @@ fn snapshot_measure() {
                         f_control: None,
                         parameters: vec![
                             v1::value_spec::ValueSpecification::Var(var("x")),
-                            v1::value_spec::ValueSpecification::Integer(
-                                v1::value_spec::CInteger {
-                                    value: 1000,
-                                    source_information: None,
-                                },
-                            ),
+                            v1::value_spec::ValueSpecification::Integer(v1::value_spec::CInteger {
+                                value: 1000,
+                                source_information: None,
+                            }),
                         ],
                         source_information: None,
                     },
@@ -396,10 +383,7 @@ fn snapshot_pure_model_context() {
                 sections: vec![v1::element::ProtocolSection::Default(
                     v1::element::DefaultCodeSection {
                         parser_name: "Pure".to_string(),
-                        elements: vec![
-                            "model::Person".to_string(),
-                            "model::Status".to_string(),
-                        ],
+                        elements: vec!["model::Person".to_string(), "model::Status".to_string()],
                         source_information: None,
                     },
                 )],
@@ -503,16 +487,12 @@ fn snapshot_nested_expression() {
                 function: "plus".to_string(),
                 f_control: None,
                 parameters: vec![
-                    v1::value_spec::ValueSpecification::Property(
-                        v1::value_spec::AppliedProperty {
-                            class: None,
-                            property: "firstName".to_string(),
-                            parameters: vec![v1::value_spec::ValueSpecification::Var(var(
-                                "this",
-                            ))],
-                            source_information: None,
-                        },
-                    ),
+                    v1::value_spec::ValueSpecification::Property(v1::value_spec::AppliedProperty {
+                        class: None,
+                        property: "firstName".to_string(),
+                        parameters: vec![v1::value_spec::ValueSpecification::Var(var("this"))],
+                        source_information: None,
+                    }),
                     v1::value_spec::ValueSpecification::Var(var("sep")),
                 ],
                 source_information: None,
@@ -641,20 +621,12 @@ fn snapshot_section_index_with_imports() {
             package_path: "__internal__".to_string(),
             name: "test.pure".to_string(),
             sections: vec![
-                v1::element::ProtocolSection::ImportAware(
-                    v1::element::ImportAwareCodeSection {
-                        parser_name: "Pure".to_string(),
-                        elements: vec![
-                            "model::Person".to_string(),
-                            "model::Address".to_string(),
-                        ],
-                        imports: vec![
-                            "model::domain".to_string(),
-                            "model::common".to_string(),
-                        ],
-                        source_information: Some(si("test.pure", 1, 1, 20, 1)),
-                    },
-                ),
+                v1::element::ProtocolSection::ImportAware(v1::element::ImportAwareCodeSection {
+                    parser_name: "Pure".to_string(),
+                    elements: vec!["model::Person".to_string(), "model::Address".to_string()],
+                    imports: vec!["model::domain".to_string(), "model::common".to_string()],
+                    source_information: Some(si("test.pure", 1, 1, 20, 1)),
+                }),
                 v1::element::ProtocolSection::Default(v1::element::DefaultCodeSection {
                     parser_name: "Relational".to_string(),
                     elements: vec!["model::store::MyStore".to_string()],
@@ -757,26 +729,24 @@ fn snapshot_all_literal_types() {
 
 #[test]
 fn snapshot_collection() {
-    let vs = v1::value_spec::ValueSpecification::Collection(
-        v1::value_spec::ProtocolCollection {
-            multiplicity: mult(3, Some(3)),
-            values: vec![
-                v1::value_spec::ValueSpecification::Integer(v1::value_spec::CInteger {
-                    value: 1,
-                    source_information: None,
-                }),
-                v1::value_spec::ValueSpecification::Integer(v1::value_spec::CInteger {
-                    value: 2,
-                    source_information: None,
-                }),
-                v1::value_spec::ValueSpecification::Integer(v1::value_spec::CInteger {
-                    value: 3,
-                    source_information: None,
-                }),
-            ],
-            source_information: None,
-        },
-    );
+    let vs = v1::value_spec::ValueSpecification::Collection(v1::value_spec::ProtocolCollection {
+        multiplicity: mult(3, Some(3)),
+        values: vec![
+            v1::value_spec::ValueSpecification::Integer(v1::value_spec::CInteger {
+                value: 1,
+                source_information: None,
+            }),
+            v1::value_spec::ValueSpecification::Integer(v1::value_spec::CInteger {
+                value: 2,
+                source_information: None,
+            }),
+            v1::value_spec::ValueSpecification::Integer(v1::value_spec::CInteger {
+                value: 3,
+                source_information: None,
+            }),
+        ],
+        source_information: None,
+    });
     let json = serde_json::to_value(&vs).unwrap();
     insta::assert_json_snapshot!("collection", json);
 }

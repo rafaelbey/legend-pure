@@ -164,11 +164,8 @@ pub fn convert_generic_type(
 ) -> Result<ast::type_ref::TypeReference> {
     let si = source_info_or_synthetic(gt.source_information.as_ref());
     let (package, name) = parse_qualified_path(&gt.raw_type.full_path)?;
-    let type_arguments: std::result::Result<Vec<_>, _> = gt
-        .type_arguments
-        .iter()
-        .map(convert_generic_type)
-        .collect();
+    let type_arguments: std::result::Result<Vec<_>, _> =
+        gt.type_arguments.iter().map(convert_generic_type).collect();
 
     Ok(ast::type_ref::TypeReference {
         package,
@@ -316,18 +313,18 @@ pub fn convert_constraint(c: &v1::property::Constraint) -> Result<ast::element::
 }
 
 /// Converts a JSON parameter value (expected to be a `Variable` `ValueSpec`) into a `Parameter`.
-fn convert_json_to_parameter(
-    json: &serde_json::Value,
-) -> Result<ast::annotation::Parameter> {
+fn convert_json_to_parameter(json: &serde_json::Value) -> Result<ast::annotation::Parameter> {
     let vs: v1::value_spec::ValueSpecification = serde_json::from_value(json.clone())?;
     match vs {
         v1::value_spec::ValueSpecification::Var(var) => {
-            let gt = var.generic_type.as_ref().ok_or(
-                ConversionError::UnsupportedValueSpec
-            )?;
-            let mult = var.multiplicity.as_ref().ok_or(
-                ConversionError::UnsupportedValueSpec
-            )?;
+            let gt = var
+                .generic_type
+                .as_ref()
+                .ok_or(ConversionError::UnsupportedValueSpec)?;
+            let mult = var
+                .multiplicity
+                .as_ref()
+                .ok_or(ConversionError::UnsupportedValueSpec)?;
             let si = source_info_or_synthetic(var.source_information.as_ref());
             Ok(ast::annotation::Parameter {
                 name: SmolStr::new(&var.name),
@@ -410,25 +407,31 @@ pub fn convert_value_spec_to_expression(
         }
         ValueSpecification::StrictDate(c) => {
             let si = source_info_or_synthetic(c.source_information.as_ref());
-            Ok(Expression::Literal(Literal::StrictDate(StrictDateLiteral {
-                value: c.value.clone(),
-                source_info: si,
-            })))
+            Ok(Expression::Literal(Literal::StrictDate(
+                StrictDateLiteral {
+                    value: c.value.clone(),
+                    source_info: si,
+                },
+            )))
         }
         ValueSpecification::StrictTime(c) => {
             let si = source_info_or_synthetic(c.source_information.as_ref());
-            Ok(Expression::Literal(Literal::StrictTime(StrictTimeLiteral {
-                value: c.value.clone(),
-                source_info: si,
-            })))
+            Ok(Expression::Literal(Literal::StrictTime(
+                StrictTimeLiteral {
+                    value: c.value.clone(),
+                    source_info: si,
+                },
+            )))
         }
         ValueSpecification::LatestDate(c) => {
             // LatestDate maps to a StrictDate with the value "%latest"
             let si = source_info_or_synthetic(c.source_information.as_ref());
-            Ok(Expression::Literal(Literal::StrictDate(StrictDateLiteral {
-                value: "%latest".to_string(),
-                source_info: si,
-            })))
+            Ok(Expression::Literal(Literal::StrictDate(
+                StrictDateLiteral {
+                    value: "%latest".to_string(),
+                    source_info: si,
+                },
+            )))
         }
         ValueSpecification::Var(v) => {
             let si = source_info_or_synthetic(v.source_information.as_ref());
@@ -459,8 +462,14 @@ pub fn convert_value_spec_to_expression(
                 .iter()
                 .map(|v| -> Result<ast::annotation::Parameter> {
                     let vsi = source_info_or_synthetic(v.source_information.as_ref());
-                    let gt = v.generic_type.as_ref().ok_or(ConversionError::UnsupportedValueSpec)?;
-                    let mult = v.multiplicity.as_ref().ok_or(ConversionError::UnsupportedValueSpec)?;
+                    let gt = v
+                        .generic_type
+                        .as_ref()
+                        .ok_or(ConversionError::UnsupportedValueSpec)?;
+                    let mult = v
+                        .multiplicity
+                        .as_ref()
+                        .ok_or(ConversionError::UnsupportedValueSpec)?;
                     Ok(ast::annotation::Parameter {
                         name: SmolStr::new(&v.name),
                         type_ref: Some(convert_generic_type(gt)?),
@@ -700,18 +709,18 @@ pub fn convert_element(
 
     match pe {
         PackageableElement::Class(c) => Ok(Some(ast::element::Element::Class(convert_class(c)?))),
-        PackageableElement::Enumeration(e) => {
-            Ok(Some(ast::element::Element::Enumeration(convert_enumeration(e)?)))
-        }
+        PackageableElement::Enumeration(e) => Ok(Some(ast::element::Element::Enumeration(
+            convert_enumeration(e)?,
+        ))),
         PackageableElement::Function(f) => {
             Ok(Some(ast::element::Element::Function(convert_function(f)?)))
         }
         PackageableElement::Profile(p) => {
             Ok(Some(ast::element::Element::Profile(convert_profile(p)?)))
         }
-        PackageableElement::Association(a) => {
-            Ok(Some(ast::element::Element::Association(convert_association(a)?)))
-        }
+        PackageableElement::Association(a) => Ok(Some(ast::element::Element::Association(
+            convert_association(a)?,
+        ))),
         PackageableElement::Measure(m) => {
             Ok(Some(ast::element::Element::Measure(convert_measure(m)?)))
         }
@@ -815,8 +824,14 @@ fn convert_function(f: &v1::element::ProtocolFunction) -> Result<ast::element::F
         .iter()
         .map(|v| -> Result<ast::annotation::Parameter> {
             let vsi = source_info_or_synthetic(v.source_information.as_ref());
-            let gt = v.generic_type.as_ref().ok_or(ConversionError::UnsupportedValueSpec)?;
-            let mult = v.multiplicity.as_ref().ok_or(ConversionError::UnsupportedValueSpec)?;
+            let gt = v
+                .generic_type
+                .as_ref()
+                .ok_or(ConversionError::UnsupportedValueSpec)?;
+            let mult = v
+                .multiplicity
+                .as_ref()
+                .ok_or(ConversionError::UnsupportedValueSpec)?;
             Ok(ast::annotation::Parameter {
                 name: SmolStr::new(&v.name),
                 type_ref: Some(convert_generic_type(gt)?),
@@ -910,11 +925,8 @@ fn convert_measure(m: &v1::element::ProtocolMeasure) -> Result<ast::element::Mea
         .as_ref()
         .map(convert_unit_def)
         .transpose()?;
-    let non_canonical: std::result::Result<Vec<_>, _> = m
-        .non_canonical_units
-        .iter()
-        .map(convert_unit_def)
-        .collect();
+    let non_canonical: std::result::Result<Vec<_>, _> =
+        m.non_canonical_units.iter().map(convert_unit_def).collect();
 
     Ok(ast::element::MeasureDef {
         package,
@@ -982,18 +994,16 @@ pub fn convert_context_to_source_file(
     let element_map: std::collections::HashMap<String, ast::element::Element> = ctx
         .elements
         .iter()
-        .filter_map(|e| {
-            match convert_element(e) {
-                Ok(Some(elem)) => {
-                    use ast::element::PackageableElement as PE;
-                    let fqn = match elem.package() {
-                        Some(pkg) => format!("{pkg}::{}", elem.name()),
-                        None => elem.name().to_string(),
-                    };
-                    Some((fqn, elem))
-                }
-                _ => None,
+        .filter_map(|e| match convert_element(e) {
+            Ok(Some(elem)) => {
+                use ast::element::PackageableElement as PE;
+                let fqn = match elem.package() {
+                    Some(pkg) => format!("{pkg}::{}", elem.name()),
+                    None => elem.name().to_string(),
+                };
+                Some((fqn, elem))
             }
+            _ => None,
         })
         .collect();
 
@@ -1012,10 +1022,12 @@ pub fn convert_context_to_source_file(
                             .imports
                             .iter()
                             .filter_map(|i| {
-                                parse_path(i).ok().map(|path| ast::section::ImportStatement {
-                                    path,
-                                    source_info: ssi.clone(),
-                                })
+                                parse_path(i)
+                                    .ok()
+                                    .map(|path| ast::section::ImportStatement {
+                                        path,
+                                        source_info: ssi.clone(),
+                                    })
                             })
                             .collect();
                         (s.parser_name.as_str(), &s.elements, imports, ssi)
@@ -1037,8 +1049,7 @@ pub fn convert_context_to_source_file(
             .collect()
     } else {
         // No section index — put all elements in a single "Pure" section
-        let all_elements: Vec<ast::element::Element> =
-            element_map.into_values().collect();
+        let all_elements: Vec<ast::element::Element> = element_map.into_values().collect();
         vec![ast::section::Section {
             kind: SmolStr::new("Pure"),
             imports: vec![],

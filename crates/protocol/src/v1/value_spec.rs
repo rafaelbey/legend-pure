@@ -405,8 +405,14 @@ mod tests {
             function: "plus".into(),
             f_control: None,
             parameters: vec![
-                ValueSpecification::Integer(CInteger { value: 1, source_information: None }),
-                ValueSpecification::Integer(CInteger { value: 2, source_information: None }),
+                ValueSpecification::Integer(CInteger {
+                    value: 1,
+                    source_information: None,
+                }),
+                ValueSpecification::Integer(CInteger {
+                    value: 2,
+                    source_information: None,
+                }),
             ],
             source_information: None,
         });

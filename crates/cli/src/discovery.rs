@@ -44,11 +44,7 @@ pub fn find_pure_files(dir: &Path) -> Result<Vec<PathBuf>, CliError> {
         .into_iter()
         .filter_map(std::result::Result::ok)
         .filter(|entry| {
-            entry.file_type().is_file()
-                && entry
-                    .path()
-                    .extension()
-                    .is_some_and(|ext| ext == "pure")
+            entry.file_type().is_file() && entry.path().extension().is_some_and(|ext| ext == "pure")
         })
         .filter(|entry| !is_ignored(entry.path()))
         .map(walkdir::DirEntry::into_path)
@@ -84,8 +80,10 @@ pub fn resolve_paths(paths: &[PathBuf]) -> Result<Vec<PathBuf>, CliError> {
 /// Falls back to `"<unknown>"` if the path has no file name component.
 /// This is used as the `source_id` when parsing `.pure` files.
 pub fn file_name(path: &Path) -> String {
-    path.file_name()
-        .map_or_else(|| "<unknown>".to_string(), |n| n.to_string_lossy().to_string())
+    path.file_name().map_or_else(
+        || "<unknown>".to_string(),
+        |n| n.to_string_lossy().to_string(),
+    )
 }
 
 /// Checks if a path should be ignored.

@@ -97,7 +97,10 @@ mod tests {
     fn src() -> SourceInformation {
         SourceInformation {
             source_id: "test.pure".into(),
-            start_line: 1, start_column: 1, end_line: 1, end_column: 20,
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 20,
         }
     }
 
@@ -114,8 +117,10 @@ mod tests {
         assert_eq!(json["profile"], "meta::pure::profiles::temporal");
         assert_eq!(json["value"], "businesstemporal");
         assert!(json.get("sourceInformation").is_some());
-        assert!(json.get("profileSourceInformation").is_none(),
-            "None should be omitted");
+        assert!(
+            json.get("profileSourceInformation").is_none(),
+            "None should be omitted"
+        );
     }
 
     #[test]

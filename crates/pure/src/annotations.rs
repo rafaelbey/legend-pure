@@ -66,7 +66,10 @@ mod tests {
     #[test]
     fn stereotype_ref_construction() {
         let s = StereotypeRef {
-            profile: ElementId { chunk_id: 0, local_idx: 10 },
+            profile: ElementId {
+                chunk_id: 0,
+                local_idx: 10,
+            },
             value: SmolStr::new("deprecated"),
         };
         assert_eq!(s.value, "deprecated");
@@ -75,7 +78,10 @@ mod tests {
     #[test]
     fn tagged_value_ref_construction() {
         let tv = TaggedValueRef {
-            profile: ElementId { chunk_id: 0, local_idx: 10 },
+            profile: ElementId {
+                chunk_id: 0,
+                local_idx: 10,
+            },
             tag: SmolStr::new("description"),
             value: "A person".to_string(),
         };

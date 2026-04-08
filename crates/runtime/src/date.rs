@@ -127,7 +127,10 @@ impl PureDate {
     pub fn year(year: i16) -> Result<Self, PureRuntimeError> {
         let dt = jiff::civil::DateTime::new(year, 1, 1, 0, 0, 0, 0)
             .map_err(|e| PureRuntimeError::EvaluationError(format!("Invalid year: {e}")))?;
-        Ok(Self { inner: dt, precision: DatePrecision::Year })
+        Ok(Self {
+            inner: dt,
+            precision: DatePrecision::Year,
+        })
     }
 
     /// Create a year-month date.
@@ -137,7 +140,10 @@ impl PureDate {
     pub fn year_month(year: i16, month: i8) -> Result<Self, PureRuntimeError> {
         let dt = jiff::civil::DateTime::new(year, month, 1, 0, 0, 0, 0)
             .map_err(|e| PureRuntimeError::EvaluationError(format!("Invalid year-month: {e}")))?;
-        Ok(Self { inner: dt, precision: DatePrecision::Month })
+        Ok(Self {
+            inner: dt,
+            precision: DatePrecision::Month,
+        })
     }
 
     /// Create a strict date (year + month + day, no time).
@@ -147,7 +153,10 @@ impl PureDate {
     pub fn strict_date(year: i16, month: i8, day: i8) -> Result<Self, PureRuntimeError> {
         let dt = jiff::civil::DateTime::new(year, month, day, 0, 0, 0, 0)
             .map_err(|e| PureRuntimeError::EvaluationError(format!("Invalid date: {e}")))?;
-        Ok(Self { inner: dt, precision: DatePrecision::Day })
+        Ok(Self {
+            inner: dt,
+            precision: DatePrecision::Day,
+        })
     }
 
     /// Create a datetime with the specified time precision.
@@ -167,7 +176,10 @@ impl PureDate {
     ) -> Result<Self, PureRuntimeError> {
         let dt = jiff::civil::DateTime::new(year, month, day, hour, minute, second, nanosecond)
             .map_err(|e| PureRuntimeError::EvaluationError(format!("Invalid datetime: {e}")))?;
-        Ok(Self { inner: dt, precision: DatePrecision::Time(precision) })
+        Ok(Self {
+            inner: dt,
+            precision: DatePrecision::Time(precision),
+        })
     }
 
     /// Create from a [`jiff::civil::Date`] (`StrictDate`).
@@ -196,7 +208,10 @@ impl PureDate {
         } else {
             DatePrecision::Time(TimePrecision::Second)
         };
-        Self { inner: dt, precision }
+        Self {
+            inner: dt,
+            precision,
+        }
     }
 
     // -- Accessors --
@@ -247,9 +262,7 @@ impl PureDate {
     #[must_use]
     pub fn get_minute(&self) -> Option<i8> {
         match self.precision {
-            DatePrecision::Time(tp) if tp >= TimePrecision::Minute => {
-                Some(self.inner.minute())
-            }
+            DatePrecision::Time(tp) if tp >= TimePrecision::Minute => Some(self.inner.minute()),
             _ => None,
         }
     }
@@ -258,9 +271,7 @@ impl PureDate {
     #[must_use]
     pub fn get_second(&self) -> Option<i8> {
         match self.precision {
-            DatePrecision::Time(tp) if tp >= TimePrecision::Second => {
-                Some(self.inner.second())
-            }
+            DatePrecision::Time(tp) if tp >= TimePrecision::Second => Some(self.inner.second()),
             _ => None,
         }
     }
@@ -317,9 +328,14 @@ impl PureDate {
     /// Returns an error if the result overflows.
     pub fn add_years(&self, years: i64) -> Result<Self, PureRuntimeError> {
         let span = jiff::Span::new().years(years);
-        let new_dt = self.inner.checked_add(span)
+        let new_dt = self
+            .inner
+            .checked_add(span)
             .map_err(|e| PureRuntimeError::EvaluationError(format!("Date overflow: {e}")))?;
-        Ok(Self { inner: new_dt, precision: self.precision })
+        Ok(Self {
+            inner: new_dt,
+            precision: self.precision,
+        })
     }
 
     /// Add months (requires at least month precision).
@@ -333,9 +349,14 @@ impl PureDate {
             ));
         }
         let span = jiff::Span::new().months(months);
-        let new_dt = self.inner.checked_add(span)
+        let new_dt = self
+            .inner
+            .checked_add(span)
             .map_err(|e| PureRuntimeError::EvaluationError(format!("Date overflow: {e}")))?;
-        Ok(Self { inner: new_dt, precision: self.precision })
+        Ok(Self {
+            inner: new_dt,
+            precision: self.precision,
+        })
     }
 
     /// Add days (requires at least day precision).
@@ -349,9 +370,14 @@ impl PureDate {
             ));
         }
         let span = jiff::Span::new().days(days);
-        let new_dt = self.inner.checked_add(span)
+        let new_dt = self
+            .inner
+            .checked_add(span)
             .map_err(|e| PureRuntimeError::EvaluationError(format!("Date overflow: {e}")))?;
-        Ok(Self { inner: new_dt, precision: self.precision })
+        Ok(Self {
+            inner: new_dt,
+            precision: self.precision,
+        })
     }
 
     /// Add hours (requires time precision).
@@ -365,9 +391,14 @@ impl PureDate {
             ));
         }
         let span = jiff::Span::new().hours(hours);
-        let new_dt = self.inner.checked_add(span)
+        let new_dt = self
+            .inner
+            .checked_add(span)
             .map_err(|e| PureRuntimeError::EvaluationError(format!("Date overflow: {e}")))?;
-        Ok(Self { inner: new_dt, precision: self.precision })
+        Ok(Self {
+            inner: new_dt,
+            precision: self.precision,
+        })
     }
 
     /// Add minutes (requires at least minute precision).
@@ -384,9 +415,14 @@ impl PureDate {
             }
         }
         let span = jiff::Span::new().minutes(minutes);
-        let new_dt = self.inner.checked_add(span)
+        let new_dt = self
+            .inner
+            .checked_add(span)
             .map_err(|e| PureRuntimeError::EvaluationError(format!("Date overflow: {e}")))?;
-        Ok(Self { inner: new_dt, precision: self.precision })
+        Ok(Self {
+            inner: new_dt,
+            precision: self.precision,
+        })
     }
 
     /// Add seconds (requires at least second precision).
@@ -403,9 +439,14 @@ impl PureDate {
             }
         }
         let span = jiff::Span::new().seconds(seconds);
-        let new_dt = self.inner.checked_add(span)
+        let new_dt = self
+            .inner
+            .checked_add(span)
             .map_err(|e| PureRuntimeError::EvaluationError(format!("Date overflow: {e}")))?;
-        Ok(Self { inner: new_dt, precision: self.precision })
+        Ok(Self {
+            inner: new_dt,
+            precision: self.precision,
+        })
     }
 }
 
@@ -494,7 +535,12 @@ impl StrictTime {
     ///
     /// # Errors
     /// Returns an error if the time components are invalid.
-    pub fn new(hour: i8, minute: i8, second: i8, nanosecond: i32) -> Result<Self, PureRuntimeError> {
+    pub fn new(
+        hour: i8,
+        minute: i8,
+        second: i8,
+        nanosecond: i32,
+    ) -> Result<Self, PureRuntimeError> {
         let t = jiff::civil::Time::new(hour, minute, second, nanosecond)
             .map_err(|e| PureRuntimeError::EvaluationError(format!("Invalid time: {e}")))?;
         Ok(Self(t))
@@ -587,7 +633,14 @@ mod tests {
     #[test]
     fn datetime_with_subseconds() {
         let d = PureDate::datetime(
-            2024, 3, 15, 10, 30, 0, 123_000_000, TimePrecision::Subsecond(3),
+            2024,
+            3,
+            15,
+            10,
+            30,
+            0,
+            123_000_000,
+            TimePrecision::Subsecond(3),
         )
         .unwrap();
         assert_eq!(d.get_subsec_nanosecond(), Some(123_000_000));

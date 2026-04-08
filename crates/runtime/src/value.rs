@@ -164,7 +164,9 @@ impl Value {
     pub fn as_boolean(&self) -> Result<bool, crate::error::PureRuntimeError> {
         match self {
             Self::Boolean(b) => Ok(*b),
-            other => Err(crate::error::PureRuntimeError::type_mismatch("Boolean", other)),
+            other => Err(crate::error::PureRuntimeError::type_mismatch(
+                "Boolean", other,
+            )),
         }
     }
 
@@ -175,7 +177,9 @@ impl Value {
     pub fn as_integer(&self) -> Result<i64, crate::error::PureRuntimeError> {
         match self {
             Self::Integer(i) => Ok(*i),
-            other => Err(crate::error::PureRuntimeError::type_mismatch("Integer", other)),
+            other => Err(crate::error::PureRuntimeError::type_mismatch(
+                "Integer", other,
+            )),
         }
     }
 
@@ -190,7 +194,9 @@ impl Value {
         match self {
             Self::Float(f) => Ok(*f),
             Self::Integer(i) => Ok(*i as f64),
-            other => Err(crate::error::PureRuntimeError::type_mismatch("Float", other)),
+            other => Err(crate::error::PureRuntimeError::type_mismatch(
+                "Float", other,
+            )),
         }
     }
 
@@ -201,7 +207,9 @@ impl Value {
     pub fn as_string(&self) -> Result<&SmolStr, crate::error::PureRuntimeError> {
         match self {
             Self::String(s) => Ok(s),
-            other => Err(crate::error::PureRuntimeError::type_mismatch("String", other)),
+            other => Err(crate::error::PureRuntimeError::type_mismatch(
+                "String", other,
+            )),
         }
     }
 
@@ -212,7 +220,9 @@ impl Value {
     pub fn as_object(&self) -> Result<ObjectId, crate::error::PureRuntimeError> {
         match self {
             Self::Object(id) => Ok(*id),
-            other => Err(crate::error::PureRuntimeError::type_mismatch("Object", other)),
+            other => Err(crate::error::PureRuntimeError::type_mismatch(
+                "Object", other,
+            )),
         }
     }
 
@@ -223,7 +233,10 @@ impl Value {
     pub fn as_collection(&self) -> Result<&PVector<Value>, crate::error::PureRuntimeError> {
         match self {
             Self::Collection(v) => Ok(v),
-            other => Err(crate::error::PureRuntimeError::type_mismatch("Collection", other)),
+            other => Err(crate::error::PureRuntimeError::type_mismatch(
+                "Collection",
+                other,
+            )),
         }
     }
 
@@ -234,7 +247,9 @@ impl Value {
     pub fn as_decimal(&self) -> Result<Decimal, crate::error::PureRuntimeError> {
         match self {
             Self::Decimal(d) => Ok(*d),
-            other => Err(crate::error::PureRuntimeError::type_mismatch("Decimal", other)),
+            other => Err(crate::error::PureRuntimeError::type_mismatch(
+                "Decimal", other,
+            )),
         }
     }
 
@@ -256,7 +271,10 @@ impl Value {
     pub fn as_strict_time(&self) -> Result<StrictTime, crate::error::PureRuntimeError> {
         match self {
             Self::StrictTime(t) => Ok(*t),
-            other => Err(crate::error::PureRuntimeError::type_mismatch("StrictTime", other)),
+            other => Err(crate::error::PureRuntimeError::type_mismatch(
+                "StrictTime",
+                other,
+            )),
         }
     }
 

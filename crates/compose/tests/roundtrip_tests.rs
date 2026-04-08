@@ -41,8 +41,9 @@ fn round_trip(source: &str) {
     );
 
     // Idempotency: compose(parse(composed)) == composed
-    let ast2 = legend_pure_parser_parser::parse(&composed, "test.pure")
-        .unwrap_or_else(|e| panic!("Re-parse of composed output failed:\n{e}\n\nComposed:\n{composed}"));
+    let ast2 = legend_pure_parser_parser::parse(&composed, "test.pure").unwrap_or_else(|e| {
+        panic!("Re-parse of composed output failed:\n{e}\n\nComposed:\n{composed}")
+    });
     let composed2 = compose_source_file(&ast2);
     assert_eq!(
         composed, composed2,
@@ -758,7 +759,9 @@ fn test_class_with_quoted_tags_and_stereotypes() {
 #[test]
 fn test_tagged_values_special_char() {
     // Note: Pure strings use \' for escaped single quotes inside single-quoted strings
-    round_trip("Class <<temporal.businesstemporal, taggedValue.Number2>> {doc.test1 = 'test1\\'s', doc.test2 = 'm\\'s test'} meta::this::class::has::path::A\n{\n  <<equality.Key, taggedValue.test>> {doc.doc = 'uyaguari\\'s test', doc.test2 = 'm\\'s test'} name: e::R[*];\n}\n");
+    round_trip(
+        "Class <<temporal.businesstemporal, taggedValue.Number2>> {doc.test1 = 'test1\\'s', doc.test2 = 'm\\'s test'} meta::this::class::has::path::A\n{\n  <<equality.Key, taggedValue.test>> {doc.doc = 'uyaguari\\'s test', doc.test2 = 'm\\'s test'} name: e::R[*];\n}\n",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1327,7 +1330,9 @@ fn test_default_value_collection() {
 fn test_complex_class() {
     // This test uses inline \n because it contains complex escape sequences
     // that interact with indoc's dedent logic
-    round_trip("Class 'A-Z'\n[\n  constraint1: $this.ok->toOne() == 1,\n  constraint2: if($this.ok == 'ok', |true, |false),\n  'constraint-3': $this.anyValue->instanceOf(String) || $this.anyValue->instanceOf(AEnum)\n]\n{\n  name: String[45..*];\n  ok: Integer[1..2];\n  anyValue: Any[1];\n  'maybe or maybe not!': Boolean[1];\n  xza(s: String[1]) {$s + 'ok\\n{\"\"}\\'\\''}: String[1];\n  'I\\'m derived'('#String': String[1]) {$s + 'ok\\n{\"\"}\\'\\''}: String[1];\n}\n\nEnum AEnum\n{\n  B\n}\n");
+    round_trip(
+        "Class 'A-Z'\n[\n  constraint1: $this.ok->toOne() == 1,\n  constraint2: if($this.ok == 'ok', |true, |false),\n  'constraint-3': $this.anyValue->instanceOf(String) || $this.anyValue->instanceOf(AEnum)\n]\n{\n  name: String[45..*];\n  ok: Integer[1..2];\n  anyValue: Any[1];\n  'maybe or maybe not!': Boolean[1];\n  xza(s: String[1]) {$s + 'ok\\n{\"\"}\\'\\''}: String[1];\n  'I\\'m derived'('#String': String[1]) {$s + 'ok\\n{\"\"}\\'\\''}: String[1];\n}\n\nEnum AEnum\n{\n  B\n}\n",
+    );
 }
 
 // ---------------------------------------------------------------------------

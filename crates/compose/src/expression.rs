@@ -22,9 +22,9 @@ use legend_pure_parser_ast::annotation::{PackageableElementPtr, Parameter};
 use legend_pure_parser_ast::element::PackageableElement as _;
 use legend_pure_parser_ast::expression::{
     ArithmeticExpr, ArithmeticOp, ArrowFunction, BitwiseExpr, BitwiseNotExpr, BitwiseOp,
-    CollectionExpr, ColumnExpression, ComparisonExpr, ComparisonOp, Expression, FunctionApplication,
-    Lambda, LetExpr, Literal, LogicalExpr, LogicalOp, MemberAccess, NewInstanceExpr, NotExpr,
-    PackageableElementRef, TypeReferenceExpr, UnaryMinusExpr, Variable,
+    CollectionExpr, ColumnExpression, ComparisonExpr, ComparisonOp, Expression,
+    FunctionApplication, Lambda, LetExpr, Literal, LogicalExpr, LogicalOp, MemberAccess,
+    NewInstanceExpr, NotExpr, PackageableElementRef, TypeReferenceExpr, UnaryMinusExpr, Variable,
 };
 
 use crate::identifier::{escape_pure_string, maybe_quote};
@@ -219,8 +219,6 @@ fn compose_literal(w: &mut IndentWriter, lit: &Literal) {
         }
     }
 }
-
-
 
 fn compose_variable(w: &mut IndentWriter, var: &Variable) {
     w.write("$");

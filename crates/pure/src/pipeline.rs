@@ -35,19 +35,19 @@ use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::element as ast;
 use legend_pure_parser_ast::section::SourceFile;
 use legend_pure_parser_ast::source_info::Spanned;
-use legend_pure_parser_ast::type_ref::Package as AstPackage;
+
 use smol_str::SmolStr;
 
 use crate::bootstrap;
 use crate::error::{CompilationError, CompilationErrorKind};
 use crate::ids::ElementId;
 use crate::model::{Element, ElementNode, ModelChunk, PureModel};
+use crate::nodes::association::Association;
 use crate::nodes::class::{self, Class};
 use crate::nodes::enumeration::{EnumValue, Enumeration};
 use crate::nodes::function::Function;
 use crate::nodes::measure::Measure;
 use crate::nodes::profile::Profile;
-use crate::nodes::association::Association;
 use crate::nodes::unit::Unit;
 use crate::resolve::{self, ResolutionContext};
 use crate::types::{Multiplicity, TypeExpr};
@@ -60,10 +60,17 @@ use crate::types::{Multiplicity, TypeExpr};
 ///
 /// This is the main entry point for the compiler pipeline.
 ///
+/// `auto_imports` provides the list of packages that are implicitly imported
+/// in every section (e.g., `meta::pure::metamodel`, `meta::pure::profiles`).
+/// The caller controls which packages are auto-imported.
+///
 /// # Errors
 ///
 /// Returns compilation errors for unresolved types, cyclic inheritance, etc.
-pub fn compile(source_files: &[SourceFile]) -> Result<PureModel, Vec<CompilationError>> {
+pub fn compile(
+    source_files: &[SourceFile],
+    auto_imports: &[SmolStr],
+) -> Result<PureModel, Vec<CompilationError>> {
     let mut model = PureModel::new();
 
     // Chunk 0 — bootstrap primitives
@@ -72,7 +79,10 @@ pub fn compile(source_files: &[SourceFile]) -> Result<PureModel, Vec<Compilation
 
     // Register bootstrap elements in the root package
     for local_idx in 0..model.chunks[0].nodes.len() {
-        let eid = ElementId { chunk_id: 0, local_idx };
+        let eid = ElementId {
+            chunk_id: 0,
+            local_idx,
+        };
         model.register_element(model.root_package, eid);
     }
 
@@ -85,7 +95,15 @@ pub fn compile(source_files: &[SourceFile]) -> Result<PureModel, Vec<Compilation
     let sorted = pass_topo_sort(&declarations, source_files, &model, &mut errors);
 
     // ---- Pass 2: Definition ----
-    pass_define(&sorted, source_files, &declarations, &unit_mappings, &mut model, &mut errors);
+    pass_define(
+        &sorted,
+        source_files,
+        &declarations,
+        &unit_mappings,
+        auto_imports,
+        &mut model,
+        &mut errors,
+    );
 
     // ---- Freeze ----
     model.rebuild_derived_indexes();
@@ -98,6 +116,25 @@ pub fn compile(source_files: &[SourceFile]) -> Result<PureModel, Vec<Compilation
     } else {
         Err(errors)
     }
+}
+
+/// Convenience macro for `compile()` with optional auto-imports.
+///
+/// ```ignore
+/// // No auto-imports (equivalent to compile(files, &[]))
+/// compile!(files);
+///
+/// // With auto-imports
+/// compile!(files, &auto_imports);
+/// ```
+#[macro_export]
+macro_rules! compile {
+    ($source_files:expr) => {
+        $crate::pipeline::compile($source_files, &[])
+    };
+    ($source_files:expr, $auto_imports:expr) => {
+        $crate::pipeline::compile($source_files, $auto_imports)
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +176,10 @@ fn pass_declare(
     source_files: &[SourceFile],
     model: &mut PureModel,
     errors: &mut Vec<CompilationError>,
-) -> (HashMap<SmolStr, Declaration>, HashMap<ElementId, UnitMapping>) {
+) -> (
+    HashMap<SmolStr, Declaration>,
+    HashMap<ElementId, UnitMapping>,
+) {
     let mut declarations = HashMap::new();
     let mut unit_mappings: HashMap<ElementId, UnitMapping> = HashMap::new();
     #[allow(clippy::cast_possible_truncation)] // chunks.len() is bounded by u16 in practice
@@ -184,22 +224,36 @@ fn pass_declare(
                     shell,
                 );
 
-                let id = ElementId { chunk_id, local_idx };
+                let id = ElementId {
+                    chunk_id,
+                    local_idx,
+                };
                 model.register_element(package_id, id);
 
-                declarations.insert(fqn.clone(), Declaration {
-                    id,
-                    file_idx,
-                    section_idx,
-                    element_idx,
-                });
+                declarations.insert(
+                    fqn.clone(),
+                    Declaration {
+                        id,
+                        file_idx,
+                        section_idx,
+                        element_idx,
+                    },
+                );
 
                 // For Measures: allocate Unit shells now
                 if let ast::Element::Measure(measure_def) = element {
                     let mapping = allocate_unit_shells(
-                        measure_def, id, &fqn, chunk_id, package_id,
-                        &mut chunk, model, &mut declarations,
-                        file_idx, section_idx, element_idx,
+                        measure_def,
+                        id,
+                        &fqn,
+                        chunk_id,
+                        package_id,
+                        &mut chunk,
+                        model,
+                        &mut declarations,
+                        file_idx,
+                        section_idx,
+                        element_idx,
                     );
                     unit_mappings.insert(id, mapping);
                 }
@@ -252,19 +306,25 @@ fn allocate_unit_shells(
             unit_shell,
         );
 
-        let unit_id = ElementId { chunk_id, local_idx };
+        let unit_id = ElementId {
+            chunk_id,
+            local_idx,
+        };
         model.register_element(package_id, unit_id);
 
         // SAFETY INVARIANT: These AST coordinates point to the parent Measure
         // element, not the unit itself. This is safe because `pass_define`
         // skips `Element::Unit` before looking up the AST. If that skip is
         // ever removed, units would be re-hydrated as duplicate Measures.
-        declarations.insert(unit_fqn, Declaration {
-            id: unit_id,
-            file_idx,
-            section_idx,
-            element_idx,
-        });
+        declarations.insert(
+            unit_fqn,
+            Declaration {
+                id: unit_id,
+                file_idx,
+                section_idx,
+                element_idx,
+            },
+        );
 
         unit_id
     };
@@ -279,9 +339,11 @@ fn allocate_unit_shells(
         non_canonical.push(alloc_unit(unit_def));
     }
 
-    UnitMapping { canonical, non_canonical }
+    UnitMapping {
+        canonical,
+        non_canonical,
+    }
 }
-
 
 // ---------------------------------------------------------------------------
 // Pass 1.5: Topological Sort (Hard Dependencies)
@@ -315,7 +377,8 @@ fn pass_topo_sort(
     }
 
     // Kahn's algorithm
-    let mut queue: VecDeque<ElementId> = in_degree.iter()
+    let mut queue: VecDeque<ElementId> = in_degree
+        .iter()
         .filter(|&(_, &deg)| deg == 0)
         .map(|(&id, _)| id)
         .collect();
@@ -339,7 +402,8 @@ fn pass_topo_sort(
 
     // Check for cycles
     if sorted.len() < declarations.len() {
-        let cyclic: Vec<_> = in_degree.iter()
+        let cyclic: Vec<_> = in_degree
+            .iter()
             .filter(|&(_, &deg)| deg > 0)
             .map(|(&id, _)| id)
             .collect();
@@ -347,10 +411,7 @@ fn pass_topo_sort(
         for id in &cyclic {
             let node = model.get_node(*id);
             errors.push(CompilationError {
-                message: format!(
-                    "Cyclic inheritance detected involving '{}'",
-                    node.name
-                ),
+                message: format!("Cyclic inheritance detected involving '{}'", node.name),
                 source_info: node.source_info.clone(),
                 kind: CompilationErrorKind::CyclicInheritance {
                     element_name: node.name.clone(),
@@ -369,14 +430,14 @@ fn extract_hard_dependencies(
     _model: &PureModel,
 ) -> Vec<ElementId> {
     match element {
-        ast::Element::Class(class_def) => {
-            class_def.super_types.iter()
-                .filter_map(|type_ref| {
-                    let fqn = SmolStr::new(type_ref.full_path());
-                    declarations.get(&fqn).map(|d| d.id)
-                })
-                .collect()
-        }
+        ast::Element::Class(class_def) => class_def
+            .super_types
+            .iter()
+            .filter_map(|type_ref| {
+                let fqn = SmolStr::new(type_ref.full_path());
+                declarations.get(&fqn).map(|d| d.id)
+            })
+            .collect(),
         _ => vec![],
     }
 }
@@ -391,18 +452,22 @@ fn pass_define(
     source_files: &[SourceFile],
     declarations: &HashMap<SmolStr, Declaration>,
     unit_mappings: &HashMap<ElementId, UnitMapping>,
+    auto_imports: &[SmolStr],
     model: &mut PureModel,
     errors: &mut Vec<CompilationError>,
 ) {
-    // Build reverse lookup: ElementId → Declaration
-    let id_to_decl: HashMap<ElementId, &Declaration> = declarations.values()
-        .map(|d| (d.id, d))
-        .collect();
+    use crate::resolve::ImportScope;
 
-    // Build resolution context: FQN → ElementId (for resolve.rs)
-    let decl_ids: HashMap<SmolStr, ElementId> = declarations.iter()
-        .map(|(fqn, d)| (fqn.clone(), d.id))
-        .collect();
+    // Build reverse lookup: ElementId → Declaration
+    let id_to_decl: HashMap<ElementId, &Declaration> =
+        declarations.values().map(|d| (d.id, d)).collect();
+
+    // Cache per-section import scopes and resolve caches
+    let mut import_scope_cache: HashMap<(usize, usize), Vec<ImportScope>> = HashMap::new();
+    let mut resolve_caches: HashMap<
+        (usize, usize),
+        HashMap<SmolStr, crate::resolve::ResolveResult>,
+    > = HashMap::new();
 
     for &id in sorted {
         // Skip units — they were fully populated during Pass 1 (allocate_unit_shells)
@@ -411,20 +476,65 @@ fn pass_define(
             continue;
         }
 
-        let Some(decl) = id_to_decl.get(&id) else { continue };
+        let Some(decl) = id_to_decl.get(&id) else {
+            continue;
+        };
         let ast_element = get_ast_element(source_files, decl);
 
-        let ctx = ResolutionContext {
-            declarations: &decl_ids,
+        // Build or retrieve the import scope for this element's section
+        let scope_key = (decl.file_idx, decl.section_idx);
+        let import_scopes = import_scope_cache.entry(scope_key).or_insert_with(|| {
+            build_import_scope(source_files, decl.file_idx, decl.section_idx, auto_imports)
+        });
+
+        // Get or create the per-section resolve cache
+        let resolve_cache = resolve_caches.entry(scope_key).or_default();
+
+        let mut ctx = ResolutionContext {
             model,
+            import_scopes,
+            resolve_cache,
         };
 
-        let hydrated = hydrate_element(ast_element, id, unit_mappings, &ctx, errors);
+        let hydrated = hydrate_element(ast_element, id, unit_mappings, &mut ctx, errors);
 
         // Replace the shell in the chunk
         let chunk = &mut model.chunks[id.chunk_id as usize];
         *chunk.elements.get_mut(id.local_idx) = hydrated;
     }
+}
+
+/// Builds the import scope for a specific section.
+///
+/// Explicit imports use the AST `Package` directly (the parser already
+/// built the recursive tree). Auto-imports arrive as path strings and
+/// get parsed into `Package` once at startup via [`ImportScope::from_path_str`].
+fn build_import_scope(
+    source_files: &[SourceFile],
+    file_idx: usize,
+    section_idx: usize,
+    auto_imports: &[SmolStr],
+) -> Vec<crate::resolve::ImportScope> {
+    use crate::resolve::ImportScope;
+
+    let section = &source_files[file_idx].sections[section_idx];
+
+    // Wrap the AST Package directly — zero conversion needed
+    let mut scope: Vec<ImportScope> = section
+        .imports
+        .iter()
+        .map(|import| ImportScope::from_package(import.path.clone()))
+        .collect();
+
+    // Append auto-imports (deduplicating by Display string)
+    for auto in auto_imports {
+        let auto_str = auto.as_str();
+        if !scope.iter().any(|s| s.package.to_string() == auto_str) {
+            scope.push(ImportScope::from_path_str(auto_str));
+        }
+    }
+
+    scope
 }
 
 // ---------------------------------------------------------------------------
@@ -488,13 +598,15 @@ fn hydrate_element(
     element: &ast::Element,
     element_id: ElementId,
     unit_mappings: &HashMap<ElementId, UnitMapping>,
-    ctx: &ResolutionContext<'_>,
+    ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Element {
     match element {
         ast::Element::Class(class_def) => {
             // Super types
-            let super_types: Vec<TypeExpr> = class_def.super_types.iter()
+            let super_types: Vec<TypeExpr> = class_def
+                .super_types
+                .iter()
                 .filter_map(|type_ref| resolve::resolve_type_ref(type_ref, ctx, errors))
                 .collect();
 
@@ -502,20 +614,16 @@ fn hydrate_element(
             let properties = lower_properties(&class_def.properties, ctx, errors);
 
             // Qualified properties
-            let qualified_properties = lower_qualified_properties(
-                &class_def.qualified_properties, ctx, errors,
-            );
+            let qualified_properties =
+                lower_qualified_properties(&class_def.qualified_properties, ctx, errors);
 
             // Constraints
             let constraints = lower_constraints(&class_def.constraints);
 
             // Annotations
-            let stereotypes = resolve::resolve_stereotypes(
-                &class_def.stereotypes, ctx, errors,
-            );
-            let tagged_values = resolve::resolve_tagged_values(
-                &class_def.tagged_values, ctx, errors,
-            );
+            let stereotypes = resolve::resolve_stereotypes(&class_def.stereotypes, ctx, errors);
+            let tagged_values =
+                resolve::resolve_tagged_values(&class_def.tagged_values, ctx, errors);
 
             Element::Class(Class {
                 type_parameters: class_def.type_parameters.clone(),
@@ -528,22 +636,17 @@ fn hydrate_element(
             })
         }
         ast::Element::Enumeration(enum_def) => {
-            let stereotypes = resolve::resolve_stereotypes(
-                &enum_def.stereotypes, ctx, errors,
-            );
-            let tagged_values = resolve::resolve_tagged_values(
-                &enum_def.tagged_values, ctx, errors,
-            );
+            let stereotypes = resolve::resolve_stereotypes(&enum_def.stereotypes, ctx, errors);
+            let tagged_values =
+                resolve::resolve_tagged_values(&enum_def.tagged_values, ctx, errors);
 
             Element::Enumeration(Enumeration {
-                values: enum_def.values.iter()
+                values: enum_def
+                    .values
+                    .iter()
                     .map(|v| {
-                        let v_stereos = resolve::resolve_stereotypes(
-                            &v.stereotypes, ctx, errors,
-                        );
-                        let v_tvs = resolve::resolve_tagged_values(
-                            &v.tagged_values, ctx, errors,
-                        );
+                        let v_stereos = resolve::resolve_stereotypes(&v.stereotypes, ctx, errors);
+                        let v_tvs = resolve::resolve_tagged_values(&v.tagged_values, ctx, errors);
                         EnumValue {
                             name: v.name.clone(),
                             source_info: v.source_info.clone(),
@@ -556,34 +659,26 @@ fn hydrate_element(
                 tagged_values,
             })
         }
-        ast::Element::Profile(prof_def) => {
-            Element::Profile(Profile {
-                stereotypes: prof_def.stereotypes.iter()
-                    .map(|s| s.value.clone())
-                    .collect(),
-                tags: prof_def.tags.iter()
-                    .map(|t| t.value.clone())
-                    .collect(),
-            })
-        }
+        ast::Element::Profile(prof_def) => Element::Profile(Profile {
+            stereotypes: prof_def
+                .stereotypes
+                .iter()
+                .map(|s| s.value.clone())
+                .collect(),
+            tags: prof_def.tags.iter().map(|t| t.value.clone()).collect(),
+        }),
         ast::Element::Function(func_def) => {
             let parameters = lower_parameters(&func_def.parameters, ctx, errors);
-            let return_type = resolve::resolve_type_spec(
-                &func_def.return_type, ctx, errors,
-            ).unwrap_or(TypeExpr::Named {
-                element: bootstrap::ANY_ID,
-                type_arguments: vec![],
-                value_arguments: vec![],
-            });
-            let return_multiplicity = resolve::lower_multiplicity(
-                &func_def.return_multiplicity,
-            );
-            let stereotypes = resolve::resolve_stereotypes(
-                &func_def.stereotypes, ctx, errors,
-            );
-            let tagged_values = resolve::resolve_tagged_values(
-                &func_def.tagged_values, ctx, errors,
-            );
+            let return_type = resolve::resolve_type_spec(&func_def.return_type, ctx, errors)
+                .unwrap_or(TypeExpr::Named {
+                    element: bootstrap::ANY_ID,
+                    type_arguments: vec![],
+                    value_arguments: vec![],
+                });
+            let return_multiplicity = resolve::lower_multiplicity(&func_def.return_multiplicity);
+            let stereotypes = resolve::resolve_stereotypes(&func_def.stereotypes, ctx, errors);
+            let tagged_values =
+                resolve::resolve_tagged_values(&func_def.tagged_values, ctx, errors);
 
             Element::Function(Function {
                 parameters,
@@ -596,15 +691,11 @@ fn hydrate_element(
         }
         ast::Element::Association(assoc_def) => {
             let properties = lower_properties(&assoc_def.properties, ctx, errors);
-            let qualified_properties = lower_qualified_properties(
-                &assoc_def.qualified_properties, ctx, errors,
-            );
-            let stereotypes = resolve::resolve_stereotypes(
-                &assoc_def.stereotypes, ctx, errors,
-            );
-            let tagged_values = resolve::resolve_tagged_values(
-                &assoc_def.tagged_values, ctx, errors,
-            );
+            let qualified_properties =
+                lower_qualified_properties(&assoc_def.qualified_properties, ctx, errors);
+            let stereotypes = resolve::resolve_stereotypes(&assoc_def.stereotypes, ctx, errors);
+            let tagged_values =
+                resolve::resolve_tagged_values(&assoc_def.tagged_values, ctx, errors);
 
             Element::Association(Association {
                 properties,
@@ -618,9 +709,7 @@ fn hydrate_element(
             let mapping = unit_mappings.get(&element_id);
             Element::Measure(Measure {
                 canonical_unit: mapping.and_then(|m| m.canonical),
-                non_canonical_units: mapping
-                    .map(|m| m.non_canonical.clone())
-                    .unwrap_or_default(),
+                non_canonical_units: mapping.map(|m| m.non_canonical.clone()).unwrap_or_default(),
             })
         }
     }
@@ -633,18 +722,17 @@ fn hydrate_element(
 /// Lowers AST properties to Pure properties.
 fn lower_properties(
     props: &[ast::Property],
-    ctx: &ResolutionContext<'_>,
+    ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Vec<class::Property> {
-    props.iter()
+    props
+        .iter()
         .filter_map(|p| {
             let type_expr = resolve::resolve_type_spec(&p.type_ref, ctx, errors)?;
             let multiplicity = resolve::lower_multiplicity(&p.multiplicity);
             let aggregation = p.aggregation.map(lower_aggregation_kind);
             let stereotypes = resolve::resolve_stereotypes(&p.stereotypes, ctx, errors);
-            let tagged_values = resolve::resolve_tagged_values(
-                &p.tagged_values, ctx, errors,
-            );
+            let tagged_values = resolve::resolve_tagged_values(&p.tagged_values, ctx, errors);
 
             Some(class::Property {
                 name: p.name.clone(),
@@ -663,18 +751,17 @@ fn lower_properties(
 /// Lowers AST qualified properties to Pure qualified properties.
 fn lower_qualified_properties(
     qprops: &[ast::QualifiedProperty],
-    ctx: &ResolutionContext<'_>,
+    ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Vec<class::QualifiedProperty> {
-    qprops.iter()
+    qprops
+        .iter()
         .filter_map(|qp| {
             let return_type = resolve::resolve_type_spec(&qp.return_type, ctx, errors)?;
             let return_multiplicity = resolve::lower_multiplicity(&qp.return_multiplicity);
             let parameters = lower_parameters(&qp.parameters, ctx, errors);
             let stereotypes = resolve::resolve_stereotypes(&qp.stereotypes, ctx, errors);
-            let tagged_values = resolve::resolve_tagged_values(
-                &qp.tagged_values, ctx, errors,
-            );
+            let tagged_values = resolve::resolve_tagged_values(&qp.tagged_values, ctx, errors);
 
             Some(class::QualifiedProperty {
                 name: qp.name.clone(),
@@ -693,10 +780,11 @@ fn lower_qualified_properties(
 /// Lowers AST parameters to Pure parameters.
 fn lower_parameters(
     params: &[legend_pure_parser_ast::annotation::Parameter],
-    ctx: &ResolutionContext<'_>,
+    ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Vec<crate::types::Parameter> {
-    params.iter()
+    params
+        .iter()
         .filter_map(|p| {
             // Skip untyped lambda params — they need type inference (Phase 5+)
             let type_ref = p.type_ref.as_ref()?;
@@ -718,18 +806,18 @@ fn lower_parameters(
 ///
 /// Constraint expressions are placeholder — full expression lowering is Phase 4+.
 fn lower_constraints(constraints: &[ast::Constraint]) -> Vec<class::Constraint> {
-    constraints.iter()
+    constraints
+        .iter()
         .map(|c| class::Constraint {
             name: c.name.clone(),
             source_info: c.source_info.clone(),
-            function: resolve::placeholder_expression(
-                c.function_definition.source_info(),
-            ),
+            function: resolve::placeholder_expression(c.function_definition.source_info()),
             enforcement_level: c.enforcement_level.clone(),
             external_id: c.external_id.clone(),
-            message: c.message.as_ref().map(|m| {
-                resolve::placeholder_expression(m.source_info())
-            }),
+            message: c
+                .message
+                .as_ref()
+                .map(|m| resolve::placeholder_expression(m.source_info())),
         })
         .collect()
 }
@@ -758,21 +846,9 @@ fn ast_element_source(element: &ast::Element) -> &SourceInfo {
 fn ast_element_package_path(element: &ast::Element) -> Vec<SmolStr> {
     use legend_pure_parser_ast::element::PackageableElement;
     match element.package() {
-        Some(pkg) => collect_package_segments(pkg),
+        Some(pkg) => pkg.segments().into_iter().cloned().collect(),
         None => vec![],
     }
-}
-
-/// Collects all segments from a linked-list AST Package into a Vec.
-pub(crate) fn collect_package_segments(pkg: &AstPackage) -> Vec<SmolStr> {
-    let mut segments = Vec::new();
-    let mut current = Some(pkg);
-    while let Some(p) = current {
-        segments.push(p.name().clone());
-        current = p.parent();
-    }
-    segments.reverse();
-    segments
 }
 
 /// Builds a fully qualified name from package path + element name.
@@ -794,10 +870,7 @@ fn build_fqn(pkg_path: &[SmolStr], name: &SmolStr) -> SmolStr {
 }
 
 /// Retrieves the AST element from source files given a declaration.
-fn get_ast_element<'a>(
-    source_files: &'a [SourceFile],
-    decl: &Declaration,
-) -> &'a ast::Element {
+fn get_ast_element<'a>(source_files: &'a [SourceFile], decl: &Declaration) -> &'a ast::Element {
     &source_files[decl.file_idx].sections[decl.section_idx].elements[decl.element_idx]
 }
 
@@ -826,7 +899,7 @@ mod tests {
 
     #[test]
     fn compile_empty_input() {
-        let result = compile(&[]);
+        let result = compile!(&[]);
         assert!(result.is_ok());
         let model = result.unwrap();
         // Should have bootstrap chunk only

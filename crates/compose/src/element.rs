@@ -88,8 +88,6 @@ fn compose_tagged_values_inline(w: &mut IndentWriter, tagged_values: &[TaggedVal
     w.write("} ");
 }
 
-
-
 /// Writes the fully qualified name: `pkg::name`.
 fn compose_qualified_name(
     w: &mut IndentWriter,
@@ -225,7 +223,8 @@ fn compose_class(w: &mut IndentWriter, c: &ClassDef) {
 }
 
 fn compose_constraint(w: &mut IndentWriter, c: &Constraint) {
-    let is_complex = c.enforcement_level.is_some() || c.external_id.is_some() || c.message.is_some();
+    let is_complex =
+        c.enforcement_level.is_some() || c.external_id.is_some() || c.message.is_some();
 
     if let Some(name) = &c.name {
         if is_complex {

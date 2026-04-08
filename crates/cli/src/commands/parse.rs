@@ -91,11 +91,7 @@ pub fn run(args: ParseArgs) -> Result<(), CliError> {
                 let pmcd =
                     legend_pure_parser_protocol::v1::convert::convert_source_file(&source_file)?;
                 all_elements.extend(pmcd.elements);
-                eprintln!(
-                    "  {} {}",
-                    "✓".green(),
-                    path.display().dimmed()
-                );
+                eprintln!("  {} {}", "✓".green(), path.display().dimmed());
             }
             Err(e) => {
                 eprintln!(

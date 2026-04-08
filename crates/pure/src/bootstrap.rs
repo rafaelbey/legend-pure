@@ -47,40 +47,79 @@ pub const BOOTSTRAP_CHUNK_ID: u16 = 0;
 // -- Type lattice --
 
 /// `Any` — the top type. Everything is a subtype of `Any`.
-pub const ANY_ID: ElementId = ElementId { chunk_id: 0, local_idx: 0 };
+pub const ANY_ID: ElementId = ElementId {
+    chunk_id: 0,
+    local_idx: 0,
+};
 /// `Nil` — the bottom type. Subtype of everything. Type of `[]`.
-pub const NIL_ID: ElementId = ElementId { chunk_id: 0, local_idx: 1 };
+pub const NIL_ID: ElementId = ElementId {
+    chunk_id: 0,
+    local_idx: 1,
+};
 
 // -- Direct children of Any --
 
 /// `String` — extends `Any`.
-pub const STRING_ID: ElementId = ElementId { chunk_id: 0, local_idx: 2 };
+pub const STRING_ID: ElementId = ElementId {
+    chunk_id: 0,
+    local_idx: 2,
+};
 /// `Boolean` — extends `Any`.
-pub const BOOLEAN_ID: ElementId = ElementId { chunk_id: 0, local_idx: 3 };
+pub const BOOLEAN_ID: ElementId = ElementId {
+    chunk_id: 0,
+    local_idx: 3,
+};
 /// `Byte` — extends `Any`.
-pub const BYTE_ID: ElementId = ElementId { chunk_id: 0, local_idx: 4 };
+pub const BYTE_ID: ElementId = ElementId {
+    chunk_id: 0,
+    local_idx: 4,
+};
 /// `StrictTime` — extends `Any`.
-pub const STRICT_TIME_ID: ElementId = ElementId { chunk_id: 0, local_idx: 5 };
+pub const STRICT_TIME_ID: ElementId = ElementId {
+    chunk_id: 0,
+    local_idx: 5,
+};
 
 // -- Numeric hierarchy: Number → Any --
 
 /// `Number` — abstract numeric supertype. Extends `Any`.
-pub const NUMBER_ID: ElementId = ElementId { chunk_id: 0, local_idx: 6 };
+pub const NUMBER_ID: ElementId = ElementId {
+    chunk_id: 0,
+    local_idx: 6,
+};
 /// `Integer` — extends `Number`.
-pub const INTEGER_ID: ElementId = ElementId { chunk_id: 0, local_idx: 7 };
+pub const INTEGER_ID: ElementId = ElementId {
+    chunk_id: 0,
+    local_idx: 7,
+};
 /// `Float` — extends `Number`.
-pub const FLOAT_ID: ElementId = ElementId { chunk_id: 0, local_idx: 8 };
+pub const FLOAT_ID: ElementId = ElementId {
+    chunk_id: 0,
+    local_idx: 8,
+};
 /// `Decimal` — extends `Number`.
-pub const DECIMAL_ID: ElementId = ElementId { chunk_id: 0, local_idx: 9 };
+pub const DECIMAL_ID: ElementId = ElementId {
+    chunk_id: 0,
+    local_idx: 9,
+};
 
 // -- Temporal hierarchy: Date → Any --
 
 /// `Date` — abstract temporal supertype. Extends `Any`.
-pub const DATE_ID: ElementId = ElementId { chunk_id: 0, local_idx: 10 };
+pub const DATE_ID: ElementId = ElementId {
+    chunk_id: 0,
+    local_idx: 10,
+};
 /// `StrictDate` — date without time. Extends `Date`.
-pub const STRICT_DATE_ID: ElementId = ElementId { chunk_id: 0, local_idx: 11 };
+pub const STRICT_DATE_ID: ElementId = ElementId {
+    chunk_id: 0,
+    local_idx: 11,
+};
 /// `DateTime` — date with time. Extends `Date`.
-pub const DATE_TIME_ID: ElementId = ElementId { chunk_id: 0, local_idx: 12 };
+pub const DATE_TIME_ID: ElementId = ElementId {
+    chunk_id: 0,
+    local_idx: 12,
+};
 
 // ---------------------------------------------------------------------------
 // Bootstrap types — ordered lists for chunk construction
@@ -115,19 +154,19 @@ const BOOTSTRAP_ELEMENT_COUNT: usize = 13;
 /// ```
 const BOOTSTRAP_PRIMITIVES: &[(&str, ElementId, ElementId)] = &[
     // Direct children of Any
-    ("String",     STRING_ID,      ANY_ID),
-    ("Boolean",    BOOLEAN_ID,     ANY_ID),
-    ("Byte",       BYTE_ID,        ANY_ID),
+    ("String", STRING_ID, ANY_ID),
+    ("Boolean", BOOLEAN_ID, ANY_ID),
+    ("Byte", BYTE_ID, ANY_ID),
     ("StrictTime", STRICT_TIME_ID, ANY_ID),
     // Numeric hierarchy
-    ("Number",     NUMBER_ID,      ANY_ID),
-    ("Integer",    INTEGER_ID,     NUMBER_ID),
-    ("Float",      FLOAT_ID,       NUMBER_ID),
-    ("Decimal",    DECIMAL_ID,     NUMBER_ID),
+    ("Number", NUMBER_ID, ANY_ID),
+    ("Integer", INTEGER_ID, NUMBER_ID),
+    ("Float", FLOAT_ID, NUMBER_ID),
+    ("Decimal", DECIMAL_ID, NUMBER_ID),
     // Temporal hierarchy
-    ("Date",       DATE_ID,        ANY_ID),
+    ("Date", DATE_ID, ANY_ID),
     ("StrictDate", STRICT_DATE_ID, DATE_ID),
-    ("DateTime",   DATE_TIME_ID,   DATE_ID),
+    ("DateTime", DATE_TIME_ID, DATE_ID),
 ];
 
 // ---------------------------------------------------------------------------
@@ -163,7 +202,7 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
     let any_node = alloc_node("Any");
     let any_elem = elements.alloc(Element::Class(Class {
         type_parameters: vec![],
-        super_types: vec![],    // Any has no supertype
+        super_types: vec![], // Any has no supertype
         properties: vec![],
         qualified_properties: vec![],
         constraints: vec![],
@@ -177,7 +216,7 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
     let nil_node = alloc_node("Nil");
     let nil_elem = elements.alloc(Element::Class(Class {
         type_parameters: vec![],
-        super_types: vec![],    // Nil's subtype-of-all is handled by type checker
+        super_types: vec![], // Nil's subtype-of-all is handled by type checker
         properties: vec![],
         qualified_properties: vec![],
         constraints: vec![],
@@ -244,8 +283,14 @@ mod tests {
     #[test]
     fn any_and_nil_are_classes() {
         let chunk = create_bootstrap_chunk(PackageId(0));
-        assert!(matches!(chunk.elements.get(ANY_ID.local_idx), Element::Class(_)));
-        assert!(matches!(chunk.elements.get(NIL_ID.local_idx), Element::Class(_)));
+        assert!(matches!(
+            chunk.elements.get(ANY_ID.local_idx),
+            Element::Class(_)
+        ));
+        assert!(matches!(
+            chunk.elements.get(NIL_ID.local_idx),
+            Element::Class(_)
+        ));
     }
 
     #[test]
@@ -279,8 +324,9 @@ mod tests {
         // Helper: extract super_type from a PrimitiveType
         let get_super = |id: ElementId| -> ElementId {
             match chunk.elements.get(id.local_idx) {
-                Element::PrimitiveType(pt) => pt.super_type
-                    .expect("primitive should have a super_type"),
+                Element::PrimitiveType(pt) => {
+                    pt.super_type.expect("primitive should have a super_type")
+                }
                 _ => panic!("expected PrimitiveType"),
             }
         };
