@@ -347,20 +347,6 @@ pub(crate) fn lower_const_value(v: &ast_type::TypeVariableValue) -> ConstValue {
 }
 
 // ---------------------------------------------------------------------------
-// Expression Placeholder
-// ---------------------------------------------------------------------------
-
-/// Creates a placeholder `Expression` from an AST source location.
-///
-/// Full expression lowering is deferred to Phase 4+. For now, we preserve
-/// the source location so diagnostics can still point to the right place.
-pub(crate) fn placeholder_expression(source_info: &SourceInfo) -> crate::types::Expression {
-    crate::types::Expression {
-        source_info: source_info.clone(),
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Annotation Resolution
 // ---------------------------------------------------------------------------
 
@@ -488,14 +474,6 @@ mod tests {
         let src = SourceInfo::new("test", 1, 1, 1, 5);
         let v = ast_type::TypeVariableValue::String("ok".to_string(), src);
         assert_eq!(lower_const_value(&v), ConstValue::String("ok".to_string()));
-    }
-
-    #[test]
-    fn placeholder_expression_has_source() {
-        let src = SourceInfo::new("test.pure", 10, 5, 10, 20);
-        let expr = placeholder_expression(&src);
-        assert_eq!(expr.source_info.start_line, 10);
-        assert_eq!(expr.source_info.start_column, 5);
     }
 
     #[test]

@@ -141,20 +141,196 @@ pub struct Parameter {
 }
 
 // ---------------------------------------------------------------------------
-// Expression (placeholder)
+// DateValue — parsed date/time literals
 // ---------------------------------------------------------------------------
 
-/// Placeholder for compiled expressions.
+/// A parsed date/time value for use in compiled expressions.
 ///
-/// Full expression lowering (`ast::Expression` → resolved expression graph)
-/// is a later phase. For now this is an opaque wrapper.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Expression {
-    /// Source location of the expression.
-    pub source_info: SourceInfo,
-    // TODO: Phase 5 — recursive enum mirroring ast::Expression
-    // with all names resolved to ElementIds.
+/// Parsed from the raw strings in `ast::StrictDateLiteral`, `ast::DateTimeLiteral`,
+/// and `ast::StrictTimeLiteral`. Avoids carrying raw strings through the
+/// semantic graph.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DateValue {
+    /// Strict date: `%2024-01-15`.
+    StrictDate {
+        /// Year.
+        year: i32,
+        /// Month (1–12).
+        month: u8,
+        /// Day (1–31).
+        day: u8,
+    },
+    /// Date-time: `%2024-01-15T10:30:00`.
+    DateTime {
+        /// Year.
+        year: i32,
+        /// Month (1–12).
+        month: u8,
+        /// Day (1–31).
+        day: u8,
+        /// Hour (0–23).
+        hour: u8,
+        /// Minute (0–59).
+        minute: u8,
+        /// Second (0–59).
+        second: u8,
+        /// Sub-second nanoseconds.
+        subsecond_nanos: u32,
+    },
+    /// Strict time: `%10:30:00`.
+    StrictTime {
+        /// Hour (0–23).
+        hour: u8,
+        /// Minute (0–59).
+        minute: u8,
+        /// Second (0–59).
+        second: u8,
+        /// Sub-second nanoseconds.
+        subsecond_nanos: u32,
+    },
 }
+
+// ---------------------------------------------------------------------------
+// ValueSpec — compiled expression (replaces placeholder)
+// ---------------------------------------------------------------------------
+
+/// A compiled value specification — the semantic expression type.
+///
+/// All names are resolved. Operators are desugared to function calls.
+/// `let` is `FunctionCall("letFunction", ...)`, `new` is
+/// `FunctionCall("new", ...)`. `Group(...)` is eliminated (unwrapped).
+///
+/// This is the Rust equivalent of Java's `ValueSpecification` hierarchy
+/// (M3 metamodel: `InstanceValue`, `SimpleFunctionExpression`,
+/// `VariableExpression`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ValueSpec {
+    // -- Literals ----------------------------------------------------------
+    /// Integer literal: `42`.
+    IntegerLiteral(i64, SourceInfo),
+    /// Float literal: `3.14`.
+    FloatLiteral(f64, SourceInfo),
+    /// Decimal literal: `3.14D`.
+    DecimalLiteral(rust_decimal::Decimal, SourceInfo),
+    /// String literal: `'hello'`.
+    StringLiteral(SmolStr, SourceInfo),
+    /// Boolean literal: `true`, `false`.
+    BooleanLiteral(bool, SourceInfo),
+    /// Date/time literal: `%2024-01-15`, `%2024-01-15T10:30:00`, `%10:30:00`.
+    DateLiteral(DateValue, SourceInfo),
+
+    // -- Variable reference ------------------------------------------------
+    /// Variable reference: `$name`.
+    ///
+    /// Just a name. Type/multiplicity information lives on [`Parameter`]
+    /// in function/lambda definitions — *not* on the variable reference.
+    Variable {
+        /// Variable name (without the `$` prefix).
+        name: SmolStr,
+        /// Source location.
+        source_info: SourceInfo,
+    },
+
+    // -- Function call (covers operators, let, new, arrow) -----------------
+    /// Any function call, including desugared operators, `let`, `new`, arrow.
+    ///
+    /// Operators desugar to: `plus`, `minus`, `times`, `divide`, `equal`,
+    /// `lessThan`, `and`, `or`, `not`, etc.
+    /// `let` desugars to `letFunction`. `new` desugars to `new`.
+    /// Arrow `x->filter(p)` becomes `FunctionCall("filter", [x, p])`.
+    FunctionCall {
+        /// Resolved function element (user-defined functions).
+        function: Option<ElementId>,
+        /// Function name (for built-ins, operators, unresolved).
+        function_name: SmolStr,
+        /// Arguments.
+        arguments: Vec<ValueSpec>,
+        /// Source location.
+        source_info: SourceInfo,
+    },
+
+    // -- Property access ---------------------------------------------------
+    /// Simple property access: `$x.name`.
+    PropertyAccess {
+        /// The target expression.
+        target: Box<ValueSpec>,
+        /// Property name.
+        property: SmolStr,
+        /// Source location.
+        source_info: SourceInfo,
+    },
+    /// Qualified property access: `$x.derived('arg')`.
+    QualifiedPropertyAccess {
+        /// The target expression.
+        target: Box<ValueSpec>,
+        /// Property name.
+        property: SmolStr,
+        /// Arguments.
+        arguments: Vec<ValueSpec>,
+        /// Source location.
+        source_info: SourceInfo,
+    },
+
+    // -- Enum value --------------------------------------------------------
+    /// Enum value reference: `MyEnum.VALUE` (after semantic disambiguation).
+    EnumValue {
+        /// The resolved Enumeration element.
+        enum_element: ElementId,
+        /// The enum value name.
+        value: SmolStr,
+        /// Source location.
+        source_info: SourceInfo,
+    },
+
+    // -- Lambda ------------------------------------------------------------
+    /// Lambda expression: `{x: String[1] | $x + 'hello'}`.
+    Lambda {
+        /// Lambda parameters.
+        parameters: Vec<Parameter>,
+        /// Body expressions.
+        body: Vec<ValueSpec>,
+        /// Source location.
+        source_info: SourceInfo,
+    },
+
+    // -- Collection --------------------------------------------------------
+    /// Collection literal: `[1, 2, 3]`.
+    Collection {
+        /// Elements.
+        elements: Vec<ValueSpec>,
+        /// Source location.
+        source_info: SourceInfo,
+    },
+
+    // -- Type reference ----------------------------------------------------
+    /// Type reference expression: `@MyType`.
+    TypeReference {
+        /// The resolved type.
+        type_expr: TypeExpr,
+        /// Source location.
+        source_info: SourceInfo,
+    },
+
+    // -- Element reference (bare) ------------------------------------------
+    /// Bare element reference: `String`, `my::Enum`, `MyClass`.
+    PackageableElementRef {
+        /// The resolved element.
+        element: ElementId,
+        /// Source location.
+        source_info: SourceInfo,
+    },
+
+    // -- Column (TDS — placeholder) ----------------------------------------
+    /// Column expression (TDS — full lowering deferred).
+    Column {
+        /// Source location.
+        source_info: SourceInfo,
+    },
+}
+
+/// Backward-compatible alias: existing code uses `Expression` throughout
+/// (`Function.body`, `Constraint.function`, `QualifiedProperty.body`, etc.).
+pub type Expression = ValueSpec;
 
 // ---------------------------------------------------------------------------
 // PrimitiveType

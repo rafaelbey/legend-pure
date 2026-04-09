@@ -81,6 +81,11 @@ pub enum CompilationErrorKind {
         /// Fully qualified paths of the matching candidates.
         candidates: Vec<SmolStr>,
     },
+    /// An expression variant is not yet implemented in the lowering phase.
+    UnsupportedExpression {
+        /// The expression kind name.
+        kind: SmolStr,
+    },
 }
 
 impl std::fmt::Display for CompilationError {
