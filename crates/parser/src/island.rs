@@ -143,7 +143,10 @@ pub mod graph_fetch {
             && !ctx.cursor().check(TokenKind::RBraceHash)
             && !ctx.cursor().check(TokenKind::Eof)
         {
-            if ctx.cursor().check(TokenKind::Arrow) {
+            // `subType(@Type){fields}` — polymorphic narrowing on the current class
+            if ctx.cursor().peek().text == "subType"
+                && ctx.cursor().peek_kind_at(1) == TokenKind::LParen
+            {
                 sub_type_trees.push(parse_graph_fetch_subtype(ctx)?);
             } else {
                 sub_trees.push(parse_graph_fetch_field(ctx)?);
@@ -232,13 +235,15 @@ pub mod graph_fetch {
         })
     }
 
-    /// Parse `->subType(@Type) { fields }` inside a graph fetch tree.
+    /// Parse `subType(@Type) { fields }` inside a graph fetch tree.
+    ///
+    /// This is the class-level polymorphic narrowing form — no arrow prefix.
+    /// The arrow form `property->subType(@Type)` is handled by the property parser.
     fn parse_graph_fetch_subtype(
         ctx: &mut ParserContext<'_>,
     ) -> Result<SubTypeGraphFetchTree, ParseError> {
         let si = ctx.cursor().current_source_info();
-        ctx.cursor().expect(TokenKind::Arrow)?;
-        let (_func_name, _) = ctx.cursor().expect_identifier_or_keyword()?;
+        let (_func_name, _) = ctx.cursor().expect_identifier_or_keyword()?; // subType
         ctx.cursor().expect(TokenKind::LParen)?;
 
         // Parse @Type

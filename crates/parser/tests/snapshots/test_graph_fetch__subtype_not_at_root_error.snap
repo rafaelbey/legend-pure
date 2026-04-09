@@ -149,9 +149,9 @@ SourceFile {
                                                                                 source_info: SourceInfo {
                                                                                     source: "test.pure",
                                                                                     start_line: 8,
-                                                                                    start_column: 32,
+                                                                                    start_column: 30,
                                                                                     end_line: 8,
-                                                                                    end_column: 33,
+                                                                                    end_column: 31,
                                                                                 },
                                                                             },
                                                                         ),
@@ -159,9 +159,9 @@ SourceFile {
                                                                         source_info: SourceInfo {
                                                                             source: "test.pure",
                                                                             start_line: 8,
-                                                                            start_column: 31,
+                                                                            start_column: 29,
                                                                             end_line: 8,
-                                                                            end_column: 31,
+                                                                            end_column: 29,
                                                                         },
                                                                     },
                                                                     sub_trees: [
@@ -187,7 +187,7 @@ SourceFile {
                                                                         start_line: 8,
                                                                         start_column: 21,
                                                                         end_line: 8,
-                                                                        end_column: 22,
+                                                                        end_column: 27,
                                                                     },
                                                                 },
                                                             ],

@@ -51,7 +51,7 @@ function my::test(): Any[*]
         #{
             my::Firm {
                 name,
-                ->subType(@my::FirmSubType) {
+                subType(@my::FirmSubType) {
                     SubTypeName
                 }
             }
@@ -72,7 +72,7 @@ function my::test(): Any[*]
         #{
             my::Firm {
                 name,
-                ->subType(@my::FirmSubType) {
+                subType(@my::FirmSubType) {
                     'alias1' : SubTypeName
                 }
             }
@@ -86,7 +86,7 @@ function my::test(): Any[*]
 #[test]
 fn subtype_not_at_root_error() {
     // SubType depth validation is a semantic concern, not a parser concern.
-    // The parser accepts syntactically valid ->subType at any depth;
+    // The parser accepts syntactically valid subType at any depth;
     // the semantic layer validates graph fetch tree structural rules.
     let file = parse_ok(
         r"###Pure
@@ -96,7 +96,7 @@ function my::test(): Any[*]
         #{
             my::Firm {
                 name {
-                    ->subType(@my::SubType) {
+                    subType(@my::SubType) {
                         SubTypeName
                     }
                 }
