@@ -25,6 +25,7 @@ members = [
     "crates/runtime",
     "crates/jni",
     "crates/cli",
+    "crates/stress",
 ]
 
 [workspace.package]
@@ -75,5 +76,5 @@ owo-colors = "4"
 walkdir = "2"
 
 [workspace.metadata.llvm-cov]
-# Exclude JNI bridge from coverage (FFI boundary, tested via Java integration)
-exclude = ["legend-pure-parser-jni"]
+# Exclude JNI bridge and stress tests from coverage
+exclude = ["legend-pure-parser-jni", "legend-pure-parser-stress"]
