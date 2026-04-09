@@ -399,7 +399,7 @@ pub(crate) fn resolve_tagged_values(
 ///
 /// Uses the AST `Package` directly for qualified refs, or goes through
 /// import-aware resolution for unqualified refs.
-fn resolve_element_ptr(
+pub(crate) fn resolve_element_ptr(
     ptr: &ast_ann::PackageableElementPtr,
     source_info: &SourceInfo,
     ctx: &mut ResolutionContext<'_>,

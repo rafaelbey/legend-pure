@@ -399,7 +399,9 @@ mod tests {
         );
 
         let output = exc.to_string();
-        assert!(output.starts_with("Execution error (resource:my/package/model.pure line:15 column:8)"));
+        assert!(
+            output.starts_with("Execution error (resource:my/package/model.pure line:15 column:8)")
+        );
         assert!(output.contains("Type mismatch: expected Integer, got String"));
         assert!(output.contains("Full Stack:"));
         assert!(output.contains("my::package::process"));
@@ -490,11 +492,8 @@ mod tests {
         assert_eq!(stack[1].function_name, "my::package::process");
 
         // Display prints in reverse (innermost first, like Java)
-        let exc = PureException::execution(
-            PureRuntimeError::DivisionByZero,
-            test_source(15, 8),
-            stack,
-        );
+        let exc =
+            PureException::execution(PureRuntimeError::DivisionByZero, test_source(15, 8), stack);
         let output = exc.to_string();
         let stack_section = output.split("Full Stack:").nth(1).unwrap();
         let lines: Vec<&str> = stack_section.trim().lines().collect();
