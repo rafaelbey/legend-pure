@@ -65,6 +65,16 @@ impl crate::element::Annotated for PackageableElementPtr {
     }
 }
 
+impl std::fmt::Display for PackageableElementPtr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(pkg) = &self.package {
+            write!(f, "{pkg}::{}", self.name)
+        } else {
+            write!(f, "{}", self.name)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Stereotypes & Tagged Values
 // ---------------------------------------------------------------------------

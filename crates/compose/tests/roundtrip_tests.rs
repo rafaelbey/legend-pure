@@ -1758,3 +1758,28 @@ fn test_graph_fetch_property_subtype() {
         }
     "});
 }
+
+// =========================================================================
+// Native Functions
+// =========================================================================
+
+#[test]
+fn test_native_function_simple() {
+    round_trip(indoc! {"
+        native function meta::pure::functions::string::plus(strings: String[*]): String[1];
+    "});
+}
+
+#[test]
+fn test_native_function_no_params() {
+    round_trip(indoc! {"
+        native function meta::pure::functions::date::now(): DateTime[1];
+    "});
+}
+
+#[test]
+fn test_native_function_multiple_params() {
+    round_trip(indoc! {"
+        native function meta::pure::functions::string::substring(str: String[1], start: Integer[1], end: Integer[1]): String[1];
+    "});
+}

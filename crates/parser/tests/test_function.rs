@@ -145,3 +145,21 @@ function my::classify(x: Integer[1]): String[1]
     );
     insta::assert_debug_snapshot!(file);
 }
+
+#[test]
+fn native_function_simple() {
+    let file = parse_ok(
+        r"###Pure
+native function meta::pure::functions::string::plus(strings: String[*]): String[1];",
+    );
+    insta::assert_debug_snapshot!(file);
+}
+
+#[test]
+fn native_function_no_params() {
+    let file = parse_ok(
+        r"###Pure
+native function meta::pure::functions::date::now(): DateTime[1];",
+    );
+    insta::assert_debug_snapshot!(file);
+}

@@ -576,18 +576,20 @@ fn create_shell(element: &ast::Element) -> Element {
             stereotypes: vec![],
             tagged_values: vec![],
         }),
-        ast::Element::Function(_) => Element::Function(Function {
-            parameters: vec![],
-            return_type: TypeExpr::Named {
-                element: bootstrap::ANY_ID,
-                type_arguments: vec![],
-                value_arguments: vec![],
-            },
-            return_multiplicity: Multiplicity::PureOne,
-            body: vec![],
-            stereotypes: vec![],
-            tagged_values: vec![],
-        }),
+        ast::Element::Function(_) | ast::Element::NativeFunction(_) => {
+            Element::Function(Function {
+                parameters: vec![],
+                return_type: TypeExpr::Named {
+                    element: bootstrap::ANY_ID,
+                    type_arguments: vec![],
+                    value_arguments: vec![],
+                },
+                return_multiplicity: Multiplicity::PureOne,
+                body: vec![],
+                stereotypes: vec![],
+                tagged_values: vec![],
+            })
+        }
         ast::Element::Profile(_) => Element::Profile(Profile {
             stereotypes: vec![],
             tags: vec![],
@@ -718,6 +720,28 @@ fn hydrate_element(
             Element::Association(Association {
                 properties,
                 qualified_properties,
+                stereotypes,
+                tagged_values,
+            })
+        }
+        ast::Element::NativeFunction(func_def) => {
+            let parameters = lower_parameters(&func_def.parameters, ctx, errors);
+            let return_type = resolve::resolve_type_spec(&func_def.return_type, ctx, errors)
+                .unwrap_or(TypeExpr::Named {
+                    element: bootstrap::ANY_ID,
+                    type_arguments: vec![],
+                    value_arguments: vec![],
+                });
+            let return_multiplicity = resolve::lower_multiplicity(&func_def.return_multiplicity);
+            let stereotypes = resolve::resolve_stereotypes(&func_def.stereotypes, ctx, errors);
+            let tagged_values =
+                resolve::resolve_tagged_values(&func_def.tagged_values, ctx, errors);
+
+            Element::Function(Function {
+                parameters,
+                return_type,
+                return_multiplicity,
+                body: vec![],
                 stereotypes,
                 tagged_values,
             })

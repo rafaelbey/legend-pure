@@ -21,7 +21,7 @@ use legend_pure_parser_ast::annotation::{StereotypePtr, TaggedValue};
 use legend_pure_parser_ast::element::{
     AggregationKind, AssociationDef, ClassDef, Constraint, Element, EnumDef, FunctionDef,
     FunctionTest, FunctionTestAssertion, FunctionTestData, FunctionTestDataValue, MeasureDef,
-    ProfileDef, Property, QualifiedProperty, UnitDef,
+    NativeFunctionDef, ProfileDef, Property, QualifiedProperty, UnitDef,
 };
 
 use crate::expression::{
@@ -41,6 +41,7 @@ pub fn compose_element(w: &mut IndentWriter, elem: &Element) {
         Element::Class(c) => compose_class(w, c),
         Element::Enumeration(e) => compose_enumeration(w, e),
         Element::Function(f) => compose_function(w, f),
+        Element::NativeFunction(f) => compose_native_function(w, f),
         Element::Profile(p) => compose_profile(w, p),
         Element::Association(a) => compose_association(w, a),
         Element::Measure(m) => compose_measure(w, m),
@@ -390,25 +391,31 @@ fn compose_unit(w: &mut IndentWriter, u: &UnitDef) {
 // Function
 // ---------------------------------------------------------------------------
 
-fn compose_function(w: &mut IndentWriter, f: &FunctionDef) {
-    w.write("function ");
-    compose_stereotypes_inline(w, &f.stereotypes);
-    compose_tagged_values_inline(w, &f.tagged_values);
-    compose_qualified_name(w, f.package.as_ref(), &f.name);
-
-    // Parameters
+/// Composes the shared signature portion: `name(params): ReturnType[mult]`.
+fn compose_function_signature<F>(w: &mut IndentWriter, f: &F)
+where
+    F: legend_pure_parser_ast::element::FunctionSignature
+        + legend_pure_parser_ast::element::PackageableElement
+        + legend_pure_parser_ast::element::Annotated,
+{
+    compose_stereotypes_inline(w, f.stereotypes());
+    compose_tagged_values_inline(w, f.tagged_values());
+    compose_qualified_name(w, f.package(), f.name());
     w.write("(");
-    for (i, p) in f.parameters.iter().enumerate() {
+    for (i, p) in f.parameters().iter().enumerate() {
         if i > 0 {
             w.write(", ");
         }
         compose_parameter(w, p);
     }
     w.write("): ");
+    compose_type_spec(w, f.return_type());
+    w.write(&f.return_multiplicity().to_string());
+}
 
-    // Return type
-    compose_type_spec(w, &f.return_type);
-    w.write(&f.return_multiplicity.to_string());
+fn compose_function(w: &mut IndentWriter, f: &FunctionDef) {
+    w.write("function ");
+    compose_function_signature(w, f);
     w.newline();
 
     // Body
@@ -422,6 +429,12 @@ fn compose_function(w: &mut IndentWriter, f: &FunctionDef) {
     for test in &f.tests {
         compose_function_test(w, test);
     }
+}
+
+fn compose_native_function(w: &mut IndentWriter, f: &NativeFunctionDef) {
+    w.write("native function ");
+    compose_function_signature(w, f);
+    w.write_line(";");
 }
 
 fn compose_function_test(w: &mut IndentWriter, test: &FunctionTest) {

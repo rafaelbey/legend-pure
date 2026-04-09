@@ -27,6 +27,7 @@
 use legend_pure_parser_ast as ast;
 use legend_pure_parser_ast::source_info::Spanned;
 use legend_pure_parser_ast::type_ref::HasMultiplicity;
+use serde::ser::Error as _;
 
 use crate::v1;
 
@@ -142,7 +143,7 @@ fn type_variable_value_to_json(tvv: &ast::type_ref::TypeVariableValue) -> serde_
 impl From<&ast::annotation::StereotypePtr> for v1::annotation::StereotypePtr {
     fn from(s: &ast::annotation::StereotypePtr) -> Self {
         Self {
-            profile: format_element_ptr(&s.profile),
+            profile: s.profile.to_string(),
             value: s.value.to_string(),
             source_information: source_information(&s.source_info),
             profile_source_information: source_information(&s.profile.source_info),
@@ -153,7 +154,7 @@ impl From<&ast::annotation::StereotypePtr> for v1::annotation::StereotypePtr {
 impl From<&ast::annotation::TagPtr> for v1::annotation::TagPtr {
     fn from(t: &ast::annotation::TagPtr) -> Self {
         Self {
-            profile: format_element_ptr(&t.profile),
+            profile: t.profile.to_string(),
             value: t.value.to_string(),
             source_information: source_information(&t.source_info),
             profile_source_information: source_information(&t.profile.source_info),
@@ -168,15 +169,6 @@ impl From<&ast::annotation::TaggedValue> for v1::annotation::TaggedValue {
             value: tv.value.clone(),
             source_information: source_information(&tv.source_info),
         }
-    }
-}
-
-/// Formats a `PackageableElementPtr` (profile ref) as a fully qualified path
-/// string: `"package::name"`.
-fn format_element_ptr(ptr: &ast::annotation::PackageableElementPtr) -> String {
-    match &ptr.package {
-        Some(pkg) => format!("{pkg}::{}", ptr.name),
-        None => ptr.name.to_string(),
     }
 }
 
@@ -370,7 +362,7 @@ pub fn convert_expression_typed(
 
         // -- Function application --
         Expression::FunctionApplication(e) => ValueSpecification::Func(AppliedFunction {
-            function: format_element_ptr(&e.function),
+            function: e.function.to_string(),
             f_control: None,
             parameters: e.arguments.iter().map(convert_expression_typed).collect(),
             source_information: source_information(&e.source_info),
@@ -378,7 +370,7 @@ pub fn convert_expression_typed(
 
         // -- Arrow function: `expr->func(args)` desugars to func(expr, args) --
         Expression::ArrowFunction(e) => ValueSpecification::Func(AppliedFunction {
-            function: format_element_ptr(&e.function),
+            function: e.function.to_string(),
             f_control: None,
             parameters: std::iter::once(convert_expression_typed(&e.target))
                 .chain(e.arguments.iter().map(convert_expression_typed))
@@ -456,7 +448,7 @@ pub fn convert_expression_typed(
             // Wrap as func call: new(Class, '', [key-expressions])
             let class_ref =
                 ValueSpecification::PackageableElementPtr(ProtocolPackageableElementPtr {
-                    full_path: format_element_ptr(&e.class),
+                    full_path: e.class.to_string(),
                     source_information: source_information(&e.source_info),
                 });
             let empty_name = ValueSpecification::String(CString {
@@ -481,7 +473,7 @@ pub fn convert_expression_typed(
 
         // -- Bare element reference (no args): same as zero-arg function in protocol --
         Expression::PackageableElementRef(e) => ValueSpecification::Func(AppliedFunction {
-            function: format_element_ptr(&e.element),
+            function: e.element.to_string(),
             f_control: None,
             parameters: vec![],
             source_information: source_information(&e.source_info),
@@ -635,7 +627,7 @@ fn convert_column(col: &ast::expression::ColumnExpression) -> v1::value_spec::Va
             type_name: "colSpec".to_string(),
             value: serde_json::json!({
                 "name": e.name.to_string(),
-                "function1": format_element_ptr(&e.function),
+                "function1": e.function.to_string(),
             }),
             source_information: source_information(&e.source_info),
         }),
@@ -693,7 +685,7 @@ fn convert_root_graph_fetch_tree(
         type_name: "rootGraphFetchTree".to_string(),
         value: serde_json::json!({
             "_type": "rootGraphFetchTree",
-            "class": format_element_ptr(&tree.class),
+            "class": tree.class.to_string(),
             "subTrees": sub_trees,
             "subTypeTrees": sub_type_trees,
         }),
@@ -741,7 +733,7 @@ fn convert_property_graph_fetch_tree(
     }
 
     if let Some(sub_type) = &prop.sub_type {
-        obj["subType"] = serde_json::json!(format_element_ptr(sub_type));
+        obj["subType"] = serde_json::json!(sub_type.to_string());
     }
 
     obj
@@ -765,7 +757,7 @@ fn convert_sub_type_graph_fetch_tree(
 
     serde_json::json!({
         "_type": "subTypeGraphFetchTree",
-        "subTypeClass": format_element_ptr(&sub.sub_type_class),
+        "subTypeClass": sub.sub_type_class.to_string(),
         "subTrees": sub_trees,
         "subTypeTrees": sub_type_trees,
     })
@@ -788,6 +780,9 @@ pub fn convert_element(elem: &ast::element::Element) -> Result<v1::element::Pack
         Element::Class(c) => Ok(PackageableElement::Class(convert_class(c)?)),
         Element::Enumeration(e) => Ok(PackageableElement::Enumeration(convert_enumeration(e))),
         Element::Function(f) => Ok(PackageableElement::Function(convert_function(f))),
+        Element::NativeFunction(_) => Err(serde_json::Error::custom(
+            "native functions cannot be converted to Engine protocol",
+        )),
         Element::Profile(p) => Ok(PackageableElement::Profile(convert_profile(p))),
         Element::Association(a) => Ok(PackageableElement::Association(convert_association(a)?)),
         Element::Measure(m) => Ok(PackageableElement::Measure(convert_measure(m))),
