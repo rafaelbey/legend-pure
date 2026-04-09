@@ -35,6 +35,7 @@ use legend_pure_parser_ast::expression::{
     StrictDateLiteral, StrictTimeLiteral, StringLiteral, TypeReferenceExpr, UnaryMinusExpr,
     Variable,
 };
+use legend_pure_parser_ast::island::IslandExpression;
 use legend_pure_parser_ast::section::{ImportStatement, Section, SourceFile};
 use legend_pure_parser_ast::source_info::SourceInfo;
 use legend_pure_parser_ast::type_ref::{
@@ -45,17 +46,34 @@ use smol_str::SmolStr;
 
 use crate::cursor::Cursor;
 use crate::error::ParseError;
+use crate::island::IslandParser;
 
 type R<T> = Result<T, ParseError>;
 
-/// Main parser struct wrapping a token cursor.
+/// Main parser struct wrapping a token cursor and island grammar plugins.
 pub(crate) struct Parser {
     cursor: Cursor,
+    island_parsers: Vec<Box<dyn IslandParser>>,
 }
 
 impl Parser {
+    /// Create a parser with the default set of island grammar plugins.
     pub fn new(cursor: Cursor) -> Self {
-        Self { cursor }
+        Self {
+            cursor,
+            island_parsers: crate::island::default_island_parsers(),
+        }
+    }
+
+    /// Create a parser with a custom set of island grammar plugins.
+    pub fn with_island_parsers(
+        cursor: Cursor,
+        island_parsers: Vec<Box<dyn IslandParser>>,
+    ) -> Self {
+        Self {
+            cursor,
+            island_parsers,
+        }
     }
 
     // ── Top-level ───────────────────────────────────────────────────────
@@ -1402,12 +1420,41 @@ impl Parser {
                     }))
                 }
             }
-            // Graph fetch island: #{ Type { fields } }#
+            // Island grammar: #{ content }# or #tag{ content }#
             TokenKind::HashLBrace => {
                 self.cursor.advance();
-                let tree = self.parse_graph_fetch_tree()?;
+                // Currently only the default tag "" is supported.
+                // When tagged islands (#>{}#, #sql{}#) are added, the tag
+                // will be extracted from the token stream here.
+                let tag = "";
+
+                // Temporarily take the island parsers to avoid borrow conflict
+                // (we need &self.island_parsers for lookup and &mut self for
+                // ParserContext simultaneously).
+                let parsers = std::mem::take(&mut self.island_parsers);
+                let result = (|| {
+                    let island_parser =
+                        parsers
+                            .iter()
+                            .find(|p| p.tag() == tag)
+                            .ok_or_else(|| {
+                                ParseError::expected(
+                                    &format!("island grammar for tag '{tag}'"),
+                                    self.cursor.peek_kind(),
+                                    si.clone(),
+                                )
+                            })?;
+                    let mut ctx = ParserContext { parser: self };
+                    island_parser.parse(&mut ctx)
+                })();
+                self.island_parsers = parsers;
+
+                let content = result?;
                 self.cursor.expect(TokenKind::RBraceHash)?;
-                Ok(tree)
+                Ok(Expression::Island(IslandExpression {
+                    content,
+                    source_info: si,
+                }))
             }
             _ => Err(ParseError::expected(
                 "expression",
@@ -1549,183 +1596,60 @@ impl Parser {
         }
     }
 
-    // ── Graph Fetch Tree ────────────────────────────────────────────────
+}
 
-    /// Parse a graph fetch tree: `Type { field, field { subfields } }`.
+// ---------------------------------------------------------------------------
+// ParserContext — shared interface for island grammar plugins
+// ---------------------------------------------------------------------------
+
+/// Shared parser context passed to island grammar plugins.
+///
+/// Provides access to the token [`Cursor`] (via `.cursor`) and the host
+/// parser's expression/path parsing capabilities.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// fn parse(&self, ctx: &mut ParserContext<'_>) -> Result<...> {
+///     let si = ctx.cursor().current_source_info();
+///     ctx.cursor().expect(TokenKind::LBrace)?;
+///     let expr = ctx.parse_expression()?;
+///     // ...
+/// }
+/// ```
+pub struct ParserContext<'a> {
+    /// The underlying parser — provides cursor access and expression parsing.
+    pub(crate) parser: &'a mut Parser,
+}
+
+impl ParserContext<'_> {
+    /// Access the token cursor directly.
+    pub(crate) fn cursor(&mut self) -> &mut Cursor {
+        &mut self.parser.cursor
+    }
+
+    /// Parse a full expression using the host parser's expression grammar.
     ///
-    /// Encoded as a `FunctionApplication` where the function is the root class
-    /// and the arguments are the parsed field expressions. This encoding is a
-    /// temporary representation until dedicated graph fetch AST types are added.
-    fn parse_graph_fetch_tree(&mut self) -> R<Expression> {
-        let si = self.cursor.current_source_info();
-        // Parse root class: my::Person
-        let path = self.parse_package_path()?;
-        let (pkg, name) = split_package_name(&path);
-        let class_ref = PackageableElementPtr {
-            package: pkg,
-            name,
-            source_info: si.clone(),
-        };
-        self.cursor.expect(TokenKind::LBrace)?;
-        let fields = self.parse_graph_fetch_fields()?;
-        self.cursor.expect(TokenKind::RBrace)?;
-
-        // Represent as FunctionApplication with the fields as arguments
-        Ok(Expression::FunctionApplication(FunctionApplication {
-            function: class_ref,
-            arguments: fields,
-            source_info: si,
-        }))
+    /// This allows island grammars to embed standard Pure expressions
+    /// (e.g., qualified property parameters, type references).
+    pub fn parse_expression(&mut self) -> R<Expression> {
+        self.parser.parse_expression()
     }
 
-    /// Parse comma-separated graph fetch fields inside `{ ... }`.
-    fn parse_graph_fetch_fields(&mut self) -> R<Vec<Expression>> {
-        let mut fields = Vec::new();
-        while !self.cursor.check(TokenKind::RBrace)
-            && !self.cursor.check(TokenKind::RBraceHash)
-            && !self.cursor.check(TokenKind::Eof)
-        {
-            if self.cursor.check(TokenKind::Arrow) {
-                // ->subType(@Type) { fields }
-                fields.push(self.parse_graph_fetch_subtype()?);
-            } else {
-                fields.push(self.parse_graph_fetch_field()?);
-            }
-            self.cursor.eat(TokenKind::Comma);
-        }
-        Ok(fields)
-    }
-
-    /// Parse a single field: `name` or `name(args) { subfields }` or `name { subfields }`
-    /// Optionally with alias: `'alias' : name ...`
-    fn parse_graph_fetch_field(&mut self) -> R<Expression> {
-        let si = self.cursor.current_source_info();
-
-        // Check for alias: 'alias' : fieldName
-        let alias = if self.cursor.check(TokenKind::StringLiteral)
-            && self.cursor.peek_kind_at(1) == TokenKind::Colon
-        {
-            let tok = self.cursor.advance().clone();
-            self.cursor.advance(); // :
-            Some(unquote_string(&tok.text))
-        } else {
-            None
-        };
-
-        let (field_name, _) = self.cursor.expect_identifier_or_keyword()?;
-
-        // Check for qualified property with args: field(args)
-        let args = if self.cursor.check(TokenKind::LParen) {
-            self.cursor.advance();
-            let mut a = Vec::new();
-            while !self.cursor.check(TokenKind::RParen) {
-                a.push(self.parse_expression()?);
-                self.cursor.eat(TokenKind::Comma);
-            }
-            self.cursor.expect(TokenKind::RParen)?;
-            a
-        } else {
-            vec![]
-        };
-
-        // Check for sub-tree: { subfields }
-        let sub_fields = if self.cursor.check(TokenKind::LBrace) {
-            self.cursor.advance();
-            let subs = self.parse_graph_fetch_fields()?;
-            self.cursor.expect(TokenKind::RBrace)?;
-            subs
-        } else {
-            vec![]
-        };
-
-        // Build field expression
-        let mut field_args = args;
-        field_args.extend(sub_fields);
-
-        if let Some(alias_str) = alias {
-            // Alias field: represent as Collection [alias_literal, field_expr]
-            let alias_expr = Expression::Literal(Literal::String(StringLiteral {
-                value: alias_str,
-                source_info: si.clone(),
-            }));
-            let field_expr = Expression::FunctionApplication(FunctionApplication {
-                function: PackageableElementPtr {
-                    package: None,
-                    name: field_name,
-                    source_info: si.clone(),
-                },
-                arguments: field_args,
-                source_info: si.clone(),
-            });
-            Ok(Expression::Collection(CollectionExpr {
-                elements: vec![alias_expr, field_expr],
-                multiplicity: None,
-                source_info: si,
-            }))
-        } else {
-            Ok(Expression::FunctionApplication(FunctionApplication {
-                function: PackageableElementPtr {
-                    package: None,
-                    name: field_name,
-                    source_info: si.clone(),
-                },
-                arguments: field_args,
-                source_info: si,
-            }))
-        }
-    }
-
-    /// Parse `->subType(@Type) { fields }` inside a graph fetch tree.
-    ///
-    /// Encoded as an `ArrowFunction` with the type cast as the first argument
-    /// and any sub-fields appended. The target is an empty collection (since
-    /// there is no explicit receiver in the graph fetch grammar — the parent
-    /// field is implicit).
-    fn parse_graph_fetch_subtype(&mut self) -> R<Expression> {
-        let si = self.cursor.current_source_info();
-        self.cursor.expect(TokenKind::Arrow)?;
-        let (func_name, _) = self.cursor.expect_identifier_or_keyword()?;
-        self.cursor.expect(TokenKind::LParen)?;
-        let type_cast = self.parse_expression()?;
-        self.cursor.expect(TokenKind::RParen)?;
-
-        let sub_fields = if self.cursor.check(TokenKind::LBrace) {
-            self.cursor.advance();
-            let subs = self.parse_graph_fetch_fields()?;
-            self.cursor.expect(TokenKind::RBrace)?;
-            subs
-        } else {
-            vec![]
-        };
-
-        let mut args = vec![type_cast];
-        args.extend(sub_fields);
-
-        Ok(Expression::ArrowFunction(ArrowFunction {
-            target: Box::new(Expression::Collection(CollectionExpr {
-                elements: vec![],
-                multiplicity: None,
-                source_info: si.clone(),
-            })),
-            function: PackageableElementPtr {
-                package: None,
-                name: func_name,
-                source_info: si.clone(),
-            },
-            arguments: args,
-            source_info: si,
-        }))
+    /// Parse a package path: `my::pkg::Name`.
+    pub fn parse_package_path(&mut self) -> R<Package> {
+        self.parser.parse_package_path()
     }
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-fn split_package_name(pkg: &Package) -> (Option<Package>, SmolStr) {
+pub(crate) fn split_package_name(pkg: &Package) -> (Option<Package>, SmolStr) {
     let name = SmolStr::new(pkg.name());
     (pkg.parent().cloned(), name)
 }
 
-fn unquote_string(s: &str) -> String {
+pub(crate) fn unquote_string(s: &str) -> String {
     let inner = &s[1..s.len() - 1]; // strip surrounding quotes
     let mut result = String::with_capacity(inner.len());
     let mut chars = inner.chars();

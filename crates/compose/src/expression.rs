@@ -159,6 +159,7 @@ fn compose_expression_prec(
         Expression::Collection(e) => compose_collection(w, e),
         Expression::NewInstance(e) => compose_new_instance(w, e),
         Expression::Column(e) => compose_column(w, e),
+        Expression::Island(e) => crate::island::compose_island(w, e),
         Expression::Group(inner) => {
             w.write("(");
             compose_expression_prec(w, inner, Precedence::None, false);
