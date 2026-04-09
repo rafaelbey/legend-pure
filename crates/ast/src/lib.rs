@@ -34,6 +34,7 @@
 pub mod annotation;
 pub mod element;
 pub mod expression;
+pub mod island;
 pub mod section;
 pub mod source_info;
 pub mod type_ref;

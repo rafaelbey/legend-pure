@@ -23,10 +23,11 @@
 //! - **Unified dot-access**: Both property access and enum value access parse
 //!   identically (`expr.identifier`); disambiguation is semantic.
 //! - **No `Cast`/`InstanceOf`/`If` nodes**: These are ordinary function/arrow calls.
-//! - **No island types**: `GraphFetchTree`, `Path` deferred to island plugins.
+//! - **Island grammars**: `GraphFetchTree` etc. live in `Expression::Island`.
 //! - **Bitwise operators**: Supported from day one.
 
 use crate::annotation::{PackageableElementPtr, Parameter};
+use crate::island::IslandExpression;
 use crate::source_info::{SourceInfo, Spanned};
 use crate::type_ref::{Identifier, Multiplicity, TypeReference};
 
@@ -95,6 +96,13 @@ pub enum Expression {
     /// Column expression covering all column syntax variants.
     Column(ColumnExpression),
 
+    // -- Island grammar --
+    /// Island grammar expression: `#tag{ content }#`.
+    ///
+    /// Includes graph fetch trees (`#{}#`), path expressions (`#>{}#`),
+    /// and other extensible island grammars.
+    Island(IslandExpression),
+
     // -- Grouping --
     /// Explicit parenthesized grouping: `(expr)`.
     ///
@@ -125,6 +133,7 @@ impl Spanned for Expression {
             Self::Collection(e) => &e.source_info,
             Self::NewInstance(e) => &e.source_info,
             Self::Column(e) => e.source_info(),
+            Self::Island(e) => &e.source_info,
             Self::Group(e) => e.source_info(),
         }
     }
@@ -677,6 +686,7 @@ pub trait ExpressionVisitor {
             Expression::NewInstance(e) => self.visit_new_instance(e),
             Expression::Column(e) => self.visit_column(e),
             Expression::PackageableElementRef(e) => self.visit_element_ref(e),
+            Expression::Island(e) => self.visit_island(e),
             Expression::Group(e) => self.visit(e),
         }
     }
@@ -719,6 +729,8 @@ pub trait ExpressionVisitor {
     fn visit_column(&mut self, expr: &ColumnExpression) {}
     /// Visit a bare packageable element reference.
     fn visit_element_ref(&mut self, expr: &PackageableElementRef) {}
+    /// Visit an island grammar expression.
+    fn visit_island(&mut self, expr: &IslandExpression) {}
 }
 
 // ---------------------------------------------------------------------------

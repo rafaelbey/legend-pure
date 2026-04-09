@@ -40,6 +40,7 @@
 pub mod element;
 pub mod expression;
 pub mod identifier;
+pub mod island;
 pub mod section;
 pub mod type_ref;
 pub mod writer;

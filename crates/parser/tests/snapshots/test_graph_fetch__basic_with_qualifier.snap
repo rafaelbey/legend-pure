@@ -105,46 +105,41 @@ SourceFile {
                                         },
                                     },
                                     arguments: [
-                                        FunctionApplication(
-                                            FunctionApplication {
-                                                function: PackageableElementPtr {
-                                                    package: Some(
-                                                        Package {
-                                                            name: "my",
-                                                            parent: None,
-                                                            source_info: SourceInfo {
-                                                                source: "test.pure",
-                                                                start_line: 6,
-                                                                start_column: 13,
-                                                                end_line: 6,
-                                                                end_column: 14,
-                                                            },
-                                                        },
-                                                    ),
-                                                    name: "Person",
-                                                    source_info: SourceInfo {
-                                                        source: "test.pure",
-                                                        start_line: 6,
-                                                        start_column: 13,
-                                                        end_line: 6,
-                                                        end_column: 14,
-                                                    },
-                                                },
-                                                arguments: [
-                                                    FunctionApplication(
-                                                        FunctionApplication {
-                                                            function: PackageableElementPtr {
-                                                                package: None,
-                                                                name: "firstName",
+                                        Island(
+                                            IslandExpression {
+                                                tag: "",
+                                                content: RootGraphFetchTree {
+                                                    class: PackageableElementPtr {
+                                                        package: Some(
+                                                            Package {
+                                                                name: "my",
+                                                                parent: None,
                                                                 source_info: SourceInfo {
                                                                     source: "test.pure",
-                                                                    start_line: 7,
-                                                                    start_column: 17,
-                                                                    end_line: 7,
-                                                                    end_column: 25,
+                                                                    start_line: 6,
+                                                                    start_column: 13,
+                                                                    end_line: 6,
+                                                                    end_column: 14,
                                                                 },
                                                             },
-                                                            arguments: [],
+                                                        ),
+                                                        name: "Person",
+                                                        source_info: SourceInfo {
+                                                            source: "test.pure",
+                                                            start_line: 6,
+                                                            start_column: 13,
+                                                            end_line: 6,
+                                                            end_column: 14,
+                                                        },
+                                                    },
+                                                    sub_trees: [
+                                                        PropertyGraphFetchTree {
+                                                            property: "firstName",
+                                                            parameters: [],
+                                                            alias: None,
+                                                            sub_type: None,
+                                                            sub_trees: [],
+                                                            sub_type_trees: [],
                                                             source_info: SourceInfo {
                                                                 source: "test.pure",
                                                                 start_line: 7,
@@ -153,21 +148,13 @@ SourceFile {
                                                                 end_column: 25,
                                                             },
                                                         },
-                                                    ),
-                                                    FunctionApplication(
-                                                        FunctionApplication {
-                                                            function: PackageableElementPtr {
-                                                                package: None,
-                                                                name: "lastName",
-                                                                source_info: SourceInfo {
-                                                                    source: "test.pure",
-                                                                    start_line: 8,
-                                                                    start_column: 17,
-                                                                    end_line: 8,
-                                                                    end_column: 24,
-                                                                },
-                                                            },
-                                                            arguments: [],
+                                                        PropertyGraphFetchTree {
+                                                            property: "lastName",
+                                                            parameters: [],
+                                                            alias: None,
+                                                            sub_type: None,
+                                                            sub_trees: [],
+                                                            sub_type_trees: [],
                                                             source_info: SourceInfo {
                                                                 source: "test.pure",
                                                                 start_line: 8,
@@ -176,21 +163,9 @@ SourceFile {
                                                                 end_column: 24,
                                                             },
                                                         },
-                                                    ),
-                                                    FunctionApplication(
-                                                        FunctionApplication {
-                                                            function: PackageableElementPtr {
-                                                                package: None,
-                                                                name: "employeesByFirstName",
-                                                                source_info: SourceInfo {
-                                                                    source: "test.pure",
-                                                                    start_line: 9,
-                                                                    start_column: 17,
-                                                                    end_line: 9,
-                                                                    end_column: 36,
-                                                                },
-                                                            },
-                                                            arguments: [
+                                                        PropertyGraphFetchTree {
+                                                            property: "employeesByFirstName",
+                                                            parameters: [
                                                                 Collection(
                                                                     CollectionExpr {
                                                                         elements: [
@@ -219,53 +194,42 @@ SourceFile {
                                                                         },
                                                                     },
                                                                 ),
-                                                                FunctionApplication(
-                                                                    FunctionApplication {
-                                                                        function: PackageableElementPtr {
-                                                                            package: None,
-                                                                            name: "firstName",
-                                                                            source_info: SourceInfo {
-                                                                                source: "test.pure",
-                                                                                start_line: 10,
-                                                                                start_column: 21,
-                                                                                end_line: 10,
-                                                                                end_column: 29,
-                                                                            },
-                                                                        },
-                                                                        arguments: [],
-                                                                        source_info: SourceInfo {
-                                                                            source: "test.pure",
-                                                                            start_line: 10,
-                                                                            start_column: 21,
-                                                                            end_line: 10,
-                                                                            end_column: 29,
-                                                                        },
-                                                                    },
-                                                                ),
-                                                                FunctionApplication(
-                                                                    FunctionApplication {
-                                                                        function: PackageableElementPtr {
-                                                                            package: None,
-                                                                            name: "lastName",
-                                                                            source_info: SourceInfo {
-                                                                                source: "test.pure",
-                                                                                start_line: 11,
-                                                                                start_column: 21,
-                                                                                end_line: 11,
-                                                                                end_column: 28,
-                                                                            },
-                                                                        },
-                                                                        arguments: [],
-                                                                        source_info: SourceInfo {
-                                                                            source: "test.pure",
-                                                                            start_line: 11,
-                                                                            start_column: 21,
-                                                                            end_line: 11,
-                                                                            end_column: 28,
-                                                                        },
-                                                                    },
-                                                                ),
                                                             ],
+                                                            alias: None,
+                                                            sub_type: None,
+                                                            sub_trees: [
+                                                                PropertyGraphFetchTree {
+                                                                    property: "firstName",
+                                                                    parameters: [],
+                                                                    alias: None,
+                                                                    sub_type: None,
+                                                                    sub_trees: [],
+                                                                    sub_type_trees: [],
+                                                                    source_info: SourceInfo {
+                                                                        source: "test.pure",
+                                                                        start_line: 10,
+                                                                        start_column: 21,
+                                                                        end_line: 10,
+                                                                        end_column: 29,
+                                                                    },
+                                                                },
+                                                                PropertyGraphFetchTree {
+                                                                    property: "lastName",
+                                                                    parameters: [],
+                                                                    alias: None,
+                                                                    sub_type: None,
+                                                                    sub_trees: [],
+                                                                    sub_type_trees: [],
+                                                                    source_info: SourceInfo {
+                                                                        source: "test.pure",
+                                                                        start_line: 11,
+                                                                        start_column: 21,
+                                                                        end_line: 11,
+                                                                        end_column: 28,
+                                                                    },
+                                                                },
+                                                            ],
+                                                            sub_type_trees: [],
                                                             source_info: SourceInfo {
                                                                 source: "test.pure",
                                                                 start_line: 9,
@@ -274,14 +238,22 @@ SourceFile {
                                                                 end_column: 36,
                                                             },
                                                         },
-                                                    ),
-                                                ],
+                                                    ],
+                                                    sub_type_trees: [],
+                                                    source_info: SourceInfo {
+                                                        source: "test.pure",
+                                                        start_line: 6,
+                                                        start_column: 13,
+                                                        end_line: 6,
+                                                        end_column: 14,
+                                                    },
+                                                },
                                                 source_info: SourceInfo {
                                                     source: "test.pure",
-                                                    start_line: 6,
-                                                    start_column: 13,
-                                                    end_line: 6,
-                                                    end_column: 14,
+                                                    start_line: 5,
+                                                    start_column: 9,
+                                                    end_line: 5,
+                                                    end_column: 10,
                                                 },
                                             },
                                         ),

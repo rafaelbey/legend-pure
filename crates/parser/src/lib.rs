@@ -32,13 +32,17 @@
 
 mod cursor;
 pub mod error;
+pub mod island;
 mod parser;
 
 use legend_pure_parser_ast::SourceFile;
 
 pub use error::ParseError;
+pub use island::IslandParser;
 
 /// Parse Pure source text into an AST [`SourceFile`].
+///
+/// Uses the default set of island grammar plugins (currently graph fetch).
 ///
 /// # Errors
 ///
@@ -47,5 +51,24 @@ pub fn parse(source: &str, source_name: &str) -> Result<SourceFile, ParseError> 
     let tokens = legend_pure_parser_lexer::tokenize(source, source_name)?;
     let cursor = cursor::Cursor::new(tokens);
     let mut p = parser::Parser::new(cursor);
+    p.parse_source_file()
+}
+
+/// Parse Pure source text with a custom set of island grammar plugins.
+///
+/// Use this when you need to register additional island grammars beyond
+/// the built-in set (e.g., path expressions, embedded SQL).
+///
+/// # Errors
+///
+/// Returns `Err` if the source contains lexer or parser errors.
+pub fn parse_with_islands(
+    source: &str,
+    source_name: &str,
+    island_parsers: Vec<Box<dyn IslandParser>>,
+) -> Result<SourceFile, ParseError> {
+    let tokens = legend_pure_parser_lexer::tokenize(source, source_name)?;
+    let cursor = cursor::Cursor::new(tokens);
+    let mut p = parser::Parser::with_island_parsers(cursor, island_parsers);
     p.parse_source_file()
 }
