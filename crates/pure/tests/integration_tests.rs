@@ -1043,3 +1043,239 @@ fn constraint_expression_compiled() {
         _ => panic!("expected Class"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2: Expression Lowering — Operators
+// ---------------------------------------------------------------------------
+
+#[test]
+fn expression_arithmetic_desugars_to_function_call() {
+    let source = "function test::f(): Integer[1] { 1 + 2 }";
+    let model = compile_one(source).expect("should compile");
+    let id = model
+        .resolve_by_path(&["test".into(), "f".into()])
+        .expect("f should exist");
+    match model.get_element(id) {
+        Element::Function(f) => {
+            assert_eq!(f.body.len(), 1, "body should have 1 expression");
+            match &f.body[0] {
+                Expression::FunctionCall {
+                    function,
+                    function_name,
+                    arguments,
+                    ..
+                } => {
+                    assert!(function.is_none(), "built-in operator has no element ID");
+                    assert_eq!(function_name.as_str(), "plus");
+                    assert_eq!(arguments.len(), 2);
+                    assert!(matches!(&arguments[0], Expression::IntegerLiteral(1, _)));
+                    assert!(matches!(&arguments[1], Expression::IntegerLiteral(2, _)));
+                }
+                other => panic!("expected FunctionCall, got {other:?}"),
+            }
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+#[test]
+fn expression_not_equal_desugars_to_not_equal() {
+    let source = "function test::f(): Boolean[1] { 1 != 2 }";
+    let model = compile_one(source).expect("should compile");
+    let id = model
+        .resolve_by_path(&["test".into(), "f".into()])
+        .expect("f should exist");
+    match model.get_element(id) {
+        Element::Function(f) => {
+            assert_eq!(f.body.len(), 1);
+            // != desugars to not(equal(1, 2))
+            match &f.body[0] {
+                Expression::FunctionCall {
+                    function_name,
+                    arguments,
+                    ..
+                } => {
+                    assert_eq!(function_name.as_str(), "not");
+                    assert_eq!(arguments.len(), 1);
+                    match &arguments[0] {
+                        Expression::FunctionCall {
+                            function_name: inner_name,
+                            arguments: inner_args,
+                            ..
+                        } => {
+                            assert_eq!(inner_name.as_str(), "equal");
+                            assert_eq!(inner_args.len(), 2);
+                        }
+                        other => panic!("expected inner equal(), got {other:?}"),
+                    }
+                }
+                other => panic!("expected not(), got {other:?}"),
+            }
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+#[test]
+fn expression_comparison_operators() {
+    // Test all comparison operators desugar correctly
+    for (op, expected_name) in &[
+        ("<", "lessThan"),
+        ("<=", "lessThanEqual"),
+        (">", "greaterThan"),
+        (">=", "greaterThanEqual"),
+        ("==", "equal"),
+    ] {
+        let source = format!("function test::f(): Boolean[1] {{ 1 {op} 2 }}");
+        let model = compile_one(&source).expect("should compile");
+        let id = model
+            .resolve_by_path(&["test".into(), "f".into()])
+            .expect("f should exist");
+        match model.get_element(id) {
+            Element::Function(f) => {
+                assert_eq!(f.body.len(), 1, "body should have 1 expression for {op}");
+                match &f.body[0] {
+                    Expression::FunctionCall { function_name, .. } => {
+                        assert_eq!(
+                            function_name.as_str(),
+                            *expected_name,
+                            "operator {op} should map to {expected_name}"
+                        );
+                    }
+                    other => panic!("expected FunctionCall for {op}, got {other:?}"),
+                }
+            }
+            _ => panic!("expected Function"),
+        }
+    }
+}
+
+#[test]
+fn expression_logical_operators() {
+    let source = "function test::f(): Boolean[1] { true && false }";
+    let model = compile_one(source).expect("should compile");
+    let id = model
+        .resolve_by_path(&["test".into(), "f".into()])
+        .expect("f should exist");
+    match model.get_element(id) {
+        Element::Function(f) => {
+            assert_eq!(f.body.len(), 1);
+            match &f.body[0] {
+                Expression::FunctionCall {
+                    function_name,
+                    arguments,
+                    ..
+                } => {
+                    assert_eq!(function_name.as_str(), "and");
+                    assert_eq!(arguments.len(), 2);
+                    assert!(matches!(&arguments[0], Expression::BooleanLiteral(true, _)));
+                    assert!(matches!(
+                        &arguments[1],
+                        Expression::BooleanLiteral(false, _)
+                    ));
+                }
+                other => panic!("expected FunctionCall, got {other:?}"),
+            }
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+#[test]
+fn expression_unary_not() {
+    let source = "function test::f(): Boolean[1] { !true }";
+    let model = compile_one(source).expect("should compile");
+    let id = model
+        .resolve_by_path(&["test".into(), "f".into()])
+        .expect("f should exist");
+    match model.get_element(id) {
+        Element::Function(f) => {
+            assert_eq!(f.body.len(), 1);
+            match &f.body[0] {
+                Expression::FunctionCall {
+                    function_name,
+                    arguments,
+                    ..
+                } => {
+                    assert_eq!(function_name.as_str(), "not");
+                    assert_eq!(arguments.len(), 1);
+                    assert!(matches!(&arguments[0], Expression::BooleanLiteral(true, _)));
+                }
+                other => panic!("expected FunctionCall, got {other:?}"),
+            }
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: Expression Lowering — Member Access
+// ---------------------------------------------------------------------------
+
+#[test]
+fn expression_property_access() {
+    let source = r"
+        Class test::Person { name: String[1]; }
+        function test::f(p: test::Person[1]): String[1] { $p.name }
+    ";
+    let model = compile_one(source).expect("should compile");
+    let id = model
+        .resolve_by_path(&["test".into(), "f".into()])
+        .expect("f should exist");
+    match model.get_element(id) {
+        Element::Function(f) => {
+            assert_eq!(f.body.len(), 1);
+            match &f.body[0] {
+                Expression::PropertyAccess {
+                    target, property, ..
+                } => {
+                    assert_eq!(property.as_str(), "name");
+                    assert!(matches!(
+                        target.as_ref(),
+                        Expression::Variable { name, .. } if name == "p"
+                    ));
+                }
+                other => panic!("expected PropertyAccess, got {other:?}"),
+            }
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: Expression Lowering — Function Application
+// ---------------------------------------------------------------------------
+
+#[test]
+fn expression_function_call_resolved() {
+    let source = r"
+        function test::helper(): String[1] { 'hi' }
+        function test::f(): String[1] { test::helper() }
+    ";
+    let model = compile_one(source).expect("should compile");
+    let id = model
+        .resolve_by_path(&["test".into(), "f".into()])
+        .expect("f should exist");
+    match model.get_element(id) {
+        Element::Function(f) => {
+            assert_eq!(f.body.len(), 1);
+            match &f.body[0] {
+                Expression::FunctionCall {
+                    function,
+                    function_name,
+                    arguments,
+                    ..
+                } => {
+                    assert!(
+                        function.is_some(),
+                        "resolved function should have element ID"
+                    );
+                    assert_eq!(function_name.as_str(), "helper");
+                    assert!(arguments.is_empty());
+                }
+                other => panic!("expected FunctionCall, got {other:?}"),
+            }
+        }
+        _ => panic!("expected Function"),
+    }
+}
