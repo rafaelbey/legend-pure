@@ -844,6 +844,18 @@ version = "0.1.0"
 dependencies = [
  "legend-pure-parser-ast",
  "legend-pure-parser-parser",
+ "rust_decimal",
+ "smol_str",
+]
+
+[[package]]
+name = "legend-pure-parser-stress"
+version = "0.1.0"
+dependencies = [
+ "legend-pure-parser-ast",
+ "legend-pure-parser-compose",
+ "legend-pure-parser-parser",
+ "legend-pure-parser-pure",
  "smol_str",
 ]
 
