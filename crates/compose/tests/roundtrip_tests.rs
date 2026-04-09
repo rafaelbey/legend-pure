@@ -1606,7 +1606,12 @@ fn test_graph_fetch_simple() {
     round_trip(indoc! {"
         function my::test(): Any[*]
         {
-          #{my::Person{firstName,lastName}}#
+          #{
+            my::Person{
+              firstName,
+              lastName
+            }
+          }#
         }
     "});
 }
@@ -1616,7 +1621,15 @@ fn test_graph_fetch_nested() {
     round_trip(indoc! {"
         function my::test(): Any[*]
         {
-          #{my::Person{firstName,address{city,street}}}#
+          #{
+            my::Person{
+              firstName,
+              address{
+                city,
+                street
+              }
+            }
+          }#
         }
     "});
 }
@@ -1626,7 +1639,32 @@ fn test_graph_fetch_with_qualifier() {
     round_trip(indoc! {"
         function my::test(): Any[*]
         {
-          #{test::Firm{legalName,employeeCount,employeesByFirstName([]){firstName,lastName},employeesByFirstName('Peter'){firstName,lastName},employeesByFirstName(['Peter']){firstName,lastName},employeesByFirstName(['Peter', 'John']){firstName,lastName},employeesByFirstNameAndCity(['Peter', 'John'], ['New York']){firstName,lastName}}}#
+          #{
+            test::Firm{
+              legalName,
+              employeeCount,
+              employeesByFirstName([]){
+                firstName,
+                lastName
+              },
+              employeesByFirstName('Peter'){
+                firstName,
+                lastName
+              },
+              employeesByFirstName(['Peter']){
+                firstName,
+                lastName
+              },
+              employeesByFirstName(['Peter', 'John']){
+                firstName,
+                lastName
+              },
+              employeesByFirstNameAndCity(['Peter', 'John'], ['New York']){
+                firstName,
+                lastName
+              }
+            }
+          }#
         }
     "});
 }
@@ -1636,7 +1674,14 @@ fn test_graph_fetch_subtype_at_root() {
     round_trip(indoc! {"
         function my::test(): Any[*]
         {
-          #{test::Firm{legalName,->subType(@test::FirmSubType){SubTypeName}}}#
+          #{
+            test::Firm{
+              legalName,
+              ->subType(@test::FirmSubType){
+                SubTypeName
+              }
+            }
+          }#
         }
     "});
 }
@@ -1646,7 +1691,17 @@ fn test_graph_fetch_multiple_subtypes() {
     round_trip(indoc! {"
         function my::test(): Any[*]
         {
-          #{test::Firm{legalName,->subType(@test::FirmSubType1){SubTypeName1},->subType(@test::FirmSubType2){SubTypeName2}}}#
+          #{
+            test::Firm{
+              legalName,
+              ->subType(@test::FirmSubType1){
+                SubTypeName1
+              },
+              ->subType(@test::FirmSubType2){
+                SubTypeName2
+              }
+            }
+          }#
         }
     "});
 }
@@ -1656,7 +1711,13 @@ fn test_graph_fetch_only_subtypes() {
     round_trip(indoc! {"
         function my::test(): Any[*]
         {
-          #{test::Firm{->subType(@test::FirmSubType){SubTypeName}}}#
+          #{
+            test::Firm{
+              ->subType(@test::FirmSubType){
+                SubTypeName
+              }
+            }
+          }#
         }
     "});
 }
@@ -1666,7 +1727,34 @@ fn test_graph_fetch_subtype_with_alias() {
     round_trip(indoc! {"
         function my::test(): Any[*]
         {
-          #{test::Firm{legalName,->subType(@test::FirmSubType1){'alias1':SubTypeName},->subType(@test::FirmSubType2){'alias2':SubTypeName}}}#
+          #{
+            test::Firm{
+              legalName,
+              ->subType(@test::FirmSubType1){
+                'alias1':SubTypeName
+              },
+              ->subType(@test::FirmSubType2){
+                'alias2':SubTypeName
+              }
+            }
+          }#
+        }
+    "});
+}
+
+#[test]
+fn test_graph_fetch_property_subtype() {
+    round_trip(indoc! {"
+        function my::test(): Any[*]
+        {
+          #{
+            test::Firm{
+              legalName,
+              employees->subType(@test::Manager){
+                managerLevel
+              }
+            }
+          }#
         }
     "});
 }
