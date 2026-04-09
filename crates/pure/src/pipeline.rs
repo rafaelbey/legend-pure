@@ -56,6 +56,21 @@ use crate::types::{Multiplicity, TypeExpr};
 // Public API
 // ---------------------------------------------------------------------------
 
+/// A partial compilation result: the best-effort model plus accumulated errors.
+///
+/// Returned in the `Err` variant of [`compile()`] when errors occur. Unlike
+/// discarding the model on failure, this allows callers to:
+/// - **LSP**: show diagnostics alongside partial type info and navigation
+/// - **Batch**: report all errors at once, not one at a time
+/// - **Autofix**: inspect the partial model to suggest code fixes
+#[derive(Debug)]
+pub struct PartialPureModel {
+    /// The compiled model (may be incomplete due to errors).
+    pub model: PureModel,
+    /// Compilation errors (guaranteed non-empty).
+    pub errors: Vec<CompilationError>,
+}
+
 /// Compiles a list of parsed source files into a `PureModel`.
 ///
 /// This is the main entry point for the compiler pipeline.
@@ -66,11 +81,14 @@ use crate::types::{Multiplicity, TypeExpr};
 ///
 /// # Errors
 ///
-/// Returns compilation errors for unresolved types, cyclic inheritance, etc.
+/// - `Ok(PureModel)` — compilation succeeded with zero errors
+/// - `Err(PartialPureModel)` — errors occurred, but the model is still
+///   available via [`PartialPureModel::model`] for diagnostics / LSP
+#[allow(clippy::result_large_err)] // Ok(PureModel) is equally large — intentional API
 pub fn compile(
     source_files: &[SourceFile],
     auto_imports: &[SmolStr],
-) -> Result<PureModel, Vec<CompilationError>> {
+) -> Result<PureModel, PartialPureModel> {
     let mut model = PureModel::new();
 
     // Chunk 0 — bootstrap primitives
@@ -114,7 +132,7 @@ pub fn compile(
     if errors.is_empty() {
         Ok(model)
     } else {
-        Err(errors)
+        Err(PartialPureModel { model, errors })
     }
 }
 
