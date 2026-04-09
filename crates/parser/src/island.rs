@@ -50,7 +50,7 @@ pub trait IslandParser {
     /// Parse island content from the parser context.
     ///
     /// Called after `#{` (or `#tag{`) has been consumed. The
-    /// [`ParserContext`] provides access to the token cursor and
+    /// `ParserContext` provides access to the token cursor and
     /// expression parsing utilities.
     ///
     /// # Errors
@@ -87,7 +87,7 @@ pub mod graph_fetch {
     use smol_str::SmolStr;
 
     use crate::error::ParseError;
-    use crate::parser::{split_package_name, unquote_string, ParserContext};
+    use crate::parser::{ParserContext, split_package_name, unquote_string};
 
     use super::IslandParser;
 
@@ -100,10 +100,7 @@ pub mod graph_fetch {
             ""
         }
 
-        fn parse(
-            &self,
-            ctx: &mut ParserContext<'_>,
-        ) -> Result<Box<dyn IslandContent>, ParseError> {
+        fn parse(&self, ctx: &mut ParserContext<'_>) -> Result<Box<dyn IslandContent>, ParseError> {
             let tree = parse_graph_fetch_tree(ctx)?;
             Ok(Box::new(tree))
         }
@@ -203,11 +200,7 @@ pub mod graph_fetch {
                     source_info: t.source_info,
                 }),
                 _ => {
-                    return Err(ParseError::expected(
-                        "@Type",
-                        ctx.cursor().peek_kind(),
-                        si,
-                    ));
+                    return Err(ParseError::expected("@Type", ctx.cursor().peek_kind(), si));
                 }
             }
         } else {
