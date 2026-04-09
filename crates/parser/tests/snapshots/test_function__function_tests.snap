@@ -66,6 +66,7 @@ SourceFile {
                                 assertions: [
                                     FunctionTestAssertion {
                                         name: "myTest",
+                                        doc: None,
                                         invocation: FunctionApplication(
                                             FunctionApplication {
                                                 function: PackageableElementPtr {

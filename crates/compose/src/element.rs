@@ -498,12 +498,24 @@ fn compose_function_test_data(w: &mut IndentWriter, data: &FunctionTestData) {
         FunctionTestDataValue::Reference(path) => {
             compose_package(w, path);
         }
+        FunctionTestDataValue::EmbeddedData { type_name, content } => {
+            w.write(type_name);
+            w.newline();
+            w.write("#{");
+            w.write(content);
+            w.write("}#");
+        }
     }
     w.write(";");
 }
 
 fn compose_function_test_assertion(w: &mut IndentWriter, assertion: &FunctionTestAssertion) {
     w.write(&maybe_quote(&assertion.name));
+    if let Some(doc) = &assertion.doc {
+        w.write(" '");
+        w.write(doc);
+        w.write("'");
+    }
     w.write(" | ");
     compose_expression(w, &assertion.invocation);
     w.write(" => ");

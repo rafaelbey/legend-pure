@@ -1555,6 +1555,53 @@ fn test_function_test() {
 }
 
 #[test]
+fn test_function_test_with_data() {
+    round_trip(indoc! {"
+        function my::Hello(name: String[1], age: Integer[1]): String[1]
+        {
+          'Hello ' + $name
+        }
+        {
+          ModelStore: (JSON) '{}';
+          store::MyStore: testing::MyReference;
+          myTest | Hello('John', 20) => 'Hello John!';
+          myOtherTest | Hello('Nicole', 20) => 'Hello Nicole!';
+        }
+    "});
+}
+
+#[test]
+fn test_function_test_named_suite() {
+    round_trip(indoc! {"
+        function my::Hello(name: String[1]): String[1]
+        {
+          'Hello ' + $name
+        }
+        {
+          MySuite2
+          (
+            ModelStore: (JSON) '{}';
+            store::MyStore: testing::MyReference;
+            myTest | Hello('John') => (XML) 'Hello John!';
+          )
+        }
+    "});
+}
+
+#[test]
+fn test_function_test_with_doc() {
+    round_trip(indoc! {"
+        function my::Hello(name: String[1]): String[1]
+        {
+          'Hello ' + $name
+        }
+        {
+          myTest 'This test checks greeting' | Hello('John') => 'Hello John!';
+        }
+    "});
+}
+
+#[test]
 fn test_boolean_precedence_or_and() {
     round_trip(indoc! {"
         function withPath::f(s: Integer[1]): String[1]

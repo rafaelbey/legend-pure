@@ -17,6 +17,8 @@
 //! Every element is [`Spanned`], [`Annotated`], and [`PackageableElement`].
 //! The [`Element`] enum wraps all element types for uniform handling.
 
+use smol_str::SmolStr;
+
 use crate::annotation::{Parameter, SpannedString, StereotypePtr, TaggedValue};
 use crate::expression::Expression;
 use crate::source_info::{SourceInfo, Spanned};
@@ -398,17 +400,26 @@ pub struct FunctionTestData {
 /// The value of function test data — either inline content or a reference.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FunctionTestDataValue {
-    /// Inline string data.
+    /// Inline string data: `(JSON) '{}'`.
     Inline(String),
-    /// Reference to external data.
+    /// Reference to external data: `testing::MyReference`.
     Reference(Package),
+    /// Embedded data (island grammar): `Relation #{ content }#`.
+    EmbeddedData {
+        /// The data type identifier (e.g., `Relation`).
+        type_name: Identifier,
+        /// The raw island content between `#{` and `}#`.
+        content: SmolStr,
+    },
 }
 
-/// An assertion in a function test: `testName | funcName(args) => expectedResult`.
+/// An assertion in a function test: `testName 'doc' | funcName(args) => expectedResult`.
 #[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct FunctionTestAssertion {
     /// Test assertion name.
     pub name: Identifier,
+    /// Optional documentation string for this test.
+    pub doc: Option<SmolStr>,
     /// The function invocation expression.
     pub invocation: Expression,
     /// Expected result format (e.g., `JSON`, `XML`), if specified.

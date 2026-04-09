@@ -24,8 +24,8 @@ use legend_pure_parser_ast::annotation::{
 };
 use legend_pure_parser_ast::element::{
     AggregationKind, AssociationDef, ClassDef, Constraint, Element, EnumDef, EnumValue,
-    FunctionDef, FunctionTest, FunctionTestAssertion, MeasureDef, NativeFunctionDef, ProfileDef,
-    Property, QualifiedProperty, UnitDef,
+    FunctionDef, FunctionTest, FunctionTestAssertion, FunctionTestData, FunctionTestDataValue,
+    MeasureDef, NativeFunctionDef, ProfileDef, Property, QualifiedProperty, UnitDef,
 };
 use legend_pure_parser_ast::expression::{
     ArithmeticExpr, ArithmeticOp, ArrowFunction, BooleanLiteral, CollectionExpr, ComparisonExpr,
@@ -801,36 +801,244 @@ impl Parser {
         }))
     }
 
-    /// Parse function test block: { testName | funcCall(args) => expected; ... }
+    /// Parse function test block: `{ (data | assertion | suite)* }`
+    ///
+    /// Grammar:
+    /// ```text
+    /// functionTestSuiteDef: '{' (simpleFunctionTest | simpleFunctionSuite | functionData)* '}'
+    /// simpleFunctionSuite:  identifier '(' (functionData)* simpleFunctionTest+ ')'
+    /// functionData:         qualifiedName ':' functionDataValue ';'
+    /// simpleFunctionTest:   identifier (STRING)? '|' identifier '(' params ')' '=>' (externalFormatValue | primitiveValue) ';'
+    /// ```
     fn parse_function_tests(&mut self) -> R<Vec<FunctionTest>> {
         let si = self.cursor.current_source_info();
         self.cursor.expect(TokenKind::LBrace)?;
+
+        let mut data = Vec::new();
         let mut assertions = Vec::new();
+        let mut named_suites = Vec::new();
+
         while !self.cursor.check(TokenKind::RBrace) {
-            assertions.push(self.parse_function_test_assertion()?);
+            // Disambiguate: peek at what follows the identifier(s).
+            //
+            // identifier '|'        → assertion (no doc)
+            // identifier STRING '|' → assertion (with doc)
+            // identifier '('        → named suite
+            // identifier '::' ...   → could be data binding (path) OR start of assertion
+            // identifier ':'        → data binding (single-segment store name)
+            //
+            // The key insight: data bindings always have a ':' after the full
+            // qualified name, while assertions always have '|' (possibly after
+            // a doc string).
+            if self.is_test_data_binding() {
+                data.push(self.parse_function_test_data()?);
+            } else if self.is_named_suite() {
+                named_suites.push(self.parse_named_suite()?);
+            } else {
+                assertions.push(self.parse_function_test_assertion()?);
+            }
         }
         self.cursor.expect(TokenKind::RBrace)?;
-        Ok(vec![FunctionTest {
-            name: None,
-            data: vec![],
-            assertions,
-            source_info: si,
-        }])
+
+        // If there are only unnamed data + assertions, wrap them in a single
+        // unnamed suite (matching Engine behavior).
+        if !data.is_empty() || !assertions.is_empty() {
+            named_suites.insert(
+                0,
+                FunctionTest {
+                    name: None,
+                    data,
+                    assertions,
+                    source_info: si.clone(),
+                },
+            );
+        }
+
+        // If nothing was parsed, produce an empty unnamed suite.
+        if named_suites.is_empty() {
+            named_suites.push(FunctionTest {
+                name: None,
+                data: vec![],
+                assertions: vec![],
+                source_info: si,
+            });
+        }
+
+        Ok(named_suites)
     }
 
-    /// Parse: testName | funcCall(args) => expected;
+    /// Lookahead: is this a test data binding? (`qualifiedName ':' ...`)
+    ///
+    /// Data bindings look like: `store::MyStore: (JSON) '{}';`
+    /// Assertions look like: `testName | func() => result;`
+    ///
+    /// We scan forward from the current token, skipping `identifier ::` pairs,
+    /// until we see `:` (data) or `|`/STRING (assertion).
+    fn is_test_data_binding(&self) -> bool {
+        let mut offset = 0;
+        // Skip the first identifier
+        if self.cursor.peek_kind_at(offset) != TokenKind::Identifier {
+            return false;
+        }
+        offset += 1;
+
+        // Skip `:: identifier` path segments
+        while self.cursor.peek_kind_at(offset) == TokenKind::PathSep {
+            offset += 1; // skip ::
+            offset += 1; // skip identifier
+        }
+
+        // If next is `:`, it's a data binding
+        self.cursor.peek_kind_at(offset) == TokenKind::Colon
+    }
+
+    /// Lookahead: is this a named test suite? (`identifier '(' ...`)
+    fn is_named_suite(&self) -> bool {
+        self.cursor.peek_kind() == TokenKind::Identifier
+            && self.cursor.peek_kind_at(1) == TokenKind::LParen
+    }
+
+    /// Parse a named test suite: `SuiteName ( data* assertion+ )`
+    fn parse_named_suite(&mut self) -> R<FunctionTest> {
+        let si = self.cursor.current_source_info();
+        let (name, _) = self.cursor.expect_identifier_or_keyword()?;
+        self.cursor.expect(TokenKind::LParen)?;
+
+        let mut data = Vec::new();
+        let mut assertions = Vec::new();
+
+        while !self.cursor.check(TokenKind::RParen) {
+            if self.is_test_data_binding() {
+                data.push(self.parse_function_test_data()?);
+            } else {
+                assertions.push(self.parse_function_test_assertion()?);
+            }
+        }
+        self.cursor.expect(TokenKind::RParen)?;
+
+        Ok(FunctionTest {
+            name: Some(name),
+            data,
+            assertions,
+            source_info: si,
+        })
+    }
+
+    /// Parse a test data binding: `qualifiedName: dataValue;`
+    ///
+    /// Data values:
+    /// - Inline: `(JSON) '{...}'`
+    /// - Reference: `testing::MyReference`
+    /// - Embedded: `Relation #{ content }#`
+    fn parse_function_test_data(&mut self) -> R<FunctionTestData> {
+        let si = self.cursor.current_source_info();
+        let store = self.parse_package_path()?;
+        self.cursor.expect(TokenKind::Colon)?;
+
+        // Determine data value type
+        let (format, data) = if self.cursor.check(TokenKind::LParen) {
+            // External format: (JSON) 'content'
+            self.cursor.advance();
+            let (fmt, _) = self.cursor.expect_identifier_or_keyword()?;
+            self.cursor.expect(TokenKind::RParen)?;
+            let content = self.cursor.expect(TokenKind::StringLiteral)?;
+            let raw = unquote_string(&content.text);
+            (Some(fmt), FunctionTestDataValue::Inline(raw))
+        } else if self.cursor.peek_kind() == TokenKind::Identifier
+            && self.cursor.peek_kind_at(1) == TokenKind::HashLBrace
+        {
+            // Embedded data: Relation #{ content }#
+            let (type_name, _) = self.cursor.expect_identifier_or_keyword()?;
+            self.cursor.expect(TokenKind::HashLBrace)?;
+            // Collect raw token text until }#
+            let mut parts = Vec::new();
+            let mut depth = 1u32;
+            while depth > 0 {
+                match self.cursor.peek_kind() {
+                    TokenKind::HashLBrace => {
+                        depth += 1;
+                        parts.push(self.cursor.advance().text.clone());
+                    }
+                    TokenKind::RBraceHash => {
+                        depth -= 1;
+                        if depth > 0 {
+                            parts.push(self.cursor.advance().text.clone());
+                        }
+                    }
+                    TokenKind::Eof => {
+                        return Err(ParseError::unexpected(
+                            "unexpected end of file in embedded data".to_string(),
+                            self.cursor.current_source_info(),
+                        ));
+                    }
+                    _ => {
+                        parts.push(self.cursor.advance().text.clone());
+                    }
+                }
+            }
+            let content = SmolStr::new(parts.join(""));
+            self.cursor.expect(TokenKind::RBraceHash)?;
+            (
+                None,
+                FunctionTestDataValue::EmbeddedData { type_name, content },
+            )
+        } else {
+            // Reference: testing::MyReference
+            let ref_package = self.parse_package_path()?;
+            (None, FunctionTestDataValue::Reference(ref_package))
+        };
+
+        self.cursor.expect(TokenKind::Semicolon)?;
+        Ok(FunctionTestData {
+            store,
+            format,
+            data,
+            source_info: si,
+        })
+    }
+
+    /// Parse: `testName ('doc')? | funcCall(args) => ((format) )? expected;`
     fn parse_function_test_assertion(&mut self) -> R<FunctionTestAssertion> {
         let si = self.cursor.current_source_info();
         let (test_name, _) = self.cursor.expect_identifier_or_keyword()?;
+
+        // Optional doc string
+        let doc = if self.cursor.check(TokenKind::StringLiteral) {
+            let tok = self.cursor.advance().clone();
+            Some(SmolStr::new(unquote_string(&tok.text)))
+        } else {
+            None
+        };
+
         self.cursor.expect(TokenKind::Pipe)?;
         let invocation = self.parse_expression()?;
         self.cursor.expect(TokenKind::FatArrow)?;
+
+        // Optional external format: (JSON) or (XML)
+        let expected_format = if self.cursor.check(TokenKind::LParen) {
+            // Lookahead: is this `(identifier)` followed by a value?
+            // vs a regular expression `(expr)`
+            if self.cursor.peek_kind_at(1) == TokenKind::Identifier
+                && self.cursor.peek_kind_at(2) == TokenKind::RParen
+            {
+                self.cursor.advance(); // (
+                let (fmt, _) = self.cursor.expect_identifier_or_keyword()?;
+                self.cursor.expect(TokenKind::RParen)?;
+                Some(fmt)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let expected = self.parse_expression()?;
         self.cursor.expect(TokenKind::Semicolon)?;
         Ok(FunctionTestAssertion {
             name: test_name,
+            doc,
             invocation,
-            expected_format: None,
+            expected_format,
             expected,
             source_info: si,
         })
