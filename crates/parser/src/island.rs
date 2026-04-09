@@ -186,6 +186,31 @@ pub mod graph_fetch {
             vec![]
         };
 
+        // Optional subtype cast on property: property->subType(@Type)
+        let sub_type = if ctx.cursor().check(TokenKind::Arrow) {
+            ctx.cursor().advance(); // ->
+            let (_func_name, _) = ctx.cursor().expect_identifier_or_keyword()?; // subType
+            ctx.cursor().expect(TokenKind::LParen)?;
+            let type_expr = ctx.parse_expression()?;
+            ctx.cursor().expect(TokenKind::RParen)?;
+            match type_expr {
+                Expression::TypeReferenceExpr(t) => Some(PackageableElementPtr {
+                    package: t.type_ref.package.clone(),
+                    name: t.type_ref.name.clone(),
+                    source_info: t.source_info,
+                }),
+                _ => {
+                    return Err(ParseError::expected(
+                        "@Type",
+                        ctx.cursor().peek_kind(),
+                        si,
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
         // Sub-tree: { subfields }
         let (sub_trees, sub_type_trees) = if ctx.cursor().check(TokenKind::LBrace) {
             ctx.cursor().advance();
@@ -200,7 +225,7 @@ pub mod graph_fetch {
             property: field_name,
             parameters,
             alias,
-            sub_type: None,
+            sub_type,
             sub_trees,
             sub_type_trees,
             source_info: si,

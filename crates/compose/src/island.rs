@@ -69,10 +69,23 @@ pub fn compose_island_with(
 // Graph Fetch Island Composer
 // ---------------------------------------------------------------------------
 
-/// Composer for graph fetch tree syntax: `#{Type{field1,field2{sub}}}#`.
+/// Composer for graph fetch tree syntax.
 ///
-/// Produces the **compact** canonical form matching Java's roundtrip output:
-/// no whitespace between tokens except where syntactically required.
+/// Produces multi-line, indented output matching the Java engine's
+/// pretty-rendering mode:
+///
+/// ```text
+/// #{
+///   my::Person{
+///     firstName,
+///     lastName,
+///     address{
+///       city,
+///       street
+///     }
+///   }
+/// }#
+/// ```
 pub struct GraphFetchIslandComposer;
 
 impl IslandComposer for GraphFetchIslandComposer {
@@ -88,16 +101,42 @@ impl IslandComposer for GraphFetchIslandComposer {
     }
 }
 
-/// Compose a root graph fetch tree: `#{Type{...}}#`.
+/// Compose a root graph fetch tree with multi-line indented formatting.
+///
+/// Output format:
+/// ```text
+/// #{
+///   Type{
+///     field1,
+///     field2{
+///       sub1
+///     },
+///     ->subType(@SubType){
+///       subField
+///     }
+///   }
+/// }#
+/// ```
 fn compose_graph_fetch_tree(w: &mut IndentWriter, tree: &RootGraphFetchTree) {
-    w.write("#{");
+    w.write_line("#{");
+    w.push_indent();
+
     compose_element_ptr(w, &tree.class);
-    w.write("{");
+    w.write_line("{");
+    w.push_indent();
+
     compose_graph_fetch_children(w, &tree.sub_trees, &tree.sub_type_trees);
-    w.write("}}#");
+
+    w.pop_indent();
+    w.write_line("}");
+
+    w.pop_indent();
+    w.write("}#");
 }
 
 /// Compose the children (property trees + subtype trees) of a graph fetch node.
+///
+/// Each child is rendered on its own line, separated by commas.
 fn compose_graph_fetch_children(
     w: &mut IndentWriter,
     sub_trees: &[PropertyGraphFetchTree],
@@ -112,6 +151,7 @@ fn compose_graph_fetch_children(
         if idx < total {
             w.write(",");
         }
+        w.newline();
     }
 
     for sub in sub_type_trees {
@@ -120,6 +160,7 @@ fn compose_graph_fetch_children(
         if idx < total {
             w.write(",");
         }
+        w.newline();
     }
 }
 
@@ -153,10 +194,12 @@ fn compose_property_tree(w: &mut IndentWriter, prop: &PropertyGraphFetchTree) {
         w.write(")");
     }
 
-    // Optional sub-tree: {children}
+    // Optional sub-tree: {children} — multi-line indented
     if !prop.sub_trees.is_empty() || !prop.sub_type_trees.is_empty() {
-        w.write("{");
+        w.write_line("{");
+        w.push_indent();
         compose_graph_fetch_children(w, &prop.sub_trees, &prop.sub_type_trees);
+        w.pop_indent();
         w.write("}");
     }
 }
@@ -168,8 +211,10 @@ fn compose_sub_type_tree(w: &mut IndentWriter, sub: &SubTypeGraphFetchTree) {
     w.write(")");
 
     if !sub.sub_trees.is_empty() || !sub.sub_type_trees.is_empty() {
-        w.write("{");
+        w.write_line("{");
+        w.push_indent();
         compose_graph_fetch_children(w, &sub.sub_trees, &sub.sub_type_trees);
+        w.pop_indent();
         w.write("}");
     }
 }
