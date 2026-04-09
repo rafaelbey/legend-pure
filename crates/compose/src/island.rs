@@ -204,9 +204,12 @@ fn compose_property_tree(w: &mut IndentWriter, prop: &PropertyGraphFetchTree) {
     }
 }
 
-/// Compose a subtype tree: `->subType(@Type){children}`.
+/// Compose a class-level subtype tree: `subType(@Type){children}`.
+///
+/// This is the polymorphic narrowing form — no arrow prefix.
+/// The arrow form `property->subType(@Type)` is rendered by the property composer.
 fn compose_sub_type_tree(w: &mut IndentWriter, sub: &SubTypeGraphFetchTree) {
-    w.write("->subType(@");
+    w.write("subType(@");
     compose_element_ptr(w, &sub.sub_type_class);
     w.write(")");
 

@@ -1677,7 +1677,7 @@ fn test_graph_fetch_subtype_at_root() {
           #{
             test::Firm{
               legalName,
-              ->subType(@test::FirmSubType){
+              subType(@test::FirmSubType){
                 SubTypeName
               }
             }
@@ -1694,10 +1694,10 @@ fn test_graph_fetch_multiple_subtypes() {
           #{
             test::Firm{
               legalName,
-              ->subType(@test::FirmSubType1){
+              subType(@test::FirmSubType1){
                 SubTypeName1
               },
-              ->subType(@test::FirmSubType2){
+              subType(@test::FirmSubType2){
                 SubTypeName2
               }
             }
@@ -1713,7 +1713,7 @@ fn test_graph_fetch_only_subtypes() {
         {
           #{
             test::Firm{
-              ->subType(@test::FirmSubType){
+              subType(@test::FirmSubType){
                 SubTypeName
               }
             }
@@ -1730,10 +1730,10 @@ fn test_graph_fetch_subtype_with_alias() {
           #{
             test::Firm{
               legalName,
-              ->subType(@test::FirmSubType1){
+              subType(@test::FirmSubType1){
                 'alias1':SubTypeName
               },
-              ->subType(@test::FirmSubType2){
+              subType(@test::FirmSubType2){
                 'alias2':SubTypeName
               }
             }
