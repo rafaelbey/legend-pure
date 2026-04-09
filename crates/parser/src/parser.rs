@@ -66,10 +66,7 @@ impl Parser {
     }
 
     /// Create a parser with a custom set of island grammar plugins.
-    pub fn with_island_parsers(
-        cursor: Cursor,
-        island_parsers: Vec<Box<dyn IslandParser>>,
-    ) -> Self {
+    pub fn with_island_parsers(cursor: Cursor, island_parsers: Vec<Box<dyn IslandParser>>) -> Self {
         Self {
             cursor,
             island_parsers,
@@ -1434,16 +1431,13 @@ impl Parser {
                 let parsers = std::mem::take(&mut self.island_parsers);
                 let result = (|| {
                     let island_parser =
-                        parsers
-                            .iter()
-                            .find(|p| p.tag() == tag)
-                            .ok_or_else(|| {
-                                ParseError::expected(
-                                    &format!("island grammar for tag '{tag}'"),
-                                    self.cursor.peek_kind(),
-                                    si.clone(),
-                                )
-                            })?;
+                        parsers.iter().find(|p| p.tag() == tag).ok_or_else(|| {
+                            ParseError::expected(
+                                &format!("island grammar for tag '{tag}'"),
+                                self.cursor.peek_kind(),
+                                si.clone(),
+                            )
+                        })?;
                     let mut ctx = ParserContext { parser: self };
                     island_parser.parse(&mut ctx)
                 })();
@@ -1595,7 +1589,6 @@ impl Parser {
             })
         }
     }
-
 }
 
 // ---------------------------------------------------------------------------

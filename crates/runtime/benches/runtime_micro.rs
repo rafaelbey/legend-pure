@@ -48,7 +48,7 @@ fn bench_value_ops(c: &mut Criterion) {
 
     group.bench_function("float_create_match", |b| {
         b.iter(|| {
-            let v = Value::Float(black_box(3.14));
+            let v = Value::Float(black_box(3.141_592_653_5));
             match v {
                 Value::Float(f) => black_box(f),
                 _ => unreachable!(),
