@@ -21,20 +21,21 @@
 //!
 //! ## Phase 1 Coverage
 //!
-//! - **Literals**: Integer, Float, Decimal, String, Boolean, Date/Time
-//! - **Variables**: `$name` references
-//! - **Collections**: `[1, 2, 3]`
-//! - **Groups**: `(expr)` — unwrapped transparently
+//! ## Coverage
 //!
-//! Remaining expression variants (operators, function calls, member access,
-//! lambdas, etc.) are handled in subsequent phases.
+//! - **Phase 1**: Literals, Variables, Collections, Groups
+//! - **Phase 2**: Operators (→ `FunctionCall`), Function Application, Arrow,
+//!   Member Access, Type References, Packageable Element Refs
+//!
+//! Remaining expression variants (lambdas, let bindings, new instances,
+//! columns, islands) are handled in Phase 3.
 
 use legend_pure_parser_ast::expression as ast_expr;
-use legend_pure_parser_ast::source_info::Spanned;
+use legend_pure_parser_ast::source_info::{SourceInfo, Spanned};
 use smol_str::SmolStr;
 
 use crate::error::CompilationError;
-use crate::resolve::ResolutionContext;
+use crate::resolve::{self, ResolutionContext};
 use crate::types::{DateValue, ValueSpec};
 
 // ---------------------------------------------------------------------------
@@ -50,12 +51,31 @@ pub(crate) fn lower_expression(
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
     match expr {
+        // Phase 1
         ast_expr::Expression::Literal(lit) => lower_literal(lit),
         ast_expr::Expression::Variable(var) => Some(lower_variable(var)),
         ast_expr::Expression::Collection(coll) => Some(lower_collection(coll, ctx, errors)),
         ast_expr::Expression::Group(inner) => lower_expression(inner, ctx, errors),
 
-        // Phase 2+ stubs — produce a diagnostic-friendly placeholder
+        // Phase 2 — Operators → FunctionCall
+        ast_expr::Expression::Arithmetic(e) => lower_arithmetic(e, ctx, errors),
+        ast_expr::Expression::Comparison(e) => lower_comparison(e, ctx, errors),
+        ast_expr::Expression::Logical(e) => lower_logical(e, ctx, errors),
+        ast_expr::Expression::Bitwise(e) => lower_bitwise(e, ctx, errors),
+        ast_expr::Expression::Not(e) => lower_unary_not(e, ctx, errors),
+        ast_expr::Expression::UnaryMinus(e) => lower_unary_minus(e, ctx, errors),
+        ast_expr::Expression::BitwiseNot(e) => lower_bitwise_not(e, ctx, errors),
+
+        // Phase 2 — Function & member access
+        ast_expr::Expression::FunctionApplication(e) => lower_function_application(e, ctx, errors),
+        ast_expr::Expression::ArrowFunction(e) => lower_arrow_function(e, ctx, errors),
+        ast_expr::Expression::MemberAccess(e) => lower_member_access(e, ctx, errors),
+        ast_expr::Expression::TypeReferenceExpr(e) => lower_type_reference(e, ctx, errors),
+        ast_expr::Expression::PackageableElementRef(e) => {
+            lower_packageable_element_ref(e, ctx, errors)
+        }
+
+        // Phase 3 stubs — produce a diagnostic-friendly placeholder
         _ => {
             let source_info = expr.source_info().clone();
             errors.push(CompilationError {
@@ -156,6 +176,271 @@ fn lower_collection(
         elements,
         source_info: coll.source_info.clone(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Operator desugaring → FunctionCall
+// ---------------------------------------------------------------------------
+
+/// Helper: build a binary operator `FunctionCall`.
+fn binary_op(
+    name: &str,
+    left: &ast_expr::Expression,
+    right: &ast_expr::Expression,
+    source_info: &SourceInfo,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let l = lower_expression(left, ctx, errors)?;
+    let r = lower_expression(right, ctx, errors)?;
+    Some(ValueSpec::FunctionCall {
+        function: None,
+        function_name: SmolStr::new(name),
+        arguments: vec![l, r],
+        source_info: source_info.clone(),
+    })
+}
+
+/// Helper: build a unary operator `FunctionCall`.
+fn unary_op(
+    name: &str,
+    operand: &ast_expr::Expression,
+    source_info: &SourceInfo,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let inner = lower_expression(operand, ctx, errors)?;
+    Some(ValueSpec::FunctionCall {
+        function: None,
+        function_name: SmolStr::new(name),
+        arguments: vec![inner],
+        source_info: source_info.clone(),
+    })
+}
+
+/// Lowers arithmetic: `a + b` → `FunctionCall("plus", [a, b])`.
+fn lower_arithmetic(
+    e: &ast_expr::ArithmeticExpr,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let name = match e.op {
+        ast_expr::ArithmeticOp::Plus => "plus",
+        ast_expr::ArithmeticOp::Minus => "minus",
+        ast_expr::ArithmeticOp::Times => "times",
+        ast_expr::ArithmeticOp::Divide => "divide",
+    };
+    binary_op(name, &e.left, &e.right, &e.source_info, ctx, errors)
+}
+
+/// Lowers comparison: `a == b` → `FunctionCall("equal", [a, b])`.
+///
+/// `!=` desugars to `not(equal(a, b))` matching the Java M3 behavior.
+fn lower_comparison(
+    e: &ast_expr::ComparisonExpr,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let (name, negate) = match e.op {
+        ast_expr::ComparisonOp::Equal => ("equal", false),
+        ast_expr::ComparisonOp::NotEqual => ("equal", true),
+        ast_expr::ComparisonOp::LessThan => ("lessThan", false),
+        ast_expr::ComparisonOp::LessThanOrEqual => ("lessThanEqual", false),
+        ast_expr::ComparisonOp::GreaterThan => ("greaterThan", false),
+        ast_expr::ComparisonOp::GreaterThanOrEqual => ("greaterThanEqual", false),
+    };
+    let inner = binary_op(name, &e.left, &e.right, &e.source_info, ctx, errors)?;
+    if negate {
+        Some(ValueSpec::FunctionCall {
+            function: None,
+            function_name: SmolStr::new_static("not"),
+            arguments: vec![inner],
+            source_info: e.source_info.clone(),
+        })
+    } else {
+        Some(inner)
+    }
+}
+
+/// Lowers logical: `a && b` → `FunctionCall("and", [a, b])`.
+fn lower_logical(
+    e: &ast_expr::LogicalExpr,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let name = match e.op {
+        ast_expr::LogicalOp::And => "and",
+        ast_expr::LogicalOp::Or => "or",
+    };
+    binary_op(name, &e.left, &e.right, &e.source_info, ctx, errors)
+}
+
+/// Lowers bitwise: `a &&& b` → `FunctionCall("bitwiseAnd", [a, b])`.
+fn lower_bitwise(
+    e: &ast_expr::BitwiseExpr,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let name = match e.op {
+        ast_expr::BitwiseOp::And => "bitwiseAnd",
+        ast_expr::BitwiseOp::Or => "bitwiseOr",
+        ast_expr::BitwiseOp::Xor => "bitwiseXor",
+        ast_expr::BitwiseOp::ShiftLeft => "shiftLeft",
+        ast_expr::BitwiseOp::ShiftRight => "shiftRight",
+    };
+    binary_op(name, &e.left, &e.right, &e.source_info, ctx, errors)
+}
+
+/// Lowers `!expr` → `FunctionCall("not", [expr])`.
+fn lower_unary_not(
+    e: &ast_expr::NotExpr,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    unary_op("not", &e.operand, &e.source_info, ctx, errors)
+}
+
+/// Lowers `-expr` → `FunctionCall("minus", [expr])`.
+fn lower_unary_minus(
+    e: &ast_expr::UnaryMinusExpr,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    unary_op("minus", &e.operand, &e.source_info, ctx, errors)
+}
+
+/// Lowers `~~~expr` → `FunctionCall("bitwiseNot", [expr])`.
+fn lower_bitwise_not(
+    e: &ast_expr::BitwiseNotExpr,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    unary_op("bitwiseNot", &e.operand, &e.source_info, ctx, errors)
+}
+
+// ---------------------------------------------------------------------------
+// Function application & arrow
+// ---------------------------------------------------------------------------
+
+/// Lowers `func(args)` → `FunctionCall`.
+///
+/// Resolves the function name through import-aware resolution. If resolution
+/// fails, the call is still produced with `function: None` so downstream
+/// code can see the structure.
+#[allow(clippy::unnecessary_wraps)] // consistent signature with other lower_* fns
+fn lower_function_application(
+    e: &ast_expr::FunctionApplication,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let function_id = resolve::resolve_element_ptr(&e.function, &e.source_info, ctx, errors);
+
+    let arguments: Vec<ValueSpec> = e
+        .arguments
+        .iter()
+        .filter_map(|a| lower_expression(a, ctx, errors))
+        .collect();
+
+    Some(ValueSpec::FunctionCall {
+        function: function_id,
+        function_name: SmolStr::new(e.function.name.as_str()),
+        arguments,
+        source_info: e.source_info.clone(),
+    })
+}
+
+/// Lowers `expr->func(args)` → `FunctionCall` with target prepended.
+///
+/// `$x->filter(p)` becomes `FunctionCall("filter", [$x, p])`.
+fn lower_arrow_function(
+    e: &ast_expr::ArrowFunction,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let function_id = resolve::resolve_element_ptr(&e.function, &e.source_info, ctx, errors);
+
+    let target = lower_expression(&e.target, ctx, errors)?;
+
+    let mut arguments = Vec::with_capacity(1 + e.arguments.len());
+    arguments.push(target);
+    for arg in &e.arguments {
+        if let Some(lowered) = lower_expression(arg, ctx, errors) {
+            arguments.push(lowered);
+        }
+    }
+
+    Some(ValueSpec::FunctionCall {
+        function: function_id,
+        function_name: SmolStr::new(e.function.name.as_str()),
+        arguments,
+        source_info: e.source_info.clone(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Member access
+// ---------------------------------------------------------------------------
+
+/// Lowers member access (dot): `$x.name` or `$x.derived('arg')`.
+fn lower_member_access(
+    e: &ast_expr::MemberAccess,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    match e {
+        ast_expr::MemberAccess::Simple(s) => {
+            let target = lower_expression(&s.target, ctx, errors)?;
+            Some(ValueSpec::PropertyAccess {
+                target: Box::new(target),
+                property: SmolStr::new(s.member.as_str()),
+                source_info: s.source_info.clone(),
+            })
+        }
+        ast_expr::MemberAccess::Qualified(q) => {
+            let target = lower_expression(&q.target, ctx, errors)?;
+            let arguments: Vec<ValueSpec> = q
+                .arguments
+                .iter()
+                .filter_map(|a| lower_expression(a, ctx, errors))
+                .collect();
+            Some(ValueSpec::QualifiedPropertyAccess {
+                target: Box::new(target),
+                property: SmolStr::new(q.member.as_str()),
+                arguments,
+                source_info: q.source_info.clone(),
+            })
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Type reference & element reference
+// ---------------------------------------------------------------------------
+
+/// Lowers `@MyType` → `TypeReference`.
+fn lower_type_reference(
+    e: &ast_expr::TypeReferenceExpr,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let type_expr = resolve::resolve_type_ref(&e.type_ref, ctx, errors)?;
+    Some(ValueSpec::TypeReference {
+        type_expr,
+        source_info: e.source_info.clone(),
+    })
+}
+
+/// Lowers a bare element reference: `String`, `my::Enum` → `PackageableElementRef`.
+fn lower_packageable_element_ref(
+    e: &ast_expr::PackageableElementRef,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let element_id = resolve::resolve_element_ptr(&e.element, &e.source_info, ctx, errors)?;
+    Some(ValueSpec::PackageableElementRef {
+        element: element_id,
+        source_info: e.source_info.clone(),
+    })
 }
 
 // ---------------------------------------------------------------------------
