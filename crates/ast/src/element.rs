@@ -61,6 +61,8 @@ pub enum Element {
     Enumeration(EnumDef),
     /// A function definition.
     Function(FunctionDef),
+    /// A native function declaration (no body).
+    NativeFunction(NativeFunctionDef),
     /// A profile definition.
     Profile(ProfileDef),
     /// An association definition.
@@ -75,6 +77,7 @@ impl Spanned for Element {
             Self::Class(e) => e.source_info(),
             Self::Enumeration(e) => e.source_info(),
             Self::Function(e) => e.source_info(),
+            Self::NativeFunction(e) => e.source_info(),
             Self::Profile(e) => e.source_info(),
             Self::Association(e) => e.source_info(),
             Self::Measure(e) => e.source_info(),
@@ -88,6 +91,7 @@ impl PackageableElement for Element {
             Self::Class(e) => e.package(),
             Self::Enumeration(e) => e.package(),
             Self::Function(e) => e.package(),
+            Self::NativeFunction(e) => e.package(),
             Self::Profile(e) => e.package(),
             Self::Association(e) => e.package(),
             Self::Measure(e) => e.package(),
@@ -99,6 +103,7 @@ impl PackageableElement for Element {
             Self::Class(e) => e.name(),
             Self::Enumeration(e) => e.name(),
             Self::Function(e) => e.name(),
+            Self::NativeFunction(e) => e.name(),
             Self::Profile(e) => e.name(),
             Self::Association(e) => e.name(),
             Self::Measure(e) => e.name(),
@@ -112,6 +117,7 @@ impl Annotated for Element {
             Self::Class(e) => e.stereotypes(),
             Self::Enumeration(e) => e.stereotypes(),
             Self::Function(e) => e.stereotypes(),
+            Self::NativeFunction(e) => e.stereotypes(),
             Self::Profile(e) => e.stereotypes(),
             Self::Association(e) => e.stereotypes(),
             Self::Measure(e) => e.stereotypes(),
@@ -123,6 +129,7 @@ impl Annotated for Element {
             Self::Class(e) => e.tagged_values(),
             Self::Enumeration(e) => e.tagged_values(),
             Self::Function(e) => e.tagged_values(),
+            Self::NativeFunction(e) => e.tagged_values(),
             Self::Profile(e) => e.tagged_values(),
             Self::Association(e) => e.tagged_values(),
             Self::Measure(e) => e.tagged_values(),
@@ -433,9 +440,6 @@ pub struct FunctionTest {
 /// {
 ///   'Hello ' + $name
 /// }
-/// {
-///   myTest | hello('World') => 'Hello World';
-/// }
 /// ```
 #[derive(Debug, Clone, PartialEq, crate::PackageableElement)]
 pub struct FunctionDef {
@@ -461,6 +465,67 @@ pub struct FunctionDef {
     pub source_info: SourceInfo,
 }
 
+/// A native function declaration (no body, semicolon-terminated).
+///
+/// ```text
+/// native function meta::pure::functions::string::plus(strings: String[*]): String[1];
+/// ```
+#[derive(Debug, Clone, PartialEq, crate::PackageableElement)]
+pub struct NativeFunctionDef {
+    /// The package.
+    pub package: Option<Package>,
+    /// The function name.
+    pub name: Identifier,
+    /// Parameters.
+    pub parameters: Vec<Parameter>,
+    /// Return type.
+    pub return_type: TypeSpec,
+    /// Return multiplicity.
+    pub return_multiplicity: Multiplicity,
+    /// Stereotypes.
+    pub stereotypes: Vec<StereotypePtr>,
+    /// Tagged values.
+    pub tagged_values: Vec<TaggedValue>,
+    /// Source location.
+    pub source_info: SourceInfo,
+}
+
+/// Shared accessors for function-like elements.
+///
+/// Implemented by both [`FunctionDef`] and [`NativeFunctionDef`].
+pub trait FunctionSignature {
+    /// The function parameters.
+    fn parameters(&self) -> &[Parameter];
+    /// The return type specification.
+    fn return_type(&self) -> &TypeSpec;
+    /// The return multiplicity.
+    fn return_multiplicity(&self) -> &Multiplicity;
+}
+
+impl FunctionSignature for FunctionDef {
+    fn parameters(&self) -> &[Parameter] {
+        &self.parameters
+    }
+    fn return_type(&self) -> &TypeSpec {
+        &self.return_type
+    }
+    fn return_multiplicity(&self) -> &Multiplicity {
+        &self.return_multiplicity
+    }
+}
+
+impl FunctionSignature for NativeFunctionDef {
+    fn parameters(&self) -> &[Parameter] {
+        &self.parameters
+    }
+    fn return_type(&self) -> &TypeSpec {
+        &self.return_type
+    }
+    fn return_multiplicity(&self) -> &Multiplicity {
+        &self.return_multiplicity
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Visitor
 // ---------------------------------------------------------------------------
@@ -475,6 +540,8 @@ pub trait ElementVisitor {
     fn visit_enum(&mut self, enum_def: &EnumDef);
     /// Visit a function definition.
     fn visit_function(&mut self, func: &FunctionDef);
+    /// Visit a native function declaration.
+    fn visit_native_function(&mut self, func: &NativeFunctionDef);
     /// Visit a profile definition.
     fn visit_profile(&mut self, profile: &ProfileDef);
     /// Visit an association definition.
@@ -490,6 +557,7 @@ impl Element {
             Self::Class(e) => visitor.visit_class(e),
             Self::Enumeration(e) => visitor.visit_enum(e),
             Self::Function(e) => visitor.visit_function(e),
+            Self::NativeFunction(e) => visitor.visit_native_function(e),
             Self::Profile(e) => visitor.visit_profile(e),
             Self::Association(e) => visitor.visit_association(e),
             Self::Measure(e) => visitor.visit_measure(e),
@@ -635,6 +703,7 @@ mod tests {
             }
             fn visit_enum(&mut self, _: &EnumDef) {}
             fn visit_function(&mut self, _: &FunctionDef) {}
+            fn visit_native_function(&mut self, _: &NativeFunctionDef) {}
             fn visit_association(&mut self, _: &AssociationDef) {}
             fn visit_measure(&mut self, _: &MeasureDef) {}
         }

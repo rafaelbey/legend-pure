@@ -24,8 +24,8 @@ use legend_pure_parser_ast::annotation::{
 };
 use legend_pure_parser_ast::element::{
     AggregationKind, AssociationDef, ClassDef, Constraint, Element, EnumDef, EnumValue,
-    FunctionDef, FunctionTest, FunctionTestAssertion, MeasureDef, ProfileDef, Property,
-    QualifiedProperty, UnitDef,
+    FunctionDef, FunctionTest, FunctionTestAssertion, MeasureDef, NativeFunctionDef, ProfileDef,
+    Property, QualifiedProperty, UnitDef,
 };
 use legend_pure_parser_ast::expression::{
     ArithmeticExpr, ArithmeticOp, ArrowFunction, BooleanLiteral, CollectionExpr, ComparisonExpr,
@@ -148,6 +148,7 @@ impl Parser {
             TokenKind::Association => self.parse_association(),
             TokenKind::Measure => self.parse_measure(),
             TokenKind::Function => self.parse_function(),
+            TokenKind::Native => self.parse_native_function(),
             _ => Err(ParseError::unexpected(
                 format!("Unexpected token {}", self.cursor.peek().text),
                 self.cursor.current_source_info(),
@@ -761,6 +762,41 @@ impl Parser {
             stereotypes,
             tagged_values,
             tests,
+            source_info: start,
+        }))
+    }
+
+    // ── Native Function ─────────────────────────────────────────────────
+
+    /// Parse `native function pkg::name(params): ReturnType[mult];`
+    fn parse_native_function(&mut self) -> R<Element> {
+        let start = self.cursor.current_source_info();
+        self.cursor.expect(TokenKind::Native)?;
+        self.cursor.expect(TokenKind::Function)?;
+        let stereotypes = self.parse_stereotypes()?;
+        let tagged_values = self.parse_tagged_values()?;
+        let (package, name, _) = self.parse_qualified_name()?;
+        self.cursor.expect(TokenKind::LParen)?;
+        let mut parameters = Vec::new();
+        while !self.cursor.check(TokenKind::RParen) {
+            parameters.push(self.parse_parameter()?);
+            self.cursor.eat(TokenKind::Comma);
+        }
+        self.cursor.expect(TokenKind::RParen)?;
+        self.cursor.expect(TokenKind::Colon)?;
+        let return_type = self.parse_type_spec()?;
+        self.cursor.expect(TokenKind::LBracket)?;
+        let return_multiplicity = self.parse_multiplicity()?;
+        self.cursor.expect(TokenKind::RBracket)?;
+        self.cursor.expect(TokenKind::Semicolon)?;
+        Ok(Element::NativeFunction(NativeFunctionDef {
+            package,
+            name,
+            parameters,
+            return_type,
+            return_multiplicity,
+            stereotypes,
+            tagged_values,
             source_info: start,
         }))
     }
