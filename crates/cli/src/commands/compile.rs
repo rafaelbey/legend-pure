@@ -168,11 +168,11 @@ pub fn run(args: CompileArgs) -> Result<(), CliError> {
             print_success_stats(&model, total, elapsed);
             Ok(())
         }
-        Err(errors) => {
-            let error_count = errors.len();
+        Err(partial) => {
+            let error_count = partial.errors.len();
 
             eprintln!();
-            for error in &errors {
+            for error in &partial.errors {
                 let source_name = &error.source_info.source;
 
                 // Find the original source text and path for this error

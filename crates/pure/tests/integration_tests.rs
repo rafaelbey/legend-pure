@@ -26,11 +26,12 @@ fn parse(source: &str) -> SourceFile {
 }
 
 /// Helper: compile a single Pure source string.
+#[allow(clippy::result_large_err)]
 fn compile_one(
     source: &str,
 ) -> Result<
     legend_pure_parser_pure::model::PureModel,
-    Vec<legend_pure_parser_pure::error::CompilationError>,
+    legend_pure_parser_pure::pipeline::PartialPureModel,
 > {
     let sf = parse(source);
     compile!(&[sf])
@@ -241,7 +242,7 @@ fn association_with_properties() {
 fn cyclic_inheritance_error() {
     let result = compile_one("Class A extends B {}\nClass B extends A {}");
     assert!(result.is_err(), "cyclic inheritance should fail");
-    let errors = result.unwrap_err();
+    let errors = &result.unwrap_err().errors;
 
     let cycle_errors: Vec<_> = errors
         .iter()
@@ -285,7 +286,7 @@ fn cyclic_inheritance_error() {
 fn unresolved_type_error() {
     let result = compile_one("Class Bad { x: NonExistent[1]; }");
     assert!(result.is_err(), "unresolved type should fail");
-    let errors = result.unwrap_err();
+    let errors = &result.unwrap_err().errors;
 
     let unresolved: Vec<_> = errors
         .iter()
@@ -332,7 +333,7 @@ fn unresolved_type_error() {
 fn duplicate_element_error() {
     let result = compile_one("Class Foo {}\nClass Foo {}");
     assert!(result.is_err(), "duplicate element should fail");
-    let errors = result.unwrap_err();
+    let errors = &result.unwrap_err().errors;
 
     let dupes: Vec<_> = errors
         .iter()
@@ -374,7 +375,7 @@ fn duplicate_element_error() {
 fn unresolved_profile_error() {
     let result = compile_one("Class <<nonexistent::profile.stereo>> Annotated {}");
     assert!(result.is_err(), "unresolved profile should fail");
-    let errors = result.unwrap_err();
+    let errors = &result.unwrap_err().errors;
 
     let unresolved: Vec<_> = errors
         .iter()
@@ -547,7 +548,7 @@ fn association_wrong_cardinality() {
          Association Bad { a: A[1]; }",
     );
     assert!(result.is_err(), "association with 1 property should fail");
-    let errors = result.unwrap_err();
+    let errors = &result.unwrap_err().errors;
     let assoc_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(&e.kind, CompilationErrorKind::InvalidAssociation { .. }))
@@ -573,7 +574,7 @@ fn association_property_not_class() {
         result.is_err(),
         "association property pointing to Enum should fail"
     );
-    let errors = result.unwrap_err();
+    let errors = &result.unwrap_err().errors;
     let assoc_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(&e.kind, CompilationErrorKind::InvalidAssociation { .. }))
@@ -595,7 +596,7 @@ fn super_type_not_class() {
          Class Bad extends Color {}",
     );
     assert!(result.is_err(), "extending an Enum should fail");
-    let errors = result.unwrap_err();
+    let errors = &result.unwrap_err().errors;
     let super_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(&e.kind, CompilationErrorKind::InvalidSuperType { .. }))
@@ -632,7 +633,7 @@ fn stereotype_not_in_profile() {
         result.is_err(),
         "referencing nonexistent stereotype should fail"
     );
-    let errors = result.unwrap_err();
+    let errors = &result.unwrap_err().errors;
     let anno_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(&e.kind, CompilationErrorKind::InvalidAnnotation { .. }))
@@ -658,7 +659,7 @@ fn tag_not_in_profile() {
          Class {doc.missingTag = 'val'} Bad {}",
     );
     assert!(result.is_err(), "referencing nonexistent tag should fail");
-    let errors = result.unwrap_err();
+    let errors = &result.unwrap_err().errors;
     let anno_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(&e.kind, CompilationErrorKind::InvalidAnnotation { .. }))
@@ -681,7 +682,7 @@ fn tag_not_in_profile() {
 fn duplicate_property_names() {
     let result = compile_one("Class Bad { name: String[1]; name: Integer[1]; }");
     assert!(result.is_err(), "duplicate properties should fail");
-    let errors = result.unwrap_err();
+    let errors = &result.unwrap_err().errors;
     let dupe_errors: Vec<_> = errors
         .iter()
         .filter(|e| matches!(&e.kind, CompilationErrorKind::DuplicateProperty { .. }))
@@ -709,12 +710,13 @@ fn duplicate_property_names() {
 // ---------------------------------------------------------------------------
 
 /// Helper: compile multiple Pure source strings together with auto-imports.
+#[allow(clippy::result_large_err)]
 fn compile_with_imports(
     sources: &[&str],
     auto_imports: &[&str],
 ) -> Result<
     legend_pure_parser_pure::model::PureModel,
-    Vec<legend_pure_parser_pure::error::CompilationError>,
+    legend_pure_parser_pure::pipeline::PartialPureModel,
 > {
     let sfs: Vec<SourceFile> = sources
         .iter()
@@ -785,7 +787,7 @@ Class model::domain::Person {
         result.is_err(),
         "should fail because section 2 has no import for Address"
     );
-    let errors = result.unwrap_err();
+    let errors = &result.unwrap_err().errors;
     assert!(errors.iter().any(|e| e.message.contains("Address")));
 }
 
@@ -801,7 +803,7 @@ Class model::domain::Person {
 ";
     let result = compile_with_imports(&[source], &[]);
     assert!(result.is_err());
-    let errors = result.unwrap_err();
+    let errors = &result.unwrap_err().errors;
     assert!(errors.iter().any(|e| e.message.contains("SomeType")));
 }
 
@@ -827,7 +829,7 @@ Class test::Bar {
 ";
     let result = compile_with_imports(&[source], &[]);
     assert!(result.is_err(), "should fail with ambiguous import");
-    let errors = result.unwrap_err();
+    let errors = &result.unwrap_err().errors;
     let ambig = errors
         .iter()
         .find(|e| matches!(&e.kind, CompilationErrorKind::AmbiguousImport { .. }));
