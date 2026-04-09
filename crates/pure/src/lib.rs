@@ -49,6 +49,7 @@ pub mod arena;
 pub mod bootstrap;
 pub mod error;
 pub mod ids;
+pub(crate) mod lower;
 pub mod model;
 pub mod nodes;
 pub mod pipeline;

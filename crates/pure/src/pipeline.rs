@@ -618,7 +618,7 @@ fn hydrate_element(
                 lower_qualified_properties(&class_def.qualified_properties, ctx, errors);
 
             // Constraints
-            let constraints = lower_constraints(&class_def.constraints);
+            let constraints = lower_constraints(&class_def.constraints, ctx, errors);
 
             // Annotations
             let stereotypes = resolve::resolve_stereotypes(&class_def.stereotypes, ctx, errors);
@@ -684,7 +684,7 @@ fn hydrate_element(
                 parameters,
                 return_type,
                 return_multiplicity,
-                body: vec![], // Expression lowering deferred
+                body: crate::lower::lower_expression_body(&func_def.body, ctx, errors),
                 stereotypes,
                 tagged_values,
             })
@@ -740,7 +740,10 @@ fn lower_properties(
                 type_expr,
                 multiplicity,
                 aggregation,
-                default_value: None, // Expression lowering deferred
+                default_value: p
+                    .default_value
+                    .as_ref()
+                    .and_then(|dv| crate::lower::lower_expression(dv, ctx, errors)),
                 stereotypes,
                 tagged_values,
             })
@@ -769,7 +772,7 @@ fn lower_qualified_properties(
                 parameters,
                 return_type,
                 return_multiplicity,
-                body: vec![], // Expression lowering deferred
+                body: crate::lower::lower_expression_body(&qp.body, ctx, errors),
                 stereotypes,
                 tagged_values,
             })
@@ -803,21 +806,27 @@ fn lower_parameters(
 }
 
 /// Lowers AST constraints to Pure constraints.
-///
-/// Constraint expressions are placeholder — full expression lowering is Phase 4+.
-fn lower_constraints(constraints: &[ast::Constraint]) -> Vec<class::Constraint> {
+fn lower_constraints(
+    constraints: &[ast::Constraint],
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Vec<class::Constraint> {
     constraints
         .iter()
-        .map(|c| class::Constraint {
-            name: c.name.clone(),
-            source_info: c.source_info.clone(),
-            function: resolve::placeholder_expression(c.function_definition.source_info()),
-            enforcement_level: c.enforcement_level.clone(),
-            external_id: c.external_id.clone(),
-            message: c
+        .filter_map(|c| {
+            let function = crate::lower::lower_expression(&c.function_definition, ctx, errors)?;
+            let message = c
                 .message
                 .as_ref()
-                .map(|m| resolve::placeholder_expression(m.source_info())),
+                .and_then(|m| crate::lower::lower_expression(m, ctx, errors));
+            Some(class::Constraint {
+                name: c.name.clone(),
+                source_info: c.source_info.clone(),
+                function,
+                enforcement_level: c.enforcement_level.clone(),
+                external_id: c.external_id.clone(),
+                message,
+            })
         })
         .collect()
 }

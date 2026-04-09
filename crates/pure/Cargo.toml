@@ -22,6 +22,7 @@ repository.workspace = true
 
 [dependencies]
 legend-pure-parser-ast = { path = "../ast" }
+rust_decimal = "1"
 smol_str = { workspace = true }
 
 [dev-dependencies]

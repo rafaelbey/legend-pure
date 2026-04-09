@@ -867,3 +867,177 @@ Class <<doc.deprecated>> {model::meta::doc.description = 'old'} model::domain::L
         _ => panic!("LegacyThing should be a Class"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Expression Lowering — Phase 1
+// ---------------------------------------------------------------------------
+
+use legend_pure_parser_pure::types::{DateValue, Expression};
+
+#[test]
+fn function_body_integer_literal() {
+    let source = "function test::intFunc(): Integer[1] { 42 }";
+    let model = compile_one(source).expect("should compile");
+    let id = model
+        .resolve_by_path(&["test".into(), "intFunc".into()])
+        .expect("intFunc should exist");
+    match model.get_element(id) {
+        Element::Function(f) => {
+            assert_eq!(f.body.len(), 1);
+            match &f.body[0] {
+                Expression::IntegerLiteral(v, _) => assert_eq!(*v, 42),
+                other => panic!("expected IntegerLiteral, got {other:?}"),
+            }
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+#[test]
+fn function_body_string_literal() {
+    let source = "function test::strFunc(): String[1] { 'hello' }";
+    let model = compile_one(source).expect("should compile");
+    let id = model
+        .resolve_by_path(&["test".into(), "strFunc".into()])
+        .expect("strFunc should exist");
+    match model.get_element(id) {
+        Element::Function(f) => {
+            assert_eq!(f.body.len(), 1);
+            match &f.body[0] {
+                Expression::StringLiteral(v, _) => assert_eq!(v.as_str(), "hello"),
+                other => panic!("expected StringLiteral, got {other:?}"),
+            }
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+#[test]
+fn function_body_boolean_literal() {
+    let source = "function test::boolFunc(): Boolean[1] { true }";
+    let model = compile_one(source).expect("should compile");
+    let id = model
+        .resolve_by_path(&["test".into(), "boolFunc".into()])
+        .expect("boolFunc should exist");
+    match model.get_element(id) {
+        Element::Function(f) => {
+            assert_eq!(f.body.len(), 1);
+            match &f.body[0] {
+                Expression::BooleanLiteral(v, _) => assert!(*v),
+                other => panic!("expected BooleanLiteral, got {other:?}"),
+            }
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+#[test]
+fn function_body_float_literal() {
+    let source = "function test::floatFunc(): Float[1] { 1.5 }";
+    let model = compile_one(source).expect("should compile");
+    let id = model
+        .resolve_by_path(&["test".into(), "floatFunc".into()])
+        .expect("floatFunc should exist");
+    match model.get_element(id) {
+        Element::Function(f) => {
+            assert_eq!(f.body.len(), 1);
+            match &f.body[0] {
+                Expression::FloatLiteral(v, _) => {
+                    assert!((v - 1.5).abs() < f64::EPSILON);
+                }
+                other => panic!("expected FloatLiteral, got {other:?}"),
+            }
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+#[test]
+fn function_body_variable_ref() {
+    let source = "function test::varFunc(x: String[1]): String[1] { $x }";
+    let model = compile_one(source).expect("should compile");
+    let id = model
+        .resolve_by_path(&["test".into(), "varFunc".into()])
+        .expect("varFunc should exist");
+    match model.get_element(id) {
+        Element::Function(f) => {
+            assert_eq!(f.body.len(), 1);
+            match &f.body[0] {
+                Expression::Variable { name, .. } => assert_eq!(name.as_str(), "x"),
+                other => panic!("expected Variable, got {other:?}"),
+            }
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+#[test]
+fn function_body_collection() {
+    let source = "function test::collFunc(): Integer[*] { [1, 2, 3] }";
+    let model = compile_one(source).expect("should compile");
+    let id = model
+        .resolve_by_path(&["test".into(), "collFunc".into()])
+        .expect("collFunc should exist");
+    match model.get_element(id) {
+        Element::Function(f) => {
+            assert_eq!(f.body.len(), 1);
+            match &f.body[0] {
+                Expression::Collection { elements, .. } => {
+                    assert_eq!(elements.len(), 3);
+                    assert!(matches!(&elements[0], Expression::IntegerLiteral(1, _)));
+                    assert!(matches!(&elements[1], Expression::IntegerLiteral(2, _)));
+                    assert!(matches!(&elements[2], Expression::IntegerLiteral(3, _)));
+                }
+                other => panic!("expected Collection, got {other:?}"),
+            }
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+#[test]
+fn function_body_date_literal() {
+    let source = "function test::dateFunc(): StrictDate[1] { %2024-01-15 }";
+    let model = compile_one(source).expect("should compile");
+    let id = model
+        .resolve_by_path(&["test".into(), "dateFunc".into()])
+        .expect("dateFunc should exist");
+    match model.get_element(id) {
+        Element::Function(f) => {
+            assert_eq!(f.body.len(), 1);
+            match &f.body[0] {
+                Expression::DateLiteral(dv, _) => {
+                    assert_eq!(
+                        *dv,
+                        DateValue::StrictDate {
+                            year: 2024,
+                            month: 1,
+                            day: 15
+                        }
+                    );
+                }
+                other => panic!("expected DateLiteral, got {other:?}"),
+            }
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+#[test]
+fn constraint_expression_compiled() {
+    let source = "Class test::Foo [ c: true ] { name: String[1]; }";
+    let model = compile_one(source).expect("should compile");
+    let id = model
+        .resolve_by_path(&["test".into(), "Foo".into()])
+        .expect("Foo should exist");
+    match model.get_element(id) {
+        Element::Class(c) => {
+            assert_eq!(c.constraints.len(), 1);
+            assert!(matches!(
+                &c.constraints[0].function,
+                Expression::BooleanLiteral(true, _)
+            ));
+        }
+        _ => panic!("expected Class"),
+    }
+}
