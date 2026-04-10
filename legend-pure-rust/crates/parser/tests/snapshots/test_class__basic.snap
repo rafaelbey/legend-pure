@@ -37,6 +37,7 @@ SourceFile {
                         ),
                         name: "Person",
                         type_parameters: [],
+                        multiplicity_parameters: [],
                         super_types: [
                             TypeReference {
                                 package: Some(
@@ -66,6 +67,7 @@ SourceFile {
                                 ),
                                 name: "LegalEntity",
                                 type_arguments: [],
+                                multiplicity_arguments: [],
                                 type_variable_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",
@@ -84,6 +86,7 @@ SourceFile {
                                         package: None,
                                         name: "String",
                                         type_arguments: [],
+                                        multiplicity_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
@@ -114,6 +117,7 @@ SourceFile {
                                         package: None,
                                         name: "Integer",
                                         type_arguments: [],
+                                        multiplicity_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
@@ -149,6 +153,7 @@ SourceFile {
                                                 package: None,
                                                 name: "String",
                                                 type_arguments: [],
+                                                multiplicity_arguments: [],
                                                 type_variable_values: [],
                                                 source_info: SourceInfo {
                                                     source: "test.pure",
@@ -176,6 +181,7 @@ SourceFile {
                                         package: None,
                                         name: "String",
                                         type_arguments: [],
+                                        multiplicity_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",

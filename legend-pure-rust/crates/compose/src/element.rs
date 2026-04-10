@@ -19,9 +19,10 @@
 
 use legend_pure_parser_ast::annotation::{StereotypePtr, TaggedValue};
 use legend_pure_parser_ast::element::{
-    AggregationKind, AssociationDef, ClassDef, Constraint, Element, EnumDef, FunctionDef,
-    FunctionTest, FunctionTestAssertion, FunctionTestData, FunctionTestDataValue, MeasureDef,
-    NativeFunctionDef, ProfileDef, Property, QualifiedProperty, UnitDef,
+    AggregationKind, Annotated, AssociationDef, ClassDef, Constraint, Element, EnumDef,
+    FunctionDef, FunctionTest, FunctionTestAssertion, FunctionTestData, FunctionTestDataValue,
+    MeasureDef, NativeFunctionDef, PackageableElement, ProfileDef, Property, QualifiedProperty,
+    UnitDef,
 };
 
 use crate::expression::{
@@ -171,14 +172,23 @@ fn compose_class(w: &mut IndentWriter, c: &ClassDef) {
     compose_tagged_values_inline(w, &c.tagged_values);
     compose_qualified_name(w, c.package.as_ref(), &c.name);
 
-    // Type parameters
-    if !c.type_parameters.is_empty() {
+    // Type parameters and multiplicity parameters
+    if !c.type_parameters.is_empty() || !c.multiplicity_parameters.is_empty() {
         w.write("<");
         for (i, tp) in c.type_parameters.iter().enumerate() {
             if i > 0 {
                 w.write(", ");
             }
             w.write(&maybe_quote(tp));
+        }
+        if !c.multiplicity_parameters.is_empty() {
+            w.write("|");
+            for (i, mp) in c.multiplicity_parameters.iter().enumerate() {
+                if i > 0 {
+                    w.write(", ");
+                }
+                w.write(&maybe_quote(mp));
+            }
         }
         w.write(">");
     }
@@ -391,16 +401,39 @@ fn compose_unit(w: &mut IndentWriter, u: &UnitDef) {
 // Function
 // ---------------------------------------------------------------------------
 
-/// Composes the shared signature portion: `name(params): ReturnType[mult]`.
-fn compose_function_signature<F>(w: &mut IndentWriter, f: &F)
+/// Composes type and multiplicity parameters: `<T, U|m, n>`.
+fn compose_type_and_multiplicity_params(
+    w: &mut IndentWriter,
+    type_params: &[legend_pure_parser_ast::Identifier],
+    mult_params: &[legend_pure_parser_ast::Identifier],
+) {
+    if type_params.is_empty() && mult_params.is_empty() {
+        return;
+    }
+    w.write("<");
+    for (i, tp) in type_params.iter().enumerate() {
+        if i > 0 {
+            w.write(", ");
+        }
+        w.write(&maybe_quote(tp));
+    }
+    if !mult_params.is_empty() {
+        w.write("|");
+        for (i, mp) in mult_params.iter().enumerate() {
+            if i > 0 {
+                w.write(", ");
+            }
+            w.write(&maybe_quote(mp));
+        }
+    }
+    w.write(">");
+}
+
+/// Composes the parameters and return type portion: `(params): ReturnType[mult]`.
+fn compose_function_params_and_return<F>(w: &mut IndentWriter, f: &F)
 where
-    F: legend_pure_parser_ast::element::FunctionSignature
-        + legend_pure_parser_ast::element::PackageableElement
-        + legend_pure_parser_ast::element::Annotated,
+    F: legend_pure_parser_ast::element::FunctionSignature,
 {
-    compose_stereotypes_inline(w, f.stereotypes());
-    compose_tagged_values_inline(w, f.tagged_values());
-    compose_qualified_name(w, f.package(), f.name());
     w.write("(");
     for (i, p) in f.parameters().iter().enumerate() {
         if i > 0 {
@@ -415,7 +448,11 @@ where
 
 fn compose_function(w: &mut IndentWriter, f: &FunctionDef) {
     w.write("function ");
-    compose_function_signature(w, f);
+    compose_stereotypes_inline(w, f.stereotypes());
+    compose_tagged_values_inline(w, f.tagged_values());
+    compose_qualified_name(w, f.package(), f.name());
+    compose_type_and_multiplicity_params(w, &f.type_parameters, &f.multiplicity_parameters);
+    compose_function_params_and_return(w, f);
     w.newline();
 
     // Body
@@ -433,7 +470,11 @@ fn compose_function(w: &mut IndentWriter, f: &FunctionDef) {
 
 fn compose_native_function(w: &mut IndentWriter, f: &NativeFunctionDef) {
     w.write("native function ");
-    compose_function_signature(w, f);
+    compose_stereotypes_inline(w, f.stereotypes());
+    compose_tagged_values_inline(w, f.tagged_values());
+    compose_qualified_name(w, f.package(), f.name());
+    compose_type_and_multiplicity_params(w, &f.type_parameters, &f.multiplicity_parameters);
+    compose_function_params_and_return(w, f);
     w.write_line(";");
 }
 

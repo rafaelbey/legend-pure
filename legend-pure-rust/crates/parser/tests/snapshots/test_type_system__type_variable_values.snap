@@ -24,6 +24,8 @@ SourceFile {
                             },
                         ),
                         name: "test",
+                        type_parameters: [],
+                        multiplicity_parameters: [],
                         parameters: [
                             Parameter {
                                 name: "r",
@@ -32,6 +34,7 @@ SourceFile {
                                         package: None,
                                         name: "Res",
                                         type_arguments: [],
+                                        multiplicity_arguments: [],
                                         type_variable_values: [
                                             Integer(
                                                 1,
@@ -71,6 +74,7 @@ SourceFile {
                                         package: None,
                                         name: "VARCHAR",
                                         type_arguments: [],
+                                        multiplicity_arguments: [],
                                         type_variable_values: [
                                             Integer(
                                                 200,
@@ -109,6 +113,7 @@ SourceFile {
                                 package: None,
                                 name: "Res",
                                 type_arguments: [],
+                                multiplicity_arguments: [],
                                 type_variable_values: [
                                     Integer(
                                         1,

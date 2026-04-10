@@ -53,6 +53,7 @@ SourceFile {
                                         package: None,
                                         name: "A",
                                         type_arguments: [],
+                                        multiplicity_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
@@ -83,6 +84,7 @@ SourceFile {
                                         package: None,
                                         name: "B",
                                         type_arguments: [],
+                                        multiplicity_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",

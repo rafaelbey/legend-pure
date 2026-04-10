@@ -24,6 +24,8 @@ SourceFile {
                             },
                         ),
                         name: "add",
+                        type_parameters: [],
+                        multiplicity_parameters: [],
                         parameters: [
                             Parameter {
                                 name: "a",
@@ -32,6 +34,7 @@ SourceFile {
                                         package: None,
                                         name: "Integer",
                                         type_arguments: [],
+                                        multiplicity_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
@@ -59,6 +62,7 @@ SourceFile {
                                 package: None,
                                 name: "Integer",
                                 type_arguments: [],
+                                multiplicity_arguments: [],
                                 type_variable_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",
@@ -112,6 +116,8 @@ SourceFile {
                             },
                         ),
                         name: "add",
+                        type_parameters: [],
+                        multiplicity_parameters: [],
                         parameters: [
                             Parameter {
                                 name: "a",
@@ -120,6 +126,7 @@ SourceFile {
                                         package: None,
                                         name: "Integer",
                                         type_arguments: [],
+                                        multiplicity_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
@@ -148,6 +155,7 @@ SourceFile {
                                         package: None,
                                         name: "Integer",
                                         type_arguments: [],
+                                        multiplicity_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
@@ -175,6 +183,7 @@ SourceFile {
                                 package: None,
                                 name: "Integer",
                                 type_arguments: [],
+                                multiplicity_arguments: [],
                                 type_variable_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",

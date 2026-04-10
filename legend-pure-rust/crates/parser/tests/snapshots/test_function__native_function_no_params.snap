@@ -60,12 +60,15 @@ SourceFile {
                             },
                         ),
                         name: "now",
+                        type_parameters: [],
+                        multiplicity_parameters: [],
                         parameters: [],
                         return_type: Type(
                             TypeReference {
                                 package: None,
                                 name: "DateTime",
                                 type_arguments: [],
+                                multiplicity_arguments: [],
                                 type_variable_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",

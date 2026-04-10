@@ -321,6 +321,65 @@ impl std::fmt::Display for Multiplicity {
 }
 
 // ---------------------------------------------------------------------------
+// MultiplicityArgument
+// ---------------------------------------------------------------------------
+
+/// A multiplicity argument inside a generic type's angle brackets.
+///
+/// Multiplicity arguments appear after a `|` in type argument lists:
+/// `Function<Z|y>` — `Z` is a type argument, `y` is a multiplicity argument.
+///
+/// A multiplicity argument can be either a named variable (on both declaration
+/// and usage sites) or a concrete multiplicity value (only on usage sites):
+/// - `<T|m>` → `Identifier("m")` (variable)
+/// - `<T|1>` → `Concrete(Multiplicity::one())` (concrete)
+/// - `<T|*>` → `Concrete(Multiplicity::zero_or_many())` (concrete)
+/// - `<T|0..1>` → `Concrete(Multiplicity::zero_or_one())` (concrete)
+#[derive(Debug, Clone, PartialEq)]
+pub enum MultiplicityArgument {
+    /// A multiplicity variable: `y` in `<T|y>`.
+    Identifier(Identifier, SourceInfo),
+    /// A concrete multiplicity: `1` in `<T|1>`, `*` in `<T|*>`.
+    Concrete(Multiplicity, SourceInfo),
+}
+
+impl Spanned for MultiplicityArgument {
+    fn source_info(&self) -> &SourceInfo {
+        match self {
+            Self::Identifier(_, s) | Self::Concrete(_, s) => s,
+        }
+    }
+}
+
+impl std::fmt::Display for MultiplicityArgument {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Identifier(id, _) => write!(f, "{id}"),
+            Self::Concrete(m, _) => {
+                // Display without brackets: "1", "*", "0..1"
+                match m {
+                    Multiplicity::PureOne => write!(f, "1"),
+                    Multiplicity::ZeroOrOne => write!(f, "0..1"),
+                    Multiplicity::ZeroOrMany => write!(f, "*"),
+                    Multiplicity::OneOrMany => write!(f, "1..*"),
+                    Multiplicity::Range {
+                        lower,
+                        upper: Some(u),
+                    } => {
+                        if lower == u {
+                            write!(f, "{lower}")
+                        } else {
+                            write!(f, "{lower}..{u}")
+                        }
+                    }
+                    Multiplicity::Range { lower, upper: None } => write!(f, "{lower}..*"),
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // TypeReference
 // ---------------------------------------------------------------------------
 
@@ -343,6 +402,11 @@ pub struct TypeReference {
     pub name: Identifier,
     /// Generic type arguments: `<String, Integer>`.
     pub type_arguments: Vec<TypeReference>,
+    /// Multiplicity arguments: `y` in `<Z|y>`, `1` in `<T|1>`.
+    ///
+    /// These appear after a `|` separator inside `<...>` on type references.
+    /// Empty for types without multiplicity arguments.
+    pub multiplicity_arguments: Vec<MultiplicityArgument>,
     /// Type variable values: `(200, 'ok')`.
     pub type_variable_values: Vec<TypeVariableValue>,
     /// Source location.
@@ -623,6 +687,7 @@ mod tests {
             package: None,
             name: SmolStr::new("String"),
             type_arguments: vec![],
+            multiplicity_arguments: vec![],
             type_variable_values: vec![],
             source_info: test_src(),
         };
@@ -639,6 +704,7 @@ mod tests {
             ),
             name: SmolStr::new("String"),
             type_arguments: vec![],
+            multiplicity_arguments: vec![],
             type_variable_values: vec![],
             source_info: test_src(),
         };
@@ -651,6 +717,7 @@ mod tests {
             package: None,
             name: SmolStr::new("String"),
             type_arguments: vec![],
+            multiplicity_arguments: vec![],
             type_variable_values: vec![],
             source_info: SourceInfo::new("file.pure", 5, 3, 5, 9),
         };

@@ -24,6 +24,8 @@ SourceFile {
                             },
                         ),
                         name: "validate",
+                        type_parameters: [],
+                        multiplicity_parameters: [],
                         parameters: [
                             Parameter {
                                 name: "this",
@@ -44,6 +46,7 @@ SourceFile {
                                         ),
                                         name: "Validated",
                                         type_arguments: [],
+                                        multiplicity_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
@@ -71,6 +74,7 @@ SourceFile {
                                 package: None,
                                 name: "Boolean",
                                 type_arguments: [],
+                                multiplicity_arguments: [],
                                 type_variable_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",

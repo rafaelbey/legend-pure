@@ -77,3 +77,69 @@ function my::test(r: X<(a:Integer(200), z:V('ok'))>[1]): X<(a:Integer(200), z:V(
     );
     insta::assert_debug_snapshot!(file);
 }
+
+// ---------------------------------------------------------------------------
+// Multiplicity argument tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn multiplicity_args_on_class() {
+    let file = parse_ok(
+        r"###Pure
+Class my::Generic<T|m>
+{
+    value: T[1];
+}",
+    );
+    insta::assert_debug_snapshot!(file);
+}
+
+#[test]
+fn multiplicity_args_on_function() {
+    let file = parse_ok(
+        r"###Pure
+function my::test<Z|y>(col: Z[*]): Z[1]
+{
+    $col
+}",
+    );
+    insta::assert_debug_snapshot!(file);
+}
+
+#[test]
+fn multiplicity_args_concrete() {
+    // Test concrete multiplicity arguments: <T|1>, <T|*>, <T|0..1>
+    let file = parse_ok(
+        r"###Pure
+function my::test(a: Result<String|1>[1], b: Result<Integer|*>[*], c: Result<Boolean|0..1>[0..1]): Boolean[1]
+{
+    true
+}",
+    );
+    insta::assert_debug_snapshot!(file);
+}
+
+#[test]
+fn multiplicity_args_multiple() {
+    // Multiple type args AND multiple multiplicity args
+    let file = parse_ok(
+        r"###Pure
+function my::test(x: MyType<String, Integer|m, n>[1]): Boolean[1]
+{
+    true
+}",
+    );
+    insta::assert_debug_snapshot!(file);
+}
+
+#[test]
+fn multiplicity_args_only_mult_params() {
+    // Class with only multiplicity parameters (no type params): <|m>
+    let file = parse_ok(
+        r"###Pure
+Class my::OnlyMult<|m>
+{
+}",
+    );
+    insta::assert_debug_snapshot!(file);
+}

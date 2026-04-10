@@ -25,6 +25,7 @@ SourceFile {
                         ),
                         name: "EscapedClass",
                         type_parameters: [],
+                        multiplicity_parameters: [],
                         super_types: [],
                         properties: [],
                         qualified_properties: [],

@@ -1,5 +1,5 @@
 ---
-source: crates/parser/tests/test_function.rs
+source: crates/parser/tests/test_type_system.rs
 expression: file
 ---
 SourceFile {
@@ -8,76 +8,44 @@ SourceFile {
             kind: "Pure",
             imports: [],
             elements: [
-                NativeFunction(
-                    NativeFunctionDef {
+                Function(
+                    FunctionDef {
                         package: Some(
                             Package {
-                                name: "string",
-                                parent: Some(
-                                    Package {
-                                        name: "functions",
-                                        parent: Some(
-                                            Package {
-                                                name: "pure",
-                                                parent: Some(
-                                                    Package {
-                                                        name: "meta",
-                                                        parent: None,
-                                                        source_info: SourceInfo {
-                                                            source: "test.pure",
-                                                            start_line: 2,
-                                                            start_column: 17,
-                                                            end_line: 2,
-                                                            end_column: 20,
-                                                        },
-                                                    },
-                                                ),
-                                                source_info: SourceInfo {
-                                                    source: "test.pure",
-                                                    start_line: 2,
-                                                    start_column: 23,
-                                                    end_line: 2,
-                                                    end_column: 26,
-                                                },
-                                            },
-                                        ),
-                                        source_info: SourceInfo {
-                                            source: "test.pure",
-                                            start_line: 2,
-                                            start_column: 29,
-                                            end_line: 2,
-                                            end_column: 37,
-                                        },
-                                    },
-                                ),
+                                name: "my",
+                                parent: None,
                                 source_info: SourceInfo {
                                     source: "test.pure",
                                     start_line: 2,
-                                    start_column: 40,
+                                    start_column: 10,
                                     end_line: 2,
-                                    end_column: 45,
+                                    end_column: 11,
                                 },
                             },
                         ),
-                        name: "plus",
-                        type_parameters: [],
-                        multiplicity_parameters: [],
+                        name: "test",
+                        type_parameters: [
+                            "Z",
+                        ],
+                        multiplicity_parameters: [
+                            "y",
+                        ],
                         parameters: [
                             Parameter {
-                                name: "strings",
+                                name: "col",
                                 type_ref: Some(
                                     TypeReference {
                                         package: None,
-                                        name: "String",
+                                        name: "Z",
                                         type_arguments: [],
                                         multiplicity_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 2,
-                                            start_column: 62,
+                                            start_column: 29,
                                             end_line: 2,
-                                            end_column: 67,
+                                            end_column: 29,
                                         },
                                     },
                                 ),
@@ -87,37 +55,52 @@ SourceFile {
                                 source_info: SourceInfo {
                                     source: "test.pure",
                                     start_line: 2,
-                                    start_column: 53,
+                                    start_column: 24,
                                     end_line: 2,
-                                    end_column: 59,
+                                    end_column: 26,
                                 },
                             },
                         ],
                         return_type: Type(
                             TypeReference {
                                 package: None,
-                                name: "String",
+                                name: "Z",
                                 type_arguments: [],
                                 multiplicity_arguments: [],
                                 type_variable_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",
                                     start_line: 2,
-                                    start_column: 74,
+                                    start_column: 36,
                                     end_line: 2,
-                                    end_column: 79,
+                                    end_column: 36,
                                 },
                             },
                         ),
                         return_multiplicity: PureOne,
+                        body: [
+                            Variable(
+                                Variable {
+                                    name: "col",
+                                    source_info: SourceInfo {
+                                        source: "test.pure",
+                                        start_line: 4,
+                                        start_column: 5,
+                                        end_line: 4,
+                                        end_column: 5,
+                                    },
+                                },
+                            ),
+                        ],
                         stereotypes: [],
                         tagged_values: [],
+                        tests: [],
                         source_info: SourceInfo {
                             source: "test.pure",
                             start_line: 2,
                             start_column: 1,
                             end_line: 2,
-                            end_column: 6,
+                            end_column: 8,
                         },
                     },
                 ),

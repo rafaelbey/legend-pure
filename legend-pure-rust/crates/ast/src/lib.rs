@@ -46,5 +46,6 @@ pub use legend_pure_parser_ast_derive::{Annotated, PackageableElement, Spanned};
 pub use section::{ImportStatement, Section, SourceFile};
 pub use source_info::SourceInfo;
 pub use type_ref::{
-    HasMultiplicity, Identifier, Multiplicity, Package, TypeReference, TypeSpec, UnitReference,
+    HasMultiplicity, Identifier, Multiplicity, MultiplicityArgument, Package, TypeReference,
+    TypeSpec, UnitReference,
 };
