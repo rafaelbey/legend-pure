@@ -298,6 +298,88 @@ impl Value {
 }
 
 // ---------------------------------------------------------------------------
+// Value — multiplicity coercion
+// ---------------------------------------------------------------------------
+
+impl Value {
+    /// Coerce a value to a scalar (for functions expecting `[1]`).
+    ///
+    /// - A scalar value returns itself.
+    /// - A 1-element collection returns the inner value.
+    /// - Unit or multi-element collections produce a multiplicity error.
+    ///
+    /// # Errors
+    /// Returns `MultiplicityViolation` if the value is `Unit` (empty) or
+    /// a collection with length != 1.
+    pub fn to_one(&self) -> Result<&Value, crate::error::PureRuntimeError> {
+        match self {
+            Self::Collection(v) if v.len() == 1 => Ok(&v[0]),
+            Self::Collection(v) => Err(crate::error::PureRuntimeError::MultiplicityViolation {
+                expected: "[1]".into(),
+                actual: v.len(),
+            }),
+            Self::Unit => Err(crate::error::PureRuntimeError::MultiplicityViolation {
+                expected: "[1]".into(),
+                actual: 0,
+            }),
+            other => Ok(other), // already scalar
+        }
+    }
+
+    /// Coerce a value to an optional (for functions expecting `[0..1]`).
+    ///
+    /// - `Unit` or empty collection → `Ok(None)`
+    /// - Scalar or 1-element collection → `Ok(Some(&inner))`
+    /// - Multi-element collection → multiplicity error
+    ///
+    /// # Errors
+    /// Returns `MultiplicityViolation` if the value is a collection with
+    /// more than one element.
+    pub fn to_zero_one(&self) -> Result<Option<&Value>, crate::error::PureRuntimeError> {
+        match self {
+            Self::Unit => Ok(None),
+            Self::Collection(v) if v.is_empty() => Ok(None),
+            Self::Collection(v) if v.len() == 1 => Ok(Some(&v[0])),
+            Self::Collection(v) => Err(crate::error::PureRuntimeError::MultiplicityViolation {
+                expected: "[0..1]".into(),
+                actual: v.len(),
+            }),
+            other => Ok(Some(other)),
+        }
+    }
+
+    /// Coerce a value to a collection (for functions expecting `[*]`).
+    ///
+    /// - A `Collection` returns a clone (O(1) via structural sharing).
+    /// - `Unit` returns an empty `PVector`.
+    /// - Any scalar becomes a 1-element `PVector`.
+    #[must_use]
+    pub fn to_collection(&self) -> PVector<Value> {
+        match self {
+            Self::Collection(v) => v.clone(), // O(1) persistent clone
+            Self::Unit => PVector::new(),
+            other => {
+                let mut v = PVector::new();
+                v.push_back(other.clone());
+                v
+            }
+        }
+    }
+
+    /// Whether this value is "empty" — `Unit` or an empty collection.
+    ///
+    /// Used for multiplicity checks and short-circuit evaluation.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Unit => true,
+            Self::Collection(v) => v.is_empty(),
+            _ => false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Value — Display
 // ---------------------------------------------------------------------------
 
@@ -448,5 +530,126 @@ mod tests {
         let a = Value::Date(PureDate::strict_date(2024, 3, 15).unwrap());
         let b = Value::Date(PureDate::strict_date(2024, 3, 15).unwrap());
         assert_eq!(a, b);
+    }
+
+    // -----------------------------------------------------------------------
+    // Multiplicity coercion tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn to_one_scalar() {
+        let v = Value::Integer(42);
+        assert_eq!(*v.to_one().unwrap(), Value::Integer(42));
+    }
+
+    #[test]
+    fn to_one_single_collection() {
+        let mut pv = PVector::new();
+        pv.push_back(Value::Integer(42));
+        let v = Value::Collection(pv);
+        assert_eq!(*v.to_one().unwrap(), Value::Integer(42));
+    }
+
+    #[test]
+    fn to_one_empty_collection_errors() {
+        let v = Value::Collection(PVector::new());
+        assert!(v.to_one().is_err());
+    }
+
+    #[test]
+    fn to_one_multi_collection_errors() {
+        let mut pv = PVector::new();
+        pv.push_back(Value::Integer(1));
+        pv.push_back(Value::Integer(2));
+        let v = Value::Collection(pv);
+        assert!(v.to_one().is_err());
+    }
+
+    #[test]
+    fn to_one_unit_errors() {
+        assert!(Value::Unit.to_one().is_err());
+    }
+
+    #[test]
+    fn to_zero_one_scalar() {
+        let v = Value::Integer(42);
+        assert_eq!(*v.to_zero_one().unwrap().unwrap(), Value::Integer(42));
+    }
+
+    #[test]
+    fn to_zero_one_unit_is_none() {
+        assert!(Value::Unit.to_zero_one().unwrap().is_none());
+    }
+
+    #[test]
+    fn to_zero_one_empty_collection_is_none() {
+        let v = Value::Collection(PVector::new());
+        assert!(v.to_zero_one().unwrap().is_none());
+    }
+
+    #[test]
+    fn to_zero_one_single_collection() {
+        let mut pv = PVector::new();
+        pv.push_back(Value::String("hi".into()));
+        let v = Value::Collection(pv);
+        assert_eq!(
+            *v.to_zero_one().unwrap().unwrap(),
+            Value::String("hi".into())
+        );
+    }
+
+    #[test]
+    fn to_zero_one_multi_collection_errors() {
+        let mut pv = PVector::new();
+        pv.push_back(Value::Integer(1));
+        pv.push_back(Value::Integer(2));
+        let v = Value::Collection(pv);
+        assert!(v.to_zero_one().is_err());
+    }
+
+    #[test]
+    fn to_collection_from_scalar() {
+        let v = Value::Integer(42);
+        let c = v.to_collection();
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0], Value::Integer(42));
+    }
+
+    #[test]
+    fn to_collection_from_unit() {
+        let c = Value::Unit.to_collection();
+        assert!(c.is_empty());
+    }
+
+    #[test]
+    fn to_collection_from_collection() {
+        let mut pv = PVector::new();
+        pv.push_back(Value::Integer(1));
+        pv.push_back(Value::Integer(2));
+        let v = Value::Collection(pv.clone());
+        let c = v.to_collection();
+        assert_eq!(c, pv);
+    }
+
+    #[test]
+    fn is_empty_unit() {
+        assert!(Value::Unit.is_empty());
+    }
+
+    #[test]
+    fn is_empty_empty_collection() {
+        assert!(Value::Collection(PVector::new()).is_empty());
+    }
+
+    #[test]
+    fn is_empty_scalar_is_false() {
+        assert!(!Value::Integer(42).is_empty());
+    }
+
+    #[test]
+    fn is_empty_nonempty_collection_is_false() {
+        let mut pv = PVector::new();
+        pv.push_back(Value::Integer(1));
+        assert!(!Value::Collection(pv).is_empty());
     }
 }
