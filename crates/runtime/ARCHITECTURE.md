@@ -126,7 +126,7 @@ Uses an **undo-log optimization** for O(1) variable lookups:
 - `pop_scope()` replays the undo log in reverse to restore the previous scope
 - `get()` is a single `HashMap` lookup — O(1) instead of scanning a scope chain
 
-## Execution Model (Future)
+## Execution Model
 
 ```
 evaluate_function(function_id, args)
@@ -136,6 +136,45 @@ evaluate_function(function_id, args)
     ├── Priority 3: Memoized (cache hit)        → pure function cache
     └── Priority 4: Interpreted (expression tree walk)
 ```
+
+### Evaluator (`eval.rs`)
+
+The `Evaluator` is the central struct that walks the semantic AST (from the `pure` crate) and produces `Value`s. It binds together:
+- `heap: RuntimeHeap` for object storage
+- `context: VariableContext` for let-bindings and parameters
+- `natives: &NativeRegistry` for built-in functions
+
+**Crucially, the Evaluator does NOT have a call stack field.** We use a lazy call stack formulation.
+
+### Error Handling (`error.rs`)
+
+We use a two-layer error model:
+- `PureRuntimeError`: Internal computation errors (e.g., `DivisionByZero`, `TypeMismatch`, `FunctionNotFound`). These carry no source information.
+- `PureException`: User-facing errors. These carry a `PureExceptionKind` (Error vs ConstraintViolation), `SourceInfo`, and a `Vec<StackFrame>`.
+
+**Lazy Call Stack Pattern**:
+Instead of `push`/`pop` at every function boundary (which Java does, costing allocation), Rust propagates `PureRuntimeError` upward. At each semantic boundary (e.g., a function call's `eval`), we use `.map_err()` to wrap the error into a `PureException` and append the current `StackFrame`.
+- **Happy path overhead:** Zero (`Result::Ok` return).
+- **Error path:** Allocates frames lazily as it unwinds.
+
+### Multiplicity Coercion
+
+Pure defines type multiplicity: `[1]` (scalar), `[0..1]` (optional), `[*]` (list).
+In Java, *everything* is boxed into a List representation, which creates massive allocation pressure.
+
+In Rust, a scalar is genuinely a scalar (`Value::Integer(42)`). When the interpreter processes a boundary that expects a collection, it uses coercion methods defined on `Value`:
+- `to_one() -> Result<&Value>`: Fails if not exactly one element.
+- `to_zero_one() -> Result<Option<&Value>>`: Maps empty to `None`.
+- `to_collection() -> PVector<Value>`: Wraps scalars or clones existing collections (`O(1)` clone).
+
+### Native Registry (`native.rs`)
+
+Built-in Pure functions (e.g., `plus`, `size`, `substring`) are implemented in Rust to bypass interpretation overhead.
+- `NativeFunction`: A trait implemented by zero-sized structs representing built-in functions.
+- `NativeRegistry`: A HashMap-based lookup table resolving string qualified names to their `NativeFunction` impls.
+- `Evaluator::call_native()`: Locates a function, checks argument lengths, and executes the logic.
+
+(Lambda-dependent functions like `map`, `filter`, `fold` require the `Evaluator` to invoke closures, so they are handled directly within the interpreter loop rather than via simple `NativeFunction` traits.)
 
 ## Thread Safety
 
