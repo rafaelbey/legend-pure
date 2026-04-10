@@ -171,6 +171,7 @@ pub fn convert_generic_type(
         package,
         name,
         type_arguments: type_arguments?,
+        multiplicity_arguments: vec![],
         type_variable_values: vec![], // Simplified — type variable values rarely roundtrip
         source_info: si,
     })
@@ -496,6 +497,7 @@ pub fn convert_value_spec_to_expression(
                 package,
                 name,
                 type_arguments: vec![],
+                multiplicity_arguments: vec![],
                 type_variable_values: vec![],
                 source_info: si.clone(),
             };
@@ -755,6 +757,7 @@ fn convert_class(c: &v1::element::ProtocolClass) -> Result<ast::element::ClassDe
                 package,
                 name,
                 type_arguments: vec![],
+                multiplicity_arguments: vec![],
                 type_variable_values: vec![],
                 source_info: si.clone(),
             })
@@ -765,6 +768,7 @@ fn convert_class(c: &v1::element::ProtocolClass) -> Result<ast::element::ClassDe
         package,
         name: SmolStr::new(&c.name),
         type_parameters: vec![],
+        multiplicity_parameters: vec![],
         super_types: super_types?,
         properties: properties?,
         qualified_properties: qualified_properties?,
@@ -850,6 +854,8 @@ fn convert_function(f: &v1::element::ProtocolFunction) -> Result<ast::element::F
     Ok(ast::element::FunctionDef {
         package,
         name: SmolStr::new(&f.name),
+        type_parameters: vec![],
+        multiplicity_parameters: vec![],
         parameters: parameters?,
         return_type: ast::type_ref::TypeSpec::Type(convert_generic_type(&f.return_generic_type)?),
         return_multiplicity: (&f.return_multiplicity).into(),

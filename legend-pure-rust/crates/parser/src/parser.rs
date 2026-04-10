@@ -39,8 +39,8 @@ use legend_pure_parser_ast::island::IslandExpression;
 use legend_pure_parser_ast::section::{ImportStatement, Section, SourceFile};
 use legend_pure_parser_ast::source_info::SourceInfo;
 use legend_pure_parser_ast::type_ref::{
-    Multiplicity, Package, RELATION_TYPE_SENTINEL, RelationColumn, RelationType, TypeReference,
-    TypeSpec, TypeVariableValue, UnitReference,
+    Identifier, Multiplicity, MultiplicityArgument, Package, RELATION_TYPE_SENTINEL,
+    RelationColumn, RelationType, TypeReference, TypeSpec, TypeVariableValue, UnitReference,
 };
 use legend_pure_parser_lexer::TokenKind;
 use smol_str::SmolStr;
@@ -388,20 +388,8 @@ impl Parser {
         let tagged_values = self.parse_tagged_values()?;
         let (package, name, _) = self.parse_qualified_name()?;
 
-        let type_parameters = if self.cursor.eat(TokenKind::Less) {
-            let mut params = Vec::new();
-            loop {
-                let (p, _) = self.cursor.expect_identifier()?;
-                params.push(p);
-                if !self.cursor.eat(TokenKind::Comma) {
-                    break;
-                }
-            }
-            self.cursor.expect(TokenKind::Greater)?;
-            params
-        } else {
-            vec![]
-        };
+        let (type_parameters, multiplicity_parameters) =
+            self.parse_type_and_multiplicity_parameters()?;
 
         let super_types = if self.cursor.eat(TokenKind::Extends) {
             let mut supers = Vec::new();
@@ -430,6 +418,7 @@ impl Parser {
             package,
             name,
             type_parameters,
+            multiplicity_parameters,
             super_types,
             properties,
             qualified_properties,
@@ -732,6 +721,8 @@ impl Parser {
         let stereotypes = self.parse_stereotypes()?;
         let tagged_values = self.parse_tagged_values()?;
         let (package, name, _) = self.parse_qualified_name()?;
+        let (type_parameters, multiplicity_parameters) =
+            self.parse_type_and_multiplicity_parameters()?;
         self.cursor.expect(TokenKind::LParen)?;
         let mut parameters = Vec::new();
         while !self.cursor.check(TokenKind::RParen) {
@@ -756,6 +747,8 @@ impl Parser {
         Ok(Element::Function(FunctionDef {
             package,
             name,
+            type_parameters,
+            multiplicity_parameters,
             parameters,
             return_type,
             return_multiplicity,
@@ -777,6 +770,8 @@ impl Parser {
         let stereotypes = self.parse_stereotypes()?;
         let tagged_values = self.parse_tagged_values()?;
         let (package, name, _) = self.parse_qualified_name()?;
+        let (type_parameters, multiplicity_parameters) =
+            self.parse_type_and_multiplicity_parameters()?;
         self.cursor.expect(TokenKind::LParen)?;
         let mut parameters = Vec::new();
         while !self.cursor.check(TokenKind::RParen) {
@@ -793,6 +788,8 @@ impl Parser {
         Ok(Element::NativeFunction(NativeFunctionDef {
             package,
             name,
+            type_parameters,
+            multiplicity_parameters,
             parameters,
             return_type,
             return_multiplicity,
@@ -1060,6 +1057,7 @@ impl Parser {
                     package: None,
                     name: col.name,
                     type_arguments: vec![col.type_ref],
+                    multiplicity_arguments: vec![],
                     type_variable_values: vec![],
                     source_info: col.source_info,
                 })
@@ -1068,6 +1066,7 @@ impl Parser {
                 package: None,
                 name: SmolStr::new(RELATION_TYPE_SENTINEL),
                 type_arguments: col_args,
+                multiplicity_arguments: vec![],
                 type_variable_values: vec![],
                 source_info: start.clone(),
             }
@@ -1105,7 +1104,7 @@ impl Parser {
         pkg: Option<Package>,
         name: SmolStr,
     ) -> R<TypeReference> {
-        let type_arguments = if self.cursor.eat(TokenKind::Less) {
+        let (type_arguments, multiplicity_arguments) = if self.cursor.eat(TokenKind::Less) {
             let mut args = Vec::new();
             if self.cursor.check(TokenKind::LParen) {
                 // Column specification: <(a:Integer, b:String)>
@@ -1117,6 +1116,7 @@ impl Parser {
                         package: None,
                         name: col.name,
                         type_arguments: vec![col.type_ref],
+                        multiplicity_arguments: vec![],
                         type_variable_values: vec![],
                         source_info: col.source_info,
                     });
@@ -1129,10 +1129,16 @@ impl Parser {
                     }
                 }
             }
+            // Multiplicity arguments: <TypeArgs | MultArgs>
+            let mult_args = if self.cursor.eat(TokenKind::Pipe) {
+                self.parse_multiplicity_arguments()?
+            } else {
+                vec![]
+            };
             self.cursor.expect(TokenKind::Greater)?;
-            args
+            (args, mult_args)
         } else {
-            vec![]
+            (vec![], vec![])
         };
         let type_variable_values = if self.cursor.eat(TokenKind::LParen) {
             let mut vals = Vec::new();
@@ -1151,6 +1157,7 @@ impl Parser {
             package: pkg,
             name,
             type_arguments,
+            multiplicity_arguments,
             type_variable_values,
             source_info: start,
         })
@@ -1244,6 +1251,133 @@ impl Parser {
         }
         self.cursor.expect(TokenKind::RParen)?;
         Ok(cols)
+    }
+
+    /// Parses optional `<TypeParams | MultParams>` on class/function declarations.
+    ///
+    /// Grammar:
+    /// ```text
+    /// typeAndMultiplicityParameters: '<' ((typeParameters multiplictyParameters?) | multiplictyParameters) '>'
+    /// typeParameters:                identifier (',' identifier)*
+    /// multiplictyParameters:         '|' identifier (',' identifier)*
+    /// ```
+    ///
+    /// Returns `(type_params, mult_params)`. Both may be empty if no `<` is present.
+    fn parse_type_and_multiplicity_parameters(&mut self) -> R<(Vec<Identifier>, Vec<Identifier>)> {
+        if !self.cursor.eat(TokenKind::Less) {
+            return Ok((vec![], vec![]));
+        }
+
+        // Check if it starts with `|` — that means no type params, only mult params.
+        if self.cursor.check(TokenKind::Pipe) {
+            self.cursor.advance(); // eat |
+            let mut mult_params = Vec::new();
+            loop {
+                let (p, _) = self.cursor.expect_identifier()?;
+                mult_params.push(p);
+                if !self.cursor.eat(TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.cursor.expect(TokenKind::Greater)?;
+            return Ok((vec![], mult_params));
+        }
+
+        // Parse type parameters
+        let mut type_params = Vec::new();
+        loop {
+            let (p, _) = self.cursor.expect_identifier()?;
+            type_params.push(p);
+            if !self.cursor.eat(TokenKind::Comma) {
+                break;
+            }
+        }
+
+        // Optional multiplicity parameters after |
+        let mult_params = if self.cursor.eat(TokenKind::Pipe) {
+            let mut params = Vec::new();
+            loop {
+                let (p, _) = self.cursor.expect_identifier()?;
+                params.push(p);
+                if !self.cursor.eat(TokenKind::Comma) {
+                    break;
+                }
+            }
+            params
+        } else {
+            vec![]
+        };
+
+        self.cursor.expect(TokenKind::Greater)?;
+        Ok((type_params, mult_params))
+    }
+
+    /// Parses multiplicity arguments after `|` in a type reference: `<TypeArgs | MultArgs>`.
+    ///
+    /// Grammar:
+    /// ```text
+    /// multiplicityArguments: multiplicityArgument (',' multiplicityArgument)*
+    /// multiplicityArgument: identifier | ((fromMultiplicity '..')? toMultiplicity)
+    /// ```
+    fn parse_multiplicity_arguments(&mut self) -> R<Vec<MultiplicityArgument>> {
+        let mut args = Vec::new();
+        loop {
+            args.push(self.parse_multiplicity_argument()?);
+            if !self.cursor.eat(TokenKind::Comma) {
+                break;
+            }
+        }
+        Ok(args)
+    }
+
+    /// Parses a single multiplicity argument: either an identifier or a concrete multiplicity.
+    fn parse_multiplicity_argument(&mut self) -> R<MultiplicityArgument> {
+        let si = self.cursor.current_source_info();
+        match self.cursor.peek_kind() {
+            TokenKind::Star => {
+                self.cursor.advance();
+                Ok(MultiplicityArgument::Concrete(
+                    Multiplicity::zero_or_many(),
+                    si,
+                ))
+            }
+            TokenKind::IntegerLiteral => {
+                let lo_tok = self.cursor.advance().clone();
+                let lo: u32 = lo_tok.text.parse().unwrap_or(0);
+                if self.cursor.check(TokenKind::Dot) {
+                    self.cursor.advance(); // first dot
+                    self.cursor.expect(TokenKind::Dot)?; // second dot
+                    if self.cursor.check(TokenKind::Star) {
+                        self.cursor.advance();
+                        Ok(MultiplicityArgument::Concrete(
+                            Multiplicity::range(lo, None),
+                            si,
+                        ))
+                    } else {
+                        let hi_tok = self.cursor.expect(TokenKind::IntegerLiteral)?;
+                        let hi: u32 = hi_tok.text.parse().unwrap_or(lo);
+                        Ok(MultiplicityArgument::Concrete(
+                            Multiplicity::range(lo, Some(hi)),
+                            si,
+                        ))
+                    }
+                } else {
+                    Ok(MultiplicityArgument::Concrete(
+                        Multiplicity::range(lo, Some(lo)),
+                        si,
+                    ))
+                }
+            }
+            TokenKind::Identifier => {
+                let (id, _) = self.cursor.expect_identifier()?;
+                Ok(MultiplicityArgument::Identifier(id, si))
+            }
+            _ => Err(ParseError::expected(
+                "multiplicity argument (identifier, integer, or *)",
+                self.cursor.peek_kind(),
+                si,
+            )),
+        }
     }
 
     fn parse_type_variable_value(&mut self) -> R<TypeVariableValue> {

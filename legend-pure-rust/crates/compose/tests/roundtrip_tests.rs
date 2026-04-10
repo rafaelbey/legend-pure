@@ -1850,3 +1850,72 @@ fn test_native_function_multiple_params() {
         native function meta::pure::functions::string::substring(str: String[1], start: Integer[1], end: Integer[1]): String[1];
     "});
 }
+
+// ---------------------------------------------------------------------------
+// Multiplicity argument roundtrips
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_class_with_multiplicity_params() {
+    round_trip(indoc! {"
+        Class my::Generic<T|m>
+        {
+          value: T[1];
+        }
+    "});
+}
+
+#[test]
+fn test_class_only_multiplicity_params() {
+    round_trip(indoc! {"
+        Class my::OnlyMult<|m>
+        {
+        }
+    "});
+}
+
+#[test]
+fn test_class_multiple_type_and_mult_params() {
+    round_trip(indoc! {"
+        Class my::Multi<T, U|m, n>
+        {
+        }
+    "});
+}
+
+#[test]
+fn test_function_with_type_and_mult_params() {
+    round_trip(indoc! {"
+        function my::test<Z|y>(col: Z[*]): Z[1]
+        {
+          $col
+        }
+    "});
+}
+
+#[test]
+fn test_native_function_with_type_and_mult_params() {
+    round_trip(indoc! {"
+        native function meta::pure::collect<T|m>(col: T[*]): T[1];
+    "});
+}
+
+#[test]
+fn test_type_ref_with_concrete_multiplicity_args() {
+    round_trip(indoc! {"
+        function my::test(a: Result<String|1>[1], b: Result<Integer|*>[*]): Boolean[1]
+        {
+          true
+        }
+    "});
+}
+
+#[test]
+fn test_type_ref_with_variable_multiplicity_args() {
+    round_trip(indoc! {"
+        function my::test(x: MyType<String, Integer|m, n>[1]): Boolean[1]
+        {
+          true
+        }
+    "});
+}

@@ -236,6 +236,7 @@ mod tests {
                 package: None,
                 name: SmolStr::new("String"),
                 type_arguments: vec![],
+                multiplicity_arguments: vec![],
                 type_variable_values: vec![],
                 source_info: src(),
             }),

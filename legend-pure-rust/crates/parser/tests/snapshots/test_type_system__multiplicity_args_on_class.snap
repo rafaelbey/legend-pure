@@ -1,5 +1,5 @@
 ---
-source: crates/parser/tests/test_class.rs
+source: crates/parser/tests/test_type_system.rs
 expression: file
 ---
 SourceFile {
@@ -27,7 +27,9 @@ SourceFile {
                         type_parameters: [
                             "T",
                         ],
-                        multiplicity_parameters: [],
+                        multiplicity_parameters: [
+                            "m",
+                        ],
                         super_types: [],
                         properties: [
                             Property {

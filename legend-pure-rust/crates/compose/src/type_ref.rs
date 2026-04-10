@@ -36,13 +36,22 @@ pub fn compose_type_reference(w: &mut IndentWriter, tr: &TypeReference) {
     }
     w.write(&maybe_quote(&tr.name));
 
-    if !tr.type_arguments.is_empty() {
+    if !tr.type_arguments.is_empty() || !tr.multiplicity_arguments.is_empty() {
         w.write("<");
         for (i, arg) in tr.type_arguments.iter().enumerate() {
             if i > 0 {
                 w.write(", ");
             }
             compose_type_reference(w, arg);
+        }
+        if !tr.multiplicity_arguments.is_empty() {
+            w.write("|");
+            for (i, ma) in tr.multiplicity_arguments.iter().enumerate() {
+                if i > 0 {
+                    w.write(", ");
+                }
+                w.write(&ma.to_string());
+            }
         }
         w.write(">");
     }

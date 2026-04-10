@@ -293,6 +293,8 @@ pub struct ClassDef {
     pub name: Identifier,
     /// Type parameters (e.g., `<T, U>` — supported in Rust parser, unlike Java).
     pub type_parameters: Vec<Identifier>,
+    /// Multiplicity parameters (e.g., `m` in `<T|m>`).
+    pub multiplicity_parameters: Vec<Identifier>,
     /// Super types (`extends`).
     pub super_types: Vec<TypeReference>,
     /// Regular properties.
@@ -458,6 +460,10 @@ pub struct FunctionDef {
     pub package: Option<Package>,
     /// The function name.
     pub name: Identifier,
+    /// Type parameters (e.g., `Z` in `<Z|y>`).
+    pub type_parameters: Vec<Identifier>,
+    /// Multiplicity parameters (e.g., `y` in `<Z|y>`).
+    pub multiplicity_parameters: Vec<Identifier>,
     /// Parameters.
     pub parameters: Vec<Parameter>,
     /// Return type (may be a regular type or a unit reference).
@@ -487,6 +493,10 @@ pub struct NativeFunctionDef {
     pub package: Option<Package>,
     /// The function name.
     pub name: Identifier,
+    /// Type parameters (e.g., `T` in `<T|m>`).
+    pub type_parameters: Vec<Identifier>,
+    /// Multiplicity parameters (e.g., `m` in `<T|m>`).
+    pub multiplicity_parameters: Vec<Identifier>,
     /// Parameters.
     pub parameters: Vec<Parameter>,
     /// Return type.
@@ -645,6 +655,7 @@ mod tests {
             package: Some(Package::root(SmolStr::new("model"), src())),
             name: SmolStr::new("Person"),
             type_parameters: vec![],
+            multiplicity_parameters: vec![],
             super_types: vec![],
             properties: vec![Property {
                 name: SmolStr::new("name"),
@@ -652,6 +663,7 @@ mod tests {
                     package: None,
                     name: SmolStr::new("String"),
                     type_arguments: vec![],
+                    multiplicity_arguments: vec![],
                     type_variable_values: vec![],
                     source_info: src(),
                 }),
@@ -731,6 +743,7 @@ mod tests {
                 package: None,
                 name: SmolStr::new("Person"),
                 type_parameters: vec![],
+                multiplicity_parameters: vec![],
                 super_types: vec![],
                 properties: vec![],
                 qualified_properties: vec![],

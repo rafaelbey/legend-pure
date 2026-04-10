@@ -24,6 +24,8 @@ SourceFile {
                             },
                         ),
                         name: "test",
+                        type_parameters: [],
+                        multiplicity_parameters: [],
                         parameters: [
                             Parameter {
                                 name: "r",
@@ -40,6 +42,7 @@ SourceFile {
                                                         package: None,
                                                         name: "Integer",
                                                         type_arguments: [],
+                                                        multiplicity_arguments: [],
                                                         type_variable_values: [
                                                             Integer(
                                                                 200,
@@ -61,6 +64,7 @@ SourceFile {
                                                         },
                                                     },
                                                 ],
+                                                multiplicity_arguments: [],
                                                 type_variable_values: [],
                                                 source_info: SourceInfo {
                                                     source: "test.pure",
@@ -78,6 +82,7 @@ SourceFile {
                                                         package: None,
                                                         name: "V",
                                                         type_arguments: [],
+                                                        multiplicity_arguments: [],
                                                         type_variable_values: [
                                                             String(
                                                                 "ok",
@@ -99,6 +104,7 @@ SourceFile {
                                                         },
                                                     },
                                                 ],
+                                                multiplicity_arguments: [],
                                                 type_variable_values: [],
                                                 source_info: SourceInfo {
                                                     source: "test.pure",
@@ -109,6 +115,7 @@ SourceFile {
                                                 },
                                             },
                                         ],
+                                        multiplicity_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
@@ -140,6 +147,7 @@ SourceFile {
                                             package: None,
                                             name: "Integer",
                                             type_arguments: [],
+                                            multiplicity_arguments: [],
                                             type_variable_values: [
                                                 Integer(
                                                     200,
@@ -175,6 +183,7 @@ SourceFile {
                                             package: None,
                                             name: "V",
                                             type_arguments: [],
+                                            multiplicity_arguments: [],
                                             type_variable_values: [
                                                 String(
                                                     "ok",

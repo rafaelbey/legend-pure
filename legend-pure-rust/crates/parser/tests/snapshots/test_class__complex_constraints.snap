@@ -25,6 +25,7 @@ SourceFile {
                         ),
                         name: "ConstrainedClass",
                         type_parameters: [],
+                        multiplicity_parameters: [],
                         super_types: [],
                         properties: [
                             Property {
@@ -34,6 +35,7 @@ SourceFile {
                                         package: None,
                                         name: "String",
                                         type_arguments: [],
+                                        multiplicity_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",

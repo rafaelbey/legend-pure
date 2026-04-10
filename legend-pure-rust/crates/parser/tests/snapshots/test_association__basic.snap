@@ -44,6 +44,7 @@ SourceFile {
                                         ),
                                         name: "Person",
                                         type_arguments: [],
+                                        multiplicity_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",
@@ -86,6 +87,7 @@ SourceFile {
                                         ),
                                         name: "Firm",
                                         type_arguments: [],
+                                        multiplicity_arguments: [],
                                         type_variable_values: [],
                                         source_info: SourceInfo {
                                             source: "test.pure",

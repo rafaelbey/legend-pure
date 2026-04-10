@@ -100,7 +100,19 @@ impl From<&ast::type_ref::TypeReference> for v1::generic_type::GenericType {
                 source_information: source_information(&tr.source_info),
             },
             type_arguments: tr.type_arguments.iter().map(Into::into).collect(),
-            multiplicity_arguments: vec![],
+            multiplicity_arguments: tr
+                .multiplicity_arguments
+                .iter()
+                .map(|ma| match ma {
+                    ast::type_ref::MultiplicityArgument::Identifier(_, _) => {
+                        // Named multiplicity variables produce a placeholder multiplicity.
+                        // The Java protocol uses the same representation — the name is lost
+                        // and must be recovered by the compiler from parameter position.
+                        v1::multiplicity::Multiplicity::PURE_ONE
+                    }
+                    ast::type_ref::MultiplicityArgument::Concrete(m, _) => m.into(),
+                })
+                .collect(),
             type_variable_values: tr
                 .type_variable_values
                 .iter()
@@ -1091,6 +1103,7 @@ mod tests {
             package: None,
             name: Identifier::new("String"),
             type_arguments: vec![],
+            multiplicity_arguments: vec![],
             type_variable_values: vec![],
             source_info: src(),
         };
@@ -1215,6 +1228,7 @@ mod tests {
             ),
             name: Identifier::new("Person"),
             type_parameters: vec![],
+            multiplicity_parameters: vec![],
             super_types: vec![],
             properties: vec![],
             qualified_properties: vec![],
