@@ -27,6 +27,8 @@ use legend_pure_parser_ast::expression::{
     NewInstanceExpr, NotExpr, PackageableElementRef, TypeReferenceExpr, UnaryMinusExpr, Variable,
 };
 
+use legend_pure_parser_ast::type_ref::{RELATION_TYPE_SENTINEL, TypeReference};
+
 use crate::identifier::{escape_pure_string, maybe_quote};
 use crate::writer::IndentWriter;
 
@@ -504,9 +506,30 @@ pub fn compose_parameter(w: &mut IndentWriter, p: &Parameter) {
     w.write(&maybe_quote(&p.name));
     if let (Some(type_ref), Some(mult)) = (&p.type_ref, &p.multiplicity) {
         w.write(": ");
-        crate::type_ref::compose_type_reference(w, type_ref);
+        if type_ref.name == RELATION_TYPE_SENTINEL && !type_ref.type_arguments.is_empty() {
+            // Relation type encoded as synthetic TypeReference — render as (col:Type, ...)
+            compose_relation_columns(w, &type_ref.type_arguments);
+        } else {
+            crate::type_ref::compose_type_reference(w, type_ref);
+        }
         w.write(&mult.to_string());
     }
+}
+
+/// Renders encoded relation columns from `type_arguments`: `(a:Integer, b:String)`
+fn compose_relation_columns(w: &mut IndentWriter, columns: &[TypeReference]) {
+    w.write("(");
+    for (i, col) in columns.iter().enumerate() {
+        if i > 0 {
+            w.write(", ");
+        }
+        w.write(&maybe_quote(&col.name));
+        w.write(":");
+        if let Some(col_type) = col.type_arguments.first() {
+            crate::type_ref::compose_type_reference(w, col_type);
+        }
+    }
+    w.write(")");
 }
 
 /// Writes a body expression list (e.g., for function or qualified property bodies).

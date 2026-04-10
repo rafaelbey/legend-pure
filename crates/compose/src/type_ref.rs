@@ -17,9 +17,12 @@
 //! Handles:
 //! - Type references: `String`, `Map<K, V>`, `VARCHAR(200)`
 //! - Unit references: `NewMeasure~UnitOne`
-//! - Type specs (either of the above)
+//! - Relation types: `(a:Integer, b:String)`
+//! - Type specs (any of the above)
 
-use legend_pure_parser_ast::type_ref::{TypeReference, TypeSpec, TypeVariableValue, UnitReference};
+use legend_pure_parser_ast::type_ref::{
+    RelationType, TypeReference, TypeSpec, TypeVariableValue, UnitReference,
+};
 
 use crate::expression::compose_package;
 use crate::identifier::{escape_pure_string, maybe_quote};
@@ -70,10 +73,28 @@ pub fn compose_unit_reference(w: &mut IndentWriter, ur: &UnitReference) {
     w.write(&maybe_quote(&ur.unit));
 }
 
-/// Composes a type spec (either a type or unit reference).
+/// Composes a relation type as `(a:Integer, b:String[1])`.
+pub fn compose_relation_type(w: &mut IndentWriter, rt: &RelationType) {
+    w.write("(");
+    for (i, col) in rt.columns.iter().enumerate() {
+        if i > 0 {
+            w.write(", ");
+        }
+        w.write(&maybe_quote(&col.name));
+        w.write(":");
+        compose_type_reference(w, &col.type_ref);
+        if let Some(mult) = &col.multiplicity {
+            w.write(&mult.to_string());
+        }
+    }
+    w.write(")");
+}
+
+/// Composes a type spec (type, unit reference, or relation type).
 pub fn compose_type_spec(w: &mut IndentWriter, ts: &TypeSpec) {
     match ts {
         TypeSpec::Type(tr) => compose_type_reference(w, tr),
         TypeSpec::Unit(ur) => compose_unit_reference(w, ur),
+        TypeSpec::Relation(rt) => compose_relation_type(w, rt),
     }
 }

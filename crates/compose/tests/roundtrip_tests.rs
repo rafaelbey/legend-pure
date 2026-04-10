@@ -1602,6 +1602,26 @@ fn test_function_test_with_doc() {
 }
 
 #[test]
+fn test_relation_type_return() {
+    round_trip(indoc! {"
+        function my::getRelation(): (a:Integer, b:String)[1]
+        {
+          []
+        }
+    "});
+}
+
+#[test]
+fn test_relation_type_parameter() {
+    round_trip(indoc! {"
+        function my::processRelation(r: (name:String, age:Integer)[1]): String[*]
+        {
+          []
+        }
+    "});
+}
+
+#[test]
 fn test_boolean_precedence_or_and() {
     round_trip(indoc! {"
         function withPath::f(s: Integer[1]): String[1]
