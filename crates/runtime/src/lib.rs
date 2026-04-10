@@ -56,5 +56,7 @@
 pub mod context;
 pub mod date;
 pub mod error;
+pub mod eval;
 pub mod heap;
+pub mod native;
 pub mod value;
