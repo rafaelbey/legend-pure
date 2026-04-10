@@ -1,0 +1,64 @@
+name: Rust CI
+
+on:
+  push:
+    paths:
+      - 'legend-pure-rust/**'
+      - '.github/workflows/rust.yml'
+  pull_request:
+    paths:
+      - 'legend-pure-rust/**'
+      - '.github/workflows/rust.yml'
+
+jobs:
+  build_and_test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: legend-pure-rust
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            legend-pure-rust/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('legend-pure-rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check Formatting (cargo fmt)
+        run: cargo fmt --check
+
+      - name: Strict Library Lint (cargo lint-lib)
+        run: cargo lint-lib
+
+      - name: Standard Lint (cargo lint)
+        run: cargo lint
+
+      - name: Build and Test Workspace (cargo test)
+        run: cargo test --workspace
+
+      - name: Run Benchmarks (cargo bench)
+        run: cargo bench --workspace
+
+      - name: Check Copyright Headers
+        run: ./scripts/check-copyright.sh
+
+      - name: Check Documentation Accuracy
+        # Ensure that running cargo doc produces 0 warnings
+        run: cargo doc --workspace --no-deps 2>&1 | grep -c "warning:" | xargs test 0 -eq
