@@ -1422,6 +1422,10 @@ impl Parser {
                     Ok(Multiplicity::range(lo, Some(lo)))
                 }
             }
+            TokenKind::Identifier => {
+                let tok = self.cursor.advance().clone();
+                Ok(Multiplicity::Variable(SmolStr::from(&*tok.text)))
+            }
             _ => Err(ParseError::expected(
                 "multiplicity",
                 self.cursor.peek_kind(),
