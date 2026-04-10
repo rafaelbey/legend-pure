@@ -1279,3 +1279,143 @@ fn expression_function_call_resolved() {
         _ => panic!("expected Function"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3: Expression Lowering — Lambda, Let, NewInstance
+// ---------------------------------------------------------------------------
+
+#[test]
+fn expression_lambda_lowering() {
+    // Stub `filter` — will be removed once the standard library is loaded.
+    let source = r"
+        native function filter(col: Any[*], fn: Any[1]): Any[*];
+        Class test::Person { name: String[1]; age: Integer[1]; }
+        function test::f(people: test::Person[*]): test::Person[*] {
+            $people->filter({p: test::Person[1] | $p.age > 18})
+        }
+    ";
+    let model = compile_one(source).expect("should compile");
+    let id = model
+        .resolve_by_path(&["test".into(), "f".into()])
+        .expect("f should exist");
+    match model.get_element(id) {
+        Element::Function(f) => {
+            assert_eq!(f.body.len(), 1);
+            // body is: $people->filter(lambda)
+            match &f.body[0] {
+                Expression::FunctionCall {
+                    function_name,
+                    arguments,
+                    ..
+                } => {
+                    assert_eq!(function_name.as_str(), "filter");
+                    assert_eq!(arguments.len(), 2, "filter takes target + lambda");
+                    // Second arg should be the lambda
+                    match &arguments[1] {
+                        Expression::Lambda {
+                            parameters, body, ..
+                        } => {
+                            assert_eq!(parameters.len(), 1);
+                            assert_eq!(parameters[0].name.as_str(), "p");
+                            assert!(!body.is_empty());
+                        }
+                        other => panic!("expected Lambda, got {other:?}"),
+                    }
+                }
+                other => panic!("expected FunctionCall, got {other:?}"),
+            }
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+#[test]
+fn expression_let_desugars_to_let_function() {
+    let source = "function test::f(): Integer[1] { let x = 42; $x; }";
+    let model = compile_one(source).expect("should compile");
+    let id = model
+        .resolve_by_path(&["test".into(), "f".into()])
+        .expect("f should exist");
+    match model.get_element(id) {
+        Element::Function(f) => {
+            assert!(f.body.len() >= 2, "body should have let + reference");
+            // First expression should be letFunction
+            match &f.body[0] {
+                Expression::FunctionCall {
+                    function_name,
+                    arguments,
+                    ..
+                } => {
+                    assert_eq!(function_name.as_str(), "letFunction");
+                    assert_eq!(arguments.len(), 2);
+                    // First arg is the variable name as a string literal
+                    assert!(matches!(
+                        &arguments[0],
+                        Expression::StringLiteral(name, _) if name == "x"
+                    ));
+                    // Second arg is the value
+                    assert!(matches!(&arguments[1], Expression::IntegerLiteral(42, _)));
+                }
+                other => panic!("expected letFunction, got {other:?}"),
+            }
+        }
+        _ => panic!("expected Function"),
+    }
+}
+
+#[test]
+fn expression_new_instance_desugars_to_new() {
+    let source = r"
+        Class test::Pair { first: String[1]; second: Integer[1]; }
+        function test::f(): test::Pair[1] { ^test::Pair(first='hello', second=42) }
+    ";
+    let model = compile_one(source).expect("should compile");
+    let id = model
+        .resolve_by_path(&["test".into(), "f".into()])
+        .expect("f should exist");
+    match model.get_element(id) {
+        Element::Function(f) => {
+            assert_eq!(f.body.len(), 1);
+            match &f.body[0] {
+                Expression::FunctionCall {
+                    function_name,
+                    arguments,
+                    ..
+                } => {
+                    assert_eq!(function_name.as_str(), "new");
+                    // class_ref, class_name_string, key1, val1, key2, val2
+                    assert_eq!(arguments.len(), 6);
+                    // First arg is the class element ref
+                    assert!(matches!(
+                        &arguments[0],
+                        Expression::PackageableElementRef { .. }
+                    ));
+                    // Second arg is the class name string
+                    assert!(matches!(
+                        &arguments[1],
+                        Expression::StringLiteral(name, _) if name == "Pair"
+                    ));
+                    // Third arg is first key name
+                    assert!(matches!(
+                        &arguments[2],
+                        Expression::StringLiteral(name, _) if name == "first"
+                    ));
+                    // Fourth arg is first value
+                    assert!(matches!(
+                        &arguments[3],
+                        Expression::StringLiteral(val, _) if val == "hello"
+                    ));
+                    // Fifth arg is second key name
+                    assert!(matches!(
+                        &arguments[4],
+                        Expression::StringLiteral(name, _) if name == "second"
+                    ));
+                    // Sixth arg is second value
+                    assert!(matches!(&arguments[5], Expression::IntegerLiteral(42, _)));
+                }
+                other => panic!("expected new(), got {other:?}"),
+            }
+        }
+        _ => panic!("expected Function"),
+    }
+}
