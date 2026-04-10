@@ -26,9 +26,10 @@
 //! - **Phase 1**: Literals, Variables, Collections, Groups
 //! - **Phase 2**: Operators (→ `FunctionCall`), Function Application, Arrow,
 //!   Member Access, Type References, Packageable Element Refs
+//! - **Phase 3**: Lambda, Let (→ `FunctionCall("letFunction")`),
+//!   New Instance (→ `FunctionCall("new")`), Column (placeholder)
 //!
-//! Remaining expression variants (lambdas, let bindings, new instances,
-//! columns, islands) are handled in Phase 3.
+//! Island expressions produce a diagnostic — full lowering is deferred.
 
 use legend_pure_parser_ast::expression as ast_expr;
 use legend_pure_parser_ast::source_info::{SourceInfo, Spanned};
@@ -75,17 +76,20 @@ pub(crate) fn lower_expression(
             lower_packageable_element_ref(e, ctx, errors)
         }
 
-        // Phase 3 stubs — produce a diagnostic-friendly placeholder
-        _ => {
+        // Phase 3 — Lambda, Let, New, Column, Island
+        ast_expr::Expression::Lambda(e) => lower_lambda(e, ctx, errors),
+        ast_expr::Expression::Let(e) => lower_let(e, ctx, errors),
+        ast_expr::Expression::NewInstance(e) => lower_new_instance(e, ctx, errors),
+        ast_expr::Expression::Column(e) => Some(lower_column(e)),
+        ast_expr::Expression::Island(_) => {
+            // Island lowering is deferred — the AST node is sufficient
+            // for protocol serialization and composer roundtripping.
             let source_info = expr.source_info().clone();
             errors.push(CompilationError {
-                message: format!(
-                    "Expression lowering not yet implemented for {:?}",
-                    expression_kind_name(expr)
-                ),
+                message: "Island expression lowering not yet implemented".to_string(),
                 source_info: source_info.clone(),
                 kind: crate::error::CompilationErrorKind::UnsupportedExpression {
-                    kind: SmolStr::new(expression_kind_name(expr)),
+                    kind: SmolStr::new_static("Island"),
                 },
             });
             None
@@ -444,6 +448,150 @@ fn lower_packageable_element_ref(
 }
 
 // ---------------------------------------------------------------------------
+// Lambda
+// ---------------------------------------------------------------------------
+
+/// Lowers a lambda: `{x: String[1] | $x + 'hello'}` → `ValueSpec::Lambda`.
+///
+/// Lambda parameters are lowered the same way as function parameters.
+/// Untyped parameters (inferred lambdas like `x | $x + 1`) are kept with
+/// best-effort type information — full inference is deferred.
+#[allow(clippy::unnecessary_wraps)] // consistent signature with other lower_* fns
+fn lower_lambda(
+    e: &ast_expr::Lambda,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let parameters = lower_lambda_parameters(&e.parameters, ctx, errors);
+    let body = lower_expression_body(&e.body, ctx, errors);
+    Some(ValueSpec::Lambda {
+        parameters,
+        body,
+        source_info: e.source_info.clone(),
+    })
+}
+
+/// Lower lambda parameters — same as function parameters but tolerates
+/// missing type/multiplicity (untyped lambda params need type inference).
+fn lower_lambda_parameters(
+    params: &[legend_pure_parser_ast::annotation::Parameter],
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Vec<crate::types::Parameter> {
+    params
+        .iter()
+        .map(|p| {
+            let type_expr = p
+                .type_ref
+                .as_ref()
+                .and_then(|tr| resolve::resolve_type_ref(tr, ctx, errors))
+                .unwrap_or(crate::types::TypeExpr::Named {
+                    element: crate::bootstrap::ANY_ID,
+                    type_arguments: vec![],
+                    value_arguments: vec![],
+                });
+            let multiplicity = p.multiplicity.as_ref().map_or(
+                crate::types::Multiplicity::PureOne,
+                resolve::lower_multiplicity,
+            );
+            crate::types::Parameter {
+                name: p.name.clone(),
+                type_expr,
+                multiplicity,
+                source_info: p.source_info.clone(),
+            }
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Let
+// ---------------------------------------------------------------------------
+
+/// Lowers `let x = expr` → `FunctionCall("letFunction", [name, value])`.
+///
+/// Matches the Java M3 desugaring: the variable name becomes a string
+/// literal, and the value is the lowered RHS expression.
+fn lower_let(
+    e: &ast_expr::LetExpr,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let value = lower_expression(&e.value, ctx, errors)?;
+    Some(ValueSpec::FunctionCall {
+        function: None,
+        function_name: SmolStr::new_static("letFunction"),
+        arguments: vec![
+            ValueSpec::StringLiteral(SmolStr::new(e.name.as_str()), e.source_info.clone()),
+            value,
+        ],
+        source_info: e.source_info.clone(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// New instance
+// ---------------------------------------------------------------------------
+
+/// Lowers `^MyClass(prop='val')` → `FunctionCall("new", [class, name, kvs...])`.
+///
+/// Matches the Java M3 desugaring: the class is resolved as an element
+/// reference, followed by the class name as a string, then key-value pairs
+/// as alternating string-name/value arguments.
+fn lower_new_instance(
+    e: &ast_expr::NewInstanceExpr,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let class_id = resolve::resolve_element_ptr(&e.class, &e.source_info, ctx, errors)?;
+
+    // Build argument list: class_ref, className_string, key1, val1, key2, val2, ...
+    let mut arguments = Vec::with_capacity(2 + e.assignments.len() * 2);
+    arguments.push(ValueSpec::PackageableElementRef {
+        element: class_id,
+        source_info: e.source_info.clone(),
+    });
+    arguments.push(ValueSpec::StringLiteral(
+        SmolStr::new(e.class.name.as_str()),
+        e.source_info.clone(),
+    ));
+    for kv in &e.assignments {
+        arguments.push(ValueSpec::StringLiteral(
+            SmolStr::new(kv.key.as_str()),
+            kv.source_info.clone(),
+        ));
+        if let Some(val) = lower_expression(&kv.value, ctx, errors) {
+            arguments.push(val);
+        }
+    }
+
+    Some(ValueSpec::FunctionCall {
+        function: None,
+        function_name: SmolStr::new_static("new"),
+        arguments,
+        source_info: e.source_info.clone(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Column (TDS — placeholder)
+// ---------------------------------------------------------------------------
+
+/// Lowers a column expression to a placeholder `ValueSpec::Column`.
+///
+/// Full TDS column lowering is deferred — the source info is preserved
+/// for diagnostics and protocol output.
+fn lower_column(e: &ast_expr::ColumnExpression) -> ValueSpec {
+    let source_info = match e {
+        ast_expr::ColumnExpression::Name(c) => c.source_info.clone(),
+        ast_expr::ColumnExpression::WithLambda(c) => c.source_info.clone(),
+        ast_expr::ColumnExpression::Typed(c) => c.source_info.clone(),
+        ast_expr::ColumnExpression::WithFunction(c) => c.source_info.clone(),
+    };
+    ValueSpec::Column { source_info }
+}
+
+// ---------------------------------------------------------------------------
 // Date parsing helpers
 // ---------------------------------------------------------------------------
 
@@ -547,33 +695,6 @@ fn parse_subsecond_nanos(frac: &str) -> u32 {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Returns a human-readable name for an expression variant (for diagnostics).
-fn expression_kind_name(expr: &ast_expr::Expression) -> &'static str {
-    match expr {
-        ast_expr::Expression::Literal(_) => "Literal",
-        ast_expr::Expression::Variable(_) => "Variable",
-        ast_expr::Expression::Arithmetic(_) => "Arithmetic",
-        ast_expr::Expression::Comparison(_) => "Comparison",
-        ast_expr::Expression::Logical(_) => "Logical",
-        ast_expr::Expression::Bitwise(_) => "Bitwise",
-        ast_expr::Expression::Not(_) => "Not",
-        ast_expr::Expression::UnaryMinus(_) => "UnaryMinus",
-        ast_expr::Expression::BitwiseNot(_) => "BitwiseNot",
-        ast_expr::Expression::FunctionApplication(_) => "FunctionApplication",
-        ast_expr::Expression::ArrowFunction(_) => "ArrowFunction",
-        ast_expr::Expression::MemberAccess(_) => "MemberAccess",
-        ast_expr::Expression::PackageableElementRef(_) => "PackageableElementRef",
-        ast_expr::Expression::TypeReferenceExpr(_) => "TypeReferenceExpr",
-        ast_expr::Expression::Lambda(_) => "Lambda",
-        ast_expr::Expression::Let(_) => "Let",
-        ast_expr::Expression::Collection(_) => "Collection",
-        ast_expr::Expression::NewInstance(_) => "NewInstance",
-        ast_expr::Expression::Column(_) => "Column",
-        ast_expr::Expression::Island(_) => "Island",
-        ast_expr::Expression::Group(_) => "Group",
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Tests
