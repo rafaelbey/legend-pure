@@ -215,6 +215,11 @@ pub enum Multiplicity {
         /// Upper bound (inclusive), `None` = unbounded.
         upper: Option<u32>,
     },
+    /// A named multiplicity variable: `[m]` where `m` is declared in `<T|m>`.
+    ///
+    /// Has no concrete bounds at parse time — the compiler resolves it by
+    /// binding it to the corresponding multiplicity parameter declaration.
+    Variable(Identifier),
 }
 
 /// Trait for accessing multiplicity bounds.
@@ -286,6 +291,7 @@ impl HasMultiplicity for Multiplicity {
             Self::PureOne | Self::OneOrMany => 1,
             Self::ZeroOrOne | Self::ZeroOrMany => 0,
             Self::Range { lower, .. } => *lower,
+            Self::Variable(_) => 0, // Unknown at parse time; compiler resolves
         }
     }
 
@@ -294,6 +300,7 @@ impl HasMultiplicity for Multiplicity {
             Self::PureOne | Self::ZeroOrOne => Some(1),
             Self::ZeroOrMany | Self::OneOrMany => None,
             Self::Range { upper, .. } => *upper,
+            Self::Variable(_) => None, // Unknown at parse time; compiler resolves
         }
     }
 }
@@ -316,6 +323,7 @@ impl std::fmt::Display for Multiplicity {
                 }
             }
             Self::Range { lower, upper: None } => write!(f, "[{lower}..*]"),
+            Self::Variable(name) => write!(f, "[{name}]"),
         }
     }
 }
@@ -373,6 +381,7 @@ impl std::fmt::Display for MultiplicityArgument {
                         }
                     }
                     Multiplicity::Range { lower, upper: None } => write!(f, "{lower}..*"),
+                    Multiplicity::Variable(name) => write!(f, "{name}"),
                 }
             }
         }

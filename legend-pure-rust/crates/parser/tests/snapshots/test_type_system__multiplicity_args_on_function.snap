@@ -50,7 +50,9 @@ SourceFile {
                                     },
                                 ),
                                 multiplicity: Some(
-                                    ZeroOrMany,
+                                    Variable(
+                                        "y",
+                                    ),
                                 ),
                                 source_info: SourceInfo {
                                     source: "test.pure",
@@ -77,7 +79,9 @@ SourceFile {
                                 },
                             },
                         ),
-                        return_multiplicity: PureOne,
+                        return_multiplicity: Variable(
+                            "y",
+                        ),
                         body: [
                             Variable(
                                 Variable {

@@ -339,6 +339,11 @@ pub(crate) fn lower_multiplicity(m: &ast_type::Multiplicity) -> Multiplicity {
             lower: *lower,
             upper: *upper,
         },
+        // TODO: Implement multiplicity variable binding once the compiler has
+        // a type/multiplicity parameter resolution context. For now, treat
+        // as unbounded — the compiler will need to substitute the actual
+        // multiplicity at the call site.
+        ast_type::Multiplicity::Variable(_) => Multiplicity::ZeroOrMany,
     }
 }
 

@@ -1886,7 +1886,7 @@ fn test_class_multiple_type_and_mult_params() {
 #[test]
 fn test_function_with_type_and_mult_params() {
     round_trip(indoc! {"
-        function my::test<Z|y>(col: Z[*]): Z[1]
+        function my::test<Z|y>(col: Z[y]): Z[y]
         {
           $col
         }
@@ -1896,7 +1896,7 @@ fn test_function_with_type_and_mult_params() {
 #[test]
 fn test_native_function_with_type_and_mult_params() {
     round_trip(indoc! {"
-        native function meta::pure::collect<T|m>(col: T[*]): T[1];
+        native function meta::pure::collect<T|m>(col: T[m]): T[m];
     "});
 }
 

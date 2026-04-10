@@ -98,7 +98,7 @@ Class my::Generic<T|m>
 fn multiplicity_args_on_function() {
     let file = parse_ok(
         r"###Pure
-function my::test<Z|y>(col: Z[*]): Z[1]
+function my::test<Z|y>(col: Z[y]): Z[y]
 {
     $col
 }",
