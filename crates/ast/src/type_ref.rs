@@ -21,6 +21,21 @@ use smol_str::SmolStr;
 use crate::source_info::{SourceInfo, Spanned};
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Sentinel name used in synthetic `TypeReference` nodes that encode relation types.
+///
+/// When a parameter has a bare relation type like `r: (a:Integer, b:String)[1]`,
+/// the parser encodes it as a `TypeReference` with this name (since `Parameter`
+/// stores `TypeReference`, not `TypeSpec`). The composer detects this sentinel
+/// to render `(col:Type, ...)` instead of the default type rendering.
+///
+/// Uses parentheses which are lexically impossible for user-defined identifiers,
+/// guaranteeing no collisions with user types.
+pub const RELATION_TYPE_SENTINEL: &str = "(RelationType)";
+
+// ---------------------------------------------------------------------------
 // Identifier
 // ---------------------------------------------------------------------------
 
@@ -366,25 +381,76 @@ pub struct UnitReference {
     pub source_info: SourceInfo,
 }
 
-/// A type specification that can be either a type or a unit reference.
+// ---------------------------------------------------------------------------
+// RelationType
+// ---------------------------------------------------------------------------
+
+/// A single column in a relation type: `name:Type[mult]`.
 ///
-/// Used in positions where the Pure grammar accepts both type references and
-/// unit names (e.g., property types, return types, parameter types).
+/// # Examples
+///
+/// - `a:Integer` → name `a`, type `Integer`, no multiplicity
+/// - `name:String[1]` → name `name`, type `String`, multiplicity `[1]`
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
+pub struct RelationColumn {
+    /// The column name.
+    pub name: Identifier,
+    /// The column type.
+    pub type_ref: TypeReference,
+    /// Optional multiplicity (e.g., `[1]`, `[*]`).
+    pub multiplicity: Option<Multiplicity>,
+    /// Source location.
+    pub source_info: SourceInfo,
+}
+
+/// A relation type: `(a:Integer, b:String)`.
+///
+/// This is a structural type representing a set of named, typed columns.
+/// It can appear as a standalone type (`(a:Integer, b:String)`) or
+/// wrapped (`Relation<(a:Integer, b:String)>`).
+///
+/// # Examples
+///
+/// ```text
+/// (a:Integer, b:String)
+/// (name:String[1], age:Integer[0..1])
+/// ```
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
+pub struct RelationType {
+    /// The columns in this relation type.
+    pub columns: Vec<RelationColumn>,
+    /// Source location.
+    pub source_info: SourceInfo,
+}
+
+/// A type specification that can be a type, a unit reference, or a relation type.
+///
+/// Used in positions where the Pure grammar accepts type references,
+/// unit names, or relation types (e.g., property types, return types, parameter types).
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeSpec {
     /// A regular type reference: `String`, `Map<K, V>`.
     Type(TypeReference),
     /// A unit reference: `NewMeasure~UnitOne`.
     Unit(UnitReference),
+    /// A relation type: `(a:Integer, b:String)`.
+    Relation(RelationType),
 }
 
 impl TypeSpec {
     /// Returns the underlying `TypeReference` (for units, returns the measure type).
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a `Relation` variant (no underlying `TypeReference`).
     #[must_use]
     pub fn type_ref(&self) -> &TypeReference {
         match self {
             Self::Type(tr) => tr,
             Self::Unit(ur) => &ur.measure,
+            Self::Relation(_) => {
+                unreachable!("type_ref() called on TypeSpec::Relation — use pattern matching")
+            }
         }
     }
 
@@ -394,6 +460,7 @@ impl TypeSpec {
         match self {
             Self::Type(tr) => tr.full_path(),
             Self::Unit(ur) => format!("{}~{}", ur.measure.full_path(), ur.unit),
+            Self::Relation(_) => "<RelationType>".to_string(),
         }
     }
 }
@@ -403,6 +470,7 @@ impl Spanned for TypeSpec {
         match self {
             Self::Type(tr) => &tr.source_info,
             Self::Unit(ur) => &ur.source_info,
+            Self::Relation(r) => &r.source_info,
         }
     }
 }

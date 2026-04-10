@@ -120,6 +120,39 @@ impl From<&ast::type_ref::TypeSpec> for v1::generic_type::GenericType {
                 gt.raw_type.full_path = ts.full_path();
                 gt
             }
+            ast::type_ref::TypeSpec::Relation(rt) => {
+                // Encode relation type as GenericType with column info as type arguments.
+                // Each column becomes a type argument with name = column name.
+                let si = source_information(&rt.source_info);
+                let type_arguments: Vec<v1::generic_type::GenericType> = rt
+                    .columns
+                    .iter()
+                    .map(|col| {
+                        let col_type: v1::generic_type::GenericType = (&col.type_ref).into();
+                        let col_si = source_information(&col.source_info);
+                        v1::generic_type::GenericType {
+                            raw_type: v1::generic_type::PackageableType {
+                                full_path: col.name.to_string(),
+                                source_information: col_si.clone(),
+                            },
+                            type_arguments: vec![col_type],
+                            multiplicity_arguments: vec![],
+                            type_variable_values: vec![],
+                            source_information: col_si,
+                        }
+                    })
+                    .collect();
+                v1::generic_type::GenericType {
+                    raw_type: v1::generic_type::PackageableType {
+                        full_path: "meta::pure::metamodel::relation::RelationType".to_string(),
+                        source_information: si.clone(),
+                    },
+                    type_arguments,
+                    multiplicity_arguments: vec![],
+                    type_variable_values: vec![],
+                    source_information: si,
+                }
+            }
         }
     }
 }

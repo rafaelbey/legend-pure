@@ -39,7 +39,8 @@ use legend_pure_parser_ast::island::IslandExpression;
 use legend_pure_parser_ast::section::{ImportStatement, Section, SourceFile};
 use legend_pure_parser_ast::source_info::SourceInfo;
 use legend_pure_parser_ast::type_ref::{
-    Multiplicity, Package, TypeReference, TypeSpec, TypeVariableValue, UnitReference,
+    Multiplicity, Package, RELATION_TYPE_SENTINEL, RelationColumn, RelationType, TypeReference,
+    TypeSpec, TypeVariableValue, UnitReference,
 };
 use legend_pure_parser_lexer::TokenKind;
 use smol_str::SmolStr;
@@ -1048,7 +1049,31 @@ impl Parser {
         let start = self.cursor.current_source_info();
         let (name, _) = self.cursor.expect_identifier_or_keyword()?;
         self.cursor.expect(TokenKind::Colon)?;
-        let type_ref = self.parse_type_reference()?;
+        let type_ref = if self.cursor.check(TokenKind::LParen) {
+            // Bare relation type in parameter position: (col:Type, ...)
+            let cols = self.parse_relation_columns()?;
+            // Encode as a synthetic TypeReference — the column info is
+            // preserved in type_arguments for downstream consumers.
+            let col_args: Vec<TypeReference> = cols
+                .into_iter()
+                .map(|col| TypeReference {
+                    package: None,
+                    name: col.name,
+                    type_arguments: vec![col.type_ref],
+                    type_variable_values: vec![],
+                    source_info: col.source_info,
+                })
+                .collect();
+            TypeReference {
+                package: None,
+                name: SmolStr::new(RELATION_TYPE_SENTINEL),
+                type_arguments: col_args,
+                type_variable_values: vec![],
+                source_info: start.clone(),
+            }
+        } else {
+            self.parse_type_reference()?
+        };
         self.cursor.expect(TokenKind::LBracket)?;
         let multiplicity = self.parse_multiplicity()?;
         self.cursor.expect(TokenKind::RBracket)?;
@@ -1066,11 +1091,36 @@ impl Parser {
         let start = self.cursor.current_source_info();
         let path = self.parse_package_path()?;
         let (pkg, name) = split_package_name(&path);
+        self.finish_type_reference(start, pkg, name)
+    }
+
+    /// Completes type reference parsing after the package path has been consumed.
+    ///
+    /// This allows callers (like `parse_type_spec`) to parse the path first,
+    /// inspect ahead for `<(` column-spec syntax, and then delegate here for
+    /// the standard `<TypeArgs>(TypeVarValues)` continuation.
+    fn finish_type_reference(
+        &mut self,
+        start: SourceInfo,
+        pkg: Option<Package>,
+        name: SmolStr,
+    ) -> R<TypeReference> {
         let type_arguments = if self.cursor.eat(TokenKind::Less) {
             let mut args = Vec::new();
             if self.cursor.check(TokenKind::LParen) {
                 // Column specification: <(a:Integer, b:String)>
-                args = self.parse_column_spec()?;
+                // Encode columns as type_arguments for backward compatibility.
+                // In parse_type_spec context, these are promoted to TypeSpec::Relation.
+                let cols = self.parse_relation_columns()?;
+                for col in cols {
+                    args.push(TypeReference {
+                        package: None,
+                        name: col.name,
+                        type_arguments: vec![col.type_ref],
+                        type_variable_values: vec![],
+                        source_info: col.source_info,
+                    });
+                }
             } else {
                 loop {
                     args.push(self.parse_type_reference()?);
@@ -1106,13 +1156,40 @@ impl Parser {
         })
     }
 
-    /// Parses a type specification that can be either a type or a unit reference.
+    /// Parses a type specification that can be a type, unit reference, or relation type.
     ///
-    /// Used in positions where the Pure grammar accepts both:
+    /// Used in positions where the Pure grammar accepts:
     /// - Regular types: `String`, `Map<K, V>`
     /// - Unit references: `NewMeasure~UnitOne`
+    /// - Relation types: `(a:Integer, b:String)` or `Relation<(a:Integer, b:String)>`
     fn parse_type_spec(&mut self) -> R<TypeSpec> {
-        let type_ref = self.parse_type_reference()?;
+        // Bare relation type: (col:Type, ...)
+        if self.cursor.check(TokenKind::LParen) {
+            return self.parse_relation_type();
+        }
+
+        let start = self.cursor.current_source_info();
+
+        // Parse the qualified name first (e.g. `Relation`, `meta::pure::Relation`).
+        let path = self.parse_package_path()?;
+
+        // Check for `<(` — this is column-spec syntax (e.g. `Relation<(a:Integer)>`).
+        // We detect it structurally by token sequence rather than name-matching,
+        // so user types named "Relation" with regular type args aren't affected.
+        if self.cursor.check(TokenKind::Less) && self.cursor.peek_kind_at(1) == TokenKind::LParen {
+            self.cursor.expect(TokenKind::Less)?;
+            let columns = self.parse_relation_columns()?;
+            self.cursor.expect(TokenKind::Greater)?;
+            return Ok(TypeSpec::Relation(RelationType {
+                columns,
+                source_info: start,
+            }));
+        }
+
+        // Standard type reference: parse remaining <TypeArgs>(TypeVarValues)
+        let (pkg, name) = split_package_name(&path);
+        let type_ref = self.finish_type_reference(start, pkg, name)?;
+
         if self.cursor.eat(TokenKind::Tilde) {
             let si = self.cursor.current_source_info();
             let (unit_name, _) = self.cursor.expect_identifier_or_keyword()?;
@@ -1126,10 +1203,20 @@ impl Parser {
         }
     }
 
-    /// Parse column specification: (a:Integer, b:String)
-    /// Each column becomes a `TypeReference` where the column name is the path
-    /// and the column type is a nested type argument.
-    fn parse_column_spec(&mut self) -> R<Vec<TypeReference>> {
+    /// Parse a bare relation type: `(col:Type[mult]?, ...)`
+    fn parse_relation_type(&mut self) -> R<TypeSpec> {
+        let si = self.cursor.current_source_info();
+        let columns = self.parse_relation_columns()?;
+        Ok(TypeSpec::Relation(RelationType {
+            columns,
+            source_info: si,
+        }))
+    }
+
+    /// Parse relation columns: `(name:Type[mult]?, ...)`
+    ///
+    /// Shared by both bare relation types and `Relation<(...)>` syntax.
+    fn parse_relation_columns(&mut self) -> R<Vec<RelationColumn>> {
         self.cursor.expect(TokenKind::LParen)?;
         let mut cols = Vec::new();
         loop {
@@ -1137,11 +1224,18 @@ impl Parser {
             let (col_name, _) = self.cursor.expect_identifier_or_keyword()?;
             self.cursor.expect(TokenKind::Colon)?;
             let col_type = self.parse_type_reference()?;
-            cols.push(TypeReference {
-                package: None,
+            let multiplicity = if self.cursor.check(TokenKind::LBracket) {
+                self.cursor.expect(TokenKind::LBracket)?;
+                let mult = self.parse_multiplicity()?;
+                self.cursor.expect(TokenKind::RBracket)?;
+                Some(mult)
+            } else {
+                None
+            };
+            cols.push(RelationColumn {
                 name: col_name,
-                type_arguments: vec![col_type],
-                type_variable_values: vec![],
+                type_ref: col_type,
+                multiplicity,
                 source_info: col_si,
             });
             if !self.cursor.eat(TokenKind::Comma) {
