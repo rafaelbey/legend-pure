@@ -430,7 +430,7 @@ mod tests {
     #[test]
     fn value_float_auto_promote() {
         let v = Value::Integer(42);
-        assert_eq!(v.as_float().unwrap(), 42.0);
+        assert!((v.as_float().unwrap() - 42.0).abs() < f64::EPSILON);
     }
 
     #[test]

@@ -14,6 +14,8 @@
 
 //! Stress test pipeline benchmarks.
 
+#![allow(clippy::similar_names)]
+
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 use legend_pure_parser_stress::alloc;
@@ -209,7 +211,9 @@ fn bench_compile(c: &mut Criterion) {
     group.bench_function("hub_spoke_1k", |b| {
         let baseline_bytes = alloc::current_bytes();
         alloc::reset();
-        b.iter(|| legend_pure_parser_pure::compile!(black_box(&[ast_hub_1k.clone()])).unwrap());
+        b.iter(|| {
+            legend_pure_parser_pure::compile!(black_box(std::slice::from_ref(&ast_hub_1k))).unwrap()
+        });
         let mem = alloc::snapshot();
         println!(
             "  peak_memory_delta: {} KB",
@@ -223,7 +227,10 @@ fn bench_compile(c: &mut Criterion) {
     group.bench_function("hub_spoke_10k", |b| {
         let baseline_bytes = alloc::current_bytes();
         alloc::reset();
-        b.iter(|| legend_pure_parser_pure::compile!(black_box(&[ast_hub_10k.clone()])).unwrap());
+        b.iter(|| {
+            legend_pure_parser_pure::compile!(black_box(std::slice::from_ref(&ast_hub_10k)))
+                .unwrap()
+        });
         let mem = alloc::snapshot();
         println!(
             "  peak_memory_delta: {} KB",
@@ -237,7 +244,10 @@ fn bench_compile(c: &mut Criterion) {
     group.bench_function("dense_10k", |b| {
         let baseline_bytes = alloc::current_bytes();
         alloc::reset();
-        b.iter(|| legend_pure_parser_pure::compile!(black_box(&[ast_dense_10k.clone()])).unwrap());
+        b.iter(|| {
+            legend_pure_parser_pure::compile!(black_box(std::slice::from_ref(&ast_dense_10k)))
+                .unwrap()
+        });
         let mem = alloc::snapshot();
         println!(
             "  peak_memory_delta: {} KB",

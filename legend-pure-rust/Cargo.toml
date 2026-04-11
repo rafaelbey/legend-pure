@@ -61,7 +61,11 @@ jni = "0.21"
 linkme = "0.3"
 
 # Testing
+criterion = { version = "0.5", features = ["html_reports"] }
 insta = { version = "1", features = ["json"] }
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"
 
 # Proc-macro (ast-derive)
 syn = "2"

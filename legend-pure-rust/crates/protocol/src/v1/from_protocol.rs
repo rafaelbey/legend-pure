@@ -321,16 +321,14 @@ fn convert_json_to_parameter(json: &serde_json::Value) -> Result<ast::annotation
             let gt = var
                 .generic_type
                 .as_ref()
-                .ok_or(ConversionError::UnsupportedValueSpec)?;
-            let mult = var
-                .multiplicity
-                .as_ref()
-                .ok_or(ConversionError::UnsupportedValueSpec)?;
+                .map(convert_generic_type)
+                .transpose()?;
+            let mult = var.multiplicity.as_ref().map(std::convert::Into::into);
             let si = source_info_or_synthetic(var.source_information.as_ref());
             Ok(ast::annotation::Parameter {
                 name: SmolStr::new(&var.name),
-                type_ref: Some(convert_generic_type(gt)?),
-                multiplicity: Some(mult.into()),
+                type_ref: gt,
+                multiplicity: mult,
                 source_info: si,
             })
         }

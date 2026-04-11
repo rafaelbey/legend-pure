@@ -350,4 +350,36 @@ mod tests {
             Value::String("42".into())
         );
     }
+
+    #[test]
+    fn wrong_arg_count_errors() {
+        assert!(StringPlus.execute(&[Value::String("a".into())]).is_err());
+        assert!(Length.execute(&[]).is_err());
+        assert!(Substring.execute(&[Value::String("a".into())]).is_err());
+        assert!(ToString.execute(&[]).is_err());
+    }
+
+    #[test]
+    fn type_mismatch_errors() {
+        assert!(
+            StringPlus
+                .execute(&[Value::Integer(1), Value::String("b".into())])
+                .is_err()
+        );
+        assert!(Length.execute(&[Value::Integer(1)]).is_err());
+        assert!(
+            Substring
+                .execute(&[
+                    Value::String("a".into()),
+                    Value::String("b".into()),
+                    Value::Integer(1)
+                ])
+                .is_err()
+        );
+        assert!(
+            Contains
+                .execute(&[Value::String("a".into()), Value::Integer(1)])
+                .is_err()
+        );
+    }
 }

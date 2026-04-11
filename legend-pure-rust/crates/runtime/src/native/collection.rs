@@ -407,4 +407,41 @@ mod tests {
             int_collection(&[1, 2, 3, 4])
         );
     }
+
+    #[test]
+    fn type_mismatch_errors() {
+        assert!(
+            At.execute(&[int_collection(&[1, 2]), Value::String("1".into())])
+                .is_err()
+        );
+        assert!(
+            Range
+                .execute(&[
+                    Value::String("1".into()),
+                    Value::Integer(5),
+                    Value::Integer(1)
+                ])
+                .is_err()
+        );
+        assert!(
+            Take.execute(&[int_collection(&[1, 2]), Value::String("1".into())])
+                .is_err()
+        );
+        assert!(
+            Drop.execute(&[int_collection(&[1, 2]), Value::String("1".into())])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn wrong_arg_count_errors() {
+        assert!(Size.execute(&[]).is_err());
+        assert!(At.execute(&[int_collection(&[1])]).is_err());
+        assert!(
+            Range
+                .execute(&[Value::Integer(1), Value::Integer(5)])
+                .is_err()
+        );
+        assert!(Take.execute(&[int_collection(&[1])]).is_err());
+    }
 }

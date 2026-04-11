@@ -225,4 +225,34 @@ mod tests {
             Value::Boolean(true)
         );
     }
+
+    #[test]
+    fn wrong_arg_count_errors() {
+        assert!(Equal.execute(&[Value::Integer(1)]).is_err());
+        assert!(LessThan.execute(&[]).is_err());
+    }
+
+    #[test]
+    fn invalid_type_comparisons() {
+        // LessThan on non-comparable types
+        assert!(
+            LessThan
+                .execute(&[Value::String("1".into()), Value::Integer(1)])
+                .is_err()
+        );
+        // Date vs String
+        assert!(
+            LessThan
+                .execute(&[
+                    Value::Date(crate::date::PureDate::strict_date(2024, 1, 1).unwrap()),
+                    Value::String("2024-01-01".into())
+                ])
+                .is_err()
+        );
+        assert!(
+            GreaterThan
+                .execute(&[Value::Boolean(true), Value::Boolean(false)])
+                .is_err()
+        );
+    }
 }

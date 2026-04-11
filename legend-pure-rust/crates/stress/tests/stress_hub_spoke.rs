@@ -21,12 +21,12 @@ use legend_pure_parser_pure::model::Element;
 use smol_str::SmolStr;
 
 /// Runs the full pipeline for a hub-spoke model and validates the result.
-fn run_hub_spoke(title: &str, config: HubSpokeConfig) {
+fn run_hub_spoke(title: &str, config: &HubSpokeConfig) {
     println!();
 
     // Phase 0: Generate source
     let t0 = PhaseTimer::start("Phase 0 (generate source)");
-    let (source, stats) = hub_spoke::generate(&config);
+    let (source, stats) = hub_spoke::generate(config);
     t0.stop();
 
     stats.print(title);
@@ -67,7 +67,7 @@ fn run_hub_spoke(title: &str, config: HubSpokeConfig) {
 
     // Phase 4: Model assertions
     let t4 = PhaseTimer::start("Phase 4 (model assertions)");
-    validate_model(&model, &config, &stats);
+    validate_model(&model, config, &stats);
     t4.stop();
 
     // Phase 5: Path resolution benchmark
@@ -211,16 +211,16 @@ fn validate_model(
 
 #[test]
 fn stress_1k_hub_spoke() {
-    run_hub_spoke("Hub-Spoke 1K", HubSpokeConfig::standard_1k());
+    run_hub_spoke("Hub-Spoke 1K", &HubSpokeConfig::standard_1k());
 }
 
 #[test]
 fn stress_10k_hub_spoke() {
-    run_hub_spoke("Hub-Spoke 10K", HubSpokeConfig::standard_10k());
+    run_hub_spoke("Hub-Spoke 10K", &HubSpokeConfig::standard_10k());
 }
 
 #[test]
 #[cfg(feature = "heavy")]
 fn stress_100k_hub_spoke() {
-    run_hub_spoke("Hub-Spoke 100K", HubSpokeConfig::standard_100k());
+    run_hub_spoke("Hub-Spoke 100K", &HubSpokeConfig::standard_100k());
 }

@@ -600,6 +600,38 @@ mod tests {
         assert_eq!(d.get_day(), None);
         assert!(!d.has_time());
         assert_eq!(d.to_string(), "2024");
+        assert!(d.add_hours(1).is_err());
+        assert!(d.add_minutes(1).is_err());
+        assert!(d.add_seconds(1).is_err());
+    }
+
+    #[test]
+    fn strict_time_tests() {
+        let t = StrictTime::new(10, 30, 45, 123_456_000).unwrap();
+        assert_eq!(t.hour(), 10);
+        assert_eq!(t.minute(), 30);
+        assert_eq!(t.second(), 45);
+        assert_eq!(t.nanosecond(), 123_456_000);
+        assert_eq!(t.to_string(), "10:30:45.123456");
+
+        let t2 = StrictTime::new(23, 59, 59, 0).unwrap();
+        assert_eq!(t2.to_string(), "23:59:59");
+    }
+
+    #[test]
+    fn time_addition() {
+        let d = PureDate::datetime(2024, 3, 15, 10, 30, 0, 0, TimePrecision::Minute).unwrap();
+        let d_h = d.add_hours(2).unwrap();
+        assert_eq!(d_h.to_string(), "2024-03-15T12:30+0000");
+
+        let d_m = d.add_minutes(15).unwrap();
+        assert_eq!(d_m.to_string(), "2024-03-15T10:45+0000");
+
+        assert!(d.add_seconds(30).is_err());
+
+        let d2 = PureDate::datetime(2024, 3, 15, 10, 30, 15, 0, TimePrecision::Second).unwrap();
+        let d2_s = d2.add_seconds(30).unwrap();
+        assert_eq!(d2_s.to_string(), "2024-03-15T10:30:45+0000");
     }
 
     #[test]
