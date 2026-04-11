@@ -36,7 +36,7 @@
 //!
 //! The evaluator uses the lazy call stack pattern: it does **not** maintain
 //! a call stack during the happy path. Instead, when an error occurs, each
-//! `map_err` in the recursive call chain appends a [`StackFrame`] as the
+//! `map_err` in the recursive call chain appends a [`StackFrame`](crate::error::StackFrame) as the
 //! `Err(PureException)` propagates upward. This gives us **zero overhead**
 //! on the hot path and rich diagnostics on failure.
 //!
@@ -140,6 +140,16 @@ impl<'model> Evaluator<'model> {
     pub fn call_native(&self, name: &str, args: &[Value]) -> Result<Value, PureException> {
         let func = self.natives.get_or_err(name).map_err(PureException::from)?;
         func.execute(args).map_err(PureException::from)
+    }
+
+    /// Call a Pure function by its fully qualified name.
+    ///
+    ///
+    /// # Errors
+    /// Returns `PureException` if evaluation fails.
+    #[allow(clippy::result_large_err)] // PureException is intentionally rich
+    pub fn call(&mut self, _name: &str, _args: &[Value]) -> Result<Value, PureException> {
+        unimplemented!("Compiler IR evaluation is not yet implemented")
     }
 }
 

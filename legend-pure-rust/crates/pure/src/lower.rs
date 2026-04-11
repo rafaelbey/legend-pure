@@ -37,7 +37,16 @@ use smol_str::SmolStr;
 
 use crate::error::CompilationError;
 use crate::resolve::{self, ResolutionContext};
-use crate::types::{DateValue, ValueSpec};
+use crate::types::{DateValue, ExprKind, ValueSpec};
+
+/// Convenience: wrap an `ExprKind` into a `ValueSpec` with no type info.
+fn untyped(kind: ExprKind, source_info: SourceInfo) -> ValueSpec {
+    ValueSpec {
+        kind,
+        source_info,
+        type_info: None,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -117,34 +126,40 @@ pub(crate) fn lower_expression_body(
 /// Lowers an AST literal to a `ValueSpec`.
 fn lower_literal(lit: &ast_expr::Literal) -> Option<ValueSpec> {
     match lit {
-        ast_expr::Literal::Integer(i) => {
-            Some(ValueSpec::IntegerLiteral(i.value, i.source_info.clone()))
-        }
-        ast_expr::Literal::Float(f) => {
-            Some(ValueSpec::FloatLiteral(f.value, f.source_info.clone()))
-        }
+        ast_expr::Literal::Integer(i) => Some(untyped(
+            ExprKind::IntegerLiteral(i.value),
+            i.source_info.clone(),
+        )),
+        ast_expr::Literal::Float(f) => Some(untyped(
+            ExprKind::FloatLiteral(f.value),
+            f.source_info.clone(),
+        )),
         ast_expr::Literal::Decimal(d) => {
             let decimal = d.value.parse::<rust_decimal::Decimal>().ok()?;
-            Some(ValueSpec::DecimalLiteral(decimal, d.source_info.clone()))
+            Some(untyped(
+                ExprKind::DecimalLiteral(decimal),
+                d.source_info.clone(),
+            ))
         }
-        ast_expr::Literal::String(s) => Some(ValueSpec::StringLiteral(
-            SmolStr::new(&s.value),
+        ast_expr::Literal::String(s) => Some(untyped(
+            ExprKind::StringLiteral(SmolStr::new(&s.value)),
             s.source_info.clone(),
         )),
-        ast_expr::Literal::Boolean(b) => {
-            Some(ValueSpec::BooleanLiteral(b.value, b.source_info.clone()))
-        }
+        ast_expr::Literal::Boolean(b) => Some(untyped(
+            ExprKind::BooleanLiteral(b.value),
+            b.source_info.clone(),
+        )),
         ast_expr::Literal::StrictDate(d) => {
             let dv = parse_strict_date(&d.value)?;
-            Some(ValueSpec::DateLiteral(dv, d.source_info.clone()))
+            Some(untyped(ExprKind::DateLiteral(dv), d.source_info.clone()))
         }
         ast_expr::Literal::DateTime(d) => {
             let dv = parse_datetime(&d.value)?;
-            Some(ValueSpec::DateLiteral(dv, d.source_info.clone()))
+            Some(untyped(ExprKind::DateLiteral(dv), d.source_info.clone()))
         }
         ast_expr::Literal::StrictTime(t) => {
             let dv = parse_strict_time(&t.value)?;
-            Some(ValueSpec::DateLiteral(dv, t.source_info.clone()))
+            Some(untyped(ExprKind::DateLiteral(dv), t.source_info.clone()))
         }
     }
 }
@@ -155,10 +170,12 @@ fn lower_literal(lit: &ast_expr::Literal) -> Option<ValueSpec> {
 
 /// Lowers a variable reference `$name`.
 fn lower_variable(var: &ast_expr::Variable) -> ValueSpec {
-    ValueSpec::Variable {
-        name: var.name.clone(),
-        source_info: var.source_info.clone(),
-    }
+    untyped(
+        ExprKind::Variable {
+            name: var.name.clone(),
+        },
+        var.source_info.clone(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -176,10 +193,7 @@ fn lower_collection(
         .iter()
         .filter_map(|e| lower_expression(e, ctx, errors))
         .collect();
-    ValueSpec::Collection {
-        elements,
-        source_info: coll.source_info.clone(),
-    }
+    untyped(ExprKind::Collection { elements }, coll.source_info.clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -197,12 +211,14 @@ fn binary_op(
 ) -> Option<ValueSpec> {
     let l = lower_expression(left, ctx, errors)?;
     let r = lower_expression(right, ctx, errors)?;
-    Some(ValueSpec::FunctionCall {
-        function: None,
-        function_name: SmolStr::new(name),
-        arguments: vec![l, r],
-        source_info: source_info.clone(),
-    })
+    Some(untyped(
+        ExprKind::FunctionCall {
+            function: None,
+            function_name: SmolStr::new(name),
+            arguments: vec![l, r],
+        },
+        source_info.clone(),
+    ))
 }
 
 /// Helper: build a unary operator `FunctionCall`.
@@ -214,12 +230,14 @@ fn unary_op(
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
     let inner = lower_expression(operand, ctx, errors)?;
-    Some(ValueSpec::FunctionCall {
-        function: None,
-        function_name: SmolStr::new(name),
-        arguments: vec![inner],
-        source_info: source_info.clone(),
-    })
+    Some(untyped(
+        ExprKind::FunctionCall {
+            function: None,
+            function_name: SmolStr::new(name),
+            arguments: vec![inner],
+        },
+        source_info.clone(),
+    ))
 }
 
 /// Lowers arithmetic: `a + b` → `FunctionCall("plus", [a, b])`.
@@ -255,12 +273,14 @@ fn lower_comparison(
     };
     let inner = binary_op(name, &e.left, &e.right, &e.source_info, ctx, errors)?;
     if negate {
-        Some(ValueSpec::FunctionCall {
-            function: None,
-            function_name: SmolStr::new_static("not"),
-            arguments: vec![inner],
-            source_info: e.source_info.clone(),
-        })
+        Some(untyped(
+            ExprKind::FunctionCall {
+                function: None,
+                function_name: SmolStr::new_static("not"),
+                arguments: vec![inner],
+            },
+            e.source_info.clone(),
+        ))
     } else {
         Some(inner)
     }
@@ -345,12 +365,14 @@ fn lower_function_application(
         .filter_map(|a| lower_expression(a, ctx, errors))
         .collect();
 
-    Some(ValueSpec::FunctionCall {
-        function: function_id,
-        function_name: SmolStr::new(e.function.name.as_str()),
-        arguments,
-        source_info: e.source_info.clone(),
-    })
+    Some(untyped(
+        ExprKind::FunctionCall {
+            function: function_id,
+            function_name: SmolStr::new(e.function.name.as_str()),
+            arguments,
+        },
+        e.source_info.clone(),
+    ))
 }
 
 /// Lowers `expr->func(args)` → `FunctionCall` with target prepended.
@@ -373,12 +395,14 @@ fn lower_arrow_function(
         }
     }
 
-    Some(ValueSpec::FunctionCall {
-        function: function_id,
-        function_name: SmolStr::new(e.function.name.as_str()),
-        arguments,
-        source_info: e.source_info.clone(),
-    })
+    Some(untyped(
+        ExprKind::FunctionCall {
+            function: function_id,
+            function_name: SmolStr::new(e.function.name.as_str()),
+            arguments,
+        },
+        e.source_info.clone(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -394,11 +418,13 @@ fn lower_member_access(
     match e {
         ast_expr::MemberAccess::Simple(s) => {
             let target = lower_expression(&s.target, ctx, errors)?;
-            Some(ValueSpec::PropertyAccess {
-                target: Box::new(target),
-                property: SmolStr::new(s.member.as_str()),
-                source_info: s.source_info.clone(),
-            })
+            Some(untyped(
+                ExprKind::PropertyAccess {
+                    target: Box::new(target),
+                    property: SmolStr::new(s.member.as_str()),
+                },
+                s.source_info.clone(),
+            ))
         }
         ast_expr::MemberAccess::Qualified(q) => {
             let target = lower_expression(&q.target, ctx, errors)?;
@@ -407,12 +433,14 @@ fn lower_member_access(
                 .iter()
                 .filter_map(|a| lower_expression(a, ctx, errors))
                 .collect();
-            Some(ValueSpec::QualifiedPropertyAccess {
-                target: Box::new(target),
-                property: SmolStr::new(q.member.as_str()),
-                arguments,
-                source_info: q.source_info.clone(),
-            })
+            Some(untyped(
+                ExprKind::QualifiedPropertyAccess {
+                    target: Box::new(target),
+                    property: SmolStr::new(q.member.as_str()),
+                    arguments,
+                },
+                q.source_info.clone(),
+            ))
         }
     }
 }
@@ -428,10 +456,10 @@ fn lower_type_reference(
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
     let type_expr = resolve::resolve_type_ref(&e.type_ref, ctx, errors)?;
-    Some(ValueSpec::TypeReference {
-        type_expr,
-        source_info: e.source_info.clone(),
-    })
+    Some(untyped(
+        ExprKind::TypeReference { type_expr },
+        e.source_info.clone(),
+    ))
 }
 
 /// Lowers a bare element reference: `String`, `my::Enum` → `PackageableElementRef`.
@@ -441,10 +469,12 @@ fn lower_packageable_element_ref(
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
     let element_id = resolve::resolve_element_ptr(&e.element, &e.source_info, ctx, errors)?;
-    Some(ValueSpec::PackageableElementRef {
-        element: element_id,
-        source_info: e.source_info.clone(),
-    })
+    Some(untyped(
+        ExprKind::PackageableElementRef {
+            element: element_id,
+        },
+        e.source_info.clone(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -464,11 +494,10 @@ fn lower_lambda(
 ) -> Option<ValueSpec> {
     let parameters = lower_lambda_parameters(&e.parameters, ctx, errors);
     let body = lower_expression_body(&e.body, ctx, errors);
-    Some(ValueSpec::Lambda {
-        parameters,
-        body,
-        source_info: e.source_info.clone(),
-    })
+    Some(untyped(
+        ExprKind::Lambda { parameters, body },
+        e.source_info.clone(),
+    ))
 }
 
 /// Lower lambda parameters — same as function parameters but tolerates
@@ -518,15 +547,20 @@ fn lower_let(
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
     let value = lower_expression(&e.value, ctx, errors)?;
-    Some(ValueSpec::FunctionCall {
-        function: None,
-        function_name: SmolStr::new_static("letFunction"),
-        arguments: vec![
-            ValueSpec::StringLiteral(SmolStr::new(e.name.as_str()), e.source_info.clone()),
-            value,
-        ],
-        source_info: e.source_info.clone(),
-    })
+    Some(untyped(
+        ExprKind::FunctionCall {
+            function: None,
+            function_name: SmolStr::new_static("letFunction"),
+            arguments: vec![
+                untyped(
+                    ExprKind::StringLiteral(SmolStr::new(e.name.as_str())),
+                    e.source_info.clone(),
+                ),
+                value,
+            ],
+        },
+        e.source_info.clone(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -547,17 +581,17 @@ fn lower_new_instance(
 
     // Build argument list: class_ref, className_string, key1, val1, key2, val2, ...
     let mut arguments = Vec::with_capacity(2 + e.assignments.len() * 2);
-    arguments.push(ValueSpec::PackageableElementRef {
-        element: class_id,
-        source_info: e.source_info.clone(),
-    });
-    arguments.push(ValueSpec::StringLiteral(
-        SmolStr::new(e.class.name.as_str()),
+    arguments.push(untyped(
+        ExprKind::PackageableElementRef { element: class_id },
+        e.source_info.clone(),
+    ));
+    arguments.push(untyped(
+        ExprKind::StringLiteral(SmolStr::new(e.class.name.as_str())),
         e.source_info.clone(),
     ));
     for kv in &e.assignments {
-        arguments.push(ValueSpec::StringLiteral(
-            SmolStr::new(kv.key.as_str()),
+        arguments.push(untyped(
+            ExprKind::StringLiteral(SmolStr::new(kv.key.as_str())),
             kv.source_info.clone(),
         ));
         if let Some(val) = lower_expression(&kv.value, ctx, errors) {
@@ -565,12 +599,14 @@ fn lower_new_instance(
         }
     }
 
-    Some(ValueSpec::FunctionCall {
-        function: None,
-        function_name: SmolStr::new_static("new"),
-        arguments,
-        source_info: e.source_info.clone(),
-    })
+    Some(untyped(
+        ExprKind::FunctionCall {
+            function: None,
+            function_name: SmolStr::new_static("new"),
+            arguments,
+        },
+        e.source_info.clone(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -588,7 +624,7 @@ fn lower_column(e: &ast_expr::ColumnExpression) -> ValueSpec {
         ast_expr::ColumnExpression::Typed(c) => c.source_info.clone(),
         ast_expr::ColumnExpression::WithFunction(c) => c.source_info.clone(),
     };
-    ValueSpec::Column { source_info }
+    untyped(ExprKind::Column, source_info)
 }
 
 // ---------------------------------------------------------------------------

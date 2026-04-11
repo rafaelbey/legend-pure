@@ -936,25 +936,51 @@ fn get_ast_element<'a>(source_files: &'a [SourceFile], decl: &Declaration) -> &'
 
 /// Runs bottom-up type inference over all function and qualified property bodies.
 ///
-/// For each function, infers types for every expression in the body and stores
-/// results in `model.inferred_types` (keyed by source position).
+/// For each function, infers types for every expression in the body and sets
+/// `type_info` on each expression node in place.
 fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
     use crate::infer;
 
-    // Collect (params, body) pairs from all chunks, avoiding borrow conflicts.
-    // We clone the minimal data needed, then run inference with `&model`.
-    let mut targets: Vec<(Vec<crate::types::Parameter>, Vec<crate::types::ValueSpec>)> = Vec::new();
+    // Collect (chunk_idx, element_idx, params, body) pairs, avoiding borrow conflicts.
+    // We clone the minimal data needed, then write back after inference.
+    struct InferTarget {
+        chunk_idx: usize,
+        local_idx: u32,
+        /// `true` = Function body, `false` = `QualifiedProperty` body (by qp index)
+        kind: TargetKind,
+        params: Vec<crate::types::Parameter>,
+        body: Vec<crate::types::ValueSpec>,
+    }
 
-    for chunk in &model.chunks {
-        for (_, element) in chunk.elements.iter() {
+    enum TargetKind {
+        FunctionBody,
+        QualifiedProperty(usize),
+    }
+
+    let mut targets: Vec<InferTarget> = Vec::new();
+
+    for (chunk_idx, chunk) in model.chunks.iter().enumerate() {
+        for (local_idx, element) in chunk.elements.iter() {
             match element {
                 Element::Function(f) if !f.body.is_empty() => {
-                    targets.push((f.parameters.clone(), f.body.clone()));
+                    targets.push(InferTarget {
+                        chunk_idx,
+                        local_idx,
+                        kind: TargetKind::FunctionBody,
+                        params: f.parameters.clone(),
+                        body: f.body.clone(),
+                    });
                 }
                 Element::Class(c) => {
-                    for qp in &c.qualified_properties {
+                    for (qp_idx, qp) in c.qualified_properties.iter().enumerate() {
                         if !qp.body.is_empty() {
-                            targets.push((qp.parameters.clone(), qp.body.clone()));
+                            targets.push(InferTarget {
+                                chunk_idx,
+                                local_idx,
+                                kind: TargetKind::QualifiedProperty(qp_idx),
+                                params: qp.parameters.clone(),
+                                body: qp.body.clone(),
+                            });
                         }
                     }
                 }
@@ -963,12 +989,29 @@ fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
         }
     }
 
-    // Run inference with shared &model access.
-    let mut type_map = std::mem::take(&mut model.inferred_types);
-    for (params, body) in &targets {
-        infer::infer_function_body(model, params, body, &mut type_map, errors);
+    // Run inference on cloned bodies, then write back.
+    for target in &mut targets {
+        infer::infer_function_body(model, &target.params, &mut target.body, errors);
     }
-    model.inferred_types = type_map;
+
+    // Write back the typed bodies.
+    for target in targets {
+        let element = model.chunks[target.chunk_idx]
+            .elements
+            .get_mut(target.local_idx);
+        match target.kind {
+            TargetKind::FunctionBody => {
+                if let Element::Function(f) = element {
+                    f.body = target.body;
+                }
+            }
+            TargetKind::QualifiedProperty(qp_idx) => {
+                if let Element::Class(c) = element {
+                    c.qualified_properties[qp_idx].body = target.body;
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -917,7 +917,7 @@ Class <<doc.deprecated>> {model::meta::doc.description = 'old'} model::domain::L
 // Expression Lowering — Phase 1
 // ---------------------------------------------------------------------------
 
-use legend_pure_parser_pure::types::{DateValue, Expression};
+use legend_pure_parser_pure::types::{DateValue, ExprKind};
 
 #[test]
 fn function_body_integer_literal() {
@@ -929,8 +929,8 @@ fn function_body_integer_literal() {
     match model.get_element(id) {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
-            match &f.body[0] {
-                Expression::IntegerLiteral(v, _) => assert_eq!(*v, 42),
+            match &f.body[0].kind {
+                ExprKind::IntegerLiteral(v) => assert_eq!(*v, 42),
                 other => panic!("expected IntegerLiteral, got {other:?}"),
             }
         }
@@ -948,8 +948,8 @@ fn function_body_string_literal() {
     match model.get_element(id) {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
-            match &f.body[0] {
-                Expression::StringLiteral(v, _) => assert_eq!(v.as_str(), "hello"),
+            match &f.body[0].kind {
+                ExprKind::StringLiteral(v) => assert_eq!(v.as_str(), "hello"),
                 other => panic!("expected StringLiteral, got {other:?}"),
             }
         }
@@ -967,8 +967,8 @@ fn function_body_boolean_literal() {
     match model.get_element(id) {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
-            match &f.body[0] {
-                Expression::BooleanLiteral(v, _) => assert!(*v),
+            match &f.body[0].kind {
+                ExprKind::BooleanLiteral(v) => assert!(*v),
                 other => panic!("expected BooleanLiteral, got {other:?}"),
             }
         }
@@ -986,8 +986,8 @@ fn function_body_float_literal() {
     match model.get_element(id) {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
-            match &f.body[0] {
-                Expression::FloatLiteral(v, _) => {
+            match &f.body[0].kind {
+                ExprKind::FloatLiteral(v) => {
                     assert!((v - 1.5).abs() < f64::EPSILON);
                 }
                 other => panic!("expected FloatLiteral, got {other:?}"),
@@ -1007,8 +1007,8 @@ fn function_body_variable_ref() {
     match model.get_element(id) {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
-            match &f.body[0] {
-                Expression::Variable { name, .. } => assert_eq!(name.as_str(), "x"),
+            match &f.body[0].kind {
+                ExprKind::Variable { name } => assert_eq!(name.as_str(), "x"),
                 other => panic!("expected Variable, got {other:?}"),
             }
         }
@@ -1026,12 +1026,12 @@ fn function_body_collection() {
     match model.get_element(id) {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
-            match &f.body[0] {
-                Expression::Collection { elements, .. } => {
+            match &f.body[0].kind {
+                ExprKind::Collection { elements } => {
                     assert_eq!(elements.len(), 3);
-                    assert!(matches!(&elements[0], Expression::IntegerLiteral(1, _)));
-                    assert!(matches!(&elements[1], Expression::IntegerLiteral(2, _)));
-                    assert!(matches!(&elements[2], Expression::IntegerLiteral(3, _)));
+                    assert!(matches!(&elements[0].kind, ExprKind::IntegerLiteral(1)));
+                    assert!(matches!(&elements[1].kind, ExprKind::IntegerLiteral(2)));
+                    assert!(matches!(&elements[2].kind, ExprKind::IntegerLiteral(3)));
                 }
                 other => panic!("expected Collection, got {other:?}"),
             }
@@ -1050,8 +1050,8 @@ fn function_body_date_literal() {
     match model.get_element(id) {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
-            match &f.body[0] {
-                Expression::DateLiteral(dv, _) => {
+            match &f.body[0].kind {
+                ExprKind::DateLiteral(dv) => {
                     assert_eq!(
                         *dv,
                         DateValue::StrictDate {
@@ -1079,8 +1079,8 @@ fn constraint_expression_compiled() {
         Element::Class(c) => {
             assert_eq!(c.constraints.len(), 1);
             assert!(matches!(
-                &c.constraints[0].function,
-                Expression::BooleanLiteral(true, _)
+                &c.constraints[0].function.kind,
+                ExprKind::BooleanLiteral(true)
             ));
         }
         _ => panic!("expected Class"),
@@ -1101,18 +1101,17 @@ fn expression_arithmetic_desugars_to_function_call() {
     match model.get_element(id) {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1, "body should have 1 expression");
-            match &f.body[0] {
-                Expression::FunctionCall {
+            match &f.body[0].kind {
+                ExprKind::FunctionCall {
                     function,
                     function_name,
                     arguments,
-                    ..
                 } => {
                     assert!(function.is_none(), "built-in operator has no element ID");
                     assert_eq!(function_name.as_str(), "plus");
                     assert_eq!(arguments.len(), 2);
-                    assert!(matches!(&arguments[0], Expression::IntegerLiteral(1, _)));
-                    assert!(matches!(&arguments[1], Expression::IntegerLiteral(2, _)));
+                    assert!(matches!(&arguments[0].kind, ExprKind::IntegerLiteral(1)));
+                    assert!(matches!(&arguments[1].kind, ExprKind::IntegerLiteral(2)));
                 }
                 other => panic!("expected FunctionCall, got {other:?}"),
             }
@@ -1132,16 +1131,16 @@ fn expression_not_equal_desugars_to_not_equal() {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
             // != desugars to not(equal(1, 2))
-            match &f.body[0] {
-                Expression::FunctionCall {
+            match &f.body[0].kind {
+                ExprKind::FunctionCall {
                     function_name,
                     arguments,
                     ..
                 } => {
                     assert_eq!(function_name.as_str(), "not");
                     assert_eq!(arguments.len(), 1);
-                    match &arguments[0] {
-                        Expression::FunctionCall {
+                    match &arguments[0].kind {
+                        ExprKind::FunctionCall {
                             function_name: inner_name,
                             arguments: inner_args,
                             ..
@@ -1177,8 +1176,8 @@ fn expression_comparison_operators() {
         match model.get_element(id) {
             Element::Function(f) => {
                 assert_eq!(f.body.len(), 1, "body should have 1 expression for {op}");
-                match &f.body[0] {
-                    Expression::FunctionCall { function_name, .. } => {
+                match &f.body[0].kind {
+                    ExprKind::FunctionCall { function_name, .. } => {
                         assert_eq!(
                             function_name.as_str(),
                             *expected_name,
@@ -1203,18 +1202,18 @@ fn expression_logical_operators() {
     match model.get_element(id) {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
-            match &f.body[0] {
-                Expression::FunctionCall {
+            match &f.body[0].kind {
+                ExprKind::FunctionCall {
                     function_name,
                     arguments,
                     ..
                 } => {
                     assert_eq!(function_name.as_str(), "and");
                     assert_eq!(arguments.len(), 2);
-                    assert!(matches!(&arguments[0], Expression::BooleanLiteral(true, _)));
+                    assert!(matches!(&arguments[0].kind, ExprKind::BooleanLiteral(true)));
                     assert!(matches!(
-                        &arguments[1],
-                        Expression::BooleanLiteral(false, _)
+                        &arguments[1].kind,
+                        ExprKind::BooleanLiteral(false)
                     ));
                 }
                 other => panic!("expected FunctionCall, got {other:?}"),
@@ -1234,15 +1233,15 @@ fn expression_unary_not() {
     match model.get_element(id) {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
-            match &f.body[0] {
-                Expression::FunctionCall {
+            match &f.body[0].kind {
+                ExprKind::FunctionCall {
                     function_name,
                     arguments,
                     ..
                 } => {
                     assert_eq!(function_name.as_str(), "not");
                     assert_eq!(arguments.len(), 1);
-                    assert!(matches!(&arguments[0], Expression::BooleanLiteral(true, _)));
+                    assert!(matches!(&arguments[0].kind, ExprKind::BooleanLiteral(true)));
                 }
                 other => panic!("expected FunctionCall, got {other:?}"),
             }
@@ -1268,14 +1267,14 @@ fn expression_property_access() {
     match model.get_element(id) {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
-            match &f.body[0] {
-                Expression::PropertyAccess {
+            match &f.body[0].kind {
+                ExprKind::PropertyAccess {
                     target, property, ..
                 } => {
                     assert_eq!(property.as_str(), "name");
                     assert!(matches!(
-                        target.as_ref(),
-                        Expression::Variable { name, .. } if name == "p"
+                        &target.kind,
+                        ExprKind::Variable { name, .. } if name == "p"
                     ));
                 }
                 other => panic!("expected PropertyAccess, got {other:?}"),
@@ -1302,12 +1301,11 @@ fn expression_function_call_resolved() {
     match model.get_element(id) {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
-            match &f.body[0] {
-                Expression::FunctionCall {
+            match &f.body[0].kind {
+                ExprKind::FunctionCall {
                     function,
                     function_name,
                     arguments,
-                    ..
                 } => {
                     assert!(
                         function.is_some(),
@@ -1345,8 +1343,8 @@ fn expression_lambda_lowering() {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
             // body is: $people->filter(lambda)
-            match &f.body[0] {
-                Expression::FunctionCall {
+            match &f.body[0].kind {
+                ExprKind::FunctionCall {
                     function_name,
                     arguments,
                     ..
@@ -1354,8 +1352,8 @@ fn expression_lambda_lowering() {
                     assert_eq!(function_name.as_str(), "filter");
                     assert_eq!(arguments.len(), 2, "filter takes target + lambda");
                     // Second arg should be the lambda
-                    match &arguments[1] {
-                        Expression::Lambda {
+                    match &arguments[1].kind {
+                        ExprKind::Lambda {
                             parameters, body, ..
                         } => {
                             assert_eq!(parameters.len(), 1);
@@ -1383,8 +1381,8 @@ fn expression_let_desugars_to_let_function() {
         Element::Function(f) => {
             assert!(f.body.len() >= 2, "body should have let + reference");
             // First expression should be letFunction
-            match &f.body[0] {
-                Expression::FunctionCall {
+            match &f.body[0].kind {
+                ExprKind::FunctionCall {
                     function_name,
                     arguments,
                     ..
@@ -1393,11 +1391,11 @@ fn expression_let_desugars_to_let_function() {
                     assert_eq!(arguments.len(), 2);
                     // First arg is the variable name as a string literal
                     assert!(matches!(
-                        &arguments[0],
-                        Expression::StringLiteral(name, _) if name == "x"
+                        &arguments[0].kind,
+                        ExprKind::StringLiteral(name) if name == "x"
                     ));
                     // Second arg is the value
-                    assert!(matches!(&arguments[1], Expression::IntegerLiteral(42, _)));
+                    assert!(matches!(&arguments[1].kind, ExprKind::IntegerLiteral(42)));
                 }
                 other => panic!("expected letFunction, got {other:?}"),
             }
@@ -1419,8 +1417,8 @@ fn expression_new_instance_desugars_to_new() {
     match model.get_element(id) {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
-            match &f.body[0] {
-                Expression::FunctionCall {
+            match &f.body[0].kind {
+                ExprKind::FunctionCall {
                     function_name,
                     arguments,
                     ..
@@ -1430,31 +1428,31 @@ fn expression_new_instance_desugars_to_new() {
                     assert_eq!(arguments.len(), 6);
                     // First arg is the class element ref
                     assert!(matches!(
-                        &arguments[0],
-                        Expression::PackageableElementRef { .. }
+                        &arguments[0].kind,
+                        ExprKind::PackageableElementRef { .. }
                     ));
                     // Second arg is the class name string
                     assert!(matches!(
-                        &arguments[1],
-                        Expression::StringLiteral(name, _) if name == "Pair"
+                        &arguments[1].kind,
+                        ExprKind::StringLiteral(name) if name == "Pair"
                     ));
                     // Third arg is first key name
                     assert!(matches!(
-                        &arguments[2],
-                        Expression::StringLiteral(name, _) if name == "first"
+                        &arguments[2].kind,
+                        ExprKind::StringLiteral(name) if name == "first"
                     ));
                     // Fourth arg is first value
                     assert!(matches!(
-                        &arguments[3],
-                        Expression::StringLiteral(val, _) if val == "hello"
+                        &arguments[3].kind,
+                        ExprKind::StringLiteral(val) if val == "hello"
                     ));
                     // Fifth arg is second key name
                     assert!(matches!(
-                        &arguments[4],
-                        Expression::StringLiteral(name, _) if name == "second"
+                        &arguments[4].kind,
+                        ExprKind::StringLiteral(name) if name == "second"
                     ));
                     // Sixth arg is second value
-                    assert!(matches!(&arguments[5], Expression::IntegerLiteral(42, _)));
+                    assert!(matches!(&arguments[5].kind, ExprKind::IntegerLiteral(42)));
                 }
                 other => panic!("expected new(), got {other:?}"),
             }
