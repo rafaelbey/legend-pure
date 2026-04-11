@@ -456,4 +456,17 @@ mod tests {
         // Same id still works
         assert_eq!(heap.classifier(id).unwrap(), "my::Trade");
     }
+
+    #[test]
+    fn invalid_id_operations() {
+        let mut heap = RuntimeHeap::new();
+        let fake_id = ObjectId::default();
+
+        assert!(heap.classifier(fake_id).is_err());
+        assert!(
+            heap.mutate_add(fake_id, "price", &[Value::Float(1.0)])
+                .is_err()
+        );
+        assert!(heap.get_property_values(fake_id, "price").is_err());
+    }
 }

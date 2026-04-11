@@ -73,15 +73,14 @@ pub fn reset() {
     // Instead, we set PEAK_BYTES to match CURRENT_BYTES as the new high-water mark starting point,
     // and reset the allocation count.
 
-    let _current = CURRENT_BYTES.load(Ordering::SeqCst);
-    PEAK_BYTES.store(_current, Ordering::SeqCst);
+    let current = CURRENT_BYTES.load(Ordering::SeqCst);
+    PEAK_BYTES.store(current, Ordering::SeqCst);
     ALLOC_COUNT.store(0, Ordering::SeqCst);
 }
 
 /// Returns a snapshot of the allocation statistics since the last reset.
 #[must_use]
 pub fn snapshot() -> AllocStats {
-    let current = CURRENT_BYTES.load(Ordering::SeqCst);
     let peak = PEAK_BYTES.load(Ordering::SeqCst);
 
     // The peak delta from the time of reset
@@ -104,11 +103,7 @@ pub fn snapshot() -> AllocStats {
 /// Calculates the max memory usage delta.
 pub fn peak_delta(baseline_current: usize) -> usize {
     let peak = PEAK_BYTES.load(Ordering::SeqCst);
-    if peak > baseline_current {
-        peak - baseline_current
-    } else {
-        0
-    }
+    peak.saturating_sub(baseline_current)
 }
 
 /// Returns the current number of allocated bytes.

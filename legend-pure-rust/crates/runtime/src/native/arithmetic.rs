@@ -388,4 +388,44 @@ mod tests {
         assert!(Plus.execute(&[Value::Integer(1)]).is_err());
         assert!(Abs.execute(&[]).is_err());
     }
+
+    #[test]
+    fn type_mismatch_errors() {
+        // String instead of Number
+        assert!(
+            Plus.execute(&[Value::String("1".into()), Value::Integer(1)])
+                .is_err()
+        );
+        // Date instead of Number
+        let date_val = Value::Date(crate::date::PureDate::strict_date(2024, 1, 1).unwrap());
+        assert!(Minus.execute(&[date_val, Value::Integer(1)]).is_err());
+        assert!(Abs.execute(&[Value::Boolean(true)]).is_err());
+        // One float, one string
+        assert!(
+            Plus.execute(&[Value::Float(1.0), Value::String("2".into())])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn division_by_zero_errors() {
+        assert!(
+            Divide
+                .execute(&[Value::Integer(5), Value::Integer(0)])
+                .is_err()
+        );
+        assert!(
+            Divide
+                .execute(&[Value::Float(5.0), Value::Float(0.0)])
+                .is_err()
+        );
+        assert!(
+            Mod.execute(&[Value::Integer(5), Value::Integer(0)])
+                .is_err()
+        );
+        assert!(
+            Rem.execute(&[Value::Integer(5), Value::Integer(0)])
+                .is_err()
+        );
+    }
 }

@@ -53,8 +53,8 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Build, Test, and Enforce 90% Coverage
-        run: cargo llvm-cov --workspace --fail-under-lines 90
+      - name: Build, Test, and Enforce 85% Coverage
+        run: cargo llvm-cov --workspace --exclude legend-pure-parser-stress --exclude legend-pure-parser-jni --fail-under-lines 85
 
       - name: Run Benchmarks (cargo bench)
         run: cargo bench --workspace

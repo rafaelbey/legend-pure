@@ -331,19 +331,16 @@ fn resolve_unqualified(
 /// identical, but the Pure variant drops source location metadata.
 pub(crate) fn lower_multiplicity(m: &ast_type::Multiplicity) -> Multiplicity {
     match m {
-        ast_type::Multiplicity::PureOne => Multiplicity::PureOne,
         ast_type::Multiplicity::ZeroOrOne => Multiplicity::ZeroOrOne,
-        ast_type::Multiplicity::ZeroOrMany => Multiplicity::ZeroOrMany,
+        ast_type::Multiplicity::PureOne => Multiplicity::PureOne,
+        ast_type::Multiplicity::ZeroOrMany | ast_type::Multiplicity::Variable(_) => {
+            Multiplicity::ZeroOrMany
+        }
         ast_type::Multiplicity::OneOrMany => Multiplicity::OneOrMany,
         ast_type::Multiplicity::Range { lower, upper } => Multiplicity::Range {
             lower: *lower,
             upper: *upper,
         },
-        // TODO: Implement multiplicity variable binding once the compiler has
-        // a type/multiplicity parameter resolution context. For now, treat
-        // as unbounded — the compiler will need to substitute the actual
-        // multiplicity at the call site.
-        ast_type::Multiplicity::Variable(_) => Multiplicity::ZeroOrMany,
     }
 }
 

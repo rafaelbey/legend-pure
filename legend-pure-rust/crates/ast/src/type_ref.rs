@@ -289,18 +289,16 @@ impl HasMultiplicity for Multiplicity {
     fn lower(&self) -> u32 {
         match self {
             Self::PureOne | Self::OneOrMany => 1,
-            Self::ZeroOrOne | Self::ZeroOrMany => 0,
+            Self::ZeroOrOne | Self::ZeroOrMany | Self::Variable(_) => 0,
             Self::Range { lower, .. } => *lower,
-            Self::Variable(_) => 0, // Unknown at parse time; compiler resolves
         }
     }
 
     fn upper(&self) -> Option<u32> {
         match self {
-            Self::PureOne | Self::ZeroOrOne => Some(1),
-            Self::ZeroOrMany | Self::OneOrMany => None,
+            Self::ZeroOrOne | Self::PureOne => Some(1),
+            Self::ZeroOrMany | Self::OneOrMany | Self::Variable(_) => None,
             Self::Range { upper, .. } => *upper,
-            Self::Variable(_) => None, // Unknown at parse time; compiler resolves
         }
     }
 }

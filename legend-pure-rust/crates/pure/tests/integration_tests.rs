@@ -326,7 +326,50 @@ fn unresolved_type_error() {
 }
 
 // ---------------------------------------------------------------------------
-// Duplicate Element (Error Case)
+// Island Expression Lowering (Error Case)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn island_expression_error() {
+    // A structurally valid island expression that passes the lexer/parser
+    // but gets rejected during lowering
+    let result = compile_one("function x(): Any[1] { #{some::Class{}}# }");
+    assert!(result.is_err(), "island expression should fail lowering");
+    let errors = &result.unwrap_err().errors;
+
+    let island_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                &e.kind,
+                legend_pure_parser_pure::error::CompilationErrorKind::UnsupportedExpression { .. }
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        island_errors.len(),
+        1,
+        "should have UnsupportedExpression error"
+    );
+    assert!(island_errors[0].message.contains("Island"));
+}
+
+// ---------------------------------------------------------------------------
+// Invalid Decimal Literal (Error Case)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn invalid_decimal_literal() {
+    let result = compile_one("function x(): Any[1] { 999999999999999999999999999999999999999n }");
+    assert!(
+        result.is_err(),
+        "should result in some error due to skipped node"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Unresolved Type (Error Case)
 // ---------------------------------------------------------------------------
 
 #[test]

@@ -552,3 +552,129 @@ pub fn compose_body(w: &mut IndentWriter, body: &[Expression], terminate_last: b
         w.newline();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::writer::IndentWriter;
+    use legend_pure_parser_ast::expression::{
+        BitwiseExpr, BitwiseNotExpr, BitwiseOp, ColumnExpression, ColumnName, Expression,
+        UnaryMinusExpr,
+    };
+
+    fn si() -> legend_pure_parser_ast::SourceInfo {
+        legend_pure_parser_ast::SourceInfo::new("test", 1, 1, 1, 1)
+    }
+
+    fn get_composed(expr: &Expression) -> String {
+        let mut w = IndentWriter::new();
+        compose_expression(&mut w, expr);
+        w.finish()
+    }
+
+    #[test]
+    fn compose_unary() {
+        let minus = Expression::UnaryMinus(UnaryMinusExpr {
+            source_info: si(),
+            operand: Box::new(Expression::Literal(Literal::Integer(
+                legend_pure_parser_ast::expression::IntegerLiteral {
+                    source_info: si(),
+                    value: 1,
+                },
+            ))),
+        });
+        assert_eq!(get_composed(&minus), "-1");
+
+        let b_not = Expression::BitwiseNot(BitwiseNotExpr {
+            source_info: si(),
+            operand: Box::new(Expression::Literal(Literal::Integer(
+                legend_pure_parser_ast::expression::IntegerLiteral {
+                    source_info: si(),
+                    value: 2,
+                },
+            ))),
+        });
+        assert_eq!(get_composed(&b_not), "~~~2");
+    }
+
+    #[test]
+    fn compose_bitwise_expr() {
+        let b = Expression::Bitwise(BitwiseExpr {
+            source_info: si(),
+            op: BitwiseOp::ShiftLeft,
+            left: Box::new(Expression::Literal(Literal::Integer(
+                legend_pure_parser_ast::expression::IntegerLiteral {
+                    source_info: si(),
+                    value: 1,
+                },
+            ))),
+            right: Box::new(Expression::Literal(Literal::Integer(
+                legend_pure_parser_ast::expression::IntegerLiteral {
+                    source_info: si(),
+                    value: 2,
+                },
+            ))),
+        });
+        assert_eq!(get_composed(&b), "1 <<< 2");
+    }
+
+    #[test]
+    fn compose_column_expr() {
+        let c = Expression::Column(ColumnExpression::Name(ColumnName {
+            source_info: si(),
+            name: "test".into(),
+        }));
+        assert_eq!(get_composed(&c), "~test");
+    }
+
+    #[test]
+    fn compose_date_literals() {
+        let d = Expression::Literal(Literal::DateTime(
+            legend_pure_parser_ast::expression::DateTimeLiteral {
+                source_info: si(),
+                value: "2024-01".into(),
+            },
+        ));
+        assert_eq!(get_composed(&d), "%2024-01");
+
+        let l = Expression::Literal(Literal::StrictDate(
+            legend_pure_parser_ast::expression::StrictDateLiteral {
+                source_info: si(),
+                value: "%latest".into(),
+            },
+        ));
+        assert_eq!(get_composed(&l), "%latest");
+    }
+
+    #[test]
+    fn compose_parentheses() {
+        let add = Expression::Arithmetic(ArithmeticExpr {
+            source_info: si(),
+            op: ArithmeticOp::Plus,
+            left: Box::new(Expression::Literal(Literal::Integer(
+                legend_pure_parser_ast::expression::IntegerLiteral {
+                    source_info: si(),
+                    value: 1,
+                },
+            ))),
+            right: Box::new(Expression::Literal(Literal::Integer(
+                legend_pure_parser_ast::expression::IntegerLiteral {
+                    source_info: si(),
+                    value: 2,
+                },
+            ))),
+        });
+        let mul = Expression::Arithmetic(ArithmeticExpr {
+            source_info: si(),
+            op: ArithmeticOp::Times,
+            left: Box::new(add),
+            right: Box::new(Expression::Literal(Literal::Integer(
+                legend_pure_parser_ast::expression::IntegerLiteral {
+                    source_info: si(),
+                    value: 3,
+                },
+            ))),
+        });
+        assert_eq!(get_composed(&mul), "(1 + 2) * 3");
+    }
+}

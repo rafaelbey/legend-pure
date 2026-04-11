@@ -120,5 +120,16 @@ mod tests {
             And.execute(&[Value::Integer(1), Value::Boolean(true)])
                 .is_err()
         );
+        assert!(
+            Or.execute(&[Value::Boolean(true), Value::String("true".into())])
+                .is_err()
+        );
+        assert!(Not.execute(&[Value::Integer(0)]).is_err());
+    }
+
+    #[test]
+    fn wrong_arg_count_errors() {
+        assert!(And.execute(&[Value::Boolean(true)]).is_err());
+        assert!(Not.execute(&[]).is_err());
     }
 }
