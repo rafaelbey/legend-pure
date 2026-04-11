@@ -14,29 +14,27 @@
 
 //! Type inference engine for compiled Pure expressions.
 //!
-//! Performs bottom-up type inference over [`ValueSpec`] trees, producing
-//! an [`InferredType`] (type + multiplicity) for each expression. Results
-//! are stored in a side map on [`PureModel`], keyed by [`SourceInfo`].
+//! Performs bottom-up type inference over [`ValueSpec`] trees, setting
+//! the [`type_info`](ValueSpec::type_info) field on every expression node.
 //!
 //! # Design
 //!
-//! - **Side map** — types are stored externally (`HashMap<SourceInfo, InferredType>`)
-//!   rather than embedded in `ValueSpec`. This keeps the IR unchanged.
+//! - **Inline types** — types are set directly on `ValueSpec::type_info`,
+//!   eliminating the need for a side map.
 //! - **Bottom-up** — literals carry their own types, variables resolve from
 //!   scope, property access looks up the class, function calls use the
 //!   declared return type.
 //! - **Scope chain** — `let` bindings and lambda parameters push entries
 //!   into a scope stack. Variable references resolve by walking up.
 
-use std::collections::HashMap;
-
-use legend_pure_parser_ast::SourceInfo;
 use smol_str::SmolStr;
 
 use crate::bootstrap;
 use crate::error::CompilationError;
-use crate::model::{Element, InferredType, PureModel};
-use crate::types::{DateValue, Multiplicity, Parameter, TypeExpr, ValueSpec};
+use crate::model::{Element, PureModel};
+use crate::types::{
+    DateValue, ExprKind, Multiplicity, Parameter, ResolvedType, TypeExpr, ValueSpec,
+};
 
 // ---------------------------------------------------------------------------
 // Scope — variable type tracking
@@ -48,33 +46,40 @@ use crate::types::{DateValue, Multiplicity, Parameter, TypeExpr, ValueSpec};
 /// lambda parameters extend the current scope.
 struct Scope {
     /// Variable name → inferred type.
-    bindings: HashMap<SmolStr, InferredType>,
+    bindings: Vec<(SmolStr, ResolvedType)>,
 }
 
+#[allow(dead_code)]
 impl Scope {
-    /// Creates a new scope from function/lambda parameters.
+    /// Creates a scope pre-populated with function/lambda parameters.
     fn from_params(params: &[Parameter]) -> Self {
-        let mut bindings = HashMap::new();
-        for p in params {
-            bindings.insert(
-                p.name.clone(),
-                InferredType {
-                    type_expr: p.type_expr.clone(),
-                    multiplicity: p.multiplicity.clone(),
-                },
-            );
-        }
-        Self { bindings }
-    }
-
-    /// Adds a variable binding (e.g., from a `let`).
-    fn bind(&mut self, name: SmolStr, inferred: InferredType) {
-        self.bindings.insert(name, inferred);
+        let bindings = params
+            .iter()
+            .map(|p| {
+                (
+                    p.name.clone(),
+                    ResolvedType {
+                        type_expr: p.type_expr.clone(),
+                        multiplicity: p.multiplicity.clone(),
+                    },
+                )
+            })
+            .collect();
+        Scope { bindings }
     }
 
     /// Looks up a variable in this scope.
-    fn lookup(&self, name: &str) -> Option<&InferredType> {
-        self.bindings.get(name)
+    fn lookup(&self, name: &str) -> Option<&ResolvedType> {
+        self.bindings
+            .iter()
+            .rev()
+            .find(|(n, _)| n == name)
+            .map(|(_, t)| t)
+    }
+
+    /// Binds a new variable (e.g., from `let`).
+    fn bind(&mut self, name: SmolStr, inferred: ResolvedType) {
+        self.bindings.push((name, inferred));
     }
 }
 
@@ -88,26 +93,19 @@ struct InferCtx<'a> {
     model: &'a PureModel,
     /// Scope chain (outermost first).
     scopes: Vec<Scope>,
-    /// Results accumulator.
-    type_map: &'a mut HashMap<SourceInfo, InferredType>,
     /// Errors accumulator (used in Phase B for type mismatch errors).
     _errors: &'a mut Vec<CompilationError>,
 }
 
 impl InferCtx<'_> {
     /// Looks up a variable by walking the scope chain from innermost to outermost.
-    fn lookup_var(&self, name: &str) -> Option<&InferredType> {
+    fn lookup_var(&self, name: &str) -> Option<&ResolvedType> {
         for scope in self.scopes.iter().rev() {
             if let Some(t) = scope.lookup(name) {
                 return Some(t);
             }
         }
         None
-    }
-
-    /// Records an inferred type for an expression at the given source position.
-    fn record(&mut self, source_info: &SourceInfo, inferred: InferredType) {
-        self.type_map.insert(source_info.clone(), inferred);
     }
 
     /// Pushes a new child scope.
@@ -127,24 +125,22 @@ impl InferCtx<'_> {
 
 /// Infers types for all expressions in a function body.
 ///
-/// Results are stored in `type_map`, keyed by expression source positions.
+/// Sets `type_info` on every expression node in `body` (in place).
 /// Type errors are appended to `errors`.
 pub(crate) fn infer_function_body(
     model: &PureModel,
     params: &[Parameter],
-    body: &[ValueSpec],
-    type_map: &mut HashMap<SourceInfo, InferredType>,
+    body: &mut [ValueSpec],
     errors: &mut Vec<CompilationError>,
 ) {
     let root_scope = Scope::from_params(params);
     let mut ctx = InferCtx {
         model,
         scopes: vec![root_scope],
-        type_map,
         _errors: errors,
     };
 
-    for expr in body {
+    for expr in body.iter_mut() {
         infer_expr(&mut ctx, expr);
     }
 }
@@ -153,119 +149,87 @@ pub(crate) fn infer_function_body(
 // Bottom-up inference
 // ---------------------------------------------------------------------------
 
-/// Infers the type of a single expression, recording it and returning it.
+/// Infers the type of a single expression, setting its `type_info` and
+/// returning a clone of the resolved type.
 #[allow(clippy::too_many_lines)]
-fn infer_expr(ctx: &mut InferCtx<'_>, expr: &ValueSpec) -> Option<InferredType> {
-    let result = match expr {
+fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedType> {
+    let result = match &mut expr.kind {
         // -- Literals -------------------------------------------------------
-        ValueSpec::IntegerLiteral(_, si) => Some(primitive_type(bootstrap::INTEGER_ID, si)),
-        ValueSpec::FloatLiteral(_, si) => Some(primitive_type(bootstrap::FLOAT_ID, si)),
-        ValueSpec::DecimalLiteral(_, si) => Some(primitive_type(bootstrap::DECIMAL_ID, si)),
-        ValueSpec::StringLiteral(_, si) => Some(primitive_type(bootstrap::STRING_ID, si)),
-        ValueSpec::BooleanLiteral(_, si) => Some(primitive_type(bootstrap::BOOLEAN_ID, si)),
-        ValueSpec::DateLiteral(dv, si) => Some(date_literal_type(dv, si)),
+        ExprKind::IntegerLiteral(_) => Some(primitive(bootstrap::INTEGER_ID)),
+        ExprKind::FloatLiteral(_) => Some(primitive(bootstrap::FLOAT_ID)),
+        ExprKind::DecimalLiteral(_) => Some(primitive(bootstrap::DECIMAL_ID)),
+        ExprKind::StringLiteral(_) => Some(primitive(bootstrap::STRING_ID)),
+        ExprKind::BooleanLiteral(_) => Some(primitive(bootstrap::BOOLEAN_ID)),
+        ExprKind::DateLiteral(dv) => Some(date_literal_type(dv)),
 
         // -- Variable -------------------------------------------------------
-        ValueSpec::Variable { name, source_info } => {
-            if let Some(inferred) = ctx.lookup_var(name) {
-                let result = inferred.clone();
-                ctx.record(source_info, result.clone());
-                Some(result)
-            } else {
-                // Variable not in scope — type unknown (might be unresolved)
-                None
-            }
-        }
+        ExprKind::Variable { name } => ctx.lookup_var(name).cloned(),
 
         // -- Function call --------------------------------------------------
-        ValueSpec::FunctionCall {
+        ExprKind::FunctionCall {
             function,
             function_name,
             arguments,
-            source_info,
         } => {
             // Infer argument types first (bottom-up)
-            let arg_types: Vec<Option<InferredType>> =
-                arguments.iter().map(|a| infer_expr(ctx, a)).collect();
+            let arg_types: Vec<Option<ResolvedType>> =
+                arguments.iter_mut().map(|a| infer_expr(ctx, a)).collect();
 
-            let result = infer_function_call(
-                ctx,
-                *function,
-                function_name,
-                arguments,
-                &arg_types,
-                source_info,
-            );
-            if let Some(ref r) = result {
-                ctx.record(source_info, r.clone());
-            }
-            return result;
+            // Extract let name from AST before calling inference
+            let let_name = if function_name == "letFunction" && arguments.len() == 2 {
+                if let ExprKind::StringLiteral(name) = &arguments[0].kind {
+                    Some(name)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let result = infer_function_call(ctx, *function, function_name, let_name, &arg_types);
+            return set_and_return(expr, result);
         }
 
         // -- Property access ------------------------------------------------
-        ValueSpec::PropertyAccess {
-            target,
-            property,
-            source_info,
-        } => {
+        ExprKind::PropertyAccess { target, property } => {
             let target_type = infer_expr(ctx, target);
-            let result = infer_property_access(ctx, target_type.as_ref(), property, source_info);
-            if let Some(ref r) = result {
-                ctx.record(source_info, r.clone());
-            }
-            return result;
+            let result = infer_property_access(ctx, target_type.as_ref(), property);
+            return set_and_return(expr, result);
         }
 
         // -- Qualified property access --------------------------------------
-        ValueSpec::QualifiedPropertyAccess {
+        ExprKind::QualifiedPropertyAccess {
             target,
             property,
             arguments,
-            source_info,
         } => {
             let target_type = infer_expr(ctx, target);
             // Infer argument types (for completeness)
-            for arg in arguments {
+            for arg in arguments.iter_mut() {
                 infer_expr(ctx, arg);
             }
-            // Qualified properties are resolved the same as simple properties
-            let result = infer_property_access(ctx, target_type.as_ref(), property, source_info);
-            if let Some(ref r) = result {
-                ctx.record(source_info, r.clone());
-            }
-            return result;
+            let result = infer_property_access(ctx, target_type.as_ref(), property);
+            return set_and_return(expr, result);
         }
 
         // -- Enum value -----------------------------------------------------
-        ValueSpec::EnumValue {
-            enum_element,
-            source_info,
-            ..
-        } => {
-            let result = InferredType {
-                type_expr: TypeExpr::Named {
-                    element: *enum_element,
-                    type_arguments: Vec::new(),
-                    value_arguments: Vec::new(),
-                },
-                multiplicity: Multiplicity::PureOne,
-            };
-            ctx.record(source_info, result.clone());
-            Some(result)
-        }
+        ExprKind::EnumValue { enum_element, .. } => Some(ResolvedType {
+            type_expr: TypeExpr::Named {
+                element: *enum_element,
+                type_arguments: Vec::new(),
+                value_arguments: Vec::new(),
+            },
+            multiplicity: Multiplicity::PureOne,
+        }),
 
         // -- Lambda ---------------------------------------------------------
-        ValueSpec::Lambda {
-            parameters,
-            body,
-            source_info,
-        } => {
+        ExprKind::Lambda { parameters, body } => {
             // Push a child scope with lambda parameters
             ctx.push_scope(Scope::from_params(parameters));
 
             // Infer body types
             let mut last_type = None;
-            for body_expr in body {
+            for body_expr in body.iter_mut() {
                 last_type = infer_expr(ctx, body_expr);
             }
 
@@ -291,25 +255,20 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &ValueSpec) -> Option<InferredType> 
                 )
             };
 
-            let result = InferredType {
+            Some(ResolvedType {
                 type_expr: TypeExpr::FunctionType {
                     parameters: param_types,
                     return_type: Box::new(return_type),
                     return_multiplicity: return_mult,
                 },
                 multiplicity: Multiplicity::PureOne,
-            };
-            ctx.record(source_info, result.clone());
-            Some(result)
+            })
         }
 
         // -- Collection -----------------------------------------------------
-        ValueSpec::Collection {
-            elements,
-            source_info,
-        } => {
-            let elem_types: Vec<Option<InferredType>> =
-                elements.iter().map(|e| infer_expr(ctx, e)).collect();
+        ExprKind::Collection { elements } => {
+            let elem_types: Vec<Option<ResolvedType>> =
+                elements.iter_mut().map(|e| infer_expr(ctx, e)).collect();
 
             let count = u32::try_from(elements.len()).unwrap_or(u32::MAX);
             let multiplicity = Multiplicity::Range {
@@ -326,53 +285,38 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &ValueSpec) -> Option<InferredType> 
                 |t| t.type_expr.clone(),
             );
 
-            let result = InferredType {
+            Some(ResolvedType {
                 type_expr,
                 multiplicity,
-            };
-            ctx.record(source_info, result.clone());
-            Some(result)
+            })
         }
 
         // -- Type reference -------------------------------------------------
-        ValueSpec::TypeReference {
-            type_expr: te,
-            source_info,
-        } => {
-            // @Type evaluates to a Class<T> meta-type; for now store the type itself
-            let result = InferredType {
-                type_expr: te.clone(),
-                multiplicity: Multiplicity::PureOne,
-            };
-            ctx.record(source_info, result.clone());
-            Some(result)
-        }
+        ExprKind::TypeReference { type_expr: te } => Some(ResolvedType {
+            type_expr: te.clone(),
+            multiplicity: Multiplicity::PureOne,
+        }),
 
         // -- Element reference ----------------------------------------------
-        ValueSpec::PackageableElementRef {
-            element,
-            source_info,
-        } => {
-            let result = InferredType {
-                type_expr: TypeExpr::Named {
-                    element: *element,
-                    type_arguments: Vec::new(),
-                    value_arguments: Vec::new(),
-                },
-                multiplicity: Multiplicity::PureOne,
-            };
-            ctx.record(source_info, result.clone());
-            Some(result)
-        }
+        ExprKind::PackageableElementRef { element } => Some(ResolvedType {
+            type_expr: TypeExpr::Named {
+                element: *element,
+                type_arguments: Vec::new(),
+                value_arguments: Vec::new(),
+            },
+            multiplicity: Multiplicity::PureOne,
+        }),
 
         // -- Column (TDS — deferred) ----------------------------------------
-        ValueSpec::Column { .. } => None,
+        ExprKind::Column => None,
     };
 
-    if let Some(ref r) = result {
-        let si = expr_source_info(expr);
-        ctx.record(si, r.clone());
-    }
+    set_and_return(expr, result)
+}
+
+/// Sets `expr.type_info` and returns the resolved type.
+fn set_and_return(expr: &mut ValueSpec, result: Option<ResolvedType>) -> Option<ResolvedType> {
+    expr.type_info.clone_from(&result);
     result
 }
 
@@ -385,21 +329,19 @@ fn infer_function_call(
     ctx: &mut InferCtx<'_>,
     function: Option<crate::ids::ElementId>,
     function_name: &SmolStr,
-    arguments: &[ValueSpec],
-    arg_types: &[Option<InferredType>],
-    _source_info: &SourceInfo,
-) -> Option<InferredType> {
+    let_name: Option<&SmolStr>,
+    arg_types: &[Option<ResolvedType>],
+) -> Option<ResolvedType> {
     // Handle `letFunction` — side effect: bind the variable in scope
     if function_name == "letFunction"
         && arg_types.len() == 2
-        && let (Some(val_type), Some(ValueSpec::StringLiteral(name, _))) =
-            (&arg_types[1], arguments.first())
+        && let (Some(val_type), Some(name)) = (&arg_types[1], let_name)
     {
         if let Some(scope) = ctx.scopes.last_mut() {
-            scope.bind(SmolStr::new(name.as_str()), val_type.clone());
+            scope.bind(name.clone(), val_type.clone());
         }
         // letFunction itself returns Nil[0] (it's a side-effect statement)
-        return Some(InferredType {
+        return Some(ResolvedType {
             type_expr: TypeExpr::Named {
                 element: bootstrap::NIL_ID,
                 type_arguments: Vec::new(),
@@ -414,7 +356,7 @@ fn infer_function_call(
 
     // Resolved user function — use its declared return type
     if let Some(Element::Function(f)) = function.and_then(|id| ctx.model.try_get_element(id)) {
-        return Some(InferredType {
+        return Some(ResolvedType {
             type_expr: f.return_type.clone(),
             multiplicity: f.return_multiplicity.clone(),
         });
@@ -427,46 +369,22 @@ fn infer_function_call(
 /// Infers return types for well-known built-in operators.
 fn infer_builtin_return_type(
     name: &str,
-    arg_types: &[Option<InferredType>],
-) -> Option<InferredType> {
+    arg_types: &[Option<ResolvedType>],
+) -> Option<ResolvedType> {
     match name {
         // Comparison operators → Boolean[1]
         "equal" | "lessThan" | "lessThanEqual" | "greaterThan" | "greaterThanEqual" => {
-            Some(InferredType {
-                type_expr: TypeExpr::Named {
-                    element: bootstrap::BOOLEAN_ID,
-                    type_arguments: Vec::new(),
-                    value_arguments: Vec::new(),
-                },
-                multiplicity: Multiplicity::PureOne,
-            })
+            Some(primitive(bootstrap::BOOLEAN_ID))
         }
 
         // Boolean operators → Boolean[1]
-        "and" | "or" | "not" => Some(InferredType {
-            type_expr: TypeExpr::Named {
-                element: bootstrap::BOOLEAN_ID,
-                type_arguments: Vec::new(),
-                value_arguments: Vec::new(),
-            },
-            multiplicity: Multiplicity::PureOne,
-        }),
+        "and" | "or" | "not" => Some(primitive(bootstrap::BOOLEAN_ID)),
 
         // Arithmetic operators — return widened type of arguments
-        "plus" | "minus" | "times" | "divide" => {
-            // Use first argument's type as the result type (simplified)
-            arg_types.iter().flatten().next().cloned()
-        }
+        "plus" | "minus" | "times" | "divide" => arg_types.iter().flatten().next().cloned(),
 
         // String concatenation
-        "joinStrings" => Some(InferredType {
-            type_expr: TypeExpr::Named {
-                element: bootstrap::STRING_ID,
-                type_arguments: Vec::new(),
-                value_arguments: Vec::new(),
-            },
-            multiplicity: Multiplicity::PureOne,
-        }),
+        "joinStrings" => Some(primitive(bootstrap::STRING_ID)),
 
         _ => None,
     }
@@ -477,13 +395,11 @@ fn infer_builtin_return_type(
 // ---------------------------------------------------------------------------
 
 /// Infers the type of a property access (`$target.property`).
-#[allow(clippy::only_used_in_recursion)]
 fn infer_property_access(
     ctx: &InferCtx<'_>,
-    target_type: Option<&InferredType>,
+    target_type: Option<&ResolvedType>,
     property_name: &str,
-    source_info: &SourceInfo,
-) -> Option<InferredType> {
+) -> Option<ResolvedType> {
     let target = target_type?;
 
     // Get the element ID from the target type
@@ -497,7 +413,7 @@ fn infer_property_access(
     if let Element::Class(class) = elem {
         // Search in own properties
         if let Some(prop) = class.properties.iter().find(|p| p.name == property_name) {
-            return Some(InferredType {
+            return Some(ResolvedType {
                 type_expr: prop.type_expr.clone(),
                 multiplicity: prop.multiplicity.clone(),
             });
@@ -508,21 +424,19 @@ fn infer_property_access(
             .iter()
             .find(|q| q.name == property_name)
         {
-            return Some(InferredType {
+            return Some(ResolvedType {
                 type_expr: qp.return_type.clone(),
                 multiplicity: qp.return_multiplicity.clone(),
             });
         }
         // Walk supertypes for inherited properties
         for st in &class.super_types {
-            if let TypeExpr::Named { element: _, .. } = st {
-                let super_type = Some(InferredType {
+            if matches!(st, TypeExpr::Named { .. }) {
+                let super_type = ResolvedType {
                     type_expr: st.clone(),
                     multiplicity: Multiplicity::PureOne,
-                });
-                if let Some(result) =
-                    infer_property_access(ctx, super_type.as_ref(), property_name, source_info)
-                {
+                };
+                if let Some(result) = infer_property_access(ctx, Some(&super_type), property_name) {
                     return Some(result);
                 }
             }
@@ -536,9 +450,9 @@ fn infer_property_access(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Creates an `InferredType` for a primitive type with multiplicity `[1]`.
-fn primitive_type(element_id: crate::ids::ElementId, _source_info: &SourceInfo) -> InferredType {
-    InferredType {
+/// Creates a `ResolvedType` for a primitive type with multiplicity `[1]`.
+fn primitive(element_id: crate::ids::ElementId) -> ResolvedType {
+    ResolvedType {
         type_expr: TypeExpr::Named {
             element: element_id,
             type_arguments: Vec::new(),
@@ -548,34 +462,12 @@ fn primitive_type(element_id: crate::ids::ElementId, _source_info: &SourceInfo) 
     }
 }
 
-/// Returns the inferred type for a date literal based on its variant.
-fn date_literal_type(dv: &DateValue, source_info: &SourceInfo) -> InferredType {
+/// Returns the resolved type for a date literal based on its variant.
+fn date_literal_type(dv: &DateValue) -> ResolvedType {
     match dv {
-        DateValue::StrictDate { .. } => primitive_type(bootstrap::STRICT_DATE_ID, source_info),
-        DateValue::DateTime { .. } => primitive_type(bootstrap::DATE_TIME_ID, source_info),
-        DateValue::StrictTime { .. } => primitive_type(bootstrap::STRICT_TIME_ID, source_info),
-    }
-}
-
-/// Returns the source info of a `ValueSpec`.
-fn expr_source_info(expr: &ValueSpec) -> &SourceInfo {
-    match expr {
-        ValueSpec::IntegerLiteral(_, si)
-        | ValueSpec::FloatLiteral(_, si)
-        | ValueSpec::DecimalLiteral(_, si)
-        | ValueSpec::StringLiteral(_, si)
-        | ValueSpec::BooleanLiteral(_, si)
-        | ValueSpec::DateLiteral(_, si) => si,
-        ValueSpec::Variable { source_info, .. }
-        | ValueSpec::FunctionCall { source_info, .. }
-        | ValueSpec::PropertyAccess { source_info, .. }
-        | ValueSpec::QualifiedPropertyAccess { source_info, .. }
-        | ValueSpec::EnumValue { source_info, .. }
-        | ValueSpec::Lambda { source_info, .. }
-        | ValueSpec::Collection { source_info, .. }
-        | ValueSpec::TypeReference { source_info, .. }
-        | ValueSpec::PackageableElementRef { source_info, .. }
-        | ValueSpec::Column { source_info, .. } => source_info,
+        DateValue::StrictDate { .. } => primitive(bootstrap::STRICT_DATE_ID),
+        DateValue::DateTime { .. } => primitive(bootstrap::DATE_TIME_ID),
+        DateValue::StrictTime { .. } => primitive(bootstrap::STRICT_TIME_ID),
     }
 }
 
@@ -587,11 +479,11 @@ fn expr_source_info(expr: &ValueSpec) -> &SourceInfo {
 mod tests {
     use super::*;
     use crate::bootstrap;
-    use crate::types::{Multiplicity, TypeExpr};
+    use crate::types::{ExprKind, Multiplicity, TypeExpr, ValueSpec};
     use legend_pure_parser_ast::SourceInfo;
     use smol_str::SmolStr;
 
-    fn test_source_info() -> SourceInfo {
+    fn si() -> SourceInfo {
         SourceInfo::new("test.pure", 1, 1, 1, 10)
     }
 
@@ -610,50 +502,56 @@ mod tests {
         model
     }
 
+    /// Helper: create a `ValueSpec` with no type info.
+    fn untyped(kind: ExprKind, source_info: SourceInfo) -> ValueSpec {
+        ValueSpec {
+            kind,
+            source_info,
+            type_info: None,
+        }
+    }
+
     #[test]
     fn infer_integer_literal() {
         let model = model_with_bootstrap();
-        let body = vec![ValueSpec::IntegerLiteral(42, test_source_info())];
-        let mut type_map = HashMap::new();
+        let mut body = vec![untyped(ExprKind::IntegerLiteral(42), si())];
         let mut errors = Vec::new();
 
-        infer_function_body(&model, &[], &body, &mut type_map, &mut errors);
+        infer_function_body(&model, &[], &mut body, &mut errors);
 
         assert!(errors.is_empty());
-        let inferred = type_map.get(&test_source_info()).unwrap();
-        assert_eq!(inferred.type_expr, named_type(bootstrap::INTEGER_ID));
-        assert_eq!(inferred.multiplicity, Multiplicity::PureOne);
+        let ti = body[0].type_info.as_ref().unwrap();
+        assert_eq!(ti.type_expr, named_type(bootstrap::INTEGER_ID));
+        assert_eq!(ti.multiplicity, Multiplicity::PureOne);
     }
 
     #[test]
     fn infer_string_literal() {
         let model = model_with_bootstrap();
-        let body = vec![ValueSpec::StringLiteral(
-            SmolStr::new("hello"),
-            test_source_info(),
+        let mut body = vec![untyped(
+            ExprKind::StringLiteral(SmolStr::new("hello")),
+            si(),
         )];
-        let mut type_map = HashMap::new();
         let mut errors = Vec::new();
 
-        infer_function_body(&model, &[], &body, &mut type_map, &mut errors);
+        infer_function_body(&model, &[], &mut body, &mut errors);
 
-        let inferred = type_map.get(&test_source_info()).unwrap();
-        assert_eq!(inferred.type_expr, named_type(bootstrap::STRING_ID));
-        assert_eq!(inferred.multiplicity, Multiplicity::PureOne);
+        let ti = body[0].type_info.as_ref().unwrap();
+        assert_eq!(ti.type_expr, named_type(bootstrap::STRING_ID));
+        assert_eq!(ti.multiplicity, Multiplicity::PureOne);
     }
 
     #[test]
     fn infer_boolean_literal() {
         let model = model_with_bootstrap();
-        let body = vec![ValueSpec::BooleanLiteral(true, test_source_info())];
-        let mut type_map = HashMap::new();
+        let mut body = vec![untyped(ExprKind::BooleanLiteral(true), si())];
         let mut errors = Vec::new();
 
-        infer_function_body(&model, &[], &body, &mut type_map, &mut errors);
+        infer_function_body(&model, &[], &mut body, &mut errors);
 
-        let inferred = type_map.get(&test_source_info()).unwrap();
-        assert_eq!(inferred.type_expr, named_type(bootstrap::BOOLEAN_ID));
-        assert_eq!(inferred.multiplicity, Multiplicity::PureOne);
+        let ti = body[0].type_info.as_ref().unwrap();
+        assert_eq!(ti.type_expr, named_type(bootstrap::BOOLEAN_ID));
+        assert_eq!(ti.multiplicity, Multiplicity::PureOne);
     }
 
     #[test]
@@ -666,19 +564,19 @@ mod tests {
             source_info: SourceInfo::new("test.pure", 1, 1, 1, 5),
         }];
 
-        let var_si = SourceInfo::new("test.pure", 2, 1, 2, 3);
-        let body = vec![ValueSpec::Variable {
-            name: SmolStr::new("x"),
-            source_info: var_si.clone(),
-        }];
-        let mut type_map = HashMap::new();
+        let mut body = vec![untyped(
+            ExprKind::Variable {
+                name: SmolStr::new("x"),
+            },
+            SourceInfo::new("test.pure", 2, 1, 2, 3),
+        )];
         let mut errors = Vec::new();
 
-        infer_function_body(&model, &params, &body, &mut type_map, &mut errors);
+        infer_function_body(&model, &params, &mut body, &mut errors);
 
-        let inferred = type_map.get(&var_si).unwrap();
-        assert_eq!(inferred.type_expr, named_type(bootstrap::STRING_ID));
-        assert_eq!(inferred.multiplicity, Multiplicity::PureOne);
+        let ti = body[0].type_info.as_ref().unwrap();
+        assert_eq!(ti.type_expr, named_type(bootstrap::STRING_ID));
+        assert_eq!(ti.multiplicity, Multiplicity::PureOne);
     }
 
     #[test]
@@ -689,23 +587,24 @@ mod tests {
         let si3 = SourceInfo::new("test.pure", 1, 8, 1, 9);
         let coll_si = SourceInfo::new("test.pure", 1, 1, 1, 10);
 
-        let body = vec![ValueSpec::Collection {
-            elements: vec![
-                ValueSpec::IntegerLiteral(1, si1),
-                ValueSpec::IntegerLiteral(2, si2),
-                ValueSpec::IntegerLiteral(3, si3),
-            ],
-            source_info: coll_si.clone(),
-        }];
-        let mut type_map = HashMap::new();
+        let mut body = vec![untyped(
+            ExprKind::Collection {
+                elements: vec![
+                    untyped(ExprKind::IntegerLiteral(1), si1),
+                    untyped(ExprKind::IntegerLiteral(2), si2),
+                    untyped(ExprKind::IntegerLiteral(3), si3),
+                ],
+            },
+            coll_si,
+        )];
         let mut errors = Vec::new();
 
-        infer_function_body(&model, &[], &body, &mut type_map, &mut errors);
+        infer_function_body(&model, &[], &mut body, &mut errors);
 
-        let inferred = type_map.get(&coll_si).unwrap();
-        assert_eq!(inferred.type_expr, named_type(bootstrap::INTEGER_ID));
+        let ti = body[0].type_info.as_ref().unwrap();
+        assert_eq!(ti.type_expr, named_type(bootstrap::INTEGER_ID));
         assert_eq!(
-            inferred.multiplicity,
+            ti.multiplicity,
             Multiplicity::Range {
                 lower: 3,
                 upper: Some(3)
@@ -717,28 +616,30 @@ mod tests {
     fn infer_lambda() {
         let model = model_with_bootstrap();
         let lambda_si = SourceInfo::new("test.pure", 1, 1, 1, 30);
-        let var_si = SourceInfo::new("test.pure", 1, 20, 1, 22);
 
-        let body = vec![ValueSpec::Lambda {
-            parameters: vec![Parameter {
-                name: SmolStr::new("x"),
-                type_expr: named_type(bootstrap::STRING_ID),
-                multiplicity: Multiplicity::PureOne,
-                source_info: SourceInfo::new("test.pure", 1, 2, 1, 15),
-            }],
-            body: vec![ValueSpec::Variable {
-                name: SmolStr::new("x"),
-                source_info: var_si.clone(),
-            }],
-            source_info: lambda_si.clone(),
-        }];
-        let mut type_map = HashMap::new();
+        let mut body = vec![untyped(
+            ExprKind::Lambda {
+                parameters: vec![Parameter {
+                    name: SmolStr::new("x"),
+                    type_expr: named_type(bootstrap::STRING_ID),
+                    multiplicity: Multiplicity::PureOne,
+                    source_info: SourceInfo::new("test.pure", 1, 2, 1, 15),
+                }],
+                body: vec![untyped(
+                    ExprKind::Variable {
+                        name: SmolStr::new("x"),
+                    },
+                    SourceInfo::new("test.pure", 1, 20, 1, 22),
+                )],
+            },
+            lambda_si,
+        )];
         let mut errors = Vec::new();
 
-        infer_function_body(&model, &[], &body, &mut type_map, &mut errors);
+        infer_function_body(&model, &[], &mut body, &mut errors);
 
-        let inferred = type_map.get(&lambda_si).unwrap();
-        match &inferred.type_expr {
+        let ti = body[0].type_info.as_ref().unwrap();
+        match &ti.type_expr {
             TypeExpr::FunctionType {
                 parameters,
                 return_type,
@@ -756,22 +657,20 @@ mod tests {
     #[test]
     fn infer_date_literals() {
         let model = model_with_bootstrap();
-        let si = test_source_info();
-        let body = vec![ValueSpec::DateLiteral(
-            DateValue::StrictDate {
+        let mut body = vec![untyped(
+            ExprKind::DateLiteral(DateValue::StrictDate {
                 year: 2024,
                 month: 1,
                 day: 15,
-            },
-            si.clone(),
+            }),
+            si(),
         )];
-        let mut type_map = HashMap::new();
         let mut errors = Vec::new();
 
-        infer_function_body(&model, &[], &body, &mut type_map, &mut errors);
+        infer_function_body(&model, &[], &mut body, &mut errors);
 
-        let inferred = type_map.get(&si).unwrap();
-        assert_eq!(inferred.type_expr, named_type(bootstrap::STRICT_DATE_ID));
+        let ti = body[0].type_info.as_ref().unwrap();
+        assert_eq!(ti.type_expr, named_type(bootstrap::STRICT_DATE_ID));
     }
 
     #[test]
@@ -781,20 +680,20 @@ mod tests {
             chunk_id: 1,
             local_idx: 0,
         };
-        let si = test_source_info();
 
-        let body = vec![ValueSpec::EnumValue {
-            enum_element: enum_id,
-            value: SmolStr::new("VALUE_A"),
-            source_info: si.clone(),
-        }];
-        let mut type_map = HashMap::new();
+        let mut body = vec![untyped(
+            ExprKind::EnumValue {
+                enum_element: enum_id,
+                value: SmolStr::new("VALUE_A"),
+            },
+            si(),
+        )];
         let mut errors = Vec::new();
 
-        infer_function_body(&model, &[], &body, &mut type_map, &mut errors);
+        infer_function_body(&model, &[], &mut body, &mut errors);
 
-        let inferred = type_map.get(&si).unwrap();
-        assert_eq!(inferred.type_expr, named_type(enum_id));
-        assert_eq!(inferred.multiplicity, Multiplicity::PureOne);
+        let ti = body[0].type_info.as_ref().unwrap();
+        assert_eq!(ti.type_expr, named_type(enum_id));
+        assert_eq!(ti.multiplicity, Multiplicity::PureOne);
     }
 }

@@ -42,7 +42,6 @@ use crate::nodes::measure::Measure;
 use crate::nodes::profile::Profile;
 use crate::nodes::unit::Unit;
 use crate::types::PrimitiveType;
-use crate::types::{Multiplicity, TypeExpr};
 
 // ---------------------------------------------------------------------------
 // ElementNode — common metadata for all elements
@@ -61,22 +60,6 @@ pub struct ElementNode {
     pub source_info: SourceInfo,
     /// The package this element belongs to.
     pub parent_package: PackageId,
-}
-
-// ---------------------------------------------------------------------------
-// InferredType — type annotation for expressions
-// ---------------------------------------------------------------------------
-
-/// Inferred type and multiplicity for a compiled expression.
-///
-/// Stored in a side map on [`PureModel`], keyed by [`SourceInfo`].
-/// This keeps [`ValueSpec`](crate::types::ValueSpec) unchanged.
-#[derive(Debug, Clone, PartialEq)]
-pub struct InferredType {
-    /// The inferred type of the expression.
-    pub type_expr: TypeExpr,
-    /// The inferred multiplicity of the expression.
-    pub multiplicity: Multiplicity,
 }
 
 // ---------------------------------------------------------------------------
@@ -222,12 +205,6 @@ pub struct PureModel {
     /// Extension arenas for plugin element types.
     pub extension_arenas: HashMap<TypeId, Box<dyn Any>>,
 
-    /// Inferred types for expressions, keyed by source position.
-    ///
-    /// Populated by Pass 2.5 (type inference). Absent entries mean
-    /// the expression has not been typed yet.
-    pub(crate) inferred_types: HashMap<SourceInfo, InferredType>,
-
     /// Derived indexes, computed post-freeze.
     derived: DerivedIndexes,
 }
@@ -249,7 +226,6 @@ impl PureModel {
             root_package: PackageId(root_idx),
             chunks: Vec::new(),
             extension_arenas: HashMap::new(),
-            inferred_types: HashMap::new(),
             derived: DerivedIndexes::default(),
         }
     }
@@ -294,15 +270,6 @@ impl PureModel {
     #[must_use]
     pub fn get_package(&self, id: PackageId) -> &Package {
         self.global_packages.get(id.0)
-    }
-
-    /// Returns the inferred type for the expression at the given source position.
-    ///
-    /// Returns `None` if the expression has not been typed (e.g., type inference
-    /// has not run yet, or the expression is in an untyped context).
-    #[must_use]
-    pub fn inferred_type_of(&self, source_info: &SourceInfo) -> Option<&InferredType> {
-        self.inferred_types.get(source_info)
     }
 
     // -- Derived Index Methods -----------------------------------------------

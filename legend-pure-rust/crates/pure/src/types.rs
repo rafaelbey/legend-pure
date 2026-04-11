@@ -191,7 +191,30 @@ pub enum DateValue {
 }
 
 // ---------------------------------------------------------------------------
-// ValueSpec — compiled expression (replaces placeholder)
+// ResolvedType — the inferred type annotation for expressions
+// ---------------------------------------------------------------------------
+
+/// Resolved type and multiplicity for a compiled expression.
+///
+/// After type inference (Pass 2.5), every expression in the model
+/// carries a `ResolvedType` via [`ValueSpec::type_info`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedType {
+    /// The inferred type of the expression.
+    pub type_expr: TypeExpr,
+    /// The inferred multiplicity of the expression.
+    pub multiplicity: Multiplicity,
+}
+
+/// Type annotation on an expression node.
+///
+/// `None` when first constructed by the lowerer (Pass 2); populated to
+/// `Some(...)` by type inference (Pass 2.5). After a successful compile,
+/// all expression `type_info` fields should be `Some`.
+pub type TypeInfo = Option<ResolvedType>;
+
+// ---------------------------------------------------------------------------
+// ValueSpec — compiled expression (header + kind)
 // ---------------------------------------------------------------------------
 
 /// A compiled value specification — the semantic expression type.
@@ -203,21 +226,47 @@ pub enum DateValue {
 /// This is the Rust equivalent of Java's `ValueSpecification` hierarchy
 /// (M3 metamodel: `InstanceValue`, `SimpleFunctionExpression`,
 /// `VariableExpression`).
+///
+/// # Structure
+///
+/// Every expression node carries three fields:
+/// - `kind` — the variant-specific data ([`ExprKind`])
+/// - `source_info` — source location for diagnostics
+/// - `type_info` — inferred type + multiplicity (populated by Pass 2.5)
+///
+/// This "header + kind" pattern avoids repeating `source_info` and
+/// `type_info` across every variant, and enables O(1) field access
+/// without pattern matching.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ValueSpec {
+pub struct ValueSpec {
+    /// The expression variant and its data.
+    pub kind: ExprKind,
+    /// Source location in the original `.pure` file.
+    pub source_info: SourceInfo,
+    /// Inferred type annotation. `None` until Pass 2.5 runs.
+    pub type_info: TypeInfo,
+}
+
+/// Expression variant — the type-specific payload of a [`ValueSpec`].
+///
+/// Each variant contains only the data unique to that expression kind.
+/// The common `source_info` and `type_info` fields live on the parent
+/// [`ValueSpec`] struct.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExprKind {
     // -- Literals ----------------------------------------------------------
     /// Integer literal: `42`.
-    IntegerLiteral(i64, SourceInfo),
+    IntegerLiteral(i64),
     /// Float literal: `3.14`.
-    FloatLiteral(f64, SourceInfo),
+    FloatLiteral(f64),
     /// Decimal literal: `3.14D`.
-    DecimalLiteral(rust_decimal::Decimal, SourceInfo),
+    DecimalLiteral(rust_decimal::Decimal),
     /// String literal: `'hello'`.
-    StringLiteral(SmolStr, SourceInfo),
+    StringLiteral(SmolStr),
     /// Boolean literal: `true`, `false`.
-    BooleanLiteral(bool, SourceInfo),
+    BooleanLiteral(bool),
     /// Date/time literal: `%2024-01-15`, `%2024-01-15T10:30:00`, `%10:30:00`.
-    DateLiteral(DateValue, SourceInfo),
+    DateLiteral(DateValue),
 
     // -- Variable reference ------------------------------------------------
     /// Variable reference: `$name`.
@@ -227,8 +276,6 @@ pub enum ValueSpec {
     Variable {
         /// Variable name (without the `$` prefix).
         name: SmolStr,
-        /// Source location.
-        source_info: SourceInfo,
     },
 
     // -- Function call (covers operators, let, new, arrow) -----------------
@@ -245,8 +292,6 @@ pub enum ValueSpec {
         function_name: SmolStr,
         /// Arguments.
         arguments: Vec<ValueSpec>,
-        /// Source location.
-        source_info: SourceInfo,
     },
 
     // -- Property access ---------------------------------------------------
@@ -256,8 +301,6 @@ pub enum ValueSpec {
         target: Box<ValueSpec>,
         /// Property name.
         property: SmolStr,
-        /// Source location.
-        source_info: SourceInfo,
     },
     /// Qualified property access: `$x.derived('arg')`.
     QualifiedPropertyAccess {
@@ -267,8 +310,6 @@ pub enum ValueSpec {
         property: SmolStr,
         /// Arguments.
         arguments: Vec<ValueSpec>,
-        /// Source location.
-        source_info: SourceInfo,
     },
 
     // -- Enum value --------------------------------------------------------
@@ -278,8 +319,6 @@ pub enum ValueSpec {
         enum_element: ElementId,
         /// The enum value name.
         value: SmolStr,
-        /// Source location.
-        source_info: SourceInfo,
     },
 
     // -- Lambda ------------------------------------------------------------
@@ -289,8 +328,6 @@ pub enum ValueSpec {
         parameters: Vec<Parameter>,
         /// Body expressions.
         body: Vec<ValueSpec>,
-        /// Source location.
-        source_info: SourceInfo,
     },
 
     // -- Collection --------------------------------------------------------
@@ -298,8 +335,6 @@ pub enum ValueSpec {
     Collection {
         /// Elements.
         elements: Vec<ValueSpec>,
-        /// Source location.
-        source_info: SourceInfo,
     },
 
     // -- Type reference ----------------------------------------------------
@@ -307,8 +342,6 @@ pub enum ValueSpec {
     TypeReference {
         /// The resolved type.
         type_expr: TypeExpr,
-        /// Source location.
-        source_info: SourceInfo,
     },
 
     // -- Element reference (bare) ------------------------------------------
@@ -316,16 +349,11 @@ pub enum ValueSpec {
     PackageableElementRef {
         /// The resolved element.
         element: ElementId,
-        /// Source location.
-        source_info: SourceInfo,
     },
 
     // -- Column (TDS — placeholder) ----------------------------------------
     /// Column expression (TDS — full lowering deferred).
-    Column {
-        /// Source location.
-        source_info: SourceInfo,
-    },
+    Column,
 }
 
 /// Backward-compatible alias: existing code uses `Expression` throughout
