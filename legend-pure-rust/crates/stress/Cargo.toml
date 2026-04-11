@@ -31,3 +31,10 @@ legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-pure = { path = "../pure" }
 legend-pure-parser-compose = { path = "../compose" }
 smol_str = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "pipeline"
+harness = false

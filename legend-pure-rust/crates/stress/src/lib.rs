@@ -31,17 +31,30 @@
 //! | 100K hub-spoke | 100,000 | `heavy` |
 //! | 100K chaotic | 100,000 | `heavy` |
 //!
+//! Measuring Statistical CPU overhead & Peak memory limits
+//!
 //! # Usage
 //!
+//! **Correctness Testing:**
 //! ```bash
 //! # Standard suite
-//! cargo test -p legend-pure-parser-stress -- --nocapture
+//! cargo test -p legend-pure-parser-stress
 //!
 //! # Heavy suite (100K models)
-//! cargo test -p legend-pure-parser-stress --features heavy -- --nocapture
+//! cargo test -p legend-pure-parser-stress --features heavy
+//! ```
+//!
+//! **Benchmarking & Memory (Criterion):**
+//! ```bash
+//! # Standard suite
+//! cargo bench -p legend-pure-parser-stress --bench pipeline
+//!
+//! # Compare regressions against main branch
+//! cargo bench -p legend-pure-parser-stress --bench pipeline -- --baseline main
 //! ```
 
-#![forbid(unsafe_code)]
+// allow unsafe for the global allocator
+#![allow(unsafe_code)]
 #![deny(missing_docs)]
 #![allow(
     clippy::too_many_arguments,
@@ -55,4 +68,5 @@
     clippy::similar_names
 )]
 
+pub mod alloc;
 pub mod generate;
