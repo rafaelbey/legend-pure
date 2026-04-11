@@ -40,7 +40,7 @@ use smol_str::SmolStr;
 /// };
 /// assert_eq!(info.start_line, 1);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SourceInfo {
     /// Source identifier (file path or URI).
     pub source: SmolStr,
