@@ -26,8 +26,10 @@
 //!    Cyclic inheritance = compilation error.
 //! 3. **Definition (Pass 2)** — Hydrate shells in topological order,
 //!    resolving soft dependencies to existing shells.
-//! 4. **Freeze** — Call `rebuild_derived_indexes()`.
-//! 5. **Validation (Pass 3)** — Read-only pass on the frozen model.
+//! 4. **Type Inference (Pass 2.5)** — Bottom-up type inference for all
+//!    function and qualified property bodies.
+//! 5. **Freeze** — Call `rebuild_derived_indexes()`.
+//! 6. **Validation (Pass 3)** — Read-only pass on the frozen model.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -122,6 +124,9 @@ pub fn compile(
         &mut model,
         &mut errors,
     );
+
+    // ---- Pass 2.5: Type Inference ----
+    pass_infer(&mut model, &mut errors);
 
     // ---- Freeze ----
     model.rebuild_derived_indexes();
@@ -923,6 +928,47 @@ fn build_fqn(pkg_path: &[SmolStr], name: &SmolStr) -> SmolStr {
 /// Retrieves the AST element from source files given a declaration.
 fn get_ast_element<'a>(source_files: &'a [SourceFile], decl: &Declaration) -> &'a ast::Element {
     &source_files[decl.file_idx].sections[decl.section_idx].elements[decl.element_idx]
+}
+
+// ---------------------------------------------------------------------------
+// Pass 2.5 — Type Inference
+// ---------------------------------------------------------------------------
+
+/// Runs bottom-up type inference over all function and qualified property bodies.
+///
+/// For each function, infers types for every expression in the body and stores
+/// results in `model.inferred_types` (keyed by source position).
+fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
+    use crate::infer;
+
+    // Collect (params, body) pairs from all chunks, avoiding borrow conflicts.
+    // We clone the minimal data needed, then run inference with `&model`.
+    let mut targets: Vec<(Vec<crate::types::Parameter>, Vec<crate::types::ValueSpec>)> = Vec::new();
+
+    for chunk in &model.chunks {
+        for (_, element) in chunk.elements.iter() {
+            match element {
+                Element::Function(f) if !f.body.is_empty() => {
+                    targets.push((f.parameters.clone(), f.body.clone()));
+                }
+                Element::Class(c) => {
+                    for qp in &c.qualified_properties {
+                        if !qp.body.is_empty() {
+                            targets.push((qp.parameters.clone(), qp.body.clone()));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Run inference with shared &model access.
+    let mut type_map = std::mem::take(&mut model.inferred_types);
+    for (params, body) in &targets {
+        infer::infer_function_body(model, params, body, &mut type_map, errors);
+    }
+    model.inferred_types = type_map;
 }
 
 // ---------------------------------------------------------------------------
