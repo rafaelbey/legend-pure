@@ -244,3 +244,127 @@ pub fn generate(config: &ChaoticConfig) -> (String, ModelStats) {
     stats.source_bytes = sb.len();
     (sb, stats)
 }
+
+/// Generates Pure grammar source for a chaotic non-uniform model across multiple files.
+/// Generates approximately `files_count` files (plus one preamble).
+#[allow(clippy::too_many_lines)]
+pub fn generate_files(config: &ChaoticConfig, files_count: usize) -> Vec<(String, String)> {
+    let n = config.total_classes;
+    let mut files = Vec::with_capacity(files_count + 1);
+
+    // ---- Preamble ----
+    let mut preamble = String::with_capacity(2048);
+    if config.include_profiles {
+        preamble.push_str("Profile test::doc {\n  stereotypes: [deprecated, internal, experimental];\n  tags: [description, owner, version];\n}\n\n");
+        preamble.push_str("Profile test::meta {\n  stereotypes: [generated, synthetic, chaos];\n  tags: [source, tier, shape];\n}\n\n");
+    }
+    if config.include_enums {
+        preamble.push_str("Enum test::Status {\n  ACTIVE,\n  INACTIVE,\n  PENDING,\n  ARCHIVED\n}\n\n");
+        preamble.push_str("Enum test::Priority {\n  HIGH,\n  MEDIUM,\n  LOW,\n  CRITICAL,\n  NONE\n}\n\n");
+    }
+    if config.include_functions {
+        let fn_count = n / 500;
+        for f in 0..fn_count {
+            preamble.push_str(&format!("function test::fn{f}(x: Integer[1]): Integer[1]\n{{\n  $x + 1\n}}\n\n"));
+        }
+    }
+    if !preamble.is_empty() {
+        files.push(("chaotic_preamble.pure".to_string(), preamble));
+    }
+
+    // ---- Pre-compute class metadata ----
+    let mut class_infos: Vec<ClassInfo> = Vec::with_capacity(n);
+    for i in 0..n {
+        let h = common::det_hash((i as u32).wrapping_mul(7).wrapping_add(13));
+        let bucket = h % 100;
+        let prop_count = if bucket < 40 {
+            1 + (common::det_hash(i as u32 * 3) % 3) as usize
+        } else if bucket < 65 {
+            4 + (common::det_hash(i as u32 * 5) % 5) as usize
+        } else if bucket < 85 {
+            9 + (common::det_hash(i as u32 * 11) % 12) as usize
+        } else if bucket < 95 {
+            21 + (common::det_hash(i as u32 * 17) % 15) as usize
+        } else {
+            36 + (common::det_hash(i as u32 * 23) % 15) as usize
+        };
+
+        let mut props = Vec::with_capacity(prop_count + 2);
+        props.push(("id".to_string(), "Integer".to_string()));
+
+        for p in 0..prop_count {
+            let type_idx = common::det_hash(i as u32 * 100 + p as u32 * 13) as usize % common::PURE_TYPES.len();
+            let pure_type = common::PURE_TYPES[type_idx];
+            let stem_idx = common::det_hash(i as u32 * 50 + p as u32 * 7) as usize % common::PROP_STEMS.len();
+            let stem = common::PROP_STEMS[stem_idx];
+            props.push((format!("{stem}{p}"), pure_type.to_string()));
+        }
+
+        let has_enum = config.include_enums && (common::det_hash(i as u32 * 41) % 20 == 0) && prop_count >= 2;
+        if has_enum {
+            props.push(("prio".to_string(), "test::Priority".to_string()));
+        }
+
+        let has_parent = config.include_inheritance && i > 10 && common::det_hash(i as u32 * 67) % 20 == 0;
+        let parent_idx = if has_parent {
+            let target = common::det_hash(i as u32 * 71) as usize % (i / 2).max(1);
+            Some(target)
+        } else {
+            None
+        };
+
+        class_infos.push(ClassInfo {
+            index: i, prop_count, props, has_enum, has_parent, parent_idx,
+        });
+    }
+
+    // ---- Group classes and associations into files ----
+    let classes_per_file = (n / files_count.max(1)).max(1);
+    
+    for (file_idx, chunk) in class_infos.chunks(classes_per_file).enumerate() {
+        let mut sb = String::with_capacity(classes_per_file * 300);
+        
+        for ci in chunk {
+            let annotate = config.include_profiles && ci.index % 7 == 0;
+            if annotate {
+                let stereo = match ci.index % 6 {
+                    0 => "test::doc.deprecated",
+                    1 => "test::doc.internal",
+                    2 => "test::doc.experimental",
+                    3 => "test::meta.generated",
+                    4 => "test::meta.synthetic",
+                    _ => "test::meta.chaos",
+                };
+                sb.push_str(&format!("Class <<{stereo}>> "));
+            } else {
+                sb.push_str("Class ");
+            }
+
+            sb.push_str(&format!("test::C{}", ci.index));
+
+            if let Some(parent_idx) = ci.parent_idx {
+                sb.push_str(&format!(" extends test::C{parent_idx}"));
+            }
+
+            sb.push_str("\n{\n");
+            for (name, typ) in &ci.props {
+                sb.push_str(&format!("  {name}: {typ}[1];\n"));
+            }
+            sb.push_str("}\n\n");
+            
+            // Add Association for this class
+            let mut target = common::det_hash(ci.index as u32 * 97 + 53) as usize % n;
+            if target == ci.index {
+                target = (target + 1) % n;
+            }
+            sb.push_str(&format!(
+                "Association test::L{} {{\n  to{0}: test::C{target}[0..1];\n  from{0}: test::C{0}[0..1];\n}}\n\n",
+                ci.index
+            ));
+        }
+        
+        files.push((format!("chaotic_chunk_{file_idx}.pure"), sb));
+    }
+
+    files
+}

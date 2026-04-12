@@ -297,6 +297,32 @@ fn bench_parse_multi_file(c: &mut Criterion) {
         println!("  total_allocs: {}", mem.alloc_count);
     });
 
+    #[cfg(feature = "heavy")]
+    {
+        // Generate 100K chaotic as individual files (1001 files)
+        let files_100k: Vec<_> = chaotic::generate_files(&ChaoticConfig::standard_100k(), 1000);
+
+        let inputs_100k: Vec<_> = files_100k
+            .iter()
+            .map(|(name, src)| SourceInput::in_memory(name, src))
+            .collect();
+
+        group.bench_function("chaotic_100k_parallel", |b| {
+            let baseline_bytes = alloc::current_bytes();
+            alloc::reset();
+            b.iter(|| {
+                let results = legend_pure_parser_parser::parse_many(black_box(&inputs_100k));
+                black_box(results);
+            });
+            let mem = alloc::snapshot();
+            println!(
+                "  peak_memory_delta: {} KB",
+                alloc::peak_delta(baseline_bytes) / 1024
+            );
+            println!("  total_allocs: {}", mem.alloc_count);
+        });
+    }
+
     group.finish();
 }
 
