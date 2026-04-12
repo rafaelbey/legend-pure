@@ -95,10 +95,10 @@ fn stress_100k_chaotic() {
         let mut classes_with_parents = 0;
         for chunk in model.chunks.iter().skip(1) {
             for (_, element) in chunk.elements.iter() {
-                if let Element::Class(class) = element {
-                    if !class.super_types.is_empty() {
-                        classes_with_parents += 1;
-                    }
+                if let Element::Class(class) = element
+                    && !class.super_types.is_empty()
+                {
+                    classes_with_parents += 1;
                 }
             }
         }
