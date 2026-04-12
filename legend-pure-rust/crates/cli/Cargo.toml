@@ -51,8 +51,7 @@ thiserror = { workspace = true }
 # File discovery
 walkdir = { workspace = true }
 
-# Parallelism
-rayon = { workspace = true }
+
 
 # Tracing
 tracing = { workspace = true }

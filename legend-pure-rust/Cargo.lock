@@ -796,7 +796,6 @@ dependencies = [
  "miette",
  "owo-colors",
  "predicates",
- "rayon",
  "serde",
  "serde_json",
  "smol_str",

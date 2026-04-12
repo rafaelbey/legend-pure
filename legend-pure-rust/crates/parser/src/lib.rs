@@ -29,18 +29,18 @@
 //!
 //! # Parallel Parsing
 //!
-//! For multi-file workloads, use [`parse_many`] to parse files concurrently
-//! across all available CPU cores:
+//! For multi-file workloads, use [`parse_many`] with [`SourceProvider`](source::SourceProvider)
+//! implementations to parse files concurrently across all available CPU cores:
 //!
 //! ```
-//! use legend_pure_parser_parser::parse_many;
+//! use legend_pure_parser_parser::{parse_many, source::SourceInput};
 //!
 //! let sources = vec![
-//!     ("Class A {}", "a.pure"),
-//!     ("Class B {}", "b.pure"),
+//!     SourceInput::in_memory("a.pure", "Class A {}"),
+//!     SourceInput::in_memory("b.pure", "Class B {}"),
 //! ];
-//! let results = parse_many(&sources);
-//! assert!(results.iter().all(|r| r.is_ok()));
+//! let outputs = parse_many(&sources);
+//! assert!(outputs.iter().all(|o| o.is_ok()));
 //! ```
 
 #![forbid(unsafe_code)]
@@ -50,11 +50,13 @@ mod cursor;
 pub mod error;
 pub mod island;
 mod parser;
+pub mod source;
 
 use legend_pure_parser_ast::SourceFile;
 
 pub use error::ParseError;
 pub use island::IslandParser;
+pub use source::SourceProvider;
 
 /// Parse Pure source text into an AST [`SourceFile`].
 ///
@@ -89,38 +91,108 @@ pub fn parse_with_islands(
     p.parse_source_file()
 }
 
-/// Parse multiple source files in parallel using all available CPU cores.
+/// Result of loading and parsing a single source via [`parse_many`].
 ///
-/// Each element in `sources` is a `(source_text, file_name)` pair. Results are
-/// returned in the **same order** as the input, making output deterministic
-/// regardless of scheduling.
+/// Carries the source name and loaded text alongside the parse result
+/// so that callers can render error diagnostics without re-loading the file.
+#[derive(Debug)]
+pub struct ParseOutput {
+    /// The logical source name (from [`SourceProvider::name`]).
+    pub name: String,
+    /// The loaded source text, or `None` if loading failed.
+    pub source_text: Option<String>,
+    /// The parse outcome.
+    pub outcome: ParseOutcome,
+}
+
+/// Outcome of loading + parsing a single source.
+#[derive(Debug)]
+pub enum ParseOutcome {
+    /// Source loaded and parsed successfully.
+    Success(SourceFile),
+    /// Source loaded but parsing failed.
+    ParseError(ParseError),
+    /// Source could not be loaded (I/O error).
+    IoError(std::io::Error),
+}
+
+impl ParseOutput {
+    /// Returns `true` if the source was loaded and parsed successfully.
+    #[must_use]
+    pub fn is_ok(&self) -> bool {
+        matches!(self.outcome, ParseOutcome::Success(_))
+    }
+
+    /// Returns the AST if parsing succeeded, `None` otherwise.
+    #[must_use]
+    pub fn ast(&self) -> Option<&SourceFile> {
+        match &self.outcome {
+            ParseOutcome::Success(ast) => Some(ast),
+            _ => None,
+        }
+    }
+
+    /// Consumes self and returns the AST if parsing succeeded.
+    #[must_use]
+    pub fn into_ast(self) -> Option<SourceFile> {
+        match self.outcome {
+            ParseOutcome::Success(ast) => Some(ast),
+            _ => None,
+        }
+    }
+}
+
+/// Parse multiple sources in parallel using all available CPU cores.
 ///
-/// This is the canonical entry point for parallel parsing — CLI commands and
-/// benchmarks should use this rather than manually calling `rayon::par_iter`.
+/// Accepts any slice of [`SourceProvider`] implementations. Each source is
+/// loaded ([`source_text()`](SourceProvider::source_text)) and parsed in
+/// parallel via Rayon. Results are returned in the **same order** as the
+/// input, making output deterministic regardless of scheduling.
+///
+/// This is the canonical entry point for parallel parsing — CLI commands,
+/// benchmarks, and IDE integrations should use this rather than manually
+/// calling `rayon::par_iter`.
 ///
 /// # Example
 ///
 /// ```
-/// use legend_pure_parser_parser::parse_many;
+/// use legend_pure_parser_parser::{parse_many, source::SourceInput};
 ///
 /// let sources = vec![
-///     ("Class pkg::A {}", "a.pure"),
-///     ("Class pkg::B {}", "b.pure"),
+///     SourceInput::in_memory("a.pure", "Class pkg::A {}"),
+///     SourceInput::in_memory("b.pure", "Class pkg::B {}"),
 /// ];
-/// let results = parse_many(&sources);
-/// assert_eq!(results.len(), 2);
-/// assert!(results[0].is_ok());
-/// assert!(results[1].is_ok());
+/// let outputs = parse_many(&sources);
+/// assert_eq!(outputs.len(), 2);
+/// assert!(outputs[0].is_ok());
+/// assert!(outputs[1].is_ok());
 /// ```
-pub fn parse_many<S, N>(sources: &[(S, N)]) -> Vec<Result<SourceFile, ParseError>>
-where
-    S: AsRef<str> + Sync,
-    N: AsRef<str> + Sync,
-{
+pub fn parse_many<S: SourceProvider>(sources: &[S]) -> Vec<ParseOutput> {
     use rayon::prelude::*;
 
     sources
         .par_iter()
-        .map(|(source, name)| parse(source.as_ref(), name.as_ref()))
+        .map(|source| {
+            let name = source.name().to_string();
+            match source.source_text() {
+                Ok(text) => {
+                    let text_str = text.into_owned();
+                    let outcome = match parse(&text_str, &name) {
+                        Ok(ast) => ParseOutcome::Success(ast),
+                        Err(e) => ParseOutcome::ParseError(e),
+                    };
+                    ParseOutput {
+                        name,
+                        source_text: Some(text_str),
+                        outcome,
+                    }
+                }
+                Err(io_err) => ParseOutput {
+                    name,
+                    source_text: None,
+                    outcome: ParseOutcome::IoError(io_err),
+                },
+            }
+        })
         .collect()
 }
