@@ -23,6 +23,7 @@ repository.workspace = true
 [dependencies]
 legend-pure-parser-ast = { path = "../ast" }
 legend-pure-parser-lexer = { path = "../lexer" }
+rayon = { workspace = true }
 smol_str = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

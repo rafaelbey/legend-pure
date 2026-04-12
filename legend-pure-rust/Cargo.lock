@@ -879,6 +879,7 @@ dependencies = [
  "insta",
  "legend-pure-parser-ast",
  "legend-pure-parser-lexer",
+ "rayon",
  "smol_str",
  "thiserror 2.0.18",
  "tracing",
@@ -917,6 +918,7 @@ dependencies = [
  "legend-pure-parser-compose",
  "legend-pure-parser-parser",
  "legend-pure-parser-pure",
+ "rayon",
  "smol_str",
 ]
 

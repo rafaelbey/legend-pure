@@ -329,6 +329,171 @@ pub fn generate(config: &HubSpokeConfig) -> (String, ModelStats) {
     (sb, stats)
 }
 
+/// Generates per-file Pure grammar sources for a hub-spoke model.
+///
+/// Each hub and its satellites are placed in a separate file, simulating
+/// a realistic multi-file project layout. Shared definitions (profiles,
+/// enums, measures, functions) go into a `_preamble.pure` file.
+///
+/// Returns `Vec<(file_name, source_text)>`.
+#[allow(clippy::too_many_lines)]
+pub fn generate_files(config: &HubSpokeConfig) -> Vec<(String, String)> {
+    let hubs = config.hubs;
+    let mut files = Vec::with_capacity(hubs + 1);
+
+    // ---- Preamble file: profiles, enums, measures, functions ----
+    let mut preamble = String::with_capacity(2048);
+
+    if config.include_profiles {
+        preamble.push_str("Profile test::doc {\n");
+        preamble.push_str("  stereotypes: [deprecated, internal, experimental];\n");
+        preamble.push_str("  tags: [description, owner, version];\n");
+        preamble.push_str("}\n\n");
+
+        preamble.push_str("Profile test::meta {\n");
+        preamble.push_str("  stereotypes: [generated, synthetic];\n");
+        preamble.push_str("  tags: [source, tier];\n");
+        preamble.push_str("}\n\n");
+    }
+
+    if config.include_enums {
+        preamble.push_str("Enum test::Status {\n");
+        preamble.push_str("  ACTIVE,\n  INACTIVE,\n  PENDING,\n  ARCHIVED\n}\n\n");
+
+        preamble.push_str("Enum test::Priority {\n");
+        preamble.push_str("  HIGH,\n  MEDIUM,\n  LOW,\n  CRITICAL,\n  NONE\n}\n\n");
+    }
+
+    if config.include_measures {
+        preamble.push_str("Measure test::Distance {\n");
+        preamble.push_str("  *Meter: x -> $x;\n");
+        preamble.push_str("  Kilometer: x -> $x * 1000;\n");
+        preamble.push_str("  Mile: x -> $x * 1609.344;\n");
+        preamble.push_str("}\n\n");
+    }
+
+    if config.include_functions {
+        let fn_count = hubs / 20;
+        for f in 0..fn_count {
+            preamble.push_str(&format!(
+                "function test::greet{f}(name: String[1]): String[1]\n{{\n  'hello ' + $name\n}}\n\n"
+            ));
+        }
+    }
+
+    if !preamble.is_empty() {
+        files.push(("_preamble.pure".to_string(), preamble));
+    }
+
+    // ---- Per-hub files ----
+    for h in 0..hubs {
+        let mut sb = String::with_capacity(config.sats_per_hub * 200 + 400);
+
+        // Inheritance base/mid classes for every 10th hub
+        if config.inheritance_depth >= 3 && h % 10 == 0 {
+            emit_class_decl(
+                &mut sb,
+                &format!("test::Base_H{h}"),
+                None,
+                &[("baseField", "String"), ("baseScore", "Integer")],
+                config.include_profiles,
+                config.include_enums,
+                false,
+                h,
+            );
+        }
+        if config.inheritance_depth >= 2 && h % 10 == 0 {
+            let parent = if config.inheritance_depth >= 3 {
+                Some(format!("test::Base_H{h}"))
+            } else {
+                None
+            };
+            emit_class_decl(
+                &mut sb,
+                &format!("test::Mid_H{h}"),
+                parent.as_deref(),
+                &[("midField", "String"), ("midValue", "Integer")],
+                false,
+                false,
+                false,
+                h,
+            );
+        }
+
+        // Hub class
+        let parent = if config.inheritance_depth >= 2 && h % 10 == 0 {
+            if config.inheritance_depth >= 3 {
+                Some(format!("test::Mid_H{h}"))
+            } else {
+                Some(format!("test::Base_H{h}"))
+            }
+        } else {
+            None
+        };
+
+        let has_enum = config.include_enums && h % 5 == 0;
+        emit_class_decl(
+            &mut sb,
+            &format!("test::H{h}"),
+            parent.as_deref(),
+            &[
+                ("id", "Integer"),
+                ("name", "String"),
+                ("code", "String"),
+                ("score", "Integer"),
+                ("fullLabel", "String"),
+            ],
+            config.include_profiles && h % 3 == 0,
+            has_enum,
+            true,
+            h,
+        );
+
+        // Satellite classes for this hub
+        let sat_start = h * config.sats_per_hub;
+        let sat_end = sat_start + config.sats_per_hub;
+        for s in sat_start..sat_end {
+            emit_class_decl(
+                &mut sb,
+                &format!("test::S{s}"),
+                None,
+                &[("id", "Integer"), ("label", "String"), ("value", "Integer")],
+                false,
+                false,
+                false,
+                s,
+            );
+        }
+
+        // Hub ring association
+        let next = (h + 1) % hubs;
+        sb.push_str(&format!(
+            "Association test::HubRing{h} {{\n  nextHub{h}: test::H{next}[0..1];\n  prevHub{h}: test::H{h}[0..1];\n}}\n\n"
+        ));
+
+        // Cross-link associations (every 10th hub)
+        if h % 10 == 0 {
+            for &offset in &config.skip_offsets {
+                let target = (h + offset) % hubs;
+                sb.push_str(&format!(
+                    "Association test::HubCross{h}_{offset} {{\n  crossTo{h}_{offset}: test::H{target}[0..1];\n  crossFrom{h}_{offset}: test::H{h}[0..1];\n}}\n\n"
+                ));
+            }
+        }
+
+        // Satellite→Hub associations
+        for s in sat_start..sat_end {
+            sb.push_str(&format!(
+                "Association test::SatHub{s} {{\n  hub{s}: test::H{h}[0..1];\n  sat{s}: test::S{s}[0..1];\n}}\n\n"
+            ));
+        }
+
+        files.push((format!("hub_{h}.pure"), sb));
+    }
+
+    files
+}
+
 /// Emits a single class declaration.
 #[allow(clippy::fn_params_excessive_bools)]
 fn emit_class_decl(

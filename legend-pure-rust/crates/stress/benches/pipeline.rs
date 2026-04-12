@@ -203,30 +203,66 @@ fn bench_parse(c: &mut Criterion) {
 // Phase 1b: Parse Multi-File (Parallelism comparison)
 // -----------------------------------------------------------------------------
 
-fn split_into_files(src: &str, elements_per_file: usize) -> Vec<String> {
-    src.split("\n\n")
-        .filter(|s| !s.trim().is_empty())
-        .collect::<Vec<_>>()
-        .chunks(elements_per_file)
-        .map(|chunk| chunk.join("\n\n"))
-        .collect()
-}
-
 fn bench_parse_multi_file(c: &mut Criterion) {
     let mut group = c.benchmark_group("parse_multi_file");
 
-    let (src_hub_10k, _) = hub_spoke::generate(&HubSpokeConfig::standard_10k());
-    
-    // Split into ~100 files (10k elements / 100 elements per file)
-    let files_10k = split_into_files(&src_hub_10k, 100);
+    // Generate 1K hub-spoke as individual files (101 files: 1 preamble + 100 hubs)
+    let files_1k: Vec<_> = hub_spoke::generate_files(&HubSpokeConfig::standard_1k());
+
+    // Prepare (source, name) pairs for parse_many
+    let sources_1k: Vec<_> = files_1k
+        .iter()
+        .map(|(name, src)| (src.as_str(), name.as_str()))
+        .collect();
+
+    group.bench_function("hub_spoke_1k_sequential", |b| {
+        let baseline_bytes = alloc::current_bytes();
+        alloc::reset();
+        b.iter(|| {
+            let asts: Vec<_> = sources_1k
+                .iter()
+                .map(|(src, name)| legend_pure_parser_parser::parse(src, name).unwrap())
+                .collect();
+            black_box(asts);
+        });
+        let mem = alloc::snapshot();
+        println!(
+            "  peak_memory_delta: {} KB",
+            alloc::peak_delta(baseline_bytes) / 1024
+        );
+        println!("  total_allocs: {}", mem.alloc_count);
+    });
+
+    group.bench_function("hub_spoke_1k_parallel", |b| {
+        let baseline_bytes = alloc::current_bytes();
+        alloc::reset();
+        b.iter(|| {
+            let results = legend_pure_parser_parser::parse_many(black_box(&sources_1k));
+            black_box(results);
+        });
+        let mem = alloc::snapshot();
+        println!(
+            "  peak_memory_delta: {} KB",
+            alloc::peak_delta(baseline_bytes) / 1024
+        );
+        println!("  total_allocs: {}", mem.alloc_count);
+    });
+
+    // Generate 10K hub-spoke as individual files (1001 files)
+    let files_10k: Vec<_> = hub_spoke::generate_files(&HubSpokeConfig::standard_10k());
+
+    let sources_10k: Vec<_> = files_10k
+        .iter()
+        .map(|(name, src)| (src.as_str(), name.as_str()))
+        .collect();
 
     group.bench_function("hub_spoke_10k_sequential", |b| {
         let baseline_bytes = alloc::current_bytes();
         alloc::reset();
         b.iter(|| {
-            let asts: Vec<_> = files_10k
+            let asts: Vec<_> = sources_10k
                 .iter()
-                .map(|src| legend_pure_parser_parser::parse(src, "bench.pure").unwrap())
+                .map(|(src, name)| legend_pure_parser_parser::parse(src, name).unwrap())
                 .collect();
             black_box(asts);
         });
@@ -239,15 +275,11 @@ fn bench_parse_multi_file(c: &mut Criterion) {
     });
 
     group.bench_function("hub_spoke_10k_parallel", |b| {
-        use rayon::prelude::*;
         let baseline_bytes = alloc::current_bytes();
         alloc::reset();
         b.iter(|| {
-            let asts: Vec<_> = files_10k
-                .par_iter()
-                .map(|src| legend_pure_parser_parser::parse(src, "bench.pure").unwrap())
-                .collect();
-            black_box(asts);
+            let results = legend_pure_parser_parser::parse_many(black_box(&sources_10k));
+            black_box(results);
         });
         let mem = alloc::snapshot();
         println!(

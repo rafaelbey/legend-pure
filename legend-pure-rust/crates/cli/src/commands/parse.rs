@@ -75,38 +75,53 @@ pub fn run(args: ParseArgs) -> Result<(), CliError> {
         files.len()
     );
 
-    // -- Read + parse + convert all files in parallel --
+    // -- Read all files in parallel --
     use rayon::prelude::*;
 
-    let results: Vec<_> = files
+    let read_results: Vec<_> = files
         .par_iter()
         .map(|path| {
             let source = std::fs::read_to_string(path);
             let file_name = discovery::file_name(path);
             (path, file_name, source)
         })
-        .map(|(path, file_name, source)| match source {
-            Ok(source) => {
-                let parse_result = legend_pure_parser_parser::parse(&source, &file_name);
-                (path, Ok((source, parse_result)))
-            }
-            Err(e) => (path, Err(e)),
-        })
         .collect();
+
+    // Separate successes from I/O errors
+    let mut file_sources: Vec<(&PathBuf, String, String)> = Vec::with_capacity(read_results.len());
+    for (path, file_name, result) in &read_results {
+        match result {
+            Ok(source) => file_sources.push((path, file_name.clone(), source.clone())),
+            Err(e) => {
+                return Err(CliError::Io {
+                    path: (*path).clone(),
+                    source: std::io::Error::new(e.kind(), e.to_string()),
+                });
+            }
+        }
+    }
+
+    // -- Parse all files in parallel via parse_many --
+    let parse_inputs: Vec<_> = file_sources
+        .iter()
+        .map(|(_, file_name, source)| (source.as_str(), file_name.as_str()))
+        .collect();
+
+    let parse_results = legend_pure_parser_parser::parse_many(&parse_inputs);
 
     // -- Sequential reporting + collection --
     let mut all_elements = Vec::new();
     let mut errors = Vec::new();
 
-    for (path, result) in results {
+    for ((path, _, source), result) in file_sources.iter().zip(parse_results) {
         match result {
-            Ok((_source, Ok(source_file))) => {
+            Ok(source_file) => {
                 let pmcd =
                     legend_pure_parser_protocol::v1::convert::convert_source_file(&source_file)?;
                 all_elements.extend(pmcd.elements);
                 eprintln!("  {} {}", "✓".green(), path.display().dimmed());
             }
-            Ok((source, Err(e))) => {
+            Err(e) => {
                 eprintln!(
                     "  {} {} — {}",
                     "✗".red(),
@@ -114,15 +129,9 @@ pub fn run(args: ParseArgs) -> Result<(), CliError> {
                     diagnostics::format_error_with_path(path, &e).red()
                 );
                 if args.show_source {
-                    diagnostics::render_source_snippet(&source, path, &e);
+                    diagnostics::render_source_snippet(source, path, &e);
                 }
-                errors.push((path.clone(), e));
-            }
-            Err(e) => {
-                return Err(CliError::Io {
-                    path: path.clone(),
-                    source: e,
-                });
+                errors.push(((*path).clone(), e));
             }
         }
     }
