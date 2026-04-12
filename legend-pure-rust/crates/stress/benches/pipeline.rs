@@ -200,6 +200,67 @@ fn bench_parse(c: &mut Criterion) {
 }
 
 // -----------------------------------------------------------------------------
+// Phase 1b: Parse Multi-File (Parallelism comparison)
+// -----------------------------------------------------------------------------
+
+fn split_into_files(src: &str, elements_per_file: usize) -> Vec<String> {
+    src.split("\n\n")
+        .filter(|s| !s.trim().is_empty())
+        .collect::<Vec<_>>()
+        .chunks(elements_per_file)
+        .map(|chunk| chunk.join("\n\n"))
+        .collect()
+}
+
+fn bench_parse_multi_file(c: &mut Criterion) {
+    let mut group = c.benchmark_group("parse_multi_file");
+
+    let (src_hub_10k, _) = hub_spoke::generate(&HubSpokeConfig::standard_10k());
+    
+    // Split into ~100 files (10k elements / 100 elements per file)
+    let files_10k = split_into_files(&src_hub_10k, 100);
+
+    group.bench_function("hub_spoke_10k_sequential", |b| {
+        let baseline_bytes = alloc::current_bytes();
+        alloc::reset();
+        b.iter(|| {
+            let asts: Vec<_> = files_10k
+                .iter()
+                .map(|src| legend_pure_parser_parser::parse(src, "bench.pure").unwrap())
+                .collect();
+            black_box(asts);
+        });
+        let mem = alloc::snapshot();
+        println!(
+            "  peak_memory_delta: {} KB",
+            alloc::peak_delta(baseline_bytes) / 1024
+        );
+        println!("  total_allocs: {}", mem.alloc_count);
+    });
+
+    group.bench_function("hub_spoke_10k_parallel", |b| {
+        use rayon::prelude::*;
+        let baseline_bytes = alloc::current_bytes();
+        alloc::reset();
+        b.iter(|| {
+            let asts: Vec<_> = files_10k
+                .par_iter()
+                .map(|src| legend_pure_parser_parser::parse(src, "bench.pure").unwrap())
+                .collect();
+            black_box(asts);
+        });
+        let mem = alloc::snapshot();
+        println!(
+            "  peak_memory_delta: {} KB",
+            alloc::peak_delta(baseline_bytes) / 1024
+        );
+        println!("  total_allocs: {}", mem.alloc_count);
+    });
+
+    group.finish();
+}
+
+// -----------------------------------------------------------------------------
 // Phase 2: Compile
 // -----------------------------------------------------------------------------
 
@@ -266,7 +327,8 @@ fn bench_compile(c: &mut Criterion) {
             let baseline_bytes = alloc::current_bytes();
             alloc::reset();
             b.iter(|| {
-                legend_pure_parser_pure::compile!(black_box(&[ast_hub_100k.clone()])).unwrap()
+                legend_pure_parser_pure::compile!(black_box(std::slice::from_ref(&ast_hub_100k)))
+                    .unwrap()
             });
             let mem = alloc::snapshot();
             println!(
@@ -283,7 +345,10 @@ fn bench_compile(c: &mut Criterion) {
             let baseline_bytes = alloc::current_bytes();
             alloc::reset();
             b.iter(|| {
-                legend_pure_parser_pure::compile!(black_box(&[ast_chaotic_100k.clone()])).unwrap()
+                legend_pure_parser_pure::compile!(black_box(std::slice::from_ref(
+                    &ast_chaotic_100k
+                )))
+                .unwrap()
             });
             let mem = alloc::snapshot();
             println!(
@@ -472,6 +537,7 @@ criterion_group!(
     benches,
     bench_generate,
     bench_parse,
+    bench_parse_multi_file,
     bench_compile,
     bench_compose,
     bench_path_resolution
