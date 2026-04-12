@@ -34,6 +34,7 @@ smol_str = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+rayon = { workspace = true }
 
 [[bench]]
 name = "pipeline"
