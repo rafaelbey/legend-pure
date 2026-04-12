@@ -1,0 +1,271 @@
+// Copyright 2026 Goldman Sachs
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Recursive descent parser for the Pure grammar.
+//!
+//! This parser is strictly responsible for **syntax analysis** — converting a
+//! token stream into an AST. It does not perform semantic validation (e.g., type
+//! checking, name resolution, or structural constraints on graph fetch trees).
+//! See `docs/SEMANTIC_VALIDATIONS.md` for deferred validations.
+
+use legend_pure_parser_ast::annotation::{
+    Parameter, StereotypePtr, TaggedValue,
+};
+use legend_pure_parser_ast::element::{
+    Constraint, Element,
+};
+use legend_pure_parser_ast::expression::Expression;
+use legend_pure_parser_ast::section::{ImportStatement, Section, SourceFile};
+use legend_pure_parser_ast::source_info::SourceInfo;
+use legend_pure_parser_ast::type_ref::{
+    Multiplicity, Package, TypeReference,
+};
+use legend_pure_parser_lexer::TokenKind;
+use smol_str::SmolStr;
+
+mod annotation;
+mod profile;
+mod enum_def;
+mod class;
+mod association;
+mod measure;
+mod function;
+mod type_ref;
+mod expression;
+mod helpers;
+
+pub(crate) use helpers::{is_wildcard_ahead, split_package_name, unquote_string};
+
+use crate::cursor::Cursor;
+use crate::error::ParseError;
+use crate::island::IslandParser;
+
+type R<T> = Result<T, ParseError>;
+
+/// Main parser struct wrapping a token cursor and island grammar plugins.
+pub(crate) struct Parser {
+    cursor: Cursor,
+    island_parsers: Vec<Box<dyn IslandParser>>,
+}
+
+impl Parser {
+    /// Create a parser with the default set of island grammar plugins.
+    pub fn new(cursor: Cursor) -> Self {
+        Self {
+            cursor,
+            island_parsers: crate::island::default_island_parsers(),
+        }
+    }
+
+    /// Create a parser with a custom set of island grammar plugins.
+    pub fn with_island_parsers(cursor: Cursor, island_parsers: Vec<Box<dyn IslandParser>>) -> Self {
+        Self {
+            cursor,
+            island_parsers,
+        }
+    }
+
+    // ── Top-level ───────────────────────────────────────────────────────
+
+    pub fn parse_source_file(&mut self) -> R<SourceFile> {
+        let start = self.cursor.current_source_info();
+        let mut sections = Vec::new();
+
+        while !self.cursor.check(TokenKind::Eof) {
+            sections.push(self.parse_section()?);
+        }
+
+        if sections.is_empty() {
+            sections.push(Section {
+                kind: SmolStr::new("Pure"),
+                imports: vec![],
+                elements: vec![],
+                source_info: start.clone(),
+            });
+        }
+
+        Ok(SourceFile {
+            sections,
+            source_info: start,
+        })
+    }
+
+    pub(crate) fn parse_section(&mut self) -> R<Section> {
+        let start = self.cursor.current_source_info();
+        let kind = if self.cursor.check(TokenKind::SectionHeader) {
+            let tok = self.cursor.advance().clone();
+            SmolStr::new(tok.text.trim_start_matches('#'))
+        } else {
+            SmolStr::new("Pure")
+        };
+
+        let mut imports = Vec::new();
+        while self.cursor.check(TokenKind::Import) {
+            imports.push(self.parse_import()?);
+        }
+
+        let mut elements = Vec::new();
+        while !self.cursor.check(TokenKind::SectionHeader) && !self.cursor.check(TokenKind::Eof) {
+            elements.push(self.parse_element()?);
+        }
+
+        Ok(Section {
+            kind,
+            imports,
+            elements,
+            source_info: start,
+        })
+    }
+
+    pub(crate) fn parse_import(&mut self) -> R<ImportStatement> {
+        let start = self.cursor.current_source_info();
+        self.cursor.expect(TokenKind::Import)?;
+        let path = self.parse_package_path()?;
+        // Consume ::* if present
+        if self.cursor.eat(TokenKind::PathSep) {
+            self.cursor.expect(TokenKind::Star)?;
+        }
+        self.cursor.expect(TokenKind::Semicolon)?;
+        Ok(ImportStatement {
+            path,
+            source_info: start,
+        })
+    }
+
+    pub(crate) fn parse_element(&mut self) -> R<Element> {
+        match self.cursor.peek_kind() {
+            TokenKind::Profile => self.parse_profile(),
+            TokenKind::Enum => self.parse_enum(),
+            TokenKind::Class => self.parse_class(),
+            TokenKind::Association => self.parse_association(),
+            TokenKind::Measure => self.parse_measure(),
+            TokenKind::Function => self.parse_function(),
+            TokenKind::Native => self.parse_native_function(),
+            _ => Err(ParseError::unexpected(
+                format!("Unexpected token {}", self.cursor.peek().text),
+                self.cursor.current_source_info(),
+            )),
+        }
+    }
+
+    // ── Package path: my::pkg::Name ─────────────────────────────────────
+
+    pub(crate) fn parse_package_path(&mut self) -> R<Package> {
+        let (name, si) = self.cursor.expect_identifier_or_keyword()?;
+        let mut pkg = Package::root(name, si);
+        while self.cursor.check(TokenKind::PathSep) && !is_wildcard_ahead(&self.cursor) {
+            self.cursor.advance();
+            let (seg, si) = self.cursor.expect_identifier_or_keyword()?;
+            pkg = pkg.child(seg, si);
+        }
+        Ok(pkg)
+    }
+
+    /// Parse a qualified name, returning (package, name).
+    pub(crate) fn parse_qualified_name(&mut self) -> R<(Option<Package>, SmolStr, SourceInfo)> {
+        let (first, first_si) = self.cursor.expect_identifier_or_keyword()?;
+        if !self.cursor.check(TokenKind::PathSep) {
+            return Ok((None, first, first_si));
+        }
+        let mut pkg = Package::root(first, first_si.clone());
+        while self.cursor.eat(TokenKind::PathSep) {
+            let (seg, si) = self.cursor.expect_identifier_or_keyword()?;
+            if self.cursor.check(TokenKind::PathSep) {
+                pkg = pkg.child(seg, si);
+            } else {
+                return Ok((Some(pkg), seg, first_si));
+            }
+        }
+        // Last segment in package is actually the name
+        let name = SmolStr::new(pkg.name());
+        Ok((pkg.parent().cloned(), name, first_si))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ParserContext — shared interface for island grammar plugins
+// ---------------------------------------------------------------------------
+
+/// Shared parser context passed to island grammar plugins.
+///
+/// Provides access to the token [`Cursor`] (via `.cursor`) and the host
+/// parser's expression/path parsing capabilities.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// fn parse(&self, ctx: &mut ParserContext<'_>) -> Result<...> {
+///     let si = ctx.cursor().current_source_info();
+///     ctx.cursor().expect(TokenKind::LBrace)?;
+///     let expr = ctx.parse_expression()?;
+///     // ...
+/// }
+/// ```
+pub struct ParserContext<'a> {
+    /// The underlying parser — provides cursor access and expression parsing.
+    pub(crate) parser: &'a mut Parser,
+}
+
+impl ParserContext<'_> {
+    /// Access the token cursor directly.
+    pub(crate) fn cursor(&mut self) -> &mut Cursor {
+        &mut self.parser.cursor
+    }
+
+    /// Parse a full expression using the host parser's expression grammar.
+    pub fn parse_expression(&mut self) -> R<Expression> {
+        self.parser.parse_expression()
+    }
+
+    /// Parse a package path: `my::pkg::Name`.
+    pub fn parse_package_path(&mut self) -> R<Package> {
+        self.parser.parse_package_path()
+    }
+
+    /// Parse a qualified name, returning (package, name, source_info).
+    pub fn parse_qualified_name(&mut self) -> R<(Option<Package>, SmolStr, SourceInfo)> {
+        self.parser.parse_qualified_name()
+    }
+
+    /// Parse a type reference: `my::Class[1]`.
+    pub fn parse_type_reference(&mut self) -> R<TypeReference> {
+        self.parser.parse_type_reference()
+    }
+
+    /// Parse a multiplicity: `[1]`, `[1..*]`.
+    pub fn parse_multiplicity(&mut self) -> R<Multiplicity> {
+        self.parser.parse_multiplicity()
+    }
+
+    /// Parse stereotypes: `<<profile.stereotype>>`.
+    pub fn parse_stereotypes(&mut self) -> R<Vec<StereotypePtr>> {
+        self.parser.parse_stereotypes()
+    }
+
+    /// Parse tagged values: `{profile.tag = 'value'}`.
+    pub fn parse_tagged_values(&mut self) -> R<Vec<TaggedValue>> {
+        self.parser.parse_tagged_values()
+    }
+
+    /// Parse constraints: `[name: expr]`.
+    pub fn parse_constraints(&mut self) -> R<Vec<Constraint>> {
+        self.parser.parse_constraints()
+    }
+
+    /// Parse a parameter: `name: Type[1]`.
+    pub fn parse_parameter(&mut self) -> R<Parameter> {
+        self.parser.parse_parameter()
+    }
+}
+
