@@ -25,6 +25,25 @@
 //! 2. Implement [`IslandParser`] for your grammar
 //! 3. Register it via [`default_island_parsers`] or pass to `parse_with_islands()`
 //!
+//! # Thread-Safety Requirements
+//!
+//! **All island parser implementations must be `Send + Sync`.**
+//!
+//! The CLI parallelizes parsing across multiple files using Rayon
+//! (`files.par_iter().map(|path| parse(...))`), which means the same
+//! `IslandParser` instance may be invoked concurrently from different
+//! threads. The `Send + Sync` supertraits on [`IslandParser`] enforce
+//! this at compile time.
+//!
+//! In practice, this means your implementation:
+//! - **Must not** use `Rc`, `Cell`, `RefCell`, or other non-thread-safe types
+//! - **Must not** hold mutable state between `parse()` calls
+//! - **Should** be stateless (zero-sized structs are ideal, like [`GraphFetchIslandParser`](graph_fetch::GraphFetchIslandParser))
+//! - If state is required, use `Arc<Mutex<...>>` or atomics
+//!
+//! The same requirement applies to [`IslandContent`] (the AST output), which
+//! also requires `Send + Sync`.
+//!
 //! [`IslandContent`]: legend_pure_parser_ast::island::IslandContent
 
 use legend_pure_parser_ast::island::IslandContent;
@@ -39,6 +58,30 @@ use crate::parser::ParserContext;
 ///
 /// The parser is called after the opening `#{` (or `#tag{`) has been consumed.
 /// It must NOT consume the closing `}#` — the main parser handles that.
+///
+/// # Thread Safety
+///
+/// This trait requires `Send + Sync` because the CLI parallelizes file
+/// parsing across threads. Implementations must be stateless or use
+/// thread-safe interior mutability. The compiler will reject any
+/// implementation that does not satisfy these bounds.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use legend_pure_parser_parser::island::IslandParser;
+///
+/// // Good: zero-sized, stateless struct — trivially Send + Sync
+/// struct MyIslandParser;
+///
+/// impl IslandParser for MyIslandParser {
+///     fn tag(&self) -> &str { "myTag" }
+///     fn parse(&self, ctx: &mut ParserContext<'_>) -> Result<Box<dyn IslandContent>, ParseError> {
+///         // parse tokens from ctx...
+///         # todo!()
+///     }
+/// }
+/// ```
 pub trait IslandParser: Send + Sync {
     /// The tag this parser handles.
     ///
