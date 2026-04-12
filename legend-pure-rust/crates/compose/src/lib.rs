@@ -45,7 +45,7 @@ pub mod section;
 pub mod type_ref;
 pub mod writer;
 
-pub use section::compose_source_file;
+pub use section::{compose_many, compose_source_file};
 
 // ---------------------------------------------------------------------------
 // Protocol convenience functions

@@ -259,13 +259,18 @@ pub fn generate_files(config: &ChaoticConfig, files_count: usize) -> Vec<(String
         preamble.push_str("Profile test::meta {\n  stereotypes: [generated, synthetic, chaos];\n  tags: [source, tier, shape];\n}\n\n");
     }
     if config.include_enums {
-        preamble.push_str("Enum test::Status {\n  ACTIVE,\n  INACTIVE,\n  PENDING,\n  ARCHIVED\n}\n\n");
-        preamble.push_str("Enum test::Priority {\n  HIGH,\n  MEDIUM,\n  LOW,\n  CRITICAL,\n  NONE\n}\n\n");
+        preamble
+            .push_str("Enum test::Status {\n  ACTIVE,\n  INACTIVE,\n  PENDING,\n  ARCHIVED\n}\n\n");
+        preamble.push_str(
+            "Enum test::Priority {\n  HIGH,\n  MEDIUM,\n  LOW,\n  CRITICAL,\n  NONE\n}\n\n",
+        );
     }
     if config.include_functions {
         let fn_count = n / 500;
         for f in 0..fn_count {
-            preamble.push_str(&format!("function test::fn{f}(x: Integer[1]): Integer[1]\n{{\n  $x + 1\n}}\n\n"));
+            preamble.push_str(&format!(
+                "function test::fn{f}(x: Integer[1]): Integer[1]\n{{\n  $x + 1\n}}\n\n"
+            ));
         }
     }
     if !preamble.is_empty() {
@@ -293,19 +298,23 @@ pub fn generate_files(config: &ChaoticConfig, files_count: usize) -> Vec<(String
         props.push(("id".to_string(), "Integer".to_string()));
 
         for p in 0..prop_count {
-            let type_idx = common::det_hash(i as u32 * 100 + p as u32 * 13) as usize % common::PURE_TYPES.len();
+            let type_idx = common::det_hash(i as u32 * 100 + p as u32 * 13) as usize
+                % common::PURE_TYPES.len();
             let pure_type = common::PURE_TYPES[type_idx];
-            let stem_idx = common::det_hash(i as u32 * 50 + p as u32 * 7) as usize % common::PROP_STEMS.len();
+            let stem_idx =
+                common::det_hash(i as u32 * 50 + p as u32 * 7) as usize % common::PROP_STEMS.len();
             let stem = common::PROP_STEMS[stem_idx];
             props.push((format!("{stem}{p}"), pure_type.to_string()));
         }
 
-        let has_enum = config.include_enums && (common::det_hash(i as u32 * 41) % 20 == 0) && prop_count >= 2;
+        let has_enum =
+            config.include_enums && (common::det_hash(i as u32 * 41) % 20 == 0) && prop_count >= 2;
         if has_enum {
             props.push(("prio".to_string(), "test::Priority".to_string()));
         }
 
-        let has_parent = config.include_inheritance && i > 10 && common::det_hash(i as u32 * 67) % 20 == 0;
+        let has_parent =
+            config.include_inheritance && i > 10 && common::det_hash(i as u32 * 67) % 20 == 0;
         let parent_idx = if has_parent {
             let target = common::det_hash(i as u32 * 71) as usize % (i / 2).max(1);
             Some(target)
@@ -314,16 +323,21 @@ pub fn generate_files(config: &ChaoticConfig, files_count: usize) -> Vec<(String
         };
 
         class_infos.push(ClassInfo {
-            index: i, prop_count, props, has_enum, has_parent, parent_idx,
+            index: i,
+            prop_count,
+            props,
+            has_enum,
+            has_parent,
+            parent_idx,
         });
     }
 
     // ---- Group classes and associations into files ----
     let classes_per_file = (n / files_count.max(1)).max(1);
-    
+
     for (file_idx, chunk) in class_infos.chunks(classes_per_file).enumerate() {
         let mut sb = String::with_capacity(classes_per_file * 300);
-        
+
         for ci in chunk {
             let annotate = config.include_profiles && ci.index % 7 == 0;
             if annotate {
@@ -351,7 +365,7 @@ pub fn generate_files(config: &ChaoticConfig, files_count: usize) -> Vec<(String
                 sb.push_str(&format!("  {name}: {typ}[1];\n"));
             }
             sb.push_str("}\n\n");
-            
+
             // Add Association for this class
             let mut target = common::det_hash(ci.index as u32 * 97 + 53) as usize % n;
             if target == ci.index {
@@ -362,7 +376,7 @@ pub fn generate_files(config: &ChaoticConfig, files_count: usize) -> Vec<(String
                 ci.index
             ));
         }
-        
+
         files.push((format!("chaotic_chunk_{file_idx}.pure"), sb));
     }
 
