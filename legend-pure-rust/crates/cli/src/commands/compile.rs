@@ -107,33 +107,48 @@ pub fn run(args: CompileArgs) -> Result<(), CliError> {
 
     let start = Instant::now();
 
-    // -- Phase 1: Read + parse all files in parallel --
+    // -- Phase 1a: Read all files in parallel --
     use rayon::prelude::*;
 
-    let results: Vec<_> = files
+    let read_results: Vec<_> = files
         .par_iter()
         .map(|path| {
             let source = std::fs::read_to_string(path);
             let file_name = discovery::file_name(path);
             (path, file_name, source)
         })
-        .map(|(path, file_name, source)| match source {
-            Ok(source) => {
-                let parse_result = legend_pure_parser_parser::parse(&source, &file_name);
-                (path, file_name, Ok((source, parse_result)))
-            }
-            Err(e) => (path, file_name, Err(e)),
-        })
         .collect();
 
-    // -- Phase 1b: Sequential reporting + collection --
+    // Separate successes from I/O errors
+    let mut file_sources: Vec<(&PathBuf, String, String)> = Vec::with_capacity(read_results.len());
+    for (path, file_name, result) in &read_results {
+        match result {
+            Ok(source) => file_sources.push((path, file_name.clone(), source.clone())),
+            Err(e) => {
+                return Err(CliError::Io {
+                    path: (*path).clone(),
+                    source: std::io::Error::new(e.kind(), e.to_string()),
+                });
+            }
+        }
+    }
+
+    // -- Phase 1b: Parse all files in parallel via parse_many --
+    let parse_inputs: Vec<_> = file_sources
+        .iter()
+        .map(|(_, file_name, source)| (source.as_str(), file_name.as_str()))
+        .collect();
+
+    let parse_results = legend_pure_parser_parser::parse_many(&parse_inputs);
+
+    // -- Phase 1c: Sequential reporting + collection --
     let mut source_files = Vec::new();
     let mut sources: HashMap<String, (PathBuf, String)> = HashMap::new();
     let mut parse_error_count = 0;
 
-    for (path, file_name, result) in results {
+    for ((path, file_name, source), result) in file_sources.iter().zip(parse_results) {
         match result {
-            Ok((source, Ok(sf))) => {
+            Ok(sf) => {
                 let count = sf.element_count();
                 eprintln!(
                     "  {} {} ({} element{})",
@@ -142,10 +157,10 @@ pub fn run(args: CompileArgs) -> Result<(), CliError> {
                     count,
                     if count == 1 { "" } else { "s" }
                 );
-                sources.insert(file_name, (path.clone(), source));
+                sources.insert(file_name.clone(), ((*path).clone(), source.clone()));
                 source_files.push(sf);
             }
-            Ok((source, Err(e))) => {
+            Err(e) => {
                 eprintln!(
                     "  {} {} — {}",
                     "✗".red(),
@@ -153,15 +168,9 @@ pub fn run(args: CompileArgs) -> Result<(), CliError> {
                     diagnostics::format_error_with_path(path, &e).red()
                 );
                 if args.show_source {
-                    diagnostics::render_source_snippet(&source, path, &e);
+                    diagnostics::render_source_snippet(source, path, &e);
                 }
                 parse_error_count += 1;
-            }
-            Err(e) => {
-                return Err(CliError::Io {
-                    path: path.clone(),
-                    source: e,
-                });
             }
         }
     }
