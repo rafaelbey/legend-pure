@@ -19,31 +19,25 @@
 //! checking, name resolution, or structural constraints on graph fetch trees).
 //! See `docs/SEMANTIC_VALIDATIONS.md` for deferred validations.
 
-use legend_pure_parser_ast::annotation::{
-    Parameter, StereotypePtr, TaggedValue,
-};
-use legend_pure_parser_ast::element::{
-    Constraint, Element,
-};
+use legend_pure_parser_ast::annotation::{Parameter, StereotypePtr, TaggedValue};
+use legend_pure_parser_ast::element::{Constraint, Element};
 use legend_pure_parser_ast::expression::Expression;
 use legend_pure_parser_ast::section::{ImportStatement, Section, SourceFile};
 use legend_pure_parser_ast::source_info::SourceInfo;
-use legend_pure_parser_ast::type_ref::{
-    Multiplicity, Package, TypeReference,
-};
+use legend_pure_parser_ast::type_ref::{Multiplicity, Package, TypeReference};
 use legend_pure_parser_lexer::TokenKind;
 use smol_str::SmolStr;
 
 mod annotation;
-mod profile;
-mod enum_def;
-mod class;
 mod association;
-mod measure;
-mod function;
-mod type_ref;
+mod class;
+mod enum_def;
 mod expression;
+mod function;
 mod helpers;
+mod measure;
+mod profile;
+mod type_ref;
 
 pub(crate) use helpers::{is_wildcard_ahead, split_package_name, unquote_string};
 
@@ -233,7 +227,7 @@ impl ParserContext<'_> {
         self.parser.parse_package_path()
     }
 
-    /// Parse a qualified name, returning (package, name, source_info).
+    /// Parse a qualified name, returning (package, name, `source_info`).
     pub fn parse_qualified_name(&mut self) -> R<(Option<Package>, SmolStr, SourceInfo)> {
         self.parser.parse_qualified_name()
     }
@@ -268,4 +262,3 @@ impl ParserContext<'_> {
         self.parser.parse_parameter()
     }
 }
-

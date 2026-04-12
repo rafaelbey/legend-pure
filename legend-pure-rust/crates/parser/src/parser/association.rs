@@ -1,7 +1,7 @@
-use legend_pure_parser_ast::element::*;
-use legend_pure_parser_lexer::TokenKind;
-use super::R;
 use super::Parser;
+use super::R;
+use legend_pure_parser_ast::element::{AssociationDef, Element};
+use legend_pure_parser_lexer::TokenKind;
 
 impl Parser {
     // ── Association ─────────────────────────────────────────────────────
@@ -25,5 +25,4 @@ impl Parser {
             source_info: start,
         }))
     }
-
 }

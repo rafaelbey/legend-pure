@@ -1,7 +1,7 @@
-use legend_pure_parser_ast::element::*;
-use legend_pure_parser_lexer::TokenKind;
-use super::R;
 use super::Parser;
+use super::R;
+use legend_pure_parser_ast::element::{Element, MeasureDef, UnitDef};
+use legend_pure_parser_lexer::TokenKind;
 
 impl Parser {
     // ── Measure ─────────────────────────────────────────────────────────
@@ -55,5 +55,4 @@ impl Parser {
             })
         }
     }
-
 }

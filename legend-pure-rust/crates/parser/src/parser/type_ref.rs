@@ -1,12 +1,14 @@
-use legend_pure_parser_ast::element::*;
-use legend_pure_parser_ast::type_ref::*;
+use super::Parser;
+use super::R;
+use super::{split_package_name, unquote_string};
+use crate::error::ParseError;
 use legend_pure_parser_ast::SourceInfo;
+use legend_pure_parser_ast::type_ref::{
+    Identifier, Multiplicity, MultiplicityArgument, Package, RelationColumn, RelationType,
+    TypeReference, TypeSpec, TypeVariableValue, UnitReference,
+};
 use legend_pure_parser_lexer::TokenKind;
 use smol_str::SmolStr;
-use crate::error::ParseError;
-use super::R;
-use super::Parser;
-use super::{split_package_name, unquote_string};
 
 impl Parser {
     // ── Type references ─────────────────────────────────────────────────
@@ -188,7 +190,9 @@ impl Parser {
     /// ```
     ///
     /// Returns `(type_params, mult_params)`. Both may be empty if no `<` is present.
-    pub(crate) fn parse_type_and_multiplicity_parameters(&mut self) -> R<(Vec<Identifier>, Vec<Identifier>)> {
+    pub(crate) fn parse_type_and_multiplicity_parameters(
+        &mut self,
+    ) -> R<(Vec<Identifier>, Vec<Identifier>)> {
         if !self.cursor.eat(TokenKind::Less) {
             return Ok((vec![], vec![]));
         }
@@ -358,5 +362,4 @@ impl Parser {
             )),
         }
     }
-
 }

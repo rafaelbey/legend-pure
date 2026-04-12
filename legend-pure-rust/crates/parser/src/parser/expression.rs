@@ -1,12 +1,19 @@
-use legend_pure_parser_ast::annotation::*;
-use legend_pure_parser_ast::expression::*;
-use legend_pure_parser_ast::island::*;
-use legend_pure_parser_ast::type_ref::*;
-use legend_pure_parser_lexer::TokenKind;
-use crate::error::ParseError;
-use super::R;
 use super::Parser;
-use super::{split_package_name, unquote_string, ParserContext};
+use super::R;
+use super::{ParserContext, split_package_name, unquote_string};
+use crate::error::ParseError;
+use legend_pure_parser_ast::annotation::{PackageableElementPtr, Parameter};
+use legend_pure_parser_ast::expression::{
+    ArithmeticExpr, ArithmeticOp, ArrowFunction, BooleanLiteral, CollectionExpr, ComparisonExpr,
+    ComparisonOp, DateTimeLiteral, DecimalLiteral, Expression, FloatLiteral, FunctionApplication,
+    IntegerLiteral, KeyValuePair, Lambda, LetExpr, Literal, LogicalExpr, LogicalOp, MemberAccess,
+    NewInstanceExpr, NotExpr, PackageableElementRef, QualifiedMemberAccess, SimpleMemberAccess,
+    StrictDateLiteral, StrictTimeLiteral, StringLiteral, TypeReferenceExpr, UnaryMinusExpr,
+    Variable,
+};
+use legend_pure_parser_ast::island::IslandExpression;
+use legend_pure_parser_ast::type_ref::Package;
+use legend_pure_parser_lexer::TokenKind;
 
 impl Parser {
     // ── Expressions (precedence-climbing recursive descent) ─────────────
@@ -641,4 +648,3 @@ impl Parser {
         }
     }
 }
-

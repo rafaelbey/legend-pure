@@ -1,9 +1,7 @@
-use legend_pure_parser_ast::element::*;
-use legend_pure_parser_ast::type_ref::*;
+use crate::cursor::Cursor;
+use legend_pure_parser_ast::type_ref::Package;
 use legend_pure_parser_lexer::TokenKind;
 use smol_str::SmolStr;
-use crate::cursor::Cursor;
-
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 

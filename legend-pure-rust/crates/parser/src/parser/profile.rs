@@ -1,9 +1,9 @@
-use legend_pure_parser_ast::annotation::*;
-use legend_pure_parser_ast::element::*;
-use legend_pure_parser_lexer::TokenKind;
-use crate::error::ParseError;
-use super::R;
 use super::Parser;
+use super::R;
+use crate::error::ParseError;
+use legend_pure_parser_ast::annotation::SpannedString;
+use legend_pure_parser_ast::element::{Element, ProfileDef};
+use legend_pure_parser_lexer::TokenKind;
 
 impl Parser {
     // ── Profile ─────────────────────────────────────────────────────────
@@ -67,5 +67,4 @@ impl Parser {
             source_info: start,
         }))
     }
-
 }

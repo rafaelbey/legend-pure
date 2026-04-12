@@ -1,8 +1,10 @@
-use legend_pure_parser_ast::annotation::*;
-use legend_pure_parser_lexer::TokenKind;
-use super::R;
 use super::Parser;
+use super::R;
 use super::{split_package_name, unquote_string};
+use legend_pure_parser_ast::annotation::{
+    PackageableElementPtr, StereotypePtr, TagPtr, TaggedValue,
+};
+use legend_pure_parser_lexer::TokenKind;
 
 impl Parser {
     // ── Annotations ─────────────────────────────────────────────────────
@@ -98,5 +100,4 @@ impl Parser {
             source_info: start,
         })
     }
-
 }
