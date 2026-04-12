@@ -31,6 +31,8 @@ legend-pure-parser-lexer = { path = "../lexer" }
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-pure = { path = "../pure" }
 legend-pure-parser-protocol = { path = "../protocol" }
+legend-pure-runtime = { path = "../runtime" }
+legend-pure-core-platform = { path = "../core-platform-pure" }
 smol_str = { workspace = true }
 
 # CLI framework
@@ -48,6 +50,9 @@ thiserror = { workspace = true }
 
 # File discovery
 walkdir = { workspace = true }
+
+# Parallelism
+rayon = { workspace = true }
 
 # Tracing
 tracing = { workspace = true }

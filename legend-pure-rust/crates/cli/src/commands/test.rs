@@ -29,6 +29,11 @@
 
 use std::path::PathBuf;
 
+use legend_pure_core_platform::platform::load_platform;
+use legend_pure_runtime::eval::Evaluator;
+use legend_pure_runtime::native::NativeRegistry;
+use legend_pure_runtime::value::Value;
+
 use crate::diagnostics::CliError;
 
 /// Arguments for the `legend test` command.
@@ -38,25 +43,52 @@ pub struct TestArgs {
     #[arg(default_value = ".")]
     pub paths: Vec<PathBuf>,
 
-    /// Filter tests by name pattern.
+    /// Scope test execution to a specific package
+    #[arg(long)]
+    pub package: Option<String>,
+
+    /// Filter tests by source path prefix (e.g. a repo root) to scope execution to a particular repo.
     #[arg(long, short)]
     pub filter: Option<String>,
 
     /// Show verbose test output.
     #[arg(long)]
-    pub show_output: bool,
+    pub verbose: bool,
 }
 
-/// Execute the `legend test` command.
-///
-/// # Status
-///
-/// This command is not yet implemented. Test execution requires the
-/// Pure semantic layer and an execution engine.
-pub fn run(_args: TestArgs) -> Result<(), CliError> {
-    Err(CliError::NotImplemented {
-        command: "test",
-        description: "Run Pure tests on testable elements",
-        reason: "Test execution requires the Pure semantic layer and an execution engine.",
-    })
+pub fn run(args: TestArgs) -> Result<(), CliError> {
+    // 1. Load platform model
+    let platform = load_platform();
+    // For now, ignore pure compilation errors if any, but in production we'd report them.
+    if !platform.compilation_errors.is_empty() {
+        println!(
+            "Warning: Loaded platform with {} compilation errors",
+            platform.compilation_errors.len()
+        );
+    }
+
+    // 2. Call the Pure test surveyor:
+    let registry = NativeRegistry::standard();
+    let mut evaluator = Evaluator::new(&platform.model, &registry);
+
+    // Evaluate via surveyor
+    let result = evaluator
+        .call(
+            "meta::pure::test::surveyor::runTestsFromPath",
+            &[
+                Value::String(args.package.unwrap_or("Root".into()).into()),
+                Value::String(args.filter.unwrap_or_default().into()),
+            ],
+        )
+        .map_err(|e| CliError::Custom(format!("Test execution failed: {e:?}")))?;
+
+    // 3. Pretty-print the TestReport
+    render_test_report(&result, args.verbose);
+
+    Ok(())
+}
+
+fn render_test_report(report_val: &Value, _verbose: bool) {
+    // Report rendering placeholder
+    println!("Test Report: {report_val:?}");
 }

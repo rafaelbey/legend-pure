@@ -75,25 +75,38 @@ pub fn run(args: ParseArgs) -> Result<(), CliError> {
         files.len()
     );
 
+    // -- Read + parse + convert all files in parallel --
+    use rayon::prelude::*;
+
+    let results: Vec<_> = files
+        .par_iter()
+        .map(|path| {
+            let source = std::fs::read_to_string(path);
+            let file_name = discovery::file_name(path);
+            (path, file_name, source)
+        })
+        .map(|(path, file_name, source)| match source {
+            Ok(source) => {
+                let parse_result = legend_pure_parser_parser::parse(&source, &file_name);
+                (path, Ok((source, parse_result)))
+            }
+            Err(e) => (path, Err(e)),
+        })
+        .collect();
+
+    // -- Sequential reporting + collection --
     let mut all_elements = Vec::new();
     let mut errors = Vec::new();
 
-    for path in &files {
-        let source = std::fs::read_to_string(path).map_err(|e| CliError::Io {
-            path: path.clone(),
-            source: e,
-        })?;
-
-        let file_name = discovery::file_name(path);
-
-        match legend_pure_parser_parser::parse(&source, &file_name) {
-            Ok(source_file) => {
+    for (path, result) in results {
+        match result {
+            Ok((_source, Ok(source_file))) => {
                 let pmcd =
                     legend_pure_parser_protocol::v1::convert::convert_source_file(&source_file)?;
                 all_elements.extend(pmcd.elements);
                 eprintln!("  {} {}", "✓".green(), path.display().dimmed());
             }
-            Err(e) => {
+            Ok((source, Err(e))) => {
                 eprintln!(
                     "  {} {} — {}",
                     "✗".red(),
@@ -104,6 +117,12 @@ pub fn run(args: ParseArgs) -> Result<(), CliError> {
                     diagnostics::render_source_snippet(&source, path, &e);
                 }
                 errors.push((path.clone(), e));
+            }
+            Err(e) => {
+                return Err(CliError::Io {
+                    path: path.clone(),
+                    source: e,
+                });
             }
         }
     }

@@ -107,21 +107,33 @@ pub fn run(args: CompileArgs) -> Result<(), CliError> {
 
     let start = Instant::now();
 
-    // -- Phase 1: Parse all files --
+    // -- Phase 1: Read + parse all files in parallel --
+    use rayon::prelude::*;
+
+    let results: Vec<_> = files
+        .par_iter()
+        .map(|path| {
+            let source = std::fs::read_to_string(path);
+            let file_name = discovery::file_name(path);
+            (path, file_name, source)
+        })
+        .map(|(path, file_name, source)| match source {
+            Ok(source) => {
+                let parse_result = legend_pure_parser_parser::parse(&source, &file_name);
+                (path, file_name, Ok((source, parse_result)))
+            }
+            Err(e) => (path, file_name, Err(e)),
+        })
+        .collect();
+
+    // -- Phase 1b: Sequential reporting + collection --
     let mut source_files = Vec::new();
     let mut sources: HashMap<String, (PathBuf, String)> = HashMap::new();
     let mut parse_error_count = 0;
 
-    for path in &files {
-        let source = std::fs::read_to_string(path).map_err(|e| CliError::Io {
-            path: path.clone(),
-            source: e,
-        })?;
-
-        let file_name = discovery::file_name(path);
-
-        match legend_pure_parser_parser::parse(&source, &file_name) {
-            Ok(sf) => {
+    for (path, file_name, result) in results {
+        match result {
+            Ok((source, Ok(sf))) => {
                 let count = sf.element_count();
                 eprintln!(
                     "  {} {} ({} element{})",
@@ -133,7 +145,7 @@ pub fn run(args: CompileArgs) -> Result<(), CliError> {
                 sources.insert(file_name, (path.clone(), source));
                 source_files.push(sf);
             }
-            Err(e) => {
+            Ok((source, Err(e))) => {
                 eprintln!(
                     "  {} {} — {}",
                     "✗".red(),
@@ -144,6 +156,12 @@ pub fn run(args: CompileArgs) -> Result<(), CliError> {
                     diagnostics::render_source_snippet(&source, path, &e);
                 }
                 parse_error_count += 1;
+            }
+            Err(e) => {
+                return Err(CliError::Io {
+                    path: path.clone(),
+                    source: e,
+                });
             }
         }
     }
