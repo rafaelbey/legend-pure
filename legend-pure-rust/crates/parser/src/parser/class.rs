@@ -1,13 +1,15 @@
-use legend_pure_parser_ast::annotation::*;
-use legend_pure_parser_ast::element::*;
-use legend_pure_parser_ast::expression::*;
+use super::Parser;
+use super::R;
+use super::unquote_string;
+use crate::error::ParseError;
 use legend_pure_parser_ast::SourceInfo;
+use legend_pure_parser_ast::annotation::{StereotypePtr, TaggedValue};
+use legend_pure_parser_ast::element::{
+    AggregationKind, ClassDef, Constraint, Element, Property, QualifiedProperty,
+};
+use legend_pure_parser_ast::expression::{BooleanLiteral, Expression, Literal, StringLiteral};
 use legend_pure_parser_lexer::TokenKind;
 use smol_str::SmolStr;
-use crate::error::ParseError;
-use super::R;
-use super::Parser;
-use super::unquote_string;
 
 impl Parser {
     // ── Class ───────────────────────────────────────────────────────────
@@ -269,5 +271,4 @@ impl Parser {
             source_info: si,
         })
     }
-
 }

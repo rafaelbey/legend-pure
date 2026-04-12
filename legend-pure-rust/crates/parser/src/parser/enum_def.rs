@@ -1,7 +1,7 @@
-use legend_pure_parser_ast::element::*;
-use legend_pure_parser_lexer::TokenKind;
-use super::R;
 use super::Parser;
+use super::R;
+use legend_pure_parser_ast::element::{Element, EnumDef, EnumValue};
+use legend_pure_parser_lexer::TokenKind;
 
 impl Parser {
     // ── Enum ────────────────────────────────────────────────────────────
@@ -36,5 +36,4 @@ impl Parser {
             source_info: start,
         }))
     }
-
 }
