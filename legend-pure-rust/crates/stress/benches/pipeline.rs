@@ -516,6 +516,46 @@ fn bench_compose(c: &mut Criterion) {
 }
 
 // -----------------------------------------------------------------------------
+// Phase 3b: Compose Multi-File (Parallelism comparison)
+// -----------------------------------------------------------------------------
+
+fn bench_compose_multi_file(c: &mut Criterion) {
+    let mut group = c.benchmark_group("compose_multi_file");
+
+    #[cfg(feature = "heavy")]
+    {
+        use legend_pure_parser_parser::source::SourceInput;
+
+        let files_100k: Vec<_> = chaotic::generate_files(&ChaoticConfig::standard_100k(), 1000);
+        let inputs_100k: Vec<_> = files_100k
+            .iter()
+            .map(|(name, src)| SourceInput::in_memory(name, src))
+            .collect();
+
+        // First parse in parallel to get the ast pool
+        let outputs = legend_pure_parser_parser::parse_many(&inputs_100k);
+        let asts: Vec<_> = outputs.iter().map(|o| o.ast().unwrap()).collect();
+
+        group.bench_function("chaotic_100k_parallel", |b| {
+            let baseline_bytes = alloc::current_bytes();
+            alloc::reset();
+            b.iter(|| {
+                let results = legend_pure_parser_compose::compose_many(black_box(&asts));
+                black_box(results);
+            });
+            let mem = alloc::snapshot();
+            println!(
+                "  peak_memory_delta: {} KB",
+                alloc::peak_delta(baseline_bytes) / 1024
+            );
+            println!("  total_allocs: {}", mem.alloc_count);
+        });
+    }
+
+    group.finish();
+}
+
+// -----------------------------------------------------------------------------
 // Phase 5: Path Resolution
 // -----------------------------------------------------------------------------
 
@@ -606,6 +646,7 @@ criterion_group!(
     bench_parse_multi_file,
     bench_compile,
     bench_compose,
+    bench_compose_multi_file,
     bench_path_resolution
 );
 criterion_main!(benches);

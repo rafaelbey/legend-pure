@@ -37,11 +37,7 @@ pub fn compose_source_file(sf: &SourceFile) -> String {
     let is_single_pure_section = sf.sections.len() == 1 && sf.sections[0].kind == "Pure";
 
     for (si, section) in sf.sections.iter().enumerate() {
-        // Section headers (e.g., `###Pure`)
-        //
-        // Single-section Pure files omit the header because Pure is the
-        // default section type. Multi-section files and non-Pure sections
-        // always emit the header.
+        // Section headers
         if !is_single_pure_section {
             if si > 0 {
                 w.newline();
@@ -72,4 +68,16 @@ pub fn compose_source_file(sf: &SourceFile) -> String {
     }
 
     w.finish()
+}
+
+/// Compose multiple AST source files in parallel using all available CPU cores.
+///
+/// Returns the generated Pure grammar text for each source file in the same order.
+#[must_use]
+pub fn compose_many(sources: &[&SourceFile]) -> Vec<String> {
+    use rayon::prelude::*;
+    sources
+        .par_iter()
+        .map(|ast| compose_source_file(ast))
+        .collect()
 }
