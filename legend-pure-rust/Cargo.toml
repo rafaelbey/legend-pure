@@ -25,6 +25,7 @@ members = [
     "crates/runtime",
     "crates/jni",
     "crates/cli",
+    "crates/core-platform-pure",
     "crates/stress",
 ]
 
@@ -49,6 +50,9 @@ jiff = { version = "0.2", features = ["std"] }
 # Tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Parallelism
+rayon = "1"
 
 # Serialization (protocol crate only)
 serde = { version = "1", features = ["derive"] }

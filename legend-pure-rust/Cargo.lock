@@ -785,15 +785,18 @@ dependencies = [
  "assert_cmd",
  "clap",
  "clap_complete",
+ "legend-pure-core-platform",
  "legend-pure-parser-ast",
  "legend-pure-parser-compose",
  "legend-pure-parser-lexer",
  "legend-pure-parser-parser",
  "legend-pure-parser-protocol",
  "legend-pure-parser-pure",
+ "legend-pure-runtime",
  "miette",
  "owo-colors",
  "predicates",
+ "rayon",
  "serde",
  "serde_json",
  "smol_str",
@@ -801,6 +804,19 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
+ "walkdir",
+]
+
+[[package]]
+name = "legend-pure-core-platform"
+version = "0.1.0"
+dependencies = [
+ "legend-pure-parser-ast",
+ "legend-pure-parser-parser",
+ "legend-pure-parser-pure",
+ "legend-pure-runtime",
+ "smol_str",
+ "tracing",
  "walkdir",
 ]
 

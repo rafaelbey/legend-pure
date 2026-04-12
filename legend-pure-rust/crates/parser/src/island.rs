@@ -39,7 +39,7 @@ use crate::parser::ParserContext;
 ///
 /// The parser is called after the opening `#{` (or `#tag{`) has been consumed.
 /// It must NOT consume the closing `}#` — the main parser handles that.
-pub trait IslandParser {
+pub trait IslandParser: Send + Sync {
     /// The tag this parser handles.
     ///
     /// - `""` for `#{…}#` (graph fetch)
