@@ -147,11 +147,15 @@ pub trait NativeFunction: fmt::Debug {
     }
 }
 
-/// Registry of native functions, keyed by qualified Pure function name.
+/// Registry of native functions, keyed by mangled function FQN.
 ///
 /// The evaluator uses this to dispatch calls to built-in functions.
 /// Functions are registered at startup and the registry is immutable
 /// during evaluation.
+///
+/// Keys are mangled function names matching Java's
+/// `ConcreteFunctionDefinitionNameProcessor` format:
+/// `funcName_ParamType_Mult__ReturnType_Mult_`
 ///
 /// # Example
 ///
@@ -159,7 +163,7 @@ pub trait NativeFunction: fmt::Debug {
 /// use legend_pure_runtime::native::NativeRegistry;
 ///
 /// let registry = NativeRegistry::standard();
-/// let plus = registry.get("plus").unwrap();
+/// let plus = registry.get("plus_Integer_MANY__Integer_1_").unwrap();
 /// let result = plus.execute(&[Value::Integer(2), Value::Integer(3)], &mut ctx);
 /// assert_eq!(result.unwrap(), Value::Integer(5));
 /// ```

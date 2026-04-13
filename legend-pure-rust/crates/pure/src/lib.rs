@@ -48,6 +48,7 @@ pub mod annotations;
 pub mod arena;
 pub mod bootstrap;
 pub mod error;
+pub mod fqn;
 pub mod ids;
 pub(crate) mod infer;
 pub(crate) mod lower;

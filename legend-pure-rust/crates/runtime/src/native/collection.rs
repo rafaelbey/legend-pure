@@ -290,15 +290,18 @@ impl NativeFunction for Concatenate {
 
 /// Register all collection native functions.
 pub fn register(registry: &mut NativeRegistry) {
-    registry.register("size", Size);
-    registry.register("isEmpty", IsEmpty);
-    registry.register("at", At);
-    registry.register("first", First);
-    registry.register("last", Last);
-    registry.register("range", Range);
-    registry.register("take", Take);
-    registry.register("drop", Drop);
-    registry.register("concatenate", Concatenate);
+    registry.register("size_Any_MANY__Integer_1_", Size);
+    registry.register("isEmpty_Any_MANY__Boolean_1_", IsEmpty);
+    registry.register("at_T_MANY__Integer_1__T_1_", At);
+    registry.register("first_T_MANY__T_$0_1$_", First);
+    registry.register("last_T_MANY__T_$0_1$_", Last);
+    registry.register(
+        "range_Integer_1__Integer_1__Integer_1__Integer_MANY_",
+        Range,
+    );
+    registry.register("take_T_MANY__Integer_1__T_MANY_", Take);
+    registry.register("drop_T_MANY__Integer_1__T_MANY_", Drop);
+    registry.register("concatenate_T_MANY__T_MANY__T_MANY_", Concatenate);
 }
 
 // ---------------------------------------------------------------------------

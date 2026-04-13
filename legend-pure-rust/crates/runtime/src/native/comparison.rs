@@ -158,12 +158,16 @@ impl NativeFunction for GreaterThanEqual {
 // ---------------------------------------------------------------------------
 
 /// Register all comparison native functions.
+///
+/// Note: `greaterThan` and `greaterThanEqual` are Pure functions (not native)
+/// that delegate to `lessThan`. They are not registered here.
 pub fn register(registry: &mut NativeRegistry) {
-    registry.register("equal", Equal);
-    registry.register("lessThan", LessThan);
-    registry.register("lessThanEqual", LessThanEqual);
-    registry.register("greaterThan", GreaterThan);
-    registry.register("greaterThanEqual", GreaterThanEqual);
+    registry.register("equal_Any_MANY__Any_MANY__Boolean_1_", Equal);
+    registry.register("lessThan_Number_1__Number_1__Boolean_1_", LessThan);
+    registry.register(
+        "lessThanEqual_Number_1__Number_1__Boolean_1_",
+        LessThanEqual,
+    );
 }
 
 // ---------------------------------------------------------------------------

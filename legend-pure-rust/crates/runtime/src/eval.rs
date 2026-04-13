@@ -349,12 +349,13 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     /// Dispatch a function call — the most complex evaluation case.
     ///
     /// Strategy (mirrors Java's `FunctionExpressionExecutor`):
-    /// 1. Check if `function_name` is in the `NativeRegistry`
+    /// 1. Resolve the function's mangled FQN from the compiled model
+    /// 2. Check if the FQN is in the `NativeRegistry`
     ///    - If `native.defer_execution()` → pass unevaluated arg expressions
     ///    - Else → evaluate all arguments left-to-right, pass Values
     ///    - Call native.execute(args, &mut `EvalContext`)
-    /// 2. If function has a resolved `ElementId` → call user function
-    /// 3. Error: function not found
+    /// 3. If function has a resolved `ElementId` → call user function
+    /// 4. Error: function not found
     #[allow(clippy::result_large_err)]
     fn eval_function_call(
         &mut self,
@@ -363,8 +364,16 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         arguments: &[ValueSpec],
         source_info: &legend_pure_parser_ast::SourceInfo,
     ) -> Result<Value, PureException> {
-        // 1. Try native dispatch first
-        if let Some(native) = self.natives.get(function_name) {
+        // 1. Resolve the function's mangled FQN for native lookup.
+        //    The compiler's Pass 2.1 stores the mangled FQN in ElementNode.name,
+        //    so we just read it — zero computation at dispatch time.
+        let lookup_key = match function {
+            Some(id) => self.model.get_node(id).name.as_str(),
+            None => function_name,
+        };
+
+        // 2. Try native dispatch
+        if let Some(native) = self.natives.get(lookup_key) {
             if native.defer_execution() {
                 // Deferred execution: pass unevaluated expressions as lambdas.
                 let deferred_args: Vec<Value> = arguments
@@ -385,7 +394,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
 
                 return result.map_err(|e| {
                     PureException::from(e).with_frame(StackFrame {
-                        function_name: function_name.into(),
+                        function_name: lookup_key.into(),
                         source: source_info.clone(),
                     })
                 });
@@ -404,13 +413,13 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
 
             return result.map_err(|e| {
                 PureException::from(e).with_frame(StackFrame {
-                    function_name: function_name.into(),
+                    function_name: lookup_key.into(),
                     source: source_info.clone(),
                 })
             });
         }
 
-        // 2. Try user function dispatch
+        // 3. Try user function dispatch
         if let Some(element_id) = function {
             let mut args = Vec::with_capacity(arguments.len());
             for arg in arguments {
@@ -419,7 +428,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             return self.call_user_function(element_id, &args, function_name);
         }
 
-        // 3. Function not found
+        // 4. Function not found
         Err(PureException::from(PureRuntimeError::FunctionNotFound(
             function_name.into(),
         )))
@@ -734,8 +743,11 @@ mod tests {
         let model = test_model();
         let registry = NativeRegistry::standard();
         let mut eval = Evaluator::new(&model, &registry);
-        let expr = make_expr(ExprKind::FloatLiteral(3.14));
-        assert_eq!(eval.eval(&expr).unwrap(), Value::Float(3.14));
+        let expr = make_expr(ExprKind::FloatLiteral(std::f64::consts::PI));
+        assert_eq!(
+            eval.eval(&expr).unwrap(),
+            Value::Float(std::f64::consts::PI)
+        );
     }
 
     #[test]
@@ -786,7 +798,7 @@ mod tests {
         let mut eval = Evaluator::new(&model, &registry);
         let expr = make_expr(ExprKind::FunctionCall {
             function: None,
-            function_name: "plus".into(),
+            function_name: "plus_Number_MANY__Number_1_".into(),
             arguments: vec![
                 make_expr(ExprKind::IntegerLiteral(2)),
                 make_expr(ExprKind::IntegerLiteral(3)),
@@ -803,12 +815,12 @@ mod tests {
         // plus(2, times(3, 4)) -> 14
         let expr = make_expr(ExprKind::FunctionCall {
             function: None,
-            function_name: "plus".into(),
+            function_name: "plus_Number_MANY__Number_1_".into(),
             arguments: vec![
                 make_expr(ExprKind::IntegerLiteral(2)),
                 make_expr(ExprKind::FunctionCall {
                     function: None,
-                    function_name: "times".into(),
+                    function_name: "times_Number_MANY__Number_1_".into(),
                     arguments: vec![
                         make_expr(ExprKind::IntegerLiteral(3)),
                         make_expr(ExprKind::IntegerLiteral(4)),

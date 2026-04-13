@@ -203,6 +203,7 @@ fn bench_parse(c: &mut Criterion) {
 // Phase 1b: Parse Multi-File (Parallelism comparison)
 // -----------------------------------------------------------------------------
 
+#[allow(clippy::too_many_lines)]
 fn bench_parse_multi_file(c: &mut Criterion) {
     use legend_pure_parser_parser::SourceProvider;
     use legend_pure_parser_parser::source::SourceInput;
@@ -520,7 +521,7 @@ fn bench_compose(c: &mut Criterion) {
 // -----------------------------------------------------------------------------
 
 fn bench_compose_multi_file(c: &mut Criterion) {
-    let mut group = c.benchmark_group("compose_multi_file");
+    let group = c.benchmark_group("compose_multi_file");
 
     #[cfg(feature = "heavy")]
     {
