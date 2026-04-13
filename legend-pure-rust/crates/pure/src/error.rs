@@ -41,6 +41,11 @@ pub enum CompilationErrorKind {
         /// The duplicate name.
         name: SmolStr,
     },
+    /// A variable hides or shadows an existing variable in scope.
+    DuplicateVariable {
+        /// The duplicate variable name.
+        name: SmolStr,
+    },
     /// A cyclic inheritance chain was detected.
     CyclicInheritance {
         /// The element that starts the cycle.

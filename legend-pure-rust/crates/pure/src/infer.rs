@@ -94,7 +94,7 @@ struct InferCtx<'a> {
     /// Scope chain (outermost first).
     scopes: Vec<Scope>,
     /// Errors accumulator (used in Phase B for type mismatch errors).
-    _errors: &'a mut Vec<CompilationError>,
+    errors: &'a mut Vec<CompilationError>,
 }
 
 impl InferCtx<'_> {
@@ -137,7 +137,7 @@ pub(crate) fn infer_function_body(
     let mut ctx = InferCtx {
         model,
         scopes: vec![root_scope],
-        _errors: errors,
+        errors,
     };
 
     for expr in body.iter_mut() {
@@ -178,7 +178,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
             // Extract let name from AST before calling inference
             let let_name = if function_name == "letFunction" && arguments.len() == 2 {
                 if let ExprKind::StringLiteral(name) = &arguments[0].kind {
-                    Some(name)
+                    Some((name, &arguments[0].source_info))
                 } else {
                     None
                 }
@@ -329,14 +329,21 @@ fn infer_function_call(
     ctx: &mut InferCtx<'_>,
     function: Option<crate::ids::ElementId>,
     function_name: &SmolStr,
-    let_name: Option<&SmolStr>,
+    let_name: Option<(&SmolStr, &legend_pure_parser_ast::SourceInfo)>,
     arg_types: &[Option<ResolvedType>],
 ) -> Option<ResolvedType> {
     // Handle `letFunction` — side effect: bind the variable in scope
     if function_name == "letFunction"
         && arg_types.len() == 2
-        && let (Some(val_type), Some(name)) = (&arg_types[1], let_name)
+        && let (Some(val_type), Some((name, source_info))) = (&arg_types[1], let_name)
     {
+        if ctx.lookup_var(name).is_some() {
+            ctx.errors.push(crate::error::CompilationError {
+                message: format!("'{name}' has already been defined!"),
+                source_info: (*source_info).clone(),
+                kind: crate::error::CompilationErrorKind::DuplicateVariable { name: name.clone() },
+            });
+        }
         if let Some(scope) = ctx.scopes.last_mut() {
             scope.bind(name.clone(), val_type.clone());
         }

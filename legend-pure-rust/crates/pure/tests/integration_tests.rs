@@ -1462,3 +1462,17 @@ fn expression_new_instance_desugars_to_new() {
         _ => panic!("expected Function"),
     }
 }
+
+#[test]
+fn compile_multiple_let_same_variable() {
+    let source = "function test::f(): Integer[1] { let x = 42; let x = 43; $x; }";
+    let Err(partial) = compile_one(source) else {
+        panic!("Should fail to compile shadowed variables");
+    };
+    assert_eq!(partial.errors.len(), 1);
+    assert!(matches!(
+        partial.errors[0].kind,
+        legend_pure_parser_pure::error::CompilationErrorKind::DuplicateVariable { .. }
+    ));
+    assert_eq!(partial.errors[0].message, "'x' has already been defined!");
+}
