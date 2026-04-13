@@ -261,6 +261,17 @@ impl PureException {
     pub fn is_constraint_violation(&self) -> bool {
         matches!(self.kind, PureExceptionKind::ConstraintViolation { .. })
     }
+
+    /// Append a stack frame and return self (builder pattern).
+    ///
+    /// Used by the evaluator's lazy call stack: each `map_err` in the
+    /// recursive `eval()` chain pushes a frame as `Err(PureException)`
+    /// propagates upward.
+    #[must_use]
+    pub fn with_frame(mut self, frame: StackFrame) -> Self {
+        self.call_stack.push(frame);
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------

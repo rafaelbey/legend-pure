@@ -58,5 +58,7 @@ pub mod date;
 pub mod error;
 pub mod eval;
 pub mod heap;
+pub mod hooks;
 pub mod native;
+pub mod scope_guard;
 pub mod value;

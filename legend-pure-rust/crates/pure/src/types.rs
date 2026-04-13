@@ -149,44 +149,47 @@ pub struct Parameter {
 /// Parsed from the raw strings in `ast::StrictDateLiteral`, `ast::DateTimeLiteral`,
 /// and `ast::StrictTimeLiteral`. Avoids carrying raw strings through the
 /// semantic graph.
+///
+/// Field types match `jiff::civil` (and `PureDate`) so the evaluator needs
+/// zero casts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DateValue {
     /// Strict date: `%2024-01-15`.
     StrictDate {
-        /// Year.
-        year: i32,
+        /// Year (−9999..9999).
+        year: i16,
         /// Month (1–12).
-        month: u8,
+        month: i8,
         /// Day (1–31).
-        day: u8,
+        day: i8,
     },
     /// Date-time: `%2024-01-15T10:30:00`.
     DateTime {
-        /// Year.
-        year: i32,
+        /// Year (−9999..9999).
+        year: i16,
         /// Month (1–12).
-        month: u8,
+        month: i8,
         /// Day (1–31).
-        day: u8,
+        day: i8,
         /// Hour (0–23).
-        hour: u8,
+        hour: i8,
         /// Minute (0–59).
-        minute: u8,
+        minute: i8,
         /// Second (0–59).
-        second: u8,
-        /// Sub-second nanoseconds.
-        subsecond_nanos: u32,
+        second: i8,
+        /// Sub-second nanoseconds (`0–999_999_999`).
+        subsecond_nanos: i32,
     },
     /// Strict time: `%10:30:00`.
     StrictTime {
         /// Hour (0–23).
-        hour: u8,
+        hour: i8,
         /// Minute (0–59).
-        minute: u8,
+        minute: i8,
         /// Second (0–59).
-        second: u8,
-        /// Sub-second nanoseconds.
-        subsecond_nanos: u32,
+        second: i8,
+        /// Sub-second nanoseconds (`0–999_999_999`).
+        subsecond_nanos: i32,
     },
 }
 

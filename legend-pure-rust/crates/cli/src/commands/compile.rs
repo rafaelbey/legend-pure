@@ -110,7 +110,7 @@ pub fn run(args: CompileArgs) -> Result<(), CliError> {
     // -- Phase 1: Load + parse all files in parallel --
     let inputs: Vec<_> = files
         .iter()
-        .map(|path| legend_pure_parser_parser::source::SourceInput::file_system(path))
+        .map(legend_pure_parser_parser::source::SourceInput::file_system)
         .collect();
 
     let outputs = legend_pure_parser_parser::parse_many(&inputs);
@@ -143,10 +143,10 @@ pub fn run(args: CompileArgs) -> Result<(), CliError> {
                     path.display().dimmed(),
                     diagnostics::format_error_with_path(path, &e).red()
                 );
-                if args.show_source {
-                    if let Some(ref text) = output.source_text {
-                        diagnostics::render_source_snippet(text, path, &e);
-                    }
+                if args.show_source
+                    && let Some(ref text) = output.source_text
+                {
+                    diagnostics::render_source_snippet(text, path, &e);
                 }
                 parse_error_count += 1;
             }

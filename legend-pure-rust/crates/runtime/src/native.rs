@@ -24,54 +24,127 @@
 //! - [`NativeFunction`] — trait that each built-in function implements.
 //! - [`NativeRegistry`] — lookup table mapping qualified function names to
 //!   their implementations.
+//! - [`EvalContextTrait`] — type-erased handle to the evaluator, passed to
+//!   native functions so they can invoke lambdas, access variables, etc.
 //!
 //! The evaluator calls [`NativeRegistry::get`] to dispatch to native functions.
-//! Native functions receive their arguments as `&[Value]` and return
-//! `Result<Value, PureRuntimeError>`. The evaluator wraps any error with
-//! source location to produce a [`PureException`](crate::error::PureException).
+//! Native functions receive their arguments as `&[Value]` and an
+//! `&mut dyn EvalContextTrait` to access the evaluator. The evaluator wraps
+//! any error with source location to produce a [`PureException`](crate::error::PureException).
 //!
 //! # Lambda-dependent functions
 //!
-//! Functions like `map`, `filter`, and `fold` need the evaluator to invoke
-//! lambdas. These cannot be implemented as plain `NativeFunction`s because
-//! they need `&mut Evaluator`. They will be handled directly by the evaluator's
-//! expression walker, not through this registry.
+//! Functions like `map`, `filter`, `fold`, and `if` use `ctx.eval_lambda()`
+//! to invoke lambda bodies. Functions like `if` also use
+//! [`NativeFunction::defer_execution`] to short-circuit argument evaluation.
 
 use std::collections::HashMap;
 use std::fmt;
 
 use smol_str::SmolStr;
 
+use crate::context::VariableContext;
 use crate::error::PureRuntimeError;
+use crate::heap::RuntimeHeap;
 use crate::value::Value;
+
+// ---------------------------------------------------------------------------
+// EvalContextTrait — type-erased evaluator handle for native functions
+// ---------------------------------------------------------------------------
+
+/// Type-erased handle to the evaluator, passed to native functions.
+///
+/// This is the object-safe counterpart of the concrete `EvalContext` struct
+/// (defined in [`eval`](crate::eval)). It allows `NativeFunction` to remain
+/// object-safe (stored as `Box<dyn NativeFunction>`) while still having
+/// access to the evaluator's capabilities.
+///
+/// Mirrors Java's pattern where `NativeFunction.execute()` receives
+/// `FunctionExecutionInterpreted`, `VariableContext`, and `ProcessorSupport`.
+pub trait EvalContextTrait {
+    /// Evaluate a lambda closure with the given arguments.
+    ///
+    /// # Errors
+    /// Returns `PureRuntimeError` if evaluation fails or the value is not a lambda.
+    fn eval_lambda(&mut self, lambda: &Value, args: &[Value]) -> Result<Value, PureRuntimeError>;
+
+    /// Access the variable context immutably.
+    fn context(&self) -> &VariableContext;
+
+    /// Access the variable context mutably.
+    fn context_mut(&mut self) -> &mut VariableContext;
+
+    /// Access the runtime heap immutably.
+    fn heap(&self) -> &RuntimeHeap;
+
+    /// Access the runtime heap mutably.
+    fn heap_mut(&mut self) -> &mut RuntimeHeap;
+}
+
+// ---------------------------------------------------------------------------
+// NativeFunction trait
+// ---------------------------------------------------------------------------
 
 /// A native (built-in) Pure function implemented in Rust.
 ///
 /// Native functions receive their arguments as a slice of [`Value`]s
-/// and return a `Result<Value, PureRuntimeError>`. The evaluator
-/// wraps any error with source location to produce a `PureException`.
+/// and an [`EvalContextTrait`] that provides access to the evaluator's
+/// capabilities (lambda evaluation, variable context, heap, model).
+/// The evaluator wraps any error with source location to produce a
+/// `PureException`.
+///
+/// This mirrors Java's `NativeFunction` which receives
+/// `VariableContext`, `FunctionExecutionInterpreted`, and
+/// `ProcessorSupport` in its `execute()` method.
 ///
 /// # Implementors
 ///
 /// Each native function is a zero-sized struct implementing this trait.
 /// This allows compile-time dispatch and zero allocation for the function
 /// objects themselves.
+///
+/// Simple natives (e.g., `plus`, `equal`) ignore the `ctx` parameter.
+/// Lambda-dependent natives (e.g., `map`, `filter`, `if`) use
+/// `ctx.eval_lambda()` to invoke lambda bodies.
 pub trait NativeFunction: fmt::Debug {
-    /// Execute the function with the given arguments.
+    /// Execute the function with the given arguments and evaluation context.
     ///
-    /// Arguments are already evaluated (left-to-right) by the evaluator.
-    /// The function should validate argument count and types, returning
-    /// appropriate `PureRuntimeError` variants on failure.
+    /// Arguments are already evaluated (left-to-right) by the evaluator,
+    /// unless [`defer_execution`](Self::defer_execution) returns `true`.
+    ///
+    /// The `ctx` parameter provides access to the evaluator for:
+    /// - Invoking lambda bodies (`ctx.eval_lambda()`)
+    /// - Reading/writing variables (`ctx.context_mut()`)
+    /// - Accessing the object heap (`ctx.heap_mut()`)
     ///
     /// # Errors
     /// Returns `PureRuntimeError` if argument count/types are wrong or
     /// if the computation fails (e.g., division by zero).
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError>;
+    fn execute(
+        &self,
+        args: &[Value],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError>;
 
     /// The Pure function signature, for documentation and error messages.
     ///
     /// Example: `"plus(Integer[1], Integer[1]): Integer[1]"`
     fn signature(&self) -> &'static str;
+
+    /// Whether this native defers parameter evaluation.
+    ///
+    /// When `true`, the evaluator passes unevaluated expressions wrapped
+    /// as zero-parameter [`LambdaClosure`](crate::value::LambdaClosure)s
+    /// instead of fully evaluated values. The native function then
+    /// evaluates them on demand via `ctx.eval_lambda()`.
+    ///
+    /// This enables short-circuiting (e.g., `if` only evaluates the taken
+    /// branch) and matches Java's `deferParameterExecution()`.
+    ///
+    /// Defaults to `false` — most native functions eagerly evaluate args.
+    fn defer_execution(&self) -> bool {
+        false
+    }
 }
 
 /// Registry of native functions, keyed by qualified Pure function name.
@@ -87,7 +160,7 @@ pub trait NativeFunction: fmt::Debug {
 ///
 /// let registry = NativeRegistry::standard();
 /// let plus = registry.get("plus").unwrap();
-/// let result = plus.execute(&[Value::Integer(2), Value::Integer(3)]);
+/// let result = plus.execute(&[Value::Integer(2), Value::Integer(3)], &mut ctx);
 /// assert_eq!(result.unwrap(), Value::Integer(5));
 /// ```
 pub struct NativeRegistry {
@@ -229,6 +302,37 @@ pub mod string;
 pub mod collection;
 
 // ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
+
+/// A no-op evaluation context stub for testing native functions.
+///
+/// All methods panic — this is only suitable for testing natives that
+/// don't use the evaluation context (i.e., simple arithmetic, comparison,
+/// string, and collection functions that ignore the `ctx` parameter).
+#[cfg(test)]
+pub(crate) struct NoOpEvalCtx;
+
+#[cfg(test)]
+impl EvalContextTrait for NoOpEvalCtx {
+    fn eval_lambda(&mut self, _l: &Value, _a: &[Value]) -> Result<Value, PureRuntimeError> {
+        unreachable!("NoOpEvalCtx::eval_lambda should never be called in simple native tests")
+    }
+    fn context(&self) -> &VariableContext {
+        unreachable!("NoOpEvalCtx::context should never be called in simple native tests")
+    }
+    fn context_mut(&mut self) -> &mut VariableContext {
+        unreachable!("NoOpEvalCtx::context_mut should never be called in simple native tests")
+    }
+    fn heap(&self) -> &RuntimeHeap {
+        unreachable!("NoOpEvalCtx::heap should never be called in simple native tests")
+    }
+    fn heap_mut(&mut self) -> &mut RuntimeHeap {
+        unreachable!("NoOpEvalCtx::heap_mut should never be called in simple native tests")
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -241,7 +345,11 @@ mod tests {
     struct ConstantFn(Value);
 
     impl NativeFunction for ConstantFn {
-        fn execute(&self, _args: &[Value]) -> Result<Value, PureRuntimeError> {
+        fn execute(
+            &self,
+            _args: &[Value],
+            _ctx: &mut dyn EvalContextTrait,
+        ) -> Result<Value, PureRuntimeError> {
             Ok(self.0.clone())
         }
 
@@ -256,7 +364,7 @@ mod tests {
         reg.register("myFunc", ConstantFn(Value::Integer(42)));
 
         let func = reg.get("myFunc").unwrap();
-        let result = func.execute(&[]).unwrap();
+        let result = func.execute(&[], &mut NoOpEvalCtx).unwrap();
         assert_eq!(result, Value::Integer(42));
     }
 
