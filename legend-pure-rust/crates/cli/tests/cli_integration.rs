@@ -186,7 +186,7 @@ fn test_stub_test_command() {
         .arg(".")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("under development"));
+        .stderr(predicate::str::contains("Test execution failed"));
 }
 
 #[test]

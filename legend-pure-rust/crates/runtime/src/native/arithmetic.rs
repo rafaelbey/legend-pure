@@ -17,7 +17,7 @@
 use rust_decimal::prelude::ToPrimitive;
 
 use crate::error::PureRuntimeError;
-use crate::native::{NativeFunction, NativeRegistry, expect_args};
+use crate::native::{EvalContextTrait, NativeFunction, NativeRegistry, expect_args};
 use crate::value::Value;
 
 // ---------------------------------------------------------------------------
@@ -36,7 +36,11 @@ use crate::value::Value;
 pub struct Plus;
 
 impl NativeFunction for Plus {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("plus", args, 2)?;
         match (&args[0], &args[1]) {
             (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a.wrapping_add(*b))),
@@ -71,7 +75,11 @@ impl NativeFunction for Plus {
 pub struct Minus;
 
 impl NativeFunction for Minus {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("minus", args, 2)?;
         match (&args[0], &args[1]) {
             (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a.wrapping_sub(*b))),
@@ -109,7 +117,11 @@ impl NativeFunction for Minus {
 pub struct Times;
 
 impl NativeFunction for Times {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("times", args, 2)?;
         match (&args[0], &args[1]) {
             (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a.wrapping_mul(*b))),
@@ -148,7 +160,11 @@ pub struct Divide;
 
 impl NativeFunction for Divide {
     #[allow(clippy::cast_precision_loss)]
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("divide", args, 2)?;
         match (&args[0], &args[1]) {
             (Value::Integer(_), Value::Integer(0)) => Err(PureRuntimeError::DivisionByZero),
@@ -190,7 +206,11 @@ impl NativeFunction for Divide {
 pub struct Abs;
 
 impl NativeFunction for Abs {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("abs", args, 1)?;
         match &args[0] {
             Value::Integer(i) => Ok(Value::Integer(i.wrapping_abs())),
@@ -214,7 +234,11 @@ impl NativeFunction for Abs {
 pub struct Mod;
 
 impl NativeFunction for Mod {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("mod", args, 2)?;
         let a = args[0].as_integer()?;
         let b = args[1].as_integer()?;
@@ -234,7 +258,11 @@ impl NativeFunction for Mod {
 pub struct Rem;
 
 impl NativeFunction for Rem {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("rem", args, 2)?;
         match (&args[0], &args[1]) {
             (Value::Integer(a), Value::Integer(b)) => {
@@ -281,11 +309,12 @@ mod tests {
     use rust_decimal::Decimal;
 
     use super::*;
+    use crate::native::NoOpEvalCtx;
 
     #[test]
     fn plus_integers() {
         let r = Plus
-            .execute(&[Value::Integer(2), Value::Integer(3)])
+            .execute(&[Value::Integer(2), Value::Integer(3)], &mut NoOpEvalCtx)
             .unwrap();
         assert_eq!(r, Value::Integer(5));
     }
@@ -293,7 +322,7 @@ mod tests {
     #[test]
     fn plus_floats() {
         let r = Plus
-            .execute(&[Value::Float(1.5), Value::Float(2.5)])
+            .execute(&[Value::Float(1.5), Value::Float(2.5)], &mut NoOpEvalCtx)
             .unwrap();
         assert_eq!(r, Value::Float(4.0));
     }
@@ -301,7 +330,7 @@ mod tests {
     #[test]
     fn plus_integer_float_promotion() {
         let r = Plus
-            .execute(&[Value::Integer(1), Value::Float(2.5)])
+            .execute(&[Value::Integer(1), Value::Float(2.5)], &mut NoOpEvalCtx)
             .unwrap();
         assert_eq!(r, Value::Float(3.5));
     }
@@ -311,7 +340,7 @@ mod tests {
         let a = Decimal::from_str("10.50").unwrap();
         let b = Decimal::from_str("3.25").unwrap();
         let r = Plus
-            .execute(&[Value::Decimal(a), Value::Decimal(b)])
+            .execute(&[Value::Decimal(a), Value::Decimal(b)], &mut NoOpEvalCtx)
             .unwrap();
         assert_eq!(r, Value::Decimal(Decimal::from_str("13.75").unwrap()));
     }
@@ -319,7 +348,7 @@ mod tests {
     #[test]
     fn minus_integers() {
         let r = Minus
-            .execute(&[Value::Integer(10), Value::Integer(3)])
+            .execute(&[Value::Integer(10), Value::Integer(3)], &mut NoOpEvalCtx)
             .unwrap();
         assert_eq!(r, Value::Integer(7));
     }
@@ -327,7 +356,7 @@ mod tests {
     #[test]
     fn times_integers() {
         let r = Times
-            .execute(&[Value::Integer(4), Value::Integer(5)])
+            .execute(&[Value::Integer(4), Value::Integer(5)], &mut NoOpEvalCtx)
             .unwrap();
         assert_eq!(r, Value::Integer(20));
     }
@@ -335,21 +364,22 @@ mod tests {
     #[test]
     fn divide_integers_returns_float() {
         let r = Divide
-            .execute(&[Value::Integer(7), Value::Integer(2)])
+            .execute(&[Value::Integer(7), Value::Integer(2)], &mut NoOpEvalCtx)
             .unwrap();
         assert_eq!(r, Value::Float(3.5));
     }
 
     #[test]
     fn divide_by_zero_errors() {
-        let r = Divide.execute(&[Value::Integer(1), Value::Integer(0)]);
+        let r = Divide.execute(&[Value::Integer(1), Value::Integer(0)], &mut NoOpEvalCtx);
         assert!(r.is_err());
     }
 
     #[test]
     fn abs_negative() {
         assert_eq!(
-            Abs.execute(&[Value::Integer(-5)]).unwrap(),
+            Abs.execute(&[Value::Integer(-5)], &mut NoOpEvalCtx)
+                .unwrap(),
             Value::Integer(5)
         );
     }
@@ -357,7 +387,7 @@ mod tests {
     #[test]
     fn mod_positive() {
         assert_eq!(
-            Mod.execute(&[Value::Integer(7), Value::Integer(3)])
+            Mod.execute(&[Value::Integer(7), Value::Integer(3)], &mut NoOpEvalCtx)
                 .unwrap(),
             Value::Integer(1)
         );
@@ -367,7 +397,7 @@ mod tests {
     fn mod_negative_dividend() {
         // rem_euclid: -7 mod 3 = 2 (always non-negative)
         assert_eq!(
-            Mod.execute(&[Value::Integer(-7), Value::Integer(3)])
+            Mod.execute(&[Value::Integer(-7), Value::Integer(3)], &mut NoOpEvalCtx)
                 .unwrap(),
             Value::Integer(2)
         );
@@ -377,7 +407,7 @@ mod tests {
     fn rem_negative_dividend() {
         // Rust remainder: -7 % 3 = -1 (preserves sign)
         assert_eq!(
-            Rem.execute(&[Value::Integer(-7), Value::Integer(3)])
+            Rem.execute(&[Value::Integer(-7), Value::Integer(3)], &mut NoOpEvalCtx)
                 .unwrap(),
             Value::Integer(-1)
         );
@@ -385,25 +415,41 @@ mod tests {
 
     #[test]
     fn wrong_arg_count_errors() {
-        assert!(Plus.execute(&[Value::Integer(1)]).is_err());
-        assert!(Abs.execute(&[]).is_err());
+        assert!(
+            Plus.execute(&[Value::Integer(1)], &mut NoOpEvalCtx)
+                .is_err()
+        );
+        assert!(Abs.execute(&[], &mut NoOpEvalCtx).is_err());
     }
 
     #[test]
     fn type_mismatch_errors() {
         // String instead of Number
         assert!(
-            Plus.execute(&[Value::String("1".into()), Value::Integer(1)])
-                .is_err()
+            Plus.execute(
+                &[Value::String("1".into()), Value::Integer(1)],
+                &mut NoOpEvalCtx
+            )
+            .is_err()
         );
         // Date instead of Number
         let date_val = Value::Date(crate::date::PureDate::strict_date(2024, 1, 1).unwrap());
-        assert!(Minus.execute(&[date_val, Value::Integer(1)]).is_err());
-        assert!(Abs.execute(&[Value::Boolean(true)]).is_err());
+        assert!(
+            Minus
+                .execute(&[date_val, Value::Integer(1)], &mut NoOpEvalCtx)
+                .is_err()
+        );
+        assert!(
+            Abs.execute(&[Value::Boolean(true)], &mut NoOpEvalCtx)
+                .is_err()
+        );
         // One float, one string
         assert!(
-            Plus.execute(&[Value::Float(1.0), Value::String("2".into())])
-                .is_err()
+            Plus.execute(
+                &[Value::Float(1.0), Value::String("2".into())],
+                &mut NoOpEvalCtx
+            )
+            .is_err()
         );
     }
 
@@ -411,20 +457,20 @@ mod tests {
     fn division_by_zero_errors() {
         assert!(
             Divide
-                .execute(&[Value::Integer(5), Value::Integer(0)])
+                .execute(&[Value::Integer(5), Value::Integer(0)], &mut NoOpEvalCtx)
                 .is_err()
         );
         assert!(
             Divide
-                .execute(&[Value::Float(5.0), Value::Float(0.0)])
+                .execute(&[Value::Float(5.0), Value::Float(0.0)], &mut NoOpEvalCtx)
                 .is_err()
         );
         assert!(
-            Mod.execute(&[Value::Integer(5), Value::Integer(0)])
+            Mod.execute(&[Value::Integer(5), Value::Integer(0)], &mut NoOpEvalCtx)
                 .is_err()
         );
         assert!(
-            Rem.execute(&[Value::Integer(5), Value::Integer(0)])
+            Rem.execute(&[Value::Integer(5), Value::Integer(0)], &mut NoOpEvalCtx)
                 .is_err()
         );
     }

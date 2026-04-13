@@ -51,9 +51,9 @@ pub struct TestArgs {
     #[arg(long, short)]
     pub filter: Option<String>,
 
-    /// Show verbose test output.
-    #[arg(long)]
-    pub verbose: bool,
+    /// Show detailed test output.
+    #[arg(long = "show-detail")]
+    pub show_detail: bool,
 }
 
 pub fn run(args: TestArgs) -> Result<(), CliError> {
@@ -83,7 +83,7 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
         .map_err(|e| CliError::Custom(format!("Test execution failed: {e:?}")))?;
 
     // 3. Pretty-print the TestReport
-    render_test_report(&result, args.verbose);
+    render_test_report(&result, args.show_detail);
 
     Ok(())
 }

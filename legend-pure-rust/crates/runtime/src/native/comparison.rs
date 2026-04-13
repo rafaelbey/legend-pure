@@ -16,7 +16,7 @@
 //! `greaterThan`, `greaterThanEqual`.
 
 use crate::error::PureRuntimeError;
-use crate::native::{NativeFunction, NativeRegistry, expect_args};
+use crate::native::{EvalContextTrait, NativeFunction, NativeRegistry, expect_args};
 use crate::value::Value;
 
 // ---------------------------------------------------------------------------
@@ -59,7 +59,11 @@ fn numeric_cmp(a: &Value, b: &Value) -> Result<std::cmp::Ordering, PureRuntimeEr
 pub struct Equal;
 
 impl NativeFunction for Equal {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("equal", args, 2)?;
         Ok(Value::Boolean(args[0] == args[1]))
     }
@@ -78,7 +82,11 @@ impl NativeFunction for Equal {
 pub struct LessThan;
 
 impl NativeFunction for LessThan {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("lessThan", args, 2)?;
         Ok(Value::Boolean(numeric_cmp(&args[0], &args[1])?.is_lt()))
     }
@@ -93,7 +101,11 @@ impl NativeFunction for LessThan {
 pub struct LessThanEqual;
 
 impl NativeFunction for LessThanEqual {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("lessThanEqual", args, 2)?;
         Ok(Value::Boolean(!numeric_cmp(&args[0], &args[1])?.is_gt()))
     }
@@ -108,7 +120,11 @@ impl NativeFunction for LessThanEqual {
 pub struct GreaterThan;
 
 impl NativeFunction for GreaterThan {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("greaterThan", args, 2)?;
         Ok(Value::Boolean(numeric_cmp(&args[0], &args[1])?.is_gt()))
     }
@@ -123,7 +139,11 @@ impl NativeFunction for GreaterThan {
 pub struct GreaterThanEqual;
 
 impl NativeFunction for GreaterThanEqual {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("greaterThanEqual", args, 2)?;
         Ok(Value::Boolean(!numeric_cmp(&args[0], &args[1])?.is_lt()))
     }
@@ -153,18 +173,19 @@ pub fn register(registry: &mut NativeRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::NoOpEvalCtx;
 
     #[test]
     fn equal_same_type() {
         assert_eq!(
             Equal
-                .execute(&[Value::Integer(1), Value::Integer(1)])
+                .execute(&[Value::Integer(1), Value::Integer(1)], &mut NoOpEvalCtx)
                 .unwrap(),
             Value::Boolean(true)
         );
         assert_eq!(
             Equal
-                .execute(&[Value::Integer(1), Value::Integer(2)])
+                .execute(&[Value::Integer(1), Value::Integer(2)], &mut NoOpEvalCtx)
                 .unwrap(),
             Value::Boolean(false)
         );
@@ -174,7 +195,10 @@ mod tests {
     fn equal_different_types() {
         assert_eq!(
             Equal
-                .execute(&[Value::Integer(1), Value::String("1".into())])
+                .execute(
+                    &[Value::Integer(1), Value::String("1".into())],
+                    &mut NoOpEvalCtx
+                )
                 .unwrap(),
             Value::Boolean(false)
         );
@@ -184,13 +208,13 @@ mod tests {
     fn less_than_integers() {
         assert_eq!(
             LessThan
-                .execute(&[Value::Integer(1), Value::Integer(2)])
+                .execute(&[Value::Integer(1), Value::Integer(2)], &mut NoOpEvalCtx)
                 .unwrap(),
             Value::Boolean(true)
         );
         assert_eq!(
             LessThan
-                .execute(&[Value::Integer(2), Value::Integer(1)])
+                .execute(&[Value::Integer(2), Value::Integer(1)], &mut NoOpEvalCtx)
                 .unwrap(),
             Value::Boolean(false)
         );
@@ -200,7 +224,7 @@ mod tests {
     fn less_than_mixed_numeric() {
         assert_eq!(
             LessThan
-                .execute(&[Value::Integer(1), Value::Float(1.5)])
+                .execute(&[Value::Integer(1), Value::Float(1.5)], &mut NoOpEvalCtx)
                 .unwrap(),
             Value::Boolean(true)
         );
@@ -210,7 +234,7 @@ mod tests {
     fn greater_than_equal_boundary() {
         assert_eq!(
             GreaterThanEqual
-                .execute(&[Value::Integer(3), Value::Integer(3)])
+                .execute(&[Value::Integer(3), Value::Integer(3)], &mut NoOpEvalCtx)
                 .unwrap(),
             Value::Boolean(true)
         );
@@ -220,7 +244,10 @@ mod tests {
     fn string_comparison() {
         assert_eq!(
             LessThan
-                .execute(&[Value::String("a".into()), Value::String("b".into())])
+                .execute(
+                    &[Value::String("a".into()), Value::String("b".into())],
+                    &mut NoOpEvalCtx
+                )
                 .unwrap(),
             Value::Boolean(true)
         );
@@ -228,8 +255,12 @@ mod tests {
 
     #[test]
     fn wrong_arg_count_errors() {
-        assert!(Equal.execute(&[Value::Integer(1)]).is_err());
-        assert!(LessThan.execute(&[]).is_err());
+        assert!(
+            Equal
+                .execute(&[Value::Integer(1)], &mut NoOpEvalCtx)
+                .is_err()
+        );
+        assert!(LessThan.execute(&[], &mut NoOpEvalCtx).is_err());
     }
 
     #[test]
@@ -237,21 +268,30 @@ mod tests {
         // LessThan on non-comparable types
         assert!(
             LessThan
-                .execute(&[Value::String("1".into()), Value::Integer(1)])
+                .execute(
+                    &[Value::String("1".into()), Value::Integer(1)],
+                    &mut NoOpEvalCtx
+                )
                 .is_err()
         );
         // Date vs String
         assert!(
             LessThan
-                .execute(&[
-                    Value::Date(crate::date::PureDate::strict_date(2024, 1, 1).unwrap()),
-                    Value::String("2024-01-01".into())
-                ])
+                .execute(
+                    &[
+                        Value::Date(crate::date::PureDate::strict_date(2024, 1, 1).unwrap()),
+                        Value::String("2024-01-01".into())
+                    ],
+                    &mut NoOpEvalCtx
+                )
                 .is_err()
         );
         assert!(
             GreaterThan
-                .execute(&[Value::Boolean(true), Value::Boolean(false)])
+                .execute(
+                    &[Value::Boolean(true), Value::Boolean(false)],
+                    &mut NoOpEvalCtx
+                )
                 .is_err()
         );
     }

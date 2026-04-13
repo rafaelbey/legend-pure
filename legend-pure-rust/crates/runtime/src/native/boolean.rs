@@ -15,7 +15,7 @@
 //! Boolean native functions: `and`, `or`, `not`.
 
 use crate::error::PureRuntimeError;
-use crate::native::{NativeFunction, NativeRegistry, expect_args};
+use crate::native::{EvalContextTrait, NativeFunction, NativeRegistry, expect_args};
 use crate::value::Value;
 
 /// Pure `and(Boolean[1], Boolean[1]): Boolean[1]`
@@ -23,7 +23,11 @@ use crate::value::Value;
 pub struct And;
 
 impl NativeFunction for And {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("and", args, 2)?;
         let a = args[0].as_boolean()?;
         let b = args[1].as_boolean()?;
@@ -40,7 +44,11 @@ impl NativeFunction for And {
 pub struct Or;
 
 impl NativeFunction for Or {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("or", args, 2)?;
         let a = args[0].as_boolean()?;
         let b = args[1].as_boolean()?;
@@ -57,7 +65,11 @@ impl NativeFunction for Or {
 pub struct Not;
 
 impl NativeFunction for Not {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("not", args, 1)?;
         let a = args[0].as_boolean()?;
         Ok(Value::Boolean(!a))
@@ -78,12 +90,16 @@ pub fn register(registry: &mut NativeRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::NoOpEvalCtx;
 
     #[test]
     fn and_true_true() {
         assert_eq!(
-            And.execute(&[Value::Boolean(true), Value::Boolean(true)])
-                .unwrap(),
+            And.execute(
+                &[Value::Boolean(true), Value::Boolean(true)],
+                &mut NoOpEvalCtx
+            )
+            .unwrap(),
             Value::Boolean(true)
         );
     }
@@ -91,8 +107,11 @@ mod tests {
     #[test]
     fn and_true_false() {
         assert_eq!(
-            And.execute(&[Value::Boolean(true), Value::Boolean(false)])
-                .unwrap(),
+            And.execute(
+                &[Value::Boolean(true), Value::Boolean(false)],
+                &mut NoOpEvalCtx
+            )
+            .unwrap(),
             Value::Boolean(false)
         );
     }
@@ -100,8 +119,11 @@ mod tests {
     #[test]
     fn or_false_true() {
         assert_eq!(
-            Or.execute(&[Value::Boolean(false), Value::Boolean(true)])
-                .unwrap(),
+            Or.execute(
+                &[Value::Boolean(false), Value::Boolean(true)],
+                &mut NoOpEvalCtx
+            )
+            .unwrap(),
             Value::Boolean(true)
         );
     }
@@ -109,7 +131,8 @@ mod tests {
     #[test]
     fn not_true() {
         assert_eq!(
-            Not.execute(&[Value::Boolean(true)]).unwrap(),
+            Not.execute(&[Value::Boolean(true)], &mut NoOpEvalCtx)
+                .unwrap(),
             Value::Boolean(false)
         );
     }
@@ -117,19 +140,25 @@ mod tests {
     #[test]
     fn type_error_on_non_boolean() {
         assert!(
-            And.execute(&[Value::Integer(1), Value::Boolean(true)])
+            And.execute(&[Value::Integer(1), Value::Boolean(true)], &mut NoOpEvalCtx)
                 .is_err()
         );
         assert!(
-            Or.execute(&[Value::Boolean(true), Value::String("true".into())])
-                .is_err()
+            Or.execute(
+                &[Value::Boolean(true), Value::String("true".into())],
+                &mut NoOpEvalCtx
+            )
+            .is_err()
         );
-        assert!(Not.execute(&[Value::Integer(0)]).is_err());
+        assert!(Not.execute(&[Value::Integer(0)], &mut NoOpEvalCtx).is_err());
     }
 
     #[test]
     fn wrong_arg_count_errors() {
-        assert!(And.execute(&[Value::Boolean(true)]).is_err());
-        assert!(Not.execute(&[]).is_err());
+        assert!(
+            And.execute(&[Value::Boolean(true)], &mut NoOpEvalCtx)
+                .is_err()
+        );
+        assert!(Not.execute(&[], &mut NoOpEvalCtx).is_err());
     }
 }

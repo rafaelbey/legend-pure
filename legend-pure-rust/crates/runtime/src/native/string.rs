@@ -19,7 +19,7 @@
 use smol_str::SmolStr;
 
 use crate::error::PureRuntimeError;
-use crate::native::{NativeFunction, NativeRegistry, expect_args};
+use crate::native::{EvalContextTrait, NativeFunction, NativeRegistry, expect_args};
 use crate::value::Value;
 
 // ---------------------------------------------------------------------------
@@ -34,7 +34,11 @@ use crate::value::Value;
 pub struct StringPlus;
 
 impl NativeFunction for StringPlus {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("plus (String)", args, 2)?;
         let a = args[0].as_string()?;
         let b = args[1].as_string()?;
@@ -55,7 +59,11 @@ impl NativeFunction for StringPlus {
 pub struct Length;
 
 impl NativeFunction for Length {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("length", args, 1)?;
         let s = args[0].as_string()?;
         #[allow(clippy::cast_possible_wrap)]
@@ -78,7 +86,11 @@ impl NativeFunction for Length {
 pub struct Substring;
 
 impl NativeFunction for Substring {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("substring", args, 3)?;
         let s = args[0].as_string()?;
         let start_i = args[1].as_integer()?.max(0);
@@ -105,7 +117,11 @@ impl NativeFunction for Substring {
 pub struct Contains;
 
 impl NativeFunction for Contains {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("contains", args, 2)?;
         let s = args[0].as_string()?;
         let sub = args[1].as_string()?;
@@ -122,7 +138,11 @@ impl NativeFunction for Contains {
 pub struct StartsWith;
 
 impl NativeFunction for StartsWith {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("startsWith", args, 2)?;
         let s = args[0].as_string()?;
         let prefix = args[1].as_string()?;
@@ -139,7 +159,11 @@ impl NativeFunction for StartsWith {
 pub struct EndsWith;
 
 impl NativeFunction for EndsWith {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("endsWith", args, 2)?;
         let s = args[0].as_string()?;
         let suffix = args[1].as_string()?;
@@ -158,7 +182,11 @@ impl NativeFunction for EndsWith {
 pub struct IndexOf;
 
 impl NativeFunction for IndexOf {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("indexOf", args, 2)?;
         let s = args[0].as_string()?;
         let sub = args[1].as_string()?;
@@ -181,7 +209,11 @@ impl NativeFunction for IndexOf {
 pub struct ToLower;
 
 impl NativeFunction for ToLower {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("toLower", args, 1)?;
         let s = args[0].as_string()?;
         Ok(Value::String(SmolStr::new(s.to_lowercase())))
@@ -197,7 +229,11 @@ impl NativeFunction for ToLower {
 pub struct ToUpper;
 
 impl NativeFunction for ToUpper {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("toUpper", args, 1)?;
         let s = args[0].as_string()?;
         Ok(Value::String(SmolStr::new(s.to_uppercase())))
@@ -213,7 +249,11 @@ impl NativeFunction for ToUpper {
 pub struct Trim;
 
 impl NativeFunction for Trim {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("trim", args, 1)?;
         let s = args[0].as_string()?;
         Ok(Value::String(SmolStr::new(s.trim())))
@@ -233,7 +273,11 @@ impl NativeFunction for Trim {
 pub struct ToString;
 
 impl NativeFunction for ToString {
-    fn execute(&self, args: &[Value]) -> Result<Value, PureRuntimeError> {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
         expect_args("toString", args, 1)?;
         Ok(Value::String(SmolStr::new(args[0].to_string())))
     }
@@ -265,14 +309,18 @@ pub fn register(registry: &mut NativeRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::NoOpEvalCtx;
 
     #[test]
     fn string_plus() {
         let r = StringPlus
-            .execute(&[
-                Value::String("hello".into()),
-                Value::String(" world".into()),
-            ])
+            .execute(
+                &[
+                    Value::String("hello".into()),
+                    Value::String(" world".into()),
+                ],
+                &mut NoOpEvalCtx,
+            )
             .unwrap();
         assert_eq!(r, Value::String("hello world".into()));
     }
@@ -280,7 +328,9 @@ mod tests {
     #[test]
     fn string_length() {
         assert_eq!(
-            Length.execute(&[Value::String("hello".into())]).unwrap(),
+            Length
+                .execute(&[Value::String("hello".into())], &mut NoOpEvalCtx)
+                .unwrap(),
             Value::Integer(5)
         );
     }
@@ -288,11 +338,14 @@ mod tests {
     #[test]
     fn string_substring() {
         let r = Substring
-            .execute(&[
-                Value::String("hello world".into()),
-                Value::Integer(6),
-                Value::Integer(11),
-            ])
+            .execute(
+                &[
+                    Value::String("hello world".into()),
+                    Value::Integer(6),
+                    Value::Integer(11),
+                ],
+                &mut NoOpEvalCtx,
+            )
             .unwrap();
         assert_eq!(r, Value::String("world".into()));
     }
@@ -301,7 +354,10 @@ mod tests {
     fn string_contains() {
         assert_eq!(
             Contains
-                .execute(&[Value::String("hello".into()), Value::String("ell".into())])
+                .execute(
+                    &[Value::String("hello".into()), Value::String("ell".into())],
+                    &mut NoOpEvalCtx
+                )
                 .unwrap(),
             Value::Boolean(true)
         );
@@ -311,7 +367,10 @@ mod tests {
     fn string_index_of_found() {
         assert_eq!(
             IndexOf
-                .execute(&[Value::String("hello".into()), Value::String("ll".into())])
+                .execute(
+                    &[Value::String("hello".into()), Value::String("ll".into())],
+                    &mut NoOpEvalCtx
+                )
                 .unwrap(),
             Value::Integer(2)
         );
@@ -321,7 +380,10 @@ mod tests {
     fn string_index_of_not_found() {
         assert_eq!(
             IndexOf
-                .execute(&[Value::String("hello".into()), Value::String("xyz".into())])
+                .execute(
+                    &[Value::String("hello".into()), Value::String("xyz".into())],
+                    &mut NoOpEvalCtx
+                )
                 .unwrap(),
             Value::Integer(-1)
         );
@@ -330,7 +392,9 @@ mod tests {
     #[test]
     fn string_to_lower() {
         assert_eq!(
-            ToLower.execute(&[Value::String("Hello".into())]).unwrap(),
+            ToLower
+                .execute(&[Value::String("Hello".into())], &mut NoOpEvalCtx)
+                .unwrap(),
             Value::String("hello".into())
         );
     }
@@ -338,7 +402,8 @@ mod tests {
     #[test]
     fn string_trim() {
         assert_eq!(
-            Trim.execute(&[Value::String("  hi  ".into())]).unwrap(),
+            Trim.execute(&[Value::String("  hi  ".into())], &mut NoOpEvalCtx)
+                .unwrap(),
             Value::String("hi".into())
         );
     }
@@ -346,39 +411,62 @@ mod tests {
     #[test]
     fn to_string_integer() {
         assert_eq!(
-            ToString.execute(&[Value::Integer(42)]).unwrap(),
+            ToString
+                .execute(&[Value::Integer(42)], &mut NoOpEvalCtx)
+                .unwrap(),
             Value::String("42".into())
         );
     }
 
     #[test]
     fn wrong_arg_count_errors() {
-        assert!(StringPlus.execute(&[Value::String("a".into())]).is_err());
-        assert!(Length.execute(&[]).is_err());
-        assert!(Substring.execute(&[Value::String("a".into())]).is_err());
-        assert!(ToString.execute(&[]).is_err());
+        assert!(
+            StringPlus
+                .execute(&[Value::String("a".into())], &mut NoOpEvalCtx)
+                .is_err()
+        );
+        assert!(Length.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(
+            Substring
+                .execute(&[Value::String("a".into())], &mut NoOpEvalCtx)
+                .is_err()
+        );
+        assert!(ToString.execute(&[], &mut NoOpEvalCtx).is_err());
     }
 
     #[test]
     fn type_mismatch_errors() {
         assert!(
             StringPlus
-                .execute(&[Value::Integer(1), Value::String("b".into())])
+                .execute(
+                    &[Value::Integer(1), Value::String("b".into())],
+                    &mut NoOpEvalCtx
+                )
                 .is_err()
         );
-        assert!(Length.execute(&[Value::Integer(1)]).is_err());
+        assert!(
+            Length
+                .execute(&[Value::Integer(1)], &mut NoOpEvalCtx)
+                .is_err()
+        );
         assert!(
             Substring
-                .execute(&[
-                    Value::String("a".into()),
-                    Value::String("b".into()),
-                    Value::Integer(1)
-                ])
+                .execute(
+                    &[
+                        Value::String("a".into()),
+                        Value::String("b".into()),
+                        Value::Integer(1)
+                    ],
+                    &mut NoOpEvalCtx
+                )
                 .is_err()
         );
         assert!(
             Contains
-                .execute(&[Value::String("a".into()), Value::Integer(1)])
+                .execute(
+                    &[Value::String("a".into()), Value::Integer(1)],
+                    &mut NoOpEvalCtx
+                )
                 .is_err()
         );
     }

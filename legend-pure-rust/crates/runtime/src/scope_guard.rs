@@ -131,8 +131,8 @@ mod tests {
         assert_eq!(ctx.depth(), 1);
 
         {
-            let _guard = ScopeGuard::new(&mut ctx);
-            assert_eq!(ctx.depth(), 2);
+            let guard = ScopeGuard::new(&mut ctx);
+            assert_eq!(guard.context().depth(), 2);
         }
 
         assert_eq!(ctx.depth(), 1);

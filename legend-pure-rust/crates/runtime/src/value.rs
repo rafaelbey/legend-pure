@@ -27,6 +27,7 @@
 //! Object references use [`ObjectId`] handles into the [`RuntimeHeap`](super::heap::RuntimeHeap),
 //! providing identity-preserving semantics for `mutateAdd`.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use im_rc::Vector as PVector;
@@ -100,9 +101,30 @@ pub enum Value {
     /// This is the key optimization for fold+put accumulator patterns.
     Map(im_rc::HashMap<ValueKey, Value>),
 
+    /// A first-class lambda (closure) — parameters + body + captured bindings.
+    ///
+    /// Created by `ExprKind::Lambda` evaluation. Used by native functions
+    /// like `map`, `filter`, `fold`, and `if` via `ctx.eval_lambda()`.
+    Lambda(LambdaClosure),
+
     /// The unit value — result of expressions with no meaningful return.
     /// Equivalent to `[]` with multiplicity `[0..0]`.
     Unit,
+}
+
+/// A lambda closure: parameters + body + captured variable bindings.
+///
+/// Mirrors Java's `LambdaFunction` + captured `VariableContext`.
+/// The `captures` map snapshots the enclosing scope at the point of
+/// lambda creation for lexical scoping.
+#[derive(Debug, Clone)]
+pub struct LambdaClosure {
+    /// Parameter declarations from the lambda syntax.
+    pub parameters: Vec<legend_pure_parser_pure::types::Parameter>,
+    /// The lambda body expressions.
+    pub body: Vec<legend_pure_parser_pure::types::ValueSpec>,
+    /// Captured variable bindings from the enclosing scope.
+    pub captures: HashMap<SmolStr, Value>,
 }
 
 /// A hashable key for `Map` entries.
@@ -292,6 +314,7 @@ impl Value {
             Self::Object(_) => "Object",
             Self::Collection(_) => "Collection",
             Self::Map(_) => "Map",
+            Self::Lambda(_) => "Lambda",
             Self::Unit => "Unit",
         }
     }
@@ -405,6 +428,7 @@ impl fmt::Display for Value {
                 write!(f, "]")
             }
             Self::Map(m) => write!(f, "<Map size={}>", m.len()),
+            Self::Lambda(_) => write!(f, "<Lambda>"),
             Self::Unit => write!(f, "[]"),
         }
     }

@@ -707,7 +707,7 @@ fn parse_strict_time(s: &str) -> Option<DateValue> {
 }
 
 /// Converts a fractional seconds string (e.g., `"123"`, `"12345"`) to nanoseconds.
-fn parse_subsecond_nanos(frac: &str) -> u32 {
+fn parse_subsecond_nanos(frac: &str) -> i32 {
     if frac.is_empty() {
         return 0;
     }
