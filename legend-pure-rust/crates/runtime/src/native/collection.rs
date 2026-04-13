@@ -12,11 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Collection native functions (non-lambda): `size`, `isEmpty`, `at`,
-//! `first`, `last`, `range`, `take`, `drop`, `concatenate`.
-//!
-//! Lambda-dependent functions (`map`, `filter`, `fold`) are handled
-//! directly by the evaluator, not through this registry.
+//! Collection native functions: `size`, `isEmpty`, `at`, `first`, `last`,
+//! `range`, `take`, `drop`, `concatenate`, `map`, `filter`, `fold`.
 
 use im_rc::Vector as PVector;
 
@@ -285,11 +282,114 @@ impl NativeFunction for Concatenate {
 }
 
 // ---------------------------------------------------------------------------
+// map (lambda-dependent)
+// ---------------------------------------------------------------------------
+
+/// Pure `map(T[*], Function<{T[1]->V[1]}>[1]): V[*]`
+///
+/// Applies a lambda to each element of a collection.
+#[derive(Debug)]
+pub struct Map;
+
+impl NativeFunction for Map {
+    fn execute(
+        &self,
+        args: &[Value],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("map", args, 2)?;
+        let source = args[0].to_collection();
+        let lambda = &args[1];
+
+        let mut results = Vec::with_capacity(source.len());
+        for item in &source {
+            results.push(ctx.eval_lambda(lambda, std::slice::from_ref(item))?);
+        }
+
+        Ok(Value::from_vec(results))
+    }
+
+    fn signature(&self) -> &'static str {
+        "map(T[*], Function<{T[1]->V[1]}>[1]): V[*]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// filter (lambda-dependent)
+// ---------------------------------------------------------------------------
+
+/// Pure `filter(T[*], Function<{T[1]->Boolean[1]}>[1]): T[*]`
+///
+/// Filters a collection using a boolean predicate.
+#[derive(Debug)]
+pub struct Filter;
+
+impl NativeFunction for Filter {
+    fn execute(
+        &self,
+        args: &[Value],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("filter", args, 2)?;
+        let source = args[0].to_collection();
+        let lambda = &args[1];
+
+        let mut results = Vec::with_capacity(source.len());
+        for item in &source {
+            let predicate_result = ctx.eval_lambda(lambda, std::slice::from_ref(item))?;
+            if predicate_result.as_boolean()? {
+                results.push(item.clone());
+            }
+        }
+
+        Ok(Value::from_vec(results))
+    }
+
+    fn signature(&self) -> &'static str {
+        "filter(T[*], Function<{T[1]->Boolean[1]}>[1]): T[*]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// fold (lambda-dependent)
+// ---------------------------------------------------------------------------
+
+/// Pure `fold(T[*], Function<{T[1],V[m]->V[m]}>[1], V[m]): V[m]`
+///
+/// Accumulates a collection into a single value using a binary function.
+#[derive(Debug)]
+pub struct Fold;
+
+impl NativeFunction for Fold {
+    fn execute(
+        &self,
+        args: &[Value],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("fold", args, 3)?;
+        let source = args[0].to_collection();
+        let lambda = &args[1];
+        let mut accumulator = args[2].clone();
+
+        for item in &source {
+            accumulator = ctx.eval_lambda(lambda, &[item.clone(), accumulator])?;
+        }
+
+        Ok(accumulator)
+    }
+
+    fn signature(&self) -> &'static str {
+        "fold(T[*], Function<{T[1],V[m]->V[m]}>[1], V[m]): V[m]"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
 /// Register all collection native functions.
 pub fn register(registry: &mut NativeRegistry) {
+    // Non-lambda collection operations
     registry.register("size_Any_MANY__Integer_1_", Size);
     registry.register("isEmpty_Any_MANY__Boolean_1_", IsEmpty);
     registry.register("at_T_MANY__Integer_1__T_1_", At);
@@ -302,6 +402,13 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("take_T_MANY__Integer_1__T_MANY_", Take);
     registry.register("drop_T_MANY__Integer_1__T_MANY_", Drop);
     registry.register("concatenate_T_MANY__T_MANY__T_MANY_", Concatenate);
+
+    // Lambda-dependent collection operations
+    registry.register("map_T_MANY__Function_1__V_MANY_", Map);
+    registry.register("map_T_m__Function_1__V_m_", Map);
+    registry.register("map_T_$0_1$__Function_1__V_$0_1$_", Map);
+    registry.register("filter_T_MANY__Function_1__T_MANY_", Filter);
+    registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
 }
 
 // ---------------------------------------------------------------------------
