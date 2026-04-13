@@ -466,6 +466,45 @@ impl PureModel {
             .find(|&&eid| self.get_node(eid).name == *name)
             .copied()
     }
+
+    /// Resolves a function by its simple name within a package path.
+    ///
+    /// After Pass 2.1 (name mangling), function element names are mangled FQNs
+    /// (e.g., `"greet_String_1__String_1_"`). This method matches by prefix:
+    /// the last segment of `path` is treated as a simple function name, and the
+    /// first function whose mangled name starts with `"name_"` is returned.
+    ///
+    /// Returns `None` if no matching function is found.
+    #[must_use]
+    pub fn resolve_function_by_path(&self, path: &[SmolStr]) -> Option<ElementId> {
+        if path.is_empty() {
+            return None;
+        }
+
+        // Walk to the parent package
+        let (pkg_path, name) = path.split_at(path.len() - 1);
+        let mut current = self.root_package;
+
+        for segment in pkg_path {
+            let pkg = self.get_package(current);
+            current = *pkg
+                .children_packages
+                .iter()
+                .find(|&&child_id| self.global_packages.get(child_id.0).name == *segment)?;
+        }
+
+        // Find function element whose mangled name starts with "simpleName_"
+        let simple = &name[0];
+        let prefix = format!("{simple}_");
+        let pkg = self.get_package(current);
+        pkg.children_elements
+            .iter()
+            .find(|&&eid| {
+                let node_name = &self.get_node(eid).name;
+                node_name.starts_with(&prefix)
+            })
+            .copied()
+    }
 }
 
 impl Default for PureModel {

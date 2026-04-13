@@ -125,6 +125,12 @@ pub fn compile(
         &mut errors,
     );
 
+    // ---- Pass 2.1: Function Name Mangling ----
+    // Mirrors Java's ConcreteFunctionDefinitionNameProcessor.process():
+    // replaces each Function's ElementNode.name with its mangled FQN
+    // (e.g., "plus" → "plus_Integer_MANY__Integer_1_").
+    pass_mangle_function_names(&mut model);
+
     // ---- Pass 2.5: Type Inference ----
     pass_infer(&mut model, &mut errors);
 
@@ -928,6 +934,43 @@ fn build_fqn(pkg_path: &[SmolStr], name: &SmolStr) -> SmolStr {
 /// Retrieves the AST element from source files given a declaration.
 fn get_ast_element<'a>(source_files: &'a [SourceFile], decl: &Declaration) -> &'a ast::Element {
     &source_files[decl.file_idx].sections[decl.section_idx].elements[decl.element_idx]
+}
+
+// ---------------------------------------------------------------------------
+// Pass 2.1 — Function Name Mangling
+// ---------------------------------------------------------------------------
+
+/// Pass 2.1 — replaces each `Function` element's name with its mangled FQN.
+///
+/// Mirrors Java's `ConcreteFunctionDefinitionNameProcessor.process()`:
+/// ```java
+/// String signature = getSignatureAndResolveImports(function, ...);
+/// function.setName(signature);
+/// function._name(signature);
+/// ```
+///
+/// After this pass, `model.get_node(func_id).name` is the mangled name
+/// (e.g., `"plus_Integer_MANY__Integer_1_"`), and the runtime can use it
+/// directly as the native registry lookup key — zero FQN computation at
+/// execution time.
+fn pass_mangle_function_names(model: &mut PureModel) {
+    // Collect (chunk_idx, local_idx, mangled_name) triples to avoid borrow conflicts.
+    let mut renames: Vec<(usize, u32, SmolStr)> = Vec::new();
+
+    for (chunk_idx, chunk) in model.chunks.iter().enumerate() {
+        for (local_idx, element) in chunk.elements.iter() {
+            if let Element::Function(func) = element {
+                let simple_name = &chunk.nodes.get(local_idx).name;
+                let mangled = crate::fqn::build_function_fqn(simple_name, func, model);
+                renames.push((chunk_idx, local_idx, SmolStr::new(mangled)));
+            }
+        }
+    }
+
+    // Apply renames
+    for (chunk_idx, local_idx, mangled_name) in renames {
+        model.chunks[chunk_idx].nodes.get_mut(local_idx).name = mangled_name;
+    }
 }
 
 // ---------------------------------------------------------------------------

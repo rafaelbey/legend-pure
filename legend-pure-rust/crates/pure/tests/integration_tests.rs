@@ -155,7 +155,9 @@ fn function_with_params() {
     let model = compile_one("function greet(name: String[1]): String[1] { 'hello' }")
         .expect("should compile");
 
-    let fn_id = model.resolve_by_path(&["greet".into()]).expect("greet");
+    let fn_id = model
+        .resolve_function_by_path(&["greet".into()])
+        .expect("greet");
     match model.get_element(fn_id) {
         Element::Function(f) => {
             // Parameters
@@ -924,7 +926,7 @@ fn function_body_integer_literal() {
     let source = "function test::intFunc(): Integer[1] { 42 }";
     let model = compile_one(source).expect("should compile");
     let id = model
-        .resolve_by_path(&["test".into(), "intFunc".into()])
+        .resolve_function_by_path(&["test".into(), "intFunc".into()])
         .expect("intFunc should exist");
     match model.get_element(id) {
         Element::Function(f) => {
@@ -943,7 +945,7 @@ fn function_body_string_literal() {
     let source = "function test::strFunc(): String[1] { 'hello' }";
     let model = compile_one(source).expect("should compile");
     let id = model
-        .resolve_by_path(&["test".into(), "strFunc".into()])
+        .resolve_function_by_path(&["test".into(), "strFunc".into()])
         .expect("strFunc should exist");
     match model.get_element(id) {
         Element::Function(f) => {
@@ -962,7 +964,7 @@ fn function_body_boolean_literal() {
     let source = "function test::boolFunc(): Boolean[1] { true }";
     let model = compile_one(source).expect("should compile");
     let id = model
-        .resolve_by_path(&["test".into(), "boolFunc".into()])
+        .resolve_function_by_path(&["test".into(), "boolFunc".into()])
         .expect("boolFunc should exist");
     match model.get_element(id) {
         Element::Function(f) => {
@@ -981,7 +983,7 @@ fn function_body_float_literal() {
     let source = "function test::floatFunc(): Float[1] { 1.5 }";
     let model = compile_one(source).expect("should compile");
     let id = model
-        .resolve_by_path(&["test".into(), "floatFunc".into()])
+        .resolve_function_by_path(&["test".into(), "floatFunc".into()])
         .expect("floatFunc should exist");
     match model.get_element(id) {
         Element::Function(f) => {
@@ -1002,7 +1004,7 @@ fn function_body_variable_ref() {
     let source = "function test::varFunc(x: String[1]): String[1] { $x }";
     let model = compile_one(source).expect("should compile");
     let id = model
-        .resolve_by_path(&["test".into(), "varFunc".into()])
+        .resolve_function_by_path(&["test".into(), "varFunc".into()])
         .expect("varFunc should exist");
     match model.get_element(id) {
         Element::Function(f) => {
@@ -1021,7 +1023,7 @@ fn function_body_collection() {
     let source = "function test::collFunc(): Integer[*] { [1, 2, 3] }";
     let model = compile_one(source).expect("should compile");
     let id = model
-        .resolve_by_path(&["test".into(), "collFunc".into()])
+        .resolve_function_by_path(&["test".into(), "collFunc".into()])
         .expect("collFunc should exist");
     match model.get_element(id) {
         Element::Function(f) => {
@@ -1045,7 +1047,7 @@ fn function_body_date_literal() {
     let source = "function test::dateFunc(): StrictDate[1] { %2024-01-15 }";
     let model = compile_one(source).expect("should compile");
     let id = model
-        .resolve_by_path(&["test".into(), "dateFunc".into()])
+        .resolve_function_by_path(&["test".into(), "dateFunc".into()])
         .expect("dateFunc should exist");
     match model.get_element(id) {
         Element::Function(f) => {
@@ -1096,7 +1098,7 @@ fn expression_arithmetic_desugars_to_function_call() {
     let source = "function test::f(): Integer[1] { 1 + 2 }";
     let model = compile_one(source).expect("should compile");
     let id = model
-        .resolve_by_path(&["test".into(), "f".into()])
+        .resolve_function_by_path(&["test".into(), "f".into()])
         .expect("f should exist");
     match model.get_element(id) {
         Element::Function(f) => {
@@ -1125,7 +1127,7 @@ fn expression_not_equal_desugars_to_not_equal() {
     let source = "function test::f(): Boolean[1] { 1 != 2 }";
     let model = compile_one(source).expect("should compile");
     let id = model
-        .resolve_by_path(&["test".into(), "f".into()])
+        .resolve_function_by_path(&["test".into(), "f".into()])
         .expect("f should exist");
     match model.get_element(id) {
         Element::Function(f) => {
@@ -1171,7 +1173,7 @@ fn expression_comparison_operators() {
         let source = format!("function test::f(): Boolean[1] {{ 1 {op} 2 }}");
         let model = compile_one(&source).expect("should compile");
         let id = model
-            .resolve_by_path(&["test".into(), "f".into()])
+            .resolve_function_by_path(&["test".into(), "f".into()])
             .expect("f should exist");
         match model.get_element(id) {
             Element::Function(f) => {
@@ -1197,7 +1199,7 @@ fn expression_logical_operators() {
     let source = "function test::f(): Boolean[1] { true && false }";
     let model = compile_one(source).expect("should compile");
     let id = model
-        .resolve_by_path(&["test".into(), "f".into()])
+        .resolve_function_by_path(&["test".into(), "f".into()])
         .expect("f should exist");
     match model.get_element(id) {
         Element::Function(f) => {
@@ -1228,7 +1230,7 @@ fn expression_unary_not() {
     let source = "function test::f(): Boolean[1] { !true }";
     let model = compile_one(source).expect("should compile");
     let id = model
-        .resolve_by_path(&["test".into(), "f".into()])
+        .resolve_function_by_path(&["test".into(), "f".into()])
         .expect("f should exist");
     match model.get_element(id) {
         Element::Function(f) => {
@@ -1262,7 +1264,7 @@ fn expression_property_access() {
     ";
     let model = compile_one(source).expect("should compile");
     let id = model
-        .resolve_by_path(&["test".into(), "f".into()])
+        .resolve_function_by_path(&["test".into(), "f".into()])
         .expect("f should exist");
     match model.get_element(id) {
         Element::Function(f) => {
@@ -1296,7 +1298,7 @@ fn expression_function_call_resolved() {
     ";
     let model = compile_one(source).expect("should compile");
     let id = model
-        .resolve_by_path(&["test".into(), "f".into()])
+        .resolve_function_by_path(&["test".into(), "f".into()])
         .expect("f should exist");
     match model.get_element(id) {
         Element::Function(f) => {
@@ -1337,7 +1339,7 @@ fn expression_lambda_lowering() {
     ";
     let model = compile_one(source).expect("should compile");
     let id = model
-        .resolve_by_path(&["test".into(), "f".into()])
+        .resolve_function_by_path(&["test".into(), "f".into()])
         .expect("f should exist");
     match model.get_element(id) {
         Element::Function(f) => {
@@ -1375,7 +1377,7 @@ fn expression_let_desugars_to_let_function() {
     let source = "function test::f(): Integer[1] { let x = 42; $x; }";
     let model = compile_one(source).expect("should compile");
     let id = model
-        .resolve_by_path(&["test".into(), "f".into()])
+        .resolve_function_by_path(&["test".into(), "f".into()])
         .expect("f should exist");
     match model.get_element(id) {
         Element::Function(f) => {
@@ -1412,7 +1414,7 @@ fn expression_new_instance_desugars_to_new() {
     ";
     let model = compile_one(source).expect("should compile");
     let id = model
-        .resolve_by_path(&["test".into(), "f".into()])
+        .resolve_function_by_path(&["test".into(), "f".into()])
         .expect("f should exist");
     match model.get_element(id) {
         Element::Function(f) => {

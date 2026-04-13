@@ -82,9 +82,9 @@ impl NativeFunction for Not {
 
 /// Register all boolean native functions.
 pub fn register(registry: &mut NativeRegistry) {
-    registry.register("and", And);
-    registry.register("or", Or);
-    registry.register("not", Not);
+    registry.register("and_Boolean_1__Boolean_1__Boolean_1_", And);
+    registry.register("or_Boolean_1__Boolean_1__Boolean_1_", Or);
+    registry.register("not_Boolean_1__Boolean_1_", Not);
 }
 
 #[cfg(test)]

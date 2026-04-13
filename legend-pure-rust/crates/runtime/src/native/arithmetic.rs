@@ -288,14 +288,44 @@ impl NativeFunction for Rem {
 // ---------------------------------------------------------------------------
 
 /// Register all arithmetic native functions into the registry.
+///
+/// Each overload (Integer, Float, Decimal, Number) is registered under
+/// its fully qualified mangled name matching the Java interpreter, e.g.
+/// `plus_Integer_MANY__Integer_1_`.
 pub fn register(registry: &mut NativeRegistry) {
-    registry.register("plus", Plus);
-    registry.register("minus", Minus);
-    registry.register("times", Times);
-    registry.register("divide", Divide);
-    registry.register("abs", Abs);
-    registry.register("mod", Mod);
-    registry.register("rem", Rem);
+    // plus — one shared implementation handles all numeric types
+    registry.register("plus_Integer_MANY__Integer_1_", Plus);
+    registry.register("plus_Float_MANY__Float_1_", Plus);
+    registry.register("plus_Decimal_MANY__Decimal_1_", Plus);
+    registry.register("plus_Number_MANY__Number_1_", Plus);
+
+    // minus
+    registry.register("minus_Integer_MANY__Integer_1_", Minus);
+    registry.register("minus_Float_MANY__Float_1_", Minus);
+    registry.register("minus_Decimal_MANY__Decimal_1_", Minus);
+    registry.register("minus_Number_MANY__Number_1_", Minus);
+
+    // times
+    registry.register("times_Integer_MANY__Integer_1_", Times);
+    registry.register("times_Float_MANY__Float_1_", Times);
+    registry.register("times_Decimal_MANY__Decimal_1_", Times);
+    registry.register("times_Number_MANY__Number_1_", Times);
+
+    // divide (two signatures in Java)
+    registry.register("divide_Number_1__Number_1__Float_1_", Divide);
+    registry.register("divide_Decimal_1__Decimal_1__Integer_1__Decimal_1_", Divide);
+
+    // abs
+    registry.register("abs_Integer_1__Integer_1_", Abs);
+    registry.register("abs_Float_1__Float_1_", Abs);
+    registry.register("abs_Decimal_1__Decimal_1_", Abs);
+    registry.register("abs_Number_1__Number_1_", Abs);
+
+    // mod
+    registry.register("mod_Integer_1__Integer_1__Integer_1_", Mod);
+
+    // rem
+    registry.register("rem_Number_1__Number_1__Number_1_", Rem);
 }
 
 // ---------------------------------------------------------------------------

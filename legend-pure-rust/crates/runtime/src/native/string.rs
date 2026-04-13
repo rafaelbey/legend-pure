@@ -293,17 +293,25 @@ impl NativeFunction for ToString {
 
 /// Register all string native functions.
 pub fn register(registry: &mut NativeRegistry) {
-    registry.register("stringPlus", StringPlus);
-    registry.register("length", Length);
-    registry.register("substring", Substring);
-    registry.register("contains", Contains);
-    registry.register("startsWith", StartsWith);
-    registry.register("endsWith", EndsWith);
-    registry.register("indexOf", IndexOf);
-    registry.register("toLower", ToLower);
-    registry.register("toUpper", ToUpper);
-    registry.register("trim", Trim);
-    registry.register("toString", ToString);
+    // String concatenation — not a native in Java (delegates to joinStrings),
+    // but we implement it natively for efficiency.
+    registry.register("plus_String_MANY__String_1_", StringPlus);
+
+    registry.register("length_String_1__Integer_1_", Length);
+    registry.register(
+        "substring_String_1__Integer_1__Integer_1__String_1_",
+        Substring,
+    );
+    registry.register("substring_String_1__Integer_1__String_1_", Substring);
+    registry.register("contains_String_1__String_1__Boolean_1_", Contains);
+    registry.register("startsWith_String_1__String_1__Boolean_1_", StartsWith);
+    registry.register("endsWith_String_1__String_1__Boolean_1_", EndsWith);
+    registry.register("indexOf_String_1__String_1__Integer_1_", IndexOf);
+    registry.register("indexOf_String_1__String_1__Integer_1__Integer_1_", IndexOf);
+    registry.register("toLower_String_1__String_1_", ToLower);
+    registry.register("toUpper_String_1__String_1_", ToUpper);
+    registry.register("trim_String_1__String_1_", Trim);
+    registry.register("toString_Any_1__String_1_", ToString);
 }
 
 #[cfg(test)]

@@ -115,13 +115,15 @@ mod tests {
     #[test]
     fn no_op_hooks_is_copy() {
         let a = NoOpHooks;
-        let _b = a; // Copy
-        let _c = a; // Still valid
+        let _ = a; // Copy
+        let _ = a; // Still valid
     }
 
     #[test]
     fn no_op_hooks_is_default() {
-        let _hooks = NoOpHooks::default();
+        // Verify Default is implemented (compile-time check)
+        fn assert_default<T: Default>() {}
+        assert_default::<NoOpHooks>();
     }
 
     #[test]
@@ -137,24 +139,24 @@ mod tests {
     /// A test hooks implementation that counts calls.
     #[derive(Debug, Default)]
     struct CountingHooks {
-        before_count: usize,
-        after_count: usize,
-        enter_count: usize,
-        leave_count: usize,
+        before: usize,
+        after: usize,
+        enter: usize,
+        leave: usize,
     }
 
     impl EvalHooks for CountingHooks {
         fn before_eval(&mut self, _source: &SourceInfo) {
-            self.before_count += 1;
+            self.before += 1;
         }
         fn after_eval(&mut self, _source: &SourceInfo, _result: &Value) {
-            self.after_count += 1;
+            self.after += 1;
         }
         fn enter_function(&mut self, _name: &str, _source: &SourceInfo) {
-            self.enter_count += 1;
+            self.enter += 1;
         }
         fn leave_function(&mut self, _name: &str) {
-            self.leave_count += 1;
+            self.leave += 1;
         }
     }
 
@@ -169,9 +171,9 @@ mod tests {
         hooks.enter_function("f", &src);
         hooks.leave_function("f");
 
-        assert_eq!(hooks.before_count, 2);
-        assert_eq!(hooks.after_count, 1);
-        assert_eq!(hooks.enter_count, 1);
-        assert_eq!(hooks.leave_count, 1);
+        assert_eq!(hooks.before, 2);
+        assert_eq!(hooks.after, 1);
+        assert_eq!(hooks.enter, 1);
+        assert_eq!(hooks.leave, 1);
     }
 }

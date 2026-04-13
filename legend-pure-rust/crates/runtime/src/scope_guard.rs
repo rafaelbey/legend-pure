@@ -111,11 +111,11 @@ mod tests {
         ctx.set("x", Value::Integer(1));
 
         // Simulate the pattern: create guard, do work that may fail, drop guard
-        let result: Result<Value, &str> = (|| {
+        let result: Result<Value, &str> = {
             let mut guard = ScopeGuard::new(&mut ctx);
             guard.set("x", Value::Integer(99)); // shadow
             Err("simulated error") // early return — guard dropped
-        })();
+        };
 
         assert!(result.is_err());
         // x restored to original value

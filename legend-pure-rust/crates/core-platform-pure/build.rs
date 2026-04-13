@@ -1,3 +1,17 @@
+// Copyright 2026 Goldman Sachs
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::env;
 use std::fmt::Write as _;
 use std::fs;
@@ -5,10 +19,16 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 fn main() {
-    let out_dir = env::var_os("OUT_DIR").unwrap();
+    if let Err(e) = generate() {
+        panic!("build script failed: {e}");
+    }
+}
+
+fn generate() -> Result<(), Box<dyn std::error::Error>> {
+    let out_dir = env::var("OUT_DIR")?;
     let dest_path = Path::new(&out_dir).join("generated_sources.rs");
 
-    // 1. Platform directory from legend-pure Java module
+    // Platform directory from legend-pure Java module
     let platform_dir = PathBuf::from(
         "../../../legend-pure-core/legend-pure-m3-core/src/main/resources/platform/pure",
     );
@@ -19,19 +39,28 @@ fn main() {
 
     if platform_dir.exists() {
         for entry in WalkDir::new(&platform_dir) {
-            let entry = entry.unwrap();
+            let entry = entry?;
             let path = entry.path();
             if path.is_file() && path.extension().is_some_and(|e| e == "pure") {
-                let relative_path = path.strip_prefix(&platform_dir).unwrap();
-                let relative_path_str = relative_path.to_str().unwrap().replace('\\', "/");
+                let relative_path = path
+                    .strip_prefix(&platform_dir)
+                    .map_err(|e| format!("strip_prefix failed for {}: {e}", path.display()))?;
+                let relative_path_str = relative_path
+                    .to_str()
+                    .ok_or_else(|| format!("non-UTF-8 path: {}", relative_path.display()))?
+                    .replace('\\', "/");
 
                 // Exclusions
                 if relative_path_str == "grammar/m3.pure" {
                     continue;
                 }
 
-                let absolute_path = fs::canonicalize(path).unwrap();
-                let abs_path_str = absolute_path.to_str().unwrap().replace('\\', "/");
+                let absolute_path = fs::canonicalize(path)
+                    .map_err(|e| format!("canonicalize failed for {}: {e}", path.display()))?;
+                let abs_path_str = absolute_path
+                    .to_str()
+                    .ok_or_else(|| format!("non-UTF-8 path: {}", absolute_path.display()))?
+                    .replace('\\', "/");
 
                 let _ = write!(
                     generated_code,
@@ -47,5 +76,8 @@ fn main() {
 
     generated_code.push_str("];\n");
 
-    fs::write(&dest_path, generated_code).unwrap();
+    fs::write(&dest_path, generated_code)
+        .map_err(|e| format!("failed to write {}: {e}", dest_path.display()))?;
+
+    Ok(())
 }
