@@ -217,7 +217,7 @@ pub struct DecimalLiteral {
 #[derive(Debug, Clone, PartialEq, Eq, crate::Spanned)]
 pub struct StringLiteral {
     /// The string value (unescaped).
-    pub value: String,
+    pub value: smol_str::SmolStr,
     /// Source location.
     pub source_info: SourceInfo,
 }
@@ -765,7 +765,7 @@ mod tests {
     #[test]
     fn test_literal_enum_matching() {
         let lit = Literal::String(StringLiteral {
-            value: "hello".to_string(),
+            value: smol_str::SmolStr::new("hello"),
             source_info: src(),
         });
         // Can match "is literal?" without caring about type
@@ -841,7 +841,7 @@ mod tests {
             })),
             member: SmolStr::new("derivedProp"),
             arguments: vec![Expression::Literal(Literal::String(StringLiteral {
-                value: "arg".to_string(),
+                value: smol_str::SmolStr::new("arg"),
                 source_info: src(),
             }))],
             source_info: src(),

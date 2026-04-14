@@ -18,7 +18,8 @@ use legend_pure_parser_ast::SourceInfo;
 use smol_str::SmolStr;
 
 /// A compilation error produced during AST → Pure lowering or validation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[error("{source_info}: {message}")]
 pub struct CompilationError {
     /// Human-readable error message.
     pub message: String,
@@ -97,11 +98,3 @@ pub enum CompilationErrorKind {
         source: SmolStr,
     },
 }
-
-impl std::fmt::Display for CompilationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.source_info, self.message)
-    }
-}
-
-impl std::error::Error for CompilationError {}

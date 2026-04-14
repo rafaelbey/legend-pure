@@ -573,7 +573,7 @@ fn convert_literal(lit: &ast::expression::Literal) -> v1::value_spec::ValueSpeci
             source_information: source_information(&e.source_info),
         }),
         Literal::String(e) => ValueSpecification::String(CString {
-            value: e.value.clone(),
+            value: e.value.to_string(),
             source_information: source_information(&e.source_info),
         }),
         Literal::Boolean(e) => ValueSpecification::Boolean(CBoolean {

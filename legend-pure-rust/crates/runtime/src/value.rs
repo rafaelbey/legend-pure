@@ -93,19 +93,19 @@ pub enum Value {
     ///
     /// Operations like `map`, `filter`, `concatenate` produce new vectors
     /// via structural sharing instead of full copies.
-    Collection(PVector<Value>),
+    Collection(Box<PVector<Value>>),
 
     /// A Pure `Map<K, V>` — backed by a HAMT persistent hash map.
     ///
     /// `put` operations produce new maps via structural sharing.
     /// This is the key optimization for fold+put accumulator patterns.
-    Map(im_rc::HashMap<ValueKey, Value>),
+    Map(Box<im_rc::HashMap<ValueKey, Value>>),
 
     /// A first-class lambda (closure) — parameters + body + captured bindings.
     ///
     /// Created by `ExprKind::Lambda` evaluation. Used by native functions
     /// like `map`, `filter`, `fold`, and `if` via `ctx.eval_lambda()`.
-    Lambda(LambdaClosure),
+    Lambda(Box<LambdaClosure>),
 
     /// The unit value — result of expressions with no meaningful return.
     /// Equivalent to `[]` with multiplicity `[0..0]`.
@@ -379,7 +379,7 @@ impl Value {
     #[must_use]
     pub fn to_collection(&self) -> PVector<Value> {
         match self {
-            Self::Collection(v) => v.clone(), // O(1) persistent clone
+            Self::Collection(v) => (**v).clone(), // O(1) persistent clone
             Self::Unit => PVector::new(),
             other => {
                 let mut v = PVector::new();
@@ -414,7 +414,7 @@ impl Value {
         match values.len() {
             0 => Value::Unit,
             1 => values.pop().unwrap_or(Value::Unit),
-            _ => Value::Collection(PVector::from_iter(values)),
+            _ => Value::Collection(Box::new(PVector::from_iter(values))),
         }
     }
 }
@@ -587,13 +587,13 @@ mod tests {
     fn to_one_single_collection() {
         let mut pv = PVector::new();
         pv.push_back(Value::Integer(42));
-        let v = Value::Collection(pv);
+        let v = Value::Collection(Box::new(pv));
         assert_eq!(*v.to_one().unwrap(), Value::Integer(42));
     }
 
     #[test]
     fn to_one_empty_collection_errors() {
-        let v = Value::Collection(PVector::new());
+        let v = Value::Collection(Box::new(PVector::new()));
         assert!(v.to_one().is_err());
     }
 
@@ -602,7 +602,7 @@ mod tests {
         let mut pv = PVector::new();
         pv.push_back(Value::Integer(1));
         pv.push_back(Value::Integer(2));
-        let v = Value::Collection(pv);
+        let v = Value::Collection(Box::new(pv));
         assert!(v.to_one().is_err());
     }
 
@@ -624,7 +624,7 @@ mod tests {
 
     #[test]
     fn to_zero_one_empty_collection_is_none() {
-        let v = Value::Collection(PVector::new());
+        let v = Value::Collection(Box::new(PVector::new()));
         assert!(v.to_zero_one().unwrap().is_none());
     }
 
@@ -632,7 +632,7 @@ mod tests {
     fn to_zero_one_single_collection() {
         let mut pv = PVector::new();
         pv.push_back(Value::String("hi".into()));
-        let v = Value::Collection(pv);
+        let v = Value::Collection(Box::new(pv));
         assert_eq!(
             *v.to_zero_one().unwrap().unwrap(),
             Value::String("hi".into())
@@ -644,7 +644,7 @@ mod tests {
         let mut pv = PVector::new();
         pv.push_back(Value::Integer(1));
         pv.push_back(Value::Integer(2));
-        let v = Value::Collection(pv);
+        let v = Value::Collection(Box::new(pv));
         assert!(v.to_zero_one().is_err());
     }
 
@@ -667,7 +667,7 @@ mod tests {
         let mut pv = PVector::new();
         pv.push_back(Value::Integer(1));
         pv.push_back(Value::Integer(2));
-        let v = Value::Collection(pv.clone());
+        let v = Value::Collection(Box::new(pv.clone()));
         let c = v.to_collection();
         assert_eq!(c, pv);
     }
@@ -679,7 +679,7 @@ mod tests {
 
     #[test]
     fn is_empty_empty_collection() {
-        assert!(Value::Collection(PVector::new()).is_empty());
+        assert!(Value::Collection(Box::new(PVector::new())).is_empty());
     }
 
     #[test]
@@ -691,6 +691,6 @@ mod tests {
     fn is_empty_nonempty_collection_is_false() {
         let mut pv = PVector::new();
         pv.push_back(Value::Integer(1));
-        assert!(!Value::Collection(pv).is_empty());
+        assert!(!Value::Collection(Box::new(pv)).is_empty());
     }
 }

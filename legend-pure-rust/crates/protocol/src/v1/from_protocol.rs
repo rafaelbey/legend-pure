@@ -386,7 +386,7 @@ pub fn convert_value_spec_to_expression(
         ValueSpecification::String(c) => {
             let si = source_info_or_synthetic(c.source_information.as_ref());
             Ok(Expression::Literal(Literal::String(StringLiteral {
-                value: c.value.clone(),
+                value: c.value.clone().into(),
                 source_info: si,
             })))
         }

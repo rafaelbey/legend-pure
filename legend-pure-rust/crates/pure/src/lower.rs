@@ -42,7 +42,7 @@ use crate::types::{DateValue, ExprKind, ValueSpec};
 /// Convenience: wrap an `ExprKind` into a `ValueSpec` with no type info.
 fn untyped(kind: ExprKind, source_info: SourceInfo) -> ValueSpec {
     ValueSpec {
-        kind,
+        kind: Box::new(kind),
         source_info,
         type_info: None,
     }

@@ -208,7 +208,8 @@ impl NativeRegistry {
         let prefix = format!("{simple_name}_");
         self.functions
             .iter()
-            .find(|(key, _)| key.starts_with(&prefix))
+            .filter(|(key, _)| key.starts_with(&prefix))
+            .min_by_key(|(key, _)| *key)
             .map(|(_, func)| func.as_ref())
     }
 

@@ -1,3 +1,17 @@
+// Copyright 2026 The Legend Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use super::Parser;
 use super::R;
 use super::{ParserContext, split_package_name, unquote_string};
@@ -254,7 +268,7 @@ impl Parser {
             TokenKind::StringLiteral => {
                 let tok = self.cursor.advance().clone();
                 Ok(Expression::Literal(Literal::String(StringLiteral {
-                    value: unquote_string(&tok.text),
+                    value: unquote_string(&tok.text).into(),
                     source_info: si,
                 })))
             }

@@ -183,7 +183,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     pub fn eval(&mut self, expr: &ValueSpec) -> Result<Value, PureException> {
         self.hooks.before_eval(&expr.source_info);
 
-        let result = match &expr.kind {
+        let result = match &*expr.kind {
             // -- Literals -------------------------------------------------
             ExprKind::IntegerLiteral(n) => Ok(Value::Integer(*n)),
             ExprKind::FloatLiteral(n) => Ok(Value::Float(*n)),
@@ -388,19 +388,17 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             None => function_name,
         };
 
-        // 2. Try native dispatch
+        // 2a. Try native dispatch with exact FQN
         if let Some(native) = self.natives.get(lookup_key) {
             return self.dispatch_native(native, lookup_key, arguments, source_info);
         }
 
-        // 2b. Fallback: prefix-based native lookup for unresolved operators.
-        //     When function is None (operators like `plus`, `not`), the lookup_key
-        //     is the simple name. Try matching against the mangled FQN registry
-        //     keys (e.g., "plus" → "plus_Integer_MANY__Integer_1_").
-        if function.is_none() {
-            if let Some(native) = self.natives.find_by_prefix(lookup_key) {
-                return self.dispatch_native(native, lookup_key, arguments, source_info);
-            }
+        // 2b. Fallback: prefix-based native lookup using simple name.
+        //     This handles unresolved operators (where function is None) AND
+        //     standard library natives (if, map) whose compiled FQNs might not perfectly match
+        //     the statically registered FQN string in NativeRegistry.
+        if let Some(native) = self.natives.find_by_prefix(function_name) {
+            return self.dispatch_native(native, lookup_key, arguments, source_info);
         }
 
         // 3. Try user function dispatch
@@ -436,11 +434,23 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             let deferred_args: Vec<Value> = arguments
                 .iter()
                 .map(|arg| {
-                    Value::Lambda(LambdaClosure {
-                        parameters: vec![],
-                        body: vec![arg.clone()],
-                        captures: HashMap::new(),
-                    })
+                    let closure = match &*arg.kind {
+                        legend_pure_parser_pure::types::ExprKind::Lambda { parameters, body } => {
+                            LambdaClosure {
+                                parameters: parameters.clone(),
+                                body: body.clone(),
+                                captures: std::collections::HashMap::new(),
+                            }
+                        }
+                        _ => {
+                            LambdaClosure {
+                                parameters: vec![],
+                                body: vec![arg.clone()],
+                                captures: std::collections::HashMap::new(),
+                            }
+                        }
+                    };
+                    Value::Lambda(Box::new(closure))
                 })
                 .collect();
 
@@ -597,11 +607,11 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     ) -> Value {
         // Captures are empty for non-escaping lambdas (map/filter/fold).
         // The evaluator uses the enclosing context directly.
-        Value::Lambda(LambdaClosure {
+        Value::Lambda(Box::new(LambdaClosure {
             parameters: parameters.to_vec(),
             body: body.to_vec(),
             captures: HashMap::new(),
-        })
+        }))
     }
 
     // -----------------------------------------------------------------------
@@ -620,8 +630,8 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             // Flatten nested collections (Pure semantics: no nested collections)
             match val {
                 Value::Collection(inner) => {
-                    for v in inner {
-                        values.push_back(v);
+                    for v in inner.iter() {
+                        values.push_back(v.clone());
                     }
                 }
                 Value::Unit => {} // Skip unit values
@@ -634,7 +644,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         } else if values.len() == 1 {
             Ok(values.pop_front().unwrap_or(Value::Unit))
         } else {
-            Ok(Value::Collection(values))
+            Ok(Value::Collection(Box::new(values)))
         }
     }
 
@@ -765,7 +775,7 @@ mod tests {
 
     fn make_expr(kind: ExprKind) -> ValueSpec {
         ValueSpec {
-            kind,
+            kind: Box::new(kind),
             source_info: synth_src(),
             type_info: None,
         }
