@@ -145,4 +145,46 @@ impl Cursor {
     pub fn current_source_info(&self) -> SourceInfo {
         self.peek().source_info.clone()
     }
+
+    /// Expects a closing `>` for type argument lists, handling the `>>` and
+    /// `>>>` token-splitting problem.
+    ///
+    /// In `Pair<Function<{->T[m]}>>`, the lexer produces a single `>>` token
+    /// for the final two `>` characters. This method consumes one `>` from the
+    /// compound token and leaves the remainder for the outer type argument list.
+    ///
+    /// | Current token | Consumed | Remainder |
+    /// |---------------|----------|-----------|
+    /// | `>`           | `>`      | (next)    |
+    /// | `>>`          | first `>` | `>`      |
+    /// | `>>>`         | first `>` | `>>`     |
+    pub fn expect_closing_angle_bracket(&mut self) -> Result<(), ParseError> {
+        match self.peek_kind() {
+            TokenKind::Greater => {
+                self.advance();
+                Ok(())
+            }
+            TokenKind::GreaterGreater => {
+                // Split: replace current >> with >, advance column by 1
+                let tok = &mut self.tokens[self.pos];
+                tok.kind = TokenKind::Greater;
+                tok.text = SmolStr::new(">");
+                tok.source_info.start_column += 1;
+                Ok(())
+            }
+            TokenKind::GreaterGreaterGreater => {
+                // Split: replace current >>> with >>, advance column by 1
+                let tok = &mut self.tokens[self.pos];
+                tok.kind = TokenKind::GreaterGreater;
+                tok.text = SmolStr::new(">>");
+                tok.source_info.start_column += 1;
+                Ok(())
+            }
+            _ => Err(ParseError::expected(
+                "'>'",
+                self.peek_kind(),
+                self.peek().source_info.clone(),
+            )),
+        }
+    }
 }

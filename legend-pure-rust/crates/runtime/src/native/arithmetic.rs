@@ -17,7 +17,9 @@
 use rust_decimal::prelude::ToPrimitive;
 
 use crate::error::PureRuntimeError;
-use crate::native::{expect_args, expect_min_args, EvalContextTrait, NativeFunction, NativeRegistry};
+use crate::native::{
+    EvalContextTrait, NativeFunction, NativeRegistry, expect_args, expect_min_args,
+};
 use crate::value::Value;
 
 // ---------------------------------------------------------------------------

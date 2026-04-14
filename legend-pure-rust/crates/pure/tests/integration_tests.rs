@@ -1212,7 +1212,10 @@ fn expression_logical_operators() {
                 } => {
                     assert_eq!(function_name.as_str(), "and");
                     assert_eq!(arguments.len(), 2);
-                    assert!(matches!(&*arguments[0].kind, ExprKind::BooleanLiteral(true)));
+                    assert!(matches!(
+                        &*arguments[0].kind,
+                        ExprKind::BooleanLiteral(true)
+                    ));
                     assert!(matches!(
                         &*arguments[1].kind,
                         ExprKind::BooleanLiteral(false)
@@ -1243,7 +1246,10 @@ fn expression_unary_not() {
                 } => {
                     assert_eq!(function_name.as_str(), "not");
                     assert_eq!(arguments.len(), 1);
-                    assert!(matches!(&*arguments[0].kind, ExprKind::BooleanLiteral(true)));
+                    assert!(matches!(
+                        &*arguments[0].kind,
+                        ExprKind::BooleanLiteral(true)
+                    ));
                 }
                 other => panic!("expected FunctionCall, got {other:?}"),
             }

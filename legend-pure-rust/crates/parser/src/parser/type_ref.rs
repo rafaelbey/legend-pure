@@ -80,7 +80,7 @@ impl Parser {
             } else {
                 vec![]
             };
-            self.cursor.expect(TokenKind::Greater)?;
+            self.cursor.expect_closing_angle_bracket()?;
             (args, mult_args)
         } else {
             (vec![], vec![])
@@ -140,7 +140,7 @@ impl Parser {
         if self.cursor.check(TokenKind::Less) && self.cursor.peek_kind_at(1) == TokenKind::LParen {
             self.cursor.expect(TokenKind::Less)?;
             let columns = self.parse_relation_columns()?;
-            self.cursor.expect(TokenKind::Greater)?;
+            self.cursor.expect_closing_angle_bracket()?;
             return Ok(TypeSpec::Relation(RelationType {
                 columns,
                 source_info: start,
@@ -308,7 +308,7 @@ impl Parser {
                     break;
                 }
             }
-            self.cursor.expect(TokenKind::Greater)?;
+            self.cursor.expect_closing_angle_bracket()?;
             return Ok((vec![], mult_params));
         }
 
@@ -337,7 +337,7 @@ impl Parser {
             vec![]
         };
 
-        self.cursor.expect(TokenKind::Greater)?;
+        self.cursor.expect_closing_angle_bracket()?;
         Ok((type_params, mult_params))
     }
 
