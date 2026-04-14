@@ -91,6 +91,8 @@ pub enum Expression {
     Collection(CollectionExpr),
     /// New instance: `^MyClass(name='John')`.
     NewInstance(NewInstanceExpr),
+    /// Copy with overrides: `^$var(prop='new value')`.
+    Copy(CopyExpr),
 
     // -- Column specification (TDS) --
     /// Column expression covering all column syntax variants.
@@ -132,6 +134,7 @@ impl Spanned for Expression {
             Self::Let(e) => &e.source_info,
             Self::Collection(e) => &e.source_info,
             Self::NewInstance(e) => &e.source_info,
+            Self::Copy(e) => &e.source_info,
             Self::Column(e) => e.source_info(),
             Self::Island(e) => &e.source_info,
             Self::Group(e) => e.source_info(),
@@ -568,6 +571,20 @@ pub struct NewInstanceExpr {
     pub source_info: SourceInfo,
 }
 
+/// A copy expression: `^$source(prop1='new', prop2=42)`.
+///
+/// Creates a copy of the source variable with property overrides.
+/// Syntactically: `^$variableName(overrides...)` or `^$variableName<TypeArgs>(overrides...)`.
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
+pub struct CopyExpr {
+    /// The source variable name (without `$` prefix).
+    pub source: Identifier,
+    /// Property value overrides.
+    pub assignments: Vec<KeyValuePair>,
+    /// Source location.
+    pub source_info: SourceInfo,
+}
+
 /// A key-value pair in a new instance: `propName = expr`.
 #[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct KeyValuePair {
@@ -684,6 +701,7 @@ pub trait ExpressionVisitor {
             Expression::Let(e) => self.visit_let(e),
             Expression::Collection(e) => self.visit_collection(e),
             Expression::NewInstance(e) => self.visit_new_instance(e),
+            Expression::Copy(e) => self.visit_copy(e),
             Expression::Column(e) => self.visit_column(e),
             Expression::PackageableElementRef(e) => self.visit_element_ref(e),
             Expression::Island(e) => self.visit_island(e),
@@ -725,6 +743,8 @@ pub trait ExpressionVisitor {
     fn visit_collection(&mut self, expr: &CollectionExpr) {}
     /// Visit a new instance expression.
     fn visit_new_instance(&mut self, expr: &NewInstanceExpr) {}
+    /// Visit a copy expression.
+    fn visit_copy(&mut self, expr: &CopyExpr) {}
     /// Visit a column expression.
     fn visit_column(&mut self, expr: &ColumnExpression) {}
     /// Visit a bare packageable element reference.

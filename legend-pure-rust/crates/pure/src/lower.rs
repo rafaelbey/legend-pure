@@ -103,6 +103,18 @@ pub(crate) fn lower_expression(
             });
             None
         }
+        ast_expr::Expression::Copy(_) => {
+            // Copy lowering requires runtime clone semantics — deferred.
+            let source_info = expr.source_info().clone();
+            errors.push(CompilationError {
+                message: "Copy expression lowering not yet implemented".to_string(),
+                source_info: source_info.clone(),
+                kind: crate::error::CompilationErrorKind::UnsupportedExpression {
+                    kind: SmolStr::new_static("Copy"),
+                },
+            });
+            None
+        }
     }
 }
 

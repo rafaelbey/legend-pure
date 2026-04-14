@@ -527,6 +527,43 @@ pub fn convert_expression_typed(
             })
         }
 
+        // -- Copy from variable: `^$var(props)` → copy(var, key-expressions) --
+        Expression::Copy(e) => {
+            let key_expressions: Vec<ValueSpecification> = e
+                .assignments
+                .iter()
+                .map(|a| {
+                    ValueSpecification::KeyExpression(ProtocolKeyExpression {
+                        add: false,
+                        key: Box::new(ValueSpecification::String(CString {
+                            value: a.key.to_string(),
+                            source_information: source_information(&a.source_info),
+                        })),
+                        expression: Box::new(convert_expression_typed(&a.value)),
+                        source_information: source_information(&a.source_info),
+                    })
+                })
+                .collect();
+            let source_var = ValueSpecification::Var(Variable {
+                name: e.source.to_string(),
+                generic_type: None,
+                multiplicity: None,
+                supports_stream: None,
+                source_information: source_information(&e.source_info),
+            });
+            let keys_collection = ValueSpecification::Collection(ProtocolCollection {
+                multiplicity: collection_multiplicity(key_expressions.len()),
+                values: key_expressions,
+                source_information: source_information(&e.source_info),
+            });
+            ValueSpecification::Func(AppliedFunction {
+                function: "copy".to_string(),
+                f_control: None,
+                parameters: vec![source_var, keys_collection],
+                source_information: source_information(&e.source_info),
+            })
+        }
+
         // -- Column expressions → classInstance --
         Expression::Column(col) => convert_column(col),
 
