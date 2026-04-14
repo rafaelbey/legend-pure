@@ -155,16 +155,15 @@ fn copy_from_variable_multiple_overrides() {
 
 #[test]
 fn error_recovery_preserves_valid_elements() {
-    // First and third functions are valid, second has a parse error in body (Primitive is not valid as expression).
+    // First and third functions are valid, second line has a parse error (random junk).
     // Error recovery should preserve the valid functions.
     let source = r"
 function pkg::valid(): String[1] { 'hello' }
-Primitive pkg::broken extends Integer
+Bogus pkg::broken extends Integer
 function pkg::also_valid(): Integer[1] { 42 }
 ";
     match legend_pure_parser_parser::parse(source, "test.pure") {
         Ok(ast) => {
-            // The Primitive keyword is not recognized as an element, so we get partial
             panic!(
                 "Expected partial parse, but got clean parse with {} elements",
                 ast.element_count()
@@ -191,7 +190,7 @@ fn error_recovery_native_before_broken() {
     // then another native. Recovery must preserve both natives.
     let source = r"
 native function pkg::myNative(x:Integer[1]):String[1];
-Primitive pkg::broken extends Integer
+Bogus pkg::broken extends Integer
 native function pkg::anotherNative(s:String[1]):Boolean[1];
 ";
     match legend_pure_parser_parser::parse(source, "test.pure") {

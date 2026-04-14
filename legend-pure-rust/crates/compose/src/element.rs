@@ -21,8 +21,8 @@ use legend_pure_parser_ast::annotation::{StereotypePtr, TaggedValue};
 use legend_pure_parser_ast::element::{
     AggregationKind, Annotated, AssociationDef, ClassDef, Constraint, Element, EnumDef,
     FunctionDef, FunctionTest, FunctionTestAssertion, FunctionTestData, FunctionTestDataValue,
-    MeasureDef, NativeFunctionDef, PackageableElement, ProfileDef, Property, QualifiedProperty,
-    UnitDef,
+    MeasureDef, NativeFunctionDef, PackageableElement, PrimitiveDef, ProfileDef, Property,
+    QualifiedProperty, UnitDef,
 };
 
 use crate::expression::{
@@ -46,6 +46,7 @@ pub fn compose_element(w: &mut IndentWriter, elem: &Element) {
         Element::Profile(p) => compose_profile(w, p),
         Element::Association(a) => compose_association(w, a),
         Element::Measure(m) => compose_measure(w, m),
+        Element::Primitive(p) => compose_primitive(w, p),
     }
 }
 
@@ -358,6 +359,18 @@ fn compose_association(w: &mut IndentWriter, a: &AssociationDef) {
     }
     w.pop_indent();
     w.write_line("}");
+}
+
+// ---------------------------------------------------------------------------
+// Primitive
+// ---------------------------------------------------------------------------
+
+fn compose_primitive(w: &mut IndentWriter, p: &PrimitiveDef) {
+    w.write("Primitive ");
+    compose_qualified_name(w, p.package.as_ref(), &p.name);
+    w.write(" extends ");
+    compose_type_reference(w, &p.super_type);
+    w.newline();
 }
 
 // ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Top-level packageable elements: Class, Enum, Function, Profile, Association, Measure.
+//! Top-level packageable elements: Class, Enum, Function, Profile, Association, Measure, Primitive.
 //!
 //! Every element is [`Spanned`], [`Annotated`], and [`PackageableElement`].
 //! The [`Element`] enum wraps all element types for uniform handling.
@@ -71,6 +71,8 @@ pub enum Element {
     Association(AssociationDef),
     /// A measure definition (with units).
     Measure(MeasureDef),
+    /// A primitive type definition.
+    Primitive(PrimitiveDef),
 }
 
 impl Spanned for Element {
@@ -83,6 +85,7 @@ impl Spanned for Element {
             Self::Profile(e) => e.source_info(),
             Self::Association(e) => e.source_info(),
             Self::Measure(e) => e.source_info(),
+            Self::Primitive(e) => e.source_info(),
         }
     }
 }
@@ -97,6 +100,7 @@ impl PackageableElement for Element {
             Self::Profile(e) => e.package(),
             Self::Association(e) => e.package(),
             Self::Measure(e) => e.package(),
+            Self::Primitive(e) => e.package(),
         }
     }
 
@@ -109,6 +113,7 @@ impl PackageableElement for Element {
             Self::Profile(e) => e.name(),
             Self::Association(e) => e.name(),
             Self::Measure(e) => e.name(),
+            Self::Primitive(e) => e.name(),
         }
     }
 }
@@ -123,6 +128,7 @@ impl Annotated for Element {
             Self::Profile(e) => e.stereotypes(),
             Self::Association(e) => e.stereotypes(),
             Self::Measure(e) => e.stereotypes(),
+            Self::Primitive(e) => e.stereotypes(),
         }
     }
 
@@ -135,8 +141,26 @@ impl Annotated for Element {
             Self::Profile(e) => e.tagged_values(),
             Self::Association(e) => e.tagged_values(),
             Self::Measure(e) => e.tagged_values(),
+            Self::Primitive(e) => e.tagged_values(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// PrimitiveDef
+// ---------------------------------------------------------------------------
+
+/// A primitive type definition: `Primitive meta::pure::MyInt extends Integer`.
+#[derive(Debug, Clone, PartialEq, crate::PackageableElement)]
+pub struct PrimitiveDef {
+    /// The package.
+    pub package: Option<Package>,
+    /// The primitive type name.
+    pub name: Identifier,
+    /// The base type this primitive extends.
+    pub super_type: TypeReference,
+    /// Source location.
+    pub source_info: SourceInfo,
 }
 
 // ---------------------------------------------------------------------------
@@ -569,6 +593,8 @@ pub trait ElementVisitor {
     fn visit_association(&mut self, assoc: &AssociationDef);
     /// Visit a measure definition.
     fn visit_measure(&mut self, measure: &MeasureDef);
+    /// Visit a primitive type definition.
+    fn visit_primitive(&mut self, primitive: &PrimitiveDef);
 }
 
 impl Element {
@@ -582,6 +608,7 @@ impl Element {
             Self::Profile(e) => visitor.visit_profile(e),
             Self::Association(e) => visitor.visit_association(e),
             Self::Measure(e) => visitor.visit_measure(e),
+            Self::Primitive(e) => visitor.visit_primitive(e),
         }
     }
 }
@@ -729,6 +756,7 @@ mod tests {
             fn visit_native_function(&mut self, _: &NativeFunctionDef) {}
             fn visit_association(&mut self, _: &AssociationDef) {}
             fn visit_measure(&mut self, _: &MeasureDef) {}
+            fn visit_primitive(&mut self, _: &PrimitiveDef) {}
         }
 
         let elements = vec![
