@@ -48,7 +48,7 @@ SourceFile {
                             },
                         ),
                         name: "doc",
-                        stereotypes: [
+                        stereotype_names: [
                             SpannedString {
                                 value: "deprecated",
                                 source_info: SourceInfo {
@@ -70,7 +70,7 @@ SourceFile {
                                 },
                             },
                         ],
-                        tags: [
+                        tag_names: [
                             SpannedString {
                                 value: "doc",
                                 source_info: SourceInfo {
@@ -92,6 +92,8 @@ SourceFile {
                                 },
                             },
                         ],
+                        stereotypes: [],
+                        tagged_values: [],
                         source_info: SourceInfo {
                             source: "test.pure",
                             start_line: 2,

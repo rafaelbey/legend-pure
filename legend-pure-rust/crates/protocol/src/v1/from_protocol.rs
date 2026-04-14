@@ -872,7 +872,7 @@ fn convert_profile(p: &v1::element::ProtocolProfile) -> Result<ast::element::Pro
     Ok(ast::element::ProfileDef {
         package,
         name: SmolStr::new(&p.name),
-        stereotypes: p
+        stereotype_names: p
             .stereotypes
             .iter()
             .map(|s| ast::annotation::SpannedString {
@@ -880,7 +880,7 @@ fn convert_profile(p: &v1::element::ProtocolProfile) -> Result<ast::element::Pro
                 source_info: si.clone(),
             })
             .collect(),
-        tags: p
+        tag_names: p
             .tags
             .iter()
             .map(|t| ast::annotation::SpannedString {
@@ -888,6 +888,8 @@ fn convert_profile(p: &v1::element::ProtocolProfile) -> Result<ast::element::Pro
                 source_info: si.clone(),
             })
             .collect(),
+        stereotypes: vec![],
+        tagged_values: vec![],
         source_info: si,
     })
 }
@@ -1234,8 +1236,8 @@ mod tests {
         match elem {
             ast::element::Element::Profile(p) => {
                 assert_eq!(p.name.as_str(), "doc");
-                assert_eq!(p.stereotypes.len(), 1);
-                assert_eq!(p.tags.len(), 1);
+                assert_eq!(p.stereotype_names.len(), 1);
+                assert_eq!(p.tag_names.len(), 1);
             }
             other => panic!("Expected profile, got {other:?}"),
         }

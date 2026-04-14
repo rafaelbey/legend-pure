@@ -31,9 +31,7 @@ impl Parser {
     pub(crate) fn parse_function(&mut self) -> R<Element> {
         let start = self.cursor.current_source_info();
         self.cursor.expect(TokenKind::Function)?;
-        let stereotypes = self.parse_stereotypes()?;
-        let tagged_values = self.parse_tagged_values()?;
-        let (package, name, _) = self.parse_qualified_name()?;
+        let header = self.parse_element_header()?;
         let (type_parameters, multiplicity_parameters) =
             self.parse_type_and_multiplicity_parameters()?;
         self.cursor.expect(TokenKind::LParen)?;
@@ -58,16 +56,16 @@ impl Parser {
             vec![]
         };
         Ok(Element::Function(FunctionDef {
-            package,
-            name,
+            package: header.package,
+            name: header.name,
             type_parameters,
             multiplicity_parameters,
             parameters,
             return_type,
             return_multiplicity,
             body,
-            stereotypes,
-            tagged_values,
+            stereotypes: header.stereotypes,
+            tagged_values: header.tagged_values,
             tests,
             source_info: start,
         }))
@@ -80,9 +78,7 @@ impl Parser {
         let start = self.cursor.current_source_info();
         self.cursor.expect(TokenKind::Native)?;
         self.cursor.expect(TokenKind::Function)?;
-        let stereotypes = self.parse_stereotypes()?;
-        let tagged_values = self.parse_tagged_values()?;
-        let (package, name, _) = self.parse_qualified_name()?;
+        let header = self.parse_element_header()?;
         let (type_parameters, multiplicity_parameters) =
             self.parse_type_and_multiplicity_parameters()?;
         self.cursor.expect(TokenKind::LParen)?;
@@ -99,15 +95,15 @@ impl Parser {
         self.cursor.expect(TokenKind::RBracket)?;
         self.cursor.expect(TokenKind::Semicolon)?;
         Ok(Element::NativeFunction(NativeFunctionDef {
-            package,
-            name,
+            package: header.package,
+            name: header.name,
             type_parameters,
             multiplicity_parameters,
             parameters,
             return_type,
             return_multiplicity,
-            stereotypes,
-            tagged_values,
+            stereotypes: header.stereotypes,
+            tagged_values: header.tagged_values,
             source_info: start,
         }))
     }

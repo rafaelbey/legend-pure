@@ -104,19 +104,28 @@ fn compose_qualified_name(
     w.write(&maybe_quote(name));
 }
 
+/// Writes the common element header: `<<stereotypes>> {tagged_values} pkg::Name`.
+///
+/// Works with any type that implements `PackageableElement` (and hence `Annotated`).
+fn compose_element_header(w: &mut IndentWriter, e: &(impl PackageableElement + Annotated)) {
+    compose_stereotypes_inline(w, e.stereotypes());
+    compose_tagged_values_inline(w, e.tagged_values());
+    compose_qualified_name(w, e.package(), e.name());
+}
+
 // ---------------------------------------------------------------------------
 // Profile
 // ---------------------------------------------------------------------------
 
 fn compose_profile(w: &mut IndentWriter, p: &ProfileDef) {
     w.write("Profile ");
-    compose_qualified_name(w, p.package.as_ref(), &p.name);
+    compose_element_header(w, p);
     w.newline();
     w.write_line("{");
     w.push_indent();
-    if !p.stereotypes.is_empty() {
+    if !p.stereotype_names.is_empty() {
         w.write("stereotypes: [");
-        for (i, s) in p.stereotypes.iter().enumerate() {
+        for (i, s) in p.stereotype_names.iter().enumerate() {
             if i > 0 {
                 w.write(", ");
             }
@@ -124,9 +133,9 @@ fn compose_profile(w: &mut IndentWriter, p: &ProfileDef) {
         }
         w.write_line("];");
     }
-    if !p.tags.is_empty() {
+    if !p.tag_names.is_empty() {
         w.write("tags: [");
-        for (i, t) in p.tags.iter().enumerate() {
+        for (i, t) in p.tag_names.iter().enumerate() {
             if i > 0 {
                 w.write(", ");
             }
@@ -144,9 +153,7 @@ fn compose_profile(w: &mut IndentWriter, p: &ProfileDef) {
 
 fn compose_enumeration(w: &mut IndentWriter, e: &EnumDef) {
     w.write("Enum ");
-    compose_stereotypes_inline(w, &e.stereotypes);
-    compose_tagged_values_inline(w, &e.tagged_values);
-    compose_qualified_name(w, e.package.as_ref(), &e.name);
+    compose_element_header(w, e);
     w.newline();
     w.write_line("{");
     w.push_indent();
@@ -169,9 +176,7 @@ fn compose_enumeration(w: &mut IndentWriter, e: &EnumDef) {
 
 fn compose_class(w: &mut IndentWriter, c: &ClassDef) {
     w.write("Class ");
-    compose_stereotypes_inline(w, &c.stereotypes);
-    compose_tagged_values_inline(w, &c.tagged_values);
-    compose_qualified_name(w, c.package.as_ref(), &c.name);
+    compose_element_header(w, c);
 
     // Type parameters and multiplicity parameters
     if !c.type_parameters.is_empty() || !c.multiplicity_parameters.is_empty() {
@@ -345,9 +350,7 @@ fn compose_qualified_property(w: &mut IndentWriter, qp: &QualifiedProperty) {
 
 fn compose_association(w: &mut IndentWriter, a: &AssociationDef) {
     w.write("Association ");
-    compose_stereotypes_inline(w, &a.stereotypes);
-    compose_tagged_values_inline(w, &a.tagged_values);
-    compose_qualified_name(w, a.package.as_ref(), &a.name);
+    compose_element_header(w, a);
     w.newline();
     w.write_line("{");
     w.push_indent();
@@ -461,9 +464,7 @@ where
 
 fn compose_function(w: &mut IndentWriter, f: &FunctionDef) {
     w.write("function ");
-    compose_stereotypes_inline(w, f.stereotypes());
-    compose_tagged_values_inline(w, f.tagged_values());
-    compose_qualified_name(w, f.package(), f.name());
+    compose_element_header(w, f);
     compose_type_and_multiplicity_params(w, &f.type_parameters, &f.multiplicity_parameters);
     compose_function_params_and_return(w, f);
     w.newline();
@@ -483,9 +484,7 @@ fn compose_function(w: &mut IndentWriter, f: &FunctionDef) {
 
 fn compose_native_function(w: &mut IndentWriter, f: &NativeFunctionDef) {
     w.write("native function ");
-    compose_stereotypes_inline(w, f.stereotypes());
-    compose_tagged_values_inline(w, f.tagged_values());
-    compose_qualified_name(w, f.package(), f.name());
+    compose_element_header(w, f);
     compose_type_and_multiplicity_params(w, &f.type_parameters, &f.multiplicity_parameters);
     compose_function_params_and_return(w, f);
     w.write_line(";");

@@ -25,7 +25,7 @@ impl Parser {
     pub(crate) fn parse_profile(&mut self) -> R<Element> {
         let start = self.cursor.current_source_info();
         self.cursor.expect(TokenKind::Profile)?;
-        let (package, name, _) = self.parse_qualified_name()?;
+        let header = self.parse_element_header()?;
         self.cursor.expect(TokenKind::LBrace)?;
 
         let mut stereotypes = Vec::new();
@@ -74,10 +74,12 @@ impl Parser {
         }
         self.cursor.expect(TokenKind::RBrace)?;
         Ok(Element::Profile(ProfileDef {
-            package,
-            name,
-            stereotypes,
-            tags,
+            package: header.package,
+            name: header.name,
+            stereotype_names: stereotypes,
+            tag_names: tags,
+            stereotypes: header.stereotypes,
+            tagged_values: header.tagged_values,
             source_info: start,
         }))
     }
