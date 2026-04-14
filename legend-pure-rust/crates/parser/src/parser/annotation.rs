@@ -95,8 +95,13 @@ impl Parser {
         self.cursor.expect(TokenKind::Dot)?;
         let (tag_name, _) = self.cursor.expect_identifier_or_keyword()?;
         self.cursor.expect(TokenKind::Equals)?;
+        // Tagged values support string concatenation: 'text' + 'more text'
         let value_tok = self.cursor.expect(TokenKind::StringLiteral)?;
-        let value = unquote_string(&value_tok.text);
+        let mut value = unquote_string(&value_tok.text);
+        while self.cursor.eat(TokenKind::Plus) {
+            let next = self.cursor.expect(TokenKind::StringLiteral)?;
+            value.push_str(&unquote_string(&next.text));
+        }
         let (pkg, profile_name) = split_package_name(&profile_path);
         let profile = PackageableElementPtr {
             package: pkg,
