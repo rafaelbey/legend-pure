@@ -292,4 +292,35 @@ impl TokenKind {
             TokenKind::Eof => "end of file",
         }
     }
+
+    /// Returns `true` if this token kind can be used as an identifier.
+    ///
+    /// This includes `Identifier`, `StringLiteral` (quoted identifiers), and
+    /// all keywords — Pure keywords are valid identifiers in most positions
+    /// (e.g., `Class::Enum::Profile` is a valid package path).
+    #[must_use]
+    pub fn is_identifier_like(self) -> bool {
+        matches!(
+            self,
+            TokenKind::Identifier
+                | TokenKind::StringLiteral
+                | TokenKind::Class
+                | TokenKind::Enum
+                | TokenKind::Profile
+                | TokenKind::Association
+                | TokenKind::Measure
+                | TokenKind::Function
+                | TokenKind::Import
+                | TokenKind::Extends
+                | TokenKind::Let
+                | TokenKind::Native
+                | TokenKind::Stereotypes
+                | TokenKind::Tags
+                | TokenKind::Shared
+                | TokenKind::Composite
+                | TokenKind::None
+                | TokenKind::True
+                | TokenKind::False
+        )
+    }
 }
