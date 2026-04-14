@@ -77,7 +77,10 @@ impl NativeFunction for If {
         let condition_val = ctx.eval_lambda(&args[0], &[])?;
         let condition = condition_val.as_boolean()?;
 
-        println!("If native condition = {} args[1] = {:?}", condition, args[1]);
+        println!(
+            "If native condition = {} args[1] = {:?}",
+            condition, args[1]
+        );
         if condition {
             ctx.eval_lambda(&args[1], &[])
         } else {

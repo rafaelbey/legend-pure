@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Tests for function type parsing (`{ParamType[mult] -> ReturnType[mult]}`).
+//! Tests for function type parsing and `>>` token splitting in nested generics.
 
 mod helpers;
 
@@ -75,6 +75,38 @@ fn function_type_sentinel_name() {
     } else {
         panic!("expected NativeFunction");
     }
+}
+
+// ---------------------------------------------------------------------------
+// `>>` token splitting in nested generics
+// ---------------------------------------------------------------------------
+
+#[test]
+fn nested_generics_double_close() {
+    // Pair<Function<{->Boolean[1]}>, String> ends with >>
+    let ast = helpers::parse_ok(
+        "native function pkg::f(x:Pair<Function<{->Boolean[1]}>, String>[1]):String[1];",
+    );
+    assert_eq!(ast.element_count(), 1);
+}
+
+#[test]
+fn nested_generics_triple_close() {
+    // Map<String, List<Set<Integer>>> ends with >>>
+    let ast = helpers::parse_ok(
+        "native function pkg::g(x:Map<String, List<Set<Integer>>>[1]):Integer[1];",
+    );
+    assert_eq!(ast.element_count(), 1);
+}
+
+#[test]
+fn nested_function_type_double_close() {
+    // if<T|m>(..., Function<{->T[m]}>, Function<{->T[m]}>):T[m]
+    // The Pair<..., Function<{->T[m]}>> at the end has >>
+    let ast = helpers::parse_ok(
+        "native function pkg::h(pairs:Pair<Function<{->Boolean[1]}>, Function<{->Integer[1]}>>[*]):Boolean[1];",
+    );
+    assert_eq!(ast.element_count(), 1);
 }
 
 // ---------------------------------------------------------------------------

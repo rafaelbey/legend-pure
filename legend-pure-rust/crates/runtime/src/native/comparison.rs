@@ -169,7 +169,10 @@ pub fn register(registry: &mut NativeRegistry) {
         LessThanEqual,
     );
     registry.register("greaterThan_Number_1__Number_1__Boolean_1_", GreaterThan);
-    registry.register("greaterThanEqual_Number_1__Number_1__Boolean_1_", GreaterThanEqual);
+    registry.register(
+        "greaterThanEqual_Number_1__Number_1__Boolean_1_",
+        GreaterThanEqual,
+    );
 }
 
 // ---------------------------------------------------------------------------

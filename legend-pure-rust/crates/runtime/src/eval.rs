@@ -442,13 +442,11 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                                 captures: std::collections::HashMap::new(),
                             }
                         }
-                        _ => {
-                            LambdaClosure {
-                                parameters: vec![],
-                                body: vec![arg.clone()],
-                                captures: std::collections::HashMap::new(),
-                            }
-                        }
+                        _ => LambdaClosure {
+                            parameters: vec![],
+                            body: vec![arg.clone()],
+                            captures: std::collections::HashMap::new(),
+                        },
                     };
                     Value::Lambda(Box::new(closure))
                 })
