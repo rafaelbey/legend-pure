@@ -294,25 +294,31 @@ impl Parser {
             TokenKind::DateLiteral => {
                 let tok = self.cursor.advance().clone();
                 let raw = tok.text.trim_start_matches('%');
+                // Classify: DateTime (has 'T'), StrictDate (has '-' in date part), StrictTime
                 if raw.contains('T') {
                     Ok(Expression::Literal(Literal::DateTime(DateTimeLiteral {
                         value: raw.to_string(),
                         source_info: si,
                     })))
-                } else if raw.starts_with(|c: char| c.is_ascii_digit()) && raw.contains('-') {
-                    Ok(Expression::Literal(Literal::StrictDate(
-                        StrictDateLiteral {
-                            value: raw.to_string(),
-                            source_info: si,
-                        },
-                    )))
                 } else {
-                    Ok(Expression::Literal(Literal::StrictTime(
-                        StrictTimeLiteral {
-                            value: raw.to_string(),
-                            source_info: si,
-                        },
-                    )))
+                    // Strip optional leading minus for negative-year dates (%-YYYY-MM-DD)
+                    let unsigned = raw.trim_start_matches('-');
+                    if unsigned.starts_with(|c: char| c.is_ascii_digit()) && unsigned.contains('-')
+                    {
+                        Ok(Expression::Literal(Literal::StrictDate(
+                            StrictDateLiteral {
+                                value: raw.to_string(),
+                                source_info: si,
+                            },
+                        )))
+                    } else {
+                        Ok(Expression::Literal(Literal::StrictTime(
+                            StrictTimeLiteral {
+                                value: raw.to_string(),
+                                source_info: si,
+                            },
+                        )))
+                    }
                 }
             }
             // Variable: $name
@@ -505,7 +511,8 @@ impl Parser {
             | TokenKind::Class
             | TokenKind::Enum
             | TokenKind::Profile
-            | TokenKind::Function => {
+            | TokenKind::Function
+            | TokenKind::PathSep => {
                 let path = self.parse_package_path()?;
                 if self.cursor.check(TokenKind::LParen) {
                     // Function call: name(args)

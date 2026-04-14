@@ -110,34 +110,15 @@ impl Cursor {
     /// This is needed where Pure allows keywords as names (e.g., in qualified paths).
     pub fn expect_identifier_or_keyword(&mut self) -> Result<(SmolStr, SourceInfo), ParseError> {
         let tok = self.peek().clone();
-        match tok.kind {
-            TokenKind::Identifier
-            | TokenKind::StringLiteral
-            | TokenKind::Class
-            | TokenKind::Enum
-            | TokenKind::Profile
-            | TokenKind::Association
-            | TokenKind::Measure
-            | TokenKind::Function
-            | TokenKind::Import
-            | TokenKind::Extends
-            | TokenKind::Let
-            | TokenKind::Native
-            | TokenKind::Stereotypes
-            | TokenKind::Tags
-            | TokenKind::Shared
-            | TokenKind::Composite
-            | TokenKind::None
-            | TokenKind::True
-            | TokenKind::False => {
-                self.advance();
-                Ok((tok.text.clone(), tok.source_info.clone()))
-            }
-            _ => Err(ParseError::expected(
+        if tok.kind.is_identifier_like() {
+            self.advance();
+            Ok((tok.text.clone(), tok.source_info.clone()))
+        } else {
+            Err(ParseError::expected(
                 "identifier",
                 tok.kind,
                 tok.source_info.clone(),
-            )),
+            ))
         }
     }
 

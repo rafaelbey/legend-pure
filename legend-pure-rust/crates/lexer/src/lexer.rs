@@ -412,18 +412,34 @@ impl<'a> Lexer<'a> {
 
     fn lex_date_or_percent(&mut self, _start_line: u32, _start_col: u32) -> TokenKind {
         // Date literal: %YYYY-MM-DD or %HH:MM:SS or %YYYY-MM-DDTHH:MM:SS
-        // If no digit follows %, it's just a percent operator
-        if self.peek().is_some_and(|c| c.is_ascii_digit()) {
+        // Also: %-YYYY-MM-DD for negative (BCE) years
+        // If no digit/minus follows %, it's just a percent operator
+        let starts_date = self.peek().is_some_and(|c| c.is_ascii_digit())
+            || (self.peek() == Some('-')
+                && self.source[self.pos..]
+                    .chars()
+                    .nth(1)
+                    .is_some_and(|c| c.is_ascii_digit()));
+        if starts_date {
+            // Consume optional leading minus for negative year
+            if self.peek() == Some('-') {
+                self.advance();
+            }
             while let Some(c) = self.peek() {
-                if c.is_ascii_digit()
-                    || c == '-'
-                    || c == 'T'
-                    || c == ':'
-                    || c == '.'
-                    || c == '+'
-                    || c == 'Z'
-                {
+                if c.is_ascii_digit() || c == 'T' || c == ':' || c == '.' || c == '+' || c == 'Z' {
                     self.advance();
+                } else if c == '-' {
+                    // Only consume '-' if followed by a digit (date segment separator).
+                    // Do NOT consume '-' when followed by '>' (arrow operator ->).
+                    if self.source[self.pos..]
+                        .chars()
+                        .nth(1)
+                        .is_some_and(|n| n.is_ascii_digit())
+                    {
+                        self.advance();
+                    } else {
+                        break;
+                    }
                 } else {
                     break;
                 }
@@ -748,6 +764,24 @@ mod tests {
         // % followed by digit starts a date literal
         assert_eq!(
             kinds("%2024-01-15"),
+            vec![TokenKind::DateLiteral, TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn date_followed_by_arrow() {
+        // %2024-01-15->adjust() must NOT eat the - from ->
+        let toks = texts("%2024-01-15->adjust");
+        assert_eq!(toks[0], "%2024-01-15");
+        assert_eq!(toks[1], "->");
+    }
+
+    #[test]
+    fn negative_year_date() {
+        let toks = texts("%-799997984-02-29");
+        assert_eq!(toks[0], "%-799997984-02-29");
+        assert_eq!(
+            kinds("%-799997984-02-29"),
             vec![TokenKind::DateLiteral, TokenKind::Eof]
         );
     }

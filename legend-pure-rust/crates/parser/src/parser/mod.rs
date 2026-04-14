@@ -215,6 +215,18 @@ impl Parser {
     // ── Package path: my::pkg::Name ─────────────────────────────────────
 
     pub(crate) fn parse_package_path(&mut self) -> R<Package> {
+        // Handle leading :: for root-qualified paths (e.g., ::meta::pure)
+        // or standalone :: as a reference to the root package itself
+        if self.cursor.check(TokenKind::PathSep) {
+            self.cursor.advance();
+            // If no identifier follows (e.g., `elementToPath(::)`), return root package
+            if !self.cursor.peek_kind().is_identifier_like() {
+                return Ok(Package::root(
+                    SmolStr::new_static(""),
+                    self.cursor.current_source_info(),
+                ));
+            }
+        }
         let (name, si) = self.cursor.expect_identifier_or_keyword()?;
         let mut pkg = Package::root(name, si);
         while self.cursor.check(TokenKind::PathSep) && !is_wildcard_ahead(&self.cursor) {
