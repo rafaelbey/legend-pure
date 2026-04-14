@@ -137,11 +137,13 @@ mod tests {
                     elements: vec![Element::Profile(ProfileDef {
                         package: Some(Package::root(SmolStr::new("meta"), src())),
                         name: SmolStr::new("doc"),
-                        stereotypes: vec![],
-                        tags: vec![SpannedString {
+                        stereotype_names: vec![],
+                        tag_names: vec![SpannedString {
                             value: SmolStr::new("description"),
                             source_info: src(),
                         }],
+                        stereotypes: vec![],
+                        tagged_values: vec![],
                         source_info: src(),
                     })],
                     source_info: src(),

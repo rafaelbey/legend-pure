@@ -975,8 +975,12 @@ fn convert_profile(p: &ast::element::ProfileDef) -> v1::element::ProtocolProfile
     v1::element::ProtocolProfile {
         package_path: optional_package_to_path(p.package.as_ref()),
         name: p.name.to_string(),
-        stereotypes: p.stereotypes.iter().map(|s| s.value.to_string()).collect(),
-        tags: p.tags.iter().map(|t| t.value.to_string()).collect(),
+        stereotypes: p
+            .stereotype_names
+            .iter()
+            .map(|s| s.value.to_string())
+            .collect(),
+        tags: p.tag_names.iter().map(|t| t.value.to_string()).collect(),
         source_information: source_information(&p.source_info),
     }
 }
@@ -1259,14 +1263,16 @@ mod tests {
         let profile = ast::element::Element::Profile(ast::element::ProfileDef {
             package: Some(ast::type_ref::Package::root(Identifier::new("meta"), src())),
             name: Identifier::new("doc"),
-            stereotypes: vec![ast::annotation::SpannedString {
+            stereotype_names: vec![ast::annotation::SpannedString {
                 value: Identifier::new("deprecated"),
                 source_info: src(),
             }],
-            tags: vec![ast::annotation::SpannedString {
+            tag_names: vec![ast::annotation::SpannedString {
                 value: Identifier::new("description"),
                 source_info: src(),
             }],
+            stereotypes: vec![],
+            tagged_values: vec![],
             source_info: src(),
         });
         let pe = convert_element(&profile).unwrap();

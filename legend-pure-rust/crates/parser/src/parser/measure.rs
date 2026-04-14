@@ -23,7 +23,7 @@ impl Parser {
     pub(crate) fn parse_measure(&mut self) -> R<Element> {
         let start = self.cursor.current_source_info();
         self.cursor.expect(TokenKind::Measure)?;
-        let (package, name, _) = self.parse_qualified_name()?;
+        let header = self.parse_element_header()?;
         self.cursor.expect(TokenKind::LBrace)?;
         let mut canonical_unit = None;
         let mut non_canonical_units = Vec::new();
@@ -38,8 +38,8 @@ impl Parser {
         }
         self.cursor.expect(TokenKind::RBrace)?;
         Ok(Element::Measure(MeasureDef {
-            package,
-            name,
+            package: header.package,
+            name: header.name,
             canonical_unit,
             non_canonical_units,
             source_info: start,

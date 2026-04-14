@@ -491,8 +491,10 @@ fn is_ident_start(ch: char) -> bool {
 }
 
 /// Returns true if `ch` can continue an identifier.
+///
+/// Includes `$` to support mangled function names (e.g., `func_$0_1$_`).
 fn is_ident_continue(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || ch == '_'
+    ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'
 }
 
 // ---------------------------------------------------------------------------

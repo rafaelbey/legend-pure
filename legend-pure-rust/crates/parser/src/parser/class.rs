@@ -31,9 +31,7 @@ impl Parser {
     pub(crate) fn parse_class(&mut self) -> R<Element> {
         let start = self.cursor.current_source_info();
         self.cursor.expect(TokenKind::Class)?;
-        let stereotypes = self.parse_stereotypes()?;
-        let tagged_values = self.parse_tagged_values()?;
-        let (package, name, _) = self.parse_qualified_name()?;
+        let header = self.parse_element_header()?;
 
         let (type_parameters, multiplicity_parameters) =
             self.parse_type_and_multiplicity_parameters()?;
@@ -62,16 +60,16 @@ impl Parser {
         self.cursor.expect(TokenKind::RBrace)?;
 
         Ok(Element::Class(ClassDef {
-            package,
-            name,
+            package: header.package,
+            name: header.name,
             type_parameters,
             multiplicity_parameters,
             super_types,
             properties,
             qualified_properties,
             constraints,
-            stereotypes,
-            tagged_values,
+            stereotypes: header.stereotypes,
+            tagged_values: header.tagged_values,
             source_info: start,
         }))
     }

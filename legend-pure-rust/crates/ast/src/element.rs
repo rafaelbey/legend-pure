@@ -167,17 +167,21 @@ pub struct PrimitiveDef {
 // ProfileDef
 // ---------------------------------------------------------------------------
 
-/// A profile definition: `Profile meta::pure::profiles::doc { stereotypes: [...]; tags: [...]; }`.
+/// A profile definition: `Profile <<stereo>> meta::pure::profiles::doc { stereotypes: [...]; tags: [...]; }`.
 #[derive(Debug, Clone, PartialEq, crate::PackageableElement)]
 pub struct ProfileDef {
     /// The package this profile belongs to.
     pub package: Option<Package>,
     /// The profile name.
     pub name: Identifier,
-    /// Stereotype names declared by this profile.
-    pub stereotypes: Vec<SpannedString>,
-    /// Tag names declared by this profile.
-    pub tags: Vec<SpannedString>,
+    /// Stereotype names declared (defined) by this profile.
+    pub stereotype_names: Vec<SpannedString>,
+    /// Tag names declared (defined) by this profile.
+    pub tag_names: Vec<SpannedString>,
+    /// Stereotypes applied to this profile element (annotations on the definition).
+    pub stereotypes: Vec<StereotypePtr>,
+    /// Tagged values applied to this profile element (annotations on the definition).
+    pub tagged_values: Vec<TaggedValue>,
     /// Source location.
     pub source_info: SourceInfo,
 }
@@ -630,21 +634,23 @@ mod tests {
         let profile = ProfileDef {
             package: Some(Package::root(SmolStr::new("meta"), src())),
             name: SmolStr::new("doc"),
-            stereotypes: vec![SpannedString {
+            stereotype_names: vec![SpannedString {
                 value: SmolStr::new("deprecated"),
                 source_info: src(),
             }],
-            tags: vec![SpannedString {
+            tag_names: vec![SpannedString {
                 value: SmolStr::new("description"),
                 source_info: src(),
             }],
+            stereotypes: vec![],
+            tagged_values: vec![],
             source_info: src(),
         };
 
         assert_eq!(profile.name(), "doc");
         assert_eq!(profile.package().unwrap().name(), "meta");
-        assert_eq!(profile.stereotypes.len(), 1);
-        assert_eq!(profile.tags.len(), 1);
+        assert_eq!(profile.stereotype_names.len(), 1);
+        assert_eq!(profile.tag_names.len(), 1);
     }
 
     #[test]
@@ -727,8 +733,10 @@ mod tests {
         let profile = Element::Profile(ProfileDef {
             package: None,
             name: SmolStr::new("doc"),
+            stereotype_names: vec![],
+            tag_names: vec![],
             stereotypes: vec![],
-            tags: vec![],
+            tagged_values: vec![],
             source_info: src(),
         });
 
@@ -763,8 +771,10 @@ mod tests {
             Element::Profile(ProfileDef {
                 package: None,
                 name: SmolStr::new("doc"),
+                stereotype_names: vec![],
+                tag_names: vec![],
                 stereotypes: vec![],
-                tags: vec![],
+                tagged_values: vec![],
                 source_info: src(),
             }),
             Element::Class(ClassDef {

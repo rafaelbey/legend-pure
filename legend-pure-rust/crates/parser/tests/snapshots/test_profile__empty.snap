@@ -24,8 +24,10 @@ SourceFile {
                             },
                         ),
                         name: "EmptyProfile",
+                        stereotype_names: [],
+                        tag_names: [],
                         stereotypes: [],
-                        tags: [],
+                        tagged_values: [],
                         source_info: SourceInfo {
                             source: "test.pure",
                             start_line: 2,

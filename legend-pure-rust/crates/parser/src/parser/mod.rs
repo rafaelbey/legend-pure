@@ -48,6 +48,27 @@ use crate::island::IslandParser;
 
 type R<T> = Result<T, ParseError>;
 
+/// The common prefix of every packageable element definition:
+///
+/// ```text
+/// KEYWORD (<<stereotypes>> | {tagged_values})* pkg::Name
+/// ```
+///
+/// Stereotypes and tagged values may appear in any order and repeat.
+#[allow(dead_code)]
+pub(crate) struct ElementHeader {
+    /// Stereotypes applied to the element.
+    pub stereotypes: Vec<StereotypePtr>,
+    /// Tagged values applied to the element.
+    pub tagged_values: Vec<TaggedValue>,
+    /// The package (if qualified), e.g. `meta::pure::profiles` → `Some(...)`.
+    pub package: Option<Package>,
+    /// The element name.
+    pub name: SmolStr,
+    /// Source info for the name.
+    pub name_source_info: SourceInfo,
+}
+
 /// Main parser struct wrapping a token cursor and island grammar plugins.
 pub(crate) struct Parser {
     cursor: Cursor,
@@ -257,6 +278,36 @@ impl Parser {
         // Last segment in package is actually the name
         let name = SmolStr::new(pkg.name());
         Ok((pkg.parent().cloned(), name, first_si))
+    }
+
+    /// Parses the common element header: `(<<stereotypes>> | {tagged_values})* pkg::Name`.
+    ///
+    /// This is the shared prefix for all packageable element definitions.
+    /// Stereotypes and tagged values may appear in any order and can repeat.
+    /// The element keyword must have already been consumed before calling this.
+    pub(crate) fn parse_element_header(&mut self) -> R<ElementHeader> {
+        let mut stereotypes = Vec::new();
+        let mut tagged_values = Vec::new();
+
+        // Parse annotations in any order: <<stereos>>, {tags}, <<stereos>>, ...
+        loop {
+            if self.cursor.check(TokenKind::LessLess) {
+                stereotypes.extend(self.parse_stereotypes()?);
+            } else if self.is_tagged_value_start() {
+                tagged_values.extend(self.parse_tagged_values()?);
+            } else {
+                break;
+            }
+        }
+
+        let (package, name, name_source_info) = self.parse_qualified_name()?;
+        Ok(ElementHeader {
+            stereotypes,
+            tagged_values,
+            package,
+            name,
+            name_source_info,
+        })
     }
 }
 

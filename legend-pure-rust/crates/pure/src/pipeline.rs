@@ -693,11 +693,11 @@ fn hydrate_element(
         }
         ast::Element::Profile(prof_def) => Element::Profile(Profile {
             stereotypes: prof_def
-                .stereotypes
+                .stereotype_names
                 .iter()
                 .map(|s| s.value.clone())
                 .collect(),
-            tags: prof_def.tags.iter().map(|t| t.value.clone()).collect(),
+            tags: prof_def.tag_names.iter().map(|t| t.value.clone()).collect(),
         }),
         ast::Element::Function(func_def) => {
             let parameters = lower_parameters(&func_def.parameters, ctx, errors);
