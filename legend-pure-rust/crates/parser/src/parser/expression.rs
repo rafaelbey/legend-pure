@@ -322,6 +322,17 @@ impl Parser {
                     }
                 }
             }
+            // Leading-dot float literal: .01 → 0.01
+            TokenKind::Dot if self.cursor.peek_kind_at(1) == TokenKind::IntegerLiteral => {
+                self.cursor.advance(); // consume the dot
+                let tok = self.cursor.advance().clone();
+                let text = format!("0.{}", tok.text);
+                let value: f64 = text.parse().unwrap_or(0.0);
+                Ok(Expression::Literal(Literal::Float(FloatLiteral {
+                    value,
+                    source_info: si,
+                })))
+            }
             // Variable: $name
             TokenKind::Dollar => {
                 self.cursor.advance();
@@ -346,10 +357,21 @@ impl Parser {
             // No-param bare lambda: | body
             TokenKind::Pipe => {
                 self.cursor.advance();
-                let body = self.parse_expression()?;
+                let mut body = vec![self.parse_expression()?];
+                while self.cursor.eat(TokenKind::Semicolon) {
+                    // Stop if we hit a closing delimiter
+                    if self.cursor.check(TokenKind::RParen)
+                        || self.cursor.check(TokenKind::RBrace)
+                        || self.cursor.check(TokenKind::RBracket)
+                        || self.cursor.check(TokenKind::Eof)
+                    {
+                        break;
+                    }
+                    body.push(self.parse_expression()?);
+                }
                 Ok(Expression::Lambda(Lambda {
                     parameters: vec![],
-                    body: vec![body],
+                    body,
                     source_info: si,
                 }))
             }
@@ -365,7 +387,12 @@ impl Parser {
                     let mut assignments = Vec::new();
                     while !self.cursor.check(TokenKind::RParen) {
                         let kv_si = self.cursor.current_source_info();
-                        let (prop, _) = self.cursor.expect_identifier()?;
+                        let (mut prop, _) = self.cursor.expect_identifier_or_keyword()?;
+                        // Accept dotted property paths: address.name
+                        while self.cursor.eat(TokenKind::Dot) {
+                            let (next, _) = self.cursor.expect_identifier_or_keyword()?;
+                            prop = SmolStr::new(format!("{prop}.{next}"));
+                        }
                         self.cursor.eat(TokenKind::Plus); // += (append) syntax
                         self.cursor.expect(TokenKind::Equals)?;
                         let val = self.parse_expression()?;
@@ -413,7 +440,19 @@ impl Parser {
                 let mut assignments = Vec::new();
                 while !self.cursor.check(TokenKind::RParen) {
                     let kv_si = self.cursor.current_source_info();
-                    let (prop, _) = self.cursor.expect_identifier()?;
+                    // Accept identifier, dotted path, or integer key
+                    let mut prop = if self.cursor.check(TokenKind::IntegerLiteral) {
+                        let tok = self.cursor.advance().clone();
+                        tok.text.clone()
+                    } else {
+                        let (name, _) = self.cursor.expect_identifier_or_keyword()?;
+                        name
+                    };
+                    // Accept dotted property paths: address.name
+                    while self.cursor.eat(TokenKind::Dot) {
+                        let (next, _) = self.cursor.expect_identifier_or_keyword()?;
+                        prop = SmolStr::new(format!("{prop}.{next}"));
+                    }
                     self.cursor.eat(TokenKind::Plus); // += (append) syntax
                     self.cursor.expect(TokenKind::Equals)?;
                     let val = self.parse_expression()?;
