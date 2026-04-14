@@ -208,14 +208,6 @@ pub struct ResolvedType {
     /// The inferred multiplicity of the expression.
     pub multiplicity: Multiplicity,
 }
-
-/// Type annotation on an expression node.
-///
-/// `None` when first constructed by the lowerer (Pass 2); populated to
-/// `Some(...)` by type inference (Pass 2.5). After a successful compile,
-/// all expression `type_info` fields should be `Some`.
-pub type TypeInfo = Option<ResolvedType>;
-
 // ---------------------------------------------------------------------------
 // ValueSpec — compiled expression (header + kind)
 // ---------------------------------------------------------------------------
@@ -243,11 +235,11 @@ pub type TypeInfo = Option<ResolvedType>;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValueSpec {
     /// The expression variant and its data.
-    pub kind: ExprKind,
+    pub kind: Box<ExprKind>,
     /// Source location in the original `.pure` file.
     pub source_info: SourceInfo,
     /// Inferred type annotation. `None` until Pass 2.5 runs.
-    pub type_info: TypeInfo,
+    pub type_info: Option<Box<ResolvedType>>,
 }
 
 /// Expression variant — the type-specific payload of a [`ValueSpec`].

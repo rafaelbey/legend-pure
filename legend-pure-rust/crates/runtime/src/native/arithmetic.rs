@@ -17,7 +17,7 @@
 use rust_decimal::prelude::ToPrimitive;
 
 use crate::error::PureRuntimeError;
-use crate::native::{EvalContextTrait, NativeFunction, NativeRegistry, expect_args};
+use crate::native::{expect_args, expect_min_args, EvalContextTrait, NativeFunction, NativeRegistry};
 use crate::value::Value;
 
 // ---------------------------------------------------------------------------
@@ -41,17 +41,27 @@ impl NativeFunction for Plus {
         args: &[Value],
         _ctx: &mut dyn EvalContextTrait,
     ) -> Result<Value, PureRuntimeError> {
-        expect_args("plus", args, 2)?;
+        expect_min_args("plus", args, 2)?;
         match (&args[0], &args[1]) {
             (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a.wrapping_add(*b))),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
             #[allow(clippy::cast_precision_loss)]
-            (Value::Integer(a), Value::Float(b)) | (Value::Float(b), Value::Integer(a)) => {
-                Ok(Value::Float(*a as f64 + b))
-            }
+            (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f64 + b)),
+            #[allow(clippy::cast_precision_loss)]
+            (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a + *b as f64)),
             (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(*a + *b)),
-            (Value::Decimal(a), Value::Integer(b)) | (Value::Integer(b), Value::Decimal(a)) => {
+            (Value::Decimal(a), Value::Integer(b)) => {
                 Ok(Value::Decimal(*a + rust_decimal::Decimal::from(*b)))
+            }
+            (Value::Integer(a), Value::Decimal(b)) => {
+                Ok(Value::Decimal(rust_decimal::Decimal::from(*a) + *b))
+            }
+            // Fallback for unresolved 'plus' operator strings
+            (Value::String(a), Value::String(b)) => {
+                let mut joined = String::with_capacity(a.len() + b.len());
+                joined.push_str(a);
+                joined.push_str(b);
+                Ok(Value::String(joined.into()))
             }
             _ => Err(PureRuntimeError::EvaluationError(format!(
                 "plus: unsupported types {} and {}",
@@ -80,6 +90,17 @@ impl NativeFunction for Minus {
         args: &[Value],
         _ctx: &mut dyn EvalContextTrait,
     ) -> Result<Value, PureRuntimeError> {
+        if args.len() == 1 {
+            return match &args[0] {
+                Value::Integer(a) => Ok(Value::Integer(-a)),
+                Value::Float(a) => Ok(Value::Float(-a)),
+                Value::Decimal(a) => Ok(Value::Decimal(-*a)),
+                _ => Err(PureRuntimeError::EvaluationError(format!(
+                    "minus: unsupported type {}",
+                    args[0].type_name()
+                ))),
+            };
+        }
         expect_args("minus", args, 2)?;
         match (&args[0], &args[1]) {
             (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a.wrapping_sub(*b))),

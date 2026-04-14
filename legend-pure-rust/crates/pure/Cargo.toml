@@ -24,6 +24,7 @@ repository.workspace = true
 legend-pure-parser-ast = { path = "../ast" }
 rust_decimal = "1"
 smol_str = { workspace = true }
+thiserror.workspace = true
 
 [dev-dependencies]
 legend-pure-parser-parser = { path = "../parser" }

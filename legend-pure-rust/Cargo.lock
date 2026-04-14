@@ -907,6 +907,7 @@ dependencies = [
  "legend-pure-parser-parser",
  "rust_decimal",
  "smol_str",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

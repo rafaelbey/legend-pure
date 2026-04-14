@@ -69,8 +69,10 @@ fn bench_value_ops(c: &mut Criterion) {
     });
 
     group.bench_function("collection_clone_empty", |b| {
-        let v = Value::Collection(PVector::new());
-        b.iter(|| black_box(v.clone()));
+        let v = Value::Collection(Box::new(PVector::new()));
+        b.iter(|| {
+            let _ = black_box(v.clone());
+        })
     });
 
     group.bench_function("collection_clone_1000", |b| {
@@ -78,8 +80,10 @@ fn bench_value_ops(c: &mut Criterion) {
         for i in 0..1000 {
             pv.push_back(Value::Integer(i));
         }
-        let v = Value::Collection(pv);
-        b.iter(|| black_box(v.clone())); // O(1) clone due to structural sharing
+        let v = Value::Collection(Box::new(pv));
+        b.iter(|| {
+            let _ = black_box(v.clone());
+        })
     });
 
     group.finish();

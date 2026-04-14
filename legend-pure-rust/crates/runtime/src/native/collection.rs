@@ -197,7 +197,7 @@ impl NativeFunction for Range {
                 i += increment;
             }
         }
-        Ok(Value::Collection(result))
+        Ok(Value::Collection(Box::new(result)))
     }
 
     fn signature(&self) -> &'static str {
@@ -224,7 +224,7 @@ impl NativeFunction for Take {
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let n = args[1].as_integer()?.max(0) as usize;
         let n = n.min(coll.len());
-        Ok(Value::Collection(coll.take(n)))
+        Ok(Value::Collection(Box::new(coll.take(n))))
     }
 
     fn signature(&self) -> &'static str {
@@ -247,7 +247,7 @@ impl NativeFunction for Drop {
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let n = args[1].as_integer()?.max(0) as usize;
         let n = n.min(coll.len());
-        Ok(Value::Collection(coll.skip(n)))
+        Ok(Value::Collection(Box::new(coll.skip(n))))
     }
 
     fn signature(&self) -> &'static str {
@@ -273,7 +273,7 @@ impl NativeFunction for Concatenate {
         let mut a = args[0].to_collection();
         let b = args[1].to_collection();
         a.append(b);
-        Ok(Value::Collection(a))
+        Ok(Value::Collection(Box::new(a)))
     }
 
     fn signature(&self) -> &'static str {
@@ -425,7 +425,7 @@ mod tests {
         for &i in items {
             v.push_back(Value::Integer(i));
         }
-        Value::Collection(v)
+        Value::Collection(Box::new(v))
     }
 
     #[test]

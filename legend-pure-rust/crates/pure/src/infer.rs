@@ -153,7 +153,7 @@ pub(crate) fn infer_function_body(
 /// returning a clone of the resolved type.
 #[allow(clippy::too_many_lines)]
 fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedType> {
-    let result = match &mut expr.kind {
+    let result = match &mut *expr.kind {
         // -- Literals -------------------------------------------------------
         ExprKind::IntegerLiteral(_) => Some(primitive(bootstrap::INTEGER_ID)),
         ExprKind::FloatLiteral(_) => Some(primitive(bootstrap::FLOAT_ID)),
@@ -177,7 +177,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
 
             // Extract let name from AST before calling inference
             let let_name = if function_name == "letFunction" && arguments.len() == 2 {
-                if let ExprKind::StringLiteral(name) = &arguments[0].kind {
+                if let ExprKind::StringLiteral(name) = &*arguments[0].kind {
                     Some((name, &arguments[0].source_info))
                 } else {
                     None
@@ -316,7 +316,11 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
 
 /// Sets `expr.type_info` and returns the resolved type.
 fn set_and_return(expr: &mut ValueSpec, result: Option<ResolvedType>) -> Option<ResolvedType> {
-    expr.type_info.clone_from(&result);
+    if let Some(r) = result.clone() {
+        expr.type_info = Some(Box::new(r));
+    } else {
+        expr.type_info = None;
+    }
     result
 }
 
@@ -512,7 +516,7 @@ mod tests {
     /// Helper: create a `ValueSpec` with no type info.
     fn untyped(kind: ExprKind, source_info: SourceInfo) -> ValueSpec {
         ValueSpec {
-            kind,
+            kind: Box::new(kind),
             source_info,
             type_info: None,
         }
