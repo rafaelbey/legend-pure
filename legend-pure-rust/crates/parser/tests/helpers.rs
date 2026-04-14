@@ -20,28 +20,41 @@ use legend_pure_parser_ast::SourceFile;
 ///
 /// # Panics
 ///
-/// Panics if the source cannot be parsed.
+/// Panics if the source cannot be parsed (including partial results).
 #[allow(dead_code)]
 #[must_use]
 pub fn parse_ok(source: &str) -> SourceFile {
-    legend_pure_parser_parser::parse(source, "test.pure")
-        .unwrap_or_else(|e| panic!("Expected parse to succeed, but got error: {e}"))
+    legend_pure_parser_parser::parse(source, "test.pure").unwrap_or_else(|e| {
+        panic!(
+            "Expected parse to succeed, but got error(s): {:?}",
+            e.errors.iter().map(ToString::to_string).collect::<Vec<_>>()
+        )
+    })
 }
 
-/// Parse Pure source text and assert it produces an error containing `expected_msg`.
+/// Parse Pure source text and assert it produces errors containing `expected_msg`.
 ///
 /// # Panics
 ///
-/// Panics if parsing succeeds or if the error doesn't contain the expected message.
+/// Panics if parsing succeeds fully or if no error contains the expected message.
 #[allow(dead_code)]
 pub fn parse_err(source: &str, expected_msg: &str) {
     match legend_pure_parser_parser::parse(source, "test.pure") {
         Ok(_) => panic!("Expected parse error containing '{expected_msg}', but parsing succeeded"),
-        Err(e) => {
-            let msg = e.to_string();
+        Err(partial) => {
+            let any_match = partial.errors.iter().any(|e| {
+                e.to_string()
+                    .to_lowercase()
+                    .contains(&expected_msg.to_lowercase())
+            });
             assert!(
-                msg.to_lowercase().contains(&expected_msg.to_lowercase()),
-                "Error message '{msg}' does not contain '{expected_msg}'"
+                any_match,
+                "No error contains '{expected_msg}'. Errors: {:?}",
+                partial
+                    .errors
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
             );
         }
     }

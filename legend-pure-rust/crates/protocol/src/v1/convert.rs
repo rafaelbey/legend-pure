@@ -165,6 +165,20 @@ impl From<&ast::type_ref::TypeSpec> for v1::generic_type::GenericType {
                     source_information: si,
                 }
             }
+            ast::type_ref::TypeSpec::Function(ft) => {
+                // Function types: encode as GenericType with FunctionType path.
+                let si = source_information(&ft.source_info);
+                v1::generic_type::GenericType {
+                    raw_type: v1::generic_type::PackageableType {
+                        full_path: "meta::pure::metamodel::type::FunctionType".to_string(),
+                        source_information: si.clone(),
+                    },
+                    type_arguments: vec![],
+                    multiplicity_arguments: vec![],
+                    type_variable_values: vec![],
+                    source_information: si,
+                }
+            }
         }
     }
 }

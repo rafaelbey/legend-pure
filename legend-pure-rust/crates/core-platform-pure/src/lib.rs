@@ -19,6 +19,34 @@
 //!
 //! Provides the standard Pure platform library, test runner ("surveyor"),
 //! and compilation orchestration for the Rust implementation.
+//!
+//! # Platform Loading
+//!
+//! Use [`platform::load_platform()`] to parse and compile the standard
+//! library into a `PureModel`. This currently reads embedded `.pure` source
+//! files and compiles them on the fly.
+//!
+//! ## Future: Binary `.purem` Format
+//!
+//! For release builds, the platform model will be pre-compiled and
+//! serialized into a binary `.purem` file (`FlatBuffers`). Loading from
+//! `.purem` is orders of magnitude faster than parsing + compiling
+//! from source.
+//!
+//! The loading strategy will be controlled by Cargo feature flags:
+//!
+//! | Feature | `load_platform()` behavior |
+//! |---------|---------------------------|
+//! | `from-source` (default) | Parse `.pure` → compile → `PureModel` |
+//! | `from-binary` | Deserialize `.purem` → `PureModel` |
+//!
+//! The `from-source` path is essential for development (edit Pure files,
+//! recompile) while `from-binary` is the release path (fast startup,
+//! no parser/compiler dependency needed).
+//!
+//! The same feature-flag pattern applies to any Pure repository, not
+//! just the platform — user repos can pre-compile their `.pure` files
+//! into `.purem` for deployment.
 
 pub mod platform;
 pub mod sources;
@@ -29,15 +57,26 @@ mod tests {
 
     #[test]
     fn platform_compiles() {
-        let platform = platform::load_platform();
-        if !platform.compilation_errors.is_empty() {
-            println!(
-                "Loaded platform with {} compilation errors (expected during iteration)",
-                platform.compilation_errors.len()
-            );
+        match platform::load_platform() {
+            Ok(model) => {
+                println!("Platform compiled cleanly");
+                // Verify that the model has elements
+                assert!(!model.chunks.is_empty(), "Expected non-empty model chunks");
+            }
+            Err(partial) => {
+                println!(
+                    "Platform loaded with {} error(s) (expected during iteration)",
+                    partial.errors.len()
+                );
+                // Still verify the model has elements
+                assert!(
+                    !partial.model.chunks.is_empty(),
+                    "Expected non-empty model chunks even with errors"
+                );
+            }
         }
 
-        // As a baseline check, just ensure we parsed files
+        // As a baseline check, just ensure we have platform source files
         let sources = sources::platform_sources();
         println!("Number of platform files: {}", sources.len());
         assert!(

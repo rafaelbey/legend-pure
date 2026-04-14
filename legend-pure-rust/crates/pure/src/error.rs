@@ -91,6 +91,11 @@ pub enum CompilationErrorKind {
         /// The expression kind name.
         kind: SmolStr,
     },
+    /// A source file failed to fully parse — some elements were recovered.
+    ParseFailure {
+        /// The source file that failed.
+        source: SmolStr,
+    },
 }
 
 impl std::fmt::Display for CompilationError {

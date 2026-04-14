@@ -58,15 +58,61 @@ pub use error::ParseError;
 pub use island::IslandParser;
 pub use source::SourceProvider;
 
+/// A partial parse result: the best-effort AST plus accumulated errors.
+///
+/// Returned in the `Err` variant of [`parse()`] when element-level parse
+/// errors occur. Unlike discarding the entire file, this preserves all
+/// successfully parsed elements:
+///
+/// - **Compiler**: can declare/resolve elements from valid portions
+/// - **LSP**: can show diagnostics alongside partial navigation
+/// - **CLI**: can report all errors at once
+#[derive(Debug)]
+pub struct PartialSourceFile {
+    /// The partially parsed AST (may have fewer elements than the source).
+    pub source_file: SourceFile,
+    /// Parse errors (guaranteed non-empty).
+    pub errors: Vec<ParseError>,
+}
+
+/// Convenience: extract the AST from either Ok or Err.
+impl PartialSourceFile {
+    /// Returns the partial AST.
+    #[must_use]
+    pub fn into_source_file(self) -> SourceFile {
+        self.source_file
+    }
+}
+
+impl std::fmt::Display for PartialSourceFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} parse error(s)", self.errors.len())?;
+        if let Some(first) = self.errors.first() {
+            write!(f, ": {first}")?;
+        }
+        Ok(())
+    }
+}
+
 /// Parse Pure source text into an AST [`SourceFile`].
 ///
 /// Uses the default set of island grammar plugins (currently graph fetch).
 ///
 /// # Errors
 ///
-/// Returns `Err` if the source contains lexer or parser errors.
-pub fn parse(source: &str, source_name: &str) -> Result<SourceFile, ParseError> {
-    let tokens = legend_pure_parser_lexer::tokenize(source, source_name)?;
+/// - `Ok(SourceFile)` — all elements parsed successfully
+/// - `Err(PartialSourceFile)` — some elements failed to parse, but valid
+///   elements are preserved in `partial.source_file`
+#[allow(clippy::result_large_err)]
+pub fn parse(source: &str, source_name: &str) -> Result<SourceFile, PartialSourceFile> {
+    let tokens =
+        legend_pure_parser_lexer::tokenize(source, source_name).map_err(|e| PartialSourceFile {
+            source_file: SourceFile {
+                sections: vec![],
+                source_info: legend_pure_parser_ast::SourceInfo::new(source_name, 0, 0, 0, 0),
+            },
+            errors: vec![e.into()],
+        })?;
     let cursor = cursor::Cursor::new(tokens);
     let mut p = parser::Parser::new(cursor);
     p.parse_source_file()
@@ -79,13 +125,22 @@ pub fn parse(source: &str, source_name: &str) -> Result<SourceFile, ParseError> 
 ///
 /// # Errors
 ///
-/// Returns `Err` if the source contains lexer or parser errors.
+/// - `Ok(SourceFile)` — all elements parsed successfully
+/// - `Err(PartialSourceFile)` — some elements failed, valid elements preserved
+#[allow(clippy::result_large_err)]
 pub fn parse_with_islands(
     source: &str,
     source_name: &str,
     island_parsers: Vec<Box<dyn IslandParser>>,
-) -> Result<SourceFile, ParseError> {
-    let tokens = legend_pure_parser_lexer::tokenize(source, source_name)?;
+) -> Result<SourceFile, PartialSourceFile> {
+    let tokens =
+        legend_pure_parser_lexer::tokenize(source, source_name).map_err(|e| PartialSourceFile {
+            source_file: SourceFile {
+                sections: vec![],
+                source_info: legend_pure_parser_ast::SourceInfo::new(source_name, 0, 0, 0, 0),
+            },
+            errors: vec![e.into()],
+        })?;
     let cursor = cursor::Cursor::new(tokens);
     let mut p = parser::Parser::with_island_parsers(cursor, island_parsers);
     p.parse_source_file()
@@ -108,22 +163,25 @@ pub struct ParseOutput {
 /// Outcome of loading + parsing a single source.
 #[derive(Debug)]
 pub enum ParseOutcome {
-    /// Source loaded and parsed successfully.
+    /// Source loaded and parsed successfully (zero errors).
     Success(SourceFile),
-    /// Source loaded but parsing failed.
-    ParseError(ParseError),
+    /// Source loaded, partially parsed (some elements valid, some errors).
+    Partial(PartialSourceFile),
     /// Source could not be loaded (I/O error).
     IoError(std::io::Error),
 }
 
 impl ParseOutput {
-    /// Returns `true` if the source was loaded and parsed successfully.
+    /// Returns `true` if the source was loaded and parsed successfully
+    /// (with zero errors).
     #[must_use]
     pub fn is_ok(&self) -> bool {
         matches!(self.outcome, ParseOutcome::Success(_))
     }
 
-    /// Returns the AST if parsing succeeded, `None` otherwise.
+    /// Returns the AST if parsing succeeded fully, `None` otherwise.
+    ///
+    /// For partial results, use [`partial()`](Self::partial) instead.
     #[must_use]
     pub fn ast(&self) -> Option<&SourceFile> {
         match &self.outcome {
@@ -132,12 +190,41 @@ impl ParseOutput {
         }
     }
 
-    /// Consumes self and returns the AST if parsing succeeded.
+    /// Returns the AST regardless of whether parsing was full or partial.
+    #[must_use]
+    pub fn ast_any(&self) -> Option<&SourceFile> {
+        match &self.outcome {
+            ParseOutcome::Success(ast) => Some(ast),
+            ParseOutcome::Partial(p) => Some(&p.source_file),
+            ParseOutcome::IoError(_) => None,
+        }
+    }
+
+    /// Returns the partial result if the parse had errors.
+    #[must_use]
+    pub fn partial(&self) -> Option<&PartialSourceFile> {
+        match &self.outcome {
+            ParseOutcome::Partial(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Consumes self and returns the AST if parsing succeeded fully.
     #[must_use]
     pub fn into_ast(self) -> Option<SourceFile> {
         match self.outcome {
             ParseOutcome::Success(ast) => Some(ast),
             _ => None,
+        }
+    }
+
+    /// Consumes self and returns the AST from either full or partial results.
+    #[must_use]
+    pub fn into_ast_any(self) -> Option<SourceFile> {
+        match self.outcome {
+            ParseOutcome::Success(ast) => Some(ast),
+            ParseOutcome::Partial(p) => Some(p.source_file),
+            ParseOutcome::IoError(_) => None,
         }
     }
 }
@@ -179,7 +266,7 @@ pub fn parse_many<S: SourceProvider>(sources: &[S]) -> Vec<ParseOutput> {
                     let text_str = text.into_owned();
                     let outcome = match parse(&text_str, &name) {
                         Ok(ast) => ParseOutcome::Success(ast),
-                        Err(e) => ParseOutcome::ParseError(e),
+                        Err(partial) => ParseOutcome::Partial(partial),
                     };
                     ParseOutput {
                         name,

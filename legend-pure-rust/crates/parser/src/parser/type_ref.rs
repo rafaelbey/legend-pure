@@ -4,8 +4,8 @@ use super::{split_package_name, unquote_string};
 use crate::error::ParseError;
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::type_ref::{
-    Identifier, Multiplicity, MultiplicityArgument, Package, RelationColumn, RelationType,
-    TypeReference, TypeSpec, TypeVariableValue, UnitReference,
+    FUNCTION_TYPE_SENTINEL, Identifier, Multiplicity, MultiplicityArgument, Package,
+    RelationColumn, RelationType, TypeReference, TypeSpec, TypeVariableValue, UnitReference,
 };
 use legend_pure_parser_lexer::TokenKind;
 use smol_str::SmolStr;
@@ -14,6 +14,10 @@ impl Parser {
     // ── Type references ─────────────────────────────────────────────────
 
     pub(crate) fn parse_type_reference(&mut self) -> R<TypeReference> {
+        // Function type: {ParamType[mult] -> ReturnType[mult]}
+        if self.cursor.check(TokenKind::LBrace) {
+            return self.parse_function_type_as_type_ref();
+        }
         let start = self.cursor.current_source_info();
         let path = self.parse_package_path()?;
         let (pkg, name) = split_package_name(&path);
@@ -97,6 +101,15 @@ impl Parser {
     /// - Unit references: `NewMeasure~UnitOne`
     /// - Relation types: `(a:Integer, b:String)` or `Relation<(a:Integer, b:String)>`
     pub(crate) fn parse_type_spec(&mut self) -> R<TypeSpec> {
+        // Function type: {ParamType[mult] -> ReturnType[mult]}
+        if self.cursor.check(TokenKind::LBrace) {
+            let ft_ref = self.parse_function_type_as_type_ref()?;
+            // In TypeSpec context, we have the full FunctionType struct available
+            // but parse_function_type_as_type_ref returns a TypeReference with
+            // sentinel name. For simplicity, wrap it as TypeSpec::Type.
+            return Ok(TypeSpec::Type(ft_ref));
+        }
+
         // Bare relation type: (col:Type, ...)
         if self.cursor.check(TokenKind::LParen) {
             return self.parse_relation_type();
@@ -178,6 +191,79 @@ impl Parser {
         }
         self.cursor.expect(TokenKind::RParen)?;
         Ok(cols)
+    }
+
+    /// Parses a function type `{ParamType[mult], ... -> ReturnType[mult]}` and
+    /// encodes it as a `TypeReference` with [`FUNCTION_TYPE_SENTINEL`] name.
+    ///
+    /// The encoding stores parameter types in `type_arguments`, each with its
+    /// multiplicity in that type reference's `multiplicity_arguments[0]`.
+    /// The return type is the last entry in `type_arguments`, with the return
+    /// multiplicity in `multiplicity_arguments`.
+    ///
+    /// # Grammar
+    ///
+    /// ```text
+    /// functionType: '{' (functionTypeParam (',' functionTypeParam)*)? '->' typeRef '[' mult ']' '}'
+    /// functionTypeParam: typeRef '[' mult ']'
+    /// ```
+    pub(crate) fn parse_function_type_as_type_ref(&mut self) -> R<TypeReference> {
+        let start = self.cursor.current_source_info();
+        self.cursor.expect(TokenKind::LBrace)?;
+
+        let mut param_types = Vec::new();
+
+        // Parse parameter types until we hit `->`
+        // Tricky: we need to distinguish `{-> RetType[m]}` (no params) from
+        // `{ParamType[m] -> RetType[m]}` (one param).
+        if !self.cursor.check(TokenKind::Arrow) {
+            loop {
+                let param_si = self.cursor.current_source_info();
+                let param_type_ref = self.parse_type_reference()?;
+                self.cursor.expect(TokenKind::LBracket)?;
+                let param_mult = self.parse_multiplicity()?;
+                self.cursor.expect(TokenKind::RBracket)?;
+
+                // Encode param multiplicity into the type reference's multiplicity_arguments
+                let mut param_with_mult = param_type_ref;
+                param_with_mult
+                    .multiplicity_arguments
+                    .push(MultiplicityArgument::Concrete(param_mult, param_si));
+
+                param_types.push(param_with_mult);
+
+                if self.cursor.check(TokenKind::Arrow) {
+                    break;
+                }
+                self.cursor.expect(TokenKind::Comma)?;
+            }
+        }
+
+        self.cursor.expect(TokenKind::Arrow)?;
+
+        // Return type and multiplicity
+        let return_type = self.parse_type_reference()?;
+        self.cursor.expect(TokenKind::LBracket)?;
+        let return_mult = self.parse_multiplicity()?;
+        self.cursor.expect(TokenKind::RBracket)?;
+
+        self.cursor.expect(TokenKind::RBrace)?;
+
+        // Assemble: param types + return type all in type_arguments.
+        // Return multiplicity goes in the top-level multiplicity_arguments.
+        param_types.push(return_type);
+
+        Ok(TypeReference {
+            package: None,
+            name: SmolStr::new(FUNCTION_TYPE_SENTINEL),
+            type_arguments: param_types,
+            multiplicity_arguments: vec![MultiplicityArgument::Concrete(
+                return_mult,
+                start.clone(),
+            )],
+            type_variable_values: vec![],
+            source_info: start,
+        })
     }
 
     /// Parses optional `<TypeParams | MultParams>` on class/function declarations.

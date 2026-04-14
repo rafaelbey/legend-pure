@@ -136,19 +136,35 @@ pub fn run(args: CompileArgs) -> Result<(), CliError> {
                 }
                 source_files.push(sf);
             }
-            legend_pure_parser_parser::ParseOutcome::ParseError(e) => {
+            legend_pure_parser_parser::ParseOutcome::Partial(partial) => {
+                let count = partial.source_file.element_count();
                 eprintln!(
-                    "  {} {} — {}",
-                    "✗".red(),
+                    "  {} {} ({} element{} recovered, {} error{})",
+                    "⚠".yellow(),
                     path.display().dimmed(),
-                    diagnostics::format_error_with_path(path, &e).red()
+                    count,
+                    if count == 1 { "" } else { "s" },
+                    partial.errors.len(),
+                    if partial.errors.len() == 1 { "" } else { "s" }
                 );
-                if args.show_source
-                    && let Some(ref text) = output.source_text
-                {
-                    diagnostics::render_source_snippet(text, path, &e);
+                for e in &partial.errors {
+                    eprintln!(
+                        "      {} {}",
+                        "✗".red(),
+                        diagnostics::format_error_with_path(path, e).red()
+                    );
+                    if args.show_source
+                        && let Some(ref text) = output.source_text
+                    {
+                        diagnostics::render_source_snippet(text, path, e);
+                    }
                 }
-                parse_error_count += 1;
+                if let Some(text) = output.source_text {
+                    sources.insert(output.name, (path.clone(), text));
+                }
+                parse_error_count += partial.errors.len();
+                // Include valid elements from the partial parse
+                source_files.push(partial.source_file);
             }
             legend_pure_parser_parser::ParseOutcome::IoError(e) => {
                 return Err(CliError::Io {
@@ -160,7 +176,10 @@ pub fn run(args: CompileArgs) -> Result<(), CliError> {
     }
 
     if parse_error_count > 0 {
-        return Err(CliError::ParseErrors(parse_error_count));
+        eprintln!(
+            "\n  {} {parse_error_count} parse error(s) — proceeding with recovered elements",
+            "⚠".yellow()
+        );
     }
 
     // -- Phase 2: Compile --

@@ -35,6 +35,19 @@ use crate::source_info::{SourceInfo, Spanned};
 /// guaranteeing no collisions with user types.
 pub const RELATION_TYPE_SENTINEL: &str = "(RelationType)";
 
+/// Sentinel name for function types encoded inside `TypeReference`.
+///
+/// When a function type `{ParamType[mult] -> ReturnType[mult]}` appears in a
+/// type argument position (e.g., `Function<{->Z[y]}>`), the parser encodes it
+/// as a `TypeReference` with this name. The return type and multiplicity are
+/// stored in a `TypeReference` named `"(FunctionTypeReturn)"` appended to
+/// `type_arguments`, with the return multiplicity in `multiplicity_arguments`.
+/// All preceding `type_arguments` are parameter types, each with their own
+/// multiplicity in that parameter's entry's `multiplicity_arguments[0]`.
+///
+/// Uses curly braces which are lexically impossible for user-defined identifiers.
+pub const FUNCTION_TYPE_SENTINEL: &str = "{FunctionType}";
+
 // ---------------------------------------------------------------------------
 // Identifier
 // ---------------------------------------------------------------------------
@@ -494,10 +507,46 @@ pub struct RelationType {
     pub source_info: SourceInfo,
 }
 
-/// A type specification that can be a type, a unit reference, or a relation type.
+/// A function type: `{ParamType[mult], ... -> ReturnType[mult]}`.
+///
+/// Function types appear inside type arguments in higher-order signatures:
+/// ```text
+/// f:Function<{Function<{->Z[y]}>[1]->Z[y]}>[1]
+/// ```
+///
+/// # Examples
+///
+/// - `{->String[1]}` — no parameters, returns String[1]
+/// - `{Integer[1]->Boolean[1]}` — takes Integer[1], returns Boolean[1]
+/// - `{String[1], Integer[1]->Boolean[1]}` — two parameters
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
+pub struct FunctionType {
+    /// Parameter types, each with a type reference and multiplicity.
+    pub parameters: Vec<FunctionTypeParameter>,
+    /// Return type.
+    pub return_type: TypeReference,
+    /// Return multiplicity.
+    pub return_multiplicity: Multiplicity,
+    /// Source location.
+    pub source_info: SourceInfo,
+}
+
+/// A parameter in a function type: `Type[mult]`.
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
+pub struct FunctionTypeParameter {
+    /// Parameter type.
+    pub type_ref: TypeReference,
+    /// Parameter multiplicity.
+    pub multiplicity: Multiplicity,
+    /// Source location.
+    pub source_info: SourceInfo,
+}
+
+/// A type specification that can be a type, a unit reference, relation type,
+/// or function type.
 ///
 /// Used in positions where the Pure grammar accepts type references,
-/// unit names, or relation types (e.g., property types, return types, parameter types).
+/// unit names, relation types, or function types.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeSpec {
     /// A regular type reference: `String`, `Map<K, V>`.
@@ -506,6 +555,8 @@ pub enum TypeSpec {
     Unit(UnitReference),
     /// A relation type: `(a:Integer, b:String)`.
     Relation(RelationType),
+    /// A function type: `{Integer[1] -> Boolean[1]}`.
+    Function(FunctionType),
 }
 
 impl TypeSpec {
@@ -513,7 +564,7 @@ impl TypeSpec {
     ///
     /// # Panics
     ///
-    /// Panics if called on a `Relation` variant (no underlying `TypeReference`).
+    /// Panics if called on a `Relation` or `Function` variant.
     #[must_use]
     pub fn type_ref(&self) -> &TypeReference {
         match self {
@@ -521,6 +572,9 @@ impl TypeSpec {
             Self::Unit(ur) => &ur.measure,
             Self::Relation(_) => {
                 unreachable!("type_ref() called on TypeSpec::Relation — use pattern matching")
+            }
+            Self::Function(_) => {
+                unreachable!("type_ref() called on TypeSpec::Function — use pattern matching")
             }
         }
     }
@@ -532,6 +586,7 @@ impl TypeSpec {
             Self::Type(tr) => tr.full_path(),
             Self::Unit(ur) => format!("{}~{}", ur.measure.full_path(), ur.unit),
             Self::Relation(_) => "<RelationType>".to_string(),
+            Self::Function(_) => "<FunctionType>".to_string(),
         }
     }
 }
@@ -542,6 +597,7 @@ impl Spanned for TypeSpec {
             Self::Type(tr) => &tr.source_info,
             Self::Unit(ur) => &ur.source_info,
             Self::Relation(r) => &r.source_info,
+            Self::Function(f) => &f.source_info,
         }
     }
 }

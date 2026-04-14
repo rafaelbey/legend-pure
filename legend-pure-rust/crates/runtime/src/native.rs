@@ -195,6 +195,23 @@ impl NativeRegistry {
         self.functions.get(name).map(AsRef::as_ref)
     }
 
+    /// Look up a native function by simple name prefix.
+    ///
+    /// Searches for a registered function whose FQN key starts with
+    /// `"{simple_name}_"`. This is the fallback path for operator calls
+    /// that the compiler lowered with simple names (e.g., `"plus"`)
+    /// before FQN resolution.
+    ///
+    /// Returns the first match, or `None` if no function matches.
+    #[must_use]
+    pub fn find_by_prefix(&self, simple_name: &str) -> Option<&dyn NativeFunction> {
+        let prefix = format!("{simple_name}_");
+        self.functions
+            .iter()
+            .find(|(key, _)| key.starts_with(&prefix))
+            .map(|(_, func)| func.as_ref())
+    }
+
     /// Look up a native function, returning a `FunctionNotFound` error if missing.
     ///
     /// # Errors
@@ -218,8 +235,8 @@ impl NativeRegistry {
 
     /// Create a registry pre-loaded with all standard Pure native functions.
     ///
-    /// This includes arithmetic, comparison, boolean, string, and collection
-    /// operations.
+    /// This includes arithmetic, comparison, boolean, string, collection,
+    /// and language-level (let, if, map, filter, fold, assert) operations.
     #[must_use]
     pub fn standard() -> Self {
         let mut registry = Self::new();
@@ -228,6 +245,8 @@ impl NativeRegistry {
         boolean::register(&mut registry);
         string::register(&mut registry);
         collection::register(&mut registry);
+        lang::register(&mut registry);
+        testing::register(&mut registry);
         registry
     }
 }
@@ -304,6 +323,12 @@ pub mod string;
 
 /// Collection native functions: `size`, `at`, `first`, `last`, etc.
 pub mod collection;
+
+/// Language-level natives: `letFunction`, `if`.
+pub mod lang;
+
+/// Test assertion natives: `assert`.
+pub mod testing;
 
 // ---------------------------------------------------------------------------
 // Test helpers

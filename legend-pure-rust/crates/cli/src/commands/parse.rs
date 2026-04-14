@@ -95,19 +95,26 @@ pub fn run(args: ParseArgs) -> Result<(), CliError> {
                 all_elements.extend(pmcd.elements);
                 eprintln!("  {} {}", "✓".green(), path.display().dimmed());
             }
-            legend_pure_parser_parser::ParseOutcome::ParseError(e) => {
-                eprintln!(
-                    "  {} {} — {}",
-                    "✗".red(),
-                    path.display().dimmed(),
-                    diagnostics::format_error_with_path(path, &e).red()
-                );
-                if args.show_source
-                    && let Some(ref text) = output.source_text
-                {
-                    diagnostics::render_source_snippet(text, path, &e);
+            legend_pure_parser_parser::ParseOutcome::Partial(partial) => {
+                // Include valid elements from the partial parse
+                let pmcd = legend_pure_parser_protocol::v1::convert::convert_source_file(
+                    &partial.source_file,
+                )?;
+                all_elements.extend(pmcd.elements);
+                for e in &partial.errors {
+                    eprintln!(
+                        "  {} {} — {}",
+                        "✗".red(),
+                        path.display().dimmed(),
+                        diagnostics::format_error_with_path(path, e).red()
+                    );
+                    if args.show_source
+                        && let Some(ref text) = output.source_text
+                    {
+                        diagnostics::render_source_snippet(text, path, e);
+                    }
                 }
-                errors.push((path.clone(), e));
+                errors.push((path.clone(), partial.errors));
             }
             legend_pure_parser_parser::ParseOutcome::IoError(e) => {
                 return Err(CliError::Io {

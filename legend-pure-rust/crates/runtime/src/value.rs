@@ -400,6 +400,23 @@ impl Value {
             _ => false,
         }
     }
+
+    /// Create a value from a `Vec`, normalizing multiplicity:
+    ///
+    /// - Empty → `Unit`
+    /// - Single → the scalar value directly
+    /// - Multiple → `Collection`
+    ///
+    /// This matches Pure's multiplicity semantics where `[0]` = empty,
+    /// `[1]` = scalar, and `[*]` = collection.
+    #[must_use]
+    pub fn from_vec(mut values: Vec<Value>) -> Value {
+        match values.len() {
+            0 => Value::Unit,
+            1 => values.pop().unwrap_or(Value::Unit),
+            _ => Value::Collection(PVector::from_iter(values)),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

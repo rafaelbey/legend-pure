@@ -61,7 +61,7 @@ use crate::date::PureDate;
 use crate::error::{PureException, PureRuntimeError, StackFrame};
 use crate::heap::RuntimeHeap;
 use crate::hooks::{EvalHooks, NoOpHooks};
-use crate::native::NativeRegistry;
+use crate::native::{NativeFunction, NativeRegistry};
 use crate::value::{LambdaClosure, Value};
 
 /// Evaluator state — holds mutable context during expression evaluation.
@@ -279,6 +279,22 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         self.call_user_function(element_id, args, name)
     }
 
+    /// Call a Pure function by its resolved [`ElementId`] with no arguments.
+    ///
+    /// This is the primary entry point for integration tests that resolve
+    /// functions externally (e.g., via [`PureModel::resolve_function_by_path`]).
+    ///
+    /// # Errors
+    /// Returns `PureException` if the element is not a function or evaluation fails.
+    #[allow(clippy::result_large_err)]
+    pub fn call_user_function_by_id(
+        &mut self,
+        element_id: ElementId,
+    ) -> Result<Value, PureException> {
+        let name = self.model.get_node(element_id).name.clone();
+        self.call_user_function(element_id, &[], &name)
+    }
+
     // -----------------------------------------------------------------------
     // Date literal evaluation
     // -----------------------------------------------------------------------
@@ -374,49 +390,17 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
 
         // 2. Try native dispatch
         if let Some(native) = self.natives.get(lookup_key) {
-            if native.defer_execution() {
-                // Deferred execution: pass unevaluated expressions as lambdas.
-                let deferred_args: Vec<Value> = arguments
-                    .iter()
-                    .map(|arg| {
-                        Value::Lambda(LambdaClosure {
-                            parameters: vec![],
-                            body: vec![arg.clone()],
-                            captures: HashMap::new(),
-                        })
-                    })
-                    .collect();
+            return self.dispatch_native(native, lookup_key, arguments, source_info);
+        }
 
-                let result = {
-                    let mut ctx = EvalContext { evaluator: self };
-                    native.execute(&deferred_args, &mut ctx)
-                };
-
-                return result.map_err(|e| {
-                    PureException::from(e).with_frame(StackFrame {
-                        function_name: lookup_key.into(),
-                        source: source_info.clone(),
-                    })
-                });
+        // 2b. Fallback: prefix-based native lookup for unresolved operators.
+        //     When function is None (operators like `plus`, `not`), the lookup_key
+        //     is the simple name. Try matching against the mangled FQN registry
+        //     keys (e.g., "plus" → "plus_Integer_MANY__Integer_1_").
+        if function.is_none() {
+            if let Some(native) = self.natives.find_by_prefix(lookup_key) {
+                return self.dispatch_native(native, lookup_key, arguments, source_info);
             }
-
-            // Eager evaluation: evaluate all arguments left-to-right
-            let mut args = Vec::with_capacity(arguments.len());
-            for arg in arguments {
-                args.push(self.eval(arg)?);
-            }
-
-            let result = {
-                let mut ctx = EvalContext { evaluator: self };
-                native.execute(&args, &mut ctx)
-            };
-
-            return result.map_err(|e| {
-                PureException::from(e).with_frame(StackFrame {
-                    function_name: lookup_key.into(),
-                    source: source_info.clone(),
-                })
-            });
         }
 
         // 3. Try user function dispatch
@@ -432,6 +416,64 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         Err(PureException::from(PureRuntimeError::FunctionNotFound(
             function_name.into(),
         )))
+    }
+
+    // -----------------------------------------------------------------------
+    // Native function dispatch
+    // -----------------------------------------------------------------------
+
+    /// Dispatch a native function, handling both deferred and eager execution.
+    #[allow(clippy::result_large_err)]
+    fn dispatch_native(
+        &mut self,
+        native: &dyn NativeFunction,
+        lookup_key: &str,
+        arguments: &[ValueSpec],
+        source_info: &legend_pure_parser_ast::SourceInfo,
+    ) -> Result<Value, PureException> {
+        if native.defer_execution() {
+            // Deferred execution: pass unevaluated expressions as lambdas.
+            let deferred_args: Vec<Value> = arguments
+                .iter()
+                .map(|arg| {
+                    Value::Lambda(LambdaClosure {
+                        parameters: vec![],
+                        body: vec![arg.clone()],
+                        captures: HashMap::new(),
+                    })
+                })
+                .collect();
+
+            let result = {
+                let mut ctx = EvalContext { evaluator: self };
+                native.execute(&deferred_args, &mut ctx)
+            };
+
+            return result.map_err(|e| {
+                PureException::from(e).with_frame(StackFrame {
+                    function_name: lookup_key.into(),
+                    source: source_info.clone(),
+                })
+            });
+        }
+
+        // Eager evaluation: evaluate all arguments left-to-right
+        let mut args = Vec::with_capacity(arguments.len());
+        for arg in arguments {
+            args.push(self.eval(arg)?);
+        }
+
+        let result = {
+            let mut ctx = EvalContext { evaluator: self };
+            native.execute(&args, &mut ctx)
+        };
+
+        result.map_err(|e| {
+            PureException::from(e).with_frame(StackFrame {
+                function_name: lookup_key.into(),
+                source: source_info.clone(),
+            })
+        })
     }
 
     // -----------------------------------------------------------------------
