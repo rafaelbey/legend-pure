@@ -28,6 +28,7 @@ use legend_pure_parser_ast::expression::{
 use legend_pure_parser_ast::island::IslandExpression;
 use legend_pure_parser_ast::type_ref::Package;
 use legend_pure_parser_lexer::TokenKind;
+use smol_str::SmolStr;
 
 impl Parser {
     // ── Expressions (precedence-climbing recursive descent) ─────────────
@@ -559,6 +560,15 @@ impl Parser {
             | TokenKind::Function
             | TokenKind::PathSep => {
                 let path = self.parse_package_path()?;
+
+                // Handle Measure~Unit references: RomanLength~Pes
+                let tilde_suffix = if self.cursor.eat(TokenKind::Tilde) {
+                    let (unit_name, _) = self.cursor.expect_identifier_or_keyword()?;
+                    Some(unit_name)
+                } else {
+                    None
+                };
+
                 if self.cursor.check(TokenKind::LParen) {
                     // Function call: name(args)
                     self.cursor.advance();
@@ -568,7 +578,10 @@ impl Parser {
                         self.cursor.eat(TokenKind::Comma);
                     }
                     self.cursor.expect(TokenKind::RParen)?;
-                    let (pkg, name) = split_package_name(&path);
+                    let (pkg, mut name) = split_package_name(&path);
+                    if let Some(unit) = &tilde_suffix {
+                        name = SmolStr::new(format!("{name}~{unit}"));
+                    }
                     let func = PackageableElementPtr {
                         package: pkg,
                         name,
@@ -581,7 +594,10 @@ impl Parser {
                     }))
                 } else {
                     // Bare element reference (no parens): String, my::Enum, MyClass
-                    let (pkg, name) = split_package_name(&path);
+                    let (pkg, mut name) = split_package_name(&path);
+                    if let Some(unit) = &tilde_suffix {
+                        name = SmolStr::new(format!("{name}~{unit}"));
+                    }
                     let element = PackageableElementPtr {
                         package: pkg,
                         name,

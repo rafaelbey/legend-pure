@@ -168,4 +168,23 @@ impl Cursor {
             )),
         }
     }
+
+    /// Skips tokens until the matching close delimiter is found, handling nesting.
+    ///
+    /// The opening delimiter must have already been consumed before calling this.
+    pub fn skip_balanced(&mut self, open: TokenKind, close: TokenKind) {
+        let mut depth = 1u32;
+        while depth > 0 && self.peek_kind() != TokenKind::Eof {
+            if self.peek_kind() == open {
+                depth += 1;
+            } else if self.peek_kind() == close {
+                depth -= 1;
+                if depth == 0 {
+                    self.advance();
+                    return;
+                }
+            }
+            self.advance();
+        }
+    }
 }

@@ -18,14 +18,28 @@ use legend_pure_parser_lexer::TokenKind;
 use super::{Parser, R, split_package_name};
 
 impl Parser {
-    /// Parses: `Primitive fqn::Name extends BaseType`
+    /// Parses: `Primitive fqn::Name[(params)] extends BaseType [\n constraints\n]`
     pub(crate) fn parse_primitive_def(&mut self) -> R<Element> {
         let si = self.cursor.current_source_info();
         self.cursor.expect(TokenKind::Primitive)?;
         let path = self.parse_package_path()?;
         let (pkg, name) = split_package_name(&path);
+
+        // Skip optional type variable parameters: (x:Integer[1])
+        if self.cursor.eat(TokenKind::LParen) {
+            self.cursor
+                .skip_balanced(TokenKind::LParen, TokenKind::RParen);
+        }
+
         self.cursor.expect(TokenKind::Extends)?;
         let super_type = self.parse_type_reference()?;
+
+        // Skip optional constraint block: [ $this < $x ]
+        if self.cursor.eat(TokenKind::LBracket) {
+            self.cursor
+                .skip_balanced(TokenKind::LBracket, TokenKind::RBracket);
+        }
+
         Ok(Element::Primitive(PrimitiveDef {
             package: pkg,
             name,
