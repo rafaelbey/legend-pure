@@ -22,8 +22,8 @@ use legend_pure_parser_ast::expression::{
     ComparisonOp, CopyExpr, DateTimeLiteral, DecimalLiteral, Expression, FloatLiteral,
     FunctionApplication, IntegerLiteral, KeyValuePair, Lambda, LetExpr, Literal, LogicalExpr,
     LogicalOp, MemberAccess, NewInstanceExpr, NotExpr, PackageableElementRef,
-    QualifiedMemberAccess, SimpleMemberAccess, StrictDateLiteral, StrictTimeLiteral, StringLiteral,
-    TypeReferenceExpr, UnaryMinusExpr, Variable,
+    QualifiedMemberAccess, SimpleMemberAccess, SliceExpr, StrictDateLiteral, StrictTimeLiteral,
+    StringLiteral, TypeReferenceExpr, UnaryMinusExpr, Variable,
 };
 use legend_pure_parser_ast::island::IslandExpression;
 use legend_pure_parser_ast::type_ref::Package;
@@ -439,20 +439,65 @@ impl Parser {
                     source_info: si,
                 }))
             }
-            // Collection: [expr, ...]
+            // Collection: [expr, ...] or Range: [start:stop:step]
             TokenKind::LBracket => {
                 self.cursor.advance();
-                let mut elements = Vec::new();
-                while !self.cursor.check(TokenKind::RBracket) {
-                    elements.push(self.parse_expression()?);
-                    self.cursor.eat(TokenKind::Comma);
+                // Check for [:stop] (no start)
+                if self.cursor.eat(TokenKind::Colon) {
+                    let stop = self.parse_expression()?;
+                    let step = if self.cursor.eat(TokenKind::Colon) {
+                        Some(Box::new(self.parse_expression()?))
+                    } else {
+                        None
+                    };
+                    self.cursor.expect(TokenKind::RBracket)?;
+                    return Ok(Expression::Slice(SliceExpr {
+                        start: None,
+                        stop: Box::new(stop),
+                        step,
+                        source_info: si,
+                    }));
                 }
-                self.cursor.expect(TokenKind::RBracket)?;
-                Ok(Expression::Collection(CollectionExpr {
-                    elements,
-                    multiplicity: None,
-                    source_info: si,
-                }))
+                if self.cursor.check(TokenKind::RBracket) {
+                    self.cursor.advance();
+                    return Ok(Expression::Collection(CollectionExpr {
+                        elements: vec![],
+                        multiplicity: None,
+                        source_info: si,
+                    }));
+                }
+                let first = self.parse_expression()?;
+                // Range: [start:stop] or [start:stop:step]
+                if self.cursor.eat(TokenKind::Colon) {
+                    let stop = self.parse_expression()?;
+                    let step = if self.cursor.eat(TokenKind::Colon) {
+                        Some(Box::new(self.parse_expression()?))
+                    } else {
+                        None
+                    };
+                    self.cursor.expect(TokenKind::RBracket)?;
+                    Ok(Expression::Slice(SliceExpr {
+                        start: Some(Box::new(first)),
+                        stop: Box::new(stop),
+                        step,
+                        source_info: si,
+                    }))
+                } else {
+                    // Standard collection
+                    let mut elements = vec![first];
+                    while self.cursor.eat(TokenKind::Comma) {
+                        if self.cursor.check(TokenKind::RBracket) {
+                            break;
+                        }
+                        elements.push(self.parse_expression()?);
+                    }
+                    self.cursor.expect(TokenKind::RBracket)?;
+                    Ok(Expression::Collection(CollectionExpr {
+                        elements,
+                        multiplicity: None,
+                        source_info: si,
+                    }))
+                }
             }
             // Parenthesized expression: (expr)
             TokenKind::LParen => {

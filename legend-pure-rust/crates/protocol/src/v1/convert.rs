@@ -487,6 +487,14 @@ pub fn convert_expression_typed(
             source_information: source_information(&e.source_info),
         }),
 
+        // Slice expressions are desugared by the compiler to range() calls;
+        // emit an empty collection as placeholder for protocol serialization.
+        Expression::Slice(e) => ValueSpecification::Collection(ProtocolCollection {
+            multiplicity: collection_multiplicity(0),
+            values: vec![],
+            source_information: source_information(&e.source_info),
+        }),
+
         // -- New instance: `^MyClass(name='John')` → classInstance --
         Expression::NewInstance(e) => {
             let key_expressions: Vec<ValueSpecification> = e

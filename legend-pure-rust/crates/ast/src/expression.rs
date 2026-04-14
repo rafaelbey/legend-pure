@@ -89,6 +89,8 @@ pub enum Expression {
     Let(LetExpr),
     /// Collection literal: `[1, 2, 3]`.
     Collection(CollectionExpr),
+    /// Slice expression: `[0:5]`, `[0:5:1]`, `[:5]`.
+    Slice(SliceExpr),
     /// New instance: `^MyClass(name='John')`.
     NewInstance(NewInstanceExpr),
     /// Copy with overrides: `^$var(prop='new value')`.
@@ -133,6 +135,7 @@ impl Spanned for Expression {
             Self::Lambda(e) => &e.source_info,
             Self::Let(e) => &e.source_info,
             Self::Collection(e) => &e.source_info,
+            Self::Slice(e) => &e.source_info,
             Self::NewInstance(e) => &e.source_info,
             Self::Copy(e) => &e.source_info,
             Self::Column(e) => e.source_info(),
@@ -560,6 +563,22 @@ pub struct CollectionExpr {
     pub source_info: SourceInfo,
 }
 
+/// A slice expression: `[start:stop:step]` or `[start:stop]` or `[:stop]`.
+///
+/// Named to match the Java ANTLR grammar rule `sliceExpression`.
+/// Sugar for `range(start, stop, step)` function call.
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
+pub struct SliceExpr {
+    /// The start expression (optional — `[:5]` has no start).
+    pub start: Option<Box<Expression>>,
+    /// The stop expression.
+    pub stop: Box<Expression>,
+    /// The step expression (optional — `[0:5]` has no step).
+    pub step: Option<Box<Expression>>,
+    /// Source location.
+    pub source_info: SourceInfo,
+}
+
 /// A new instance expression: `^MyClass(prop1='val', prop2=42)`.
 #[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct NewInstanceExpr {
@@ -700,6 +719,7 @@ pub trait ExpressionVisitor {
             Expression::Lambda(e) => self.visit_lambda(e),
             Expression::Let(e) => self.visit_let(e),
             Expression::Collection(e) => self.visit_collection(e),
+            Expression::Slice(e) => self.visit_slice(e),
             Expression::NewInstance(e) => self.visit_new_instance(e),
             Expression::Copy(e) => self.visit_copy(e),
             Expression::Column(e) => self.visit_column(e),
@@ -741,6 +761,16 @@ pub trait ExpressionVisitor {
     fn visit_let(&mut self, expr: &LetExpr) {}
     /// Visit a collection expression.
     fn visit_collection(&mut self, expr: &CollectionExpr) {}
+    /// Visit a slice expression.
+    fn visit_slice(&mut self, expr: &SliceExpr) {
+        if let Some(s) = &expr.start {
+            self.visit(s);
+        }
+        self.visit(&expr.stop);
+        if let Some(s) = &expr.step {
+            self.visit(s);
+        }
+    }
     /// Visit a new instance expression.
     fn visit_new_instance(&mut self, expr: &NewInstanceExpr) {}
     /// Visit a copy expression.

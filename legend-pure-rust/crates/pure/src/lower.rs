@@ -115,6 +115,18 @@ pub(crate) fn lower_expression(
             });
             None
         }
+        ast_expr::Expression::Slice(_) => {
+            // Slice expressions are desugared to range() function calls.
+            let source_info = expr.source_info().clone();
+            errors.push(CompilationError {
+                message: "Slice expression lowering not yet implemented".to_string(),
+                source_info: source_info.clone(),
+                kind: crate::error::CompilationErrorKind::UnsupportedExpression {
+                    kind: SmolStr::new_static("Slice"),
+                },
+            });
+            None
+        }
     }
 }
 
