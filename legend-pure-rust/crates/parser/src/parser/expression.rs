@@ -19,11 +19,11 @@ use crate::error::ParseError;
 use legend_pure_parser_ast::annotation::{PackageableElementPtr, Parameter};
 use legend_pure_parser_ast::expression::{
     ArithmeticExpr, ArithmeticOp, ArrowFunction, BooleanLiteral, CollectionExpr, ComparisonExpr,
-    ComparisonOp, DateTimeLiteral, DecimalLiteral, Expression, FloatLiteral, FunctionApplication,
-    IntegerLiteral, KeyValuePair, Lambda, LetExpr, Literal, LogicalExpr, LogicalOp, MemberAccess,
-    NewInstanceExpr, NotExpr, PackageableElementRef, QualifiedMemberAccess, SimpleMemberAccess,
-    StrictDateLiteral, StrictTimeLiteral, StringLiteral, TypeReferenceExpr, UnaryMinusExpr,
-    Variable,
+    ComparisonOp, CopyExpr, DateTimeLiteral, DecimalLiteral, Expression, FloatLiteral,
+    FunctionApplication, IntegerLiteral, KeyValuePair, Lambda, LetExpr, Literal, LogicalExpr,
+    LogicalOp, MemberAccess, NewInstanceExpr, NotExpr, PackageableElementRef,
+    QualifiedMemberAccess, SimpleMemberAccess, StrictDateLiteral, StrictTimeLiteral, StringLiteral,
+    TypeReferenceExpr, UnaryMinusExpr, Variable,
 };
 use legend_pure_parser_ast::island::IslandExpression;
 use legend_pure_parser_ast::type_ref::Package;
@@ -341,9 +341,37 @@ impl Parser {
                     source_info: si,
                 }))
             }
-            // New instance: ^Type(props) or ^Type<Args>(props)
+            // New instance: ^Type(props), ^Type<Args>(props), or copy: ^$var(overrides)
             TokenKind::Caret => {
                 self.cursor.advance();
+
+                // Copy from variable: ^$var(overrides)
+                if self.cursor.check(TokenKind::Dollar) {
+                    self.cursor.advance();
+                    let (var_name, _) = self.cursor.expect_identifier_or_keyword()?;
+                    self.cursor.expect(TokenKind::LParen)?;
+                    let mut assignments = Vec::new();
+                    while !self.cursor.check(TokenKind::RParen) {
+                        let kv_si = self.cursor.current_source_info();
+                        let (prop, _) = self.cursor.expect_identifier()?;
+                        self.cursor.expect(TokenKind::Equals)?;
+                        let val = self.parse_expression()?;
+                        assignments.push(KeyValuePair {
+                            key: prop,
+                            value: val,
+                            source_info: kv_si,
+                        });
+                        self.cursor.eat(TokenKind::Comma);
+                    }
+                    self.cursor.expect(TokenKind::RParen)?;
+                    return Ok(Expression::Copy(CopyExpr {
+                        source: var_name,
+                        assignments,
+                        source_info: si,
+                    }));
+                }
+
+                // New instance: ^Type(props) or ^Type<Args>(props)
                 let path = self.parse_package_path()?;
                 let (pkg, name) = split_package_name(&path);
 

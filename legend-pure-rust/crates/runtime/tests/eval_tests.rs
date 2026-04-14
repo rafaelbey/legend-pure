@@ -112,7 +112,10 @@ fn compile_with_platform(user_source: &str) -> PureModel {
     let user_ast = legend_pure_parser_parser::parse(user_source, "<test>").unwrap_or_else(|e| {
         panic!(
             "Parse error: {:?}",
-            e.errors.iter().map(std::string::ToString::to_string).collect::<Vec<_>>()
+            e.errors
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>()
         )
     });
 
@@ -444,19 +447,29 @@ fn eval_let_with_if_and_arithmetic() {
 // ===========================================================================
 
 #[test]
-#[ignore = "TDD: awaiting evaluator support for variable shadowing"]
-fn eval_variable_shadowing_block() {
+#[ignore = "TDD: awaiting evaluator support for let inside lambda shadowing outer"]
+fn eval_lambda_let_shadows_outer_let() {
     let result = eval_pure(
-        r"
-        function test::f(): Integer[1] {
+        r#"
+        function test::f(): Integer[*] {
             let x = 10;
-            let x = 20;
-            $x + 5;
+            [1, 2, 3]->map(y | 
+                let x = 20;
+                $x + $y
+            );
         }
-        ",
-        "f__Integer_1_",
+        "#,
+        "f__Integer_MANY_",
     );
-    assert_eq!(result, Value::Integer(25));
+    match result {
+        Value::Collection(v) => {
+            assert_eq!(v.len(), 3);
+            assert_eq!(v[0], Value::Integer(21));
+            assert_eq!(v[1], Value::Integer(22));
+            assert_eq!(v[2], Value::Integer(23));
+        }
+        other => panic!("Expected Collection, got {other:?}"),
+    }
 }
 
 #[test]
@@ -507,8 +520,8 @@ fn eval_closure_captures_outer_scope() {
 }
 
 #[test]
-#[ignore = "TDD: awaiting evaluator support for nested closure variable escaping/capturing"]
-fn eval_closure_nested_shadowing() {
+#[ignore = "TDD: awaiting evaluator support for closure variable escaping/capturing"]
+fn eval_closure_captures_and_binds_inner_let() {
     let result = eval_pure(
         r"
         function test::f(): Integer[*] {

@@ -1482,3 +1482,29 @@ fn compile_multiple_let_same_variable() {
     ));
     assert_eq!(partial.errors[0].message, "'x' has already been defined!");
 }
+
+#[test]
+#[ignore = "TDD: awaiting compiler support for shadowing outer scopes in lambdas"]
+fn compile_lambda_let_shadows_outer_let() {
+    // Should compile cleanly because x is in a new lambda scope
+    let source =
+        "function test::f(): Integer[*] { let x = 42; [1, 2]->map(y | let x = 43; $x + $y); }";
+    let Ok(_) = compile_one(source) else {
+        panic!("Lambda let should be allowed to shadow outer block let");
+    };
+}
+
+#[test]
+fn compile_let_shadows_function_parameter() {
+    // Should fail cleanly, just like a block let shadowing a block let
+    let source = "function test::f(x: Integer[1]): Integer[1] { let x = 42; $x; }";
+    let Err(partial) = compile_one(source) else {
+        panic!("Should fail to compile because let shadows function parameter");
+    };
+    assert_eq!(partial.errors.len(), 1);
+    assert!(matches!(
+        partial.errors[0].kind,
+        legend_pure_parser_pure::error::CompilationErrorKind::DuplicateVariable { .. }
+    ));
+    assert_eq!(partial.errors[0].message, "'x' has already been defined!");
+}

@@ -132,6 +132,24 @@ fn generic_new_instance_nested() {
 }
 
 // ---------------------------------------------------------------------------
+// Copy from variable: ^$var(overrides)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn copy_from_variable() {
+    // ^$p2(lastName = 'new') — copy variable with property overrides
+    let ast = helpers::parse_ok("function pkg::f(p:Person[1]):Person[1] { ^$p(lastName = 'new') }");
+    assert_eq!(ast.element_count(), 1);
+}
+
+#[test]
+fn copy_from_variable_multiple_overrides() {
+    // ^$obj(a = 1, b = 'hello') — copy with multiple overrides
+    let ast = helpers::parse_ok("function pkg::g(x:Obj[1]):Obj[1] { ^$x(a = 1, b = 'hello') }");
+    assert_eq!(ast.element_count(), 1);
+}
+
+// ---------------------------------------------------------------------------
 // Error recovery
 // ---------------------------------------------------------------------------
 

@@ -22,7 +22,7 @@ use legend_pure_parser_ast::annotation::{PackageableElementPtr, Parameter};
 use legend_pure_parser_ast::element::PackageableElement as _;
 use legend_pure_parser_ast::expression::{
     ArithmeticExpr, ArithmeticOp, ArrowFunction, BitwiseExpr, BitwiseNotExpr, BitwiseOp,
-    CollectionExpr, ColumnExpression, ComparisonExpr, ComparisonOp, Expression,
+    CollectionExpr, ColumnExpression, ComparisonExpr, ComparisonOp, CopyExpr, Expression,
     FunctionApplication, Lambda, LetExpr, Literal, LogicalExpr, LogicalOp, MemberAccess,
     NewInstanceExpr, NotExpr, PackageableElementRef, TypeReferenceExpr, UnaryMinusExpr, Variable,
 };
@@ -160,6 +160,7 @@ fn compose_expression_prec(
         Expression::Let(e) => compose_let(w, e),
         Expression::Collection(e) => compose_collection(w, e),
         Expression::NewInstance(e) => compose_new_instance(w, e),
+        Expression::Copy(e) => compose_copy(w, e),
         Expression::Column(e) => compose_column(w, e),
         Expression::Island(e) => crate::island::compose_island(w, e),
         Expression::Group(inner) => {
@@ -437,6 +438,21 @@ fn compose_collection(w: &mut IndentWriter, e: &CollectionExpr) {
 fn compose_new_instance(w: &mut IndentWriter, e: &NewInstanceExpr) {
     w.write("^");
     compose_element_ptr(w, &e.class);
+    w.write("(");
+    for (i, kv) in e.assignments.iter().enumerate() {
+        if i > 0 {
+            w.write(", ");
+        }
+        w.write(&maybe_quote(&kv.key));
+        w.write("=");
+        compose_expression(w, &kv.value);
+    }
+    w.write(")");
+}
+
+fn compose_copy(w: &mut IndentWriter, e: &CopyExpr) {
+    w.write("^$");
+    w.write(&maybe_quote(&e.source));
     w.write("(");
     for (i, kv) in e.assignments.iter().enumerate() {
         if i > 0 {
