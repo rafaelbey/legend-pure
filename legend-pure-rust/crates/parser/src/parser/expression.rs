@@ -167,6 +167,11 @@ impl Parser {
                 source_info: si,
             }));
         }
+        // Unary plus: `+expr` is semantically a no-op (identity)
+        if self.cursor.check(TokenKind::Plus) {
+            self.cursor.advance();
+            return self.parse_unary();
+        }
         self.parse_postfix()
     }
 
@@ -354,6 +359,7 @@ impl Parser {
                     while !self.cursor.check(TokenKind::RParen) {
                         let kv_si = self.cursor.current_source_info();
                         let (prop, _) = self.cursor.expect_identifier()?;
+                        self.cursor.eat(TokenKind::Plus); // += (append) syntax
                         self.cursor.expect(TokenKind::Equals)?;
                         let val = self.parse_expression()?;
                         assignments.push(KeyValuePair {
@@ -401,6 +407,7 @@ impl Parser {
                 while !self.cursor.check(TokenKind::RParen) {
                     let kv_si = self.cursor.current_source_info();
                     let (prop, _) = self.cursor.expect_identifier()?;
+                    self.cursor.eat(TokenKind::Plus); // += (append) syntax
                     self.cursor.expect(TokenKind::Equals)?;
                     let val = self.parse_expression()?;
                     assignments.push(KeyValuePair {
