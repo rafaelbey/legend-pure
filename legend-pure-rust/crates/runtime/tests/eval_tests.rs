@@ -112,7 +112,7 @@ fn compile_with_platform(user_source: &str) -> PureModel {
     let user_ast = legend_pure_parser_parser::parse(user_source, "<test>").unwrap_or_else(|e| {
         panic!(
             "Parse error: {:?}",
-            e.errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+            e.errors.iter().map(std::string::ToString::to_string).collect::<Vec<_>>()
         )
     });
 
@@ -351,10 +351,10 @@ fn eval_collection_literal() {
 #[test]
 fn eval_call_user_function() {
     let result = eval_pure(
-        r#"
+        r"
         function test::double(x: Integer[1]): Integer[1] { $x * 2 }
         function test::f(): Integer[1] { test::double(21) }
-        "#,
+        ",
         "f__Integer_1_",
     );
     assert_eq!(result, Value::Integer(42));
@@ -363,12 +363,12 @@ fn eval_call_user_function() {
 #[test]
 fn eval_recursive_function() {
     let result = eval_pure(
-        r#"
+        r"
         function test::factorial(n: Integer[1]): Integer[1] {
             if($n == 0, |1, |$n * test::factorial($n - 1))
         }
         function test::f(): Integer[1] { test::factorial(5) }
-        "#,
+        ",
         "f__Integer_1_",
     );
     assert_eq!(result, Value::Integer(120));
@@ -427,14 +427,106 @@ fn eval_fold_sum() {
 #[test]
 fn eval_let_with_if_and_arithmetic() {
     let result = eval_pure(
-        r#"
+        r"
         function test::f(): String[1] {
             let x = 10;
             let y = 20;
             if($x + $y == 30, |'correct', |'wrong');
         }
-        "#,
+        ",
         "f__String_1_",
     );
     assert_eq!(result, Value::String("correct".into()));
+}
+
+// ===========================================================================
+// 12. Advanced Variable Shadowing & Closures (TDD)
+// ===========================================================================
+
+#[test]
+#[ignore = "TDD: awaiting evaluator support for variable shadowing"]
+fn eval_variable_shadowing_block() {
+    let result = eval_pure(
+        r"
+        function test::f(): Integer[1] {
+            let x = 10;
+            let x = 20;
+            $x + 5;
+        }
+        ",
+        "f__Integer_1_",
+    );
+    assert_eq!(result, Value::Integer(25));
+}
+
+#[test]
+#[ignore = "TDD: awaiting evaluator support for closure parameter shadowing"]
+fn eval_variable_shadowing_lambda() {
+    let result = eval_pure(
+        r"
+        function test::f(): Integer[*] {
+            let x = 10;
+            [1, 2, 3]->map(x | $x * 2);
+        }
+        ",
+        "f__Integer_MANY_",
+    );
+    match result {
+        Value::Collection(v) => {
+            assert_eq!(v.len(), 3);
+            assert_eq!(v[0], Value::Integer(2));
+            assert_eq!(v[1], Value::Integer(4));
+            assert_eq!(v[2], Value::Integer(6));
+        }
+        other => panic!("Expected Collection, got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "TDD: capturing outer scopes correctly across deep function calls"]
+fn eval_closure_captures_outer_scope() {
+    let result = eval_pure(
+        r"
+        function test::f(): Integer[*] {
+            let multiplier = 10;
+            let base = 5;
+            [1, 2, 3]->map(x | ($x * $multiplier) + $base);
+        }
+        ",
+        "f__Integer_MANY_",
+    );
+    match result {
+        Value::Collection(v) => {
+            assert_eq!(v.len(), 3);
+            assert_eq!(v[0], Value::Integer(15));
+            assert_eq!(v[1], Value::Integer(25));
+            assert_eq!(v[2], Value::Integer(35));
+        }
+        other => panic!("Expected Collection, got {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "TDD: awaiting evaluator support for nested closure variable escaping/capturing"]
+fn eval_closure_nested_shadowing() {
+    let result = eval_pure(
+        r"
+        function test::f(): Integer[*] {
+            let x = 100;
+            [1, 2]->map(y | 
+                let inner = $x;
+                $inner + $y
+            );
+        }
+        ",
+        "f__Integer_MANY_",
+    );
+    match result {
+        Value::Collection(v) => {
+            assert_eq!(v.len(), 2);
+            assert_eq!(v[0], Value::Integer(101));
+            assert_eq!(v[1], Value::Integer(102));
+        }
+        other => panic!("Expected Collection, got {other:?}"),
+    }
 }

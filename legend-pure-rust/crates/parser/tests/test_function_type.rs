@@ -110,6 +110,28 @@ fn nested_function_type_double_close() {
 }
 
 // ---------------------------------------------------------------------------
+// Generic new-instance: ^Type<Args>(props)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn generic_new_instance() {
+    // ^List<U>(values = $vals) — generic type argument on new-instance
+    let ast = helpers::parse_ok(
+        "function pkg::mkList<U>(vals:U[*]):List<U>[1] { ^List<U>(values = $vals) }",
+    );
+    assert_eq!(ast.element_count(), 1);
+}
+
+#[test]
+fn generic_new_instance_nested() {
+    // ^Map<String, List<Integer>>(entries = []) — nested generics on new-instance
+    let ast = helpers::parse_ok(
+        "function pkg::mkMap():Map<String, List<Integer>>[1] { ^Map<String, List<Integer>>(entries = []) }",
+    );
+    assert_eq!(ast.element_count(), 1);
+}
+
+// ---------------------------------------------------------------------------
 // Error recovery
 // ---------------------------------------------------------------------------
 

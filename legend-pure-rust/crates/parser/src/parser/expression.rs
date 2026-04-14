@@ -341,11 +341,28 @@ impl Parser {
                     source_info: si,
                 }))
             }
-            // New instance: ^Type(props)
+            // New instance: ^Type(props) or ^Type<Args>(props)
             TokenKind::Caret => {
                 self.cursor.advance();
                 let path = self.parse_package_path()?;
                 let (pkg, name) = split_package_name(&path);
+
+                // Optional type arguments: ^List<U>(...)
+                let type_arguments = if self.cursor.eat(TokenKind::Less) {
+                    let mut args = Vec::new();
+                    loop {
+                        args.push(self.parse_type_reference()?);
+                        if !self.cursor.eat(TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                    self.cursor.expect_closing_angle_bracket()?;
+                    args
+                } else {
+                    vec![]
+                };
+                let _ = type_arguments; // TODO: store in NewInstanceExpr when compiler needs it
+
                 let class_ref = PackageableElementPtr {
                     package: pkg,
                     name,
