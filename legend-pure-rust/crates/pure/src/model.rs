@@ -505,6 +505,41 @@ impl PureModel {
             })
             .copied()
     }
+
+    /// Resolves an element by its exact mangled FQN within a package path.
+    ///
+    /// The last segment of `path` is the exact mangled function name
+    /// (e.g., `"f__Integer_1_"`), and preceding segments are the
+    /// package path (e.g., `["test", "f__Integer_1_"]`).
+    ///
+    /// This is the correct lookup method for FQN-based dispatch where
+    /// the mangled name is known.
+    ///
+    /// Returns `None` if no matching element is found.
+    #[must_use]
+    pub fn resolve_by_fqn(&self, path: &[SmolStr]) -> Option<ElementId> {
+        if path.is_empty() {
+            return None;
+        }
+
+        let (pkg_path, name) = path.split_at(path.len() - 1);
+        let mut current = self.root_package;
+
+        for segment in pkg_path {
+            let pkg = self.get_package(current);
+            current = *pkg
+                .children_packages
+                .iter()
+                .find(|&&child_id| self.global_packages.get(child_id.0).name == *segment)?;
+        }
+
+        let fqn = &name[0];
+        let pkg = self.get_package(current);
+        pkg.children_elements
+            .iter()
+            .find(|&&eid| self.get_node(eid).name == *fqn)
+            .copied()
+    }
 }
 
 impl Default for PureModel {

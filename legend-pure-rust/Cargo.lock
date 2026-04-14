@@ -902,6 +902,7 @@ dependencies = [
 name = "legend-pure-parser-pure"
 version = "0.1.0"
 dependencies = [
+ "legend-pure-core-platform",
  "legend-pure-parser-ast",
  "legend-pure-parser-parser",
  "rust_decimal",
@@ -930,6 +931,7 @@ dependencies = [
  "jiff",
  "legend-pure-core-platform",
  "legend-pure-parser-ast",
+ "legend-pure-parser-parser",
  "legend-pure-parser-pure",
  "rust_decimal",
  "slotmap",

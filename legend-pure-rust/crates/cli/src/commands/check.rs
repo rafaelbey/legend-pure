@@ -89,19 +89,30 @@ pub fn run(args: CheckArgs) -> Result<(), CliError> {
                 );
                 ok_count += 1;
             }
-            legend_pure_parser_parser::ParseOutcome::ParseError(e) => {
+            legend_pure_parser_parser::ParseOutcome::Partial(partial) => {
+                let count = partial.source_file.element_count();
                 eprintln!(
-                    "  {} {} — {}",
-                    "✗".red(),
+                    "  {} {} ({} element{} recovered, {} error{})",
+                    "⚠".yellow(),
                     path.display().dimmed(),
-                    diagnostics::format_error_with_path(path, &e).red()
+                    count,
+                    if count == 1 { "" } else { "s" },
+                    partial.errors.len(),
+                    if partial.errors.len() == 1 { "" } else { "s" }
                 );
-                if args.show_source
-                    && let Some(ref text) = output.source_text
-                {
-                    diagnostics::render_source_snippet(text, path, &e);
+                for e in &partial.errors {
+                    eprintln!(
+                        "      {} {}",
+                        "✗".red(),
+                        diagnostics::format_error_with_path(path, e).red()
+                    );
+                    if args.show_source
+                        && let Some(ref text) = output.source_text
+                    {
+                        diagnostics::render_source_snippet(text, path, e);
+                    }
                 }
-                error_count += 1;
+                error_count += partial.errors.len();
             }
             legend_pure_parser_parser::ParseOutcome::IoError(e) => {
                 return Err(CliError::Io {

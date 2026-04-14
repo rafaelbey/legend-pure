@@ -58,18 +58,20 @@ pub struct TestArgs {
 
 pub fn run(args: TestArgs) -> Result<(), CliError> {
     // 1. Load platform model
-    let platform = load_platform();
-    // For now, ignore pure compilation errors if any, but in production we'd report them.
-    if !platform.compilation_errors.is_empty() {
-        println!(
-            "Warning: Loaded platform with {} compilation errors",
-            platform.compilation_errors.len()
-        );
-    }
+    let model = match load_platform() {
+        Ok(m) => m,
+        Err(partial) => {
+            println!(
+                "Warning: Platform loaded with {} error(s)",
+                partial.errors.len()
+            );
+            partial.model
+        }
+    };
 
     // 2. Call the Pure test surveyor:
     let registry = NativeRegistry::standard();
-    let mut evaluator = Evaluator::new(&platform.model, &registry);
+    let mut evaluator = Evaluator::new(&model, &registry);
 
     // Evaluate via surveyor
     let result = evaluator

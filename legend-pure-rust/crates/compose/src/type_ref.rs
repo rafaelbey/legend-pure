@@ -99,11 +99,31 @@ pub fn compose_relation_type(w: &mut IndentWriter, rt: &RelationType) {
     w.write(")");
 }
 
-/// Composes a type spec (type, unit reference, or relation type).
+/// Composes a type spec (type, unit reference, relation type, or function type).
 pub fn compose_type_spec(w: &mut IndentWriter, ts: &TypeSpec) {
     match ts {
         TypeSpec::Type(tr) => compose_type_reference(w, tr),
         TypeSpec::Unit(ur) => compose_unit_reference(w, ur),
         TypeSpec::Relation(rt) => compose_relation_type(w, rt),
+        TypeSpec::Function(ft) => compose_function_type(w, ft),
     }
+}
+
+/// Composes a function type as `{ParamType[mult], ... -> ReturnType[mult]}`.
+pub fn compose_function_type(
+    w: &mut IndentWriter,
+    ft: &legend_pure_parser_ast::type_ref::FunctionType,
+) {
+    w.write("{");
+    for (i, param) in ft.parameters.iter().enumerate() {
+        if i > 0 {
+            w.write(", ");
+        }
+        compose_type_reference(w, &param.type_ref);
+        w.write(&ft.parameters[i].multiplicity.to_string());
+    }
+    w.write("->");
+    compose_type_reference(w, &ft.return_type);
+    w.write(&ft.return_multiplicity.to_string());
+    w.write("}");
 }

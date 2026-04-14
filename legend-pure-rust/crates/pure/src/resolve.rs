@@ -213,6 +213,17 @@ pub(crate) fn resolve_type_spec(
             // updated when the relation interning infrastructure is wired up.
             None
         }
+        ast_type::TypeSpec::Function(_ft) => {
+            // Function types are structural types: {ParamType[mult] -> RetType[mult]}.
+            // Full resolution requires lowering each param/return type; deferred to
+            // the function-type lowering pass. For signature mangling, the simple
+            // name "Function" is used (matching Java behavior).
+            Some(TypeExpr::FunctionType {
+                parameters: vec![],
+                return_type: Box::new(TypeExpr::Generic("T".into())),
+                return_multiplicity: Multiplicity::ZeroOrMany,
+            })
+        }
     }
 }
 

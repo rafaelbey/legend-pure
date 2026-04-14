@@ -72,12 +72,18 @@ impl Parser {
 
     // ── Top-level ───────────────────────────────────────────────────────
 
-    pub fn parse_source_file(&mut self) -> R<SourceFile> {
+    /// Parse the entire source file with element-level error recovery.
+    ///
+    /// Returns `Ok(SourceFile)` if all elements parse successfully, or
+    /// `Err(PartialSourceFile)` with the valid elements and collected
+    /// errors if any elements fail.
+    pub fn parse_source_file(&mut self) -> Result<SourceFile, crate::PartialSourceFile> {
         let start = self.cursor.current_source_info();
         let mut sections = Vec::new();
+        let mut errors = Vec::new();
 
         while !self.cursor.check(TokenKind::Eof) {
-            sections.push(self.parse_section()?);
+            sections.push(self.parse_section(&mut errors));
         }
 
         if sections.is_empty() {
@@ -89,13 +95,27 @@ impl Parser {
             });
         }
 
-        Ok(SourceFile {
+        let source_file = SourceFile {
             sections,
             source_info: start,
-        })
+        };
+
+        if errors.is_empty() {
+            Ok(source_file)
+        } else {
+            Err(crate::PartialSourceFile {
+                source_file,
+                errors,
+            })
+        }
     }
 
-    pub(crate) fn parse_section(&mut self) -> R<Section> {
+    /// Parse a section with element-level error recovery.
+    ///
+    /// When an element fails to parse, the error is collected and the cursor
+    /// skips to the next element boundary (a top-level keyword like `function`,
+    /// `class`, `native`, etc.).
+    fn parse_section(&mut self, errors: &mut Vec<ParseError>) -> Section {
         let start = self.cursor.current_source_info();
         let kind = if self.cursor.check(TokenKind::SectionHeader) {
             let tok = self.cursor.advance().clone();
@@ -104,22 +124,61 @@ impl Parser {
             SmolStr::new("Pure")
         };
 
+        // Imports still fail-fast — a malformed import is unusual and
+        // likely indicates a fundamentally broken file structure.
         let mut imports = Vec::new();
         while self.cursor.check(TokenKind::Import) {
-            imports.push(self.parse_import()?);
+            match self.parse_import() {
+                Ok(imp) => imports.push(imp),
+                Err(e) => {
+                    errors.push(e);
+                    self.skip_to_next_element();
+                }
+            }
         }
 
         let mut elements = Vec::new();
         while !self.cursor.check(TokenKind::SectionHeader) && !self.cursor.check(TokenKind::Eof) {
-            elements.push(self.parse_element()?);
+            match self.parse_element() {
+                Ok(elem) => elements.push(elem),
+                Err(e) => {
+                    errors.push(e);
+                    self.skip_to_next_element();
+                }
+            }
         }
 
-        Ok(Section {
+        Section {
             kind,
             imports,
             elements,
             source_info: start,
-        })
+        }
+    }
+
+    /// Skip tokens until the cursor reaches a token that starts a new
+    /// top-level element or the end of the section/file.
+    ///
+    /// Element boundary tokens: `function`, `native`, `class`, `enum`,
+    /// `profile`, `association`, `measure`, section headers, and EOF.
+    fn skip_to_next_element(&mut self) {
+        loop {
+            match self.cursor.peek_kind() {
+                // These tokens can start a new top-level element
+                TokenKind::Function
+                | TokenKind::Native
+                | TokenKind::Class
+                | TokenKind::Enum
+                | TokenKind::Profile
+                | TokenKind::Association
+                | TokenKind::Measure
+                | TokenKind::SectionHeader
+                | TokenKind::Eof => break,
+                _ => {
+                    self.cursor.advance();
+                }
+            }
+        }
     }
 
     pub(crate) fn parse_import(&mut self) -> R<ImportStatement> {
