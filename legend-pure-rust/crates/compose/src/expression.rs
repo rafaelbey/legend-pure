@@ -24,7 +24,8 @@ use legend_pure_parser_ast::expression::{
     ArithmeticExpr, ArithmeticOp, ArrowFunction, BitwiseExpr, BitwiseNotExpr, BitwiseOp,
     CollectionExpr, ColumnExpression, ComparisonExpr, ComparisonOp, CopyExpr, Expression,
     FunctionApplication, Lambda, LetExpr, Literal, LogicalExpr, LogicalOp, MemberAccess,
-    NewInstanceExpr, NotExpr, PackageableElementRef, TypeReferenceExpr, UnaryMinusExpr, Variable,
+    NewInstanceExpr, NotExpr, PackageableElementRef, SliceExpr, TypeReferenceExpr, UnaryMinusExpr,
+    Variable,
 };
 
 use legend_pure_parser_ast::type_ref::{RELATION_TYPE_SENTINEL, TypeReference};
@@ -159,6 +160,7 @@ fn compose_expression_prec(
         Expression::Lambda(e) => compose_lambda(w, e),
         Expression::Let(e) => compose_let(w, e),
         Expression::Collection(e) => compose_collection(w, e),
+        Expression::Slice(e) => compose_slice(w, e),
         Expression::NewInstance(e) => compose_new_instance(w, e),
         Expression::Copy(e) => compose_copy(w, e),
         Expression::Column(e) => compose_column(w, e),
@@ -431,6 +433,20 @@ fn compose_collection(w: &mut IndentWriter, e: &CollectionExpr) {
             w.write(", ");
         }
         compose_expression(w, elem);
+    }
+    w.write("]");
+}
+
+fn compose_slice(w: &mut IndentWriter, e: &SliceExpr) {
+    w.write("[");
+    if let Some(start) = &e.start {
+        compose_expression(w, start);
+    }
+    w.write(":");
+    compose_expression(w, &e.stop);
+    if let Some(step) = &e.step {
+        w.write(":");
+        compose_expression(w, step);
     }
     w.write("]");
 }
