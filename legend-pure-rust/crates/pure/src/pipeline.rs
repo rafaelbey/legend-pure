@@ -52,7 +52,7 @@ use crate::nodes::measure::Measure;
 use crate::nodes::profile::Profile;
 use crate::nodes::unit::Unit;
 use crate::resolve::{self, ResolutionContext};
-use crate::types::{Multiplicity, TypeExpr};
+use crate::types::{Multiplicity, PrimitiveType, TypeExpr};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -615,6 +615,7 @@ fn create_shell(element: &ast::Element) -> Element {
             canonical_unit: None,
             non_canonical_units: vec![],
         }),
+        ast::Element::Primitive(_) => Element::PrimitiveType(PrimitiveType { super_type: None }),
     }
 }
 
@@ -764,6 +765,15 @@ fn hydrate_element(
                 canonical_unit: mapping.and_then(|m| m.canonical),
                 non_canonical_units: mapping.map(|m| m.non_canonical.clone()).unwrap_or_default(),
             })
+        }
+        ast::Element::Primitive(prim_def) => {
+            let super_type = resolve::resolve_type_ref(&prim_def.super_type, ctx, errors).and_then(
+                |te| match te {
+                    TypeExpr::Named { element, .. } => Some(element),
+                    _ => None,
+                },
+            );
+            Element::PrimitiveType(PrimitiveType { super_type })
         }
     }
 }

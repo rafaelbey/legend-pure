@@ -882,6 +882,9 @@ pub fn convert_element(elem: &ast::element::Element) -> Result<v1::element::Pack
         Element::Profile(p) => Ok(PackageableElement::Profile(convert_profile(p))),
         Element::Association(a) => Ok(PackageableElement::Association(convert_association(a)?)),
         Element::Measure(m) => Ok(PackageableElement::Measure(convert_measure(m))),
+        Element::Primitive(_) => Err(serde_json::Error::custom(
+            "primitive type definitions cannot be converted to Engine protocol",
+        )),
     }
 }
 

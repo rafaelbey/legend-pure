@@ -36,6 +36,7 @@ mod expression;
 mod function;
 mod helpers;
 mod measure;
+mod primitive;
 mod profile;
 mod type_ref;
 
@@ -203,6 +204,7 @@ impl Parser {
             TokenKind::Class => self.parse_class(),
             TokenKind::Association => self.parse_association(),
             TokenKind::Measure => self.parse_measure(),
+            TokenKind::Primitive => self.parse_primitive_def(),
             TokenKind::Function => self.parse_function(),
             TokenKind::Native => self.parse_native_function(),
             _ => Err(ParseError::unexpected(

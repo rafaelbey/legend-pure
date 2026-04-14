@@ -42,6 +42,8 @@ pub enum TokenKind {
     Association,
     /// `Measure`
     Measure,
+    /// `Primitive`
+    Primitive,
     /// `function`
     Function,
 
@@ -201,6 +203,7 @@ impl TokenKind {
             "Profile" => Some(TokenKind::Profile),
             "Association" => Some(TokenKind::Association),
             "Measure" => Some(TokenKind::Measure),
+            "Primitive" => Some(TokenKind::Primitive),
             "function" => Some(TokenKind::Function),
             "import" => Some(TokenKind::Import),
             "extends" => Some(TokenKind::Extends),
@@ -226,6 +229,7 @@ impl TokenKind {
             TokenKind::Profile => "'Profile'",
             TokenKind::Association => "'Association'",
             TokenKind::Measure => "'Measure'",
+            TokenKind::Primitive => "'Primitive'",
             TokenKind::Function => "'function'",
             TokenKind::Import => "'import'",
             TokenKind::Extends => "'extends'",
@@ -309,6 +313,7 @@ impl TokenKind {
                 | TokenKind::Profile
                 | TokenKind::Association
                 | TokenKind::Measure
+                | TokenKind::Primitive
                 | TokenKind::Function
                 | TokenKind::Import
                 | TokenKind::Extends
