@@ -127,3 +127,24 @@ pub fn compose_function_type(
     w.write(&ft.return_multiplicity.to_string());
     w.write("}");
 }
+
+/// Composes optional type variable parameters like `(x:Integer[1], y:String[1])`.
+pub fn compose_type_variable_parameters(
+    w: &mut IndentWriter,
+    params: &[legend_pure_parser_ast::type_ref::TypeVariableParameter],
+) {
+    if params.is_empty() {
+        return;
+    }
+    w.write("(");
+    for (i, param) in params.iter().enumerate() {
+        if i > 0 {
+            w.write(", ");
+        }
+        w.write(&maybe_quote(&param.name));
+        w.write(":");
+        compose_type_reference(w, &param.type_ref);
+        w.write(&param.multiplicity.to_string());
+    }
+    w.write(")");
+}

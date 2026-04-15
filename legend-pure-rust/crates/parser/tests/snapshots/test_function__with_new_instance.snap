@@ -23,7 +23,16 @@ SourceFile {
                                 },
                             },
                         ),
-                        name: "create",
+                        name: SpannedString {
+                            value: "create",
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 2,
+                                start_column: 10,
+                                end_line: 2,
+                                end_column: 11,
+                            },
+                        },
                         type_parameters: [],
                         multiplicity_parameters: [],
                         parameters: [],
@@ -70,6 +79,8 @@ SourceFile {
                                             end_column: 5,
                                         },
                                     },
+                                    type_arguments: [],
+                                    type_variable_values: [],
                                     assignments: [
                                         KeyValuePair {
                                             key: "name",
@@ -122,6 +133,8 @@ SourceFile {
                                                             end_column: 38,
                                                         },
                                                     },
+                                                    type_arguments: [],
+                                                    type_variable_values: [],
                                                     assignments: [
                                                         KeyValuePair {
                                                             key: "city",

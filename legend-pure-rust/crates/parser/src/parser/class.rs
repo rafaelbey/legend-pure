@@ -33,6 +33,8 @@ impl Parser {
         self.cursor.expect(TokenKind::Class)?;
         let header = self.parse_element_header()?;
 
+        let type_variable_parameters = self.parse_type_variable_parameters()?;
+
         let (type_parameters, multiplicity_parameters) =
             self.parse_type_and_multiplicity_parameters()?;
 
@@ -62,6 +64,7 @@ impl Parser {
         Ok(Element::Class(ClassDef {
             package: header.package,
             name: header.name,
+            type_variable_parameters,
             type_parameters,
             multiplicity_parameters,
             super_types,

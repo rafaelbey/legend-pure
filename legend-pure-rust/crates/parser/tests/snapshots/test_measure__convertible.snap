@@ -23,7 +23,16 @@ SourceFile {
                                 },
                             },
                         ),
-                        name: "NewMeasure",
+                        name: SpannedString {
+                            value: "NewMeasure",
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 17,
+                                start_column: 9,
+                                end_line: 17,
+                                end_column: 11,
+                            },
+                        },
                         canonical_unit: Some(
                             UnitDef {
                                 name: "UnitOne",

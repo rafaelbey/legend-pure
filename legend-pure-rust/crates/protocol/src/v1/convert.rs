@@ -908,7 +908,7 @@ fn convert_class(c: &ast::element::ClassDef) -> Result<v1::element::ProtocolClas
         c.constraints.iter().map(convert_constraint).collect();
     Ok(v1::element::ProtocolClass {
         package_path: optional_package_to_path(c.package.as_ref()),
-        name: c.name.to_string(),
+        name: c.name.value.to_string(),
         super_types: c
             .super_types
             .iter()
@@ -927,7 +927,7 @@ fn convert_class(c: &ast::element::ClassDef) -> Result<v1::element::ProtocolClas
 fn convert_enumeration(e: &ast::element::EnumDef) -> v1::element::ProtocolEnumeration {
     v1::element::ProtocolEnumeration {
         package_path: optional_package_to_path(e.package.as_ref()),
-        name: e.name.to_string(),
+        name: e.name.value.to_string(),
         values: e.values.iter().map(convert_enum_value).collect(),
         stereotypes: e.stereotypes.iter().map(Into::into).collect(),
         tagged_values: e.tagged_values.iter().map(Into::into).collect(),
@@ -947,7 +947,7 @@ fn convert_enum_value(v: &ast::element::EnumValue) -> v1::element::ProtocolEnumM
 fn convert_function(f: &ast::element::FunctionDef) -> v1::element::ProtocolFunction {
     v1::element::ProtocolFunction {
         package_path: optional_package_to_path(f.package.as_ref()),
-        name: f.name.to_string(),
+        name: f.name.value.to_string(),
         parameters: f
             .parameters
             .iter()
@@ -974,7 +974,7 @@ fn convert_function(f: &ast::element::FunctionDef) -> v1::element::ProtocolFunct
 fn convert_profile(p: &ast::element::ProfileDef) -> v1::element::ProtocolProfile {
     v1::element::ProtocolProfile {
         package_path: optional_package_to_path(p.package.as_ref()),
-        name: p.name.to_string(),
+        name: p.name.value.to_string(),
         stereotypes: p
             .stereotype_names
             .iter()
@@ -997,7 +997,7 @@ fn convert_association(
         .collect();
     Ok(v1::element::ProtocolAssociation {
         package_path: optional_package_to_path(a.package.as_ref()),
-        name: a.name.to_string(),
+        name: a.name.value.to_string(),
         properties: properties?,
         qualified_properties: qualified_properties?,
         original_milestoned_properties: vec![],
@@ -1010,7 +1010,7 @@ fn convert_association(
 fn convert_measure(m: &ast::element::MeasureDef) -> v1::element::ProtocolMeasure {
     v1::element::ProtocolMeasure {
         package_path: optional_package_to_path(m.package.as_ref()),
-        name: m.name.to_string(),
+        name: m.name.value.to_string(),
         canonical_unit: m.canonical_unit.as_ref().map(|u| convert_unit(m, u)),
         non_canonical_units: m
             .non_canonical_units
@@ -1027,8 +1027,8 @@ fn convert_unit(
 ) -> v1::element::ProtocolUnit {
     // Unit package path = measure's fully qualified name (e.g., "pkg::Measure")
     let measure_fqn = match &measure.package {
-        Some(pkg) => format!("{pkg}::{}", measure.name),
-        None => measure.name.to_string(),
+        Some(pkg) => format!("{pkg}::{}", measure.name.value),
+        None => measure.name.value.to_string(),
     };
     v1::element::ProtocolUnit {
         package_path: optional_package_to_path(measure.package.as_ref()),
@@ -1262,7 +1262,7 @@ mod tests {
     fn test_convert_profile_element() {
         let profile = ast::element::Element::Profile(ast::element::ProfileDef {
             package: Some(ast::type_ref::Package::root(Identifier::new("meta"), src())),
-            name: Identifier::new("doc"),
+            name: ast::annotation::SpannedString { value: Identifier::new("doc"), source_info: src() },
             stereotype_names: vec![ast::annotation::SpannedString {
                 value: Identifier::new("deprecated"),
                 source_info: src(),
@@ -1294,7 +1294,8 @@ mod tests {
                 ast::type_ref::Package::root(Identifier::new("model"), src())
                     .child(Identifier::new("domain"), src()),
             ),
-            name: Identifier::new("Person"),
+            name: ast::annotation::SpannedString { value: Identifier::new("Person"), source_info: src() },
+            type_variable_parameters: vec![],
             type_parameters: vec![],
             multiplicity_parameters: vec![],
             super_types: vec![],

@@ -584,6 +584,10 @@ pub struct SliceExpr {
 pub struct NewInstanceExpr {
     /// The class being instantiated (a packageable element reference).
     pub class: PackageableElementPtr,
+    /// Optional type arguments: `^List<String>()`.
+    pub type_arguments: Vec<crate::type_ref::TypeReference>,
+    /// Optional type variable values: `^Ext(10)()`.
+    pub type_variable_values: Vec<crate::type_ref::TypeVariableValue>,
     /// Property value assignments.
     pub assignments: Vec<KeyValuePair>,
     /// Source location.
@@ -923,6 +927,8 @@ mod tests {
     fn test_new_instance_uses_element_ptr() {
         let expr = Expression::NewInstance(NewInstanceExpr {
             class: elem_ptr("MyClass"),
+            type_arguments: vec![],
+            type_variable_values: vec![],
             assignments: vec![],
             source_info: src(),
         });

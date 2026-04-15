@@ -23,7 +23,17 @@ SourceFile {
                                 },
                             },
                         ),
-                        name: "ConstrainedClass",
+                        name: SpannedString {
+                            value: "ConstrainedClass",
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 17,
+                                start_column: 7,
+                                end_line: 17,
+                                end_column: 8,
+                            },
+                        },
+                        type_variable_parameters: [],
                         type_parameters: [],
                         multiplicity_parameters: [],
                         super_types: [],

@@ -23,7 +23,16 @@ SourceFile {
                                 },
                             },
                         ),
-                        name: "SimpleFunction",
+                        name: SpannedString {
+                            value: "SimpleFunction",
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 17,
+                                start_column: 10,
+                                end_line: 17,
+                                end_column: 11,
+                            },
+                        },
                         type_parameters: [],
                         multiplicity_parameters: [],
                         parameters: [],

@@ -44,7 +44,16 @@ SourceFile {
                                 },
                             },
                         ),
-                        name: "OldAssoc",
+                        name: SpannedString {
+                            value: "OldAssoc",
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 3,
+                                start_column: 61,
+                                end_line: 3,
+                                end_column: 65,
+                            },
+                        },
                         properties: [
                             Property {
                                 name: "left",

@@ -24,11 +24,8 @@ impl Parser {
         self.cursor.expect(TokenKind::Primitive)?;
         let header = self.parse_element_header()?;
 
-        // Skip optional type variable parameters: (x:Integer[1])
-        if self.cursor.eat(TokenKind::LParen) {
-            self.cursor
-                .skip_balanced(TokenKind::LParen, TokenKind::RParen);
-        }
+        // Optional type variable parameters: (x:Integer[1])
+        let type_variable_parameters = self.parse_type_variable_parameters()?;
 
         self.cursor.expect(TokenKind::Extends)?;
         let super_type = self.parse_type_reference()?;
@@ -42,6 +39,7 @@ impl Parser {
         Ok(Element::Primitive(PrimitiveDef {
             package: header.package,
             name: header.name,
+            type_variable_parameters,
             super_type,
             source_info: si,
         }))

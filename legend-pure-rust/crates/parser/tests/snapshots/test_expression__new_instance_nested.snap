@@ -23,7 +23,16 @@ SourceFile {
                                 },
                             },
                         ),
-                        name: "test",
+                        name: SpannedString {
+                            value: "test",
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 2,
+                                start_column: 10,
+                                end_line: 2,
+                                end_column: 11,
+                            },
+                        },
                         type_parameters: [],
                         multiplicity_parameters: [],
                         parameters: [],
@@ -58,6 +67,8 @@ SourceFile {
                                             end_column: 5,
                                         },
                                     },
+                                    type_arguments: [],
+                                    type_variable_values: [],
                                     assignments: [
                                         KeyValuePair {
                                             key: "v2",
@@ -74,6 +85,8 @@ SourceFile {
                                                             end_column: 15,
                                                         },
                                                     },
+                                                    type_arguments: [],
+                                                    type_variable_values: [],
                                                     assignments: [
                                                         KeyValuePair {
                                                             key: "v",

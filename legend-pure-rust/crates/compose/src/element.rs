@@ -177,6 +177,7 @@ fn compose_enumeration(w: &mut IndentWriter, e: &EnumDef) {
 fn compose_class(w: &mut IndentWriter, c: &ClassDef) {
     w.write("Class ");
     compose_element_header(w, c);
+    crate::type_ref::compose_type_variable_parameters(w, &c.type_variable_parameters);
 
     // Type parameters and multiplicity parameters
     if !c.type_parameters.is_empty() || !c.multiplicity_parameters.is_empty() {
@@ -370,7 +371,8 @@ fn compose_association(w: &mut IndentWriter, a: &AssociationDef) {
 
 fn compose_primitive(w: &mut IndentWriter, p: &PrimitiveDef) {
     w.write("Primitive ");
-    compose_qualified_name(w, p.package.as_ref(), &p.name);
+    compose_qualified_name(w, p.package.as_ref(), &p.name.value);
+    crate::type_ref::compose_type_variable_parameters(w, &p.type_variable_parameters);
     w.write(" extends ");
     compose_type_reference(w, &p.super_type);
     w.newline();
@@ -382,7 +384,7 @@ fn compose_primitive(w: &mut IndentWriter, p: &PrimitiveDef) {
 
 fn compose_measure(w: &mut IndentWriter, m: &MeasureDef) {
     w.write("Measure ");
-    compose_qualified_name(w, m.package.as_ref(), &m.name);
+    compose_qualified_name(w, m.package.as_ref(), &m.name.value);
     w.newline();
     w.write_line("{");
     w.push_indent();

@@ -23,7 +23,16 @@ SourceFile {
                                 },
                             },
                         ),
-                        name: "OnlyMult",
+                        name: SpannedString {
+                            value: "OnlyMult",
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 2,
+                                start_column: 7,
+                                end_line: 2,
+                                end_column: 8,
+                            },
+                        },
                         type_parameters: [],
                         multiplicity_parameters: [
                             "m",
