@@ -1484,13 +1484,18 @@ fn compile_multiple_let_same_variable() {
 }
 
 #[test]
-#[ignore = "TDD: awaiting compiler support for shadowing outer scopes in lambdas"]
+
 fn compile_lambda_let_shadows_outer_let() {
-    // Should compile cleanly because x is in a new lambda scope
-    let source =
-        "function test::f(): Integer[*] { let x = 42; [1, 2]->map(y | let x = 43; $x + $y); }";
+    let source = r"
+        native function map(col: Any[*], fn: Any[1]): Any[*];
+        function test::f(): Integer[*] { let x = 42; [1, 2]->map(y | let x = 43; $x + $y); }
+    ";
     let Ok(_) = compile_one(source) else {
-        panic!("Lambda let should be allowed to shadow outer block let");
+        let partial = compile_one(source).unwrap_err();
+        panic!(
+            "Lambda let should be allowed to shadow outer block let. Errors: {:#?}",
+            partial.errors
+        );
     };
 }
 
