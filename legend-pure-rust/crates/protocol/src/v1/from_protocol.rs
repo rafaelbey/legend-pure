@@ -764,7 +764,8 @@ fn convert_class(c: &v1::element::ProtocolClass) -> Result<ast::element::ClassDe
 
     Ok(ast::element::ClassDef {
         package,
-        name: SmolStr::new(&c.name),
+        name: ast::annotation::SpannedString { value: SmolStr::new(&c.name), source_info: si.clone() },
+        type_variable_parameters: vec![],
         type_parameters: vec![],
         multiplicity_parameters: vec![],
         super_types: super_types?,
@@ -805,7 +806,7 @@ fn convert_enumeration(e: &v1::element::ProtocolEnumeration) -> Result<ast::elem
 
     Ok(ast::element::EnumDef {
         package,
-        name: SmolStr::new(&e.name),
+        name: ast::annotation::SpannedString { value: SmolStr::new(&e.name), source_info: si.clone() },
         values: values?,
         stereotypes: stereotypes?,
         tagged_values: tagged_values?,
@@ -851,7 +852,7 @@ fn convert_function(f: &v1::element::ProtocolFunction) -> Result<ast::element::F
 
     Ok(ast::element::FunctionDef {
         package,
-        name: SmolStr::new(&f.name),
+        name: ast::annotation::SpannedString { value: SmolStr::new(&f.name), source_info: si.clone() },
         type_parameters: vec![],
         multiplicity_parameters: vec![],
         parameters: parameters?,
@@ -871,7 +872,7 @@ fn convert_profile(p: &v1::element::ProtocolProfile) -> Result<ast::element::Pro
 
     Ok(ast::element::ProfileDef {
         package,
-        name: SmolStr::new(&p.name),
+        name: ast::annotation::SpannedString { value: SmolStr::new(&p.name), source_info: si.clone() },
         stereotype_names: p
             .stereotypes
             .iter()
@@ -913,7 +914,7 @@ fn convert_association(
 
     Ok(ast::element::AssociationDef {
         package,
-        name: SmolStr::new(&a.name),
+        name: ast::annotation::SpannedString { value: SmolStr::new(&a.name), source_info: si.clone() },
         properties: properties?,
         qualified_properties: qualified_properties?,
         stereotypes: stereotypes?,
@@ -936,7 +937,7 @@ fn convert_measure(m: &v1::element::ProtocolMeasure) -> Result<ast::element::Mea
 
     Ok(ast::element::MeasureDef {
         package,
-        name: SmolStr::new(&m.name),
+        name: ast::annotation::SpannedString { value: SmolStr::new(&m.name), source_info: si.clone() },
         canonical_unit,
         non_canonical_units: non_canonical?,
         source_info: si,
@@ -1235,7 +1236,7 @@ mod tests {
         let elem = convert_element(&proto).unwrap().unwrap();
         match elem {
             ast::element::Element::Profile(p) => {
-                assert_eq!(p.name.as_str(), "doc");
+                assert_eq!(p.name.value.as_str(), "doc");
                 assert_eq!(p.stereotype_names.len(), 1);
                 assert_eq!(p.tag_names.len(), 1);
             }
@@ -1260,7 +1261,7 @@ mod tests {
         let elem = convert_element(&proto).unwrap().unwrap();
         match elem {
             ast::element::Element::Class(c) => {
-                assert_eq!(c.name.as_str(), "Person");
+                assert_eq!(c.name.value.as_str(), "Person");
                 assert_eq!(c.package.unwrap().to_string(), "model::domain");
             }
             other => panic!("Expected class, got {other:?}"),

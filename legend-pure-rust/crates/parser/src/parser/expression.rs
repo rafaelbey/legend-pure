@@ -431,6 +431,51 @@ impl Parser {
                 };
                 let _ = type_arguments; // TODO: store in NewInstanceExpr when compiler needs it
 
+                // Optional type variable values: (10, 'ok')
+                let type_variable_values = if self.cursor.check(TokenKind::LParen) {
+                    // Disambiguate from property assignments `(prop = val)`.
+                    // A property assignment starts with an identifier/keyword (or integer property)
+                    // followed by `=` or `+=` or `.` (for nested properties).
+                    let mut lookahead = 1;
+                    if self.cursor.peek_kind_at(lookahead) == TokenKind::IntegerLiteral {
+                        lookahead += 1; // Integer keys
+                    } else {
+                        // Skip dotted property paths: address.name
+                        while self.cursor.peek_kind_at(lookahead).is_identifier_like()
+                        {
+                            lookahead += 1;
+                            if self.cursor.peek_kind_at(lookahead) == TokenKind::Dot {
+                                lookahead += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    let next_kind = self.cursor.peek_kind_at(lookahead);
+                    let is_prop_assignments = next_kind == TokenKind::Equals
+                        || next_kind == TokenKind::Plus
+                        || next_kind == TokenKind::RParen; // empty parens `()` are property assignments
+
+                    if is_prop_assignments {
+                        vec![]
+                    } else {
+                        self.cursor.expect(TokenKind::LParen)?;
+                        let mut vals = Vec::new();
+                        if !self.cursor.check(TokenKind::RParen) {
+                            loop {
+                                vals.push(self.parse_type_variable_value()?);
+                                if !self.cursor.eat(TokenKind::Comma) {
+                                    break;
+                                }
+                            }
+                        }
+                        self.cursor.expect(TokenKind::RParen)?;
+                        vals
+                    }
+                } else {
+                    vec![]
+                };
+
                 let class_ref = PackageableElementPtr {
                     package: pkg,
                     name,
@@ -466,6 +511,8 @@ impl Parser {
                 self.cursor.expect(TokenKind::RParen)?;
                 Ok(Expression::NewInstance(NewInstanceExpr {
                     class: class_ref,
+                    type_arguments: vec![],
+                    type_variable_values,
                     assignments,
                     source_info: si,
                 }))

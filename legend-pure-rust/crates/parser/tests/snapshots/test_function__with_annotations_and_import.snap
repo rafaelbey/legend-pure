@@ -44,7 +44,16 @@ SourceFile {
                                 },
                             },
                         ),
-                        name: "oldFunc",
+                        name: SpannedString {
+                            value: "oldFunc",
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 3,
+                                start_column: 60,
+                                end_line: 3,
+                                end_column: 61,
+                            },
+                        },
                         type_parameters: [],
                         multiplicity_parameters: [],
                         parameters: [],

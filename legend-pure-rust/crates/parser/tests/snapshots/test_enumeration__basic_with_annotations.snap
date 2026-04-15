@@ -23,7 +23,16 @@ SourceFile {
                                 },
                             },
                         ),
-                        name: "Color",
+                        name: SpannedString {
+                            value: "Color",
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 2,
+                                start_column: 91,
+                                end_line: 2,
+                                end_column: 92,
+                            },
+                        },
                         values: [
                             EnumValue {
                                 name: "RED",

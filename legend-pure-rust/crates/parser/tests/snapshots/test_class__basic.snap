@@ -35,7 +35,17 @@ SourceFile {
                                 },
                             },
                         ),
-                        name: "Person",
+                        name: SpannedString {
+                            value: "Person",
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 17,
+                                start_column: 68,
+                                end_line: 17,
+                                end_column: 72,
+                            },
+                        },
+                        type_variable_parameters: [],
                         type_parameters: [],
                         multiplicity_parameters: [],
                         super_types: [

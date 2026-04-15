@@ -345,7 +345,7 @@ fn enumeration_element_conversion() {
     let element = v1::from_protocol::convert_element(&enumeration).unwrap();
     match element {
         Some(ast::element::Element::Enumeration(e)) => {
-            assert_eq!(e.name.as_str(), "MyEnum");
+            assert_eq!(e.name.value.as_str(), "MyEnum");
             assert_eq!(e.package.unwrap().to_string().as_str(), "model");
             assert_eq!(e.values.len(), 1);
         }
@@ -391,7 +391,7 @@ fn association_element_conversion() {
     let element = v1::from_protocol::convert_element(&association).unwrap();
     match element {
         Some(ast::element::Element::Association(a)) => {
-            assert_eq!(a.name.as_str(), "MyAssoc");
+            assert_eq!(a.name.value.as_str(), "MyAssoc");
             assert_eq!(a.properties.len(), 1);
         }
         _ => panic!("Expected Association"),
@@ -416,7 +416,7 @@ fn measure_element_conversion() {
     let element = v1::from_protocol::convert_element(&measure).unwrap();
     match element {
         Some(ast::element::Element::Measure(m)) => {
-            assert_eq!(m.name.as_str(), "MyMeasure");
+            assert_eq!(m.name.value.as_str(), "MyMeasure");
         }
         _ => panic!("Expected Measure"),
     }
@@ -458,7 +458,7 @@ fn function_element_conversion() {
     let element = v1::from_protocol::convert_element(&func).unwrap();
     match element {
         Some(ast::element::Element::Function(f)) => {
-            assert_eq!(f.name.as_str(), "myFunc");
+            assert_eq!(f.name.value.as_str(), "myFunc");
             assert_eq!(f.body.len(), 1);
         }
         _ => panic!("Expected Function"),

@@ -23,7 +23,16 @@ SourceFile {
                                 },
                             },
                         ),
-                        name: "Person_Firm",
+                        name: SpannedString {
+                            value: "Person_Firm",
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 2,
+                                start_column: 13,
+                                end_line: 2,
+                                end_column: 17,
+                            },
+                        },
                         properties: [
                             Property {
                                 name: "employee",

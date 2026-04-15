@@ -280,6 +280,39 @@ impl Parser {
         })
     }
 
+    /// Parses optional type variable parameter definitions on classes and primitives: `(x:Integer[1], y:String[1])`.
+    pub(crate) fn parse_type_variable_parameters(
+        &mut self,
+    ) -> R<Vec<legend_pure_parser_ast::type_ref::TypeVariableParameter>> {
+        if !self.cursor.eat(TokenKind::LParen) {
+            return Ok(vec![]);
+        }
+
+        let mut params = Vec::new();
+        while !self.cursor.check(TokenKind::RParen) {
+            let si = self.cursor.current_source_info();
+            let (name, _) = self.cursor.expect_identifier_or_keyword()?;
+            self.cursor.expect(TokenKind::Colon)?;
+            let type_ref = self.parse_type_reference()?;
+            self.cursor.expect(TokenKind::LBracket)?;
+            let multiplicity = self.parse_multiplicity()?;
+            self.cursor.expect(TokenKind::RBracket)?;
+
+            params.push(legend_pure_parser_ast::type_ref::TypeVariableParameter {
+                name,
+                type_ref,
+                multiplicity,
+                source_info: si,
+            });
+
+            if !self.cursor.eat(TokenKind::Comma) {
+                break;
+            }
+        }
+        self.cursor.expect(TokenKind::RParen)?;
+        Ok(params)
+    }
+
     /// Parses optional `<TypeParams | MultParams>` on class/function declarations.
     ///
     /// Grammar:

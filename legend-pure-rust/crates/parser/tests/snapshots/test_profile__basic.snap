@@ -47,7 +47,16 @@ SourceFile {
                                 },
                             },
                         ),
-                        name: "doc",
+                        name: SpannedString {
+                            value: "doc",
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 2,
+                                start_column: 9,
+                                end_line: 2,
+                                end_column: 12,
+                            },
+                        },
                         stereotype_names: [
                             SpannedString {
                                 value: "deprecated",

@@ -400,6 +400,26 @@ impl std::fmt::Display for MultiplicityArgument {
 }
 
 // ---------------------------------------------------------------------------
+// TypeVariableParameter
+// ---------------------------------------------------------------------------
+
+/// A type variable parameter declaration on a Class or Primitive.
+///
+/// e.g. `x:Integer[1]` in `Class Foo(x:Integer[1])`.
+/// Structurally identical to `Parameter` but used for type-level constants.
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
+pub struct TypeVariableParameter {
+    /// Variable name.
+    pub name: Identifier,
+    /// Parameter type.
+    pub type_ref: TypeReference,
+    /// Parameter multiplicity.
+    pub multiplicity: Multiplicity,
+    /// Source location.
+    pub source_info: SourceInfo,
+}
+
+// ---------------------------------------------------------------------------
 // TypeReference
 // ---------------------------------------------------------------------------
 

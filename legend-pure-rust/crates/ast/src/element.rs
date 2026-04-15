@@ -22,7 +22,7 @@ use smol_str::SmolStr;
 use crate::annotation::{Parameter, SpannedString, StereotypePtr, TaggedValue};
 use crate::expression::Expression;
 use crate::source_info::{SourceInfo, Spanned};
-use crate::type_ref::{Identifier, Multiplicity, Package, TypeReference, TypeSpec};
+use crate::type_ref::{Identifier, Multiplicity, Package, TypeReference, TypeSpec, TypeVariableParameter};
 
 // ---------------------------------------------------------------------------
 // Traits
@@ -36,6 +36,9 @@ pub trait PackageableElement: Spanned + Annotated {
     /// Returns the package this element belongs to.
     fn package(&self) -> Option<&Package>;
     /// Returns the name of this element.
+    ///
+    /// Returns the identifier string only. Use `element.name.source_info` directly
+    /// when the exact token position is needed (IDE hover, error underlining, etc.).
     fn name(&self) -> &Identifier;
 }
 
@@ -155,10 +158,12 @@ impl Annotated for Element {
 pub struct PrimitiveDef {
     /// The package.
     pub package: Option<Package>,
-    /// The primitive type name.
-    pub name: Identifier,
+    /// The primitive type name with its source location.
+    pub name: SpannedString,
     /// The base type this primitive extends.
     pub super_type: TypeReference,
+    /// Type variable parameters, e.g., `(x:Integer[1])`.
+    pub type_variable_parameters: Vec<TypeVariableParameter>,
     /// Source location.
     pub source_info: SourceInfo,
 }
@@ -172,8 +177,8 @@ pub struct PrimitiveDef {
 pub struct ProfileDef {
     /// The package this profile belongs to.
     pub package: Option<Package>,
-    /// The profile name.
-    pub name: Identifier,
+    /// The profile name with its source location.
+    pub name: SpannedString,
     /// Stereotype names declared (defined) by this profile.
     pub stereotype_names: Vec<SpannedString>,
     /// Tag names declared (defined) by this profile.
@@ -195,8 +200,8 @@ pub struct ProfileDef {
 pub struct EnumDef {
     /// The package.
     pub package: Option<Package>,
-    /// The enum name.
-    pub name: Identifier,
+    /// The enum name with its source location.
+    pub name: SpannedString,
     /// Enum values (members).
     pub values: Vec<EnumValue>,
     /// Stereotypes on the enum.
@@ -317,8 +322,10 @@ pub struct Constraint {
 pub struct ClassDef {
     /// The package.
     pub package: Option<Package>,
-    /// The class name.
-    pub name: Identifier,
+    /// The class name with its source location.
+    pub name: SpannedString,
+    /// Type variable parameters, e.g., `(x:Integer[1])`.
+    pub type_variable_parameters: Vec<TypeVariableParameter>,
     /// Type parameters (e.g., `<T, U>` — supported in Rust parser, unlike Java).
     pub type_parameters: Vec<Identifier>,
     /// Multiplicity parameters (e.g., `m` in `<T|m>`).
@@ -355,8 +362,8 @@ pub struct ClassDef {
 pub struct AssociationDef {
     /// The package.
     pub package: Option<Package>,
-    /// The association name.
-    pub name: Identifier,
+    /// The association name with its source location.
+    pub name: SpannedString,
     /// Properties (typically exactly two).
     pub properties: Vec<Property>,
     /// Qualified properties.
@@ -400,8 +407,8 @@ pub struct UnitDef {
 pub struct MeasureDef {
     /// The package.
     pub package: Option<Package>,
-    /// The measure name.
-    pub name: Identifier,
+    /// The measure name with its source location.
+    pub name: SpannedString,
     /// The canonical unit (marked with `*`).
     pub canonical_unit: Option<UnitDef>,
     /// Non-canonical units.
@@ -486,8 +493,8 @@ pub struct FunctionTest {
 pub struct FunctionDef {
     /// The package.
     pub package: Option<Package>,
-    /// The function name.
-    pub name: Identifier,
+    /// The function name with its source location.
+    pub name: SpannedString,
     /// Type parameters (e.g., `Z` in `<Z|y>`).
     pub type_parameters: Vec<Identifier>,
     /// Multiplicity parameters (e.g., `y` in `<Z|y>`).
@@ -519,8 +526,8 @@ pub struct FunctionDef {
 pub struct NativeFunctionDef {
     /// The package.
     pub package: Option<Package>,
-    /// The function name.
-    pub name: Identifier,
+    /// The function name with its source location.
+    pub name: SpannedString,
     /// Type parameters (e.g., `T` in `<T|m>`).
     pub type_parameters: Vec<Identifier>,
     /// Multiplicity parameters (e.g., `m` in `<T|m>`).
@@ -633,7 +640,7 @@ mod tests {
     fn test_profile_def() {
         let profile = ProfileDef {
             package: Some(Package::root(SmolStr::new("meta"), src())),
-            name: SmolStr::new("doc"),
+            name: SpannedString { value: SmolStr::new("doc"), source_info: src() },
             stereotype_names: vec![SpannedString {
                 value: SmolStr::new("deprecated"),
                 source_info: src(),
@@ -657,7 +664,7 @@ mod tests {
     fn test_enum_def() {
         let enum_def = EnumDef {
             package: Some(Package::root(SmolStr::new("model"), src())),
-            name: SmolStr::new("Color"),
+            name: SpannedString { value: SmolStr::new("Color"), source_info: src() },
             values: vec![
                 EnumValue {
                     name: SmolStr::new("RED"),
@@ -686,7 +693,8 @@ mod tests {
     fn test_class_def_with_stereotype() {
         let class = ClassDef {
             package: Some(Package::root(SmolStr::new("model"), src())),
-            name: SmolStr::new("Person"),
+            name: SpannedString { value: SmolStr::new("Person"), source_info: src() },
+            type_variable_parameters: vec![],
             type_parameters: vec![],
             multiplicity_parameters: vec![],
             super_types: vec![],
@@ -732,7 +740,7 @@ mod tests {
     fn test_element_enum_dispatch() {
         let profile = Element::Profile(ProfileDef {
             package: None,
-            name: SmolStr::new("doc"),
+            name: SpannedString { value: SmolStr::new("doc"), source_info: src() },
             stereotype_names: vec![],
             tag_names: vec![],
             stereotypes: vec![],
@@ -770,7 +778,7 @@ mod tests {
         let elements = vec![
             Element::Profile(ProfileDef {
                 package: None,
-                name: SmolStr::new("doc"),
+                name: SpannedString { value: SmolStr::new("doc"), source_info: src() },
                 stereotype_names: vec![],
                 tag_names: vec![],
                 stereotypes: vec![],
@@ -779,7 +787,8 @@ mod tests {
             }),
             Element::Class(ClassDef {
                 package: None,
-                name: SmolStr::new("Person"),
+                name: SpannedString { value: SmolStr::new("Person"), source_info: src() },
+                type_variable_parameters: vec![],
                 type_parameters: vec![],
                 multiplicity_parameters: vec![],
                 super_types: vec![],

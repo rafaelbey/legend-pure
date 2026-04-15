@@ -165,7 +165,7 @@ pub fn derive_packageable_element(input: TokenStream) -> TokenStream {
                 self.package.as_ref()
             }
             fn name(&self) -> &crate::type_ref::Identifier {
-                &self.name
+                &self.name.value
             }
         }
 

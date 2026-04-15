@@ -19,7 +19,7 @@
 //! checking, name resolution, or structural constraints on graph fetch trees).
 //! See `docs/SEMANTIC_VALIDATIONS.md` for deferred validations.
 
-use legend_pure_parser_ast::annotation::{Parameter, StereotypePtr, TaggedValue};
+use legend_pure_parser_ast::annotation::{Parameter, SpannedString, StereotypePtr, TaggedValue};
 use legend_pure_parser_ast::element::{Constraint, Element};
 use legend_pure_parser_ast::expression::Expression;
 use legend_pure_parser_ast::section::{ImportStatement, Section, SourceFile};
@@ -55,7 +55,6 @@ type R<T> = Result<T, ParseError>;
 /// ```
 ///
 /// Stereotypes and tagged values may appear in any order and repeat.
-#[allow(dead_code)]
 pub(crate) struct ElementHeader {
     /// Stereotypes applied to the element.
     pub stereotypes: Vec<StereotypePtr>,
@@ -63,10 +62,12 @@ pub(crate) struct ElementHeader {
     pub tagged_values: Vec<TaggedValue>,
     /// The package (if qualified), e.g. `meta::pure::profiles` → `Some(...)`.
     pub package: Option<Package>,
-    /// The element name.
-    pub name: SmolStr,
-    /// Source info for the name.
-    pub name_source_info: SourceInfo,
+    /// The element name with its exact token source location.
+    ///
+    /// Using [`SpannedString`] rather than separate `name: SmolStr` +
+    /// `name_source_info: SourceInfo` fields ensures the position can never
+    /// be computed and then silently dropped — both travel together.
+    pub name: SpannedString,
 }
 
 /// Main parser struct wrapping a token cursor and island grammar plugins.
@@ -300,13 +301,12 @@ impl Parser {
             }
         }
 
-        let (package, name, name_source_info) = self.parse_qualified_name()?;
+        let (package, name_str, name_si) = self.parse_qualified_name()?;
         Ok(ElementHeader {
             stereotypes,
             tagged_values,
             package,
-            name,
-            name_source_info,
+            name: SpannedString { value: name_str, source_info: name_si },
         })
     }
 }

@@ -23,7 +23,16 @@ SourceFile {
                                 },
                             },
                         ),
-                        name: "NewMeasure",
+                        name: SpannedString {
+                            value: "NewMeasure",
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 2,
+                                start_column: 9,
+                                end_line: 2,
+                                end_column: 11,
+                            },
+                        },
                         canonical_unit: Some(
                             UnitDef {
                                 name: "UnitOne",
@@ -132,7 +141,16 @@ SourceFile {
                                 },
                             },
                         ),
-                        name: "WithUnitProp",
+                        name: SpannedString {
+                            value: "WithUnitProp",
+                            source_info: SourceInfo {
+                                source: "test.pure",
+                                start_line: 8,
+                                start_column: 7,
+                                end_line: 8,
+                                end_column: 9,
+                            },
+                        },
                         type_parameters: [],
                         multiplicity_parameters: [],
                         super_types: [],
