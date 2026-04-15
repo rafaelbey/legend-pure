@@ -238,8 +238,8 @@ pub mod graph_fetch {
             ctx.cursor().expect(TokenKind::RParen)?;
             match type_expr {
                 Expression::TypeReferenceExpr(t) => Some(PackageableElementPtr {
-                    package: t.type_ref.package.clone(),
-                    name: t.type_ref.name.clone(),
+                    package: t.type_ref.type_ref().package.clone(),
+                    name: t.type_ref.type_ref().name.clone(),
                     source_info: t.source_info,
                 }),
                 _ => {
@@ -288,8 +288,8 @@ pub mod graph_fetch {
 
         let sub_type_class = match type_expr {
             Expression::TypeReferenceExpr(t) => PackageableElementPtr {
-                package: t.type_ref.package.clone(),
-                name: t.type_ref.name.clone(),
+                package: t.type_ref.type_ref().package.clone(),
+                name: t.type_ref.type_ref().name.clone(),
                 source_info: t.source_info,
             },
             _ => {

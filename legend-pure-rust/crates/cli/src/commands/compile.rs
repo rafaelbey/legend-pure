@@ -95,6 +95,7 @@ pub struct CompileArgs {
 /// 2. Compile ALL parsed source files together into a `PureModel`
 /// 3. Report any parse errors or compilation errors with source snippets
 #[allow(clippy::needless_pass_by_value)] // clap convention: Args are passed by value
+#[allow(clippy::too_many_lines)]
 pub fn run(args: CompileArgs) -> Result<(), CliError> {
     let files = discovery::resolve_paths(&args.paths)?;
 

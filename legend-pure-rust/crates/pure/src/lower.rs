@@ -479,7 +479,7 @@ fn lower_type_reference(
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
-    let type_expr = resolve::resolve_type_ref(&e.type_ref, ctx, errors)?;
+    let type_expr = resolve::resolve_type_spec(&e.type_ref, ctx, errors)?;
     Some(untyped(
         ExprKind::TypeReference { type_expr },
         e.source_info.clone(),
@@ -641,14 +641,8 @@ fn lower_new_instance(
 ///
 /// Full TDS column lowering is deferred — the source info is preserved
 /// for diagnostics and protocol output.
-fn lower_column(e: &ast_expr::ColumnExpression) -> ValueSpec {
-    let source_info = match e {
-        ast_expr::ColumnExpression::Name(c) => c.source_info.clone(),
-        ast_expr::ColumnExpression::WithLambda(c) => c.source_info.clone(),
-        ast_expr::ColumnExpression::Typed(c) => c.source_info.clone(),
-        ast_expr::ColumnExpression::WithFunction(c) => c.source_info.clone(),
-    };
-    untyped(ExprKind::Column, source_info)
+fn lower_column(e: &ast_expr::ColumnBuilderExpr) -> ValueSpec {
+    untyped(ExprKind::Column, e.source_info.clone())
 }
 
 // ---------------------------------------------------------------------------

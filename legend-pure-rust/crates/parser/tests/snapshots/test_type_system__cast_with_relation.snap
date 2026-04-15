@@ -112,15 +112,12 @@ SourceFile {
                                     arguments: [
                                         TypeReferenceExpr(
                                             TypeReferenceExpr {
-                                                type_ref: TypeReference {
-                                                    package: None,
-                                                    name: "Relation",
-                                                    type_arguments: [
-                                                        TypeReference {
-                                                            package: None,
-                                                            name: "a",
-                                                            type_arguments: [
-                                                                TypeReference {
+                                                type_ref: Relation(
+                                                    RelationType {
+                                                        columns: [
+                                                            RelationColumn {
+                                                                name: "a",
+                                                                type_ref: TypeReference {
                                                                     package: None,
                                                                     name: "Integer",
                                                                     type_arguments: [],
@@ -134,28 +131,25 @@ SourceFile {
                                                                         end_column: 33,
                                                                     },
                                                                 },
-                                                            ],
-                                                            multiplicity_arguments: [],
-                                                            type_variable_values: [],
-                                                            source_info: SourceInfo {
-                                                                source: "test.pure",
-                                                                start_line: 4,
-                                                                start_column: 25,
-                                                                end_line: 4,
-                                                                end_column: 25,
+                                                                multiplicity: None,
+                                                                source_info: SourceInfo {
+                                                                    source: "test.pure",
+                                                                    start_line: 4,
+                                                                    start_column: 25,
+                                                                    end_line: 4,
+                                                                    end_column: 25,
+                                                                },
                                                             },
+                                                        ],
+                                                        source_info: SourceInfo {
+                                                            source: "test.pure",
+                                                            start_line: 4,
+                                                            start_column: 15,
+                                                            end_line: 4,
+                                                            end_column: 22,
                                                         },
-                                                    ],
-                                                    multiplicity_arguments: [],
-                                                    type_variable_values: [],
-                                                    source_info: SourceInfo {
-                                                        source: "test.pure",
-                                                        start_line: 4,
-                                                        start_column: 15,
-                                                        end_line: 4,
-                                                        end_column: 22,
                                                     },
-                                                },
+                                                ),
                                                 source_info: SourceInfo {
                                                     source: "test.pure",
                                                     start_line: 4,

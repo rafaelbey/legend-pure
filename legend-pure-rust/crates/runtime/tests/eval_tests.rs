@@ -450,7 +450,7 @@ fn eval_let_with_if_and_arithmetic() {
 #[ignore = "TDD: awaiting evaluator support for let inside lambda shadowing outer"]
 fn eval_lambda_let_shadows_outer_let() {
     let result = eval_pure(
-        r#"
+        r"
         function test::f(): Integer[*] {
             let x = 10;
             [1, 2, 3]->map(y | 
@@ -458,7 +458,7 @@ fn eval_lambda_let_shadows_outer_let() {
                 $x + $y
             );
         }
-        "#,
+        ",
         "f__Integer_MANY_",
     );
     match result {

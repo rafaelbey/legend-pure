@@ -29,7 +29,7 @@
 use crate::annotation::{PackageableElementPtr, Parameter};
 use crate::island::IslandExpression;
 use crate::source_info::{SourceInfo, Spanned};
-use crate::type_ref::{Identifier, Multiplicity, TypeReference};
+use crate::type_ref::{Identifier, Multiplicity};
 
 // ---------------------------------------------------------------------------
 // Expression enum
@@ -97,8 +97,8 @@ pub enum Expression {
     Copy(CopyExpr),
 
     // -- Column specification (TDS) --
-    /// Column expression covering all column syntax variants.
-    Column(ColumnExpression),
+    /// Column builder expression: `~col` or `~[col1, col2]`.
+    Column(ColumnBuilderExpr),
 
     // -- Island grammar --
     /// Island grammar expression: `#tag{ content }#`.
@@ -521,7 +521,7 @@ pub struct QualifiedMemberAccess {
 #[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct TypeReferenceExpr {
     /// The referenced type.
-    pub type_ref: TypeReference,
+    pub type_ref: crate::type_ref::TypeSpec,
     /// Source location.
     pub source_info: SourceInfo,
 }
@@ -623,75 +623,41 @@ pub struct KeyValuePair {
 // Column specification
 // ---------------------------------------------------------------------------
 
-/// Column expression covering all TDS column syntax variants.
-///
-/// Pure has several column forms:
-/// - `~colName` — simple column reference
-/// - `~colName: x | $x.prop` — column with inline lambda
-/// - `~[colName: Type]` — typed column
-/// - `~colName: func` — column with function reference
+/// A column specification: `~name` or `~name:Type[mult]` or `~name:x|$x+1`.
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
+pub struct ColumnSpec {
+    /// Column stereotypes.
+    pub stereotypes: Vec<crate::annotation::StereotypePtr>,
+    /// Column tagged values.
+    pub tagged_values: Vec<crate::annotation::TaggedValue>,
+    /// Column name.
+    pub name: Identifier,
+    /// Optional column type spec.
+    pub type_spec: Option<ColumnTypeSpec>,
+    /// Optional extra function.
+    pub extra_function: Option<Box<Expression>>,
+    /// Source info.
+    pub source_info: SourceInfo,
+}
+
+/// What follows the `:` in a column spec.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ColumnExpression {
-    /// Simple column by name: `~colName`.
-    Name(ColumnName),
-    /// Column with inline lambda: `~colName: x | $x.prop`.
-    WithLambda(ColumnWithLambda),
-    /// Typed column: `~[colName: Type]`.
-    Typed(ColumnTyped),
-    /// Column with function reference: `~colName: funcRef`.
-    WithFunction(ColumnWithFunction),
+pub enum ColumnTypeSpec {
+    /// Type and optional multiplicity: `String[1]`
+    Typed(
+        crate::type_ref::TypeReference,
+        Option<crate::type_ref::Multiplicity>,
+    ),
+    /// Lambda: `x|$x+1`
+    Lambda(Lambda),
 }
 
-impl Spanned for ColumnExpression {
-    fn source_info(&self) -> &SourceInfo {
-        match self {
-            Self::Name(c) => &c.source_info,
-            Self::WithLambda(c) => &c.source_info,
-            Self::Typed(c) => &c.source_info,
-            Self::WithFunction(c) => &c.source_info,
-        }
-    }
-}
-
-/// Simple column reference: `~colName`.
+/// Column builder expression: `~col` or `~[col1, col2]`.
 #[derive(Debug, Clone, PartialEq, crate::Spanned)]
-pub struct ColumnName {
-    /// Column name.
-    pub name: Identifier,
-    /// Source location.
-    pub source_info: SourceInfo,
-}
-
-/// Column with inline lambda: `~colName: x | $x.prop`.
-#[derive(Debug, Clone, PartialEq, crate::Spanned)]
-pub struct ColumnWithLambda {
-    /// Column name.
-    pub name: Identifier,
-    /// The lambda expression.
-    pub lambda: Box<Lambda>,
-    /// Source location.
-    pub source_info: SourceInfo,
-}
-
-/// Typed column: `~[colName: Type]`.
-#[derive(Debug, Clone, PartialEq, crate::Spanned)]
-pub struct ColumnTyped {
-    /// Column name.
-    pub name: Identifier,
-    /// Column type.
-    pub type_ref: TypeReference,
-    /// Source location.
-    pub source_info: SourceInfo,
-}
-
-/// Column with function reference: `~colName: funcRef`.
-#[derive(Debug, Clone, PartialEq, crate::Spanned)]
-pub struct ColumnWithFunction {
-    /// Column name.
-    pub name: Identifier,
-    /// Function reference (a packageable element reference).
-    pub function: PackageableElementPtr,
-    /// Source location.
+pub struct ColumnBuilderExpr {
+    /// Columns.
+    pub columns: Vec<ColumnSpec>,
+    /// Source info.
     pub source_info: SourceInfo,
 }
 
@@ -779,8 +745,8 @@ pub trait ExpressionVisitor {
     fn visit_new_instance(&mut self, expr: &NewInstanceExpr) {}
     /// Visit a copy expression.
     fn visit_copy(&mut self, expr: &CopyExpr) {}
-    /// Visit a column expression.
-    fn visit_column(&mut self, expr: &ColumnExpression) {}
+    /// Visit a column builder expression.
+    fn visit_column(&mut self, expr: &ColumnBuilderExpr) {}
     /// Visit a bare packageable element reference.
     fn visit_element_ref(&mut self, expr: &PackageableElementRef) {}
     /// Visit an island grammar expression.
@@ -794,7 +760,7 @@ pub trait ExpressionVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::type_ref::Package;
+    use crate::type_ref::{Package, TypeReference};
     use smol_str::SmolStr;
 
     use crate::test_utils::src;
@@ -940,14 +906,14 @@ mod tests {
     #[test]
     fn test_type_reference_expr() {
         let expr = Expression::TypeReferenceExpr(TypeReferenceExpr {
-            type_ref: TypeReference {
+            type_ref: crate::type_ref::TypeSpec::Type(TypeReference {
                 package: None,
                 name: SmolStr::new("MyType"),
                 type_arguments: vec![],
                 multiplicity_arguments: vec![],
                 type_variable_values: vec![],
                 source_info: src(),
-            },
+            }),
             source_info: src(),
         });
         if let Expression::TypeReferenceExpr(tr) = &expr {
@@ -980,34 +946,6 @@ mod tests {
         if let Expression::Lambda(l) = &lambda {
             assert_eq!(l.parameters.len(), 1);
         }
-    }
-
-    #[test]
-    fn test_column_expression_variants() {
-        // ~colName
-        let col = Expression::Column(ColumnExpression::Name(ColumnName {
-            name: SmolStr::new("firstName"),
-            source_info: src(),
-        }));
-        assert!(matches!(col, Expression::Column(ColumnExpression::Name(_))));
-
-        // ~[colName: Type]
-        let col_typed = Expression::Column(ColumnExpression::Typed(ColumnTyped {
-            name: SmolStr::new("age"),
-            type_ref: TypeReference {
-                package: None,
-                name: SmolStr::new("Integer"),
-                type_arguments: vec![],
-                multiplicity_arguments: vec![],
-                type_variable_values: vec![],
-                source_info: src(),
-            },
-            source_info: src(),
-        }));
-        assert!(matches!(
-            col_typed,
-            Expression::Column(ColumnExpression::Typed(_))
-        ));
     }
 
     #[test]

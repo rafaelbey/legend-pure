@@ -242,7 +242,7 @@ impl Parser {
         Ok(expr)
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::similar_names)]
     pub(crate) fn parse_primary(&mut self) -> R<Expression> {
         let si = self.cursor.current_source_info();
         match self.cursor.peek_kind() {
@@ -441,8 +441,7 @@ impl Parser {
                         lookahead += 1; // Integer keys
                     } else {
                         // Skip dotted property paths: address.name
-                        while self.cursor.peek_kind_at(lookahead).is_identifier_like()
-                        {
+                        while self.cursor.peek_kind_at(lookahead).is_identifier_like() {
                             lookahead += 1;
                             if self.cursor.peek_kind_at(lookahead) == TokenKind::Dot {
                                 lookahead += 1;
@@ -520,11 +519,16 @@ impl Parser {
             // Cast: @Type
             TokenKind::At => {
                 self.cursor.advance();
-                let type_ref = self.parse_type_reference()?;
+                let type_ref = self.parse_type_spec()?;
                 Ok(Expression::TypeReferenceExpr(TypeReferenceExpr {
                     type_ref,
                     source_info: si,
                 }))
+            }
+            // Column builder: ~name or ~[name, name2]
+            TokenKind::Tilde => {
+                self.cursor.advance();
+                self.parse_column_builder(si)
             }
             // Collection: [expr, ...] or Range: [start:stop:step]
             TokenKind::LBracket => {
@@ -866,5 +870,80 @@ impl Parser {
                 source_info: si,
             })
         }
+    }
+
+    pub(crate) fn parse_column_builder(
+        &mut self,
+        si: legend_pure_parser_ast::SourceInfo,
+    ) -> R<Expression> {
+        let mut columns = vec![];
+        if self.cursor.eat(TokenKind::LBracket) {
+            if !self.cursor.check(TokenKind::RBracket) {
+                loop {
+                    columns.push(self.parse_one_col_spec()?);
+                    if !self.cursor.eat(TokenKind::Comma) {
+                        break;
+                    }
+                }
+            }
+            self.cursor.expect(TokenKind::RBracket)?;
+        } else {
+            columns.push(self.parse_one_col_spec()?);
+        }
+        Ok(Expression::Column(
+            legend_pure_parser_ast::expression::ColumnBuilderExpr {
+                columns,
+                source_info: si,
+            },
+        ))
+    }
+
+    fn parse_one_col_spec(&mut self) -> R<legend_pure_parser_ast::expression::ColumnSpec> {
+        use legend_pure_parser_ast::expression::{ColumnSpec, ColumnTypeSpec};
+
+        let si = self.cursor.current_source_info();
+        let stereotypes = self.parse_stereotypes()?;
+        let tagged_values = self.parse_tagged_values()?;
+        let (name, _) = self.cursor.expect_identifier_or_keyword()?;
+
+        let mut type_spec = None;
+        let mut extra_function = None;
+
+        if self.cursor.eat(TokenKind::Colon) {
+            if self.cursor.check(TokenKind::LBrace) || self.is_bare_lambda() {
+                let expr = self.parse_expression()?;
+                extra_function = Some(Box::new(expr));
+            } else {
+                let type_ref = self.parse_type_reference()?;
+                let mult = if self.cursor.check(TokenKind::LBracket) {
+                    self.cursor.advance();
+                    let m = self.parse_multiplicity()?;
+                    self.cursor.expect(TokenKind::RBracket)?;
+                    Some(m)
+                } else {
+                    None
+                };
+                type_spec = Some(ColumnTypeSpec::Typed(type_ref, mult));
+            }
+
+            if !self.cursor.check(TokenKind::Comma)
+                && !self.cursor.check(TokenKind::RBracket)
+                && !self.cursor.check(TokenKind::RParen)
+                && !self.cursor.check(TokenKind::Semicolon)
+                && !self.cursor.check(TokenKind::Eof)
+            {
+                let expr = self.parse_expression()?;
+                extra_function = Some(Box::new(expr));
+            }
+        }
+
+        Ok(ColumnSpec {
+            stereotypes,
+            tagged_values,
+            name,
+            type_spec,
+            extra_function,
+            source_info: si,
+        })
     }
 }

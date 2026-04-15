@@ -688,54 +688,51 @@ fn convert_member_access(ma: &ast::expression::MemberAccess) -> v1::value_spec::
     }
 }
 
-/// Converts a `ColumnExpression` into a `classInstance` value specification.
-fn convert_column(col: &ast::expression::ColumnExpression) -> v1::value_spec::ValueSpecification {
-    use ast::expression::ColumnExpression;
+/// Converts a `ColumnBuilderExpr` into a `colSpec` value specification.
+/// Note: Currently only converts the first column spec into a `colSpec`.
+/// Full `colSpecArray` support pending.
+fn convert_column(e: &ast::expression::ColumnBuilderExpr) -> v1::value_spec::ValueSpecification {
+    use ast::expression::ColumnTypeSpec;
     use v1::value_spec::ClassInstance;
     use v1::value_spec::ValueSpecification;
 
-    match col {
-        ColumnExpression::Name(e) => ValueSpecification::ClassInstance(ClassInstance {
-            type_name: "colSpec".to_string(),
-            value: serde_json::json!({
-                "name": e.name.to_string(),
-            }),
-            source_information: source_information(&e.source_info),
-        }),
-        ColumnExpression::Typed(e) => ValueSpecification::ClassInstance(ClassInstance {
-            type_name: "colSpec".to_string(),
-            value: serde_json::json!({
-                "name": e.name.to_string(),
-                "type": e.type_ref.full_path(),
-            }),
-            source_information: source_information(&e.source_info),
-        }),
-        ColumnExpression::WithLambda(e) => {
-            let lambda_spec =
-                convert_expression_typed(&ast::expression::Expression::Lambda(*e.lambda.clone()));
-            // Serializing a well-formed ValueSpecification cannot fail —
-            // all fields are primitives or recursively serializable protocol types.
-            let Ok(lambda_val) = serde_json::to_value(&lambda_spec) else {
-                unreachable!("well-formed ValueSpecification serialization cannot fail");
-            };
-            ValueSpecification::ClassInstance(ClassInstance {
-                type_name: "colSpec".to_string(),
-                value: serde_json::json!({
-                    "name": e.name.to_string(),
-                    "function1": lambda_val,
-                }),
-                source_information: source_information(&e.source_info),
-            })
+    // For now, extract the first column spec (if any)
+    let col = e.columns.first().unwrap();
+
+    let mut value_map = serde_json::Map::new();
+    value_map.insert("name".to_string(), serde_json::json!(col.name.to_string()));
+
+    // In a real implementation we would convert the annotations, tagged values, etc.
+    if let Some(type_spec) = &col.type_spec {
+        match type_spec {
+            ColumnTypeSpec::Typed(tr, _) => {
+                value_map.insert("type".to_string(), serde_json::json!(tr.full_path()));
+            }
+            ColumnTypeSpec::Lambda(lambda) => {
+                let lambda_spec =
+                    convert_expression_typed(&ast::expression::Expression::Lambda(lambda.clone()));
+                if let Ok(lambda_val) = serde_json::to_value(&lambda_spec) {
+                    value_map.insert("function1".to_string(), lambda_val);
+                }
+            }
         }
-        ColumnExpression::WithFunction(e) => ValueSpecification::ClassInstance(ClassInstance {
-            type_name: "colSpec".to_string(),
-            value: serde_json::json!({
-                "name": e.name.to_string(),
-                "function1": e.function.to_string(),
-            }),
-            source_information: source_information(&e.source_info),
-        }),
     }
+
+    #[allow(clippy::collapsible_if)]
+    if let Some(func) = &col.extra_function {
+        if let ast::expression::Expression::PackageableElementRef(r) = &**func {
+            value_map.insert(
+                "function1".to_string(),
+                serde_json::json!(r.element.name.to_string()),
+            );
+        }
+    }
+
+    ValueSpecification::ClassInstance(ClassInstance {
+        type_name: "colSpec".to_string(),
+        value: serde_json::Value::Object(value_map),
+        source_information: source_information(&e.source_info),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1262,7 +1259,10 @@ mod tests {
     fn test_convert_profile_element() {
         let profile = ast::element::Element::Profile(ast::element::ProfileDef {
             package: Some(ast::type_ref::Package::root(Identifier::new("meta"), src())),
-            name: ast::annotation::SpannedString { value: Identifier::new("doc"), source_info: src() },
+            name: ast::annotation::SpannedString {
+                value: Identifier::new("doc"),
+                source_info: src(),
+            },
             stereotype_names: vec![ast::annotation::SpannedString {
                 value: Identifier::new("deprecated"),
                 source_info: src(),
@@ -1294,7 +1294,10 @@ mod tests {
                 ast::type_ref::Package::root(Identifier::new("model"), src())
                     .child(Identifier::new("domain"), src()),
             ),
-            name: ast::annotation::SpannedString { value: Identifier::new("Person"), source_info: src() },
+            name: ast::annotation::SpannedString {
+                value: Identifier::new("Person"),
+                source_info: src(),
+            },
             type_variable_parameters: vec![],
             type_parameters: vec![],
             multiplicity_parameters: vec![],
