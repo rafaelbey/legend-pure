@@ -839,10 +839,23 @@ impl Parser {
         let si = self.cursor.current_source_info();
         let param = self.parse_lambda_param()?;
         self.cursor.expect(TokenKind::Pipe)?;
-        let body = self.parse_expression()?;
+
+        let mut body = vec![self.parse_expression()?];
+        while self.cursor.eat(TokenKind::Semicolon) {
+            if self.cursor.check(TokenKind::RParen)
+                || self.cursor.check(TokenKind::RBrace)
+                || self.cursor.check(TokenKind::RBracket)
+                || self.cursor.check(TokenKind::Comma)
+                || self.cursor.check(TokenKind::Eof)
+            {
+                break;
+            }
+            body.push(self.parse_expression()?);
+        }
+
         Ok(Expression::Lambda(Lambda {
             parameters: vec![param],
-            body: vec![body],
+            body,
             source_info: si,
         }))
     }

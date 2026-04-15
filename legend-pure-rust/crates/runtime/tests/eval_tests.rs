@@ -447,7 +447,7 @@ fn eval_let_with_if_and_arithmetic() {
 // ===========================================================================
 
 #[test]
-#[ignore = "TDD: awaiting evaluator support for let inside lambda shadowing outer"]
+
 fn eval_lambda_let_shadows_outer_let() {
     let result = eval_pure(
         r"
@@ -473,7 +473,7 @@ fn eval_lambda_let_shadows_outer_let() {
 }
 
 #[test]
-#[ignore = "TDD: awaiting evaluator support for closure parameter shadowing"]
+
 fn eval_variable_shadowing_lambda() {
     let result = eval_pure(
         r"
