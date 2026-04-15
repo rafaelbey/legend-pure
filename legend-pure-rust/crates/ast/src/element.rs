@@ -22,7 +22,9 @@ use smol_str::SmolStr;
 use crate::annotation::{Parameter, SpannedString, StereotypePtr, TaggedValue};
 use crate::expression::Expression;
 use crate::source_info::{SourceInfo, Spanned};
-use crate::type_ref::{Identifier, Multiplicity, Package, TypeReference, TypeSpec, TypeVariableParameter};
+use crate::type_ref::{
+    Identifier, Multiplicity, Package, TypeReference, TypeSpec, TypeVariableParameter,
+};
 
 // ---------------------------------------------------------------------------
 // Traits
@@ -640,7 +642,10 @@ mod tests {
     fn test_profile_def() {
         let profile = ProfileDef {
             package: Some(Package::root(SmolStr::new("meta"), src())),
-            name: SpannedString { value: SmolStr::new("doc"), source_info: src() },
+            name: SpannedString {
+                value: SmolStr::new("doc"),
+                source_info: src(),
+            },
             stereotype_names: vec![SpannedString {
                 value: SmolStr::new("deprecated"),
                 source_info: src(),
@@ -664,7 +669,10 @@ mod tests {
     fn test_enum_def() {
         let enum_def = EnumDef {
             package: Some(Package::root(SmolStr::new("model"), src())),
-            name: SpannedString { value: SmolStr::new("Color"), source_info: src() },
+            name: SpannedString {
+                value: SmolStr::new("Color"),
+                source_info: src(),
+            },
             values: vec![
                 EnumValue {
                     name: SmolStr::new("RED"),
@@ -693,7 +701,10 @@ mod tests {
     fn test_class_def_with_stereotype() {
         let class = ClassDef {
             package: Some(Package::root(SmolStr::new("model"), src())),
-            name: SpannedString { value: SmolStr::new("Person"), source_info: src() },
+            name: SpannedString {
+                value: SmolStr::new("Person"),
+                source_info: src(),
+            },
             type_variable_parameters: vec![],
             type_parameters: vec![],
             multiplicity_parameters: vec![],
@@ -740,7 +751,10 @@ mod tests {
     fn test_element_enum_dispatch() {
         let profile = Element::Profile(ProfileDef {
             package: None,
-            name: SpannedString { value: SmolStr::new("doc"), source_info: src() },
+            name: SpannedString {
+                value: SmolStr::new("doc"),
+                source_info: src(),
+            },
             stereotype_names: vec![],
             tag_names: vec![],
             stereotypes: vec![],
@@ -778,7 +792,10 @@ mod tests {
         let elements = vec![
             Element::Profile(ProfileDef {
                 package: None,
-                name: SpannedString { value: SmolStr::new("doc"), source_info: src() },
+                name: SpannedString {
+                    value: SmolStr::new("doc"),
+                    source_info: src(),
+                },
                 stereotype_names: vec![],
                 tag_names: vec![],
                 stereotypes: vec![],
@@ -787,7 +804,10 @@ mod tests {
             }),
             Element::Class(ClassDef {
                 package: None,
-                name: SpannedString { value: SmolStr::new("Person"), source_info: src() },
+                name: SpannedString {
+                    value: SmolStr::new("Person"),
+                    source_info: src(),
+                },
                 type_variable_parameters: vec![],
                 type_parameters: vec![],
                 multiplicity_parameters: vec![],

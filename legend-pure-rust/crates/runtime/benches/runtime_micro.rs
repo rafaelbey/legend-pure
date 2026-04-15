@@ -72,7 +72,7 @@ fn bench_value_ops(c: &mut Criterion) {
         let v = Value::Collection(Box::new(PVector::new()));
         b.iter(|| {
             let _ = black_box(v.clone());
-        })
+        });
     });
 
     group.bench_function("collection_clone_1000", |b| {
@@ -83,7 +83,7 @@ fn bench_value_ops(c: &mut Criterion) {
         let v = Value::Collection(Box::new(pv));
         b.iter(|| {
             let _ = black_box(v.clone());
-        })
+        });
     });
 
     group.finish();

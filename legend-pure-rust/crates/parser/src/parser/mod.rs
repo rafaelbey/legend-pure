@@ -306,7 +306,10 @@ impl Parser {
             stereotypes,
             tagged_values,
             package,
-            name: SpannedString { value: name_str, source_info: name_si },
+            name: SpannedString {
+                value: name_str,
+                source_info: name_si,
+            },
         })
     }
 }

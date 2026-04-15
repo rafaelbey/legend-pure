@@ -22,7 +22,7 @@ use legend_pure_parser_ast::annotation::{PackageableElementPtr, Parameter};
 use legend_pure_parser_ast::element::PackageableElement as _;
 use legend_pure_parser_ast::expression::{
     ArithmeticExpr, ArithmeticOp, ArrowFunction, BitwiseExpr, BitwiseNotExpr, BitwiseOp,
-    CollectionExpr, ColumnExpression, ComparisonExpr, ComparisonOp, CopyExpr, Expression,
+    CollectionExpr, ColumnBuilderExpr, ComparisonExpr, ComparisonOp, CopyExpr, Expression,
     FunctionApplication, Lambda, LetExpr, Literal, LogicalExpr, LogicalOp, MemberAccess,
     NewInstanceExpr, NotExpr, PackageableElementRef, SliceExpr, TypeReferenceExpr, UnaryMinusExpr,
     Variable,
@@ -362,7 +362,7 @@ fn compose_member_access(w: &mut IndentWriter, e: &MemberAccess) {
 
 fn compose_type_reference_expr(w: &mut IndentWriter, e: &TypeReferenceExpr) {
     w.write("@");
-    crate::type_ref::compose_type_reference(w, &e.type_ref);
+    crate::type_ref::compose_type_spec(w, &e.type_ref);
 }
 
 // ---------------------------------------------------------------------------
@@ -481,31 +481,51 @@ fn compose_copy(w: &mut IndentWriter, e: &CopyExpr) {
     w.write(")");
 }
 
-fn compose_column(w: &mut IndentWriter, e: &ColumnExpression) {
-    match e {
-        ColumnExpression::Name(c) => {
-            w.write("~");
-            w.write(&maybe_quote(&c.name));
+fn compose_column(w: &mut IndentWriter, e: &ColumnBuilderExpr) {
+    if e.columns.is_empty() {
+        w.write("~[]");
+        return;
+    }
+
+    w.write("~");
+    let is_array = e.columns.len() > 1;
+    if is_array {
+        w.write("[");
+    }
+
+    for (i, col) in e.columns.iter().enumerate() {
+        if i > 0 {
+            w.write(", ");
         }
-        ColumnExpression::WithLambda(c) => {
-            w.write("~");
-            w.write(&maybe_quote(&c.name));
+        w.write(&maybe_quote(&col.name));
+
+        if let Some(spec) = &col.type_spec {
             w.write(": ");
-            compose_lambda(w, &c.lambda);
+            match spec {
+                legend_pure_parser_ast::expression::ColumnTypeSpec::Typed(tr, mult) => {
+                    crate::type_ref::compose_type_reference(w, tr);
+                    if let Some(m) = mult {
+                        w.write(&m.to_string());
+                    }
+                }
+                legend_pure_parser_ast::expression::ColumnTypeSpec::Lambda(l) => {
+                    compose_lambda(w, l);
+                }
+            }
         }
-        ColumnExpression::Typed(c) => {
-            w.write("~[");
-            w.write(&maybe_quote(&c.name));
-            w.write(": ");
-            crate::type_ref::compose_type_reference(w, &c.type_ref);
-            w.write("]");
+
+        if let Some(ef) = &col.extra_function {
+            if col.type_spec.is_none() {
+                w.write(": ");
+            } else {
+                w.write(" "); // Space if we already had a type spec
+            }
+            compose_expression(w, ef);
         }
-        ColumnExpression::WithFunction(c) => {
-            w.write("~");
-            w.write(&maybe_quote(&c.name));
-            w.write(": ");
-            compose_element_ptr(w, &c.function);
-        }
+    }
+
+    if is_array {
+        w.write("]");
     }
 }
 
@@ -590,8 +610,7 @@ mod tests {
     use super::*;
     use crate::writer::IndentWriter;
     use legend_pure_parser_ast::expression::{
-        BitwiseExpr, BitwiseNotExpr, BitwiseOp, ColumnExpression, ColumnName, Expression,
-        UnaryMinusExpr,
+        BitwiseExpr, BitwiseNotExpr, BitwiseOp, Expression, UnaryMinusExpr,
     };
 
     fn si() -> legend_pure_parser_ast::SourceInfo {
@@ -651,12 +670,22 @@ mod tests {
     }
 
     #[test]
-    fn compose_column_expr() {
-        let c = Expression::Column(ColumnExpression::Name(ColumnName {
+    fn test_compose_column() {
+        use legend_pure_parser_ast::expression::{ColumnBuilderExpr, ColumnSpec};
+
+        let c = Expression::Column(ColumnBuilderExpr {
+            columns: vec![ColumnSpec {
+                stereotypes: vec![],
+                tagged_values: vec![],
+                name: "col".into(),
+                type_spec: None,
+                extra_function: None,
+                source_info: si(),
+            }],
             source_info: si(),
-            name: "test".into(),
-        }));
-        assert_eq!(get_composed(&c), "~test");
+        });
+
+        assert_eq!(get_composed(&c), "~col");
     }
 
     #[test]

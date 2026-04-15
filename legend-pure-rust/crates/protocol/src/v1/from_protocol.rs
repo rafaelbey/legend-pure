@@ -500,7 +500,7 @@ pub fn convert_value_spec_to_expression(
                 source_info: si.clone(),
             };
             Ok(Expression::TypeReferenceExpr(TypeReferenceExpr {
-                type_ref,
+                type_ref: ast::type_ref::TypeSpec::Type(type_ref),
                 source_info: si,
             }))
         }
@@ -764,7 +764,10 @@ fn convert_class(c: &v1::element::ProtocolClass) -> Result<ast::element::ClassDe
 
     Ok(ast::element::ClassDef {
         package,
-        name: ast::annotation::SpannedString { value: SmolStr::new(&c.name), source_info: si.clone() },
+        name: ast::annotation::SpannedString {
+            value: SmolStr::new(&c.name),
+            source_info: si.clone(),
+        },
         type_variable_parameters: vec![],
         type_parameters: vec![],
         multiplicity_parameters: vec![],
@@ -806,7 +809,10 @@ fn convert_enumeration(e: &v1::element::ProtocolEnumeration) -> Result<ast::elem
 
     Ok(ast::element::EnumDef {
         package,
-        name: ast::annotation::SpannedString { value: SmolStr::new(&e.name), source_info: si.clone() },
+        name: ast::annotation::SpannedString {
+            value: SmolStr::new(&e.name),
+            source_info: si.clone(),
+        },
         values: values?,
         stereotypes: stereotypes?,
         tagged_values: tagged_values?,
@@ -852,7 +858,10 @@ fn convert_function(f: &v1::element::ProtocolFunction) -> Result<ast::element::F
 
     Ok(ast::element::FunctionDef {
         package,
-        name: ast::annotation::SpannedString { value: SmolStr::new(&f.name), source_info: si.clone() },
+        name: ast::annotation::SpannedString {
+            value: SmolStr::new(&f.name),
+            source_info: si.clone(),
+        },
         type_parameters: vec![],
         multiplicity_parameters: vec![],
         parameters: parameters?,
@@ -872,7 +881,10 @@ fn convert_profile(p: &v1::element::ProtocolProfile) -> Result<ast::element::Pro
 
     Ok(ast::element::ProfileDef {
         package,
-        name: ast::annotation::SpannedString { value: SmolStr::new(&p.name), source_info: si.clone() },
+        name: ast::annotation::SpannedString {
+            value: SmolStr::new(&p.name),
+            source_info: si.clone(),
+        },
         stereotype_names: p
             .stereotypes
             .iter()
@@ -914,7 +926,10 @@ fn convert_association(
 
     Ok(ast::element::AssociationDef {
         package,
-        name: ast::annotation::SpannedString { value: SmolStr::new(&a.name), source_info: si.clone() },
+        name: ast::annotation::SpannedString {
+            value: SmolStr::new(&a.name),
+            source_info: si.clone(),
+        },
         properties: properties?,
         qualified_properties: qualified_properties?,
         stereotypes: stereotypes?,
@@ -937,7 +952,10 @@ fn convert_measure(m: &v1::element::ProtocolMeasure) -> Result<ast::element::Mea
 
     Ok(ast::element::MeasureDef {
         package,
-        name: ast::annotation::SpannedString { value: SmolStr::new(&m.name), source_info: si.clone() },
+        name: ast::annotation::SpannedString {
+            value: SmolStr::new(&m.name),
+            source_info: si.clone(),
+        },
         canonical_unit,
         non_canonical_units: non_canonical?,
         source_info: si,

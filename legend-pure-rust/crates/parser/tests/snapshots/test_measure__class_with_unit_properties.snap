@@ -151,6 +151,7 @@ SourceFile {
                                 end_column: 9,
                             },
                         },
+                        type_variable_parameters: [],
                         type_parameters: [],
                         multiplicity_parameters: [],
                         super_types: [],

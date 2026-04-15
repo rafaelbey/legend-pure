@@ -19,10 +19,10 @@
 
 use legend_pure_parser_ast::annotation::{StereotypePtr, TaggedValue};
 use legend_pure_parser_ast::element::{
-    AggregationKind, Annotated, AssociationDef, ClassDef, Constraint, Element, EnumDef,
-    FunctionDef, FunctionTest, FunctionTestAssertion, FunctionTestData, FunctionTestDataValue,
-    MeasureDef, NativeFunctionDef, PackageableElement, PrimitiveDef, ProfileDef, Property,
-    QualifiedProperty, UnitDef,
+    AggregationKind, AssociationDef, ClassDef, Constraint, Element, EnumDef, FunctionDef,
+    FunctionTest, FunctionTestAssertion, FunctionTestData, FunctionTestDataValue, MeasureDef,
+    NativeFunctionDef, PackageableElement, PrimitiveDef, ProfileDef, Property, QualifiedProperty,
+    UnitDef,
 };
 
 use crate::expression::{
@@ -107,7 +107,7 @@ fn compose_qualified_name(
 /// Writes the common element header: `<<stereotypes>> {tagged_values} pkg::Name`.
 ///
 /// Works with any type that implements `PackageableElement` (and hence `Annotated`).
-fn compose_element_header(w: &mut IndentWriter, e: &(impl PackageableElement + Annotated)) {
+fn compose_element_header(w: &mut IndentWriter, e: &impl PackageableElement) {
     compose_stereotypes_inline(w, e.stereotypes());
     compose_tagged_values_inline(w, e.tagged_values());
     compose_qualified_name(w, e.package(), e.name());

@@ -33,6 +33,7 @@ SourceFile {
                                 end_column: 8,
                             },
                         },
+                        type_variable_parameters: [],
                         type_parameters: [
                             "T",
                         ],
