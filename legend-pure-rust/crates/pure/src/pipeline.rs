@@ -118,12 +118,28 @@ pub fn compile(
     // ---- Pass 1.5: Topological Sort ----
     let sorted = pass_topo_sort(&declarations, source_files, &model, &mut errors);
 
-    // ---- Pass 2: Definition ----
-    pass_define(
+    // ---- Pass 2a: Signatures & Non-Function Elements ----
+    // Resolve everything EXCEPT function expression bodies.
+    // After this pass, all function signatures (params, return types) are
+    // available for type-based dispatch during body compilation.
+    let (id_to_decl, import_scope_cache, resolve_caches) = pass_define_signatures(
         &sorted,
         source_files,
         &declarations,
         &unit_mappings,
+        auto_imports,
+        &mut model,
+        &mut errors,
+    );
+
+    // ---- Pass 2b: Function Bodies ----
+    // Compile expression bodies using fully-resolved function signatures.
+    pass_define_bodies(
+        &sorted,
+        source_files,
+        &id_to_decl,
+        import_scope_cache,
+        resolve_caches,
         auto_imports,
         &mut model,
         &mut errors,
@@ -513,15 +529,22 @@ fn extract_hard_dependencies(
 // Pass 2: Definition
 // ---------------------------------------------------------------------------
 
-/// Pass 2 — hydrates shells in topological order.
-fn pass_define(
+/// Pass 2a — hydrates shells in topological order, resolving everything
+/// EXCEPT function expression bodies. Returns the lookup maps and caches
+/// for reuse in Pass 2b.
+#[allow(clippy::type_complexity)]
+fn pass_define_signatures<'a>(
     sorted: &[ElementId],
     source_files: &[SourceFile],
-    declarations: &HashMap<SmolStr, Vec<Declaration>>,
+    declarations: &'a HashMap<SmolStr, Vec<Declaration>>,
     unit_mappings: &HashMap<ElementId, UnitMapping>,
     auto_imports: &[SmolStr],
     model: &mut PureModel,
     errors: &mut Vec<CompilationError>,
+) -> (
+    HashMap<ElementId, &'a Declaration>,
+    HashMap<(usize, usize), Vec<crate::resolve::ImportScope>>,
+    HashMap<(usize, usize), HashMap<SmolStr, crate::resolve::ResolveResult>>,
 ) {
     use crate::resolve::ImportScope;
 
@@ -570,11 +593,64 @@ fn pass_define(
             type_parameters: &type_params,
         };
 
-        let hydrated = hydrate_element(ast_element, id, unit_mappings, &mut ctx, errors);
+        // Hydrate everything EXCEPT function bodies (bodies resolved in Pass 2b)
+        let hydrated = hydrate_element_signature(ast_element, id, unit_mappings, &mut ctx, errors);
 
         // Replace the shell in the chunk
         let chunk = &mut model.chunks[id.chunk_id as usize];
         *chunk.elements.get_mut(id.local_idx) = hydrated;
+    }
+
+    (id_to_decl, import_scope_cache, resolve_caches)
+}
+
+/// Pass 2b — compile function expression bodies.
+///
+/// At this point all function signatures (params, return types) are fully
+/// resolved, enabling type-based dispatch in `resolve_function_call`.
+fn pass_define_bodies(
+    sorted: &[ElementId],
+    source_files: &[SourceFile],
+    id_to_decl: &HashMap<ElementId, &Declaration>,
+    mut import_scope_cache: HashMap<(usize, usize), Vec<crate::resolve::ImportScope>>,
+    mut resolve_caches: HashMap<(usize, usize), HashMap<SmolStr, crate::resolve::ResolveResult>>,
+    auto_imports: &[SmolStr],
+    model: &mut PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    for &id in sorted {
+        let Some(decl) = id_to_decl.get(&id) else {
+            continue;
+        };
+        let ast_element = get_ast_element(source_files, decl);
+
+        // Only process functions with bodies
+        let body_exprs = match ast_element {
+            ast::Element::Function(f) if !f.body.is_empty() => &f.body,
+            _ => continue,
+        };
+
+        let scope_key = (decl.file_idx, decl.section_idx);
+        let import_scopes = import_scope_cache.entry(scope_key).or_insert_with(|| {
+            build_import_scope(source_files, decl.file_idx, decl.section_idx, auto_imports)
+        });
+        let resolve_cache = resolve_caches.entry(scope_key).or_default();
+
+        let type_params = ast_type_parameters(ast_element);
+        let mut ctx = ResolutionContext {
+            model,
+            import_scopes,
+            resolve_cache,
+            type_parameters: &type_params,
+        };
+
+        let body = crate::lower::lower_expression_body(body_exprs, &mut ctx, errors);
+
+        // Patch the body into the already-resolved function
+        let chunk = &mut model.chunks[id.chunk_id as usize];
+        if let Element::Function(func) = chunk.elements.get_mut(id.local_idx) {
+            func.body = body;
+        }
     }
 }
 
@@ -715,7 +791,7 @@ fn create_shell(element: &ast::Element) -> Element {
 /// Expression bodies remain as placeholders — full expression lowering
 /// is deferred to Phase 4+.
 #[allow(clippy::too_many_lines)]
-fn hydrate_element(
+fn hydrate_element_signature(
     element: &ast::Element,
     element_id: ElementId,
     unit_mappings: &HashMap<ElementId, UnitMapping>,
@@ -806,7 +882,7 @@ fn hydrate_element(
                 parameters,
                 return_type,
                 return_multiplicity,
-                body: crate::lower::lower_expression_body(&func_def.body, ctx, errors),
+                body: vec![], // Bodies resolved in Pass 2b
                 stereotypes,
                 tagged_values,
             })

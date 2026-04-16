@@ -85,6 +85,17 @@ dependencies, so future contributors know what's safe to pick up.
 
 ---
 
+## Developer Experience / Observability
+
+| Item | Priority | Status | Notes |
+|---|---|---|---|
+| Compilation tracing (`tracing` crate) | P1 | 🔲 Planned | Add `tracing` instrumentation to pipeline passes, function dispatch, expression lowering, and type narrowing. Enable via `RUST_LOG=legend_pure_parser_pure=debug`. Shows pass timing, dispatch decisions, candidate narrowing, and resolution fallback paths. |
+| Dispatch decision log | P1 | 🔲 Planned | Log each `resolve_function_call`: function name, arg count, candidates found, type-narrowed set, final pick or error. Critical for debugging false ambiguity / false elimination. |
+| Pass timing | P2 | 🔲 Planned | `tracing::info_span!` on each pipeline pass (1, 1.5, 2a, 2b, 2.5, 3) with element count and duration. |
+| Error source chain | P2 | 🔲 Planned | For cascading errors (arg lowering fails → function unresolved), link parent error to child cause. |
+
+---
+
 ## Error Reporting
 
 | Item | Priority | Status | Notes |
