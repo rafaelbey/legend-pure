@@ -359,14 +359,21 @@ fn lower_function_application(
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
-    let function_id =
-        resolve::resolve_function_call(&e.function, &e.arguments, &e.source_info, ctx, errors);
-
+    // Lower arguments FIRST — their compiled types drive dispatch
     let arguments: Vec<ValueSpec> = e
         .arguments
         .iter()
         .filter_map(|a| lower_expression(a, ctx, errors))
         .collect();
+
+    let function_id = resolve::resolve_function_call(
+        &e.function,
+        e.arguments.len(),
+        &arguments,
+        &e.source_info,
+        ctx,
+        errors,
+    );
 
     Some(untyped(
         ExprKind::FunctionCall {
@@ -386,13 +393,7 @@ fn lower_arrow_function(
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
-    // Build combined arg list: target is prepended as first param
-    let mut call_args = Vec::with_capacity(1 + e.arguments.len());
-    call_args.push((*e.target).clone());
-    call_args.extend(e.arguments.iter().cloned());
-    let function_id =
-        resolve::resolve_function_call(&e.function, &call_args, &e.source_info, ctx, errors);
-
+    // Lower target and arguments FIRST — their compiled types drive dispatch
     let target = lower_expression(&e.target, ctx, errors)?;
 
     let mut arguments = Vec::with_capacity(1 + e.arguments.len());
@@ -402,6 +403,16 @@ fn lower_arrow_function(
             arguments.push(lowered);
         }
     }
+
+    // AST arg count = target + explicit args
+    let function_id = resolve::resolve_function_call(
+        &e.function,
+        1 + e.arguments.len(),
+        &arguments,
+        &e.source_info,
+        ctx,
+        errors,
+    );
 
     Some(untyped(
         ExprKind::FunctionCall {

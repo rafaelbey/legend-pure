@@ -22,7 +22,6 @@ use std::collections::HashMap;
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::annotation as ast_ann;
 use legend_pure_parser_ast::element::PackageableElement;
-use legend_pure_parser_ast::expression as ast_expr;
 use legend_pure_parser_ast::type_ref::{self as ast_type, FUNCTION_TYPE_SENTINEL, Package};
 use smol_str::SmolStr;
 
@@ -556,18 +555,18 @@ pub(crate) fn resolve_element_ptr(
 /// this searches `Function.function_name` — the simple name — across
 /// import scopes.
 ///
-/// `call_args` carries the AST argument expressions from the call site.
-/// Currently used for parameter-count filtering; will enable full
-/// type-based dispatch when implemented.
+/// `arg_count` is the number of arguments at the call site (from the AST).
+/// `lowered_args` are the already-compiled argument expressions, used for
+/// type-based narrowing when multiple overloads share the same param count.
 pub(crate) fn resolve_function_call(
     ptr: &ast_ann::PackageableElementPtr,
-    call_args: &[ast_expr::Expression],
+    arg_count: usize,
+    lowered_args: &[crate::types::ValueSpec],
     source_info: &SourceInfo,
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<ElementId> {
     let name = ptr.name();
-    let arg_count = call_args.len();
 
     if let Some(pkg) = ptr.package() {
         // Qualified — search in the specified package by simple name
@@ -583,12 +582,11 @@ pub(crate) fn resolve_function_call(
                     }
                 })
                 .collect();
-            if filtered.len() == 1 {
-                return Some(filtered[0]);
+            let narrowed = narrow_candidates_by_type(&filtered, lowered_args, ctx.model);
+            if narrowed.len() == 1 {
+                return Some(narrowed[0]);
             }
-            if let Some(&first) = filtered.first() {
-                return Some(first);
-            }
+            // 0 or >1 candidates after narrowing — fall through to exact match
         }
         // Fall back to exact element match (e.g., mangled name used directly)
         if let Some(id) = ctx.model.resolve_in_package(pkg, name) {
@@ -659,13 +657,18 @@ pub(crate) fn resolve_function_call(
         } else if all_candidates.len() == 1 {
             Some(all_candidates[0])
         } else {
-            // Multiple overloads with same param count — needs type-based dispatch
+            // Multiple overloads with same param count — narrow by type
+            let narrowed = narrow_candidates_by_type(&all_candidates, lowered_args, ctx.model);
+            if narrowed.len() == 1 {
+                return Some(narrowed[0]);
+            }
             errors.push(CompilationError {
                 message: format!(
-                    "Ambiguous function call '{name}': found {} overloads with {} args, \
-                     type-based dispatch not yet implemented",
+                    "Ambiguous function call '{name}': found {} overloads with {} args \
+                     (narrowed from {} candidates)",
+                    narrowed.len(),
+                    arg_count,
                     all_candidates.len(),
-                    arg_count
                 ),
                 source_info: source_info.clone(),
                 kind: CompilationErrorKind::AmbiguousImport {
@@ -677,6 +680,194 @@ pub(crate) fn resolve_function_call(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Type-based dispatch helpers
+// ---------------------------------------------------------------------------
+
+/// Infers a type `ElementId` from a lowered `ValueSpec` by examining
+/// its `ExprKind` structure. Returns `None` for expressions whose type
+/// cannot be statically determined (treated as `Any` — matches everything).
+fn infer_type_from_valuespec(vs: &crate::types::ValueSpec, model: &crate::model::PureModel) -> Option<ElementId> {
+    use crate::bootstrap;
+    use crate::types::ExprKind;
+
+    match vs.kind.as_ref() {
+        ExprKind::IntegerLiteral(_) => Some(bootstrap::INTEGER_ID),
+        ExprKind::FloatLiteral(_) => Some(bootstrap::FLOAT_ID),
+        ExprKind::DecimalLiteral(_) => Some(bootstrap::DECIMAL_ID),
+        ExprKind::StringLiteral(_) => Some(bootstrap::STRING_ID),
+        ExprKind::BooleanLiteral(_) => Some(bootstrap::BOOLEAN_ID),
+        ExprKind::DateLiteral(dv) => {
+            use crate::types::DateValue;
+            match dv {
+                DateValue::StrictDate { .. } => Some(bootstrap::STRICT_DATE_ID),
+                DateValue::DateTime { .. } => Some(bootstrap::DATE_TIME_ID),
+                DateValue::StrictTime { .. } => Some(bootstrap::STRICT_TIME_ID),
+            }
+        }
+        ExprKind::Lambda { .. } => None, // FunctionType — no ElementId
+        ExprKind::FunctionCall { function, .. } => {
+            // Use the return type of the resolved function
+            function.and_then(|fid| {
+                if let Element::Function(f) = model.get_element(fid) {
+                    match &f.return_type {
+                        crate::types::TypeExpr::Named { element, .. } => Some(*element),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+        }
+        // Variables, property access, etc. — type unknown at this stage
+        _ => None,
+    }
+}
+
+/// Checks if `arg_type` is compatible with `param_type` in the type hierarchy.
+///
+/// Compatible means: same type, or arg_type is a subtype of param_type.
+/// Returns true if we can't determine (either side is `None`/`Any`/generic).
+fn is_type_compatible(
+    arg_type: Option<ElementId>,
+    param_type: &crate::types::TypeExpr,
+    model: &crate::model::PureModel,
+) -> bool {
+    use crate::bootstrap;
+
+    let param_eid = match param_type {
+        crate::types::TypeExpr::Named { element, .. } => *element,
+        crate::types::TypeExpr::Generic(_) => return true, // Generic matches anything
+        crate::types::TypeExpr::FunctionType { .. } => return true, // Can't check structurally
+        _ => return true,
+    };
+
+    // If param is Any, everything matches
+    if param_eid == bootstrap::ANY_ID {
+        return true;
+    }
+
+    let Some(arg_eid) = arg_type else {
+        // Unknown arg type — assume compatible (can't eliminate)
+        return true;
+    };
+
+    // Exact match
+    if arg_eid == param_eid {
+        return true;
+    }
+
+    // Walk supertype chain: is arg_eid a subtype of param_eid?
+    is_subtype(arg_eid, param_eid, model)
+}
+
+/// Checks if `child` is a subtype of `parent` by walking the supertype chain.
+fn is_subtype(child: ElementId, parent: ElementId, model: &crate::model::PureModel) -> bool {
+
+    if child == parent {
+        return true;
+    }
+
+    let element = model.get_element(child);
+    let super_types = match element {
+        Element::Class(c) => &c.super_types,
+        Element::PrimitiveType(p) => {
+            // PrimitiveType has a single super_type
+            if let Some(sup) = p.super_type {
+                return sup == parent || is_subtype(sup, parent, model);
+            }
+            return false;
+        }
+        _ => return false,
+    };
+
+    for st in super_types {
+        if let crate::types::TypeExpr::Named { element: sup_eid, .. } = st {
+            if *sup_eid == parent || is_subtype(*sup_eid, parent, model) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Narrows function candidates by checking argument types against parameter types.
+///
+/// Returns only candidates where all arguments are type-compatible with the
+/// corresponding parameters. If type narrowing eliminates all candidates,
+/// returns the original set (type info was insufficient).
+fn narrow_candidates_by_type(
+    candidates: &[ElementId],
+    lowered_args: &[crate::types::ValueSpec],
+    model: &crate::model::PureModel,
+) -> Vec<ElementId> {
+    if candidates.len() <= 1 {
+        return candidates.to_vec();
+    }
+
+    // Infer types of each argument
+    let arg_types: Vec<Option<ElementId>> = lowered_args
+        .iter()
+        .map(|vs| infer_type_from_valuespec(vs, model))
+        .collect();
+
+    // If all arg types are unknown, we can't narrow — return all
+    if arg_types.iter().all(|t| t.is_none()) {
+        return candidates.to_vec();
+    }
+
+    // Score each candidate: count how many params have exact/subtype matches
+    let mut scored: Vec<(ElementId, i32)> = candidates
+        .iter()
+        .filter_map(|&eid| {
+            let Element::Function(f) = model.get_element(eid) else {
+                return None;
+            };
+            let mut score: i32 = 0;
+            let mut compatible = true;
+            for (i, param) in f.parameters.iter().enumerate() {
+                let arg_type = arg_types.get(i).copied().flatten();
+                if !is_type_compatible(arg_type, &param.type_expr, model) {
+                    compatible = false;
+                    break;
+                }
+                // Score: known exact/subtype match is better than unknown
+                if let Some(at) = arg_type {
+                    if let crate::types::TypeExpr::Named { element: pe, .. } = &param.type_expr {
+                        if at == *pe {
+                            score += 2; // exact match
+                        } else if is_subtype(at, *pe, model) {
+                            score += 1; // subtype match
+                        }
+                    }
+                }
+            }
+            if compatible {
+                Some((eid, score))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if scored.is_empty() {
+        // Type narrowing eliminated everything — fall back to original
+        return candidates.to_vec();
+    }
+
+    // Sort by score descending, pick the best
+    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    let best_score = scored[0].1;
+
+    // Return all candidates with the best score
+    scored
+        .into_iter()
+        .filter(|(_, s)| *s == best_score)
+        .map(|(eid, _)| eid)
+        .collect()
+}
+
 
 // ---------------------------------------------------------------------------
 // Tests
