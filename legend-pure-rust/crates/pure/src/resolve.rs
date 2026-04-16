@@ -110,6 +110,10 @@ pub(crate) struct ResolutionContext<'a> {
     /// for `Class<T, V>` or function `<T|m>`). Names here resolve to
     /// `TypeExpr::Generic(name)` instead of going through import lookup.
     pub type_parameters: &'a [SmolStr],
+    /// Variable types in scope. Maps variable name → (type, multiplicity).
+    /// Populated from function parameters, let bindings, and lambda parameters.
+    /// Used by dispatch to infer argument types for variable references.
+    pub variable_types: HashMap<SmolStr, (crate::types::TypeExpr, crate::types::Multiplicity)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -582,7 +586,8 @@ pub(crate) fn resolve_function_call(
                     }
                 })
                 .collect();
-            let narrowed = narrow_candidates_by_type(&filtered, lowered_args, ctx.model);
+            let narrowed =
+                narrow_candidates_by_type(&filtered, lowered_args, ctx.model, &ctx.variable_types);
             if narrowed.len() == 1 {
                 return Some(narrowed[0]);
             }
@@ -658,7 +663,12 @@ pub(crate) fn resolve_function_call(
             Some(all_candidates[0])
         } else {
             // Multiple overloads with same param count — narrow by type
-            let narrowed = narrow_candidates_by_type(&all_candidates, lowered_args, ctx.model);
+            let narrowed = narrow_candidates_by_type(
+                &all_candidates,
+                lowered_args,
+                ctx.model,
+                &ctx.variable_types,
+            );
             if narrowed.len() == 1 {
                 return Some(narrowed[0]);
             }
@@ -688,9 +698,13 @@ pub(crate) fn resolve_function_call(
 /// Infers a type `ElementId` from a lowered `ValueSpec` by examining
 /// its `ExprKind` structure. Returns `None` for expressions whose type
 /// cannot be statically determined (treated as `Any` — matches everything).
+/// Type alias for variable scope: name → (type, multiplicity).
+type VarTypes = HashMap<SmolStr, (crate::types::TypeExpr, crate::types::Multiplicity)>;
+
 fn infer_type_from_valuespec(
     vs: &crate::types::ValueSpec,
     model: &crate::model::PureModel,
+    var_types: &VarTypes,
 ) -> Option<ElementId> {
     use crate::bootstrap;
     use crate::types::ExprKind;
@@ -723,7 +737,15 @@ fn infer_type_from_valuespec(
                 }
             })
         }
-        // Variables, property access, etc. — type unknown at this stage
+        ExprKind::Variable { name } => {
+            // Look up declared type from function params / let / lambda
+            var_types.get(name).and_then(|(te, _)| match te {
+                crate::types::TypeExpr::Named { element, .. } => Some(*element),
+                _ => None,
+            })
+        }
+        ExprKind::EnumValue { enum_element, .. } => Some(*enum_element),
+        // Property access, collection, etc. — type unknown
         _ => None,
     }
 }
@@ -802,6 +824,7 @@ fn is_subtype(child: ElementId, parent: ElementId, model: &crate::model::PureMod
 fn infer_multiplicity_from_valuespec(
     vs: &crate::types::ValueSpec,
     model: &crate::model::PureModel,
+    var_types: &VarTypes,
 ) -> Option<crate::types::Multiplicity> {
     use crate::types::{ExprKind, Multiplicity};
 
@@ -832,7 +855,10 @@ fn infer_multiplicity_from_valuespec(
             }
         }),
 
-        // Variables, property access — unknown
+        // Variable → look up declared multiplicity
+        ExprKind::Variable { name } => var_types.get(name).map(|(_, m)| m.clone()),
+
+        // Property access, etc. — unknown
         _ => None,
     }
 }
@@ -846,8 +872,6 @@ fn is_multiplicity_compatible(
     arg_mult: &Option<crate::types::Multiplicity>,
     param_mult: &crate::types::Multiplicity,
 ) -> bool {
-    use crate::types::Multiplicity;
-
     let Some(am) = arg_mult else {
         // Unknown — assume compatible
         return true;
@@ -898,6 +922,7 @@ fn narrow_candidates_by_type(
     candidates: &[ElementId],
     lowered_args: &[crate::types::ValueSpec],
     model: &crate::model::PureModel,
+    var_types: &VarTypes,
 ) -> Vec<ElementId> {
     if candidates.len() <= 1 {
         return candidates.to_vec();
@@ -906,12 +931,12 @@ fn narrow_candidates_by_type(
     // Infer types and multiplicities of each argument
     let arg_types: Vec<Option<ElementId>> = lowered_args
         .iter()
-        .map(|vs| infer_type_from_valuespec(vs, model))
+        .map(|vs| infer_type_from_valuespec(vs, model, var_types))
         .collect();
 
     let arg_mults: Vec<Option<crate::types::Multiplicity>> = lowered_args
         .iter()
-        .map(|vs| infer_multiplicity_from_valuespec(vs, model))
+        .map(|vs| infer_multiplicity_from_valuespec(vs, model, var_types))
         .collect();
 
     // Score each candidate

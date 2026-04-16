@@ -512,7 +512,21 @@ fn lower_lambda(
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
     let parameters = lower_lambda_parameters(&e.parameters, ctx, errors);
+
+    // Save outer variable scope, register lambda params
+    let outer_vars = ctx.variable_types.clone();
+    for param in &parameters {
+        ctx.variable_types.insert(
+            param.name.clone(),
+            (param.type_expr.clone(), param.multiplicity.clone()),
+        );
+    }
+
     let body = lower_expression_body(&e.body, ctx, errors);
+
+    // Restore outer scope (lambda params don't leak)
+    ctx.variable_types = outer_vars;
+
     Some(untyped(
         ExprKind::Lambda { parameters, body },
         e.source_info.clone(),
@@ -566,6 +580,13 @@ fn lower_let(
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
     let value = lower_expression(&e.value, ctx, errors)?;
+
+    // Register the variable type for downstream dispatch
+    let var_type = infer_let_type(&value, ctx);
+    if let Some(vt) = var_type {
+        ctx.variable_types.insert(SmolStr::new(e.name.as_str()), vt);
+    }
+
     Some(untyped(
         ExprKind::FunctionCall {
             function: None,
@@ -580,6 +601,38 @@ fn lower_let(
         },
         e.source_info.clone(),
     ))
+}
+
+/// Infers the type and multiplicity of a let-bound value for variable tracking.
+fn infer_let_type(
+    value: &ValueSpec,
+    ctx: &ResolutionContext<'_>,
+) -> Option<(crate::types::TypeExpr, crate::types::Multiplicity)> {
+    use crate::bootstrap;
+    use crate::types::{ExprKind, Multiplicity, TypeExpr};
+
+    let named = |eid: crate::ids::ElementId| TypeExpr::Named {
+        element: eid,
+        type_arguments: vec![],
+        value_arguments: vec![],
+    };
+
+    match value.kind.as_ref() {
+        ExprKind::IntegerLiteral(_) => Some((named(bootstrap::INTEGER_ID), Multiplicity::PureOne)),
+        ExprKind::FloatLiteral(_) => Some((named(bootstrap::FLOAT_ID), Multiplicity::PureOne)),
+        ExprKind::DecimalLiteral(_) => Some((named(bootstrap::DECIMAL_ID), Multiplicity::PureOne)),
+        ExprKind::StringLiteral(_) => Some((named(bootstrap::STRING_ID), Multiplicity::PureOne)),
+        ExprKind::BooleanLiteral(_) => Some((named(bootstrap::BOOLEAN_ID), Multiplicity::PureOne)),
+        ExprKind::FunctionCall { function, .. } => function.and_then(|fid| {
+            if let crate::model::Element::Function(f) = ctx.model.get_element(fid) {
+                Some((f.return_type.clone(), f.return_multiplicity.clone()))
+            } else {
+                None
+            }
+        }),
+        ExprKind::Variable { name } => ctx.variable_types.get(name).cloned(),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
