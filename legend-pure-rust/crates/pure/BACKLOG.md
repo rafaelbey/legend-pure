@@ -24,7 +24,7 @@ dependencies, so future contributors know what's safe to pick up.
 | Type-compatible matching | P0 | ✅ Done | Exact + subtype scoring via `is_type_compatible` |
 | Multiplicity narrowing | P0 | ✅ Done | `is_multiplicity_compatible` + specificity scoring |
 | Subtype matching (`Integer` → `Number`) | P0 | ✅ Done | `is_subtype` walks super_types chain |
-| Variable type tracking | P0 | 🔲 Next | Needed to resolve remaining 355 ambiguous. Track `HashMap<SmolStr, TypeExpr>` in lowering context from let bindings and function params. |
+| Variable type tracking | P0 | ✅ Done | Function params, let bindings, lambda params tracked in `ResolutionContext.variable_types`. |
 | Generic params treated as `Any` | P1 | ⚠️ Compromise | Correct for now; causes false matches |
 | Generic unification (`Z` propagation) | P2 | 🔲 Deferred | Complex; Java uses `TypeInferenceObserver` |
 | Lambda parameter type inference | P2 | 🔲 Deferred | Infer from expected `Function<{...}>` type |
@@ -101,9 +101,9 @@ dependencies, so future contributors know what's safe to pick up.
 
 | Item | Priority | Status | Notes |
 |---|---|---|---|
-| Error count baseline | — | 429 | 355 ambiguous, 69 unresolved, 5 parse |
-| Target after variable tracking | — | ~100 | Variable types should resolve most remaining ambiguous |
-| Target after expression fixes | — | ~5 | Only parse failures remain |
+| Error count baseline | — | 243 | 161 ambiguous, 75 unresolved, 6 parse, 1 duplicate |
+| Target after metaclass inference | — | ~100 | M3 metaclass types (Type, Class, GenericType) resolve elementToPath/dynamicNew |
+| Target after expression fixes | — | ~7 | Only parse failures + duplicates remain |
 
 ---
 
