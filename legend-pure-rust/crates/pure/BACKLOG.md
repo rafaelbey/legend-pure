@@ -20,10 +20,11 @@ dependencies, so future contributors know what's safe to pick up.
 | Item | Priority | Status | Notes |
 |---|---|---|---|
 | Param count filtering | P0 | ✅ Done | `f.parameters.len() == arg_count` |
-| Pass 2a/2b split (signatures before bodies) | P0 | 🔲 Next | Prerequisite for type dispatch |
-| Type-compatible matching | P0 | 🔲 Blocked | Needs 2a/2b split |
-| Multiplicity narrowing | P0 | 🔲 Blocked | Needs type matching first |
-| Subtype matching (`Integer` → `Number`) | P0 | 🔲 Blocked | Needs type hierarchy walk |
+| Pass 2a/2b split (signatures before bodies) | P0 | ✅ Done | Signatures resolved before bodies |
+| Type-compatible matching | P0 | ✅ Done | Exact + subtype scoring via `is_type_compatible` |
+| Multiplicity narrowing | P0 | ✅ Done | `is_multiplicity_compatible` + specificity scoring |
+| Subtype matching (`Integer` → `Number`) | P0 | ✅ Done | `is_subtype` walks super_types chain |
+| Variable type tracking | P0 | 🔲 Next | Needed to resolve remaining 355 ambiguous. Track `HashMap<SmolStr, TypeExpr>` in lowering context from let bindings and function params. |
 | Generic params treated as `Any` | P1 | ⚠️ Compromise | Correct for now; causes false matches |
 | Generic unification (`Z` propagation) | P2 | 🔲 Deferred | Complex; Java uses `TypeInferenceObserver` |
 | Lambda parameter type inference | P2 | 🔲 Deferred | Infer from expected `Function<{...}>` type |
@@ -57,9 +58,9 @@ dependencies, so future contributors know what's safe to pick up.
 | Item | Priority | Status | Notes |
 |---|---|---|---|
 | Root package `::` references | P1 | 🔲 Open | 16 errors. `::meta::pure::...` paths starting with `::` need root-anchored resolution. |
-| Lambda variable scope | P1 | 🔲 Open | 17 errors. Lambda params (`e`, `d`, etc.) not in variable scope during body lowering. |
-| Package-as-value references | P1 | 🔲 Open | 16 errors. Qualified package paths used in expression context (e.g., `meta::pure::functions::meta`). |
-| `^ClassName(typeArgs)(props)` constructor | P1 | 🔲 Open | 2 parse failures. Dual-paren new syntax for classes with type variable constructors. |
+| Lambda variable scope | P1 | 🔲 Open | 6+ errors. Lambda params (`e`, `d`, etc.) not in variable scope during body lowering. |
+| Package-as-value references | P1 | 🔲 Open | 5+ errors. Qualified package paths used in expression context (e.g., `meta::pure::functions::meta`). |
+| `^ClassName(typeArgs)(props)` constructor | P1 | 🔲 Open | Parse failures. Dual-paren new syntax for classes with type variable constructors. |
 | Variable type tracking | P0 | 🔲 Next | Needed for type dispatch. `HashMap<SmolStr, TypeExpr>` in lowering context. |
 
 ---
@@ -68,8 +69,8 @@ dependencies, so future contributors know what's safe to pick up.
 
 | Item | Priority | Status | Notes |
 |---|---|---|---|
-| Type hierarchy walk (subtype check) | P0 | 🔲 Next | `is_subtype(child, parent)` following `super_types` chain. Needed for dispatch. |
-| Multiplicity compatibility | P0 | 🔲 Next | `[1]` fits `[0..1]` fits `[*]`. Needed for dispatch. |
+| Type hierarchy walk (subtype check) | P0 | ✅ Done | `is_subtype(child, parent)` following `super_types` chain. |
+| Multiplicity compatibility | P0 | ✅ Done | `is_multiplicity_compatible` + `mult_bounds` + `mult_specificity`. |
 | Type inference (bottom-up) | P2 | 🔲 Deferred | Pass 2.5 in pipeline doc. Infer expression types. |
 | Constraint evaluation | P3 | 🔲 Deferred | Class constraints need expression evaluation at validation time. |
 
@@ -79,7 +80,7 @@ dependencies, so future contributors know what's safe to pick up.
 
 | Item | Priority | Status | Notes |
 |---|---|---|---|
-| Pass 2a/2b split | P0 | 🔲 Next | Resolve function signatures (params, return type) before bodies. |
+| Pass 2a/2b split | P0 | ✅ Done | Signatures resolved in 2a, bodies in 2b. |
 | Parallel Pass 2 | P3 | 🔲 Deferred | After 2a/2b, bodies can be parallelized per-element. |
 | Incremental compilation | P3 | 🔲 Deferred | Re-resolve only changed chunks. Chunk IDs enable this without rewriting. |
 
@@ -100,9 +101,9 @@ dependencies, so future contributors know what's safe to pick up.
 
 | Item | Priority | Status | Notes |
 |---|---|---|---|
-| Error count baseline | — | 535 | 468 ambiguous, 65 unresolved, 2 parse |
-| Target after type dispatch | — | ~65 | Should eliminate most ambiguous errors |
-| Target after expression fixes | — | ~2 | Only parse failures remain |
+| Error count baseline | — | 429 | 355 ambiguous, 69 unresolved, 5 parse |
+| Target after variable tracking | — | ~100 | Variable types should resolve most remaining ambiguous |
+| Target after expression fixes | — | ~5 | Only parse failures remain |
 
 ---
 
