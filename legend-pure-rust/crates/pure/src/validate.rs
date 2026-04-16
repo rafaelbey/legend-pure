@@ -50,8 +50,13 @@ use crate::types::TypeExpr;
 pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
     let mut errors = Vec::new();
 
-    // Skip chunk 0 (bootstrap) — those are compiler-trusted
-    for chunk in model.chunks.iter().skip(1) {
+    // Only validate the current compilation chunk (the last one).
+    // Bootstrap chunk (0) is compiler-trusted.
+    let chunk = model
+        .chunks
+        .last()
+        .expect("model must have at least one chunk");
+    {
         for (local_idx, element) in chunk.elements.iter() {
             let id = ElementId {
                 chunk_id: chunk.chunk_id,
@@ -130,7 +135,8 @@ pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
                 Element::Measure(_)
                 | Element::Unit(_)
                 | Element::Profile(_)
-                | Element::PrimitiveType(_) => {}
+                | Element::PrimitiveType(_)
+                | Element::PackageableMultiplicity(_) => {}
             }
         }
     }

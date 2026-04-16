@@ -19,8 +19,6 @@
 //! to [`ElementId`](crate::ids::ElementId)s, operators are desugared to
 //! function calls, and grouping parentheses are eliminated.
 //!
-//! ## Phase 1 Coverage
-//!
 //! ## Coverage
 //!
 //! - **Phase 1**: Literals, Variables, Collections, Groups
@@ -28,6 +26,8 @@
 //!   Member Access, Type References, Packageable Element Refs
 //! - **Phase 3**: Lambda, Let (→ `FunctionCall("letFunction")`),
 //!   New Instance (→ `FunctionCall("new")`), Column (placeholder)
+//! - **Phase 4**: Copy (→ `FunctionCall("copy")`),
+//!   Slice (→ `FunctionCall("range")`)
 //!
 //! Island expressions produce a diagnostic — full lowering is deferred.
 
@@ -103,30 +103,8 @@ pub(crate) fn lower_expression(
             });
             None
         }
-        ast_expr::Expression::Copy(_) => {
-            // Copy lowering requires runtime clone semantics — deferred.
-            let source_info = expr.source_info().clone();
-            errors.push(CompilationError {
-                message: "Copy expression lowering not yet implemented".to_string(),
-                source_info: source_info.clone(),
-                kind: crate::error::CompilationErrorKind::UnsupportedExpression {
-                    kind: SmolStr::new_static("Copy"),
-                },
-            });
-            None
-        }
-        ast_expr::Expression::Slice(_) => {
-            // Slice expressions are desugared to range() function calls.
-            let source_info = expr.source_info().clone();
-            errors.push(CompilationError {
-                message: "Slice expression lowering not yet implemented".to_string(),
-                source_info: source_info.clone(),
-                kind: crate::error::CompilationErrorKind::UnsupportedExpression {
-                    kind: SmolStr::new_static("Slice"),
-                },
-            });
-            None
-        }
+        ast_expr::Expression::Copy(e) => lower_copy(e, ctx, errors),
+        ast_expr::Expression::Slice(e) => lower_slice(e, ctx, errors),
     }
 }
 
@@ -381,7 +359,8 @@ fn lower_function_application(
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
-    let function_id = resolve::resolve_element_ptr(&e.function, &e.source_info, ctx, errors);
+    let function_id =
+        resolve::resolve_function_call(&e.function, &e.arguments, &e.source_info, ctx, errors);
 
     let arguments: Vec<ValueSpec> = e
         .arguments
@@ -407,7 +386,12 @@ fn lower_arrow_function(
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
-    let function_id = resolve::resolve_element_ptr(&e.function, &e.source_info, ctx, errors);
+    // Build combined arg list: target is prepended as first param
+    let mut call_args = Vec::with_capacity(1 + e.arguments.len());
+    call_args.push((*e.target).clone());
+    call_args.extend(e.arguments.iter().cloned());
+    let function_id =
+        resolve::resolve_function_call(&e.function, &call_args, &e.source_info, ctx, errors);
 
     let target = lower_expression(&e.target, ctx, errors)?;
 
@@ -627,6 +611,87 @@ fn lower_new_instance(
         ExprKind::FunctionCall {
             function: None,
             function_name: SmolStr::new_static("new"),
+            arguments,
+        },
+        e.source_info.clone(),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Copy expression
+// ---------------------------------------------------------------------------
+
+/// Lowers `^$source(prop='val')` → `FunctionCall("copy", [$source, key1, val1, ...])`.
+///
+/// Matches the Java M3 desugaring: the source variable becomes the first
+/// argument, followed by alternating string-name/value pairs for each
+/// property override.
+fn lower_copy(
+    e: &ast_expr::CopyExpr,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let source_var = untyped(
+        ExprKind::Variable {
+            name: e.source.clone(),
+        },
+        e.source_info.clone(),
+    );
+
+    let mut arguments = Vec::with_capacity(1 + e.assignments.len() * 2);
+    arguments.push(source_var);
+
+    for kv in &e.assignments {
+        arguments.push(untyped(
+            ExprKind::StringLiteral(SmolStr::new(kv.key.as_str())),
+            kv.source_info.clone(),
+        ));
+        if let Some(val) = lower_expression(&kv.value, ctx, errors) {
+            arguments.push(val);
+        }
+    }
+
+    Some(untyped(
+        ExprKind::FunctionCall {
+            function: None,
+            function_name: SmolStr::new_static("copy"),
+            arguments,
+        },
+        e.source_info.clone(),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Slice expression
+// ---------------------------------------------------------------------------
+
+/// Lowers `[start:stop]` or `[start:stop:step]` → `FunctionCall("range", args)`.
+///
+/// Matches the Java M3 desugaring of slice (subscript) expressions to
+/// `range(start, stop)` or `range(start, stop, step)`. Missing `start`
+/// defaults to integer literal `0`.
+fn lower_slice(
+    e: &ast_expr::SliceExpr,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let start = match &e.start {
+        Some(s) => lower_expression(s, ctx, errors)?,
+        None => untyped(ExprKind::IntegerLiteral(0), e.source_info.clone()),
+    };
+    let stop = lower_expression(&e.stop, ctx, errors)?;
+
+    let mut arguments = vec![start, stop];
+    if let Some(ref step) = e.step {
+        if let Some(step_val) = lower_expression(step, ctx, errors) {
+            arguments.push(step_val);
+        }
+    }
+
+    Some(untyped(
+        ExprKind::FunctionCall {
+            function: None,
+            function_name: SmolStr::new_static("range"),
             arguments,
         },
         e.source_info.clone(),

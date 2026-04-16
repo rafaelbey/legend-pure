@@ -54,7 +54,11 @@ use crate::types::PrimitiveType;
 /// without knowing the concrete element type.
 #[derive(Debug, Clone)]
 pub struct ElementNode {
-    /// The element's simple name (e.g., `"Person"`, `"String"`).
+    /// The element's unique name.
+    ///
+    /// For functions this is the **mangled signature**
+    /// (e.g., `"plus_Integer_MANY__Integer_1_"`).
+    /// For all other elements this is the simple name (e.g., `"Person"`).
     pub name: SmolStr,
     /// Source location in the original `.pure` file.
     pub source_info: SourceInfo,
@@ -95,6 +99,12 @@ pub enum Element {
     PrimitiveType(PrimitiveType),
     /// A unit within a measure (Kilogram, Meter). Each has its own `ElementId`.
     Unit(Unit),
+    /// A named multiplicity instance from the M3 metamodel (PureOne, ZeroMany, etc.).
+    ///
+    /// These are singleton instances of `PackageableMultiplicity` registered
+    /// in `meta::pure::metamodel::multiplicity`. They carry the actual
+    /// multiplicity bounds they represent.
+    PackageableMultiplicity(crate::types::Multiplicity),
 }
 
 // ---------------------------------------------------------------------------
@@ -324,7 +334,8 @@ impl PureModel {
                     | Element::Profile(_)
                     | Element::Measure(_)
                     | Element::Unit(_)
-                    | Element::PrimitiveType(_) => {}
+                    | Element::PrimitiveType(_)
+                    | Element::PackageableMultiplicity(_) => {}
                 }
             }
         }
@@ -465,6 +476,30 @@ impl PureModel {
             .iter()
             .find(|&&eid| self.get_node(eid).name == *name)
             .copied()
+    }
+
+    /// Finds all function elements in a package matching a simple name.
+    ///
+    /// Returns the overload candidates — functions whose `function_name`
+    /// matches the given name. Used by unqualified resolution for function
+    /// dispatch.
+    pub fn resolve_functions_by_name_in_package(
+        &self,
+        pkg_id: PackageId,
+        name: &SmolStr,
+    ) -> Vec<ElementId> {
+        let pkg = self.get_package(pkg_id);
+        pkg.children_elements
+            .iter()
+            .filter(|&&eid| {
+                if let Element::Function(f) = self.get_element(eid) {
+                    f.function_name == *name
+                } else {
+                    false
+                }
+            })
+            .copied()
+            .collect()
     }
 
     /// Resolves a function by its simple name within a package path.

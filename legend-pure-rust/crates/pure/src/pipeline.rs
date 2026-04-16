@@ -52,7 +52,7 @@ use crate::nodes::measure::Measure;
 use crate::nodes::profile::Profile;
 use crate::nodes::unit::Unit;
 use crate::resolve::{self, ResolutionContext};
-use crate::types::{Multiplicity, PrimitiveType, TypeExpr};
+use crate::types::{Multiplicity, Parameter, PrimitiveType, TypeExpr};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -106,6 +106,10 @@ pub fn compile(
         model.register_element(model.root_package, eid);
     }
 
+    // Register M3 metamodel stubs in their canonical packages
+    // (e.g., Function → meta::pure::metamodel::function::Function)
+    bootstrap::register_m3_packages(&mut model);
+
     let mut errors = Vec::new();
 
     // ---- Pass 1: Declaration ----
@@ -125,11 +129,8 @@ pub fn compile(
         &mut errors,
     );
 
-    // ---- Pass 2.1: Function Name Mangling ----
-    // Mirrors Java's ConcreteFunctionDefinitionNameProcessor.process():
-    // replaces each Function's ElementNode.name with its mangled FQN
-    // (e.g., "plus" → "plus_Integer_MANY__Integer_1_").
-    pass_mangle_function_names(&mut model);
+    // NOTE: Function name mangling happens at declaration time (Pass 1).
+    // Elements are registered with their mangled names from the start.
 
     // ---- Pass 2.5: Type Inference ----
     pass_infer(&mut model, &mut errors);
@@ -181,6 +182,8 @@ struct Declaration {
     section_idx: usize,
     /// Index of the element within the section.
     element_idx: usize,
+    /// Whether this declaration is a function (overloads allowed).
+    is_function: bool,
 }
 
 /// Tracks unit `ElementId`s allocated for a measure during Pass 1.
@@ -199,17 +202,22 @@ struct UnitMapping {
 /// Pass 1 — assigns `ElementId`s, allocates element shells, and builds the
 /// package tree.
 ///
-/// Returns a map from fully qualified name to Declaration, and a map from
+/// Returns a map from fully qualified name to declaration(s), and a map from
 /// measure `ElementId` to its allocated unit `ElementId`s.
+///
+/// **Function overloads:** Pure allows multiple function definitions with the
+/// same FQN (overloaded by parameter types). Each overload gets its own
+/// `ElementId` and `Declaration`, stored in the `Vec`. Non-function elements
+/// still produce `DuplicateElement` errors on collision.
 fn pass_declare(
     source_files: &[SourceFile],
     model: &mut PureModel,
     errors: &mut Vec<CompilationError>,
 ) -> (
-    HashMap<SmolStr, Declaration>,
+    HashMap<SmolStr, Vec<Declaration>>,
     HashMap<ElementId, UnitMapping>,
 ) {
-    let mut declarations = HashMap::new();
+    let mut declarations: HashMap<SmolStr, Vec<Declaration>> = HashMap::new();
     let mut unit_mappings: HashMap<ElementId, UnitMapping> = HashMap::new();
     #[allow(clippy::cast_possible_truncation)] // chunks.len() is bounded by u16 in practice
     let chunk_id = model.chunks.len() as u16;
@@ -218,7 +226,7 @@ fn pass_declare(
     for (file_idx, source_file) in source_files.iter().enumerate() {
         for (section_idx, section) in source_file.sections.iter().enumerate() {
             for (element_idx, element) in section.elements.iter().enumerate() {
-                let name = ast_element_name(element);
+                let simple_name = ast_element_name(element);
                 let source_info = ast_element_source(element);
 
                 // Resolve package path
@@ -229,24 +237,47 @@ fn pass_declare(
                     model.get_or_create_package(&pkg_path)
                 };
 
-                // Build fully qualified name
-                let fqn = build_fqn(&pkg_path, &name);
+                // For functions, compute the mangled name at declaration time.
+                // This is the element name (like a class name is its element name).
+                let is_function_like = matches!(
+                    element,
+                    ast::Element::Function(_) | ast::Element::NativeFunction(_)
+                );
 
-                // Check for duplicates
-                if declarations.contains_key(&fqn) {
-                    errors.push(CompilationError {
-                        message: format!("Duplicate element: '{fqn}'"),
-                        source_info: source_info.clone(),
-                        kind: CompilationErrorKind::DuplicateElement { name: fqn.clone() },
-                    });
-                    continue;
+                let element_name = match element {
+                    ast::Element::Function(f) => {
+                        use legend_pure_parser_ast::element::FunctionSignature;
+                        SmolStr::new(f.mangled_name())
+                    }
+                    ast::Element::NativeFunction(f) => {
+                        use legend_pure_parser_ast::element::FunctionSignature;
+                        SmolStr::new(f.mangled_name())
+                    }
+                    _ => simple_name.clone(),
+                };
+
+                // Build fully qualified name
+                let fqn = build_fqn(&pkg_path, &element_name);
+
+                // Check for duplicates — allow function overloads
+                if let Some(existing) = declarations.get(&fqn) {
+                    if !is_function_like || !existing.iter().all(|d| d.is_function) {
+                        // Non-function duplicate, or mixing function with non-function
+                        errors.push(CompilationError {
+                            message: format!("Duplicate element: '{fqn}'"),
+                            source_info: source_info.clone(),
+                            kind: CompilationErrorKind::DuplicateElement { name: fqn.clone() },
+                        });
+                        continue;
+                    }
+                    // Function overload — fall through to allocate
                 }
 
                 // Allocate shell
                 let shell = create_shell(element);
                 let local_idx = chunk.alloc_element(
                     ElementNode {
-                        name: name.clone(),
+                        name: element_name.clone(),
                         source_info: source_info.clone(),
                         parent_package: package_id,
                     },
@@ -259,15 +290,16 @@ fn pass_declare(
                 };
                 model.register_element(package_id, id);
 
-                declarations.insert(
-                    fqn.clone(),
-                    Declaration {
+                declarations
+                    .entry(fqn.clone())
+                    .or_default()
+                    .push(Declaration {
                         id,
                         file_idx,
                         section_idx,
                         element_idx,
-                    },
-                );
+                        is_function: is_function_like,
+                    });
 
                 // For Measures: allocate Unit shells now
                 if let ast::Element::Measure(measure_def) = element {
@@ -308,7 +340,7 @@ fn allocate_unit_shells(
     package_id: crate::ids::PackageId,
     chunk: &mut ModelChunk,
     model: &mut PureModel,
-    declarations: &mut HashMap<SmolStr, Declaration>,
+    declarations: &mut HashMap<SmolStr, Vec<Declaration>>,
     file_idx: usize,
     section_idx: usize,
     element_idx: usize,
@@ -328,7 +360,7 @@ fn allocate_unit_shells(
 
         let local_idx = chunk.alloc_element(
             ElementNode {
-                name: unit_name.clone(),
+                name: SmolStr::new(format!("{}~{unit_name}", measure_def.name.value)),
                 source_info: unit_def.source_info.clone(),
                 parent_package: package_id,
             },
@@ -345,15 +377,13 @@ fn allocate_unit_shells(
         // element, not the unit itself. This is safe because `pass_define`
         // skips `Element::Unit` before looking up the AST. If that skip is
         // ever removed, units would be re-hydrated as duplicate Measures.
-        declarations.insert(
-            unit_fqn,
-            Declaration {
-                id: unit_id,
-                file_idx,
-                section_idx,
-                element_idx,
-            },
-        );
+        declarations.entry(unit_fqn).or_default().push(Declaration {
+            id: unit_id,
+            file_idx,
+            section_idx,
+            element_idx,
+            is_function: false,
+        });
 
         unit_id
     };
@@ -382,7 +412,7 @@ fn allocate_unit_shells(
 ///
 /// Returns an ordered list of element IDs safe for definition.
 fn pass_topo_sort(
-    declarations: &HashMap<SmolStr, Declaration>,
+    declarations: &HashMap<SmolStr, Vec<Declaration>>,
     source_files: &[SourceFile],
     model: &PureModel,
     errors: &mut Vec<CompilationError>,
@@ -391,17 +421,21 @@ fn pass_topo_sort(
     let mut in_degree: HashMap<ElementId, usize> = HashMap::new();
     let mut dependents: HashMap<ElementId, Vec<ElementId>> = HashMap::new();
 
-    for decl in declarations.values() {
-        in_degree.entry(decl.id).or_insert(0);
+    for decls in declarations.values() {
+        for decl in decls {
+            in_degree.entry(decl.id).or_insert(0);
+        }
     }
 
-    for decl in declarations.values() {
-        let element = get_ast_element(source_files, decl);
-        let hard_deps = extract_hard_dependencies(element, declarations, model);
+    for decls in declarations.values() {
+        for decl in decls {
+            let element = get_ast_element(source_files, decl);
+            let hard_deps = extract_hard_dependencies(element, declarations, model);
 
-        for dep_id in hard_deps {
-            dependents.entry(dep_id).or_default().push(decl.id);
-            *in_degree.entry(decl.id).or_insert(0) += 1;
+            for dep_id in hard_deps {
+                dependents.entry(dep_id).or_default().push(decl.id);
+                *in_degree.entry(decl.id).or_insert(0) += 1;
+            }
         }
     }
 
@@ -412,7 +446,8 @@ fn pass_topo_sort(
         .map(|(&id, _)| id)
         .collect();
 
-    let mut sorted = Vec::with_capacity(declarations.len());
+    let total_decls: usize = declarations.values().map(|v| v.len()).sum();
+    let mut sorted = Vec::with_capacity(total_decls);
 
     while let Some(id) = queue.pop_front() {
         sorted.push(id);
@@ -430,7 +465,7 @@ fn pass_topo_sort(
     }
 
     // Check for cycles
-    if sorted.len() < declarations.len() {
+    if sorted.len() < total_decls {
         let cyclic: Vec<_> = in_degree
             .iter()
             .filter(|&(_, &deg)| deg > 0)
@@ -455,7 +490,7 @@ fn pass_topo_sort(
 /// Extracts hard dependencies (supertypes) from an AST element.
 fn extract_hard_dependencies(
     element: &ast::Element,
-    declarations: &HashMap<SmolStr, Declaration>,
+    declarations: &HashMap<SmolStr, Vec<Declaration>>,
     _model: &PureModel,
 ) -> Vec<ElementId> {
     match element {
@@ -464,7 +499,10 @@ fn extract_hard_dependencies(
             .iter()
             .filter_map(|type_ref| {
                 let fqn = SmolStr::new(type_ref.full_path());
-                declarations.get(&fqn).map(|d| d.id)
+                declarations
+                    .get(&fqn)
+                    .and_then(|ds| ds.first())
+                    .map(|d| d.id)
             })
             .collect(),
         _ => vec![],
@@ -479,7 +517,7 @@ fn extract_hard_dependencies(
 fn pass_define(
     sorted: &[ElementId],
     source_files: &[SourceFile],
-    declarations: &HashMap<SmolStr, Declaration>,
+    declarations: &HashMap<SmolStr, Vec<Declaration>>,
     unit_mappings: &HashMap<ElementId, UnitMapping>,
     auto_imports: &[SmolStr],
     model: &mut PureModel,
@@ -488,8 +526,11 @@ fn pass_define(
     use crate::resolve::ImportScope;
 
     // Build reverse lookup: ElementId → Declaration
-    let id_to_decl: HashMap<ElementId, &Declaration> =
-        declarations.values().map(|d| (d.id, d)).collect();
+    let id_to_decl: HashMap<ElementId, &Declaration> = declarations
+        .values()
+        .flat_map(|ds| ds.iter())
+        .map(|d| (d.id, d))
+        .collect();
 
     // Cache per-section import scopes and resolve caches
     let mut import_scope_cache: HashMap<(usize, usize), Vec<ImportScope>> = HashMap::new();
@@ -519,10 +560,14 @@ fn pass_define(
         // Get or create the per-section resolve cache
         let resolve_cache = resolve_caches.entry(scope_key).or_default();
 
+        // Extract type parameters from the AST element (Class<T,V>, function<T|m>)
+        let type_params = ast_type_parameters(ast_element);
+
         let mut ctx = ResolutionContext {
             model,
             import_scopes,
             resolve_cache,
+            type_parameters: &type_params,
         };
 
         let hydrated = hydrate_element(ast_element, id, unit_mappings, &mut ctx, errors);
@@ -587,9 +632,53 @@ fn create_shell(element: &ast::Element) -> Element {
             stereotypes: vec![],
             tagged_values: vec![],
         }),
-        ast::Element::Function(_) | ast::Element::NativeFunction(_) => {
+        ast::Element::Function(f) => {
+            let placeholder_params: Vec<Parameter> = f
+                .parameters
+                .iter()
+                .map(|p| Parameter {
+                    name: p.name.clone(),
+                    type_expr: TypeExpr::Named {
+                        element: bootstrap::ANY_ID,
+                        type_arguments: vec![],
+                        value_arguments: vec![],
+                    },
+                    multiplicity: Multiplicity::PureOne,
+                    source_info: p.source_info.clone(),
+                })
+                .collect();
             Element::Function(Function {
-                parameters: vec![],
+                function_name: f.name.value.clone(),
+                parameters: placeholder_params,
+                return_type: TypeExpr::Named {
+                    element: bootstrap::ANY_ID,
+                    type_arguments: vec![],
+                    value_arguments: vec![],
+                },
+                return_multiplicity: Multiplicity::PureOne,
+                body: vec![],
+                stereotypes: vec![],
+                tagged_values: vec![],
+            })
+        }
+        ast::Element::NativeFunction(f) => {
+            let placeholder_params: Vec<Parameter> = f
+                .parameters
+                .iter()
+                .map(|p| Parameter {
+                    name: p.name.clone(),
+                    type_expr: TypeExpr::Named {
+                        element: bootstrap::ANY_ID,
+                        type_arguments: vec![],
+                        value_arguments: vec![],
+                    },
+                    multiplicity: Multiplicity::PureOne,
+                    source_info: p.source_info.clone(),
+                })
+                .collect();
+            Element::Function(Function {
+                function_name: f.name.value.clone(),
+                parameters: placeholder_params,
                 return_type: TypeExpr::Named {
                     element: bootstrap::ANY_ID,
                     type_arguments: vec![],
@@ -713,6 +802,7 @@ fn hydrate_element(
                 resolve::resolve_tagged_values(&func_def.tagged_values, ctx, errors);
 
             Element::Function(Function {
+                function_name: func_def.name.value.clone(),
                 parameters,
                 return_type,
                 return_multiplicity,
@@ -750,6 +840,7 @@ fn hydrate_element(
                 resolve::resolve_tagged_values(&func_def.tagged_values, ctx, errors);
 
             Element::Function(Function {
+                function_name: func_def.name.value.clone(),
                 parameters,
                 return_type,
                 return_multiplicity,
@@ -923,6 +1014,20 @@ fn ast_element_package_path(element: &ast::Element) -> Vec<SmolStr> {
     }
 }
 
+/// Extracts type parameter names from an AST element.
+///
+/// Classes and functions can declare type parameters (e.g., `Class<T, V>`,
+/// `function<Z|m>`). These names must be treated as generic type variables
+/// during resolution, not as packageable element references.
+fn ast_type_parameters(element: &ast::Element) -> Vec<SmolStr> {
+    match element {
+        ast::Element::Class(c) => c.type_parameters.clone(),
+        ast::Element::Function(f) => f.type_parameters.clone(),
+        ast::Element::NativeFunction(f) => f.type_parameters.clone(),
+        _ => vec![],
+    }
+}
+
 /// Builds a fully qualified name from package path + element name.
 fn build_fqn(pkg_path: &[SmolStr], name: &SmolStr) -> SmolStr {
     if pkg_path.is_empty() {
@@ -944,43 +1049,6 @@ fn build_fqn(pkg_path: &[SmolStr], name: &SmolStr) -> SmolStr {
 /// Retrieves the AST element from source files given a declaration.
 fn get_ast_element<'a>(source_files: &'a [SourceFile], decl: &Declaration) -> &'a ast::Element {
     &source_files[decl.file_idx].sections[decl.section_idx].elements[decl.element_idx]
-}
-
-// ---------------------------------------------------------------------------
-// Pass 2.1 — Function Name Mangling
-// ---------------------------------------------------------------------------
-
-/// Pass 2.1 — replaces each `Function` element's name with its mangled FQN.
-///
-/// Mirrors Java's `ConcreteFunctionDefinitionNameProcessor.process()`:
-/// ```java
-/// String signature = getSignatureAndResolveImports(function, ...);
-/// function.setName(signature);
-/// function._name(signature);
-/// ```
-///
-/// After this pass, `model.get_node(func_id).name` is the mangled name
-/// (e.g., `"plus_Integer_MANY__Integer_1_"`), and the runtime can use it
-/// directly as the native registry lookup key — zero FQN computation at
-/// execution time.
-fn pass_mangle_function_names(model: &mut PureModel) {
-    // Collect (chunk_idx, local_idx, mangled_name) triples to avoid borrow conflicts.
-    let mut renames: Vec<(usize, u32, SmolStr)> = Vec::new();
-
-    for (chunk_idx, chunk) in model.chunks.iter().enumerate() {
-        for (local_idx, element) in chunk.elements.iter() {
-            if let Element::Function(func) = element {
-                let simple_name = &chunk.nodes.get(local_idx).name;
-                let mangled = crate::fqn::build_function_fqn(simple_name, func, model);
-                renames.push((chunk_idx, local_idx, SmolStr::new(mangled)));
-            }
-        }
-    }
-
-    // Apply renames
-    for (chunk_idx, local_idx, mangled_name) in renames {
-        model.chunks[chunk_idx].nodes.get_mut(local_idx).name = mangled_name;
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1012,33 +1080,36 @@ fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
 
     let mut targets: Vec<InferTarget> = Vec::new();
 
-    for (chunk_idx, chunk) in model.chunks.iter().enumerate() {
-        for (local_idx, element) in chunk.elements.iter() {
-            match element {
-                Element::Function(f) if !f.body.is_empty() => {
-                    targets.push(InferTarget {
-                        chunk_idx,
-                        local_idx,
-                        kind: TargetKind::FunctionBody,
-                        params: f.parameters.clone(),
-                        body: f.body.clone(),
-                    });
-                }
-                Element::Class(c) => {
-                    for (qp_idx, qp) in c.qualified_properties.iter().enumerate() {
-                        if !qp.body.is_empty() {
-                            targets.push(InferTarget {
-                                chunk_idx,
-                                local_idx,
-                                kind: TargetKind::QualifiedProperty(qp_idx),
-                                params: qp.parameters.clone(),
-                                body: qp.body.clone(),
-                            });
-                        }
+    // Only infer in the current compilation chunk (the last one).
+    // Bootstrap chunk (0) has no function/QP bodies.
+    let chunk_idx = model.chunks.len() - 1;
+    let chunk = &model.chunks[chunk_idx];
+
+    for (local_idx, element) in chunk.elements.iter() {
+        match element {
+            Element::Function(f) if !f.body.is_empty() => {
+                targets.push(InferTarget {
+                    chunk_idx,
+                    local_idx,
+                    kind: TargetKind::FunctionBody,
+                    params: f.parameters.clone(),
+                    body: f.body.clone(),
+                });
+            }
+            Element::Class(c) => {
+                for (qp_idx, qp) in c.qualified_properties.iter().enumerate() {
+                    if !qp.body.is_empty() {
+                        targets.push(InferTarget {
+                            chunk_idx,
+                            local_idx,
+                            kind: TargetKind::QualifiedProperty(qp_idx),
+                            params: qp.parameters.clone(),
+                            body: qp.body.clone(),
+                        });
                     }
                 }
-                _ => {}
             }
+            _ => {}
         }
     }
 

@@ -62,12 +62,15 @@ pub const PLATFORM_AUTO_IMPORTS: &[&str] = &[
     "meta::pure::functions::string",
     "meta::pure::functions::date",
     "meta::pure::functions::meta",
+    "meta::pure::functions::multiplicity",
+    "meta::pure::functions::relation",
     "meta::pure::functions::asserts",
     "meta::pure::functions::io",
     "meta::pure::functions::tools",
     "meta::pure::profiles",
     "meta::pure::test::pct",
     "meta::pure::test::surveyor",
+    "meta::pure::tools",
 ];
 
 /// Load all platform Pure sources: parse → compile → return model.

@@ -28,14 +28,23 @@
 //! let _ = bootstrap::STRING_ID;
 //! ```
 
+use std::cell::RefCell;
+
 use legend_pure_parser_ast::SourceInfo;
 use smol_str::SmolStr;
 
 use crate::arena::Arena;
 use crate::ids::{ElementId, PackageId};
+use crate::m3_parser::M3Registration;
 use crate::model::{Element, ElementNode, ModelChunk};
 use crate::nodes::class::Class;
 use crate::types::PrimitiveType;
+
+thread_local! {
+    /// Side-channel for M3 registration data produced by `create_bootstrap_chunk`
+    /// and consumed by `register_m3_packages`.
+    static M3_REGISTRATIONS: RefCell<Vec<M3Registration>> = RefCell::new(Vec::new());
+}
 
 // ---------------------------------------------------------------------------
 // Well-known ElementIds (deterministic, compile-time constants)
@@ -125,9 +134,6 @@ pub const DATE_TIME_ID: ElementId = ElementId {
 // Bootstrap types — ordered lists for chunk construction
 // ---------------------------------------------------------------------------
 
-/// The total number of bootstrap elements (2 classes + 11 primitives).
-const BOOTSTRAP_ELEMENT_COUNT: usize = 13;
-
 /// The well-known primitive types with their inheritance edges.
 ///
 /// **Important:** `Any` and `Nil` are NOT in this list — they are `Class`
@@ -170,22 +176,42 @@ const BOOTSTRAP_PRIMITIVES: &[(&str, ElementId, ElementId)] = &[
 ];
 
 // ---------------------------------------------------------------------------
+// M3 metamodel — parsed from m3.pure at runtime
+// ---------------------------------------------------------------------------
+
+/// The actual M3 metamodel source, loaded at compile time.
+const M3_SOURCE: &str = include_str!(
+    "../../../../legend-pure-core/legend-pure-m3-core/src/main/resources/platform/pure/grammar/m3.pure"
+);
+
+/// M3 elements that already exist in the bootstrap chunk as primitives or
+/// classes but also need to be registered in their M3 packages as aliases.
+///
+/// Each entry is `(existing_element_id, &[package_segments])`.
+const M3_ALIASES: &[(ElementId, &[&str])] = &[
+    (ANY_ID, &["meta", "pure", "metamodel", "type"]),
+    (NIL_ID, &["meta", "pure", "metamodel", "type"]),
+];
+
+// ---------------------------------------------------------------------------
 // Bootstrap chunk construction
 // ---------------------------------------------------------------------------
 
 /// Creates the bootstrap `ModelChunk` (`chunk_id` = 0) containing all
-/// well-known types: `Any` (top class), `Nil` (bottom class), and the
-/// 11 primitive types.
+/// well-known types: `Any` (top class), `Nil` (bottom class), the
+/// 11 primitive types, and M3 metamodel elements parsed from `m3.pure`.
 ///
-/// In the M3 metamodel:
-/// - `Any` and `Nil` are instances of `Class` (not `PrimitiveType`)
-/// - All other bootstrap types are instances of `PrimitiveType`
+/// The M3 elements are created with the correct `Element` variant matching
+/// their M3 classifier, with fully populated content (properties, inheritance,
+/// stereotypes, enum values, etc.).
 ///
-/// The `root_package` is used as the parent package for all bootstrap elements.
+/// The `root_package` is used as the parent package for the root-level
+/// bootstrap elements. M3 elements get their actual package assignment
+/// during [`register_m3_packages`].
 #[must_use]
 pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
-    let mut nodes = Arena::with_capacity(BOOTSTRAP_ELEMENT_COUNT);
-    let mut elements = Arena::with_capacity(BOOTSTRAP_ELEMENT_COUNT);
+    let mut nodes = Arena::with_capacity(256);
+    let mut elements = Arena::with_capacity(256);
 
     let synthetic_source = SourceInfo::new("<bootstrap>", 0, 0, 0, 0);
 
@@ -237,10 +263,48 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
         debug_assert_eq!(elem_idx, expected_id.local_idx);
     }
 
+    // -- M3 metamodel elements (slots 13..): parsed from m3.pure --
+    let m3_registrations =
+        crate::m3_parser::parse_m3_into_chunk(M3_SOURCE, &mut nodes, &mut elements);
+
+    // Store the registrations for later use by register_m3_packages.
+    // We stash them on the chunk via a side-channel (thread-local).
+    M3_REGISTRATIONS.with(|cell| {
+        cell.replace(m3_registrations);
+    });
+
     ModelChunk {
         chunk_id: BOOTSTRAP_CHUNK_ID,
         nodes,
         elements,
+    }
+}
+
+/// Registers M3 metamodel elements in their canonical packages.
+///
+/// After bootstrap chunk creation, this function:
+/// 1. Consumes the `M3Registration` list produced by `create_bootstrap_chunk`
+/// 2. Creates the M3 package hierarchy (`meta::pure::metamodel::*`)
+/// 3. Registers each parsed M3 element in its correct package
+/// 4. Registers existing bootstrap elements (`Any`, `Nil`) as aliases
+///    in their M3 packages
+///
+/// Call this in the compilation pipeline after `create_bootstrap_chunk()`
+/// and before Pass 1.
+pub fn register_m3_packages(model: &mut crate::model::PureModel) {
+    // Take the registrations produced by create_bootstrap_chunk
+    let registrations = M3_REGISTRATIONS.with(|cell| cell.take());
+
+    for reg in &registrations {
+        let package_id = model.get_or_create_package(&reg.package_segments);
+        model.register_element(package_id, reg.element_id);
+    }
+
+    // Register existing bootstrap elements as aliases in their M3 packages
+    for &(element_id, pkg_segments) in M3_ALIASES {
+        let pkg_path: Vec<SmolStr> = pkg_segments.iter().map(|&s| SmolStr::new(s)).collect();
+        let package_id = model.get_or_create_package(&pkg_path);
+        model.register_element(package_id, element_id);
     }
 }
 
@@ -256,10 +320,14 @@ mod tests {
     fn bootstrap_chunk_has_correct_count() {
         let chunk = create_bootstrap_chunk(PackageId(0));
         assert_eq!(chunk.chunk_id, 0);
-        #[allow(clippy::cast_possible_truncation)]
-        let expected = BOOTSTRAP_ELEMENT_COUNT as u32;
-        assert_eq!(chunk.nodes.len(), expected);
-        assert_eq!(chunk.elements.len(), expected);
+        // 13 primitives + all M3 elements parsed from m3.pure
+        // The count should be > 13 (at least the primitives + parsed M3 elements)
+        assert!(
+            chunk.nodes.len() >= 13,
+            "expected at least 13 elements, got {}",
+            chunk.nodes.len()
+        );
+        assert_eq!(chunk.nodes.len(), chunk.elements.len());
     }
 
     #[test]

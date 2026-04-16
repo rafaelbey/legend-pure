@@ -535,7 +535,7 @@ fn measure_with_units() {
                 _ => panic!("expected Unit element for canonical"),
             }
             let node = model.get_node(canon_id);
-            assert_eq!(node.name.as_str(), "Meter");
+            assert_eq!(node.name.as_str(), "Distance~Meter");
 
             for &non_canon_id in &m.non_canonical_units {
                 match model.get_element(non_canon_id) {

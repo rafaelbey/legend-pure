@@ -22,13 +22,14 @@ use std::collections::HashMap;
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::annotation as ast_ann;
 use legend_pure_parser_ast::element::PackageableElement;
-use legend_pure_parser_ast::type_ref::{self as ast_type, Package};
+use legend_pure_parser_ast::expression as ast_expr;
+use legend_pure_parser_ast::type_ref::{self as ast_type, FUNCTION_TYPE_SENTINEL, Package};
 use smol_str::SmolStr;
 
 use crate::annotations::{StereotypeRef, TaggedValueRef};
 use crate::error::{CompilationError, CompilationErrorKind};
 use crate::ids::ElementId;
-use crate::model::PureModel;
+use crate::model::{Element, PureModel};
 use crate::types::{ConstValue, Multiplicity, TypeExpr};
 
 // ---------------------------------------------------------------------------
@@ -83,8 +84,9 @@ impl ImportScope {
 pub(crate) enum ResolveResult {
     /// Successfully resolved to a single element.
     Found(ElementId),
-    /// Resolution failed (unresolved or ambiguous) — errors already emitted.
-    Failed,
+    /// Resolution failed (unresolved or ambiguous) — stores original error
+    /// so subsequent lookups re-emit the correct error kind.
+    Failed(CompilationError),
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +107,10 @@ pub(crate) struct ResolutionContext<'a> {
     /// Per-section cache: unqualified name → resolved result.
     /// Avoids re-scanning imports for the same name within one section.
     pub resolve_cache: &'a mut HashMap<SmolStr, ResolveResult>,
+    /// Type parameters in scope for the current element (e.g., `["T", "V"]`
+    /// for `Class<T, V>` or function `<T|m>`). Names here resolve to
+    /// `TypeExpr::Generic(name)` instead of going through import lookup.
+    pub type_parameters: &'a [SmolStr],
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +130,13 @@ pub(crate) fn resolve_type_ref(
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<TypeExpr> {
+    // Handle the {FunctionType} sentinel: the parser encodes function types
+    // like `{String[1]->Boolean[1]}` as a TypeReference with this name when
+    // they appear inside type argument positions (e.g., `Function<{->Z[y]}>`)
+    if type_ref.name == FUNCTION_TYPE_SENTINEL {
+        return resolve_function_type_sentinel(type_ref, ctx, errors);
+    }
+
     let element_id = if let Some(pkg) = &type_ref.package {
         // Qualified — resolve directly via the AST Package tree
         if let Some(id) = ctx.model.resolve_in_package(pkg, &type_ref.name) {
@@ -138,7 +151,11 @@ pub(crate) fn resolve_type_ref(
             return None;
         }
     } else {
-        // Unqualified — go through import-aware resolution with memoization
+        // Unqualified — first check if it's a type parameter in scope
+        if ctx.type_parameters.iter().any(|tp| tp == &type_ref.name) {
+            return Some(TypeExpr::Generic(type_ref.name.clone()));
+        }
+        // Otherwise go through import-aware resolution with memoization
         resolve_unqualified_cached(&type_ref.name, &type_ref.source_info, ctx, errors)?
     };
 
@@ -160,6 +177,71 @@ pub(crate) fn resolve_type_ref(
         element: element_id,
         type_arguments,
         value_arguments,
+    })
+}
+
+/// Decodes a `{FunctionType}` sentinel `TypeReference` into `TypeExpr::FunctionType`.
+///
+/// The parser encodes function types `{ParamType[m], ... -> RetType[m]}` as a
+/// `TypeReference` with name `{FunctionType}`:
+/// - `type_arguments[0..n-1]` — parameter types, each with its multiplicity in
+///   `multiplicity_arguments[0]`
+/// - `type_arguments[n-1]` — the return type
+/// - top-level `multiplicity_arguments[0]` — the return multiplicity
+fn resolve_function_type_sentinel(
+    type_ref: &ast_type::TypeReference,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<TypeExpr> {
+    if type_ref.type_arguments.is_empty() {
+        // Malformed sentinel — no type arguments at all
+        return Some(TypeExpr::FunctionType {
+            parameters: vec![],
+            return_type: Box::new(TypeExpr::Generic("Any".into())),
+            return_multiplicity: Multiplicity::ZeroOrMany,
+        });
+    }
+
+    let n = type_ref.type_arguments.len();
+
+    // Parameter types are all entries except the last
+    let mut parameters = Vec::with_capacity(n.saturating_sub(1));
+    for param_ref in &type_ref.type_arguments[..n - 1] {
+        let param_type =
+            resolve_type_ref(param_ref, ctx, errors).unwrap_or(TypeExpr::Generic("Any".into()));
+
+        // Each parameter's multiplicity is stored in its multiplicity_arguments[0]
+        let param_mult = param_ref
+            .multiplicity_arguments
+            .first()
+            .map(|ma| match ma {
+                ast_type::MultiplicityArgument::Concrete(m, _) => lower_multiplicity(m),
+                ast_type::MultiplicityArgument::Identifier(_, _) => Multiplicity::ZeroOrMany,
+            })
+            .unwrap_or(Multiplicity::PureOne);
+
+        parameters.push((param_type, param_mult));
+    }
+
+    // Return type is the last type_argument
+    let return_ref = &type_ref.type_arguments[n - 1];
+    let return_type =
+        resolve_type_ref(return_ref, ctx, errors).unwrap_or(TypeExpr::Generic("Any".into()));
+
+    // Return multiplicity is in the top-level multiplicity_arguments[0]
+    let return_multiplicity = type_ref
+        .multiplicity_arguments
+        .first()
+        .map(|ma| match ma {
+            ast_type::MultiplicityArgument::Concrete(m, _) => lower_multiplicity(m),
+            ast_type::MultiplicityArgument::Identifier(_, _) => Multiplicity::ZeroOrMany,
+        })
+        .unwrap_or(Multiplicity::PureOne);
+
+    Some(TypeExpr::FunctionType {
+        parameters,
+        return_type: Box::new(return_type),
+        return_multiplicity,
     })
 }
 
@@ -213,15 +295,26 @@ pub(crate) fn resolve_type_spec(
             // updated when the relation interning infrastructure is wired up.
             None
         }
-        ast_type::TypeSpec::Function(_ft) => {
-            // Function types are structural types: {ParamType[mult] -> RetType[mult]}.
-            // Full resolution requires lowering each param/return type; deferred to
-            // the function-type lowering pass. For signature mangling, the simple
-            // name "Function" is used (matching Java behavior).
+        ast_type::TypeSpec::Function(ft) => {
+            // Function types are structural: {ParamType[mult] -> RetType[mult]}.
+            // Resolve each parameter type and the return type.
+            let parameters: Vec<(TypeExpr, Multiplicity)> = ft
+                .parameters
+                .iter()
+                .map(|p| {
+                    let te = resolve_type_ref(&p.type_ref, ctx, errors)
+                        .unwrap_or(TypeExpr::Generic("Any".into()));
+                    let mult = lower_multiplicity(&p.multiplicity);
+                    (te, mult)
+                })
+                .collect();
+            let return_type = resolve_type_ref(&ft.return_type, ctx, errors)
+                .unwrap_or(TypeExpr::Generic("Any".into()));
+            let return_multiplicity = lower_multiplicity(&ft.return_multiplicity);
             Some(TypeExpr::FunctionType {
-                parameters: vec![],
-                return_type: Box::new(TypeExpr::Generic("T".into())),
-                return_multiplicity: Multiplicity::ZeroOrMany,
+                parameters,
+                return_type: Box::new(return_type),
+                return_multiplicity,
             })
         }
     }
@@ -245,12 +338,12 @@ fn resolve_unqualified_cached(
     if let Some(cached) = ctx.resolve_cache.get(name) {
         return match cached {
             ResolveResult::Found(id) => Some(*id),
-            ResolveResult::Failed => {
-                // Re-emit the error for this occurrence's source location
+            ResolveResult::Failed(cached_error) => {
+                // Re-emit the same error kind for this occurrence
                 errors.push(CompilationError {
-                    message: format!("Cannot resolve element '{name}'"),
+                    message: cached_error.message.clone(),
                     source_info: source_info.clone(),
-                    kind: CompilationErrorKind::UnresolvedElement { path: name.clone() },
+                    kind: cached_error.kind.clone(),
                 });
                 None
             }
@@ -258,10 +351,22 @@ fn resolve_unqualified_cached(
     }
 
     // Resolve and cache
+    let pre_errors = errors.len();
     let result = resolve_unqualified(name, source_info, ctx, errors);
     let cache_entry = match result {
         Some(id) => ResolveResult::Found(id),
-        None => ResolveResult::Failed,
+        None => {
+            // Cache the error that was just emitted (if any)
+            let cached = errors
+                .get(pre_errors)
+                .cloned()
+                .unwrap_or_else(|| CompilationError {
+                    message: format!("Cannot resolve element '{name}'"),
+                    source_info: source_info.clone(),
+                    kind: CompilationErrorKind::UnresolvedElement { path: name.clone() },
+                });
+            ResolveResult::Failed(cached)
+        }
     };
     ctx.resolve_cache.insert(name.clone(), cache_entry);
     result
@@ -442,6 +547,134 @@ pub(crate) fn resolve_element_ptr(
     } else {
         // Unqualified — go through import-aware resolution
         resolve_unqualified_cached(ptr.name(), source_info, ctx, errors)
+    }
+}
+
+/// Resolves a function call by simple name.
+///
+/// Unlike `resolve_element_ptr` (which matches by exact element name),
+/// this searches `Function.function_name` — the simple name — across
+/// import scopes.
+///
+/// `call_args` carries the AST argument expressions from the call site.
+/// Currently used for parameter-count filtering; will enable full
+/// type-based dispatch when implemented.
+pub(crate) fn resolve_function_call(
+    ptr: &ast_ann::PackageableElementPtr,
+    call_args: &[ast_expr::Expression],
+    source_info: &SourceInfo,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ElementId> {
+    let name = ptr.name();
+    let arg_count = call_args.len();
+
+    if let Some(pkg) = ptr.package() {
+        // Qualified — search in the specified package by simple name
+        if let Some(pkg_id) = ctx.model.resolve_package(pkg) {
+            let candidates = ctx.model.resolve_functions_by_name_in_package(pkg_id, name);
+            let filtered: Vec<_> = candidates
+                .into_iter()
+                .filter(|&eid| {
+                    if let Element::Function(f) = ctx.model.get_element(eid) {
+                        f.parameters.len() == arg_count
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+            if filtered.len() == 1 {
+                return Some(filtered[0]);
+            }
+            if let Some(&first) = filtered.first() {
+                return Some(first);
+            }
+        }
+        // Fall back to exact element match (e.g., mangled name used directly)
+        if let Some(id) = ctx.model.resolve_in_package(pkg, name) {
+            return Some(id);
+        }
+        let display = SmolStr::new(format!("{}::{}", pkg, name));
+        errors.push(CompilationError {
+            message: format!("Cannot resolve element '{display}'"),
+            source_info: source_info.clone(),
+            kind: CompilationErrorKind::UnresolvedElement { path: display },
+        });
+        None
+    } else {
+        // Unqualified — search import scopes by function_name
+        // Step 1: Try root package
+        let root_candidates = ctx
+            .model
+            .resolve_functions_by_name_in_package(ctx.model.root_package, name);
+        let root_filtered: Vec<_> = root_candidates
+            .into_iter()
+            .filter(|&eid| {
+                if let Element::Function(f) = ctx.model.get_element(eid) {
+                    f.parameters.len() == arg_count
+                } else {
+                    false
+                }
+            })
+            .collect();
+        if root_filtered.len() == 1 {
+            return Some(root_filtered[0]);
+        }
+
+        // Step 2: Search import scopes — collect overloads per package
+        let mut all_candidates: Vec<ElementId> = Vec::new();
+        let mut contributing_packages: Vec<SmolStr> = Vec::new();
+        for scope in ctx.import_scopes {
+            if let Some(pkg_id) = ctx.model.resolve_package(&scope.package) {
+                let found = ctx.model.resolve_functions_by_name_in_package(pkg_id, name);
+                // Filter by parameter count
+                let filtered: Vec<_> = found
+                    .into_iter()
+                    .filter(|&eid| {
+                        if let Element::Function(f) = ctx.model.get_element(eid) {
+                            f.parameters.len() == arg_count
+                        } else {
+                            false
+                        }
+                    })
+                    .collect();
+                if !filtered.is_empty() {
+                    let pkg_name = SmolStr::new(format!("{}::{name}", scope.package));
+                    if !contributing_packages.contains(&pkg_name) {
+                        contributing_packages.push(pkg_name);
+                    }
+                    all_candidates.extend(filtered);
+                }
+            }
+        }
+
+        if all_candidates.is_empty() {
+            // No function with this simple name and arg count in any import scope
+            errors.push(CompilationError {
+                message: format!("Cannot resolve function '{name}'"),
+                source_info: source_info.clone(),
+                kind: CompilationErrorKind::UnresolvedElement { path: name.clone() },
+            });
+            None
+        } else if all_candidates.len() == 1 {
+            Some(all_candidates[0])
+        } else {
+            // Multiple overloads with same param count — needs type-based dispatch
+            errors.push(CompilationError {
+                message: format!(
+                    "Ambiguous function call '{name}': found {} overloads with {} args, \
+                     type-based dispatch not yet implemented",
+                    all_candidates.len(),
+                    arg_count
+                ),
+                source_info: source_info.clone(),
+                kind: CompilationErrorKind::AmbiguousImport {
+                    name: name.clone(),
+                    candidates: contributing_packages,
+                },
+            });
+            None
+        }
     }
 }
 
