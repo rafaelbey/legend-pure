@@ -16,10 +16,18 @@
 
 use crate::annotations::{StereotypeRef, TaggedValueRef};
 use crate::types::{Expression, Multiplicity, Parameter, TypeExpr};
+use smol_str::SmolStr;
 
 /// A compiled top-level function definition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
+    /// The function's simple name (e.g., `"plus"`, `"toOne"`).
+    ///
+    /// `ElementNode.name` holds the mangled signature
+    /// (e.g., `"plus_Integer_MANY__Integer_1_"`), which is the unique
+    /// element identity. This field preserves the simple name for
+    /// unqualified resolution in expression bodies.
+    pub function_name: SmolStr,
     /// Parameters.
     pub parameters: Vec<Parameter>,
     /// Return type.

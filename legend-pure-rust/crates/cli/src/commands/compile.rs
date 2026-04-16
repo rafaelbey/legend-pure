@@ -254,7 +254,7 @@ fn print_success_stats(
                 Element::Profile(_) => profile_count += 1,
                 Element::Measure(_) => measure_count += 1,
                 Element::Unit(_) => unit_count += 1,
-                Element::PrimitiveType(_) => {}
+                Element::PrimitiveType(_) | Element::PackageableMultiplicity(_) => {}
             }
         }
     }

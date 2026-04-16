@@ -551,13 +551,57 @@ pub struct NativeFunctionDef {
 /// Shared accessors for function-like elements.
 ///
 /// Implemented by both [`FunctionDef`] and [`NativeFunctionDef`].
-pub trait FunctionSignature {
+pub trait FunctionSignature: PackageableElement {
     /// The function parameters.
     fn parameters(&self) -> &[Parameter];
     /// The return type specification.
     fn return_type(&self) -> &TypeSpec;
     /// The return multiplicity.
     fn return_multiplicity(&self) -> &Multiplicity;
+
+    /// Compute the mangled function name (FQN).
+    ///
+    /// Mirrors Java's `ConcreteFunctionDefinitionNameProcessor`:
+    /// ```text
+    /// funcName_ParamType_Mult__ParamType_Mult__ReturnType_Mult_
+    /// ```
+    ///
+    /// Each parameter contributes `Type + multSig + "_"`, producing a
+    /// double-underscore `__` between consecutive parameters.
+    /// If there are no parameters, an extra `_` is added (`funcName__`).
+    fn mangled_name(&self) -> String {
+        let mut b = String::with_capacity(64);
+        b.push_str(self.name());
+        b.push('_');
+
+        let params = self.parameters();
+        if params.is_empty() {
+            b.push('_');
+        } else {
+            for p in params {
+                match &p.type_ref {
+                    Some(tr) => append_type_name(&mut b, tr),
+                    None => b.push_str("Any"),
+                }
+                match &p.multiplicity {
+                    Some(m) => append_mult(&mut b, m),
+                    None => b.push_str("_MANY_"),
+                }
+                b.push('_');
+            }
+        }
+
+        // Return type
+        match self.return_type() {
+            TypeSpec::Type(tr) => append_type_name(&mut b, tr),
+            TypeSpec::Unit(_) => b.push_str("Any"),
+            TypeSpec::Relation(_) => b.push_str("Relation"),
+            TypeSpec::Function(_) => b.push_str("Function"),
+        }
+        append_mult(&mut b, self.return_multiplicity());
+
+        b
+    }
 }
 
 impl FunctionSignature for FunctionDef {
@@ -581,6 +625,62 @@ impl FunctionSignature for NativeFunctionDef {
     }
     fn return_multiplicity(&self) -> &Multiplicity {
         &self.return_multiplicity
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FQN encoding helpers (used by `FunctionSignature::mangled_name`)
+// ---------------------------------------------------------------------------
+
+/// Append the type name from a `TypeReference` to the FQN builder.
+fn append_type_name(b: &mut String, tr: &TypeReference) {
+    use crate::type_ref::FUNCTION_TYPE_SENTINEL;
+    if tr.name == FUNCTION_TYPE_SENTINEL {
+        b.push_str("Function");
+    } else {
+        b.push_str(&tr.name);
+    }
+}
+
+/// Append the multiplicity signature to the FQN builder.
+///
+/// Encoding (matching Java's `Multiplicity.multiplicityToSignatureString`):
+/// - `[1]` → `_1_`
+/// - `[0..1]` → `_$0_1$_`
+/// - `[*]` → `_MANY_`
+/// - `[1..*]` → `_$1_MANY$_`
+/// - `[n..m]` → `_$n_m$_`
+fn append_mult(b: &mut String, m: &Multiplicity) {
+    match m {
+        Multiplicity::PureOne => b.push_str("_1_"),
+        Multiplicity::ZeroOrOne => b.push_str("_$0_1$_"),
+        Multiplicity::ZeroOrMany => b.push_str("_MANY_"),
+        Multiplicity::OneOrMany => b.push_str("_$1_MANY$_"),
+        Multiplicity::Variable(_) => b.push_str("_MANY_"),
+        Multiplicity::Range { lower, upper } => match upper {
+            None => {
+                if *lower == 0 {
+                    b.push_str("_MANY_");
+                } else {
+                    b.push_str("_$");
+                    b.push_str(&lower.to_string());
+                    b.push_str("_MANY$_");
+                }
+            }
+            Some(u) => {
+                if lower == u {
+                    b.push('_');
+                    b.push_str(&u.to_string());
+                    b.push('_');
+                } else {
+                    b.push_str("_$");
+                    b.push_str(&lower.to_string());
+                    b.push('_');
+                    b.push_str(&u.to_string());
+                    b.push_str("$_");
+                }
+            }
+        },
     }
 }
 

@@ -207,6 +207,7 @@ mod tests {
     fn plus_integer() {
         let model = test_model();
         let func = Function {
+            function_name: SmolStr::default(),
             parameters: vec![param(
                 "values",
                 bootstrap::INTEGER_ID,
@@ -232,6 +233,7 @@ mod tests {
     fn if_function() {
         let model = test_model();
         let func = Function {
+            function_name: SmolStr::default(),
             parameters: vec![
                 param("test", bootstrap::BOOLEAN_ID, Multiplicity::PureOne),
                 Parameter {
@@ -277,6 +279,7 @@ mod tests {
     fn first_collection() {
         let model = test_model();
         let func = Function {
+            function_name: SmolStr::default(),
             parameters: vec![Parameter {
                 name: "set".into(),
                 type_expr: TypeExpr::Generic("T".into()),
@@ -299,6 +302,7 @@ mod tests {
     fn equal_function() {
         let model = test_model();
         let func = Function {
+            function_name: SmolStr::default(),
             parameters: vec![
                 param("left", bootstrap::ANY_ID, Multiplicity::ZeroOrMany),
                 param("right", bootstrap::ANY_ID, Multiplicity::ZeroOrMany),
@@ -323,6 +327,7 @@ mod tests {
     fn no_params_function() {
         let model = test_model();
         let func = Function {
+            function_name: SmolStr::default(),
             parameters: vec![],
             return_type: TypeExpr::Named {
                 element: bootstrap::DATE_TIME_ID,
