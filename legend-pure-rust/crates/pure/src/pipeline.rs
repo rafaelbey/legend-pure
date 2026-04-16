@@ -591,6 +591,7 @@ fn pass_define_signatures<'a>(
             import_scopes,
             resolve_cache,
             type_parameters: &type_params,
+            variable_types: HashMap::new(),
         };
 
         // Hydrate everything EXCEPT function bodies (bodies resolved in Pass 2b)
@@ -637,11 +638,24 @@ fn pass_define_bodies(
         let resolve_cache = resolve_caches.entry(scope_key).or_default();
 
         let type_params = ast_type_parameters(ast_element);
+
+        // Seed variable scope with the function's own resolved parameters
+        let mut variable_types = HashMap::new();
+        if let Element::Function(f) = model.get_element(id) {
+            for param in &f.parameters {
+                variable_types.insert(
+                    param.name.clone(),
+                    (param.type_expr.clone(), param.multiplicity.clone()),
+                );
+            }
+        }
+
         let mut ctx = ResolutionContext {
             model,
             import_scopes,
             resolve_cache,
             type_parameters: &type_params,
+            variable_types,
         };
 
         let body = crate::lower::lower_expression_body(body_exprs, &mut ctx, errors);
