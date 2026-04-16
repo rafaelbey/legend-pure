@@ -688,7 +688,10 @@ pub(crate) fn resolve_function_call(
 /// Infers a type `ElementId` from a lowered `ValueSpec` by examining
 /// its `ExprKind` structure. Returns `None` for expressions whose type
 /// cannot be statically determined (treated as `Any` — matches everything).
-fn infer_type_from_valuespec(vs: &crate::types::ValueSpec, model: &crate::model::PureModel) -> Option<ElementId> {
+fn infer_type_from_valuespec(
+    vs: &crate::types::ValueSpec,
+    model: &crate::model::PureModel,
+) -> Option<ElementId> {
     use crate::bootstrap;
     use crate::types::ExprKind;
 
@@ -764,7 +767,6 @@ fn is_type_compatible(
 
 /// Checks if `child` is a subtype of `parent` by walking the supertype chain.
 fn is_subtype(child: ElementId, parent: ElementId, model: &crate::model::PureModel) -> bool {
-
     if child == parent {
         return true;
     }
@@ -783,7 +785,10 @@ fn is_subtype(child: ElementId, parent: ElementId, model: &crate::model::PureMod
     };
 
     for st in super_types {
-        if let crate::types::TypeExpr::Named { element: sup_eid, .. } = st {
+        if let crate::types::TypeExpr::Named {
+            element: sup_eid, ..
+        } = st
+        {
             if *sup_eid == parent || is_subtype(*sup_eid, parent, model) {
                 return true;
             }
@@ -792,11 +797,103 @@ fn is_subtype(child: ElementId, parent: ElementId, model: &crate::model::PureMod
     false
 }
 
-/// Narrows function candidates by checking argument types against parameter types.
+/// Infers multiplicity from a lowered `ValueSpec` by examining `ExprKind`.
+/// Returns `None` for expressions whose multiplicity can't be determined.
+fn infer_multiplicity_from_valuespec(
+    vs: &crate::types::ValueSpec,
+    model: &crate::model::PureModel,
+) -> Option<crate::types::Multiplicity> {
+    use crate::types::{ExprKind, Multiplicity};
+
+    match vs.kind.as_ref() {
+        // All literals produce exactly one value
+        ExprKind::IntegerLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::DecimalLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::BooleanLiteral(_)
+        | ExprKind::DateLiteral(_) => Some(Multiplicity::PureOne),
+
+        // Enum values are always [1]
+        ExprKind::EnumValue { .. } => Some(Multiplicity::PureOne),
+
+        // Lambda is [1]
+        ExprKind::Lambda { .. } => Some(Multiplicity::PureOne),
+
+        // Collection → [*]
+        ExprKind::Collection { .. } => Some(Multiplicity::ZeroOrMany),
+
+        // Function call → return multiplicity of the resolved function
+        ExprKind::FunctionCall { function, .. } => function.and_then(|fid| {
+            if let Element::Function(f) = model.get_element(fid) {
+                Some(f.return_multiplicity.clone())
+            } else {
+                None
+            }
+        }),
+
+        // Variables, property access — unknown
+        _ => None,
+    }
+}
+
+/// Checks if `arg_mult` is compatible with `param_mult`.
 ///
-/// Returns only candidates where all arguments are type-compatible with the
-/// corresponding parameters. If type narrowing eliminates all candidates,
-/// returns the original set (type info was insufficient).
+/// Compatible means: the arg's multiplicity fits within the param's range.
+/// `[1]` fits into `[0..1]`, `[0..1]`, `[1..*]`, `[*]`.
+/// `[*]` only fits into `[*]`.
+fn is_multiplicity_compatible(
+    arg_mult: &Option<crate::types::Multiplicity>,
+    param_mult: &crate::types::Multiplicity,
+) -> bool {
+    use crate::types::Multiplicity;
+
+    let Some(am) = arg_mult else {
+        // Unknown — assume compatible
+        return true;
+    };
+
+    // Check if arg's range is a subset of param's range
+    let (arg_lo, arg_hi) = mult_bounds(am);
+    let (param_lo, param_hi) = mult_bounds(param_mult);
+
+    // arg's lower >= param's lower AND arg's upper <= param's upper
+    arg_lo >= param_lo && arg_hi <= param_hi
+}
+
+/// Returns (lower, upper) bounds for a multiplicity.
+/// `None` upper means unbounded (represented as u32::MAX).
+fn mult_bounds(m: &crate::types::Multiplicity) -> (u32, u32) {
+    use crate::types::Multiplicity;
+    match m {
+        Multiplicity::PureOne => (1, 1),
+        Multiplicity::ZeroOrOne => (0, 1),
+        Multiplicity::ZeroOrMany => (0, u32::MAX),
+        Multiplicity::OneOrMany => (1, u32::MAX),
+        Multiplicity::Range { lower, upper } => (*lower, upper.unwrap_or(u32::MAX)),
+    }
+}
+
+/// Multiplicity specificity score — more specific = higher.
+/// `[1]` = 4, `[0..1]` = 3, `[1..*]` = 2, `[*]` = 1
+fn mult_specificity(m: &crate::types::Multiplicity) -> i32 {
+    use crate::types::Multiplicity;
+    match m {
+        Multiplicity::PureOne => 4,
+        Multiplicity::ZeroOrOne => 3,
+        Multiplicity::OneOrMany => 2,
+        Multiplicity::Range { upper: Some(_), .. } => 3, // bounded range
+        Multiplicity::Range { upper: None, .. } => 1,    // unbounded
+        Multiplicity::ZeroOrMany => 1,
+    }
+}
+
+/// Narrows function candidates by checking argument types AND multiplicities
+/// against parameter types/multiplicities.
+///
+/// Scoring: type exact match (+3), type subtype (+1), multiplicity exact (+2),
+/// multiplicity specificity bonus (+1). Type incompatibility eliminates a candidate.
+/// If all candidates are eliminated, returns the original set.
 fn narrow_candidates_by_type(
     candidates: &[ElementId],
     lowered_args: &[crate::types::ValueSpec],
@@ -806,18 +903,18 @@ fn narrow_candidates_by_type(
         return candidates.to_vec();
     }
 
-    // Infer types of each argument
+    // Infer types and multiplicities of each argument
     let arg_types: Vec<Option<ElementId>> = lowered_args
         .iter()
         .map(|vs| infer_type_from_valuespec(vs, model))
         .collect();
 
-    // If all arg types are unknown, we can't narrow — return all
-    if arg_types.iter().all(|t| t.is_none()) {
-        return candidates.to_vec();
-    }
+    let arg_mults: Vec<Option<crate::types::Multiplicity>> = lowered_args
+        .iter()
+        .map(|vs| infer_multiplicity_from_valuespec(vs, model))
+        .collect();
 
-    // Score each candidate: count how many params have exact/subtype matches
+    // Score each candidate
     let mut scored: Vec<(ElementId, i32)> = candidates
         .iter()
         .filter_map(|&eid| {
@@ -827,32 +924,43 @@ fn narrow_candidates_by_type(
             let mut score: i32 = 0;
             let mut compatible = true;
             for (i, param) in f.parameters.iter().enumerate() {
+                // --- Type scoring ---
                 let arg_type = arg_types.get(i).copied().flatten();
                 if !is_type_compatible(arg_type, &param.type_expr, model) {
                     compatible = false;
                     break;
                 }
-                // Score: known exact/subtype match is better than unknown
                 if let Some(at) = arg_type {
                     if let crate::types::TypeExpr::Named { element: pe, .. } = &param.type_expr {
                         if at == *pe {
-                            score += 2; // exact match
+                            score += 3; // exact type match
                         } else if is_subtype(at, *pe, model) {
                             score += 1; // subtype match
                         }
                     }
                 }
+
+                // --- Multiplicity scoring ---
+                let arg_mult = arg_mults.get(i).cloned().flatten();
+                if !is_multiplicity_compatible(&arg_mult, &param.multiplicity) {
+                    compatible = false;
+                    break;
+                }
+                if let Some(ref am) = arg_mult {
+                    if *am == param.multiplicity {
+                        score += 2; // exact multiplicity match
+                    } else {
+                        // Prefer more specific param multiplicity
+                        score += mult_specificity(&param.multiplicity).min(1);
+                    }
+                }
             }
-            if compatible {
-                Some((eid, score))
-            } else {
-                None
-            }
+            if compatible { Some((eid, score)) } else { None }
         })
         .collect();
 
     if scored.is_empty() {
-        // Type narrowing eliminated everything — fall back to original
+        // Narrowing eliminated everything — fall back to original
         return candidates.to_vec();
     }
 
@@ -867,7 +975,6 @@ fn narrow_candidates_by_type(
         .map(|(eid, _)| eid)
         .collect()
 }
-
 
 // ---------------------------------------------------------------------------
 // Tests
