@@ -973,11 +973,14 @@ fn narrow_candidates_by_type(
                 }
                 if let Some(ref am) = arg_mult {
                     if *am == param.multiplicity {
-                        score += 2; // exact multiplicity match
+                        score += 4; // exact multiplicity match
                     } else {
-                        // Prefer more specific param multiplicity
-                        score += mult_specificity(&param.multiplicity).min(1);
+                        // Prefer narrower param multiplicity that still fits
+                        score += mult_specificity(&param.multiplicity);
                     }
+                } else {
+                    // Unknown arg mult — use param specificity as tiebreaker
+                    score += mult_specificity(&param.multiplicity);
                 }
             }
             if compatible { Some((eid, score)) } else { None }
