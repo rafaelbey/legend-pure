@@ -213,6 +213,7 @@ mod tests {
         let model = test_model();
         let func = Function {
             function_name: SmolStr::default(),
+            is_native: false,
             parameters: vec![param(
                 "values",
                 bootstrap::INTEGER_ID,
@@ -239,6 +240,7 @@ mod tests {
         let model = test_model();
         let func = Function {
             function_name: SmolStr::default(),
+            is_native: false,
             parameters: vec![
                 param("test", bootstrap::BOOLEAN_ID, Multiplicity::PureOne),
                 Parameter {
@@ -285,6 +287,7 @@ mod tests {
         let model = test_model();
         let func = Function {
             function_name: SmolStr::default(),
+            is_native: false,
             parameters: vec![Parameter {
                 name: "set".into(),
                 type_expr: TypeExpr::Generic("T".into()),
@@ -308,6 +311,7 @@ mod tests {
         let model = test_model();
         let func = Function {
             function_name: SmolStr::default(),
+            is_native: false,
             parameters: vec![
                 param("left", bootstrap::ANY_ID, Multiplicity::ZeroOrMany),
                 param("right", bootstrap::ANY_ID, Multiplicity::ZeroOrMany),
@@ -334,6 +338,7 @@ mod tests {
         let model = test_model();
         let func = Function {
             function_name: SmolStr::default(),
+            is_native: false,
             parameters: vec![Parameter {
                 name: "values".into(),
                 type_expr: TypeExpr::Generic("T".into()),
@@ -357,6 +362,7 @@ mod tests {
         let model = test_model();
         let func = Function {
             function_name: SmolStr::default(),
+            is_native: false,
             parameters: vec![],
             return_type: TypeExpr::Named {
                 element: bootstrap::DATE_TIME_ID,

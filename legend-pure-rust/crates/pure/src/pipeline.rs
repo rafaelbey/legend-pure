@@ -844,6 +844,7 @@ fn create_shell(element: &ast::Element) -> Element {
                 .collect();
             Element::Function(Function {
                 function_name: f.name.value.clone(),
+                is_native: false,
                 parameters: placeholder_params,
                 return_type: TypeExpr::Named {
                     element: bootstrap::ANY_ID,
@@ -873,6 +874,7 @@ fn create_shell(element: &ast::Element) -> Element {
                 .collect();
             Element::Function(Function {
                 function_name: f.name.value.clone(),
+                is_native: true,
                 parameters: placeholder_params,
                 return_type: TypeExpr::Named {
                     element: bootstrap::ANY_ID,
@@ -998,6 +1000,7 @@ fn hydrate_element_signature(
 
             Element::Function(Function {
                 function_name: func_def.name.value.clone(),
+                is_native: false,
                 parameters,
                 return_type,
                 return_multiplicity,
@@ -1036,6 +1039,7 @@ fn hydrate_element_signature(
 
             Element::Function(Function {
                 function_name: func_def.name.value.clone(),
+                is_native: true,
                 parameters,
                 return_type,
                 return_multiplicity,

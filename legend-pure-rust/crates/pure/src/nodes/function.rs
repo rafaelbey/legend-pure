@@ -28,6 +28,12 @@ pub struct Function {
     /// element identity. This field preserves the simple name for
     /// unqualified resolution in expression bodies.
     pub function_name: SmolStr,
+    /// True for `native function` declarations (no body); false for
+    /// user-defined `function` with a Pure expression body.
+    ///
+    /// Drives metatype: native → `NativeFunctionDefinition`,
+    /// concrete → `ConcreteFunctionDefinition`.
+    pub is_native: bool,
     /// Parameters.
     pub parameters: Vec<Parameter>,
     /// Return type.
