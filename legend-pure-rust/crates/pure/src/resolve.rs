@@ -1130,6 +1130,9 @@ pub(crate) struct GenericBindings {
 /// `Variable(name)`, binds `name` to the argument's inferred `Multiplicity`.
 /// Also recurses into `Named { type_arguments, … }` so `@T[1]` binds `T` from
 /// the TypeReference's wrapped type.
+///
+/// If the same variable is bound by multiple arguments (e.g., `T` appears in
+/// two params), the bindings are merged using LUB rather than first-wins.
 pub(crate) fn infer_generic_bindings(
     params: &[crate::types::Parameter],
     args: &[crate::types::ValueSpec],
@@ -1142,7 +1145,17 @@ pub(crate) fn infer_generic_bindings(
         // Bind the param's multiplicity variable from the arg's multiplicity.
         if let Multiplicity::Variable(name) = &param.multiplicity {
             if let Some(arg_mult) = infer_multiplicity_from_valuespec(arg, model, var_types) {
-                bindings.mult.entry(name.clone()).or_insert(arg_mult);
+                use std::collections::hash_map::Entry;
+                match bindings.mult.entry(name.clone()) {
+                    Entry::Vacant(e) => {
+                        e.insert(arg_mult);
+                    }
+                    Entry::Occupied(mut e) => {
+                        // m already bound — compute LUB (widest range covering both).
+                        let lub = mult_lub(e.get(), &arg_mult);
+                        *e.get_mut() = lub;
+                    }
+                }
             }
         }
         // Derive the arg's "type expression" — for TypeReference, use the
@@ -1156,7 +1169,7 @@ pub(crate) fn infer_generic_bindings(
             }),
         };
         if let Some(arg_ty) = arg_type_expr {
-            bind_type(&param.type_expr, &arg_ty, &mut bindings.ty);
+            bind_type(&param.type_expr, &arg_ty, &mut bindings.ty, model);
         }
     }
     bindings
@@ -1168,15 +1181,29 @@ pub(crate) fn infer_generic_bindings(
 /// - `Named { type_arguments: [...] }` vs `Named { type_arguments: [...] }`
 ///   → recurse pairwise so `List<T>` against `List<String>` binds
 ///   `T := String`.
+///
+/// If `T` is already bound and a second arg binds `T` to a different type,
+/// the binding is updated to the LUB of the two types rather than first-wins.
 fn bind_type(
     param_ty: &crate::types::TypeExpr,
     arg_ty: &crate::types::TypeExpr,
     out: &mut HashMap<SmolStr, crate::types::TypeExpr>,
+    model: &crate::model::PureModel,
 ) {
     use crate::types::TypeExpr;
     match param_ty {
         TypeExpr::Generic(name) => {
-            out.entry(name.clone()).or_insert_with(|| arg_ty.clone());
+            use std::collections::hash_map::Entry;
+            match out.entry(name.clone()) {
+                Entry::Vacant(e) => {
+                    e.insert(arg_ty.clone());
+                }
+                Entry::Occupied(mut e) => {
+                    // T already bound — update to LUB with new candidate.
+                    let lub = type_lub(e.get(), arg_ty, model);
+                    *e.get_mut() = lub;
+                }
+            }
         }
         TypeExpr::Named {
             type_arguments: p_args,
@@ -1188,11 +1215,64 @@ fn bind_type(
             } = arg_ty
             {
                 for (p, a) in p_args.iter().zip(a_args.iter()) {
-                    bind_type(p, a, out);
+                    bind_type(p, a, out, model);
                 }
             }
         }
         _ => {}
+    }
+}
+
+/// Computes the least upper bound of two `TypeExpr`s.
+/// For `Named` types, walks the type hierarchy via `least_upper_bound`.
+/// For anything else (or mixed), falls back to `Any`.
+fn type_lub(
+    a: &crate::types::TypeExpr,
+    b: &crate::types::TypeExpr,
+    model: &crate::model::PureModel,
+) -> crate::types::TypeExpr {
+    use crate::bootstrap;
+    use crate::types::TypeExpr;
+    if a == b {
+        return a.clone();
+    }
+    match (a, b) {
+        (TypeExpr::Named { element: ea, .. }, TypeExpr::Named { element: eb, .. }) => {
+            TypeExpr::Named {
+                element: least_upper_bound(*ea, *eb, model),
+                type_arguments: vec![],
+                value_arguments: vec![],
+            }
+        }
+        // Can't compute structural LUB → Any
+        _ => TypeExpr::Named {
+            element: bootstrap::ANY_ID,
+            type_arguments: vec![],
+            value_arguments: vec![],
+        },
+    }
+}
+
+/// Computes the least upper bound of two multiplicities — the smallest range
+/// that covers both. Used when the same multiplicity variable `m` is bound
+/// from multiple arguments.
+fn mult_lub(
+    a: &crate::types::Multiplicity,
+    b: &crate::types::Multiplicity,
+) -> crate::types::Multiplicity {
+    use crate::types::Multiplicity;
+    let (a_lo, a_hi) = mult_bounds(a);
+    let (b_lo, b_hi) = mult_bounds(b);
+    let lower = a_lo.min(b_lo);
+    let upper = a_hi.max(b_hi);
+    match (lower, upper) {
+        (1, 1) => Multiplicity::PureOne,
+        (0, 1) => Multiplicity::ZeroOrOne,
+        (1, u32::MAX) => Multiplicity::OneOrMany,
+        _ => Multiplicity::Range {
+            lower,
+            upper: if upper == u32::MAX { None } else { Some(upper) },
+        },
     }
 }
 
