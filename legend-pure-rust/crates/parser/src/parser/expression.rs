@@ -23,7 +23,7 @@ use legend_pure_parser_ast::expression::{
     FunctionApplication, IntegerLiteral, KeyValuePair, Lambda, LetExpr, Literal, LogicalExpr,
     LogicalOp, MemberAccess, NewInstanceExpr, NotExpr, PackageableElementRef,
     QualifiedMemberAccess, SimpleMemberAccess, SliceExpr, StrictDateLiteral, StrictTimeLiteral,
-    StringLiteral, TypeReferenceExpr, UnaryMinusExpr, Variable,
+    StringLiteral, TypeReferenceExpr, UnaryMinusExpr, UnitInstanceExpr, Variable,
 };
 use legend_pure_parser_ast::island::IslandExpression;
 use legend_pure_parser_ast::type_ref::Package;
@@ -250,26 +250,29 @@ impl Parser {
             TokenKind::IntegerLiteral => {
                 let tok = self.cursor.advance().clone();
                 let value: i64 = tok.text.parse().unwrap_or(0);
-                Ok(Expression::Literal(Literal::Integer(IntegerLiteral {
+                let num_expr = Expression::Literal(Literal::Integer(IntegerLiteral {
                     value,
-                    source_info: si,
-                })))
+                    source_info: si.clone(),
+                }));
+                self.maybe_unit_instance(num_expr, si)
             }
             TokenKind::FloatLiteral => {
                 let tok = self.cursor.advance().clone();
                 let value: f64 = tok.text.parse().unwrap_or(0.0);
-                Ok(Expression::Literal(Literal::Float(FloatLiteral {
+                let num_expr = Expression::Literal(Literal::Float(FloatLiteral {
                     value,
-                    source_info: si,
-                })))
+                    source_info: si.clone(),
+                }));
+                self.maybe_unit_instance(num_expr, si)
             }
             TokenKind::DecimalLiteral => {
                 let tok = self.cursor.advance().clone();
                 let text = tok.text.trim_end_matches(['D', 'd']);
-                Ok(Expression::Literal(Literal::Decimal(DecimalLiteral {
+                let num_expr = Expression::Literal(Literal::Decimal(DecimalLiteral {
                     value: text.to_string(),
-                    source_info: si,
-                })))
+                    source_info: si.clone(),
+                }));
+                self.maybe_unit_instance(num_expr, si)
             }
             TokenKind::StringLiteral => {
                 let tok = self.cursor.advance().clone();
@@ -415,11 +418,21 @@ impl Parser {
                 let path = self.parse_package_path()?;
                 let (pkg, name) = split_package_name(&path);
 
-                // Optional type arguments: ^List<U>(...)
+                // Optional type arguments: ^List<U>(...) or ^Class<|1>(...)
                 let type_arguments = if self.cursor.eat(TokenKind::Less) {
                     let mut args = Vec::new();
                     loop {
-                        args.push(self.parse_type_reference()?);
+                        if self.cursor.check(TokenKind::Pipe) {
+                            // Multiplicity argument: |1, |* — skip over it
+                            self.cursor.advance(); // consume |
+                            if self.cursor.check(TokenKind::IntegerLiteral)
+                                || self.cursor.check(TokenKind::Star)
+                            {
+                                self.cursor.advance(); // consume the value
+                            }
+                        } else {
+                            args.push(self.parse_type_reference()?);
+                        }
                         if !self.cursor.eat(TokenKind::Comma) {
                             break;
                         }
@@ -451,9 +464,12 @@ impl Parser {
                         }
                     }
                     let next_kind = self.cursor.peek_kind_at(lookahead);
+                    // `(prop = val)` or `(prop += val)` → property assignments
+                    // `()` → empty property assignments (only if nothing preceded the `)`)
+                    // `(10)` or `('str')` → type variable values
                     let is_prop_assignments = next_kind == TokenKind::Equals
                         || next_kind == TokenKind::Plus
-                        || next_kind == TokenKind::RParen; // empty parens `()` are property assignments
+                        || (next_kind == TokenKind::RParen && lookahead == 1); // truly empty `()`
 
                     if is_prop_assignments {
                         vec![]
@@ -958,5 +974,36 @@ impl Parser {
             extra_function,
             source_info: si,
         })
+    }
+
+    /// After parsing a numeric literal, check if it's followed by a
+    /// `Measure~Unit` reference (e.g., `5 RomanLength~Pes`).
+    /// If so, wrap them into a `UnitInstanceExpr`.
+    fn maybe_unit_instance(
+        &mut self,
+        num_expr: Expression,
+        si: legend_pure_parser_ast::SourceInfo,
+    ) -> R<Expression> {
+        // Look ahead: Identifier followed by Tilde means unit value
+        if self.cursor.peek_kind() == TokenKind::Identifier
+            && self.cursor.peek_kind_at(1) == TokenKind::Tilde
+        {
+            let (measure_name, _) = self.cursor.expect_identifier_or_keyword()?;
+            self.cursor.expect(TokenKind::Tilde)?;
+            let (unit_name, _) = self.cursor.expect_identifier_or_keyword()?;
+            let combined = SmolStr::new(format!("{measure_name}~{unit_name}"));
+            let end_si = self.cursor.current_source_info();
+            Ok(Expression::UnitInstance(UnitInstanceExpr {
+                value: Box::new(num_expr),
+                unit: PackageableElementPtr {
+                    package: None,
+                    name: combined,
+                    source_info: end_si,
+                },
+                source_info: si,
+            }))
+        } else {
+            Ok(num_expr)
+        }
     }
 }

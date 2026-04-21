@@ -373,10 +373,28 @@ impl<'a> M3Parser<'a> {
                 }
             }
             "PrimitiveType" => {
-                // PrimitiveTypes are already in bootstrap slots 0-12.
-                // Skip the body.
-                if self.at(&Token::LBrace) {
-                    self.skip_balanced_braces();
+                // The 11 standard primitives are already in bootstrap slots 0-12.
+                // Any additional PrimitiveTypes (e.g., LatestDate) must be allocated.
+                const BOOTSTRAP_PRIMS: &[&str] = &[
+                    "String",
+                    "Boolean",
+                    "Byte",
+                    "StrictTime",
+                    "Number",
+                    "Integer",
+                    "Float",
+                    "Decimal",
+                    "Date",
+                    "StrictDate",
+                    "DateTime",
+                ];
+                if BOOTSTRAP_PRIMS.contains(&name.as_str()) {
+                    if self.at(&Token::LBrace) {
+                        self.skip_balanced_braces();
+                    }
+                } else {
+                    // Non-bootstrap primitive — parse body to extract supertype
+                    self.parse_primitive_type_body(&name, &package_segments);
                 }
             }
             _ => {
@@ -450,7 +468,7 @@ impl<'a> M3Parser<'a> {
         let elem_idx = self.elements.alloc(element);
         debug_assert_eq!(idx, elem_idx, "node and element arenas out of sync");
 
-        let element_id = ElementId {
+        let element_id = ElementId::InstanceId {
             chunk_id: BOOTSTRAP_CHUNK_ID,
             local_idx: idx,
         };
@@ -519,7 +537,10 @@ impl<'a> M3Parser<'a> {
                         }
                         "generalizations" => {
                             // Type.properties[generalizations] : [...]
-                            super_types = self.parse_generalizations();
+                            // In m3.pure, generalizations stored on a type include entries
+                            // for ALL subclasses, not just this class itself. We filter by
+                            // `specific` to only keep entries for the current class.
+                            super_types = self.parse_generalizations(&name);
                         }
                         "typeParameters" => {
                             // Class.properties[typeParameters] : [...]
@@ -551,6 +572,58 @@ impl<'a> M3Parser<'a> {
                 stereotypes: vec![],
                 tagged_values: vec![],
             }),
+        );
+    }
+
+    /// Parses a non-bootstrap `PrimitiveType` body from m3.pure.
+    ///
+    /// Extracts the supertype from its generalizations and allocates it as a
+    /// `PrimitiveType` element. The supertype is resolved later during the
+    /// compilation pipeline when package registration wires up the references.
+    fn parse_primitive_type_body(&mut self, name: &SmolStr, package_segments: &[SmolStr]) {
+        let mut super_type_name: Option<SmolStr> = None;
+
+        if self.eat(&Token::LBrace) {
+            loop {
+                match self.peek() {
+                    Token::RBrace | Token::Eof => break,
+                    Token::Caret => {
+                        self.skip_inline_instance();
+                    }
+                    _ => {
+                        let prop_path = self.parse_property_path_tail();
+                        if !self.eat(&Token::Colon) {
+                            self.skip_to_comma_or_brace();
+                            continue;
+                        }
+
+                        if prop_path.as_str() == "generalizations" {
+                            let supers = self.parse_generalizations(name);
+                            if let Some(crate::types::TypeExpr::Generic(s)) = supers.first() {
+                                super_type_name = Some(s.clone());
+                            }
+                        } else {
+                            self.skip_value();
+                        }
+                    }
+                }
+                self.eat(&Token::Comma);
+            }
+            self.eat(&Token::RBrace);
+        }
+
+        // Look up the supertype ElementId from the bootstrap primitives
+        let super_type = super_type_name.and_then(|sn| {
+            crate::bootstrap::BOOTSTRAP_PRIMITIVES
+                .iter()
+                .find(|(n, _, _)| *n == sn.as_str())
+                .map(|(_, id, _)| *id)
+        });
+
+        self.alloc_element(
+            name,
+            package_segments,
+            Element::PrimitiveType(crate::types::PrimitiveType { super_type }),
         );
     }
 
@@ -649,7 +722,16 @@ impl<'a> M3Parser<'a> {
     }
 
     /// Parses the generalizations list and extracts super-type names.
-    fn parse_generalizations(&mut self) -> Vec<crate::types::TypeExpr> {
+    ///
+    /// In m3.pure, `Type.properties[generalizations]` stores Generalization
+    /// instances for ALL subclasses (e.g., Class, PrimitiveType), not just
+    /// the current class. Each Generalization has:
+    /// - `general.rawType` — the supertype
+    /// - `specific` — the actual subtype this applies to
+    ///
+    /// We filter by `specific` to only keep entries where the subtype matches
+    /// the class we are currently parsing (`class_name`).
+    fn parse_generalizations(&mut self, class_name: &str) -> Vec<crate::types::TypeExpr> {
         let mut supers = Vec::new();
 
         if self.eat(&Token::LBrack) {
@@ -657,9 +739,13 @@ impl<'a> M3Parser<'a> {
                 match self.peek() {
                     Token::RBrack | Token::Eof => break,
                     Token::Caret => {
-                        // ^Generalization { general: ^GenericType { rawType: SuperClass }, specific: ... }
-                        if let Some(name) = self.parse_generalization_instance() {
-                            supers.push(crate::types::TypeExpr::Generic(name));
+                        // ^Generalization { general: ^GenericType { rawType: SuperClass }, specific: SubClass }
+                        if let Some((general, specific)) = self.parse_generalization_instance() {
+                            // Only keep this generalization if `specific` matches
+                            // the class we are currently parsing.
+                            if specific.as_deref() == Some(class_name) || specific.is_none() {
+                                supers.push(crate::types::TypeExpr::Generic(general));
+                            }
                         }
                     }
                     _ => {
@@ -671,8 +757,10 @@ impl<'a> M3Parser<'a> {
             self.eat(&Token::RBrack);
         } else if self.at(&Token::Caret) {
             // Single generalization (not in array)
-            if let Some(name) = self.parse_generalization_instance() {
-                supers.push(crate::types::TypeExpr::Generic(name));
+            if let Some((general, specific)) = self.parse_generalization_instance() {
+                if specific.as_deref() == Some(class_name) || specific.is_none() {
+                    supers.push(crate::types::TypeExpr::Generic(general));
+                }
             }
         } else {
             self.skip_value();
@@ -681,9 +769,12 @@ impl<'a> M3Parser<'a> {
         supers
     }
 
-    /// Parses a `^Generalization { general: ^GenericType{rawType: X}, specific: ... }`
-    /// and returns the "general" raw type name.
-    fn parse_generalization_instance(&mut self) -> Option<SmolStr> {
+    /// Parses a `^Generalization { general: ^GenericType{rawType: X}, specific: Y }`
+    /// and returns `(general_raw_type, specific_name)`.
+    ///
+    /// The `specific` is the simple name of the subclass extracted from the
+    /// path reference (e.g., `Root.children[...].children[Class]` → `"Class"`).
+    fn parse_generalization_instance(&mut self) -> Option<(SmolStr, Option<SmolStr>)> {
         self.expect(&Token::Caret);
         let _classifier = self.parse_classifier_path();
 
@@ -699,6 +790,7 @@ impl<'a> M3Parser<'a> {
         }
 
         let mut general_type = None;
+        let mut specific_type = None;
 
         if self.eat(&Token::LBrace) {
             loop {
@@ -720,6 +812,12 @@ impl<'a> M3Parser<'a> {
                                 // We need to extract XXXX
                                 general_type = Some(self.parse_generic_type_raw_type());
                             }
+                            "specific" => {
+                                // The value is a path reference like:
+                                // Root.children[meta]...children[Class]
+                                // Extract the last segment as the specific class name.
+                                specific_type = Some(self.parse_classifier_path());
+                            }
                             _ => {
                                 self.skip_value();
                             }
@@ -731,7 +829,7 @@ impl<'a> M3Parser<'a> {
             self.eat(&Token::RBrace);
         }
 
-        general_type
+        general_type.map(|g| (g, specific_type))
     }
 
     /// Parses a type parameters list: `[^TypeParameter{name:'T'}, ...]`

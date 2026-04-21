@@ -105,6 +105,7 @@ pub(crate) fn lower_expression(
         }
         ast_expr::Expression::Copy(e) => lower_copy(e, ctx, errors),
         ast_expr::Expression::Slice(e) => lower_slice(e, ctx, errors),
+        ast_expr::Expression::UnitInstance(e) => lower_unit_instance(e, ctx, errors),
     }
 }
 
@@ -623,14 +624,88 @@ fn infer_let_type(
         ExprKind::DecimalLiteral(_) => Some((named(bootstrap::DECIMAL_ID), Multiplicity::PureOne)),
         ExprKind::StringLiteral(_) => Some((named(bootstrap::STRING_ID), Multiplicity::PureOne)),
         ExprKind::BooleanLiteral(_) => Some((named(bootstrap::BOOLEAN_ID), Multiplicity::PureOne)),
-        ExprKind::FunctionCall { function, .. } => function.and_then(|fid| {
+        ExprKind::FunctionCall {
+            function,
+            arguments,
+            ..
+        } => function.and_then(|fid| {
             if let crate::model::Element::Function(f) = ctx.model.get_element(fid) {
-                Some((f.return_type.clone(), f.return_multiplicity.clone()))
+                // Bind generic type/multiplicity variables from the call
+                // arguments, then substitute into the declared return type
+                // and multiplicity. This turns `cast<T|m>(x, @Class<Any>)`
+                // from `(T, m)` into `(Class<Any>, [1])`.
+                let bindings = crate::resolve::infer_generic_bindings(
+                    &f.parameters,
+                    arguments,
+                    ctx.model,
+                    &ctx.variable_types,
+                );
+                Some((
+                    crate::resolve::substitute_type(&f.return_type, &bindings.ty),
+                    crate::resolve::substitute_mult(&f.return_multiplicity, &bindings.mult),
+                ))
             } else {
                 None
             }
         }),
         ExprKind::Variable { name } => ctx.variable_types.get(name).cloned(),
+        ExprKind::Collection { elements } => {
+            // Compute the LUB (least upper bound) of ALL element types.
+            // e.g., [1, 2, 5] → Integer, [1, 2.5] → Number, ['a', 'b'] → String
+            let mut lub_type: Option<TypeExpr> = None;
+            for elem in elements {
+                if let Some((te, _)) = infer_let_type(elem, ctx) {
+                    lub_type = Some(match lub_type {
+                        None => te,
+                        Some(current) => {
+                            // Compute LUB at TypeExpr level — extract ElementIds and
+                            // find the common supertype.
+                            if let (
+                                TypeExpr::Named { element: a, .. },
+                                TypeExpr::Named { element: b, .. },
+                            ) = (&current, &te)
+                            {
+                                let lub_id =
+                                    crate::resolve::least_upper_bound_ids(*a, *b, ctx.model);
+                                TypeExpr::Named {
+                                    element: lub_id,
+                                    type_arguments: vec![],
+                                    value_arguments: vec![],
+                                }
+                            } else {
+                                // Mixed or non-Named types — fall back to current
+                                current
+                            }
+                        }
+                    });
+                }
+            }
+
+            // Multiplicity is derived from the element count:
+            // [1,2,5] → [3], [x] → [1], [] → [0]
+            let n = elements.len() as u32;
+            let mult = match n {
+                0 => Multiplicity::Range {
+                    lower: 0,
+                    upper: Some(0),
+                },
+                1 => Multiplicity::PureOne,
+                _ => Multiplicity::Range {
+                    lower: n,
+                    upper: Some(n),
+                },
+            };
+
+            lub_type.map(|te| (te, mult))
+        }
+        ExprKind::PackageableElementRef { element } => {
+            // Bare element ref: `let c = ClassWithDefault` — the variable
+            // holds a reference to the metaclass. Share the metatype lookup
+            // with `infer_type_from_valuespec` via bootstrap::metatype_of
+            // so new element kinds don't silently diverge between the two.
+            crate::bootstrap::metatype_of(ctx.model, ctx.model.get_element(*element))
+                .map(|eid| (named(eid), Multiplicity::PureOne))
+        }
         _ => None,
     }
 }
@@ -878,6 +953,35 @@ fn parse_subsecond_nanos(frac: &str) -> i32 {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Lowers a unit instance expression (`5 RomanLength~Pes`) to a `newUnit` call.
+///
+/// In the Pure semantic model, `5 RomanLength~Pes` desugars to
+/// `newUnit(RomanLength~Pes, 5)`.
+fn lower_unit_instance(
+    e: &ast_expr::UnitInstanceExpr,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let value_vs = lower_expression(&e.value, ctx, errors)?;
+    let unit_ref = lower_packageable_element_ref(
+        &ast_expr::PackageableElementRef {
+            element: e.unit.clone(),
+            source_info: e.source_info.clone(),
+        },
+        ctx,
+        errors,
+    )?;
+
+    Some(untyped(
+        ExprKind::FunctionCall {
+            function: None,
+            function_name: SmolStr::new_static("newUnit"),
+            arguments: vec![unit_ref, value_vs],
+        },
+        e.source_info.clone(),
+    ))
+}
 
 // ---------------------------------------------------------------------------
 // Tests

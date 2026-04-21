@@ -24,24 +24,67 @@ use std::fmt;
 // ElementId — the universal element reference
 // ---------------------------------------------------------------------------
 
-/// A segmented index into the chunked element arenas.
+/// A reference to any element in the Pure model graph.
 ///
-/// `chunk_id` identifies which [`ModelChunk`](crate::model::ModelChunk) owns
-/// the element, and `local_idx` is the position within that chunk's arenas.
+/// In M3, `Package extends PackageableElement` — packages are elements.
+/// This enum captures both:
 ///
-/// This design enables O(1) model merging: push a new chunk, link its elements
-/// into the global package tree, and rebuild derived indexes — no ID rewriting.
+/// - **`InstanceId`**: an element stored in a chunk arena, addressed by
+///   `(chunk_id, local_idx)`. Enables O(1) model merging.
+/// - **`Package`**: a package in the global `global_packages` arena,
+///   addressed by [`PackageId`]. Packages span chunks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ElementId {
-    /// Which chunk owns this element (0 = bootstrap).
-    pub chunk_id: u16,
-    /// Index within the chunk's `nodes` and `elements` arenas.
-    pub local_idx: u32,
+pub enum ElementId {
+    /// An element instance in a chunk arena.
+    InstanceId {
+        /// Which chunk owns this element (0 = bootstrap).
+        chunk_id: u16,
+        /// Index within the chunk's `nodes` and `elements` arenas.
+        local_idx: u32,
+    },
+    /// A package in the global package arena.
+    Package(PackageId),
 }
 
 impl fmt::Display for ElementId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.chunk_id, self.local_idx)
+        match self {
+            Self::InstanceId {
+                chunk_id,
+                local_idx,
+            } => write!(f, "{chunk_id}:{local_idx}"),
+            Self::Package(pkg_id) => write!(f, "pkg:{}", pkg_id.0),
+        }
+    }
+}
+
+impl ElementId {
+    /// Returns the `local_idx` for an `InstanceId` variant.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on a `Package` variant.
+    #[must_use]
+    pub fn local_idx(self) -> u32 {
+        match self {
+            Self::InstanceId { local_idx, .. } => local_idx,
+            Self::Package(_) => panic!("local_idx called on Package element {self}"),
+        }
+    }
+
+    /// Returns `true` if this is a `Package` variant.
+    #[must_use]
+    pub fn is_package(self) -> bool {
+        matches!(self, Self::Package(_))
+    }
+
+    /// Returns the `PackageId` if this is a `Package` variant.
+    #[must_use]
+    pub fn package_id(self) -> Option<PackageId> {
+        match self {
+            Self::Package(id) => Some(id),
+            Self::InstanceId { .. } => None,
+        }
     }
 }
 
@@ -89,7 +132,7 @@ mod tests {
 
     #[test]
     fn element_id_is_copy_and_eq() {
-        let a = ElementId {
+        let a = ElementId::InstanceId {
             chunk_id: 0,
             local_idx: 5,
         };
@@ -102,15 +145,15 @@ mod tests {
     fn element_id_hash_works() {
         use std::collections::HashSet;
         let mut set = HashSet::new();
-        set.insert(ElementId {
+        set.insert(ElementId::InstanceId {
             chunk_id: 0,
             local_idx: 0,
         });
-        set.insert(ElementId {
+        set.insert(ElementId::InstanceId {
             chunk_id: 0,
             local_idx: 1,
         });
-        set.insert(ElementId {
+        set.insert(ElementId::InstanceId {
             chunk_id: 0,
             local_idx: 0,
         }); // duplicate
@@ -119,15 +162,31 @@ mod tests {
 
     #[test]
     fn element_id_different_chunks_not_equal() {
-        let a = ElementId {
+        let a = ElementId::InstanceId {
             chunk_id: 0,
             local_idx: 0,
         };
-        let b = ElementId {
+        let b = ElementId::InstanceId {
             chunk_id: 1,
             local_idx: 0,
         };
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn element_id_package_variant() {
+        let a = ElementId::Package(PackageId(7));
+        let b = a;
+        assert_eq!(a, b);
+        assert_eq!(a.to_string(), "pkg:7");
+        // Package and InstanceId are distinct
+        assert_ne!(
+            a,
+            ElementId::InstanceId {
+                chunk_id: 0,
+                local_idx: 7
+            }
+        );
     }
 
     #[test]

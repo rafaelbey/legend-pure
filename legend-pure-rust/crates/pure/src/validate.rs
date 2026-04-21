@@ -58,7 +58,7 @@ pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
         .expect("model must have at least one chunk");
     {
         for (local_idx, element) in chunk.elements.iter() {
-            let id = ElementId {
+            let id = ElementId::InstanceId {
                 chunk_id: chunk.chunk_id,
                 local_idx,
             };
@@ -136,7 +136,8 @@ pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
                 | Element::Unit(_)
                 | Element::Profile(_)
                 | Element::PrimitiveType(_)
-                | Element::PackageableMultiplicity(_) => {}
+                | Element::PackageableMultiplicity(_)
+                | Element::Package(_) => {}
             }
         }
     }
@@ -432,7 +433,7 @@ mod tests {
                 name: SmolStr::new("name"),
                 source_info: src.clone(),
                 type_expr: TypeExpr::Named {
-                    element: ElementId {
+                    element: ElementId::InstanceId {
                         chunk_id: 0,
                         local_idx: 0,
                     },
@@ -449,7 +450,7 @@ mod tests {
                 name: SmolStr::new("name"), // duplicate!
                 source_info: src.clone(),
                 type_expr: TypeExpr::Named {
-                    element: ElementId {
+                    element: ElementId::InstanceId {
                         chunk_id: 0,
                         local_idx: 0,
                     },

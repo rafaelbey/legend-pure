@@ -451,24 +451,52 @@ impl<'a> Lexer<'a> {
     }
 
     fn lex_number(&mut self, _start_line: u32, _start_col: u32) -> TokenKind {
-        // Consume digits
+        // Consume leading digits
         while self.peek().is_some_and(|c| c.is_ascii_digit()) {
             self.advance();
         }
 
+        let mut is_float = false;
+
         // Check for decimal point
         if self.peek() == Some('.') && self.peek_at(1).is_some_and(|c| c.is_ascii_digit()) {
+            is_float = true;
             self.advance(); // consume '.'
             while self.peek().is_some_and(|c| c.is_ascii_digit()) {
                 self.advance();
             }
+        }
 
-            // Check for decimal suffix 'D'
-            if self.peek() == Some('D') || self.peek() == Some('d') {
-                self.advance();
-                return TokenKind::DecimalLiteral;
+        // Check for exponent: e/E followed by optional +/- and digits
+        // Examples: 1e6, 134.21e-10, 1.3421E+8, 0.13421e-7
+        if matches!(self.peek(), Some('e' | 'E')) {
+            let has_exponent_digits = match self.peek_at(1) {
+                Some(c) if c.is_ascii_digit() => true,
+                Some('+' | '-') => self.peek_at(2).is_some_and(|c| c.is_ascii_digit()),
+                _ => false,
+            };
+            if has_exponent_digits {
+                is_float = true;
+                self.advance(); // consume 'e'/'E'
+                // consume optional sign
+                if matches!(self.peek(), Some('+' | '-')) {
+                    self.advance();
+                }
+                // consume exponent digits
+                while self.peek().is_some_and(|c| c.is_ascii_digit()) {
+                    self.advance();
+                }
             }
+        }
 
+        // Check for decimal suffix 'D'/'d' — applies to both integers and floats
+        // Examples: 1.0D, 1.5d, 9999999999999992d
+        if matches!(self.peek(), Some('D' | 'd')) {
+            self.advance();
+            return TokenKind::DecimalLiteral;
+        }
+
+        if is_float {
             return TokenKind::FloatLiteral;
         }
 
@@ -631,10 +659,66 @@ mod tests {
     }
 
     #[test]
+    fn float_with_exponent() {
+        // 134.21e-10 — negative exponent
+        let tokens = tokenize("134.21e-10", "test.pure").unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::FloatLiteral);
+        assert_eq!(tokens[0].text, "134.21e-10");
+    }
+
+    #[test]
+    fn float_with_positive_exponent() {
+        let tokens = tokenize("1.5E+3", "test.pure").unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::FloatLiteral);
+        assert_eq!(tokens[0].text, "1.5E+3");
+    }
+
+    #[test]
+    fn float_with_unsigned_exponent() {
+        let tokens = tokenize("0.13421e7", "test.pure").unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::FloatLiteral);
+        assert_eq!(tokens[0].text, "0.13421e7");
+    }
+
+    #[test]
+    fn integer_with_exponent() {
+        // 1e6 — integer base with exponent becomes float
+        let tokens = tokenize("1e6", "test.pure").unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::FloatLiteral);
+        assert_eq!(tokens[0].text, "1e6");
+    }
+
+    #[test]
+    fn exponent_in_expression() {
+        // 134.21e-10->toString() — must not eat the ->
+        let toks = texts("134.21e-10->toString");
+        assert_eq!(toks[0], "134.21e-10");
+        assert_eq!(toks[1], "->");
+        assert_eq!(toks[2], "toString");
+    }
+
+    #[test]
+    fn exponent_not_confused_with_identifier() {
+        // 'e' alone after a float without digits is NOT an exponent
+        // 3.14end should be float 3.14 then identifier 'end'
+        let toks = texts("3.14end");
+        assert_eq!(toks[0], "3.14");
+        assert_eq!(toks[1], "end");
+    }
+
+    #[test]
     fn decimal_literal() {
         let tokens = tokenize("1.0D", "test.pure").unwrap();
         assert_eq!(tokens[0].kind, TokenKind::DecimalLiteral);
         assert_eq!(tokens[0].text, "1.0D");
+    }
+
+    #[test]
+    fn integer_decimal_literal() {
+        // Integer with 'd' suffix is a decimal literal
+        let tokens = tokenize("9999999999999992d", "test.pure").unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::DecimalLiteral);
+        assert_eq!(tokens[0].text, "9999999999999992d");
     }
 
     // -- Date literals --

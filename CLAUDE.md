@@ -2,109 +2,73 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project
+## Repository Shape
 
-Legend Pure is the language and compiler engine powering the FINOS Legend data-management platform. This repo ships the Pure language, its compiler, two execution engines (compiled + interpreted), DSL extensions, a relational store, and the Maven plugin suite that drives Pure compilation during normal Maven builds.
+Two parallel implementations of Legend Pure live side-by-side at the root:
 
-Group ID: `org.finos.legend.pure`. Current version: `5.81.1-SNAPSHOT` (root `pom.xml`). Downstream consumer: `legend-engine` compiles against these JARs, so public Java API in `legend-pure-m4`, `legend-pure-m3-core`, and runtime engine modules is a **breaking-change surface for the whole Legend stack**.
+- **Java/Maven stack** (upstream FINOS) — `legend-pure-core`, `legend-pure-dsl`,
+  `legend-pure-maven`, `legend-pure-runtime`, `legend-pure-store`. Entry point: root `pom.xml`.
+- **Rust rewrite** — `legend-pure-rust/` (Cargo workspace). The active fork branch
+  `legend-pure-rust` reimplements parsing, compilation, and a tree-walking interpreter in
+  Rust. **When working inside that directory, see `legend-pure-rust/CLAUDE.md` for the
+  Rust-specific guide.**
 
-## Build & test commands
+Most current development targets the Rust workspace. The Java modules still compile and run
+tests — `.pure` source in `legend-pure-core/legend-pure-m3-core/src/main/resources/platform/`
+is the canonical platform definition consumed by **both** stacks.
 
-Requires **JDK 11 or 17** (enforcer rejects anything else) and Maven 3.6+.
+## Java Stack — Build & Test
+
+Requires **JDK 11 or 17** (the Maven enforcer rejects all others) and **Maven 3.6+**.
 
 ```bash
-# First build, skip tests (15–30 min warm repo, longer cold)
-mvn -T 4 clean install -DskipTests
-
-# Full build + tests
-mvn clean install
-
-# Single module
+mvn -T 4 install -DskipTests                    # fast first build (15–30 min)
+mvn -T 4 install                                # full build + tests
 mvn test -pl legend-pure-core/legend-pure-m3-core
-
-# Single test class / method (remember -DfailIfNoTests=false — most modules don't
-# have a match and will fail without it)
-mvn test -pl legend-pure-core/legend-pure-m3-core \
-    -Dtest=TestM3Compiler -DfailIfNoTests=false
-mvn test -pl legend-pure-core/legend-pure-m3-core \
-    -Dtest="TestM3Compiler#testSimpleClass" -DfailIfNoTests=false
-
-# PCT tests only (pattern-matched)
-mvn test -Dtest="*_PCT" -DfailIfNoTests=false
-
-# Checkstyle without tests
-mvn verify -DskipTests
-mvn checkstyle:check
-# Skip checkstyle in a hurry
-mvn clean install -Dcheckstyle.skip=true
-
-# Build a module and its dependencies
-mvn clean install -pl legend-pure-store/legend-pure-store-relational -am
+mvn install -pl legend-pure-store/legend-pure-store-relational -am   # module + deps
+mvn install -Dcheckstyle.skip=true
 ```
 
-If you see `cannot find symbol: class CoreInstance...`, you ran `mvn test` without prior code generation. Run `mvn generate-sources` or `mvn install -DskipTests` first — ANTLR4 parsers and `CoreInstance` accessors live in `target/generated-sources/` and must exist before `maven-compiler-plugin` runs.
+`mvn install -DskipTests` must run at least once so the
+`legend-pure-maven-generation-platform-java` plugin emits the generated `CoreInstance`
+Java accessors before IDE-driven test runs will compile.
 
-Heap: the compiler builds large graphs. For local builds, `export MAVEN_OPTS="-Xmx4g"`.
+## High-Level Architecture
 
-macOS JDK switch: `export JAVA_HOME=$(/usr/libexec/java_home -v 11) PATH="$JAVA_HOME/bin:$PATH"`. The enforcer rejects 25, 21, 12–16, 18+ — must be 11 or 17.
+### M4 → M3 → M2 → M1 metamodel stack
 
-After editing a `.pure` file, the compiled engine's per-function generated Java under `target/generated-test-sources/` can go stale. Run `mvn clean install -DskipTests -pl <engine-module> -am` (or just delete `target/generated-test-sources/`) to regenerate before `mvn test`.
+This is the mental model for the entire codebase — every module maps onto a layer:
 
-When passing `-Dtest=...` with `-am`, add `-Dsurefire.failIfNoSpecifiedTests=false` — dependency modules without matching tests otherwise fail the reactor.
+- **M4** (`legend-pure-m4`) — meta-metamodel; defines what a node is (`CoreInstance`).
+- **M3** (`legend-pure-m3-core`) — Pure language metamodel: Class, Function, Association, etc.
+- **M2** — DSL metamodels written in Pure: Mapping, Store, Diagram, TDS, Path, Graph.
+- **M1** — user `.pure` source (the platform library under `m3-core/.../resources/platform/`
+  is M1 source that *bootstraps* M2/M3).
 
-## Architecture — the M4 → M3 → M2 → M1 stack
+### Java compiler pipeline
 
-The metamodel-layer split is **the** key concept for navigating this codebase:
+`src → ANTLR4 parse → first-pass symbol registration → PostProcessor (type linking,
+milestoning rewrite, association resolution, matcher loop) → Validator → serialize to
+.par/binary elements → Java codegen (compiled mode) OR tree-walk (interpreted mode)`.
 
-- **M4** (`legend-pure-m4`) — meta-metamodel. Defines what a "node" is (`CoreInstance` interface, serialization primitives). Rarely touched.
-- **M3** (`legend-pure-m3-core`) — the Pure language itself: `Class`, `Function`, `Association`, parser (ANTLR4 `M3.g4` + `M3AntlrParser`), compiler passes, standard library.
-- **M2** (`legend-pure-dsl/*`, `legend-pure-store/*`) — DSL extensions built *in Pure*: mapping, diagram, graph, path, store, tds, relational. Each DSL ships three sub-modules: `*-pure` (Pure source), `*-grammar` (ANTLR4 + Java visitor), `*-runtime-*-extension` (compiled/interpreted runtime hook).
-- **M1** — user/business Pure code. Lives in consumer repos, not here.
+PCT (`@PCT` annotation) runs every annotated function through **both** engines on every
+build and fails if results diverge. This is the integration-test contract — don't bypass it.
 
-Rule of thumb: editing `m4` = changing what a node *is*; editing `m3-core` = changing what `Class` or `Function` *means*; editing a DSL module = changing what `Mapping` or `Database` *means*.
+## Java Code Conventions
 
-### Two execution modes (kept in lockstep by PCT)
+- JUnit 4 (ADR-001), Eclipse Collections for immutable collections (ADR-002), no mocking
+  (ADR-003) — integration tests hit real engines. See `docs/decisions/`.
+- Checkstyle is enforced during `verify`; root config is `checkstyle.xml`.
+- Public API in `legend-pure-m4`, `legend-pure-m3-core`, and runtime modules is consumed
+  as a compiled dependency by `legend-engine`. Changing those signatures is a breaking
+  change for the entire FINOS Legend stack — treat them like a published library API.
+- The Maven plugin suite (`legend-pure-maven-*`) is also a published contract: goal names,
+  parameters, and default phases are consumed by `legend-engine` and downstream projects.
 
-Both modes compile from the same `CoreInstance` graph produced by the M3 compiler:
+## Where to Look First
 
-- **Compiled** (`legend-pure-runtime-java-engine-compiled`) — ahead-of-time codegen to Java during Maven build. Production path.
-- **Interpreted** (`legend-pure-runtime-java-engine-interpreted`) — tree-walking interpreter at runtime. Dev/IDE path.
-
-**PCT (Platform Compatibility Testing)** is the integration contract that keeps these engines identical: Pure functions carrying the `<<PCT.function>>` stereotype (with `<<PCT.test>>` tests) run on *both* engines every build; divergent results fail CI. Tests follow `Test_<Mode>_<Suite>_PCT` naming. The current branch (`pct-refactor`) is migrating Java-side abstract test classes into native Pure PCT — recent commits named `test(grammar): PCT … migration` are deleting `AbstractTest*.java` under `legend-pure-m3-core/src/test/java/.../function/base/` and replacing them with Pure PCT functions in `legend-pure-m3-core/src/main/resources/platform/pure/`.
-
-### Maven plugin pipeline (driven by `legend-pure-maven/*`)
-
-Pure compilation runs as part of the normal Maven lifecycle, not a separate step:
-
-1. `legend-pure-maven-generation-platform-java` (phase `compile`) — generates M3 `CoreInstance` Java accessors.
-2. `legend-pure-maven-compiler` (`compile`) — parses `.pure` files to binary elements.
-3. `legend-pure-maven-generation-par` — serializes compiled repos to PAR archives (the build/startup cache).
-4. `legend-pure-maven-generation-java` — emits Java source + bytecode for the compiled engine.
-5. `legend-pure-maven-generation-pct` — produces PCT function index + reports.
-
-These plugin goals and parameter names are part of the public contract consumed by `legend-engine`.
-
-## Conventions
-
-- **Collections:** Eclipse Collections throughout. Use `Lists.mutable.empty()` / `Lists.immutable.with(...)`; return `RichIterable` / `ListIterable` from APIs, not `java.util.List`. Java collections only when bridging to external APIs.
-- **Testing framework:** JUnit 4 only (`junit:junit:4.13.1`). **Do not introduce JUnit 5.** No mocking framework — hand-written stubs, real objects, or `TemporaryFolder`. See `docs/decisions/ADR-003-use-of-mocking-framework.md`.
-- **Mojo tests:** no `maven-plugin-testing-harness`. Set `@Parameter` fields via reflection and call `execute()` directly — this is the established pattern.
-- **Pure test co-location:** tests live in the same `.pure` file as the function under test, nested under `::tests::<functionName>::`. Use `<<test.Test>>` for vanilla tests and `<<PCT.test>>` for cross-engine tests. If the native function bears `<<PCT.platformOnly>>` (or has no `<<PCT.function>>` stereotype at all), its tests *must* be `<<test.Test>>` — this is enforced by `FunctionsGeneration.java:123-147`. Use `{test.excludePlatform='Java compiled'}` or `'Java interpreted'` to skip one engine.
-- **Pure association gotcha:** two associations cannot both declare the same property name on the same class, even with different association names — Pure raises "Property conflict on class X: property 'Y' defined more than once" at parse. Split into distinct class pairs when a test needs separate reverse-multiplicity fixtures.
-- **Platform Pure fixture naming:** anything added under `legend-pure-m3-core/src/main/resources/platform/pure/**` joins the global symbol table and leaks into every test. Short generic names (`Car`, `Owner`, `A`, `B`, `func`, `Test<word><digit>`) break unrelated tests that assert on exact error messages (`PureUnresolvedIdentifierException` candidate lists), exact match counts (`TestSearchTools#testFindInAllPackages`), or exact file counts (`TestClassLoaderCodeStorage#testGetUserFiles`). Rules: (1) prefer reusing `LA_*` fixtures from `lang/_testModel.pure`; (2) promote reusable fixtures there with the `LA_*` prefix; (3) name PCT-local fixtures with unique descriptive identifiers (e.g. `ZeroToOneSource`, `MultiplicityParameterizedHolder`, `InstanceOfEnumA`); (4) when adding new `.pure` files under `platform/pure/**`, bump the count in `TestClassLoaderCodeStorage#testGetUserFiles` by the number added; (5) before pushing, sanity-run `TestPureRuntimeProjection`, `TestMilestoning`, `TestPureRuntimeClass_*`, `TestMatching`, `TestSearchTools`, and `TestClassLoaderCodeStorage`.
-- **Java test-source hygiene:** JUnit tests that call `compileTestSource("fromString.pure", …)` must define `@After cleanRuntime() { runtime.delete("fromString.pure"); runtime.compile(); }`. Without it, the second `@Test` method errors with `Source id 'fromString.pure' is already in use`.
-- **Checkstyle is enforced at `verify` and fails the build on warnings.** Notable rules: Apache 2.0 copyright header on every `.java`/`.xml`/`.properties` file; spaces not tabs; opening brace on a new line (`nl`); empty catch blocks only when the variable is named `expected` or `ignored`.
-- **Logging:** SLF4J with `{}` placeholders. Never `System.out`/`System.err`. Never log secrets or raw SQL with user values.
-- **API stability:** adding methods to interfaces in `m4` / `m3-core` breaks legend-engine unless a `default` implementation is provided. Deprecate first, remove in a later release.
-
-## Docs
-
-Authoritative developer docs live in `/docs` and are maintained alongside code. When behaviour, dependencies, or build steps change, update the matching doc in the same PR.
-
-- `docs/README.md` — top-level index.
-- `docs/architecture/overview.md` — module tree + ecosystem position.
-- `docs/architecture/compiler-pipeline.md` — parse → post-process → validate → codegen.
-- `docs/reference/maven-plugins-reference.md` — every plugin goal + parameter.
-- `docs/testing/testing-strategy.md` — PCT, coverage, how to run things.
-- `docs/standards/coding-standards.md` — full Checkstyle rule list.
-- `docs/decisions/` — ADRs (JUnit 4, Eclipse Collections, no mocks).
+- `docs/README.md` — full docs index (architecture, compiler pipeline, grammar references).
+- `docs/architecture/compiler-pipeline.md` — parse → post-process → validate → serialize → codegen.
+- `docs/architecture/overview.md` — position in the Legend ecosystem, stack diagrams.
+- `docs/reference/` — Pure language, Legend grammar, Mapping, Relational, Maven plugin refs.
+- `legend-pure-rust/CLAUDE.md` — dedicated guide for the Rust workspace.

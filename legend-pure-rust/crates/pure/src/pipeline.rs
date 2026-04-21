@@ -35,6 +35,7 @@ use std::collections::{HashMap, VecDeque};
 
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::element as ast;
+use legend_pure_parser_ast::element::PackageableElement as _;
 use legend_pure_parser_ast::section::SourceFile;
 use legend_pure_parser_ast::source_info::Spanned;
 
@@ -99,7 +100,7 @@ pub fn compile(
 
     // Register bootstrap elements in the root package
     for local_idx in 0..model.chunks[0].nodes.len() {
-        let eid = ElementId {
+        let eid = ElementId::InstanceId {
             chunk_id: 0,
             local_idx,
         };
@@ -109,6 +110,12 @@ pub fn compile(
     // Register M3 metamodel stubs in their canonical packages
     // (e.g., Function → meta::pure::metamodel::function::Function)
     bootstrap::register_m3_packages(&mut model);
+
+    // Resolve M3 supertype strings to actual ElementIds.
+    // After M3 parsing, supertypes are stored as TypeExpr::Generic("ClassName").
+    // Now that all M3 elements are registered in their packages, we can resolve
+    // them to TypeExpr::Named { element } for subtype checking.
+    resolve_m3_supertypes(&mut model);
 
     let mut errors = Vec::new();
 
@@ -225,6 +232,61 @@ struct UnitMapping {
 /// same FQN (overloaded by parameter types). Each overload gets its own
 /// `ElementId` and `Declaration`, stored in the `Vec`. Non-function elements
 /// still produce `DuplicateElement` errors on collision.
+/// Resolves M3 supertype strings (`TypeExpr::Generic`) to resolved `TypeExpr::Named`.
+///
+/// The M3 parser stores supertypes as `TypeExpr::Generic("ClassName")` because
+/// forward references are common in m3.pure. After all M3 elements are registered
+/// in their packages, this pass resolves those names to actual `ElementId`s.
+///
+/// This enables `is_subtype()` to walk the M3 type hierarchy correctly
+/// (e.g., `Class <: Type <: PackageableElement <: Any`).
+fn resolve_m3_supertypes(model: &mut PureModel) {
+    use crate::bootstrap::BOOTSTRAP_CHUNK_ID;
+    use crate::types::TypeExpr;
+
+    // Collect all M3 element IDs from chunk 0
+    let chunk = &model.chunks[BOOTSTRAP_CHUNK_ID as usize];
+    let m3_count = chunk.elements.len();
+
+    // Build a name → ElementId lookup for M3 classes (same-chunk resolution)
+    let mut name_to_id: HashMap<SmolStr, ElementId> = HashMap::new();
+    for local_idx in 0..m3_count {
+        let eid = ElementId::InstanceId {
+            chunk_id: BOOTSTRAP_CHUNK_ID,
+            local_idx,
+        };
+        let name = model.get_node(eid).name.clone();
+        name_to_id.insert(name, eid);
+    }
+
+    // Also try full-path resolution through the model's package tree
+    // for names that aren't simple M3 class names.
+
+    // Now resolve all Generic supertypes in chunk 0 classes
+    let chunk = &mut model.chunks[BOOTSTRAP_CHUNK_ID as usize];
+    for local_idx in 0..m3_count {
+        let element = chunk.elements.get_mut(local_idx);
+        let super_types = match element {
+            Element::Class(c) => &mut c.super_types,
+            _ => continue,
+        };
+
+        for st in super_types.iter_mut() {
+            if let TypeExpr::Generic(name) = st {
+                if let Some(&resolved_id) = name_to_id.get(name.as_str()) {
+                    *st = TypeExpr::Named {
+                        element: resolved_id,
+                        type_arguments: vec![],
+                        value_arguments: vec![],
+                    };
+                } else {
+                    // Supertype name not found in M3 chunk — remains unresolved
+                }
+            }
+        }
+    }
+}
+
 fn pass_declare(
     source_files: &[SourceFile],
     model: &mut PureModel,
@@ -300,7 +362,7 @@ fn pass_declare(
                     shell,
                 );
 
-                let id = ElementId {
+                let id = ElementId::InstanceId {
                     chunk_id,
                     local_idx,
                 };
@@ -383,7 +445,7 @@ fn allocate_unit_shells(
             unit_shell,
         );
 
-        let unit_id = ElementId {
+        let unit_id = ElementId::InstanceId {
             chunk_id,
             local_idx,
         };
@@ -563,9 +625,16 @@ fn pass_define_signatures<'a>(
     > = HashMap::new();
 
     for &id in sorted {
+        let ElementId::InstanceId {
+            chunk_id,
+            local_idx,
+        } = id
+        else {
+            continue;
+        };
         // Skip units — they were fully populated during Pass 1 (allocate_unit_shells)
-        let chunk = &model.chunks[id.chunk_id as usize];
-        if matches!(chunk.elements.get(id.local_idx), Element::Unit(_)) {
+        let chunk = &model.chunks[chunk_id as usize];
+        if matches!(chunk.elements.get(local_idx), Element::Unit(_)) {
             continue;
         }
 
@@ -579,6 +648,18 @@ fn pass_define_signatures<'a>(
         let import_scopes = import_scope_cache.entry(scope_key).or_insert_with(|| {
             build_import_scope(source_files, decl.file_idx, decl.section_idx, auto_imports)
         });
+
+        // Implicit self-package: elements can see siblings in the same package
+        // without explicit imports (matches Java Pure compiler behavior).
+        if let Some(pkg) = ast_element.package() {
+            let pkg_str = pkg.to_string();
+            if !import_scopes
+                .iter()
+                .any(|s| s.package.to_string() == pkg_str)
+            {
+                import_scopes.push(ImportScope::from_path_str(&pkg_str));
+            }
+        }
 
         // Get or create the per-section resolve cache
         let resolve_cache = resolve_caches.entry(scope_key).or_default();
@@ -597,9 +678,15 @@ fn pass_define_signatures<'a>(
         // Hydrate everything EXCEPT function bodies (bodies resolved in Pass 2b)
         let hydrated = hydrate_element_signature(ast_element, id, unit_mappings, &mut ctx, errors);
 
-        // Replace the shell in the chunk
-        let chunk = &mut model.chunks[id.chunk_id as usize];
-        *chunk.elements.get_mut(id.local_idx) = hydrated;
+        let ElementId::InstanceId {
+            chunk_id,
+            local_idx,
+        } = id
+        else {
+            continue;
+        };
+        let chunk = &mut model.chunks[chunk_id as usize];
+        *chunk.elements.get_mut(local_idx) = hydrated;
     }
 
     (id_to_decl, import_scope_cache, resolve_caches)
@@ -635,6 +722,17 @@ fn pass_define_bodies(
         let import_scopes = import_scope_cache.entry(scope_key).or_insert_with(|| {
             build_import_scope(source_files, decl.file_idx, decl.section_idx, auto_imports)
         });
+
+        // Implicit self-package (same as Pass 2a)
+        if let Some(pkg) = ast_element.package() {
+            let pkg_str = pkg.to_string();
+            if !import_scopes
+                .iter()
+                .any(|s| s.package.to_string() == pkg_str)
+            {
+                import_scopes.push(crate::resolve::ImportScope::from_path_str(&pkg_str));
+            }
+        }
         let resolve_cache = resolve_caches.entry(scope_key).or_default();
 
         let type_params = ast_type_parameters(ast_element);
@@ -661,8 +759,15 @@ fn pass_define_bodies(
         let body = crate::lower::lower_expression_body(body_exprs, &mut ctx, errors);
 
         // Patch the body into the already-resolved function
-        let chunk = &mut model.chunks[id.chunk_id as usize];
-        if let Element::Function(func) = chunk.elements.get_mut(id.local_idx) {
+        let ElementId::InstanceId {
+            chunk_id,
+            local_idx,
+        } = id
+        else {
+            continue;
+        };
+        let chunk = &mut model.chunks[chunk_id as usize];
+        if let Element::Function(func) = chunk.elements.get_mut(local_idx) {
             func.body = body;
         }
     }

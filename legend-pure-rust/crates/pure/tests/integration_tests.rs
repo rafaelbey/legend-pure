@@ -811,7 +811,9 @@ Class model::trading::Trade {
 
 #[test]
 fn compile_import_isolation_across_sections() {
-    // Import in section 1 does NOT apply to section 2
+    // Import in section 1 does NOT apply to section 2.
+    // BUT both sections define elements in `model::domain`, so `Address`
+    // is visible in section 2 via same-package resolution (not imports).
     let source = r"
 ###Pure
 import model::domain::*;
@@ -826,14 +828,13 @@ Class model::domain::Person {
   home: Address[1];
 }
 ";
-    // Section 2 has no import — `Address` is unqualified and should fail
+    // Section 2 has no import, but `Person` and `Address` share the
+    // `model::domain` package — same-package resolution succeeds.
     let result = compile_with_imports(&[source], &[]);
     assert!(
-        result.is_err(),
-        "should fail because section 2 has no import for Address"
+        result.is_ok(),
+        "should succeed: same-package types are visible without imports"
     );
-    let errors = &result.unwrap_err().errors;
-    assert!(errors.iter().any(|e| e.message.contains("Address")));
 }
 
 #[test]
@@ -1497,6 +1498,167 @@ fn compile_lambda_let_shadows_outer_let() {
             partial.errors
         );
     };
+}
+
+// ---------------------------------------------------------------------------
+// Function dispatch phases — targeted tests per phase
+// ---------------------------------------------------------------------------
+
+/// Resolve the single FunctionCall in `caller_fqn`'s body and return the
+/// mangled name of the resolved callee (i.e. which overload dispatch picked).
+fn dispatch_target(
+    model: &legend_pure_parser_pure::model::PureModel,
+    caller_fqn: &[&str],
+) -> String {
+    let path: Vec<smol_str::SmolStr> = caller_fqn
+        .iter()
+        .map(|s| smol_str::SmolStr::new(s))
+        .collect();
+    let caller_id = model
+        .resolve_by_path(&path)
+        .unwrap_or_else(|| panic!("caller {caller_fqn:?} should exist"));
+    let Element::Function(f) = model.get_element(caller_id) else {
+        panic!("caller {caller_fqn:?} should be a Function");
+    };
+    // Walk the body looking for the first FunctionCall with a resolved target.
+    // Skip `letFunction` calls, which are the implicit `let x = …` desugaring.
+    for stmt in &f.body {
+        if let legend_pure_parser_pure::types::ExprKind::FunctionCall {
+            function: Some(fid),
+            function_name,
+            ..
+        } = stmt.kind.as_ref()
+        {
+            if function_name.as_str() == "letFunction" {
+                continue;
+            }
+            return model.get_node(*fid).name.to_string();
+        }
+    }
+    panic!("caller body has no resolved FunctionCall");
+}
+
+#[test]
+fn dispatch_phase1_incompatible_type_eliminated() {
+    // f(String) vs f(Integer); call with Integer arg → only f(Integer) compatible.
+    let source = r"
+###Pure
+function test::f(x: String[1]): Boolean[1] { true; }
+function test::f(x: Integer[1]): Boolean[1] { false; }
+function test::caller(): Boolean[1] { f(42); }
+";
+    let model = compile_with_imports(&[source], &[]).expect("should compile");
+    let target = dispatch_target(&model, &["test", "caller__Boolean_1_"]);
+    assert!(
+        target.starts_with("f_Integer_1_"),
+        "phase 1 should pick Integer overload, got {target}"
+    );
+}
+
+#[test]
+fn dispatch_phase2_exact_type_wins_over_subtype() {
+    // f(Number) vs f(Integer); call with Integer → f(Integer) (exact +3) beats
+    // f(Number) (subtype +1).
+    let source = r"
+###Pure
+function test::f(x: Number[1]): Boolean[1] { true; }
+function test::f(x: Integer[1]): Boolean[1] { false; }
+function test::caller(): Boolean[1] { f(42); }
+";
+    let model = compile_with_imports(&[source], &[]).expect("should compile");
+    let target = dispatch_target(&model, &["test", "caller__Boolean_1_"]);
+    assert!(
+        target.starts_with("f_Integer_1_"),
+        "phase 2 should prefer exact Integer over subtype-via-Number, got {target}"
+    );
+}
+
+#[test]
+fn dispatch_phase2_exact_multiplicity_wins() {
+    // f(String[1]) vs f(String[0..1]); call with [1] → exact wins.
+    let source = r"
+###Pure
+function test::f(x: String[0..1]): Boolean[1] { true; }
+function test::f(x: String[1]): Boolean[1] { false; }
+function test::caller(): Boolean[1] { f('hi'); }
+";
+    let model = compile_with_imports(&[source], &[]).expect("should compile");
+    let target = dispatch_target(&model, &["test", "caller__Boolean_1_"]);
+    assert!(
+        target.starts_with("f_String_1_"),
+        "phase 2 should prefer exact [1] over [0..1], got {target}"
+    );
+}
+
+#[test]
+fn dispatch_phase1_mult_eliminates_too_many() {
+    // [0..1] arg cannot fit into [1] param.
+    let source = r"
+###Pure
+function test::f(x: String[1]): Boolean[1] { true; }
+function test::f(x: String[0..1]): Boolean[1] { false; }
+function test::caller(s: String[0..1]): Boolean[1] { f($s); }
+";
+    let model = compile_with_imports(&[source], &[]).expect("should compile");
+    let target = dispatch_target(&model, &["test", "caller_String_$0_1$__Boolean_1_"]);
+    assert!(
+        target.starts_with("f_String_$0_1$_"),
+        "phase 1 mult should eliminate [1] overload when arg is [0..1], got {target}"
+    );
+}
+
+#[test]
+fn dispatch_generic_substitution_cast() {
+    // Declares a native `myCast<T>(src:Any[1], t:T[1]):T[1]` so the test
+    // doesn't depend on platform sources. Substitution must bind T := Integer
+    // from the `@Integer` arg and make `$c` report Integer (not generic T).
+    let source = r"
+###Pure
+native function test::myCast<T>(src: Any[1], t: T[1]): T[1];
+function test::g(x: Integer[1]): Boolean[1] { true; }
+function test::g(x: String[1]): Boolean[1] { false; }
+function test::caller(): Boolean[1] {
+    let c = myCast(1, @Integer);
+    g($c);
+}
+";
+    let model = compile_with_imports(&[source], &[]).expect("should compile");
+    let target = dispatch_target(&model, &["test", "caller__Boolean_1_"]);
+    assert!(
+        target.starts_with("g_Integer_1_"),
+        "generic substitution should reveal $c's concrete type (Integer), got {target}"
+    );
+}
+
+#[test]
+fn dispatch_generic_mult_substitution_toone() {
+    // `$x->myToOne()` substitutes [0..1] → [1]. Dispatch sees concrete [1]
+    // and picks the f([1]) overload.
+    let source = r"
+###Pure
+native function test::myToOne<T>(x: T[0..1]): T[1];
+function test::f(x: String[1]): Boolean[1] { true; }
+function test::f(x: String[0..1]): Boolean[1] { false; }
+function test::caller(s: String[0..1]): Boolean[1] { f($s->myToOne()); }
+";
+    let model = compile_with_imports(&[source], &[]).expect("should compile");
+    let target = dispatch_target(&model, &["test", "caller_String_$0_1$__Boolean_1_"]);
+    assert!(
+        target.starts_with("f_String_1_"),
+        "myToOne should substitute [0..1] to [1], got {target}"
+    );
+}
+
+#[test]
+fn dispatch_root_identifier_resolves() {
+    // `Root` should alias the root package. If it doesn't resolve, the
+    // compile errors out. The compile succeeding is the assertion.
+    let source = r"
+###Pure
+native function test::accept(p: Any[1]): Boolean[1];
+function test::caller(): Boolean[1] { accept(Root); }
+";
+    let _model = compile_with_imports(&[source], &[]).expect("Root should resolve");
 }
 
 #[test]

@@ -113,7 +113,9 @@ fn validate_model(
                 Element::Profile(_) => profiles += 1,
                 Element::Measure(_) => measures += 1,
                 Element::Unit(_) => units += 1,
-                Element::PrimitiveType(_) | Element::PackageableMultiplicity(_) => {} // bootstrap only
+                Element::PrimitiveType(_)
+                | Element::PackageableMultiplicity(_)
+                | Element::Package(_) => {} // bootstrap only
             }
         }
     }

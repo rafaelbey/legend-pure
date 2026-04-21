@@ -110,29 +110,10 @@ populated from three sources:
 
 ## Scoring Algorithm
 
-Each candidate function is scored per-parameter, then scores are summed.
-Incompatible candidates are eliminated. Highest total score wins.
-
-### Type Scoring
-
-| Condition | Score |
-|---|---|
-| Exact type match (`arg == param`) | +3 |
-| Subtype match (`is_subtype(arg, param)`) | +1 |
-| Generic/Any param (always compatible) | +0 |
-| Incompatible type | **Eliminate** |
-
-### Multiplicity Scoring
-
-| Condition | Score |
-|---|---|
-| Exact match (`arg_mult == param_mult`) | +4 |
-| Compatible, param is `[1]` | +4 (specificity) |
-| Compatible, param is `[0..1]` | +3 |
-| Compatible, param is `[1..*]` | +2 |
-| Compatible, param is `[*]` | +1 |
-| Unknown arg mult — still uses specificity | +specificity |
-| Incompatible (arg range ⊄ param range) | **Eliminate** |
+See [DISPATCH_ENGINE.md](./DISPATCH_ENGINE.md) for the authoritative scoring
+table and the five-phase narrowing algorithm. `narrow_candidates_by_type`
+in `resolve.rs` is the implementation; this doc is a higher-level overview
+and should not re-state the numeric scores (they've drifted once already).
 
 ### Multiplicity Compatibility
 
@@ -156,29 +137,14 @@ PrimitiveType elements. `Integer → Number → Any` is a valid chain.
 | Subtype hierarchy walk | ✅ Done | `is_subtype` via `super_types` |
 | Variable type tracking | ✅ Done | Params, lets, lambdas |
 | Narrowest-match wins | ✅ Done | Uncapped specificity scoring |
-| Generic params (T, V) | ⚠️ Compromise | Treated as `Any` — always matches |
-| Generic unification | 🔲 Deferred | Propagate `Z` across params |
+| Generic type substitution | ✅ Done | `T` bound from arg types at call site |
+| Generic multiplicity substitution | ✅ Done | `m` bound from arg mults at call site |
+| Variable multiplicity mangling | ✅ Done | `Variable("m")` preserves name in mangled FQN |
+| Full generic unification | 🔲 Deferred | Multi-arg `Z` propagation across signatures |
 | Lambda param inference | 🔲 Deferred | Infer from `Function<{...}>` type |
 | Numeric coercion | 🔲 Deferred | Implicit widening `Integer → Float` |
 | Return type influence | 🔲 Deferred | Expected return type narrows |
 
-## Current Error Counts
-
-```
-Total errors: 243  (down from 538, 55% reduction)
-  161 AmbiguousImport
-   75 UnresolvedElement
-    6 ParseFailure
-    1 DuplicateElement
-```
-
-Top remaining ambiguous:
-```
-  30 elementToPath  — M3 metaclass type (Type vs PackageableElement vs Function<Any>)
-  29 dynamicNew     — M3 metaclass type (Class<Any> vs GenericType)
-  21 map            — generic multiplicity param (T[m] vs T[*] vs T[0..1])
-  12 assertEquals   — message overloads (String vs Function vs format)
-  10 assert         — message overloads
-   8 abs            — same-type overloads with multiplicity variants
-   8 plus           — cross-package (math vs string)
-```
+Platform compile: **0 errors** on
+`legend-pure-core/legend-pure-m3-core/src/main/resources/platform/pure/`
+(236 source files, 1338 elements).

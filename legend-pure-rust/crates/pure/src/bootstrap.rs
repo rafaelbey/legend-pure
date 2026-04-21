@@ -56,12 +56,12 @@ pub const BOOTSTRAP_CHUNK_ID: u16 = 0;
 // -- Type lattice --
 
 /// `Any` — the top type. Everything is a subtype of `Any`.
-pub const ANY_ID: ElementId = ElementId {
+pub const ANY_ID: ElementId = ElementId::InstanceId {
     chunk_id: 0,
     local_idx: 0,
 };
 /// `Nil` — the bottom type. Subtype of everything. Type of `[]`.
-pub const NIL_ID: ElementId = ElementId {
+pub const NIL_ID: ElementId = ElementId::InstanceId {
     chunk_id: 0,
     local_idx: 1,
 };
@@ -69,22 +69,22 @@ pub const NIL_ID: ElementId = ElementId {
 // -- Direct children of Any --
 
 /// `String` — extends `Any`.
-pub const STRING_ID: ElementId = ElementId {
+pub const STRING_ID: ElementId = ElementId::InstanceId {
     chunk_id: 0,
     local_idx: 2,
 };
 /// `Boolean` — extends `Any`.
-pub const BOOLEAN_ID: ElementId = ElementId {
+pub const BOOLEAN_ID: ElementId = ElementId::InstanceId {
     chunk_id: 0,
     local_idx: 3,
 };
 /// `Byte` — extends `Any`.
-pub const BYTE_ID: ElementId = ElementId {
+pub const BYTE_ID: ElementId = ElementId::InstanceId {
     chunk_id: 0,
     local_idx: 4,
 };
 /// `StrictTime` — extends `Any`.
-pub const STRICT_TIME_ID: ElementId = ElementId {
+pub const STRICT_TIME_ID: ElementId = ElementId::InstanceId {
     chunk_id: 0,
     local_idx: 5,
 };
@@ -92,22 +92,22 @@ pub const STRICT_TIME_ID: ElementId = ElementId {
 // -- Numeric hierarchy: Number → Any --
 
 /// `Number` — abstract numeric supertype. Extends `Any`.
-pub const NUMBER_ID: ElementId = ElementId {
+pub const NUMBER_ID: ElementId = ElementId::InstanceId {
     chunk_id: 0,
     local_idx: 6,
 };
 /// `Integer` — extends `Number`.
-pub const INTEGER_ID: ElementId = ElementId {
+pub const INTEGER_ID: ElementId = ElementId::InstanceId {
     chunk_id: 0,
     local_idx: 7,
 };
 /// `Float` — extends `Number`.
-pub const FLOAT_ID: ElementId = ElementId {
+pub const FLOAT_ID: ElementId = ElementId::InstanceId {
     chunk_id: 0,
     local_idx: 8,
 };
 /// `Decimal` — extends `Number`.
-pub const DECIMAL_ID: ElementId = ElementId {
+pub const DECIMAL_ID: ElementId = ElementId::InstanceId {
     chunk_id: 0,
     local_idx: 9,
 };
@@ -115,17 +115,17 @@ pub const DECIMAL_ID: ElementId = ElementId {
 // -- Temporal hierarchy: Date → Any --
 
 /// `Date` — abstract temporal supertype. Extends `Any`.
-pub const DATE_ID: ElementId = ElementId {
+pub const DATE_ID: ElementId = ElementId::InstanceId {
     chunk_id: 0,
     local_idx: 10,
 };
 /// `StrictDate` — date without time. Extends `Date`.
-pub const STRICT_DATE_ID: ElementId = ElementId {
+pub const STRICT_DATE_ID: ElementId = ElementId::InstanceId {
     chunk_id: 0,
     local_idx: 11,
 };
 /// `DateTime` — date with time. Extends `Date`.
-pub const DATE_TIME_ID: ElementId = ElementId {
+pub const DATE_TIME_ID: ElementId = ElementId::InstanceId {
     chunk_id: 0,
     local_idx: 12,
 };
@@ -158,7 +158,7 @@ pub const DATE_TIME_ID: ElementId = ElementId {
 ///
 /// Nil (bottom, Class)       ← local_idx 1
 /// ```
-const BOOTSTRAP_PRIMITIVES: &[(&str, ElementId, ElementId)] = &[
+pub(crate) const BOOTSTRAP_PRIMITIVES: &[(&str, ElementId, ElementId)] = &[
     // Direct children of Any
     ("String", STRING_ID, ANY_ID),
     ("Boolean", BOOLEAN_ID, ANY_ID),
@@ -235,8 +235,8 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
         stereotypes: vec![],
         tagged_values: vec![],
     }));
-    debug_assert_eq!(any_node, ANY_ID.local_idx);
-    debug_assert_eq!(any_elem, ANY_ID.local_idx);
+    debug_assert_eq!(any_node, ANY_ID.local_idx());
+    debug_assert_eq!(any_elem, ANY_ID.local_idx());
 
     // -- Slot 1: Nil (Class, bottom type) --
     let nil_node = alloc_node("Nil");
@@ -249,8 +249,8 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
         stereotypes: vec![],
         tagged_values: vec![],
     }));
-    debug_assert_eq!(nil_node, NIL_ID.local_idx);
-    debug_assert_eq!(nil_elem, NIL_ID.local_idx);
+    debug_assert_eq!(nil_node, NIL_ID.local_idx());
+    debug_assert_eq!(nil_elem, NIL_ID.local_idx());
 
     // -- Slots 2..12: Primitive types --
     for &(name, expected_id, super_type) in BOOTSTRAP_PRIMITIVES {
@@ -259,8 +259,8 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
             super_type: Some(super_type),
         }));
 
-        debug_assert_eq!(actual_idx, expected_id.local_idx);
-        debug_assert_eq!(elem_idx, expected_id.local_idx);
+        debug_assert_eq!(actual_idx, expected_id.local_idx());
+        debug_assert_eq!(elem_idx, expected_id.local_idx());
     }
 
     // -- M3 metamodel elements (slots 13..): parsed from m3.pure --
@@ -278,6 +278,42 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
         nodes,
         elements,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Metatype lookup
+// ---------------------------------------------------------------------------
+
+/// Returns the M3 metatype element for a compiled element.
+///
+/// Used by dispatch to type bare element references: `ClassWithDefault` as a
+/// value has metatype `meta::pure::metamodel::type::Class`; `MyEnum` has
+/// metatype `Enumeration`; and so on. Unifies the lookup that previously
+/// lived in both `resolve.rs` and `lower.rs` with divergent element-kind
+/// coverage.
+///
+/// The M3 metatypes live in packages parsed from `m3.pure` at bootstrap, so
+/// the lookup is a `resolve_by_path` call rather than a compile-time constant.
+#[must_use]
+pub fn metatype_of(model: &crate::model::PureModel, element: &Element) -> Option<ElementId> {
+    let path: &[&str] = match element {
+        Element::Class(_) => &["meta", "pure", "metamodel", "type", "Class"],
+        Element::Enumeration(_) => &["meta", "pure", "metamodel", "type", "Enumeration"],
+        Element::PrimitiveType(_) => &["meta", "pure", "metamodel", "type", "PrimitiveType"],
+        Element::Function(_) => &[
+            "meta",
+            "pure",
+            "metamodel",
+            "function",
+            "ConcreteFunctionDefinition",
+        ],
+        Element::Measure(_) => &["meta", "pure", "metamodel", "type", "Measure"],
+        Element::Unit(_) => &["meta", "pure", "metamodel", "type", "Unit"],
+        Element::Package(_) => &["meta", "pure", "metamodel", "PackageableElement"],
+        _ => return None,
+    };
+    let segments: Vec<SmolStr> = path.iter().map(|&s| SmolStr::new(s)).collect();
+    model.resolve_by_path(&segments)
 }
 
 /// Registers M3 metamodel elements in their canonical packages.
@@ -333,30 +369,36 @@ mod tests {
     #[test]
     fn bootstrap_ids_match_names() {
         let chunk = create_bootstrap_chunk(PackageId(0));
-        assert_eq!(chunk.nodes.get(ANY_ID.local_idx).name, "Any");
-        assert_eq!(chunk.nodes.get(NIL_ID.local_idx).name, "Nil");
-        assert_eq!(chunk.nodes.get(STRING_ID.local_idx).name, "String");
-        assert_eq!(chunk.nodes.get(BOOLEAN_ID.local_idx).name, "Boolean");
-        assert_eq!(chunk.nodes.get(BYTE_ID.local_idx).name, "Byte");
-        assert_eq!(chunk.nodes.get(STRICT_TIME_ID.local_idx).name, "StrictTime");
-        assert_eq!(chunk.nodes.get(NUMBER_ID.local_idx).name, "Number");
-        assert_eq!(chunk.nodes.get(INTEGER_ID.local_idx).name, "Integer");
-        assert_eq!(chunk.nodes.get(FLOAT_ID.local_idx).name, "Float");
-        assert_eq!(chunk.nodes.get(DECIMAL_ID.local_idx).name, "Decimal");
-        assert_eq!(chunk.nodes.get(DATE_ID.local_idx).name, "Date");
-        assert_eq!(chunk.nodes.get(STRICT_DATE_ID.local_idx).name, "StrictDate");
-        assert_eq!(chunk.nodes.get(DATE_TIME_ID.local_idx).name, "DateTime");
+        assert_eq!(chunk.nodes.get(ANY_ID.local_idx()).name, "Any");
+        assert_eq!(chunk.nodes.get(NIL_ID.local_idx()).name, "Nil");
+        assert_eq!(chunk.nodes.get(STRING_ID.local_idx()).name, "String");
+        assert_eq!(chunk.nodes.get(BOOLEAN_ID.local_idx()).name, "Boolean");
+        assert_eq!(chunk.nodes.get(BYTE_ID.local_idx()).name, "Byte");
+        assert_eq!(
+            chunk.nodes.get(STRICT_TIME_ID.local_idx()).name,
+            "StrictTime"
+        );
+        assert_eq!(chunk.nodes.get(NUMBER_ID.local_idx()).name, "Number");
+        assert_eq!(chunk.nodes.get(INTEGER_ID.local_idx()).name, "Integer");
+        assert_eq!(chunk.nodes.get(FLOAT_ID.local_idx()).name, "Float");
+        assert_eq!(chunk.nodes.get(DECIMAL_ID.local_idx()).name, "Decimal");
+        assert_eq!(chunk.nodes.get(DATE_ID.local_idx()).name, "Date");
+        assert_eq!(
+            chunk.nodes.get(STRICT_DATE_ID.local_idx()).name,
+            "StrictDate"
+        );
+        assert_eq!(chunk.nodes.get(DATE_TIME_ID.local_idx()).name, "DateTime");
     }
 
     #[test]
     fn any_and_nil_are_classes() {
         let chunk = create_bootstrap_chunk(PackageId(0));
         assert!(matches!(
-            chunk.elements.get(ANY_ID.local_idx),
+            chunk.elements.get(ANY_ID.local_idx()),
             Element::Class(_)
         ));
         assert!(matches!(
-            chunk.elements.get(NIL_ID.local_idx),
+            chunk.elements.get(NIL_ID.local_idx()),
             Element::Class(_)
         ));
     }
@@ -366,9 +408,12 @@ mod tests {
         let chunk = create_bootstrap_chunk(PackageId(0));
         for &(_, id, _) in BOOTSTRAP_PRIMITIVES {
             assert!(
-                matches!(chunk.elements.get(id.local_idx), Element::PrimitiveType(_)),
+                matches!(
+                    chunk.elements.get(id.local_idx()),
+                    Element::PrimitiveType(_)
+                ),
                 "{} should be PrimitiveType",
-                chunk.nodes.get(id.local_idx).name
+                chunk.nodes.get(id.local_idx()).name
             );
         }
     }
@@ -378,20 +423,20 @@ mod tests {
         let chunk = create_bootstrap_chunk(PackageId(0));
 
         // Any is a Class with no supertypes
-        match chunk.elements.get(ANY_ID.local_idx) {
+        match chunk.elements.get(ANY_ID.local_idx()) {
             Element::Class(c) => assert!(c.super_types.is_empty()),
             _ => panic!("Any should be a Class"),
         }
 
         // Nil is a Class with no supertypes (bottom handled by type checker)
-        match chunk.elements.get(NIL_ID.local_idx) {
+        match chunk.elements.get(NIL_ID.local_idx()) {
             Element::Class(c) => assert!(c.super_types.is_empty()),
             _ => panic!("Nil should be a Class"),
         }
 
         // Helper: extract super_type from a PrimitiveType
         let get_super = |id: ElementId| -> ElementId {
-            match chunk.elements.get(id.local_idx) {
+            match chunk.elements.get(id.local_idx()) {
                 Element::PrimitiveType(pt) => {
                     pt.super_type.expect("primitive should have a super_type")
                 }
@@ -420,7 +465,7 @@ mod tests {
     #[test]
     fn bootstrap_source_info_is_synthetic() {
         let chunk = create_bootstrap_chunk(PackageId(0));
-        let node = chunk.nodes.get(STRING_ID.local_idx);
+        let node = chunk.nodes.get(STRING_ID.local_idx());
         assert_eq!(node.source_info.source.as_str(), "<bootstrap>");
         assert_eq!(node.source_info.start_line, 0);
     }

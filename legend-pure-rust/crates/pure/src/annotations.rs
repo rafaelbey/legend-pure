@@ -66,7 +66,7 @@ mod tests {
     #[test]
     fn stereotype_ref_construction() {
         let s = StereotypeRef {
-            profile: ElementId {
+            profile: ElementId::InstanceId {
                 chunk_id: 0,
                 local_idx: 10,
             },
@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn tagged_value_ref_construction() {
         let tv = TaggedValueRef {
-            profile: ElementId {
+            profile: ElementId::InstanceId {
                 chunk_id: 0,
                 local_idx: 10,
             },
