@@ -776,8 +776,11 @@ fn infer_type_from_valuespec(
                     let bindings =
                         infer_generic_bindings(&f.parameters, arguments, model, var_types);
                     let substituted = substitute_type(&f.return_type, &bindings.ty);
-                    if let crate::types::TypeExpr::Named { element, .. } = &substituted {
-                        return Some(*element);
+                    match &substituted {
+                        crate::types::TypeExpr::Named { element, .. } => return Some(*element),
+                        // Unbound type variable — widen to Any (type unknown at this call site).
+                        crate::types::TypeExpr::Generic(_) => return Some(bootstrap::ANY_ID),
+                        _ => {}
                     }
                 }
             }
