@@ -300,6 +300,13 @@ pub fn metatype_of(model: &crate::model::PureModel, element: &Element) -> Option
         Element::Class(_) => &["meta", "pure", "metamodel", "type", "Class"],
         Element::Enumeration(_) => &["meta", "pure", "metamodel", "type", "Enumeration"],
         Element::PrimitiveType(_) => &["meta", "pure", "metamodel", "type", "PrimitiveType"],
+        Element::Function(f) if f.is_native => &[
+            "meta",
+            "pure",
+            "metamodel",
+            "function",
+            "NativeFunctionDefinition",
+        ],
         Element::Function(_) => &[
             "meta",
             "pure",
@@ -309,7 +316,16 @@ pub fn metatype_of(model: &crate::model::PureModel, element: &Element) -> Option
         ],
         Element::Measure(_) => &["meta", "pure", "metamodel", "type", "Measure"],
         Element::Unit(_) => &["meta", "pure", "metamodel", "type", "Unit"],
-        Element::Package(_) => &["meta", "pure", "metamodel", "PackageableElement"],
+        Element::Profile(_) => &["meta", "pure", "metamodel", "extension", "Profile"],
+        Element::Association(_) => &["meta", "pure", "metamodel", "relationship", "Association"],
+        Element::PackageableMultiplicity(_) => &[
+            "meta",
+            "pure",
+            "metamodel",
+            "multiplicity",
+            "PackageableMultiplicity",
+        ],
+        Element::Package(_) => &["meta", "pure", "metamodel", "type", "Package"],
         _ => return None,
     };
     let segments: Vec<SmolStr> = path.iter().map(|&s| SmolStr::new(s)).collect();
