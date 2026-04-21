@@ -854,9 +854,83 @@ fn infer_type_from_valuespec(
             // vs `dynamicNew(GenericType[1], ...)`.
             crate::bootstrap::metatype_of(model, model.get_element(*element))
         }
-        // Property access, new, etc. — type unknown
+        ExprKind::PropertyAccess { target, property }
+        | ExprKind::QualifiedPropertyAccess {
+            target, property, ..
+        } => {
+            // Resolve the property's return type, substituting class-level
+            // generic parameters from the receiver's type arguments.
+            let target_eid = infer_type_from_valuespec(target, model, var_types)?;
+            let receiver_type_args = extract_receiver_type_args(target, var_types);
+            let element = model.get_element(target_eid);
+            let (properties, qprops, type_params): (&[_], &[_], &[smol_str::SmolStr]) =
+                match element {
+                    Element::Class(c) => {
+                        (&c.properties, &c.qualified_properties, &c.type_parameters)
+                    }
+                    _ => return None,
+                };
+            // Search simple properties first, then qualified properties.
+            let prop_type: Option<&crate::types::TypeExpr> = properties
+                .iter()
+                .find(|p| p.name == *property)
+                .map(|p| &p.type_expr)
+                .or_else(|| {
+                    qprops
+                        .iter()
+                        .find(|p| p.name == *property)
+                        .map(|p| &p.return_type)
+                });
+            let prop_ty = prop_type?;
+            // Substitute class type params (T, U, …) from receiver's args.
+            let resolved = substitute_class_generics(prop_ty, type_params, &receiver_type_args);
+            match resolved {
+                crate::types::TypeExpr::Named { element, .. } => Some(element),
+                crate::types::TypeExpr::Generic(_) => Some(crate::bootstrap::ANY_ID),
+                _ => None,
+            }
+        }
         _ => None,
     }
+}
+
+/// Extracts the type arguments from the receiver expression's stored type.
+/// Only handles `Variable` — the most common receiver. Other receivers
+/// (chained calls, property chains) return an empty vec; callers treat
+/// unknown type args the same as no type args (substitution is a no-op).
+fn extract_receiver_type_args(
+    target: &crate::types::ValueSpec,
+    var_types: &VarTypes,
+) -> Vec<crate::types::TypeExpr> {
+    use crate::types::{ExprKind, TypeExpr};
+    match target.kind.as_ref() {
+        ExprKind::Variable { name } => {
+            if let Some((TypeExpr::Named { type_arguments, .. }, _)) = var_types.get(name) {
+                return type_arguments.clone();
+            }
+            vec![]
+        }
+        _ => vec![],
+    }
+}
+
+/// Rewrites a property `TypeExpr` by substituting class-level type parameters
+/// with the receiver's concrete type arguments.
+///
+/// `type_params` is the class's declared parameter list (e.g., `["T", "U"]`).
+/// `type_args` is the concrete arguments at the use site (e.g., `[String, Integer]`).
+/// Position-based: `type_params[i]` maps to `type_args[i]`.
+fn substitute_class_generics(
+    ty: &crate::types::TypeExpr,
+    type_params: &[smol_str::SmolStr],
+    type_args: &[crate::types::TypeExpr],
+) -> crate::types::TypeExpr {
+    let bindings: HashMap<SmolStr, crate::types::TypeExpr> = type_params
+        .iter()
+        .zip(type_args.iter())
+        .map(|(name, te)| (name.clone(), te.clone()))
+        .collect();
+    substitute_type(ty, &bindings)
 }
 
 /// Checks if `arg_type` is compatible with `param_type` in the type hierarchy.
