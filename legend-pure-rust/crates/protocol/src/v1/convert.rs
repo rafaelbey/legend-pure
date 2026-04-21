@@ -586,6 +586,22 @@ pub fn convert_expression_typed(
         // -- Island grammar: graph fetch → classInstance --
         Expression::Island(island) => convert_island_expression(island),
 
+        // -- Unit instance: `5 RomanLength~Pes` → newUnit(unit, value) --
+        Expression::UnitInstance(e) => {
+            let unit_ref =
+                ValueSpecification::PackageableElementPtr(ProtocolPackageableElementPtr {
+                    full_path: e.unit.to_string(),
+                    source_information: source_information(&e.source_info),
+                });
+            let value = convert_expression_typed(&e.value);
+            ValueSpecification::Func(AppliedFunction {
+                function: "newUnit".to_string(),
+                f_control: None,
+                parameters: vec![unit_ref, value],
+                source_information: source_information(&e.source_info),
+            })
+        }
+
         // -- Grouping (transparent) --
         Expression::Group(inner) => convert_expression_typed(inner),
     }

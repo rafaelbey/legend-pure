@@ -105,6 +105,12 @@ pub enum Element {
     /// in `meta::pure::metamodel::multiplicity`. They carry the actual
     /// multiplicity bounds they represent.
     PackageableMultiplicity(crate::types::Multiplicity),
+    /// A package (Package extends PackageableElement in M3).
+    ///
+    /// The actual package data (name, children) lives in `global_packages`.
+    /// This variant carries the `PackageId` so `get_element` works uniformly
+    /// for all `ElementId` variants.
+    Package(PackageId),
 }
 
 // ---------------------------------------------------------------------------
@@ -212,6 +218,11 @@ pub struct PureModel {
     /// Chunked element storage. Chunk 0 = bootstrap.
     pub chunks: Vec<ModelChunk>,
 
+    /// Backing `Element::Package` values parallel to `global_packages`.
+    /// No data duplication — just `Element::Package(PackageId)` tags
+    /// so `get_element` can return `&Element` uniformly.
+    package_elements: Vec<Element>,
+
     /// Extension arenas for plugin element types.
     pub extension_arenas: HashMap<TypeId, Box<dyn Any>>,
 
@@ -235,6 +246,7 @@ impl PureModel {
             global_packages,
             root_package: PackageId(root_idx),
             chunks: Vec::new(),
+            package_elements: vec![Element::Package(PackageId(root_idx))],
             extension_arenas: HashMap::new(),
             derived: DerivedIndexes::default(),
         }
@@ -242,24 +254,41 @@ impl PureModel {
 
     /// Returns the element node for the given ID.
     ///
+    /// For `Package` IDs, panics — use [`element_name`](Self::element_name)
+    /// or [`get_package`](Self::get_package) instead.
+    ///
     /// # Panics
     ///
-    /// Panics if the chunk or index is out of bounds.
+    /// Panics if the ID is a `Package` or if the chunk/index is out of bounds.
     #[must_use]
     pub fn get_node(&self, id: ElementId) -> &ElementNode {
-        let chunk = &self.chunks[id.chunk_id as usize];
-        chunk.nodes.get(id.local_idx)
+        match id {
+            ElementId::InstanceId {
+                chunk_id,
+                local_idx,
+            } => self.chunks[chunk_id as usize].nodes.get(local_idx),
+            ElementId::Package(_) => {
+                panic!("get_node called on Package {id} — use element_name or get_package")
+            }
+        }
     }
 
     /// Returns the typed element for the given ID.
     ///
+    /// Works uniformly for both chunk elements and packages.
+    ///
     /// # Panics
     ///
-    /// Panics if the chunk or index is out of bounds.
+    /// Panics if the chunk/index is out of bounds.
     #[must_use]
     pub fn get_element(&self, id: ElementId) -> &Element {
-        let chunk = &self.chunks[id.chunk_id as usize];
-        chunk.elements.get(id.local_idx)
+        match id {
+            ElementId::InstanceId {
+                chunk_id,
+                local_idx,
+            } => self.chunks[chunk_id as usize].elements.get(local_idx),
+            ElementId::Package(pkg_id) => &self.package_elements[pkg_id.0 as usize],
+        }
     }
 
     /// Returns the typed element for the given ID, or `None` if out of bounds.
@@ -267,13 +296,30 @@ impl PureModel {
     /// Use this when the ID might reference an unresolved or invalid element.
     #[must_use]
     pub fn try_get_element(&self, id: ElementId) -> Option<&Element> {
-        self.chunks.get(id.chunk_id as usize).and_then(|chunk| {
-            if id.local_idx < chunk.elements.len() {
-                Some(chunk.elements.get(id.local_idx))
-            } else {
-                None
-            }
-        })
+        match id {
+            ElementId::InstanceId {
+                chunk_id,
+                local_idx,
+            } => self.chunks.get(chunk_id as usize).and_then(|chunk| {
+                if local_idx < chunk.elements.len() {
+                    Some(chunk.elements.get(local_idx))
+                } else {
+                    None
+                }
+            }),
+            ElementId::Package(pkg_id) => self.package_elements.get(pkg_id.0 as usize),
+        }
+    }
+
+    /// Returns the name of any element, including packages.
+    ///
+    /// Preferred over `get_node(id).name` when the ID might be a Package.
+    #[must_use]
+    pub fn element_name(&self, id: ElementId) -> &SmolStr {
+        match id {
+            ElementId::InstanceId { .. } => &self.get_node(id).name,
+            ElementId::Package(pkg_id) => &self.global_packages.get(pkg_id.0).name,
+        }
     }
 
     /// Returns the package for the given ID.
@@ -293,7 +339,7 @@ impl PureModel {
 
         for chunk in &self.chunks {
             for (local_idx, element) in chunk.elements.iter() {
-                let id = ElementId {
+                let id = ElementId::InstanceId {
                     chunk_id: chunk.chunk_id,
                     local_idx,
                 };
@@ -335,7 +381,8 @@ impl PureModel {
                     | Element::Measure(_)
                     | Element::Unit(_)
                     | Element::PrimitiveType(_)
-                    | Element::PackageableMultiplicity(_) => {}
+                    | Element::PackageableMultiplicity(_)
+                    | Element::Package(_) => {}
                 }
             }
         }
@@ -395,6 +442,7 @@ impl PureModel {
                     children_packages: Vec::new(),
                     children_elements: Vec::new(),
                 }));
+                self.package_elements.push(Element::Package(new_id));
                 self.global_packages
                     .get_mut(current.0)
                     .children_packages
@@ -471,11 +519,22 @@ impl PureModel {
     pub fn resolve_in_package(&self, pkg: &AstPackage, name: &SmolStr) -> Option<ElementId> {
         let pkg_id = self.resolve_package(pkg)?;
         let model_pkg = self.get_package(pkg_id);
-        model_pkg
+
+        // Check child elements first
+        if let Some(&eid) = model_pkg
             .children_elements
             .iter()
-            .find(|&&eid| self.get_node(eid).name == *name)
-            .copied()
+            .find(|&&eid| self.element_name(eid) == name)
+        {
+            return Some(eid);
+        }
+
+        // Fall back to child packages (Package extends PackageableElement in M3)
+        model_pkg
+            .children_packages
+            .iter()
+            .find(|&&child_id| self.global_packages.get(child_id.0).name == *name)
+            .map(|&child_id| ElementId::Package(child_id))
     }
 
     /// Finds all function elements in a package matching a simple name.
@@ -648,7 +707,7 @@ mod tests {
             .alloc(Element::PrimitiveType(PrimitiveType { super_type: None }));
         model.chunks.push(chunk);
 
-        let id = ElementId {
+        let id = ElementId::InstanceId {
             chunk_id: 0,
             local_idx: 0,
         };

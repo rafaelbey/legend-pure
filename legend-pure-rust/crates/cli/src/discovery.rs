@@ -90,6 +90,12 @@ fn is_ignored(path: &Path) -> bool {
         }
     }
 
+    // Skip m3.pure — it's an M3 serialization format handled by the
+    // bootstrap parser, not compilable Pure grammar.
+    if path.file_name().is_some_and(|n| n == "m3.pure") {
+        return true;
+    }
+
     false
 }
 

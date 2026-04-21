@@ -656,7 +656,11 @@ fn append_mult(b: &mut String, m: &Multiplicity) {
         Multiplicity::ZeroOrOne => b.push_str("_$0_1$_"),
         Multiplicity::ZeroOrMany => b.push_str("_MANY_"),
         Multiplicity::OneOrMany => b.push_str("_$1_MANY$_"),
-        Multiplicity::Variable(_) => b.push_str("_MANY_"),
+        Multiplicity::Variable(name) => {
+            b.push('_');
+            b.push_str(name);
+            b.push('_');
+        }
         Multiplicity::Range { lower, upper } => match upper {
             None => {
                 if *lower == 0 {

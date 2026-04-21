@@ -95,6 +95,8 @@ pub enum Expression {
     NewInstance(NewInstanceExpr),
     /// Copy with overrides: `^$var(prop='new value')`.
     Copy(CopyExpr),
+    /// Unit instance: `5 RomanLength~Pes` — a number with a unit.
+    UnitInstance(UnitInstanceExpr),
 
     // -- Column specification (TDS) --
     /// Column builder expression: `~col` or `~[col1, col2]`.
@@ -140,6 +142,7 @@ impl Spanned for Expression {
             Self::Copy(e) => &e.source_info,
             Self::Column(e) => e.source_info(),
             Self::Island(e) => &e.source_info,
+            Self::UnitInstance(e) => &e.source_info,
             Self::Group(e) => e.source_info(),
         }
     }
@@ -619,6 +622,21 @@ pub struct KeyValuePair {
     pub source_info: SourceInfo,
 }
 
+/// A unit instance expression: `5 RomanLength~Pes`.
+///
+/// In Pure, a numeric literal followed by a `Measure~Unit` reference
+/// creates a value of that unit. For example, `10.5D RomanLength~Cubitum`
+/// represents 10.5 of the unit Cubitum.
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
+pub struct UnitInstanceExpr {
+    /// The numeric value expression (integer, float, or decimal literal).
+    pub value: Box<Expression>,
+    /// The unit reference path (e.g., `RomanLength~Pes`).
+    pub unit: PackageableElementPtr,
+    /// Source location.
+    pub source_info: SourceInfo,
+}
+
 // ---------------------------------------------------------------------------
 // Column specification
 // ---------------------------------------------------------------------------
@@ -695,6 +713,7 @@ pub trait ExpressionVisitor {
             Expression::Column(e) => self.visit_column(e),
             Expression::PackageableElementRef(e) => self.visit_element_ref(e),
             Expression::Island(e) => self.visit_island(e),
+            Expression::UnitInstance(e) => self.visit_unit_instance(e),
             Expression::Group(e) => self.visit(e),
         }
     }
@@ -751,6 +770,8 @@ pub trait ExpressionVisitor {
     fn visit_element_ref(&mut self, expr: &PackageableElementRef) {}
     /// Visit an island grammar expression.
     fn visit_island(&mut self, expr: &IslandExpression) {}
+    /// Visit a unit instance expression.
+    fn visit_unit_instance(&mut self, expr: &UnitInstanceExpr) {}
 }
 
 // ---------------------------------------------------------------------------

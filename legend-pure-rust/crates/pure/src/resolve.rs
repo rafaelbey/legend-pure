@@ -452,9 +452,8 @@ pub(crate) fn lower_multiplicity(m: &ast_type::Multiplicity) -> Multiplicity {
     match m {
         ast_type::Multiplicity::ZeroOrOne => Multiplicity::ZeroOrOne,
         ast_type::Multiplicity::PureOne => Multiplicity::PureOne,
-        ast_type::Multiplicity::ZeroOrMany | ast_type::Multiplicity::Variable(_) => {
-            Multiplicity::ZeroOrMany
-        }
+        ast_type::Multiplicity::ZeroOrMany => Multiplicity::ZeroOrMany,
+        ast_type::Multiplicity::Variable(name) => Multiplicity::Variable(name.clone()),
         ast_type::Multiplicity::OneOrMany => Multiplicity::OneOrMany,
         ast_type::Multiplicity::Range { lower, upper } => Multiplicity::Range {
             lower: *lower,
@@ -534,6 +533,16 @@ pub(crate) fn resolve_element_ptr(
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<ElementId> {
+    // Handle root package literal `::` — empty name with no package
+    if ptr.name().is_empty() && ptr.package().is_none() {
+        return Some(ElementId::Package(ctx.model.root_package));
+    }
+
+    // Handle `Root` as an alias for the root package (Java `M3Paths.Root`).
+    if ptr.package().is_none() && ptr.name() == "Root" {
+        return Some(ElementId::Package(ctx.model.root_package));
+    }
+
     if let Some(pkg) = ptr.package() {
         // Qualified — resolve directly via the AST Package tree
         if let Some(id) = ctx.model.resolve_in_package(pkg, ptr.name()) {
@@ -549,7 +558,28 @@ pub(crate) fn resolve_element_ptr(
         }
     } else {
         // Unqualified — go through import-aware resolution
-        resolve_unqualified_cached(ptr.name(), source_info, ctx, errors)
+        let result = resolve_unqualified_cached(ptr.name(), source_info, ctx, errors);
+        if result.is_some() {
+            return result;
+        }
+
+        // Fallback: try resolving as a child package of root.
+        // In Pure, packages are PackageableElements and can be used as values
+        // (e.g., `elementPath(meta)`, `[::, meta, meta::pure]`).
+        let root = ctx.model.get_package(ctx.model.root_package);
+        for &child_id in &root.children_packages {
+            if ctx.model.get_package(child_id).name == *ptr.name() {
+                // Remove the error that resolve_unqualified_cached added
+                if errors.last().map_or(false, |e| {
+                    matches!(&e.kind, CompilationErrorKind::UnresolvedElement { path } if path == ptr.name())
+                }) {
+                    errors.pop();
+                }
+                return Some(ElementId::Package(child_id));
+            }
+        }
+
+        None
     }
 }
 
@@ -724,18 +754,73 @@ fn infer_type_from_valuespec(
             }
         }
         ExprKind::Lambda { .. } => None, // FunctionType — no ElementId
-        ExprKind::FunctionCall { function, .. } => {
-            // Use the return type of the resolved function
-            function.and_then(|fid| {
-                if let Element::Function(f) = model.get_element(fid) {
-                    match &f.return_type {
-                        crate::types::TypeExpr::Named { element, .. } => Some(*element),
-                        _ => None,
+        ExprKind::TypeReference { type_expr } => {
+            // A `@Foo` expression is a type-token value. For dispatch,
+            // expose the wrapped type's element so `cast<T>(_, @Class<Any>)`
+            // can bind T to `Class<Any>` and surface the concrete element.
+            if let crate::types::TypeExpr::Named { element, .. } = type_expr {
+                Some(*element)
+            } else {
+                None
+            }
+        }
+        ExprKind::FunctionCall {
+            function,
+            function_name,
+            arguments,
+        } => {
+            // Use the return type of the resolved function, with generic
+            // type variables (`T`) bound from call-site arguments.
+            if let Some(fid) = function {
+                if let Element::Function(f) = model.get_element(*fid) {
+                    let bindings =
+                        infer_generic_bindings(&f.parameters, arguments, model, var_types);
+                    let substituted = substitute_type(&f.return_type, &bindings.ty);
+                    if let crate::types::TypeExpr::Named { element, .. } = &substituted {
+                        return Some(*element);
                     }
-                } else {
-                    None
                 }
-            })
+            }
+            // Well-known function return types — these operators always return
+            // a specific type regardless of resolution status.
+            match function_name.as_str() {
+                // Comparison/equality → Boolean
+                "equal" | "lessThan" | "lessThanEqual" | "greaterThan" | "greaterThanEqual"
+                | "is" | "in" | "contains" | "startsWith" | "endsWith" | "isEmpty"
+                | "isNotEmpty" => {
+                    return Some(bootstrap::BOOLEAN_ID);
+                }
+                // Logical → Boolean
+                "and" | "or" | "not" => return Some(bootstrap::BOOLEAN_ID),
+                // Assert family → Boolean
+                "assert" | "assertFalse" | "assertEquals" | "assertNotEquals"
+                | "assertNotEmpty" | "assertEmpty" | "assertSize" | "assertSameElements"
+                | "assertIs" | "assertIsNot" | "assertContains" | "assertNotContains"
+                | "assertNotSize" => {
+                    return Some(bootstrap::BOOLEAN_ID);
+                }
+                // String operations
+                "toString" | "format" | "toRepresentation" | "joinStrings" => {
+                    return Some(bootstrap::STRING_ID);
+                }
+                _ => {}
+            }
+            // `new(Class, name, keys)` → return type is the class itself
+            // `dynamicNew(Class, keys)` → same pattern
+            // `copy(src, keys)` → return type is the receiver
+            if matches!(function_name.as_str(), "new" | "dynamicNew") {
+                if let Some(first_arg) = arguments.first() {
+                    if let ExprKind::PackageableElementRef { element } = first_arg.kind.as_ref() {
+                        return Some(*element);
+                    }
+                }
+            }
+            // When the function is unresolved and there's no dedicated rule
+            // above, give up. The "fallback from first arg" heuristic that
+            // used to live here masked real dispatch bugs whenever a
+            // non-type-preserving function failed to resolve; generic
+            // substitution replaces it for resolved type-preserving calls.
+            None
         }
         ExprKind::Variable { name } => {
             // Look up declared type from function params / let / lambda
@@ -745,7 +830,28 @@ fn infer_type_from_valuespec(
             })
         }
         ExprKind::EnumValue { enum_element, .. } => Some(*enum_element),
-        // Property access, collection, etc. — type unknown
+        ExprKind::Collection { elements } => {
+            // Compute the LUB (least upper bound) of all element types.
+            // [1, 2, 3] → Integer, [1, 2.5] → Number, ["a", "b"] → String.
+            let mut lub: Option<ElementId> = None;
+            for elem in elements {
+                if let Some(elem_type) = infer_type_from_valuespec(elem, model, var_types) {
+                    lub = Some(match lub {
+                        None => elem_type,
+                        Some(current) => least_upper_bound(current, elem_type, model),
+                    });
+                }
+            }
+            lub
+        }
+        ExprKind::PackageableElementRef { element } => {
+            // Bare element ref has its M3 metatype — a Class value has
+            // metatype `meta::pure::metamodel::type::Class`, etc. Enables
+            // dispatch on overloads like `dynamicNew(Class<Any>[1], ...)`
+            // vs `dynamicNew(GenericType[1], ...)`.
+            crate::bootstrap::metatype_of(model, model.get_element(*element))
+        }
+        // Property access, new, etc. — type unknown
         _ => None,
     }
 }
@@ -819,6 +925,114 @@ fn is_subtype(child: ElementId, parent: ElementId, model: &crate::model::PureMod
     false
 }
 
+/// Computes the shortest distance (number of hops) from `child` to `parent`
+/// in the type hierarchy. Returns `None` if `child` is not a subtype of `parent`.
+fn type_distance(
+    child: ElementId,
+    parent: ElementId,
+    model: &crate::model::PureModel,
+) -> Option<usize> {
+    if child == parent {
+        return Some(0);
+    }
+
+    let element = model.get_element(child);
+    let super_types = match element {
+        Element::Class(c) => &c.super_types,
+        Element::PrimitiveType(p) => {
+            if let Some(sup) = p.super_type {
+                return type_distance(sup, parent, model).map(|d| d + 1);
+            }
+            return None;
+        }
+        _ => return None,
+    };
+
+    let mut min_dist: Option<usize> = None;
+    for st in super_types {
+        if let crate::types::TypeExpr::Named {
+            element: sup_eid, ..
+        } = st
+        {
+            if let Some(d) = type_distance(*sup_eid, parent, model) {
+                let dist = d + 1;
+                min_dist = Some(min_dist.map_or(dist, |m: usize| m.min(dist)));
+            }
+        }
+    }
+    min_dist
+}
+
+/// Computes the least upper bound (LUB) of two types in the hierarchy.
+///
+/// Collects `a`'s ancestor chain, then walks `b`'s ancestors until a
+/// common type is found. Falls back to `Any` if no common ancestor exists.
+///
+/// Public within the crate for use from `lower.rs` (collection type inference).
+pub(crate) fn least_upper_bound_ids(
+    a: ElementId,
+    b: ElementId,
+    model: &crate::model::PureModel,
+) -> ElementId {
+    least_upper_bound(a, b, model)
+}
+
+fn least_upper_bound(a: ElementId, b: ElementId, model: &crate::model::PureModel) -> ElementId {
+    if a == b {
+        return a;
+    }
+    // If one is subtype of the other, the supertype is the LUB
+    if is_subtype(a, b, model) {
+        return b;
+    }
+    if is_subtype(b, a, model) {
+        return a;
+    }
+
+    // Collect a's ancestor chain (including a itself)
+    let mut a_ancestors = Vec::new();
+    collect_ancestors(a, model, &mut a_ancestors);
+
+    // Walk b's ancestors and find the first match in a's chain
+    let mut current = b;
+    loop {
+        if a_ancestors.contains(&current) {
+            return current;
+        }
+        match get_first_supertype(current, model) {
+            Some(sup) => current = sup,
+            None => break,
+        }
+    }
+
+    // Fallback: Any (top type)
+    crate::bootstrap::ANY_ID
+}
+
+/// Collects all ancestors of `id` into `out` (including `id` itself).
+fn collect_ancestors(id: ElementId, model: &crate::model::PureModel, out: &mut Vec<ElementId>) {
+    out.push(id);
+    if let Some(sup) = get_first_supertype(id, model) {
+        collect_ancestors(sup, model, out);
+    }
+}
+
+/// Returns the first (primary) supertype of an element, if any.
+fn get_first_supertype(id: ElementId, model: &crate::model::PureModel) -> Option<ElementId> {
+    let element = model.get_element(id);
+    match element {
+        Element::PrimitiveType(p) => p.super_type,
+        Element::Class(c) => c.super_types.first().and_then(|st| {
+            if let crate::types::TypeExpr::Named { element, .. } = st {
+                Some(*element)
+            } else {
+                None
+            }
+        }),
+        _ => None,
+    }
+}
+
 /// Infers multiplicity from a lowered `ValueSpec` by examining `ExprKind`.
 /// Returns `None` for expressions whose multiplicity can't be determined.
 fn infer_multiplicity_from_valuespec(
@@ -843,13 +1057,42 @@ fn infer_multiplicity_from_valuespec(
         // Lambda is [1]
         ExprKind::Lambda { .. } => Some(Multiplicity::PureOne),
 
-        // Collection → [*]
-        ExprKind::Collection { .. } => Some(Multiplicity::ZeroOrMany),
+        // Bare element ref (e.g., `ClassWithDefault`) is a single value —
+        // a reference to the class/enum/function itself.
+        ExprKind::PackageableElementRef { .. } => Some(Multiplicity::PureOne),
 
-        // Function call → return multiplicity of the resolved function
-        ExprKind::FunctionCall { function, .. } => function.and_then(|fid| {
+        // `@Foo` type-reference literal is a single value (a type token).
+        ExprKind::TypeReference { .. } => Some(Multiplicity::PureOne),
+
+        // Collection: precise cardinality from element count.
+        // `[]` is `[0..0]`, `[x]` is `[1]`, `[x, y]` is `[2..2]`, etc.
+        // This precision matters for dispatch — `[]` must match an `[0..1]`
+        // parameter but not a `[1]` parameter.
+        ExprKind::Collection { elements } => {
+            let n = elements.len() as u32;
+            Some(match n {
+                0 => Multiplicity::Range {
+                    lower: 0,
+                    upper: Some(0),
+                },
+                1 => Multiplicity::PureOne,
+                _ => Multiplicity::Range {
+                    lower: n,
+                    upper: Some(n),
+                },
+            })
+        }
+
+        // Function call → return multiplicity of the resolved function,
+        // with generic multiplicity variables (`m`) bound from arguments.
+        ExprKind::FunctionCall {
+            function,
+            arguments,
+            ..
+        } => function.and_then(|fid| {
             if let Element::Function(f) = model.get_element(fid) {
-                Some(f.return_multiplicity.clone())
+                let bindings = infer_generic_bindings(&f.parameters, arguments, model, var_types);
+                Some(substitute_mult(&f.return_multiplicity, &bindings.mult))
             } else {
                 None
             }
@@ -860,6 +1103,148 @@ fn infer_multiplicity_from_valuespec(
 
         // Property access, etc. — unknown
         _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Generic substitution (type variables + multiplicity variables)
+// ---------------------------------------------------------------------------
+
+/// Bindings from generic parameter names (`T`, `m`, …) to the concrete
+/// types/multiplicities inferred at a specific call site.
+#[derive(Default)]
+pub(crate) struct GenericBindings {
+    /// Type-variable bindings: `T` → `TypeExpr::Named { Class, … }`.
+    pub ty: HashMap<SmolStr, crate::types::TypeExpr>,
+    /// Multiplicity-variable bindings: `m` → `Multiplicity::PureOne`.
+    pub mult: HashMap<SmolStr, crate::types::Multiplicity>,
+}
+
+/// Walks `(params, args)` pairs and collects generic-variable bindings.
+///
+/// For each parameter whose type is `Generic(name)`, binds `name` to the
+/// argument's inferred `TypeExpr`. For each parameter whose multiplicity is
+/// `Variable(name)`, binds `name` to the argument's inferred `Multiplicity`.
+/// Also recurses into `Named { type_arguments, … }` so `@T[1]` binds `T` from
+/// the TypeReference's wrapped type.
+pub(crate) fn infer_generic_bindings(
+    params: &[crate::types::Parameter],
+    args: &[crate::types::ValueSpec],
+    model: &crate::model::PureModel,
+    var_types: &VarTypes,
+) -> GenericBindings {
+    use crate::types::{ExprKind, Multiplicity, TypeExpr};
+    let mut bindings = GenericBindings::default();
+    for (param, arg) in params.iter().zip(args.iter()) {
+        // Bind the param's multiplicity variable from the arg's multiplicity.
+        if let Multiplicity::Variable(name) = &param.multiplicity {
+            if let Some(arg_mult) = infer_multiplicity_from_valuespec(arg, model, var_types) {
+                bindings.mult.entry(name.clone()).or_insert(arg_mult);
+            }
+        }
+        // Derive the arg's "type expression" — for TypeReference, use the
+        // wrapped type; otherwise build a bare Named from the inferred id.
+        let arg_type_expr: Option<TypeExpr> = match arg.kind.as_ref() {
+            ExprKind::TypeReference { type_expr } => Some(type_expr.clone()),
+            _ => infer_type_from_valuespec(arg, model, var_types).map(|eid| TypeExpr::Named {
+                element: eid,
+                type_arguments: vec![],
+                value_arguments: vec![],
+            }),
+        };
+        if let Some(arg_ty) = arg_type_expr {
+            bind_type(&param.type_expr, &arg_ty, &mut bindings.ty);
+        }
+    }
+    bindings
+}
+
+/// Recursively match `param_ty` against `arg_ty`, collecting type-variable
+/// bindings. Handles:
+/// - `Generic(T)` vs anything → bind `T := arg_ty`.
+/// - `Named { type_arguments: [...] }` vs `Named { type_arguments: [...] }`
+///   → recurse pairwise so `List<T>` against `List<String>` binds
+///   `T := String`.
+fn bind_type(
+    param_ty: &crate::types::TypeExpr,
+    arg_ty: &crate::types::TypeExpr,
+    out: &mut HashMap<SmolStr, crate::types::TypeExpr>,
+) {
+    use crate::types::TypeExpr;
+    match param_ty {
+        TypeExpr::Generic(name) => {
+            out.entry(name.clone()).or_insert_with(|| arg_ty.clone());
+        }
+        TypeExpr::Named {
+            type_arguments: p_args,
+            ..
+        } => {
+            if let TypeExpr::Named {
+                type_arguments: a_args,
+                ..
+            } = arg_ty
+            {
+                for (p, a) in p_args.iter().zip(a_args.iter()) {
+                    bind_type(p, a, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Rewrites a `TypeExpr` by substituting `Generic(name)` nodes with their
+/// bound types. Recurses into `Named { type_arguments }`, `FunctionType`,
+/// and `AlgebraUnion` so substitution works at any nesting depth.
+pub(crate) fn substitute_type(
+    ty: &crate::types::TypeExpr,
+    bindings: &HashMap<SmolStr, crate::types::TypeExpr>,
+) -> crate::types::TypeExpr {
+    use crate::types::TypeExpr;
+    match ty {
+        TypeExpr::Generic(name) => bindings.get(name).cloned().unwrap_or_else(|| ty.clone()),
+        TypeExpr::Named {
+            element,
+            type_arguments,
+            value_arguments,
+        } => TypeExpr::Named {
+            element: *element,
+            type_arguments: type_arguments
+                .iter()
+                .map(|t| substitute_type(t, bindings))
+                .collect(),
+            value_arguments: value_arguments.clone(),
+        },
+        TypeExpr::FunctionType {
+            parameters,
+            return_type,
+            return_multiplicity,
+        } => TypeExpr::FunctionType {
+            parameters: parameters
+                .iter()
+                .map(|(t, m)| (substitute_type(t, bindings), m.clone()))
+                .collect(),
+            return_type: Box::new(substitute_type(return_type, bindings)),
+            return_multiplicity: return_multiplicity.clone(),
+        },
+        TypeExpr::AlgebraUnion(a, b) => TypeExpr::AlgebraUnion(
+            Box::new(substitute_type(a, bindings)),
+            Box::new(substitute_type(b, bindings)),
+        ),
+        TypeExpr::Relation(_) => ty.clone(),
+    }
+}
+
+/// Substitutes a multiplicity variable with its bound value, if any.
+/// Non-variable multiplicities are returned unchanged.
+pub(crate) fn substitute_mult(
+    m: &crate::types::Multiplicity,
+    bindings: &HashMap<SmolStr, crate::types::Multiplicity>,
+) -> crate::types::Multiplicity {
+    use crate::types::Multiplicity;
+    match m {
+        Multiplicity::Variable(name) => bindings.get(name).cloned().unwrap_or_else(|| m.clone()),
+        _ => m.clone(),
     }
 }
 
@@ -895,6 +1280,9 @@ fn mult_bounds(m: &crate::types::Multiplicity) -> (u32, u32) {
         Multiplicity::ZeroOrMany => (0, u32::MAX),
         Multiplicity::OneOrMany => (1, u32::MAX),
         Multiplicity::Range { lower, upper } => (*lower, upper.unwrap_or(u32::MAX)),
+        // Variable multiplicity is unbounded at declaration; treated as [*]
+        // for compatibility/ordering. Substitution binds it before dispatch.
+        Multiplicity::Variable(_) => (0, u32::MAX),
     }
 }
 
@@ -909,15 +1297,124 @@ fn mult_specificity(m: &crate::types::Multiplicity) -> i32 {
         Multiplicity::Range { upper: Some(_), .. } => 3, // bounded range
         Multiplicity::Range { upper: None, .. } => 1,    // unbounded
         Multiplicity::ZeroOrMany => 1,
+        // Unbound variable: same specificity as ZeroOrMany.
+        Multiplicity::Variable(_) => 1,
     }
 }
 
-/// Narrows function candidates by checking argument types AND multiplicities
-/// against parameter types/multiplicities.
+/// Extracts the return multiplicity from a `Function<{...->V[m]}>` param type.
 ///
-/// Scoring: type exact match (+3), type subtype (+1), multiplicity exact (+2),
-/// multiplicity specificity bonus (+1). Type incompatibility eliminates a candidate.
-/// If all candidates are eliminated, returns the original set.
+/// Returns `Some(m)` if the param type is `Named { type_arguments: [FunctionType { return_multiplicity: m, .. }] }`
+/// or a direct `FunctionType`, otherwise `None`.
+fn extract_function_type_return_mult(
+    param_type: &crate::types::TypeExpr,
+) -> Option<&crate::types::Multiplicity> {
+    match param_type {
+        crate::types::TypeExpr::Named { type_arguments, .. } => {
+            type_arguments.iter().find_map(|ta| match ta {
+                crate::types::TypeExpr::FunctionType {
+                    return_multiplicity,
+                    ..
+                } => Some(return_multiplicity),
+                _ => None,
+            })
+        }
+        crate::types::TypeExpr::FunctionType {
+            return_multiplicity,
+            ..
+        } => Some(return_multiplicity),
+        _ => None,
+    }
+}
+
+/// Checks if a lambda argument is compatible with a `Function<{...->V[m]}>` param.
+///
+/// When the arg is a `Lambda` and the param type contains a `FunctionType`
+/// (via `Function<{T[1]->V[m]}>` or a direct `{...}` type), this checks
+/// whether the lambda's body return multiplicity fits the expected `m`.
+///
+/// Returns `true` (compatible) if:
+/// - The arg is not a lambda (not applicable)
+/// - The param type doesn't contain a FunctionType (not applicable)
+/// - The lambda's body return multiplicity can't be determined (assume OK)
+/// - The lambda's body return multiplicity fits within the param's expected mult
+fn is_lambda_compatible(
+    arg_vs: &crate::types::ValueSpec,
+    param_type: &crate::types::TypeExpr,
+    model: &crate::model::PureModel,
+    var_types: &VarTypes,
+) -> bool {
+    use crate::types::ExprKind;
+
+    // Only applies when the arg is a Lambda
+    let ExprKind::Lambda { body, .. } = arg_vs.kind.as_ref() else {
+        return true;
+    };
+
+    // Extract the expected FunctionType from the param.
+    // For `Function<{T[1]->V[m]}>`, the FunctionType is in type_arguments[0].
+    let expected_ft = match param_type {
+        crate::types::TypeExpr::Named {
+            element,
+            type_arguments,
+            ..
+        } => {
+            let ft = type_arguments.iter().find_map(|ta| match ta {
+                crate::types::TypeExpr::FunctionType {
+                    return_multiplicity,
+                    ..
+                } => Some(return_multiplicity),
+                _ => None,
+            });
+            if ft.is_none() && *element != crate::bootstrap::ANY_ID {
+                // The arg is a Lambda but the param is a concrete Named type
+                // without a FunctionType (e.g., String, Boolean) — incompatible.
+                // Any is allowed because Function is a subtype of Any.
+                return false;
+            }
+            ft
+        }
+        crate::types::TypeExpr::FunctionType {
+            return_multiplicity,
+            ..
+        } => Some(return_multiplicity),
+        // Generic params (T) — assume compatible, can't verify
+        _ => None,
+    };
+
+    let Some(expected_mult) = expected_ft else {
+        return true; // Any or Generic param — assume compatible
+    };
+
+    // Infer the lambda's body return multiplicity from the last expression
+    let Some(last_expr) = body.last() else {
+        return true; // Empty body — can't determine
+    };
+
+    let inferred = infer_multiplicity_from_valuespec(last_expr, model, var_types);
+    is_multiplicity_compatible(&inferred, expected_mult)
+}
+
+/// Narrows function candidates using a two-phase approach:
+///
+/// **Phase 1 — Filter**: Eliminate candidates whose parameter types or
+/// multiplicities are incompatible with the inferred argument types.
+/// A candidate is compatible if, for every parameter position:
+///   - The arg type is unknown (treated as Any — matches everything), OR
+///   - The arg type exactly matches or is a subtype of the param type
+///   - The arg multiplicity is unknown (matches everything), OR
+///   - The arg multiplicity fits within the param's multiplicity range
+///
+/// **Phase 2 — Rank**: Among compatible candidates, score each by
+/// specificity to pick the best fit:
+///   - Exact type match: +3 per param
+///   - Subtype match: +1 per param
+///   - Generic/Any param: +0 (matches but non-specific)
+///   - Exact multiplicity match: +4 per param
+///   - Compatible multiplicity: +specificity bonus (narrower = higher)
+///
+/// If all candidates are eliminated by filtering, returns the original set
+/// (lets the ambiguity error surface with all candidates listed).
 fn narrow_candidates_by_type(
     candidates: &[ElementId],
     lowered_args: &[crate::types::ValueSpec],
@@ -928,7 +1425,7 @@ fn narrow_candidates_by_type(
         return candidates.to_vec();
     }
 
-    // Infer types and multiplicities of each argument
+    // Infer types and multiplicities of each argument once
     let arg_types: Vec<Option<ElementId>> = lowered_args
         .iter()
         .map(|vs| infer_type_from_valuespec(vs, model, var_types))
@@ -939,69 +1436,234 @@ fn narrow_candidates_by_type(
         .map(|vs| infer_multiplicity_from_valuespec(vs, model, var_types))
         .collect();
 
-    // Score each candidate
-    let mut scored: Vec<(ElementId, i32)> = candidates
+    // === Phase 1: Filter — keep only compatible candidates ===
+    let compatible: Vec<ElementId> = candidates
         .iter()
-        .filter_map(|&eid| {
+        .copied()
+        .filter(|&eid| {
             let Element::Function(f) = model.get_element(eid) else {
-                return None;
+                return false;
             };
-            let mut score: i32 = 0;
-            let mut compatible = true;
             for (i, param) in f.parameters.iter().enumerate() {
-                // --- Type scoring ---
                 let arg_type = arg_types.get(i).copied().flatten();
                 if !is_type_compatible(arg_type, &param.type_expr, model) {
-                    compatible = false;
-                    break;
+                    return false;
                 }
-                if let Some(at) = arg_type {
+                let arg_mult = arg_mults.get(i).cloned().flatten();
+                if !is_multiplicity_compatible(&arg_mult, &param.multiplicity) {
+                    return false;
+                }
+                // Lambda vs Function<{...->V[m]}> structural check:
+                // when the arg is a lambda and the param expects a Function type,
+                // verify the lambda's body return multiplicity matches.
+                if let Some(arg_vs) = lowered_args.get(i) {
+                    if !is_lambda_compatible(arg_vs, &param.type_expr, model, var_types) {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+        .collect();
+
+    if compatible.is_empty() {
+        // Filtering eliminated everything — fall back to original set
+        return candidates.to_vec();
+    }
+    if compatible.len() == 1 {
+        return compatible;
+    }
+
+    // === Phase 2: Rank — score compatible candidates by specificity ===
+    let mut scored: Vec<(ElementId, i32)> = compatible
+        .iter()
+        .map(|&eid| {
+            let Element::Function(f) = model.get_element(eid) else {
+                return (eid, 0);
+            };
+            let mut score: i32 = 0;
+            for (i, param) in f.parameters.iter().enumerate() {
+                // --- Type specificity ---
+                if let Some(at) = arg_types.get(i).copied().flatten() {
                     if let crate::types::TypeExpr::Named { element: pe, .. } = &param.type_expr {
                         if at == *pe {
                             score += 3; // exact type match
                         } else if is_subtype(at, *pe, model) {
                             score += 1; // subtype match
                         }
+                        // else: compatible via Any/generic — +0
                     }
                 }
+                // If arg type is unknown, no type score — all candidates equal
 
-                // --- Multiplicity scoring ---
-                let arg_mult = arg_mults.get(i).cloned().flatten();
-                if !is_multiplicity_compatible(&arg_mult, &param.multiplicity) {
-                    compatible = false;
-                    break;
-                }
-                if let Some(ref am) = arg_mult {
+                // --- Multiplicity specificity ---
+                if let Some(ref am) = arg_mults.get(i).cloned().flatten() {
                     if *am == param.multiplicity {
                         score += 4; // exact multiplicity match
                     } else {
-                        // Prefer narrower param multiplicity that still fits
                         score += mult_specificity(&param.multiplicity);
                     }
                 } else {
                     // Unknown arg mult — use param specificity as tiebreaker
                     score += mult_specificity(&param.multiplicity);
                 }
+
+                // --- Lambda FunctionType return multiplicity specificity ---
+                // When the arg is a lambda and the param expects Function<{...->V[m]}>,
+                // prefer the overload with the most specific return multiplicity.
+                if let Some(arg_vs) = lowered_args.get(i) {
+                    if matches!(arg_vs.kind.as_ref(), crate::types::ExprKind::Lambda { .. }) {
+                        if let Some(ft_mult) = extract_function_type_return_mult(&param.type_expr) {
+                            score += mult_specificity(ft_mult);
+                        }
+                    }
+                }
+
+                // --- Concrete vs Function-wrapped type preference ---
+                // When the arg is NOT a lambda and parameter type could be either
+                // concrete (String) or Function-wrapped (Function<{->String}>),
+                // prefer the concrete type.
+                // When the arg IS a lambda, prefer the Function-wrapped param.
+                let arg_is_lambda = lowered_args.get(i).map_or(false, |vs| {
+                    matches!(vs.kind.as_ref(), crate::types::ExprKind::Lambda { .. })
+                });
+                let param_is_function_type =
+                    extract_function_type_return_mult(&param.type_expr).is_some();
+
+                if arg_is_lambda && param_is_function_type {
+                    score += 3; // lambda arg matches Function param → strong preference
+                } else if !arg_is_lambda && !param_is_function_type {
+                    score += 2; // non-lambda arg matches concrete param → preference
+                }
             }
-            if compatible { Some((eid, score)) } else { None }
+            (eid, score)
         })
         .collect();
-
-    if scored.is_empty() {
-        // Narrowing eliminated everything — fall back to original
-        return candidates.to_vec();
-    }
 
     // Sort by score descending, pick the best
     scored.sort_by(|a, b| b.1.cmp(&a.1));
     let best_score = scored[0].1;
 
-    // Return all candidates with the best score
-    scored
+    // Collect all candidates tied at the best score
+    let tied: Vec<ElementId> = scored
         .into_iter()
         .filter(|(_, s)| *s == best_score)
         .map(|(eid, _)| eid)
-        .collect()
+        .collect();
+
+    if tied.len() <= 1 {
+        return tied;
+    }
+
+    // === Phase 3: Most-specific parameter type tiebreaker ===
+    // Among tied candidates, eliminate any overload whose parameter types
+    // are all *supertypes* (or equal) of another overload's parameters.
+    // E.g., elementToPath(PackageableElement) is dominated by elementToPath(Type)
+    // because Type <: PackageableElement, so the Type overload is more specific.
+    let mut dominated: Vec<bool> = vec![false; tied.len()];
+
+    for i in 0..tied.len() {
+        if dominated[i] {
+            continue;
+        }
+        let Element::Function(fi) = model.get_element(tied[i]) else {
+            continue;
+        };
+        for j in 0..tied.len() {
+            if i == j || dominated[j] {
+                continue;
+            }
+            let Element::Function(fj) = model.get_element(tied[j]) else {
+                continue;
+            };
+            // Check if fj's params are ALL supertypes of (or same as) fi's params
+            // → fi is more specific, so fj is dominated
+            let fj_dominated = fi
+                .parameters
+                .iter()
+                .zip(fj.parameters.iter())
+                .all(|(pi, pj)| {
+                    let pi_eid = match &pi.type_expr {
+                        crate::types::TypeExpr::Named { element, .. } => Some(*element),
+                        _ => None,
+                    };
+                    let pj_eid = match &pj.type_expr {
+                        crate::types::TypeExpr::Named { element, .. } => Some(*element),
+                        _ => None,
+                    };
+                    match (pi_eid, pj_eid) {
+                        (Some(pi_e), Some(pj_e)) => pi_e == pj_e || is_subtype(pi_e, pj_e, model),
+                        _ => true, // can't compare generics — don't eliminate
+                    }
+                });
+            if fj_dominated {
+                dominated[j] = true;
+            }
+        }
+    }
+
+    let result: Vec<ElementId> = tied
+        .into_iter()
+        .enumerate()
+        .filter(|(idx, _)| !dominated[*idx])
+        .map(|(_, eid)| eid)
+        .collect();
+
+    if result.is_empty() {
+        // Shouldn't happen, but don't lose candidates
+        candidates.to_vec()
+    } else if result.len() > 1 {
+        // Phase 4: Argument-type proximity tiebreaker.
+        // When we know the arg types, find the overload whose parameter
+        // types are the closest ancestors. This breaks ties between
+        // independent branches like Type vs PackageableElement.
+        let mut best_distance = usize::MAX;
+        let mut best_idx = 0;
+        let mut unique_best = true;
+
+        for (idx, &eid) in result.iter().enumerate() {
+            let Element::Function(f) = model.get_element(eid) else {
+                continue;
+            };
+            let mut total_distance = 0usize;
+            let mut can_score = true;
+            for (pi, arg_type_opt) in f.parameters.iter().zip(arg_types.iter()) {
+                let param_eid = match &pi.type_expr {
+                    crate::types::TypeExpr::Named { element, .. } => *element,
+                    _ => {
+                        can_score = false;
+                        break;
+                    }
+                };
+                let Some(arg_eid) = arg_type_opt else {
+                    can_score = false;
+                    break;
+                };
+                total_distance += type_distance(*arg_eid, param_eid, model).unwrap_or(100);
+            }
+            if can_score {
+                if total_distance < best_distance {
+                    best_distance = total_distance;
+                    best_idx = idx;
+                    unique_best = true;
+                } else if total_distance == best_distance {
+                    unique_best = false;
+                }
+            }
+        }
+
+        if unique_best && best_distance < usize::MAX {
+            vec![result[best_idx]]
+        } else {
+            // Phase 5: Declaration-order tiebreaker.
+            // When all other disambiguation fails, pick the first-declared
+            // overload. The candidate ordering is preserved from registration
+            // order, which reflects source declaration order.
+            vec![result[0]]
+        }
+    } else {
+        result
+    }
 }
 
 // ---------------------------------------------------------------------------

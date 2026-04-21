@@ -1,0 +1,7 @@
+- [Repository shape](repo_shape.md) — Two stacks side-by-side; Rust port lives in `legend-pure-rust/`, branch `legend-pure-rust`; shared `platform/*.pure` is the parity contract.
+- [Rust port architecture](rust_port_architecture.md) — Crate layers 0–7, Pass 2a/2b, arena/index, TypeExpr as GenericType, PureModel two-phase lifecycle.
+- [Port status snapshot 2026-04](port_status_2026_04.md) — Parser/compose/protocol done; semantic layer near-complete with 243 dispatch errors; runtime interpreter usable but narrow stdlib; JNI + `legend test` stubs only.
+- [Known divergences from DESIGN.md](design_divergences.md) — ExprKind desugars ops to FunctionCall despite DESIGN.md saying "don't desugar"; may hurt future Pure→AST emission.
+- [Parity semantics to preserve](parity_semantics.md) — Function overload dispatch, multiplicity coercion, milestoning rewrite, PCT contract between engines, lazy call stack, deferred-arg semantics for `if`/`and`/`or`.
+- [PCT and testing strategy](pct_and_testing.md) — PCT = the parity contract; 873 inline-Pure JUnit tests across 1492 @Test methods; `excludePlatform` vs `expectedFailures` rules.
+- [Gaps and underserved platform surface](gaps.md) — Metaprogramming (dynamicNew/evaluate/reactivate), units conversion, constraint evaluation, incremental compile, QualifiedProperty eval, Relation/TDS, island grammars.

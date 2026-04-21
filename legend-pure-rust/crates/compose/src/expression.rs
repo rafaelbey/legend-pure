@@ -165,6 +165,11 @@ fn compose_expression_prec(
         Expression::Copy(e) => compose_copy(w, e),
         Expression::Column(e) => compose_column(w, e),
         Expression::Island(e) => crate::island::compose_island(w, e),
+        Expression::UnitInstance(e) => {
+            compose_expression(w, &e.value);
+            w.write(" ");
+            compose_element_ptr(w, &e.unit);
+        }
         Expression::Group(inner) => {
             w.write("(");
             compose_expression_prec(w, inner, Precedence::None, false);

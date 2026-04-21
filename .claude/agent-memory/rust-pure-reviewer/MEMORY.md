@@ -1,0 +1,10 @@
+- [Pure language shape](pure_language_shape.md) — strongly-typed, expression-only, multiplicity-typed; M4→M3→M2→M1 stack; `^Class(props)` constructs instances; shared platform `.pure` sources under `legend-pure-core/.../platform/` drive both stacks.
+- [Rust workspace layout](rust_workspace_layout.md) — Cargo layers ast → lexer → parser/compose → protocol → pure → runtime → cli/jni; `#![forbid(unsafe_code)]` everywhere except jni and stress alloc tracking.
+- [Compiler pass architecture](rust_compiler_passes.md) — Pass 1 declare, 1.5 topo-sort (hard deps only), 2a signatures, 2b bodies, 2.5 infer, 3 validate; Pass 2a/2b split is load-bearing for overload dispatch.
+- [Function dispatch model](rust_function_dispatch.md) — `resolve_element_ptr` (mangled) vs `resolve_function_call` (simple + lower-first + type/multiplicity scoring); narrow-candidates returns ties on score equality.
+- [Runtime architecture](rust_runtime_architecture.md) — `Arc<PureModel>` immutable; per-thread `RuntimeHeap` (SlotMap) not Send; `im-rc` persistent collections; lazy call stack via `map_err`.
+- [Key divergences Java → Rust](project_pure_overview.md) — Arena/Index vs bidirectional CoreInstance; unboxed primitives; no Generalization node; Rust AST keeps type params Java rejects; two-layer storage; AST/Protocol three-shape split.
+- [Review watch-points](project_rust_architecture_invariants.md) — pass ordering, parallel arenas, name mangling, two resolve entry points, AST/Protocol, thread-safety, lazy call stack, native dispatch order, clone patterns, unsafe/unwrap gates, 243-error baseline.
+- [Rust rewrite state](project_rust_rewrite_state.md) — what's implemented vs stubbed (41/173 natives, 243 dispatch errors, generics-as-Any compromise); `convergence_analysis.md` is stale.
+- [Reference — key files](reference_key_files.md) — absolute paths to the files reviewers open most.
+- [Review-approach guidelines](feedback_review_approach.md) — priority order: parity > invariants > idioms > micro-perf; the team is new to Rust — explain mechanisms, not labels.

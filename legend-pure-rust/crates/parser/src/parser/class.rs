@@ -21,7 +21,7 @@ use legend_pure_parser_ast::annotation::{StereotypePtr, TaggedValue};
 use legend_pure_parser_ast::element::{
     AggregationKind, ClassDef, Constraint, Element, Property, QualifiedProperty,
 };
-use legend_pure_parser_ast::expression::{BooleanLiteral, Expression, Literal, StringLiteral};
+use legend_pure_parser_ast::expression::{BooleanLiteral, Expression, Literal};
 use legend_pure_parser_lexer::TokenKind;
 use smol_str::SmolStr;
 
@@ -124,16 +124,7 @@ impl Parser {
                             external_id = Some(unquote_string(&tok.text));
                         }
                         "message" => {
-                            if self.cursor.check(TokenKind::StringLiteral) {
-                                let tok = self.cursor.advance().clone();
-                                message =
-                                    Some(Expression::Literal(Literal::String(StringLiteral {
-                                        value: unquote_string(&tok.text).into(),
-                                        source_info: tok.source_info.clone(),
-                                    })));
-                            } else {
-                                message = Some(self.parse_expression()?);
-                            }
+                            message = Some(self.parse_expression()?);
                         }
                         other => {
                             return Err(ParseError::unexpected(

@@ -687,7 +687,7 @@ mod tests {
     #[test]
     fn infer_enum_value() {
         let model = model_with_bootstrap();
-        let enum_id = crate::ids::ElementId {
+        let enum_id = crate::ids::ElementId::InstanceId {
             chunk_id: 1,
             local_idx: 0,
         };

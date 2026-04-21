@@ -172,6 +172,11 @@ fn append_multiplicity_signature(builder: &mut String, mult: &Multiplicity) {
                 }
             }
         },
+        Multiplicity::Variable(name) => {
+            builder.push('_');
+            builder.push_str(name);
+            builder.push('_');
+        }
     }
 }
 
@@ -320,6 +325,30 @@ mod tests {
         assert_eq!(
             build_function_fqn("equal", &func, &model),
             "equal_Any_MANY__Any_MANY__Boolean_1_"
+        );
+    }
+
+    #[test]
+    fn variable_multiplicity_reverse() {
+        // reverse<T|m>(values:T[m]):T[m] → reverse_T_m__T_m_
+        let model = test_model();
+        let func = Function {
+            function_name: SmolStr::default(),
+            parameters: vec![Parameter {
+                name: "values".into(),
+                type_expr: TypeExpr::Generic("T".into()),
+                multiplicity: Multiplicity::Variable("m".into()),
+                source_info: si(),
+            }],
+            return_type: TypeExpr::Generic("T".into()),
+            return_multiplicity: Multiplicity::Variable("m".into()),
+            body: vec![],
+            stereotypes: vec![],
+            tagged_values: vec![],
+        };
+        assert_eq!(
+            build_function_fqn("reverse", &func, &model),
+            "reverse_T_m__T_m_"
         );
     }
 

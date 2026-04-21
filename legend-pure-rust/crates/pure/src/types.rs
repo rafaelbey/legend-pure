@@ -121,6 +121,12 @@ pub enum Multiplicity {
         /// Upper bound (inclusive), `None` = unbounded.
         upper: Option<u32>,
     },
+    /// A multiplicity variable bound by the enclosing generic signature —
+    /// e.g., `m` in `reverse<T|m>(values:T[m]):T[m]`. Kept as a name so
+    /// function-name mangling reproduces the source form
+    /// (`reverse_T_m__T_m_`) and so generic substitution can bind it at
+    /// call sites. Semantically acts like `ZeroOrMany` everywhere else.
+    Variable(SmolStr),
 }
 
 // ---------------------------------------------------------------------------
@@ -406,7 +412,7 @@ mod tests {
     #[test]
     fn type_expr_named_simple() {
         let ty = TypeExpr::Named {
-            element: ElementId {
+            element: ElementId::InstanceId {
                 chunk_id: 0,
                 local_idx: 2,
             },
@@ -420,7 +426,7 @@ mod tests {
     fn type_expr_named_with_type_args() {
         // List<String>
         let string_ty = TypeExpr::Named {
-            element: ElementId {
+            element: ElementId::InstanceId {
                 chunk_id: 0,
                 local_idx: 2,
             },
@@ -428,7 +434,7 @@ mod tests {
             value_arguments: vec![],
         };
         let list_ty = TypeExpr::Named {
-            element: ElementId {
+            element: ElementId::InstanceId {
                 chunk_id: 0,
                 local_idx: 20,
             },
@@ -444,7 +450,7 @@ mod tests {
     fn type_expr_named_with_value_args() {
         // Varchar(255)
         let ty = TypeExpr::Named {
-            element: ElementId {
+            element: ElementId::InstanceId {
                 chunk_id: 0,
                 local_idx: 12,
             },
@@ -464,7 +470,7 @@ mod tests {
     fn type_expr_function_type() {
         // {String[1] -> Boolean[1]}
         let string = TypeExpr::Named {
-            element: ElementId {
+            element: ElementId::InstanceId {
                 chunk_id: 0,
                 local_idx: 2,
             },
@@ -472,7 +478,7 @@ mod tests {
             value_arguments: vec![],
         };
         let boolean = TypeExpr::Named {
-            element: ElementId {
+            element: ElementId::InstanceId {
                 chunk_id: 0,
                 local_idx: 5,
             },
