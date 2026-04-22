@@ -234,12 +234,22 @@ struct UnitMapping {
 /// still produce `DuplicateElement` errors on collision.
 /// Resolves M3 supertype strings (`TypeExpr::Generic`) to resolved `TypeExpr::Named`.
 ///
-/// The M3 parser stores supertypes as `TypeExpr::Generic("ClassName")` because
-/// forward references are common in m3.pure. After all M3 elements are registered
-/// in their packages, this pass resolves those names to actual `ElementId`s.
+/// The M3 parser stores supertypes AND property types as
+/// `TypeExpr::Generic("ClassName")` because forward references are common
+/// in m3.pure. After all M3 elements are registered in their packages,
+/// this pass resolves those names to actual `ElementId`s.
 ///
-/// This enables `is_subtype()` to walk the M3 type hierarchy correctly
-/// (e.g., `Class <: Type <: PackageableElement <: Any`).
+/// This enables:
+/// - `is_subtype()` to walk the M3 type hierarchy correctly
+///   (e.g., `Class <: Type <: PackageableElement <: Any`).
+/// - Property-access type inference through inherited properties
+///   (e.g., `.package` on a `Package` value — `package` is declared on
+///   `PackageableElement` with type `Package[0..1]`, which before this
+///   pass is stored as `Generic("Package")` and would widen to `Any`).
+///
+/// Names whose *declared* class type parameter includes the same identifier
+/// (e.g. the M3 `Property` class has a type parameter `T`) remain generic —
+/// those are real type variables.
 fn resolve_m3_supertypes(model: &mut PureModel) {
     use crate::bootstrap::BOOTSTRAP_CHUNK_ID;
     use crate::types::TypeExpr;
@@ -259,29 +269,41 @@ fn resolve_m3_supertypes(model: &mut PureModel) {
         name_to_id.insert(name, eid);
     }
 
-    // Also try full-path resolution through the model's package tree
-    // for names that aren't simple M3 class names.
-
-    // Now resolve all Generic supertypes in chunk 0 classes
+    // Resolve Generic → Named on supertypes AND properties/qualified-properties.
+    // A Generic("X") remains generic only when "X" is one of the class's own
+    // type parameters; otherwise, resolve it against the chunk-0 class set.
     let chunk = &mut model.chunks[BOOTSTRAP_CHUNK_ID as usize];
     for local_idx in 0..m3_count {
         let element = chunk.elements.get_mut(local_idx);
-        let super_types = match element {
-            Element::Class(c) => &mut c.super_types,
-            _ => continue,
+        let Element::Class(c) = element else {
+            continue;
         };
+        let type_params: std::collections::HashSet<SmolStr> =
+            c.type_parameters.iter().cloned().collect();
 
-        for st in super_types.iter_mut() {
-            if let TypeExpr::Generic(name) = st {
+        let resolve_in_place = |ty: &mut TypeExpr| match ty {
+            TypeExpr::Generic(name) if !type_params.contains(name) => {
                 if let Some(&resolved_id) = name_to_id.get(name.as_str()) {
-                    *st = TypeExpr::Named {
+                    *ty = TypeExpr::Named {
                         element: resolved_id,
                         type_arguments: vec![],
                         value_arguments: vec![],
                     };
-                } else {
-                    // Supertype name not found in M3 chunk — remains unresolved
                 }
+            }
+            _ => {}
+        };
+
+        for st in c.super_types.iter_mut() {
+            resolve_in_place(st);
+        }
+        for p in c.properties.iter_mut() {
+            resolve_in_place(&mut p.type_expr);
+        }
+        for qp in c.qualified_properties.iter_mut() {
+            resolve_in_place(&mut qp.return_type);
+            for param in qp.parameters.iter_mut() {
+                resolve_in_place(&mut param.type_expr);
             }
         }
     }

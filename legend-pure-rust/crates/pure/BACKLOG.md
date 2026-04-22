@@ -26,7 +26,7 @@ dependencies, so future contributors know what's safe to pick up.
 | Subtype matching (`Integer` → `Number`) | P0 | ✅ Done | `is_subtype` walks super_types chain |
 | Variable type tracking | P0 | ✅ Done | Function params, let bindings, lambda params tracked in `ResolutionContext.variable_types`. |
 | Generic params treated as `Any` | P1 | ⚠️ Compromise | Correct for now; causes false matches |
-| Generic return-type flow through `T[m]` methods | P1 | 🔲 Open | `at<T\|m>(T[m], Integer[1]):T[1]` and `toOne` widen T to `Any`. Empirical: `elementToPath(x)` resolves fine for direct `Package` refs, but not for `pkg.package->at(0)` — compiler leaves `function=None`, runtime falls to simple-name prefix fallback and picks the 3-arg native with wrong arity. Workaround: `->cast(@PackageableElement)`. Blocks `testPackageablesToPath` / `testEnumerationToPath` on the surveyor canary. |
+| Generic return-type flow through `T[m]` methods | P1 | ✅ Done | Root cause was *inherited property lookup*: `infer_type_from_valuespec`'s `PropertyAccess` branch didn't walk the supertype chain, and the M3 parser stored property types as `TypeExpr::Generic("ClassName")` never resolved to `Named`. Extended `resolve_m3_supertypes` to resolve property types too, and added a supertype walk when looking up a property. After fix, `.package->at(0)` flows through `at<T\|m>(T[m],...)` correctly. Unblocked `testPackageablesToPath`/`testEnumerationToPath`. |
 | Generic unification (`Z` propagation) | P2 | 🔲 Deferred | Complex; Java uses `TypeInferenceObserver` |
 | Lambda parameter type inference | P2 | 🔲 Deferred | Infer from expected `Function<{...}>` type |
 | Numeric coercion (`Integer` → `Float`) | P3 | 🔲 Deferred | Java has implicit widening |
