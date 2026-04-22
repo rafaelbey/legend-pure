@@ -104,8 +104,10 @@ impl NativeFunction for LenientPathToElement {
 /// up the package parent chain. For functions, uses the simple `functionName`
 /// (not the mangled signature).
 ///
-/// When `includeRoot == true`, the empty root-package name is included — this
-/// produces a leading separator in the output (e.g., `"::meta::pure"`).
+/// When `includeRoot == true`, the anonymous root package is rendered as the
+/// literal `"Root"` — matching the Java Pure runtime. `elementToPath(Package)`
+/// is just `"Package"` (top-level types carry `parent_package = root`);
+/// `elementToPath(Package, '::', true)` becomes `"Root::Package"`.
 #[derive(Debug)]
 pub struct ElementToPath;
 
@@ -411,14 +413,32 @@ fn resolve_path(model: &PureModel, path: &str, separator: &str) -> Option<Elemen
 
 /// Build the `separator`-joined qualified path for an element.
 ///
-/// For functions, uses `function_name` (simple name). Root-package segment
-/// (empty string) is included iff `include_root == true`.
+/// For functions, uses `function_name` (simple name). When `include_root`
+/// is `true` the anonymous root package is rendered as the literal string
+/// `"Root"` (matching the Java Pure runtime) — so a top-level element
+/// like `Package` becomes `"Root::Package"` under `includeRoot=true`.
+/// When `include_root` is `false`, the root segment is dropped entirely.
+///
+/// Special case: `elementToPath(::)` on the root package with
+/// `include_root=false` must be the empty string, not `""` joined into
+/// the output.
 fn build_element_path(
     model: &PureModel,
     id: ElementId,
     separator: &str,
     include_root: bool,
 ) -> String {
+    // Calling elementToPath on the root package itself.
+    if let ElementId::Package(pkg_id) = id
+        && model.get_package(pkg_id).parent.is_none()
+    {
+        return if include_root {
+            "Root".to_string()
+        } else {
+            String::new()
+        };
+    }
+
     let mut segments: Vec<SmolStr> = Vec::new();
     segments.push(element_simple_name(model, id).clone());
 
@@ -430,7 +450,10 @@ fn build_element_path(
     while let Some(pkg_id) = parent_pkg {
         let pkg = model.get_package(pkg_id);
         let is_root = pkg.parent.is_none();
-        if is_root && !include_root {
+        if is_root {
+            if include_root {
+                segments.push(SmolStr::new("Root"));
+            }
             break;
         }
         segments.push(pkg.name.clone());

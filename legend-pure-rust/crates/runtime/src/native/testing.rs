@@ -156,11 +156,14 @@ impl NativeFunction for ExecutePCTTest {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Status enum values as mangled Pure strings.
-const STATUS_PASS: &str = "meta::pure::test::surveyor::TestStatus.PASS";
-const STATUS_FAIL: &str = "meta::pure::test::surveyor::TestStatus.FAIL";
-const STATUS_ERROR: &str = "meta::pure::test::surveyor::TestStatus.ERROR";
-const STATUS_SKIP: &str = "meta::pure::test::surveyor::TestStatus.SKIP";
+/// Status enum values in the same `"EnumSimpleName.VALUE"` form produced by
+/// [`Evaluator::eval_enum_value`](crate::eval::Evaluator) and the enum-value
+/// branch of `eval_element_property`. The surveyor compares with
+/// `$r.status == TestStatus.PASS` — the two sides must agree string-for-string.
+const STATUS_PASS: &str = "TestStatus.PASS";
+const STATUS_FAIL: &str = "TestStatus.FAIL";
+const STATUS_ERROR: &str = "TestStatus.ERROR";
+const STATUS_SKIP: &str = "TestStatus.SKIP";
 
 /// Extract the FQN from a compiled function value; fall back to `"<lambda>"`.
 fn function_fqn(callable: &Value, ctx: &dyn EvalContextTrait) -> String {

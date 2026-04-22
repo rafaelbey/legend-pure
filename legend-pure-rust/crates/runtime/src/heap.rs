@@ -271,6 +271,24 @@ impl RuntimeHeap {
         }
     }
 
+    /// List the property names currently populated on a dynamic heap object.
+    ///
+    /// Typed objects have a fixed schema and return an empty list — typed
+    /// property enumeration belongs to the compiled-code path.
+    ///
+    /// # Errors
+    /// Returns `InvalidObjectId` if the ID is stale or invalid.
+    pub fn property_names(&self, id: ObjectId) -> Result<Vec<SmolStr>, PureRuntimeError> {
+        let entry = self
+            .objects
+            .get(id)
+            .ok_or(PureRuntimeError::InvalidObjectId(id))?;
+        Ok(match entry {
+            HeapEntry::Dynamic(obj) => obj.properties.keys().cloned().collect(),
+            HeapEntry::Typed(_) => Vec::new(),
+        })
+    }
+
     /// Get the classifier (class path) of an object.
     ///
     /// # Errors

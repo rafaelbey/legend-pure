@@ -639,48 +639,84 @@ fn eval_element_to_path_include_root() {
         ",
         "f__String_1_",
     );
-    // Root package has empty name, so including it produces a leading '::'
-    assert_eq!(result, Value::String("::meta::pure".into()));
+    // includeRoot=true prepends the literal "Root" segment (matches the
+    // Java Pure runtime's rendering of the unnamed root package).
+    assert_eq!(result, Value::String("Root::meta::pure".into()));
 }
 
 #[test]
-fn eval_surveyor_entry_point_reaches_build_test_group() {
-    // Regression canary: the Pure-native surveyor must reach `buildTestGroup`
-    // on a real platform path. It fails today inside `buildTestGroup` because
-    // `^Class(...)` object construction (`new`) isn't implemented — but
-    // getting this deep proves path resolution, element property access,
-    // `match`/`instanceOf`/`cast`, and collection/meta natives are wired up.
+fn eval_surveyor_entry_point_runs_to_completion() {
+    // End-to-end proof that the Pure-native surveyor can walk the compiled
+    // platform: discovery → match/instanceOf dispatch → ^Class(...) object
+    // construction → flatten → aggregate → `^TestReport(...)` return.
     //
-    // When `new` lands this test should start passing (or progress to a
-    // different, more interesting failure); either way the assertion below
-    // surfaces the regression loudly.
+    // The collection package has `<<test.Test>>`-stereotyped functions that
+    // rely on `assertEquals`/`joinStrings`/etc. (not all implemented yet), so
+    // many will bucket as ERROR. The regression lock is structural: the
+    // surveyor must return a `TestReport` with all five counter fields
+    // populated to non-negative integers that sum to the total.
     use legend_pure_runtime::eval::Evaluator;
 
     let model = compile_with_platform("");
     let registry = NativeRegistry::standard();
     let mut evaluator = Evaluator::new(&model, &registry);
 
-    let result = evaluator.call(
-        "meta::pure::test::surveyor::runTestsFromPath",
-        &[
-            Value::String("meta::pure::functions::collection".into()),
-            Value::String("".into()),
-        ],
+    let report = evaluator
+        .call(
+            "meta::pure::test::surveyor::runTestsFromPath",
+            &[
+                Value::String("meta::pure::functions::collection".into()),
+                Value::String("".into()),
+            ],
+        )
+        .expect("surveyor should return a TestReport");
+
+    let report_id = match report {
+        Value::Object(id) => id,
+        other => panic!("surveyor returned non-object: {other:?}"),
+    };
+
+    let heap = evaluator.heap();
+    assert_eq!(
+        heap.classifier(report_id).unwrap(),
+        "meta::pure::test::surveyor::TestReport"
     );
-    let err = result.expect_err(
-        "surveyor currently blocks on missing `new`; revisit this canary when that lands",
-    );
-    let msg = err.to_string();
-    assert!(
-        msg.contains("Function not found: new"),
-        "unexpected surveyor failure — did a dependency regress?\n{msg}"
-    );
-    // buildTestGroup is deeper in the call chain than getTestFunctions.
-    // Requiring both frames in the stack is what proves the surveyor got
-    // past discovery into the per-package grouping phase.
-    assert!(
-        msg.contains("buildTestGroup"),
-        "expected buildTestGroup in stack, got: {msg}"
+
+    // Each counter is a single Integer >= 0.
+    let read_counter = |name: &str| -> i64 {
+        let values = heap.get_property_values(report_id, name).unwrap();
+        let collected: Vec<_> = values.iter().cloned().collect();
+        assert_eq!(
+            collected.len(),
+            1,
+            "expected one Integer for {name}, got {collected:?}"
+        );
+        match collected[0] {
+            Value::Integer(n) => n,
+            ref other => panic!("expected Integer for {name}, got {other:?}"),
+        }
+    };
+    let pass = read_counter("passCount");
+    let fail = read_counter("failCount");
+    let error = read_counter("errorCount");
+    let skip = read_counter("skipCount");
+    for (name, v) in [
+        ("passCount", pass),
+        ("failCount", fail),
+        ("errorCount", error),
+        ("skipCount", skip),
+    ] {
+        assert!(v >= 0, "{name} should be non-negative, got {v}");
+    }
+
+    // `results` length must equal pass + fail + error + skip — every test
+    // outcome is classified into exactly one bucket.
+    let results = heap.get_property_values(report_id, "results").unwrap();
+    let total = i64::try_from(results.len()).expect("results length fits in i64");
+    assert_eq!(
+        total,
+        pass + fail + error + skip,
+        "results length ({total}) must equal pass+fail+error+skip"
     );
 }
 
