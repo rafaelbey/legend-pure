@@ -331,7 +331,12 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     fn eval_date_literal(&self, dv: &DateValue) -> Result<Value, PureException> {
         match dv {
             DateValue::StrictDate { year, month, day } => {
-                let date = PureDate::strict_date(*year, *month, *day).map_err(|e| {
+                let date = match (month, day) {
+                    (None, _) => PureDate::year(*year),
+                    (Some(m), None) => PureDate::year_month(*year, *m),
+                    (Some(m), Some(d)) => PureDate::strict_date(*year, *m, *d),
+                };
+                let date = date.map_err(|e| {
                     PureException::from(PureRuntimeError::EvaluationError(format!(
                         "Invalid date literal: {e}"
                     )))

@@ -671,8 +671,8 @@ mod tests {
         let mut body = vec![untyped(
             ExprKind::DateLiteral(DateValue::StrictDate {
                 year: 2024,
-                month: 1,
-                day: 15,
+                month: Some(1),
+                day: Some(15),
             }),
             si(),
         )];

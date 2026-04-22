@@ -853,19 +853,30 @@ fn lower_column(e: &ast_expr::ColumnBuilderExpr) -> ValueSpec {
 // Date parsing helpers
 // ---------------------------------------------------------------------------
 
-/// Parses `"2024-01-15"` → `DateValue::StrictDate`.
+/// Parses `"2024-01-15"`, `"2024-01"`, or `"2024"` →
+/// `DateValue::StrictDate` with appropriate precision (`month` / `day`
+/// are `None` when the corresponding segment is missing).
 fn parse_strict_date(s: &str) -> Option<DateValue> {
-    // Format: YYYY-MM-DD (possibly with leading %)
     let s = s.strip_prefix('%').unwrap_or(s);
     let parts: Vec<&str> = s.split('-').collect();
-    if parts.len() != 3 {
-        return None;
+    match parts.len() {
+        1 => Some(DateValue::StrictDate {
+            year: parts[0].parse().ok()?,
+            month: None,
+            day: None,
+        }),
+        2 => Some(DateValue::StrictDate {
+            year: parts[0].parse().ok()?,
+            month: Some(parts[1].parse().ok()?),
+            day: None,
+        }),
+        3 => Some(DateValue::StrictDate {
+            year: parts[0].parse().ok()?,
+            month: Some(parts[1].parse().ok()?),
+            day: Some(parts[2].parse().ok()?),
+        }),
+        _ => None,
     }
-    Some(DateValue::StrictDate {
-        year: parts[0].parse().ok()?,
-        month: parts[1].parse().ok()?,
-        day: parts[2].parse().ok()?,
-    })
 }
 
 /// Parses `"2024-01-15T10:30:00"` (or with subseconds) → `DateValue::DateTime`.
@@ -999,8 +1010,8 @@ mod tests {
             dv,
             DateValue::StrictDate {
                 year: 2024,
-                month: 1,
-                day: 15
+                month: Some(1),
+                day: Some(15)
             }
         );
     }
@@ -1012,8 +1023,34 @@ mod tests {
             dv,
             DateValue::StrictDate {
                 year: 2024,
-                month: 3,
-                day: 20
+                month: Some(3),
+                day: Some(20)
+            }
+        );
+    }
+
+    #[test]
+    fn parse_strict_date_year_only() {
+        let dv = parse_strict_date("%2024").unwrap();
+        assert_eq!(
+            dv,
+            DateValue::StrictDate {
+                year: 2024,
+                month: None,
+                day: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_strict_date_year_month() {
+        let dv = parse_strict_date("%2024-03").unwrap();
+        assert_eq!(
+            dv,
+            DateValue::StrictDate {
+                year: 2024,
+                month: Some(3),
+                day: None,
             }
         );
     }

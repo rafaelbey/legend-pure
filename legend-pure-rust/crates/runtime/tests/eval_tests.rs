@@ -1112,8 +1112,81 @@ fn eval_element_to_path_ephemeral_nameless() {
 }
 
 #[test]
+fn eval_partial_date_literals_round_trip_toRepresentation() {
+    // A year-only and a year-month StrictDate literal must preserve
+    // precision through lowering and `toRepresentation`. Before the
+    // partial-precision fix, the parser accepted `%2014` / `%2014-01`
+    // but `parse_strict_date` in lower.rs required 3 segments and
+    // silently returned `None`, dropping the expression during
+    // lowering and corrupting argument counts for the surrounding call.
+    assert_eq!(
+        eval_pure(
+            r"function test::f(): String[1] { %2014->toRepresentation() }",
+            "f__String_1_",
+        ),
+        Value::String("%2014".into()),
+    );
+    assert_eq!(
+        eval_pure(
+            r"function test::g(): String[1] { %2014-01->toRepresentation() }",
+            "g__String_1_",
+        ),
+        Value::String("%2014-01".into()),
+    );
+}
+
+#[test]
+fn eval_multiple_assertEq_mixed_date_precision() {
+    // Regression: multiple assertEq calls with mixed date precisions —
+    // previously crashed with "Variable 'actual' not found" because
+    // the year-month date literal failed to lower and `filter_map`
+    // silently dropped the second argument of `assertEq`.
+    assert_eq!(
+        eval_pure(
+            r"
+            function test::f(): Boolean[1] {
+                assertEq('%2014-01-01', %2014-01-01->toRepresentation());
+                assertEq('%2014-01', %2014-01->toRepresentation());
+                assertEq('%2014', %2014->toRepresentation());
+            }
+            ",
+            "f__Boolean_1_",
+        ),
+        Value::Boolean(true),
+    );
+}
+
+#[test]
 #[ignore = "diagnostic: bucket meta::tests errors by first line of message"]
 fn eval_surveyor_meta_tests_error_histogram() {
+    surveyor_error_histogram("meta::pure::functions::meta::tests");
+}
+
+#[test]
+#[ignore = "diagnostic: bucket lang::tests errors by first line of message"]
+fn eval_surveyor_lang_tests_error_histogram() {
+    surveyor_error_histogram("meta::pure::functions::lang::tests");
+}
+
+#[test]
+#[ignore = "diagnostic: bucket boolean::tests errors by first line of message"]
+fn eval_surveyor_boolean_tests_error_histogram() {
+    surveyor_error_histogram("meta::pure::functions::boolean::tests");
+}
+
+#[test]
+#[ignore = "diagnostic: bucket collection::tests errors by first line of message"]
+fn eval_surveyor_collection_tests_error_histogram() {
+    surveyor_error_histogram("meta::pure::functions::collection::tests");
+}
+
+#[test]
+#[ignore = "diagnostic: bucket string::tests errors by first line of message"]
+fn eval_surveyor_string_tests_error_histogram() {
+    surveyor_error_histogram("meta::pure::functions::string::tests");
+}
+
+fn surveyor_error_histogram(package: &str) {
     use legend_pure_runtime::eval::Evaluator;
     use std::collections::BTreeMap;
 
@@ -1125,7 +1198,7 @@ fn eval_surveyor_meta_tests_error_histogram() {
         .call(
             "meta::pure::test::surveyor::runTestsFromPath",
             &[
-                Value::String("meta::pure::functions::meta::tests".into()),
+                Value::String(SmolStr::new(package)),
                 Value::String("".into()),
             ],
         )
@@ -1187,7 +1260,7 @@ fn eval_surveyor_meta_tests_error_histogram() {
             .or_default()
             .push(format!("{fqn} || {msg}"));
     }
-    eprintln!("\n=== meta::tests ERROR histogram ({error_count} errors) ===");
+    eprintln!("\n=== {package} ERROR histogram ({error_count} errors) ===");
     let mut rows: Vec<_> = histogram.iter().collect();
     rows.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
     for (bucket, tests) in rows {

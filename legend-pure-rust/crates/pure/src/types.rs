@@ -160,14 +160,19 @@ pub struct Parameter {
 /// zero casts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DateValue {
-    /// Strict date: `%2024-01-15`.
+    /// Strict date: `%2024-01-15`, or a partial date (`%2024`, `%2024-01`).
+    ///
+    /// `month` is `Some` when the literal included a month segment; `day`
+    /// likewise for the day segment. The runtime preserves the precision
+    /// so `%2024-01->toRepresentation()` round-trips to `%2024-01`, not
+    /// `%2024-01-01`.
     StrictDate {
         /// Year (−9999..9999).
         year: i16,
-        /// Month (1–12).
-        month: i8,
-        /// Day (1–31).
-        day: i8,
+        /// Month (1–12). `None` for year-only literals (`%2024`).
+        month: Option<i8>,
+        /// Day (1–31). `None` for year- or year-month-only literals.
+        day: Option<i8>,
     },
     /// Date-time: `%2024-01-15T10:30:00`.
     DateTime {
