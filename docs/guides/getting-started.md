@@ -234,4 +234,42 @@ so that ANTLR4-generated and platform-generated Java files are present in
 
 ---
 
+## 9. Rust Workspace Quick Start
+
+The Rust workspace (`legend-pure-rust/`) is the active development target.
+
+### Prerequisites
+
+| Tool | Required version |
+|------|-----------------|
+| **Rust** | Latest stable (edition 2024) — install via [rustup.rs](https://rustup.rs/) |
+| **cargo-llvm-cov** | For coverage — `cargo install cargo-llvm-cov` |
+| **cargo-insta** | For snapshot testing — `cargo install cargo-insta` |
+
+### Build and Test
+
+```bash
+cd legend-pure-rust
+cargo build --workspace       # Build all crates
+cargo test --workspace        # Run all 739 tests
+cargo lint-lib                # Strict: no unwrap/expect in library code
+cargo lint                    # Standard clippy
+cargo fmt --check             # Format check
+```
+
+### Install the CLI
+
+```bash
+cargo install --path crates/cli
+legend parse model.pure       # Parse a Pure file
+legend check src/             # Check for syntax errors
+legend --help                 # All commands
+```
+
+See `legend-pure-rust/CLAUDE.md` for full development guide, code conventions,
+and `legend-pure-rust/BACKLOG.md` for active work items.
+
+---
+
 *Back: [Architecture Overview](../architecture/overview.md) · Next: [Build & CI Guide](build-and-ci.md)*
+

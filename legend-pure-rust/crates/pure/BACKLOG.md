@@ -101,9 +101,9 @@ dependencies, so future contributors know what's safe to pick up.
 
 | Item | Priority | Status | Notes |
 |---|---|---|---|
-| Error count baseline | — | 243 | 161 ambiguous, 75 unresolved, 6 parse, 1 duplicate |
-| Target after metaclass inference | — | ~100 | M3 metaclass types (Type, Class, GenericType) resolve elementToPath/dynamicNew |
-| Target after expression fixes | — | ~7 | Only parse failures + duplicates remain |
+| Error count baseline | — | ✅ 0 | Was 243 → 8 → 0. Platform compile clean (236 files, 1338 elements). |
+| Target after metaclass inference | — | ✅ Achieved | M3 metaclass types fully resolved. |
+| Target after expression fixes | — | ✅ Achieved | All expression lowering errors resolved. |
 
 ---
 

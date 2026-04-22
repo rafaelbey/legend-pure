@@ -288,4 +288,30 @@ flowchart TD
 
 ---
 
+## legend-pure-rust (Cargo workspace)
+
+> **Active development target.** The Rust workspace reimplements the Pure parser,
+> compiler, and runtime in Rust. See `legend-pure-rust/ARCHITECTURE.md` for the
+> full crate dependency graph and `legend-pure-rust/CLAUDE.md` for development setup.
+
+| Crate | Layer | Purpose |
+|-------|-------|---------|
+| `legend-pure-rust-ast` | 0 | AST data model (`Element`, `Expression`, `SourceInfo`) |
+| `legend-pure-rust-ast-derive` | 0 | Proc-macros (`Spanned`, `Annotated`, `PackageableElement`) |
+| `legend-pure-rust-lexer` | 1 | Hand-written tokenizer |
+| `legend-pure-rust-parser` | 2 | Recursive descent parser |
+| `legend-pure-rust-compose` | 2b | AST → canonical Pure grammar text |
+| `legend-pure-rust-protocol` | 3 | AST ↔ Legend Protocol v1 JSON (bidirectional) |
+| `legend-pure-rust-pure` | 5 | Semantic compiler: `PureModel`, type resolution, dispatch |
+| `legend-pure-runtime` | 6 | Tree-walking interpreter, persistent heap, native functions |
+| `legend-pure-rust-jni` | 7a | JNI bridge for Java interop |
+| `legend-cli` | 7b | Developer CLI: `legend parse`, `legend check`, etc. |
+| `legend-pure-core-platform-pure` | — | Embeds platform `.pure` files at build time |
+| `legend-pure-parser-stress` | — | Criterion benchmarks (1K–100K models) |
+
+**Build:** `cargo build --workspace` · **Test:** `cargo test --workspace` (739 tests)
+
+---
+
 *Back: [Architecture Overview](overview.md) · Next: [Technology Stack](tech-stack.md)*
+

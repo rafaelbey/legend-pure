@@ -31,6 +31,18 @@ lives only in the `protocol` crate.
 The `legend` CLI (`crates/cli`) is the primary developer tool: `legend parse`,
 `legend check`, `legend init`. Install with `cargo install --path crates/cli`.
 
+## Current State (April 2026)
+
+| Component | Status | Tests | Key Milestone |
+|-----------|--------|-------|---------------|
+| Parser | ✅ Complete | ~400+ | Full grammar coverage, 0 errors |
+| Compiler | ✅ Platform clean | ~50+ | 0 errors on 236 files / 1338 elements |
+| Runtime | 🚧 Active | ~160+ | ~50 native functions, PCT subset passing |
+| CLI | 🚧 Partial | ~20+ | 6/11 commands implemented |
+| **Total** | | **739** | |
+
+→ See `BACKLOG.md` at workspace root for the unified backlog.
+
 ## Build & Test Commands
 
 ```bash

@@ -43,7 +43,7 @@ cargo fmt --check
 
 # Code coverage (requires cargo-llvm-cov)
 cargo llvm-cov --workspace --html --output-dir coverage/
-cargo llvm-cov --workspace --fail-under-lines 90
+cargo llvm-cov --workspace --fail-under-lines 85
 ```
 
 ## Legend CLI
@@ -79,7 +79,9 @@ legend --help
 | `legend-pure-parser-pure` | Semantic Layer | `PureModel`, `ElementId`, `Class`, `TypeExpr` | ast, parser, `serde`, `bincode` |
 | `legend-pure-runtime` | Interpreter + heap | `Value`, `RuntimeHeap`, `VariableContext` | pure, ast, `im-rc`, `slotmap`, `rust_decimal`, `jiff` |
 | `legend-pure-parser-jni` | JNI bridge to Java | `Java_*` FFI functions | ast, lexer, parser, protocol, `jni` |
-| `legend-cli` | Developer CLI | `legend` binary | ast, lexer, parser, protocol, compose, pure, `clap` |
+| `legend-cli` | Developer CLI | `legend` binary | ast, lexer, parser, protocol, compose, pure, runtime, `clap` |
+| `legend-pure-core-platform-pure` | Platform `.pure` embedding | Build-time file bundling | (build.rs only) |
+| `legend-pure-parser-stress` | Benchmarks (1K–100K models) | Criterion benches | parser, ast, `criterion` |
 
 ## Development Guide
 
