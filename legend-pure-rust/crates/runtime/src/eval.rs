@@ -591,10 +591,19 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     ) -> Result<Value, PureException> {
         let target_val = self.eval(target)?;
         match &target_val {
-            Value::Object(id) => self
-                .heap
-                .get_property(*id, property)
-                .map_err(PureException::from),
+            Value::Object(id) => {
+                // Read as a multi-valued property and normalise via `from_vec`:
+                // empty → `Unit`, single → scalar, multiple → `Collection`. This
+                // matches Pure's multiplicity semantics — `$tg.before` on a
+                // freshly-constructed `^TestGroup(before=[])` must be empty,
+                // not a "property not found" error.
+                let values = self
+                    .heap
+                    .get_property_values(*id, property)
+                    .map_err(PureException::from)?;
+                let collected: Vec<Value> = values.iter().cloned().collect();
+                Ok(Value::from_vec(collected))
+            }
             Value::Element(id) => {
                 let id = *id;
                 self.eval_element_property(id, property)
@@ -734,9 +743,21 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 }
                 Ok(Value::from_vec(items))
             }
-            _ => Err(PureRuntimeError::EvaluationError(format!(
-                "Property '{property}' not supported on model element references"
-            ))),
+            _ => {
+                // Enum value access: `MyEnum.VALUE` where the compiler didn't
+                // pre-lower to `ExprKind::EnumValue`. Match the format used by
+                // `eval_enum_value` — `"SimpleName.VALUE"` — so equality
+                // comparisons between the two paths stay consistent.
+                if let Element::Enumeration(enum_def) = self.model.get_element(id)
+                    && enum_def.values.iter().any(|v| v.name == property)
+                {
+                    let simple = self.model.element_name(id);
+                    return Ok(Value::String(SmolStr::new(format!("{simple}.{property}"))));
+                }
+                Err(PureRuntimeError::EvaluationError(format!(
+                    "Property '{property}' not supported on model element references"
+                )))
+            }
         }
     }
 

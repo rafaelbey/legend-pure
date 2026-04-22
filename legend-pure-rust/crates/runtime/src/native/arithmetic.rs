@@ -17,9 +17,7 @@
 use rust_decimal::prelude::ToPrimitive;
 
 use crate::error::PureRuntimeError;
-use crate::native::{
-    EvalContextTrait, NativeFunction, NativeRegistry, expect_args, expect_min_args,
-};
+use crate::native::{EvalContextTrait, NativeFunction, NativeRegistry, expect_args};
 use crate::value::Value;
 
 // ---------------------------------------------------------------------------
@@ -43,39 +41,72 @@ impl NativeFunction for Plus {
         args: &[Value],
         _ctx: &mut dyn EvalContextTrait,
     ) -> Result<Value, PureRuntimeError> {
-        expect_min_args("plus", args, 2)?;
-        match (&args[0], &args[1]) {
-            (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a.wrapping_add(*b))),
-            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
-            #[allow(clippy::cast_precision_loss)]
-            (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f64 + b)),
-            #[allow(clippy::cast_precision_loss)]
-            (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a + *b as f64)),
-            (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(*a + *b)),
-            (Value::Decimal(a), Value::Integer(b)) => {
-                Ok(Value::Decimal(*a + rust_decimal::Decimal::from(*b)))
-            }
-            (Value::Integer(a), Value::Decimal(b)) => {
-                Ok(Value::Decimal(rust_decimal::Decimal::from(*a) + *b))
-            }
-            // Fallback for unresolved 'plus' operator strings
-            (Value::String(a), Value::String(b)) => {
-                let mut joined = String::with_capacity(a.len() + b.len());
-                joined.push_str(a);
-                joined.push_str(b);
-                Ok(Value::String(joined.into()))
-            }
-            _ => Err(PureRuntimeError::EvaluationError(format!(
-                "plus: unsupported types {} and {}",
-                args[0].type_name(),
-                args[1].type_name()
-            ))),
+        // Pure exposes three shapes for `plus`:
+        //   plus(Number[*]):Number[1]            // single collection arg → sum
+        //   plus(Number[1], Number[1]):Number[1] // pairwise
+        //   plus(String[*]):String[1]            // string concatenation
+        // The compiler dispatches by mangled FQN, but all three land here.
+        // Zero-or-one arg → treat the single collection as a fold source
+        // (empty collection → `Integer(0)` identity). Two or more args fall
+        // into the pairwise-plus-then-fold path so mixed-arity `plus` calls
+        // all share the same promotion matrix.
+        if args.len() <= 1 {
+            let items: Vec<Value> = args
+                .first()
+                .map(|a| a.to_collection().iter().cloned().collect())
+                .unwrap_or_default();
+            return plus_fold(items);
         }
+        plus_pair(&args[0], &args[1])
     }
 
     fn signature(&self) -> &'static str {
         "plus(Number[1], Number[1]): Number[1]"
     }
+}
+
+/// Pairwise `plus` — the promotion matrix shared by all `plus` shapes.
+fn plus_pair(a: &Value, b: &Value) -> Result<Value, PureRuntimeError> {
+    match (a, b) {
+        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a.wrapping_add(*b))),
+        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
+        #[allow(clippy::cast_precision_loss)]
+        (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f64 + b)),
+        #[allow(clippy::cast_precision_loss)]
+        (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a + *b as f64)),
+        (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(*a + *b)),
+        (Value::Decimal(a), Value::Integer(b)) => {
+            Ok(Value::Decimal(*a + rust_decimal::Decimal::from(*b)))
+        }
+        (Value::Integer(a), Value::Decimal(b)) => {
+            Ok(Value::Decimal(rust_decimal::Decimal::from(*a) + *b))
+        }
+        // Fallback for unresolved 'plus' operator strings
+        (Value::String(a), Value::String(b)) => {
+            let mut joined = String::with_capacity(a.len() + b.len());
+            joined.push_str(a);
+            joined.push_str(b);
+            Ok(Value::String(joined.into()))
+        }
+        _ => Err(PureRuntimeError::EvaluationError(format!(
+            "plus: unsupported types {} and {}",
+            a.type_name(),
+            b.type_name()
+        ))),
+    }
+}
+
+/// Fold a collection of numerics (or strings) through pairwise `plus`.
+///
+/// Empty input is treated as an identity: `Integer(0)`. All non-empty inputs
+/// reduce left-to-right so types follow Pure's promotion rules
+/// (Integer → Float → Decimal). Strings concatenate.
+fn plus_fold(values: Vec<Value>) -> Result<Value, PureRuntimeError> {
+    let mut iter = values.into_iter();
+    let Some(first) = iter.next() else {
+        return Ok(Value::Integer(0));
+    };
+    iter.try_fold(first, |acc, next| plus_pair(&acc, &next))
 }
 
 // ---------------------------------------------------------------------------
@@ -468,11 +499,35 @@ mod tests {
 
     #[test]
     fn wrong_arg_count_errors() {
-        assert!(
+        // `plus` accepts a single collection argument (fold form) — a lone
+        // Integer is therefore valid (returns it unchanged). Zero args falls
+        // back to the identity `Integer(0)`.
+        assert_eq!(
             Plus.execute(&[Value::Integer(1)], &mut NoOpEvalCtx)
-                .is_err()
+                .unwrap(),
+            Value::Integer(1)
+        );
+        assert_eq!(
+            Plus.execute(&[], &mut NoOpEvalCtx).unwrap(),
+            Value::Integer(0)
         );
         assert!(Abs.execute(&[], &mut NoOpEvalCtx).is_err());
+    }
+
+    #[test]
+    fn plus_folds_integer_collection() {
+        // `plus([1, 2, 3])` sums the collection — this is the surveyor path
+        // (`$results->map(r | $r.elapsed)->plus()`).
+        use im_rc::Vector as PVector;
+        let mut v = PVector::new();
+        v.push_back(Value::Integer(1));
+        v.push_back(Value::Integer(2));
+        v.push_back(Value::Integer(3));
+        assert_eq!(
+            Plus.execute(&[Value::Collection(Box::new(v))], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::Integer(6)
+        );
     }
 
     #[test]
