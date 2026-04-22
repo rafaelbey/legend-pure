@@ -41,10 +41,11 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use legend_pure_parser_pure::model::PureModel;
 use smol_str::SmolStr;
 
 use crate::context::VariableContext;
-use crate::error::PureRuntimeError;
+use crate::error::{PureException, PureRuntimeError};
 use crate::heap::RuntimeHeap;
 use crate::value::Value;
 
@@ -79,6 +80,21 @@ pub trait EvalContextTrait {
 
     /// Access the runtime heap mutably.
     fn heap_mut(&mut self) -> &mut RuntimeHeap;
+
+    /// Call a Pure function value (lambda or compiled) with the given arguments,
+    /// returning the full [`PureException`] on failure.
+    ///
+    /// Unlike [`eval_lambda`](Self::eval_lambda), this preserves the exception
+    /// kind so callers can classify outcomes (PASS / FAIL / ERROR / SKIP).
+    ///
+    /// # Errors
+    /// Returns a [`PureException`] if evaluation fails.
+    fn call_function(&mut self, callable: &Value, args: &[Value]) -> Result<Value, PureException>;
+
+    /// Access the compiled Pure model.
+    ///
+    /// Allows natives to resolve element names and type information.
+    fn model(&self) -> &PureModel;
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +264,7 @@ impl NativeRegistry {
         collection::register(&mut registry);
         lang::register(&mut registry);
         testing::register(&mut registry);
+        meta::register(&mut registry);
         registry
     }
 }
@@ -331,6 +348,9 @@ pub mod lang;
 /// Test assertion natives: `assert`.
 pub mod testing;
 
+/// Meta-model natives: `pathToElement`, `elementToPath`, `match`.
+pub mod meta;
+
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
@@ -359,6 +379,12 @@ impl EvalContextTrait for NoOpEvalCtx {
     }
     fn heap_mut(&mut self) -> &mut RuntimeHeap {
         unreachable!("NoOpEvalCtx::heap_mut should never be called in simple native tests")
+    }
+    fn call_function(&mut self, _c: &Value, _a: &[Value]) -> Result<Value, PureException> {
+        unreachable!("NoOpEvalCtx::call_function should never be called in simple native tests")
+    }
+    fn model(&self) -> &PureModel {
+        unreachable!("NoOpEvalCtx::model should never be called in simple native tests")
     }
 }
 

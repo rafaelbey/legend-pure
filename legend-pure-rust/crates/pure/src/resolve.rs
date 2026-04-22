@@ -1246,6 +1246,58 @@ pub(crate) fn infer_generic_bindings(
             bind_type(&param.type_expr, &arg_ty, &mut bindings.ty, model);
         }
     }
+
+    // Second pass: for lambda args against Function<{T->V}>[1] params, infer
+    // the lambda body's return type (with the lambda params in scope) and bind
+    // the FunctionType's return type variable.  This lets `map(coll, r | $r.x)`
+    // propagate the property type through `V` so downstream calls like `->plus()`
+    // can resolve unambiguously.
+    for (param, arg) in params.iter().zip(args.iter()) {
+        let ExprKind::Lambda {
+            parameters: lambda_params,
+            body: lambda_body,
+        } = arg.kind.as_ref()
+        else {
+            continue;
+        };
+        // The param type may be FunctionType directly, or Named<Function>[FunctionType]
+        // (the common `Function<{T[1]->V[*]}>` spelling).
+        let function_type = match &param.type_expr {
+            TypeExpr::FunctionType { .. } => Some(&param.type_expr),
+            TypeExpr::Named { type_arguments, .. } => type_arguments
+                .iter()
+                .find(|ta| matches!(ta, TypeExpr::FunctionType { .. })),
+            _ => None,
+        };
+        let Some(TypeExpr::FunctionType {
+            parameters: ft_params,
+            return_type,
+            ..
+        }) = function_type
+        else {
+            continue;
+        };
+        // Extend var_types with the lambda's own params, substituting any type
+        // variables already bound (e.g., T → TestResult from the first arg).
+        let mut extended = var_types.clone();
+        for (lp, (ft_ty, _ft_mult)) in lambda_params.iter().zip(ft_params.iter()) {
+            let resolved = substitute_type(ft_ty, &bindings.ty);
+            extended.insert(lp.name.clone(), (resolved, Multiplicity::PureOne));
+        }
+        let Some(last_expr) = lambda_body.last() else {
+            continue;
+        };
+        let Some(body_eid) = infer_type_from_valuespec(last_expr, model, &extended) else {
+            continue;
+        };
+        let body_te = TypeExpr::Named {
+            element: body_eid,
+            type_arguments: vec![],
+            value_arguments: vec![],
+        };
+        bind_type(return_type, &body_te, &mut bindings.ty, model);
+    }
+
     bindings
 }
 
