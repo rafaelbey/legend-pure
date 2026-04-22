@@ -570,6 +570,315 @@ impl NativeFunction for IsNotEmpty {
 }
 
 // ---------------------------------------------------------------------------
+// contains (collection)
+// ---------------------------------------------------------------------------
+
+/// Pure `contains<T>(T[*], Any[1]): Boolean[1]`
+///
+/// Returns `true` when the collection contains an element equal to the
+/// given needle, using [`Value`] equality. Empty collections always return
+/// `false`. A scalar input is treated as a singleton collection.
+#[derive(Debug)]
+pub struct Contains;
+
+impl NativeFunction for Contains {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("contains", args, 2)?;
+        let haystack = args[0].to_collection();
+        let needle = &args[1];
+        Ok(Value::Boolean(haystack.iter().any(|v| v == needle)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "contains(T[*], Any[1]): Boolean[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// reverse
+// ---------------------------------------------------------------------------
+
+/// Pure `reverse<T|m>(T[m]): T[m]`
+///
+/// Returns the input collection in reverse order. A scalar input is
+/// returned unchanged (a single-element reversal is a no-op). Empty
+/// input yields [`Value::Unit`].
+#[derive(Debug)]
+pub struct Reverse;
+
+impl NativeFunction for Reverse {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("reverse", args, 1)?;
+        let source = args[0].to_collection();
+        let reversed: Vec<Value> = source.iter().rev().cloned().collect();
+        Ok(Value::from_vec(reversed))
+    }
+
+    fn signature(&self) -> &'static str {
+        "reverse(T[m]): T[m]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// indexOf
+// ---------------------------------------------------------------------------
+
+/// Pure `indexOf<T>(T[*], T[1]): Integer[1]`
+///
+/// Returns the 0-based index of the first element equal to the needle,
+/// or `-1` when the needle is not found. Uses [`Value`] equality.
+#[derive(Debug)]
+pub struct IndexOf;
+
+impl NativeFunction for IndexOf {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("indexOf", args, 2)?;
+        let haystack = args[0].to_collection();
+        let needle = &args[1];
+        let idx = haystack.iter().position(|v| v == needle);
+        match idx {
+            #[allow(clippy::cast_possible_wrap)]
+            Some(i) => Ok(Value::Integer(i as i64)),
+            None => Ok(Value::Integer(-1)),
+        }
+    }
+
+    fn signature(&self) -> &'static str {
+        "indexOf(T[*], T[1]): Integer[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// find (lambda-dependent)
+// ---------------------------------------------------------------------------
+
+/// Pure `find<T>(T[*], Function<{T[1]->Boolean[1]}>[1]): T[0..1]`
+///
+/// Returns the first element for which the predicate returns `true`, or
+/// [`Value::Unit`] if no element satisfies the predicate.
+#[derive(Debug)]
+pub struct Find;
+
+impl NativeFunction for Find {
+    fn execute(
+        &self,
+        args: &[Value],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("find", args, 2)?;
+        let source = args[0].to_collection();
+        let lambda = &args[1];
+
+        for item in &source {
+            let predicate_result = ctx.eval_lambda(lambda, std::slice::from_ref(item))?;
+            if predicate_result.as_boolean()? {
+                return Ok(item.clone());
+            }
+        }
+
+        Ok(Value::Unit)
+    }
+
+    fn signature(&self) -> &'static str {
+        "find(T[*], Function<{T[1]->Boolean[1]}>[1]): T[0..1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// add (append)
+// ---------------------------------------------------------------------------
+
+/// Pure `add<T|m>(T[m], T[1]): T[$1_MANY$]`
+///
+/// Appends a single element to the end of a collection, producing a new
+/// collection. Scalar inputs are promoted; empty inputs yield a singleton.
+#[derive(Debug)]
+pub struct Add;
+
+impl NativeFunction for Add {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("add", args, 2)?;
+        let mut coll = args[0].to_collection();
+        coll.push_back(args[1].clone());
+        let as_vec: Vec<Value> = coll.into_iter().collect();
+        Ok(Value::from_vec(as_vec))
+    }
+
+    fn signature(&self) -> &'static str {
+        "add(T[m], T[1]): T[$1_MANY$]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// slice
+// ---------------------------------------------------------------------------
+
+/// Pure `slice<T>(T[*], Integer[1], Integer[1]): T[*]`
+///
+/// Returns the sub-collection from `start` (inclusive) to `end` (exclusive).
+/// Indices are clamped to the collection bounds: negative indices become 0,
+/// and indices past the end become the length. If `start >= end` after
+/// clamping, the result is empty.
+#[derive(Debug)]
+pub struct Slice;
+
+impl NativeFunction for Slice {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("slice", args, 3)?;
+        let source = args[0].to_collection();
+        let start = args[1].as_integer()?;
+        let end = args[2].as_integer()?;
+
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let start = start.max(0) as usize;
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let end = end.max(0) as usize;
+        let start = start.min(source.len());
+        let end = end.min(source.len());
+
+        if start >= end {
+            return Ok(Value::Unit);
+        }
+
+        // PVector::slice takes Range; we iterate to keep it simple & avoid
+        // accidentally moving the clone out.
+        let out: Vec<Value> = source
+            .iter()
+            .skip(start)
+            .take(end - start)
+            .cloned()
+            .collect();
+        Ok(Value::from_vec(out))
+    }
+
+    fn signature(&self) -> &'static str {
+        "slice(T[*], Integer[1], Integer[1]): T[*]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// sort
+// ---------------------------------------------------------------------------
+
+/// Default comparator used by [`Sort`] when no user-supplied comparator
+/// is provided. Compares values of the same primitive type using their
+/// natural ordering. Cross-type comparisons produce an evaluation error.
+fn cmp_values(a: &Value, b: &Value) -> Result<std::cmp::Ordering, PureRuntimeError> {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (Value::Integer(x), Value::Integer(y)) => Ok(x.cmp(y)),
+        (Value::Float(x), Value::Float(y)) => Ok(x.partial_cmp(y).unwrap_or(Ordering::Equal)),
+        (Value::Decimal(x), Value::Decimal(y)) => Ok(x.cmp(y)),
+        (Value::String(x), Value::String(y)) => Ok(x.cmp(y)),
+        (Value::Boolean(x), Value::Boolean(y)) => Ok(x.cmp(y)),
+        (Value::Date(x), Value::Date(y)) => Ok(x.cmp(y)),
+        _ => Err(PureRuntimeError::EvaluationError(format!(
+            "sort: cannot compare {} and {}",
+            a.type_name(),
+            b.type_name()
+        ))),
+    }
+}
+
+/// Pure `sort<T>(T[*]): T[*]` — default (natural) comparator.
+///
+/// Sorts the collection stably using [`cmp_values`] as the comparator. Only
+/// homogeneous collections of comparable primitive types are supported;
+/// mixed-type inputs produce an evaluation error.
+#[derive(Debug)]
+pub struct Sort;
+
+impl NativeFunction for Sort {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("sort", args, 1)?;
+        let source = args[0].to_collection();
+        let mut items: Vec<Value> = source.iter().cloned().collect();
+
+        // Stable sort, bubbling up the first comparison error via a captured
+        // Result slot. `sort_by` cannot short-circuit on its own.
+        let mut cmp_err: Option<PureRuntimeError> = None;
+        items.sort_by(|a, b| match cmp_values(a, b) {
+            Ok(o) => o,
+            Err(e) => {
+                if cmp_err.is_none() {
+                    cmp_err = Some(e);
+                }
+                std::cmp::Ordering::Equal
+            }
+        });
+        if let Some(e) = cmp_err {
+            return Err(e);
+        }
+
+        Ok(Value::from_vec(items))
+    }
+
+    fn signature(&self) -> &'static str {
+        "sort(T[*]): T[*]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// removeAllOptimized
+// ---------------------------------------------------------------------------
+
+/// Pure `removeAllOptimized<T>(T[*], T[*]): T[*]`
+///
+/// Returns a new collection containing the elements of the first argument
+/// that are **not** present in the second argument. Uses [`Value`] equality
+/// for membership. Preserves the original ordering of the first argument
+/// and keeps duplicates that don't match any element in the second argument.
+#[derive(Debug)]
+pub struct RemoveAllOptimized;
+
+impl NativeFunction for RemoveAllOptimized {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("removeAllOptimized", args, 2)?;
+        let source = args[0].to_collection();
+        let to_remove = args[1].to_collection();
+
+        let out: Vec<Value> = source
+            .iter()
+            .filter(|v| !to_remove.iter().any(|r| r == *v))
+            .cloned()
+            .collect();
+        Ok(Value::from_vec(out))
+    }
+
+    fn signature(&self) -> &'static str {
+        "removeAllOptimized(T[*], T[*]): T[*]"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -605,6 +914,21 @@ pub fn register(registry: &mut NativeRegistry) {
         "removeDuplicates_T_MANY__Function_$0_1$__Function_$0_1$__T_MANY_",
         RemoveDuplicates,
     );
+
+    // Additional non-lambda collection operations
+    registry.register("contains_T_MANY__Any_1__Boolean_1_", Contains);
+    registry.register("reverse_T_m__T_m_", Reverse);
+    registry.register("indexOf_T_MANY__T_1__Integer_1_", IndexOf);
+    registry.register("add_T_m__T_1__T_$1_MANY$_", Add);
+    registry.register("slice_T_MANY__Integer_1__Integer_1__T_MANY_", Slice);
+    registry.register("sort_T_MANY__T_MANY_", Sort);
+    registry.register(
+        "removeAllOptimized_T_MANY__T_MANY__T_MANY_",
+        RemoveAllOptimized,
+    );
+
+    // Lambda-dependent additional operations
+    registry.register("find_T_MANY__Function_1__T_$0_1$_", Find);
 }
 
 // ---------------------------------------------------------------------------
@@ -928,5 +1252,367 @@ mod tests {
             .execute(&[input, Value::Unit, Value::Unit], &mut NoOpEvalCtx)
             .unwrap();
         assert_eq!(result, int_collection(&[1, 2]));
+    }
+
+    // -----------------------------------------------------------------------
+    // contains
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn contains_finds_element() {
+        assert_eq!(
+            Contains
+                .execute(
+                    &[int_collection(&[1, 2, 3]), Value::Integer(2)],
+                    &mut NoOpEvalCtx
+                )
+                .unwrap(),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn contains_missing_element() {
+        assert_eq!(
+            Contains
+                .execute(
+                    &[int_collection(&[1, 2, 3]), Value::Integer(99)],
+                    &mut NoOpEvalCtx
+                )
+                .unwrap(),
+            Value::Boolean(false)
+        );
+    }
+
+    #[test]
+    fn contains_on_empty_is_false() {
+        assert_eq!(
+            Contains
+                .execute(&[Value::Unit, Value::Integer(1)], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::Boolean(false)
+        );
+    }
+
+    #[test]
+    fn contains_wrong_arg_count() {
+        assert!(
+            Contains
+                .execute(&[int_collection(&[1])], &mut NoOpEvalCtx)
+                .is_err()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // reverse
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn reverse_multi_element() {
+        assert_eq!(
+            Reverse
+                .execute(&[int_collection(&[1, 2, 3])], &mut NoOpEvalCtx)
+                .unwrap(),
+            int_collection(&[3, 2, 1])
+        );
+    }
+
+    #[test]
+    fn reverse_single_element_is_noop() {
+        assert_eq!(
+            Reverse
+                .execute(&[Value::Integer(7)], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::Integer(7)
+        );
+    }
+
+    #[test]
+    fn reverse_empty_returns_unit() {
+        assert_eq!(
+            Reverse.execute(&[Value::Unit], &mut NoOpEvalCtx).unwrap(),
+            Value::Unit
+        );
+    }
+
+    #[test]
+    fn reverse_wrong_arg_count() {
+        assert!(Reverse.execute(&[], &mut NoOpEvalCtx).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // indexOf
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn index_of_found() {
+        assert_eq!(
+            IndexOf
+                .execute(
+                    &[int_collection(&[10, 20, 30]), Value::Integer(20)],
+                    &mut NoOpEvalCtx
+                )
+                .unwrap(),
+            Value::Integer(1)
+        );
+    }
+
+    #[test]
+    fn index_of_not_found_returns_minus_one() {
+        assert_eq!(
+            IndexOf
+                .execute(
+                    &[int_collection(&[10, 20, 30]), Value::Integer(99)],
+                    &mut NoOpEvalCtx
+                )
+                .unwrap(),
+            Value::Integer(-1)
+        );
+    }
+
+    #[test]
+    fn index_of_empty_returns_minus_one() {
+        assert_eq!(
+            IndexOf
+                .execute(&[Value::Unit, Value::Integer(1)], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::Integer(-1)
+        );
+    }
+
+    #[test]
+    fn index_of_wrong_arg_count() {
+        assert!(
+            IndexOf
+                .execute(&[Value::Integer(1)], &mut NoOpEvalCtx)
+                .is_err()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // find (lambda-dependent)
+    // -----------------------------------------------------------------------
+
+    // Happy-path `find` exercises the lambda-capable context; covered by
+    // `eval_find_returns_first_match` in `tests/eval_tests.rs`.
+
+    #[test]
+    fn find_wrong_arg_count() {
+        assert!(
+            Find.execute(&[int_collection(&[1])], &mut NoOpEvalCtx)
+                .is_err()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // add (append)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn add_appends_to_collection() {
+        assert_eq!(
+            Add.execute(
+                &[int_collection(&[1, 2]), Value::Integer(3)],
+                &mut NoOpEvalCtx
+            )
+            .unwrap(),
+            int_collection(&[1, 2, 3])
+        );
+    }
+
+    #[test]
+    fn add_to_empty_yields_singleton() {
+        assert_eq!(
+            Add.execute(&[Value::Unit, Value::Integer(1)], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::Integer(1)
+        );
+    }
+
+    #[test]
+    fn add_to_scalar_promotes_to_collection() {
+        assert_eq!(
+            Add.execute(&[Value::Integer(1), Value::Integer(2)], &mut NoOpEvalCtx)
+                .unwrap(),
+            int_collection(&[1, 2])
+        );
+    }
+
+    #[test]
+    fn add_wrong_arg_count() {
+        assert!(Add.execute(&[Value::Integer(1)], &mut NoOpEvalCtx).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // slice
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn slice_basic_range() {
+        assert_eq!(
+            Slice
+                .execute(
+                    &[
+                        int_collection(&[10, 20, 30, 40, 50]),
+                        Value::Integer(1),
+                        Value::Integer(4)
+                    ],
+                    &mut NoOpEvalCtx
+                )
+                .unwrap(),
+            int_collection(&[20, 30, 40])
+        );
+    }
+
+    #[test]
+    fn slice_empty_when_start_equals_end() {
+        assert_eq!(
+            Slice
+                .execute(
+                    &[
+                        int_collection(&[1, 2, 3]),
+                        Value::Integer(2),
+                        Value::Integer(2)
+                    ],
+                    &mut NoOpEvalCtx
+                )
+                .unwrap(),
+            Value::Unit
+        );
+    }
+
+    #[test]
+    fn slice_clamps_out_of_bounds() {
+        assert_eq!(
+            Slice
+                .execute(
+                    &[
+                        int_collection(&[1, 2, 3]),
+                        Value::Integer(1),
+                        Value::Integer(99)
+                    ],
+                    &mut NoOpEvalCtx
+                )
+                .unwrap(),
+            int_collection(&[2, 3])
+        );
+    }
+
+    #[test]
+    fn slice_type_mismatch_errors() {
+        assert!(
+            Slice
+                .execute(
+                    &[
+                        int_collection(&[1, 2, 3]),
+                        Value::String("1".into()),
+                        Value::Integer(2)
+                    ],
+                    &mut NoOpEvalCtx
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn slice_wrong_arg_count() {
+        assert!(
+            Slice
+                .execute(
+                    &[int_collection(&[1, 2, 3]), Value::Integer(0)],
+                    &mut NoOpEvalCtx
+                )
+                .is_err()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // sort
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sort_integers_ascending() {
+        assert_eq!(
+            Sort.execute(&[int_collection(&[3, 1, 2])], &mut NoOpEvalCtx)
+                .unwrap(),
+            int_collection(&[1, 2, 3])
+        );
+    }
+
+    #[test]
+    fn sort_single_element_is_noop() {
+        assert_eq!(
+            Sort.execute(&[Value::Integer(5)], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::Integer(5)
+        );
+    }
+
+    #[test]
+    fn sort_empty_returns_unit() {
+        assert_eq!(
+            Sort.execute(&[Value::Unit], &mut NoOpEvalCtx).unwrap(),
+            Value::Unit
+        );
+    }
+
+    #[test]
+    fn sort_mixed_types_errors() {
+        let mut v = PVector::new();
+        v.push_back(Value::Integer(1));
+        v.push_back(Value::String("oops".into()));
+        let input = Value::Collection(Box::new(v));
+        assert!(Sort.execute(&[input], &mut NoOpEvalCtx).is_err());
+    }
+
+    #[test]
+    fn sort_wrong_arg_count() {
+        assert!(Sort.execute(&[], &mut NoOpEvalCtx).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // removeAllOptimized
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn remove_all_optimized_removes_matching_elements() {
+        assert_eq!(
+            RemoveAllOptimized
+                .execute(
+                    &[int_collection(&[1, 2, 3, 2, 4]), int_collection(&[2, 4])],
+                    &mut NoOpEvalCtx
+                )
+                .unwrap(),
+            int_collection(&[1, 3])
+        );
+    }
+
+    #[test]
+    fn remove_all_optimized_with_empty_removal_list_is_identity() {
+        assert_eq!(
+            RemoveAllOptimized
+                .execute(&[int_collection(&[1, 2, 3]), Value::Unit], &mut NoOpEvalCtx)
+                .unwrap(),
+            int_collection(&[1, 2, 3])
+        );
+    }
+
+    #[test]
+    fn remove_all_optimized_empty_source() {
+        assert_eq!(
+            RemoveAllOptimized
+                .execute(&[Value::Unit, int_collection(&[1])], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::Unit
+        );
+    }
+
+    #[test]
+    fn remove_all_optimized_wrong_arg_count() {
+        assert!(
+            RemoveAllOptimized
+                .execute(&[int_collection(&[1])], &mut NoOpEvalCtx)
+                .is_err()
+        );
     }
 }

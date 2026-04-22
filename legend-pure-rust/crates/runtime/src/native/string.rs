@@ -14,7 +14,8 @@
 
 //! String native functions: `plus` (concatenation), `length`, `substring`,
 //! `indexOf`, `contains`, `startsWith`, `endsWith`, `toLower`, `toUpper`,
-//! `trim`, `toString`, `format`.
+//! `trim`, `ltrim`, `rtrim`, `reverseString`, `replace`, `joinStrings`,
+//! `toString`, `format`.
 
 use smol_str::SmolStr;
 
@@ -363,6 +364,163 @@ impl NativeFunction for Format {
 }
 
 // ---------------------------------------------------------------------------
+// ltrim / rtrim
+// ---------------------------------------------------------------------------
+
+/// Pure `ltrim(String[1]): String[1]` — remove leading whitespace.
+#[derive(Debug)]
+pub struct Ltrim;
+
+impl NativeFunction for Ltrim {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("ltrim", args, 1)?;
+        let s = args[0].as_string()?;
+        Ok(Value::String(SmolStr::new(s.trim_start())))
+    }
+
+    fn signature(&self) -> &'static str {
+        "ltrim(String[1]): String[1]"
+    }
+}
+
+/// Pure `rtrim(String[1]): String[1]` — remove trailing whitespace.
+#[derive(Debug)]
+pub struct Rtrim;
+
+impl NativeFunction for Rtrim {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("rtrim", args, 1)?;
+        let s = args[0].as_string()?;
+        Ok(Value::String(SmolStr::new(s.trim_end())))
+    }
+
+    fn signature(&self) -> &'static str {
+        "rtrim(String[1]): String[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// reverseString
+// ---------------------------------------------------------------------------
+
+/// Pure `reverseString(String[1]): String[1]` — reverse the characters of
+/// a string. Reversal is per Unicode scalar (`char`), not per byte, so
+/// multi-byte characters are preserved intact.
+#[derive(Debug)]
+pub struct ReverseString;
+
+impl NativeFunction for ReverseString {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("reverseString", args, 1)?;
+        let s = args[0].as_string()?;
+        let reversed: String = s.chars().rev().collect();
+        Ok(Value::String(SmolStr::new(reversed)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "reverseString(String[1]): String[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// replace
+// ---------------------------------------------------------------------------
+
+/// Pure `replace(String[1], String[1], String[1]): String[1]` — replace all
+/// occurrences of `target` in `source` with `replacement`.
+#[derive(Debug)]
+pub struct Replace;
+
+impl NativeFunction for Replace {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("replace", args, 3)?;
+        let source = args[0].as_string()?;
+        let target = args[1].as_string()?;
+        let replacement = args[2].as_string()?;
+        let out = source
+            .as_str()
+            .replace(target.as_str(), replacement.as_str());
+        Ok(Value::String(SmolStr::new(out)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "replace(String[1], String[1], String[1]): String[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// joinStrings (2-arg and 4-arg)
+// ---------------------------------------------------------------------------
+
+/// Pure `joinStrings` — concatenate a collection of strings with a separator.
+///
+/// Two arities are supported:
+/// - `joinStrings(String[*], String[1]): String[1]` — elements joined by
+///   `separator`.
+/// - `joinStrings(String[*], String[1], String[1], String[1]): String[1]` —
+///   `prefix + elements.join(separator) + suffix`.
+///
+/// The `execute` implementation dispatches on `args.len()` so a single
+/// struct can back both mangled registrations.
+#[derive(Debug)]
+pub struct JoinStrings;
+
+impl NativeFunction for JoinStrings {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        let (separator, prefix, suffix) = match args.len() {
+            2 => (args[1].as_string()?.clone(), None, None),
+            4 => (
+                args[1].as_string()?.clone(),
+                Some(args[2].as_string()?.clone()),
+                Some(args[3].as_string()?.clone()),
+            ),
+            n => {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "joinStrings: expected 2 or 4 argument(s), got {n}"
+                )));
+            }
+        };
+
+        let coll = args[0].to_collection();
+        let mut parts: Vec<String> = Vec::with_capacity(coll.len());
+        for v in coll.iter() {
+            parts.push(v.as_string()?.as_str().to_owned());
+        }
+        let joined = parts.join(separator.as_str());
+
+        let result = match (prefix, suffix) {
+            (Some(p), Some(s)) => format!("{p}{joined}{s}"),
+            _ => joined,
+        };
+        Ok(Value::String(SmolStr::new(result)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "joinStrings(String[*], String[1]): String[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -386,6 +544,15 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("toLower_String_1__String_1_", ToLower);
     registry.register("toUpper_String_1__String_1_", ToUpper);
     registry.register("trim_String_1__String_1_", Trim);
+    registry.register("ltrim_String_1__String_1_", Ltrim);
+    registry.register("rtrim_String_1__String_1_", Rtrim);
+    registry.register("reverseString_String_1__String_1_", ReverseString);
+    registry.register("replace_String_1__String_1__String_1__String_1_", Replace);
+    registry.register("joinStrings_String_MANY__String_1__String_1_", JoinStrings);
+    registry.register(
+        "joinStrings_String_MANY__String_1__String_1__String_1__String_1_",
+        JoinStrings,
+    );
     registry.register("toString_Any_1__String_1_", ToString);
     registry.register("format_String_1__Any_MANY__String_1_", Format);
 }
@@ -587,6 +754,287 @@ mod tests {
                     &[Value::String("a".into()), Value::Integer(1)],
                     &mut NoOpEvalCtx
                 )
+                .is_err()
+        );
+    }
+
+    // -- ltrim / rtrim --
+
+    #[test]
+    fn ltrim_strips_leading_whitespace() {
+        assert_eq!(
+            Ltrim
+                .execute(&[Value::String("  hi  ".into())], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::String("hi  ".into())
+        );
+    }
+
+    #[test]
+    fn ltrim_empty_string() {
+        assert_eq!(
+            Ltrim
+                .execute(&[Value::String("".into())], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::String("".into())
+        );
+    }
+
+    #[test]
+    fn ltrim_wrong_arg_count() {
+        assert!(Ltrim.execute(&[], &mut NoOpEvalCtx).is_err());
+    }
+
+    #[test]
+    fn ltrim_type_mismatch() {
+        assert!(
+            Ltrim
+                .execute(&[Value::Integer(1)], &mut NoOpEvalCtx)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn rtrim_strips_trailing_whitespace() {
+        assert_eq!(
+            Rtrim
+                .execute(&[Value::String("  hi  ".into())], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::String("  hi".into())
+        );
+    }
+
+    #[test]
+    fn rtrim_empty_string() {
+        assert_eq!(
+            Rtrim
+                .execute(&[Value::String("".into())], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::String("".into())
+        );
+    }
+
+    #[test]
+    fn rtrim_wrong_arg_count() {
+        assert!(
+            Rtrim
+                .execute(
+                    &[Value::String("a".into()), Value::String("b".into())],
+                    &mut NoOpEvalCtx
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn rtrim_type_mismatch() {
+        assert!(
+            Rtrim
+                .execute(&[Value::Boolean(true)], &mut NoOpEvalCtx)
+                .is_err()
+        );
+    }
+
+    // -- reverseString --
+
+    #[test]
+    fn reverse_string_ascii() {
+        assert_eq!(
+            ReverseString
+                .execute(&[Value::String("hello".into())], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::String("olleh".into())
+        );
+    }
+
+    #[test]
+    fn reverse_string_empty() {
+        assert_eq!(
+            ReverseString
+                .execute(&[Value::String("".into())], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::String("".into())
+        );
+    }
+
+    #[test]
+    fn reverse_string_unicode_preserves_codepoints() {
+        // "héllo" contains a 2-byte UTF-8 char; reversing per byte would
+        // produce invalid UTF-8. Reversing per char gives "olléh".
+        assert_eq!(
+            ReverseString
+                .execute(&[Value::String("héllo".into())], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::String("olléh".into())
+        );
+    }
+
+    #[test]
+    fn reverse_string_wrong_arg_count() {
+        assert!(ReverseString.execute(&[], &mut NoOpEvalCtx).is_err());
+    }
+
+    #[test]
+    fn reverse_string_type_mismatch() {
+        assert!(
+            ReverseString
+                .execute(&[Value::Integer(1)], &mut NoOpEvalCtx)
+                .is_err()
+        );
+    }
+
+    // -- replace --
+
+    #[test]
+    fn replace_replaces_all_occurrences() {
+        let r = Replace
+            .execute(
+                &[
+                    Value::String("foo bar foo".into()),
+                    Value::String("foo".into()),
+                    Value::String("baz".into()),
+                ],
+                &mut NoOpEvalCtx,
+            )
+            .unwrap();
+        assert_eq!(r, Value::String("baz bar baz".into()));
+    }
+
+    #[test]
+    fn replace_no_match_returns_source_unchanged() {
+        let r = Replace
+            .execute(
+                &[
+                    Value::String("hello".into()),
+                    Value::String("xyz".into()),
+                    Value::String("abc".into()),
+                ],
+                &mut NoOpEvalCtx,
+            )
+            .unwrap();
+        assert_eq!(r, Value::String("hello".into()));
+    }
+
+    #[test]
+    fn replace_wrong_arg_count() {
+        assert!(
+            Replace
+                .execute(
+                    &[Value::String("a".into()), Value::String("b".into())],
+                    &mut NoOpEvalCtx
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn replace_type_mismatch() {
+        assert!(
+            Replace
+                .execute(
+                    &[
+                        Value::String("a".into()),
+                        Value::Integer(1),
+                        Value::String("c".into()),
+                    ],
+                    &mut NoOpEvalCtx
+                )
+                .is_err()
+        );
+    }
+
+    // -- joinStrings --
+
+    #[test]
+    fn join_strings_2arg_basic() {
+        use im_rc::Vector;
+        let coll = Value::Collection(Box::new(Vector::from_iter([
+            Value::String("a".into()),
+            Value::String("b".into()),
+            Value::String("c".into()),
+        ])));
+        let r = JoinStrings
+            .execute(&[coll, Value::String(",".into())], &mut NoOpEvalCtx)
+            .unwrap();
+        assert_eq!(r, Value::String("a,b,c".into()));
+    }
+
+    #[test]
+    fn join_strings_2arg_empty_collection() {
+        use im_rc::Vector;
+        let coll: Value = Value::Collection(Box::new(Vector::new()));
+        let r = JoinStrings
+            .execute(&[coll, Value::String(",".into())], &mut NoOpEvalCtx)
+            .unwrap();
+        assert_eq!(r, Value::String("".into()));
+    }
+
+    #[test]
+    fn join_strings_2arg_scalar_treated_as_singleton() {
+        // A bare String[1] value passed where String[*] is expected should
+        // be treated as a one-element collection via Value::to_collection.
+        let r = JoinStrings
+            .execute(
+                &[Value::String("lone".into()), Value::String(",".into())],
+                &mut NoOpEvalCtx,
+            )
+            .unwrap();
+        assert_eq!(r, Value::String("lone".into()));
+    }
+
+    #[test]
+    fn join_strings_4arg_with_prefix_and_suffix() {
+        use im_rc::Vector;
+        let coll = Value::Collection(Box::new(Vector::from_iter([
+            Value::String("a".into()),
+            Value::String("b".into()),
+        ])));
+        let r = JoinStrings
+            .execute(
+                &[
+                    coll,
+                    Value::String(", ".into()),
+                    Value::String("[".into()),
+                    Value::String("]".into()),
+                ],
+                &mut NoOpEvalCtx,
+            )
+            .unwrap();
+        assert_eq!(r, Value::String("[a, b]".into()));
+    }
+
+    #[test]
+    fn join_strings_wrong_arg_count() {
+        assert!(JoinStrings.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(
+            JoinStrings
+                .execute(&[Value::String("only".into())], &mut NoOpEvalCtx)
+                .is_err()
+        );
+        assert!(
+            JoinStrings
+                .execute(
+                    &[
+                        Value::String("a".into()),
+                        Value::String("b".into()),
+                        Value::String("c".into()),
+                    ],
+                    &mut NoOpEvalCtx
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn join_strings_element_type_mismatch() {
+        use im_rc::Vector;
+        let coll = Value::Collection(Box::new(Vector::from_iter([
+            Value::String("a".into()),
+            Value::Integer(1),
+        ])));
+        assert!(
+            JoinStrings
+                .execute(&[coll, Value::String(",".into())], &mut NoOpEvalCtx)
                 .is_err()
         );
     }
