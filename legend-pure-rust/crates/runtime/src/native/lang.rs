@@ -150,18 +150,17 @@ impl NativeFunction for Print {
     fn execute(
         &self,
         args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
+        ctx: &mut dyn EvalContextTrait,
     ) -> Result<Value, PureRuntimeError> {
         expect_args("print", args, 2)?;
-        let payload = &args[0];
-        match payload {
+        match &args[0] {
             Value::Collection(v) => {
                 for item in v.iter() {
-                    print!("{item}");
+                    ctx.console_output(&format!("{item}"));
                 }
             }
             Value::Unit => {}
-            other => print!("{other}"),
+            other => ctx.console_output(&format!("{other}")),
         }
         Ok(Value::Unit)
     }

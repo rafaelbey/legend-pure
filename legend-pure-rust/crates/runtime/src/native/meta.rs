@@ -637,134 +637,10 @@ fn as_element_id(v: &Value) -> Result<ElementId, PureRuntimeError> {
     }
 }
 
-/// Resolve a package-qualified path to an element or a package.
-///
-/// Walks all segments but the last as packages, then tries:
-/// 1. A child element — first by simple name (function `function_name`,
-///    not mangled), then by mangled element name so paths like
-///    `meta::pure::functions::boolean::greaterThan_Number_1__Number_1__Boolean_1_`
-///    resolve to the specific overload.
-/// 2. A child package.
-///
-/// Special cases for "the root package": `""`, `"Root"`, and a path
-/// equal to the separator (e.g. `"::"` with separator `"::"`, or `"."`
-/// with separator `"."`) all resolve to the root package.
-///
-/// Returns `None` if any segment fails to resolve.
-fn resolve_path(model: &PureModel, path: &str, separator: &str) -> Option<ElementId> {
-    // Root-package sentinels.
-    if path.is_empty() || path == "Root" || (!separator.is_empty() && path == separator) {
-        return Some(ElementId::Package(model.root_package));
-    }
-
-    let segments: Vec<&str> = if separator.is_empty() {
-        vec![path]
-    } else {
-        path.split(separator).collect()
-    };
-    if segments.is_empty() {
-        return None;
-    }
-
-    // Walk packages for all but the last segment.
-    let mut current = model.root_package;
-    for segment in &segments[..segments.len() - 1] {
-        let pkg = model.get_package(current);
-        let next = pkg
-            .children_packages
-            .iter()
-            .find(|&&child_id| model.get_package(child_id).name == *segment)?;
-        current = *next;
-    }
-
-    let last = segments[segments.len() - 1];
-    let pkg = model.get_package(current);
-
-    // Prefer child-element match by simple name (function simple name for
-    // Function elements). Falls through to a mangled-name match so
-    // overload-specific paths like `greaterThan_Number_1__Number_1__Boolean_1_`
-    // resolve directly.
-    for &eid in &pkg.children_elements {
-        if element_simple_name(model, eid) == last {
-            return Some(eid);
-        }
-    }
-    for &eid in &pkg.children_elements {
-        if model.element_name(eid) == last {
-            return Some(eid);
-        }
-    }
-
-    // Fall back to a child package of that name.
-    pkg.children_packages
-        .iter()
-        .find(|&&child_id| model.get_package(child_id).name == *last)
-        .map(|&child_id| ElementId::Package(child_id))
-}
-
-/// Build the `separator`-joined qualified path for an element.
-///
-/// For functions, uses `function_name` (simple name). When `include_root`
-/// is `true` the anonymous root package is rendered as the literal string
-/// `"Root"` (matching the Java Pure runtime) — so a top-level element
-/// like `Package` becomes `"Root::Package"` under `includeRoot=true`.
-/// When `include_root` is `false`, the root segment is dropped entirely.
-///
-/// Special case: `elementToPath(::)` on the root package with
-/// `include_root=false` must be the empty string, not `""` joined into
-/// the output.
-fn build_element_path(
-    model: &PureModel,
-    id: ElementId,
-    separator: &str,
-    include_root: bool,
-) -> String {
-    // Calling elementToPath on the root package itself.
-    if let ElementId::Package(pkg_id) = id
-        && model.get_package(pkg_id).parent.is_none()
-    {
-        return if include_root {
-            "Root".to_string()
-        } else {
-            String::new()
-        };
-    }
-
-    let mut segments: Vec<SmolStr> = Vec::new();
-    segments.push(element_simple_name(model, id).clone());
-
-    let mut parent_pkg = match id {
-        ElementId::Package(pkg_id) => model.get_package(pkg_id).parent,
-        ElementId::InstanceId { .. } => Some(model.get_node(id).parent_package),
-    };
-
-    // Collect intermediate package names (everything between the element and
-    // the root package). We don't yet know whether we'll prepend "Root" —
-    // the Java Pure rule is that top-level elements (direct children of the
-    // root) never get a "Root" prefix, even when `includeRoot == true`. Only
-    // elements nested inside at least one named package do.
-    let mut intermediate_packages: Vec<SmolStr> = Vec::new();
-    while let Some(pkg_id) = parent_pkg {
-        let pkg = model.get_package(pkg_id);
-        let is_root = pkg.parent.is_none();
-        if is_root {
-            if include_root && !intermediate_packages.is_empty() {
-                intermediate_packages.push(SmolStr::new("Root"));
-            }
-            break;
-        }
-        intermediate_packages.push(pkg.name.clone());
-        parent_pkg = pkg.parent;
-    }
-    segments.extend(intermediate_packages);
-
-    segments.reverse();
-    segments
-        .iter()
-        .map(SmolStr::as_str)
-        .collect::<Vec<_>>()
-        .join(separator)
-}
+// `build_element_path` and `resolve_path` are re-exports of the shared
+// `crate::model_utils` helpers — see the module for the algorithm and
+// edge-case contract.
+use crate::model_utils::{build_element_path, resolve_path};
 
 /// Build the qualified path for an ephemeral (heap-constructed) packageable
 /// element.
@@ -845,17 +721,7 @@ fn build_ephemeral_path(
         .join(separator)
 }
 
-/// Return the element's simple name.
-///
-/// For `Element::Function`, this is the unmangled `function_name`. For
-/// packages it is the package's own `name`. For everything else it is the
-/// [`ElementNode::name`](legend_pure_parser_pure::model::ElementNode::name).
-fn element_simple_name(model: &PureModel, id: ElementId) -> &SmolStr {
-    if let Element::Function(f) = model.get_element(id) {
-        return &f.function_name;
-    }
-    model.element_name(id)
-}
+// `element_simple_name` lives in `crate::model_utils`.
 
 /// Check whether `value` is an instance of the class identified by
 /// `type_class_id`.
