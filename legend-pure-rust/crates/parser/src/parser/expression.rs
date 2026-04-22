@@ -298,17 +298,26 @@ impl Parser {
             TokenKind::DateLiteral => {
                 let tok = self.cursor.advance().clone();
                 let raw = tok.text.trim_start_matches('%');
-                // Classify: DateTime (has 'T'), StrictDate (has '-' in date part), StrictTime
+                // Classify: DateTime (has 'T'), StrictDate (year-only or
+                // `YYYY`-prefixed, possibly `YYYY-MM` or `YYYY-MM-DD`),
+                // StrictTime (everything else — `HH:MM:SS`-shaped).
                 if raw.contains('T') {
                     Ok(Expression::Literal(Literal::DateTime(DateTimeLiteral {
                         value: raw.to_string(),
                         source_info: si,
                     })))
                 } else {
-                    // Strip optional leading minus for negative-year dates (%-YYYY-MM-DD)
+                    // Strip optional leading minus for negative-year dates (%-YYYY[-MM[-DD]]).
                     let unsigned = raw.trim_start_matches('-');
-                    if unsigned.starts_with(|c: char| c.is_ascii_digit()) && unsigned.contains('-')
-                    {
+                    // A StrictDate starts with a 4-digit year. Times always have
+                    // ':' and 2-digit HH at the head, so a 4-digit prefix is
+                    // sufficient to disambiguate. Accept `%YYYY`, `%YYYY-MM`,
+                    // and `%YYYY-MM-DD` uniformly — the lowerer decides the
+                    // precision based on segment count.
+                    let year_prefix = unsigned.len() >= 4
+                        && unsigned[..4].chars().all(|c| c.is_ascii_digit())
+                        && !unsigned.contains(':');
+                    if year_prefix {
                         Ok(Expression::Literal(Literal::StrictDate(
                             StrictDateLiteral {
                                 value: raw.to_string(),
