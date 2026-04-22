@@ -123,7 +123,7 @@ cargo run -- compile /path/to/legend-pure-core/.../platform/pure/
 ```
 The primary validation target — compiles the **full Legend Pure M3 platform** (~350 source files, ~2,000+ elements). This exercises every path through the dispatch engine.
 
-**Progress**: 2,164 errors → **8 errors** (99.6% reduction)
+**Progress**: 2,164 errors → **0 errors** (100% — platform compile clean)
 
 ### 3. Error Categorization
 We track errors by category to ensure each fix targets the right root cause:

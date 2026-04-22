@@ -17,6 +17,25 @@ Most current development targets the Rust workspace. The Java modules still comp
 tests — `.pure` source in `legend-pure-core/legend-pure-m3-core/src/main/resources/platform/`
 is the canonical platform definition consumed by **both** stacks.
 
+## Current State (April 2026)
+
+### Rust Workspace — Active Development
+- **Parser** — ✅ Complete. Full Pure grammar coverage, 400+ tests, 0 parser errors.
+- **Compiler** — ✅ Platform compile clean. 0 errors on 236 files / 1338 elements.
+  Five-phase dispatch engine with generic type+multiplicity substitution.
+- **Runtime** — 🚧 Active. Tree-walking interpreter with ~50 native functions,
+  persistent data structures (`im-rc`), `SlotMap` heap, lazy call stack.
+  Passing platform PCT subset.
+- **CLI** — 🚧 Partial. 6 of 11 commands implemented (`parse`, `check`, `init`,
+  `version`, `completions`, `emit`). Stubs: `compile`, `test`, `plan`, `package`, `publish`.
+
+### Java Stack — Maintenance Mode
+- Stable. All tests pass. Used by FINOS `legend-engine` as a compiled dependency.
+- No active feature work in this repository.
+
+### Backlog
+→ `legend-pure-rust/BACKLOG.md` — unified backlog for the Rust workspace.
+
 ## Java Stack — Build & Test
 
 Requires **JDK 11 or 17** (the Maven enforcer rejects all others) and **Maven 3.6+**.
