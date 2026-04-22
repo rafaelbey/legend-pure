@@ -800,11 +800,15 @@ fn cmp_values(a: &Value, b: &Value) -> Result<std::cmp::Ordering, PureRuntimeErr
     }
 }
 
-/// Pure `sort<T>(T[*]): T[*]` — default (natural) comparator.
+/// Pure `sort<T,U|m>(col:T[m], key:Function[0..1], comp:Function[0..1]):T[m]`.
 ///
-/// Sorts the collection stably using [`cmp_values`] as the comparator. Only
-/// homogeneous collections of comparable primitive types are supported;
-/// mixed-type inputs produce an evaluation error.
+/// Sorts the collection stably. When `key` is provided (non-empty), each
+/// element is first mapped through `key` and the resulting values drive
+/// ordering — values stay associated with their original element. When
+/// `comp` is provided, it returns an `Integer` (negative/zero/positive)
+/// to order two items; otherwise, primitive natural order via
+/// [`cmp_values`] is used. Both `key` and `comp` may independently be
+/// `Unit` / `[]` to mean "not provided".
 #[derive(Debug)]
 pub struct Sort;
 
@@ -812,33 +816,81 @@ impl NativeFunction for Sort {
     fn execute(
         &self,
         args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
+        ctx: &mut dyn EvalContextTrait,
     ) -> Result<Value, PureRuntimeError> {
-        expect_args("sort", args, 1)?;
+        expect_args("sort", args, 3)?;
         let source = args[0].to_collection();
-        let mut items: Vec<Value> = source.iter().cloned().collect();
+        let key_fn = lambda_or_none(&args[1]);
+        let comp_fn = lambda_or_none(&args[2]);
 
-        // Stable sort, bubbling up the first comparison error via a captured
-        // Result slot. `sort_by` cannot short-circuit on its own.
-        let mut cmp_err: Option<PureRuntimeError> = None;
-        items.sort_by(|a, b| match cmp_values(a, b) {
-            Ok(o) => o,
-            Err(e) => {
-                if cmp_err.is_none() {
-                    cmp_err = Some(e);
-                }
-                std::cmp::Ordering::Equal
+        // Pre-compute key(x) once per element when a key is supplied,
+        // so we don't re-invoke the lambda during every comparison.
+        let items: Vec<Value> = source.iter().cloned().collect();
+        let keys: Vec<Value> = if let Some(k) = key_fn {
+            let mut out = Vec::with_capacity(items.len());
+            for it in &items {
+                out.push(ctx.eval_lambda(k, &[it.clone()])?);
             }
-        });
+            out
+        } else {
+            items.clone()
+        };
+
+        // Indices into items/keys — sort those so we can carry a value
+        // alongside its pre-computed key.
+        let mut indices: Vec<usize> = (0..items.len()).collect();
+        let mut cmp_err: Option<PureRuntimeError> = None;
+
+        if let Some(cf) = comp_fn {
+            indices.sort_by(|&i, &j| {
+                if cmp_err.is_some() {
+                    return std::cmp::Ordering::Equal;
+                }
+                match ctx.eval_lambda(cf, &[keys[i].clone(), keys[j].clone()]) {
+                    Ok(Value::Integer(n)) => n.cmp(&0),
+                    Ok(other) => {
+                        cmp_err = Some(PureRuntimeError::type_mismatch("Integer", &other));
+                        std::cmp::Ordering::Equal
+                    }
+                    Err(e) => {
+                        cmp_err = Some(e);
+                        std::cmp::Ordering::Equal
+                    }
+                }
+            });
+        } else {
+            indices.sort_by(|&i, &j| match cmp_values(&keys[i], &keys[j]) {
+                Ok(o) => o,
+                Err(e) => {
+                    if cmp_err.is_none() {
+                        cmp_err = Some(e);
+                    }
+                    std::cmp::Ordering::Equal
+                }
+            });
+        }
         if let Some(e) = cmp_err {
             return Err(e);
         }
 
-        Ok(Value::from_vec(items))
+        let sorted: Vec<Value> = indices.into_iter().map(|i| items[i].clone()).collect();
+        Ok(Value::from_vec(sorted))
     }
 
     fn signature(&self) -> &'static str {
-        "sort(T[*]): T[*]"
+        "sort<T,U|m>(T[m], Function<{T[1]->U[1]}>[0..1], Function<{U[1],U[1]->Integer[1]}>[0..1]): T[m]"
+    }
+}
+
+/// Extract a `&Value::Function` from a lambda-valued argument, or `None` if
+/// the arg is `Unit`/empty. Any other non-Unit value is treated as "not a
+/// lambda" and returns `None` — matches the semantics of the optional
+/// `Function[0..1]` parameter.
+fn lambda_or_none(v: &Value) -> Option<&Value> {
+    match v {
+        Value::Unit => None,
+        Value::Function(_) => Some(v),
+        _ => None,
     }
 }
 
@@ -921,7 +973,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("indexOf_T_MANY__T_1__Integer_1_", IndexOf);
     registry.register("add_T_m__T_1__T_$1_MANY$_", Add);
     registry.register("slice_T_MANY__Integer_1__Integer_1__T_MANY_", Slice);
-    registry.register("sort_T_MANY__T_MANY_", Sort);
+    registry.register("sort_T_m__Function_$0_1$__Function_$0_1$__T_m_", Sort);
     registry.register(
         "removeAllOptimized_T_MANY__T_MANY__T_MANY_",
         RemoveAllOptimized,
@@ -1533,8 +1585,11 @@ mod tests {
     #[test]
     fn sort_integers_ascending() {
         assert_eq!(
-            Sort.execute(&[int_collection(&[3, 1, 2])], &mut NoOpEvalCtx)
-                .unwrap(),
+            Sort.execute(
+                &[int_collection(&[3, 1, 2]), Value::Unit, Value::Unit],
+                &mut NoOpEvalCtx
+            )
+            .unwrap(),
             int_collection(&[1, 2, 3])
         );
     }
@@ -1542,8 +1597,11 @@ mod tests {
     #[test]
     fn sort_single_element_is_noop() {
         assert_eq!(
-            Sort.execute(&[Value::Integer(5)], &mut NoOpEvalCtx)
-                .unwrap(),
+            Sort.execute(
+                &[Value::Integer(5), Value::Unit, Value::Unit],
+                &mut NoOpEvalCtx
+            )
+            .unwrap(),
             Value::Integer(5)
         );
     }
@@ -1551,7 +1609,8 @@ mod tests {
     #[test]
     fn sort_empty_returns_unit() {
         assert_eq!(
-            Sort.execute(&[Value::Unit], &mut NoOpEvalCtx).unwrap(),
+            Sort.execute(&[Value::Unit, Value::Unit, Value::Unit], &mut NoOpEvalCtx)
+                .unwrap(),
             Value::Unit
         );
     }
@@ -1562,7 +1621,10 @@ mod tests {
         v.push_back(Value::Integer(1));
         v.push_back(Value::String("oops".into()));
         let input = Value::Collection(Box::new(v));
-        assert!(Sort.execute(&[input], &mut NoOpEvalCtx).is_err());
+        assert!(
+            Sort.execute(&[input, Value::Unit, Value::Unit], &mut NoOpEvalCtx)
+                .is_err()
+        );
     }
 
     #[test]

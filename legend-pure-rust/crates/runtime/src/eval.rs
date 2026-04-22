@@ -53,7 +53,7 @@ use std::collections::HashMap;
 use im_rc::Vector as PVector;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
-use legend_pure_parser_pure::types::{DateValue, ExprKind, ValueSpec};
+use legend_pure_parser_pure::types::{DateValue, ExprKind, TypeExpr, ValueSpec};
 use smol_str::SmolStr;
 
 use crate::context::VariableContext;
@@ -743,6 +743,42 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 }
                 Ok(Value::from_vec(items))
             }
+            "generalizations" => {
+                // Synthesize `Generalization` heap objects — one per direct
+                // supertype. `getAllTypeGeneralisations` and `subTypeOf`
+                // walk these. Each wraps a `GenericType` with `rawType`
+                // pointing to the supertype element, and `specific`
+                // pointing back to `id` (the subtype).
+                let super_eids: Vec<ElementId> = match self.model.get_element(id) {
+                    Element::Class(c) => c
+                        .super_types
+                        .iter()
+                        .filter_map(|st| match st {
+                            TypeExpr::Named { element, .. } => Some(*element),
+                            _ => None,
+                        })
+                        .collect(),
+                    Element::PrimitiveType(p) => p.super_type.into_iter().collect(),
+                    _ => Vec::new(),
+                };
+                let mut items = Vec::with_capacity(super_eids.len());
+                for super_eid in super_eids {
+                    let gt_obj = self
+                        .heap
+                        .alloc_dynamic("meta::pure::metamodel::type::generics::GenericType");
+                    self.heap
+                        .mutate_add(gt_obj, "rawType", &[Value::Element(super_eid)])?;
+                    let gen_obj = self
+                        .heap
+                        .alloc_dynamic("meta::pure::metamodel::relationship::Generalization");
+                    self.heap
+                        .mutate_add(gen_obj, "general", &[Value::Object(gt_obj)])?;
+                    self.heap
+                        .mutate_add(gen_obj, "specific", &[Value::Element(id)])?;
+                    items.push(Value::Object(gen_obj));
+                }
+                Ok(Value::from_vec(items))
+            }
             _ => {
                 // Enum value access: `MyEnum.VALUE` where the compiler didn't
                 // pre-lower to `ExprKind::EnumValue`. Match the format used by
@@ -993,7 +1029,19 @@ impl<H: EvalHooks> crate::native::EvalContextTrait for EvalContext<'_, '_, H> {
             Value::Function(_) => self
                 .evaluator
                 .apply_callable(lambda_val, args)
-                .map_err(|e| PureRuntimeError::EvaluationError(format!("{e}"))),
+                .map_err(|e| {
+                    // Preserve the semantic kind across the native→lambda
+                    // boundary. Assertion failures from inside a lambda
+                    // invoked by a native (e.g. `assertEquals` body evaluated
+                    // via `if_...->eval()`) must stay as `AssertionFailed`
+                    // so test classifiers bucket them as FAIL, not ERROR.
+                    match e.kind {
+                        crate::error::PureExceptionKind::AssertionFailed(msg) => {
+                            PureRuntimeError::AssertionFailed(msg)
+                        }
+                        _ => PureRuntimeError::EvaluationError(format!("{e}")),
+                    }
+                }),
             _ => Err(PureRuntimeError::EvaluationError(format!(
                 "Expected Function, got {}",
                 lambda_val.type_name()

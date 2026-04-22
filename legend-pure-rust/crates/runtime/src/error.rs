@@ -353,9 +353,19 @@ impl From<PureRuntimeError> for PureException {
     ///
     /// Used as a fallback when source info is unavailable. Prefer
     /// [`PureException::execution`] when source info is known.
+    ///
+    /// `PureRuntimeError::AssertionFailed` is promoted to
+    /// `PureExceptionKind::AssertionFailed` rather than being wrapped as an
+    /// `ExecutionError` — the semantic kind should reflect intent (assertion
+    /// vs. runtime error), so test frameworks classifying outcomes by
+    /// `kind` correctly bucket these as FAIL instead of ERROR.
     fn from(error: PureRuntimeError) -> Self {
+        let kind = match error {
+            PureRuntimeError::AssertionFailed(msg) => PureExceptionKind::AssertionFailed(msg),
+            other => PureExceptionKind::ExecutionError(other),
+        };
         Self {
-            kind: PureExceptionKind::ExecutionError(error),
+            kind,
             source: None,
             call_stack: Vec::new(),
         }

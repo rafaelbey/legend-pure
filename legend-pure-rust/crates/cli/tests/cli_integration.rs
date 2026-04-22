@@ -179,14 +179,17 @@ fn test_completions() {
 
 // Stubs coverage
 #[test]
-fn test_stub_test_command() {
+fn test_test_command_runs_surveyor() {
+    // `legend test .` wires up the Pure-native surveyor. Once natives
+    // caught up enough to run tests end-to-end on the root package,
+    // this stops being a stub and starts emitting a real test report.
     let mut cmd = Command::cargo_bin("legend").unwrap();
     cmd.env("NO_COLOR", "1");
     cmd.arg("test")
         .arg(".")
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("Test execution failed"));
+        .success()
+        .stdout(predicate::str::contains("Discovered"));
 }
 
 #[test]

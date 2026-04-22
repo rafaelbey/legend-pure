@@ -1112,6 +1112,96 @@ fn eval_element_to_path_ephemeral_nameless() {
 }
 
 #[test]
+#[ignore = "diagnostic: bucket meta::tests errors by first line of message"]
+fn eval_surveyor_meta_tests_error_histogram() {
+    use legend_pure_runtime::eval::Evaluator;
+    use std::collections::BTreeMap;
+
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    let mut evaluator = Evaluator::new(&model, &registry);
+
+    let report = evaluator
+        .call(
+            "meta::pure::test::surveyor::runTestsFromPath",
+            &[
+                Value::String("meta::pure::functions::meta::tests".into()),
+                Value::String("".into()),
+            ],
+        )
+        .expect("surveyor should return a TestReport");
+    let Value::Object(report_id) = report else {
+        panic!();
+    };
+    let heap = evaluator.heap();
+    let results = heap.get_property_values(report_id, "results").unwrap();
+
+    let mut histogram: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut error_count = 0;
+    for val in results.iter() {
+        let Value::Object(res_id) = val else {
+            continue;
+        };
+        let status = heap
+            .get_property_values(*res_id, "status")
+            .ok()
+            .and_then(|v| v.iter().next().cloned());
+        let is_error =
+            matches!(&status, Some(Value::String(s)) if s.as_str() == "TestStatus.ERROR");
+        if !is_error {
+            continue;
+        }
+        error_count += 1;
+        let fqn = heap
+            .get_property_values(*res_id, "fqn")
+            .ok()
+            .and_then(|v| v.iter().next().cloned())
+            .and_then(|v| match v {
+                Value::String(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "<unknown>".into());
+        let msg = heap
+            .get_property_values(*res_id, "message")
+            .ok()
+            .and_then(|v| v.iter().next().cloned())
+            .and_then(|v| match v {
+                Value::String(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "<no message>".into());
+        // Bucket by "first useful line after Execution error" — the actual cause.
+        let bucket = msg
+            .lines()
+            .map(|l| l.trim_matches('"').trim())
+            .find(|l| {
+                !l.is_empty()
+                    && !l.starts_with("Execution error")
+                    && !l.starts_with("Assert failure")
+                    && !l.starts_with("Full Stack")
+            })
+            .unwrap_or("<no bucket line>")
+            .to_string();
+        histogram
+            .entry(bucket)
+            .or_default()
+            .push(format!("{fqn} || {msg}"));
+    }
+    eprintln!("\n=== meta::tests ERROR histogram ({error_count} errors) ===");
+    let mut rows: Vec<_> = histogram.iter().collect();
+    rows.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    for (bucket, tests) in rows {
+        eprintln!("\n[{}] {}", tests.len(), bucket);
+        for (i, t) in tests.iter().enumerate().take(3) {
+            eprintln!("    {}. {}", i + 1, t);
+        }
+        if tests.len() > 3 {
+            eprintln!("    ... and {} more", tests.len() - 3);
+        }
+    }
+}
+
+#[test]
 #[ignore = "broad surveyor canary across meta::pure::functions — prints full bucket breakdown"]
 fn eval_surveyor_broad_canary() {
     use legend_pure_runtime::eval::Evaluator;
@@ -1133,10 +1223,7 @@ fn eval_surveyor_broad_canary() {
         let mut evaluator = Evaluator::new(&model, &registry);
         let report_result = evaluator.call(
             "meta::pure::test::surveyor::runTestsFromPath",
-            &[
-                Value::String(SmolStr::new(pkg)),
-                Value::String("".into()),
-            ],
+            &[Value::String(SmolStr::new(pkg)), Value::String("".into())],
         );
         let Ok(Value::Object(report_id)) = report_result else {
             eprintln!("[{pkg}] surveyor failed: {report_result:?}");
