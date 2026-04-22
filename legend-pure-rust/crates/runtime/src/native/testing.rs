@@ -165,13 +165,23 @@ const STATUS_FAIL: &str = "TestStatus.FAIL";
 const STATUS_ERROR: &str = "TestStatus.ERROR";
 const STATUS_SKIP: &str = "TestStatus.SKIP";
 
-/// Extract the FQN from a compiled function value; fall back to `"<lambda>"`.
+/// Extract a human-readable FQN from a function-valued argument.
+///
+/// - Compiled elements render via [`build_element_path`](crate::model_utils::build_element_path)
+///   so surveyor reports carry the same `a::b::funcName` format users see in
+///   source, not the mangled FQN stored in `ElementNode::name`.
+/// - Element refs (e.g. a function passed via `$t->cast(@Function<…>)`) are
+///   also path-rendered.
+/// - Lambdas collapse to `"<lambda>"`.
+/// - Everything else is `"<unknown>"`.
 fn function_fqn(callable: &Value, ctx: &dyn EvalContextTrait) -> String {
+    use crate::model_utils::build_element_path;
     match callable {
         Value::Function(fv) => match fv.as_ref() {
-            FunctionValue::Compiled(id) => ctx.model().get_node(*id).name.to_string(),
+            FunctionValue::Compiled(id) => build_element_path(ctx.model(), *id, "::", false),
             FunctionValue::Lambda(_) => "<lambda>".to_string(),
         },
+        Value::Element(id) => build_element_path(ctx.model(), *id, "::", false),
         _ => "<unknown>".to_string(),
     }
 }

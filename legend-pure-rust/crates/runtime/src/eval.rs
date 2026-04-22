@@ -1077,6 +1077,10 @@ impl<H: EvalHooks> crate::native::EvalContextTrait for EvalContext<'_, '_, H> {
     fn model(&self) -> &legend_pure_parser_pure::model::PureModel {
         self.evaluator.model
     }
+
+    fn console_output(&mut self, msg: &str) {
+        self.evaluator.hooks.console_output(msg);
+    }
 }
 
 impl<H: EvalHooks> std::fmt::Debug for Evaluator<'_, H> {

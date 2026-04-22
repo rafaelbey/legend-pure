@@ -95,6 +95,14 @@ pub trait EvalContextTrait {
     ///
     /// Allows natives to resolve element names and type information.
     fn model(&self) -> &PureModel;
+
+    /// Emit console output through the evaluator's configured sink.
+    ///
+    /// Pure's `print`/`println` natives call this instead of writing to
+    /// stdout directly, so embedders (CLI, LSP, DAP, tests) can capture
+    /// or redirect output. The default implementation on `EvalHooks`
+    /// forwards to stdout, matching the previous behaviour.
+    fn console_output(&mut self, msg: &str);
 }
 
 // ---------------------------------------------------------------------------
@@ -399,6 +407,11 @@ impl EvalContextTrait for NoOpEvalCtx {
     }
     fn model(&self) -> &PureModel {
         unreachable!("NoOpEvalCtx::model should never be called in simple native tests")
+    }
+    fn console_output(&mut self, _msg: &str) {
+        // Silent sink — unit tests for side-effect-free natives don't
+        // observe console output, and routing to stdout would pollute
+        // the cargo-test display.
     }
 }
 

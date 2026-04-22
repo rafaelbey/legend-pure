@@ -70,6 +70,21 @@ pub trait EvalHooks {
     ///
     /// Debug implementations pop the live call stack.
     fn leave_function(&mut self, name: &str);
+
+    /// Emit a chunk of console output — Pure-level `print` / `println`
+    /// routes through here instead of writing to stdout directly.
+    ///
+    /// The default implementation writes to stdout so existing callers
+    /// see no behavioural change. Debug harnesses, tests, and embedders
+    /// override this to capture output (e.g. into a buffer for
+    /// assertion, or a LSP/DAP output channel). `msg` is the already-
+    /// rendered text; the hook does not append a trailing newline — the
+    /// caller (`println` vs. `print`) decides.
+    fn console_output(&mut self, msg: &str) {
+        use std::io::Write as _;
+        let mut stdout = std::io::stdout().lock();
+        let _ = stdout.write_all(msg.as_bytes());
+    }
 }
 
 /// No-op hooks for production execution.
@@ -134,6 +149,32 @@ mod tests {
         hooks.after_eval(&src, &Value::Integer(42));
         hooks.enter_function("test::func", &src);
         hooks.leave_function("test::func");
+    }
+
+    /// Hooks implementation that captures console output into a buffer —
+    /// demonstrates the redirect pattern embedders (CLI, LSP, tests)
+    /// will use.
+    #[derive(Debug, Default)]
+    struct CapturingHooks {
+        output: String,
+    }
+
+    impl EvalHooks for CapturingHooks {
+        fn before_eval(&mut self, _source: &SourceInfo) {}
+        fn after_eval(&mut self, _source: &SourceInfo, _result: &Value) {}
+        fn enter_function(&mut self, _name: &str, _source: &SourceInfo) {}
+        fn leave_function(&mut self, _name: &str) {}
+        fn console_output(&mut self, msg: &str) {
+            self.output.push_str(msg);
+        }
+    }
+
+    #[test]
+    fn console_output_routes_to_hook() {
+        let mut hooks = CapturingHooks::default();
+        hooks.console_output("hello ");
+        hooks.console_output("world");
+        assert_eq!(hooks.output, "hello world");
     }
 
     /// A test hooks implementation that counts calls.
