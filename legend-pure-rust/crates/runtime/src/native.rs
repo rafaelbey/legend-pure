@@ -265,6 +265,8 @@ impl NativeRegistry {
         lang::register(&mut registry);
         testing::register(&mut registry);
         meta::register(&mut registry);
+        math::register(&mut registry);
+        datetime::register(&mut registry);
         registry
     }
 }
@@ -348,8 +350,20 @@ pub mod lang;
 /// Test assertion natives: `assert`.
 pub mod testing;
 
-/// Meta-model natives: `pathToElement`, `elementToPath`, `match`.
+/// Meta-model natives: `pathToElement`, `elementToPath`, `match`, `id`,
+/// `type`, `genericType`, `rawType`, `enumName`, `enumValues`,
+/// `toRepresentation`, `subTypeOf`.
 pub mod meta;
+
+/// Math natives: `floor`, `ceiling`, `round`, `sign`, `sqrt`, `cbrt`, `exp`,
+/// `log`, `log10`, `pow`, trig functions, `toFloat`, `toDecimal`,
+/// `parseInteger`/`Float`/`Boolean`.
+pub mod math;
+
+/// Date/time natives: `now`, `today`, `year`, `monthNumber`, `dayOfMonth`,
+/// `hour`, `minute`, `second`, `datePart`, `dateDiff`, `adjust`, `hasX`
+/// predicates, `parseDate`, `date(...)` constructors.
+pub mod datetime;
 
 // ---------------------------------------------------------------------------
 // Test helpers

@@ -898,6 +898,14 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     ) -> Result<Value, PureException> {
         match callable {
             Value::Function(fv) => self.eval_function_value(fv, args),
+            // `Value::Element(fn_id)` flows in from places like surveyor's
+            // `executeTest($t->cast(@Function<...>))` — `cast` preserves the
+            // element handle rather than rewrapping it, so we need to
+            // promote compiled-function elements to `FunctionValue::Compiled`
+            // on the fly. Non-function elements remain a type error.
+            Value::Element(id) if matches!(self.model.get_element(*id), Element::Function(_)) => {
+                self.eval_function_value(&FunctionValue::Compiled(*id), args)
+            }
             other => Err(PureException::from(PureRuntimeError::EvaluationError(
                 format!("Expected Function, got {}", other.type_name()),
             ))),

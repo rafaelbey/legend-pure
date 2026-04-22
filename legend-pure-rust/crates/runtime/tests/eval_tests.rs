@@ -771,3 +771,316 @@ fn eval_match_dispatches_to_first_matching_lambda() {
     );
     assert_eq!(result, Value::String("int".into()));
 }
+
+// ===========================================================================
+// 9. Meta / Reflection (id, type, genericType, rawType, enumName,
+//    enumValues, toRepresentation, subTypeOf)
+// ===========================================================================
+
+#[test]
+fn eval_type_of_integer_resolves_to_integer_primitive() {
+    // type(42) must return the bootstrap `Integer` primitive. elementToPath
+    // gives us a stable string comparison despite the primitive's generated
+    // ElementId drifting between runs.
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            42->type()->elementToPath();
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("Integer".into()));
+}
+
+#[test]
+fn eval_type_of_string_resolves_to_string_primitive() {
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            'hi'->type()->elementToPath();
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("String".into()));
+}
+
+#[test]
+fn eval_type_of_element_is_itself() {
+    // type(<element>) returns the element — round-trip through elementToPath
+    // proves the same path is preserved.
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            pathToElement('meta::pure', '::')->type()->elementToPath();
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("meta::pure".into()));
+}
+
+#[test]
+fn eval_generic_type_wraps_rawtype() {
+    // genericType(42).rawType->elementToPath() must round-trip back to
+    // Integer. This exercises rawType's read of the heap-stored property.
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            42->genericType()->rawType()->elementToPath();
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("Integer".into()));
+}
+
+#[test]
+fn eval_id_of_integer_returns_display() {
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            42->id();
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("42".into()));
+}
+
+#[test]
+fn eval_id_of_element_returns_fqn() {
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            pathToElement('meta::pure', '::')->id();
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("meta::pure".into()));
+}
+
+#[test]
+fn eval_to_representation_quotes_strings() {
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            'hello'->toRepresentation();
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("'hello'".into()));
+}
+
+#[test]
+fn eval_to_representation_integer_is_unquoted() {
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            42->toRepresentation();
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("42".into()));
+}
+
+#[test]
+fn eval_sub_type_of_integer_number_is_true() {
+    // Integer extends Number — walking the primitive super_type chain must
+    // find it.
+    let result = eval_pure(
+        r"
+        function test::f(): Boolean[1] {
+            subTypeOf(@Integer, @Number);
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(result, Value::Boolean(true));
+}
+
+#[test]
+fn eval_sub_type_of_is_reflexive() {
+    // Reflexivity: every type is a subtype of itself.
+    let result = eval_pure(
+        r"
+        function test::f(): Boolean[1] {
+            subTypeOf(@Integer, @Integer);
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(result, Value::Boolean(true));
+}
+
+#[test]
+fn eval_sub_type_of_unrelated_is_false() {
+    let result = eval_pure(
+        r"
+        function test::f(): Boolean[1] {
+            subTypeOf(@Integer, @String);
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(result, Value::Boolean(false));
+}
+
+#[test]
+fn eval_enum_name_of_user_enum() {
+    // Define a tiny enumeration, then ask for its simple name via the
+    // metamodel reference.
+    let result = eval_pure(
+        r"
+        Enum test::Color { RED, GREEN, BLUE }
+
+        function test::f(): String[1] {
+            enumName(@test::Color);
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("Color".into()));
+}
+
+#[test]
+fn eval_enum_values_expands_to_each_member() {
+    // enumValues returns one "EnumName.Member" entry per declared value in
+    // declaration order.
+    let result = eval_pure(
+        r"
+        Enum test::Color { RED, GREEN, BLUE }
+
+        function test::f(): Color[*] {
+            enumValues(@test::Color);
+        }
+        ",
+        "f__Color_MANY_",
+    );
+    match result {
+        Value::Collection(v) => {
+            assert_eq!(v.len(), 3);
+            assert_eq!(v[0], Value::String("Color.RED".into()));
+            assert_eq!(v[1], Value::String("Color.GREEN".into()));
+            assert_eq!(v[2], Value::String("Color.BLUE".into()));
+        }
+        other => panic!("Expected Collection, got {other:?}"),
+    }
+}
+
+// ===========================================================================
+// 10. Coordinator regression — contains_ prefix disambiguation + find lambda
+// ===========================================================================
+
+#[test]
+fn eval_contains_collection_variant_dispatches_correctly() {
+    // Collection `contains(T[*], Any[1]):Boolean[1]` mangles to
+    // `contains_T_MANY__Any_1__Boolean_1_`; string
+    // `contains(String[1], String[1]):Boolean[1]` mangles to
+    // `contains_String_1__String_1__Boolean_1_`. Both keys share the
+    // `contains_` prefix — exact-FQN dispatch must win so the collection
+    // form gets its own native.
+    let result = eval_pure(
+        r"
+        function test::f(): Boolean[1] {
+            [1, 2, 3]->contains(2);
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(result, Value::Boolean(true));
+}
+
+#[test]
+fn eval_contains_string_variant_still_routes_to_string_impl() {
+    // Sanity: the string form continues to work after the collection form
+    // was added.
+    let result = eval_pure(
+        r"
+        function test::f(): Boolean[1] {
+            'hello world'->contains('world');
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(result, Value::Boolean(true));
+}
+
+#[test]
+fn eval_find_returns_first_matching_element() {
+    // Closes out the `find_returns_first_match` placeholder that was
+    // ignored at unit-test level (lambda-dependent — needs real evaluator).
+    let result = eval_pure(
+        r"
+        function test::f(): Integer[0..1] {
+            [1, 2, 3, 4]->find(x | $x > 2);
+        }
+        ",
+        "f__Integer_$0_1$_",
+    );
+    assert_eq!(result, Value::Integer(3));
+}
+
+#[test]
+fn eval_find_returns_unit_when_no_match() {
+    let result = eval_pure(
+        r"
+        function test::f(): Integer[0..1] {
+            [1, 2, 3]->find(x | $x > 10);
+        }
+        ",
+        "f__Integer_$0_1$_",
+    );
+    assert_eq!(result, Value::Unit);
+}
+
+#[test]
+fn eval_surveyor_on_element_to_path_tests_has_nonzero_runs() {
+    // Canary: after the Track 1–5 native rollout, surveyor should be able to
+    // bucket real platform `<<test.Test>>` functions as PASS/FAIL/ERROR
+    // (not all-ERROR). We don't assert specific counts — the assertion chain
+    // still reaches into many natives we haven't implemented — but at least
+    // *one* test in this package must flip out of ERROR.
+    use legend_pure_runtime::eval::Evaluator;
+
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    let mut evaluator = Evaluator::new(&model, &registry);
+
+    let report = evaluator
+        .call(
+            "meta::pure::test::surveyor::runTestsFromPath",
+            &[
+                Value::String("meta::pure::functions::meta::tests::elementToPath".into()),
+                Value::String("".into()),
+            ],
+        )
+        .expect("surveyor should return a TestReport");
+
+    let Value::Object(report_id) = report else {
+        panic!("surveyor returned non-object: {report:?}");
+    };
+
+    let heap = evaluator.heap();
+    let read = |name: &str| -> i64 {
+        let values = heap.get_property_values(report_id, name).unwrap();
+        match values.iter().next() {
+            Some(Value::Integer(n)) => *n,
+            _ => -1,
+        }
+    };
+    let pass = read("passCount");
+    let fail = read("failCount");
+    let error = read("errorCount");
+    let skip = read("skipCount");
+    let total = pass + fail + error + skip;
+    assert!(total > 0, "expected at least one test, got 0");
+    assert!(
+        pass + fail + skip > 0,
+        "expected at least one non-error outcome after native rollout (pass={pass}, fail={fail}, error={error}, skip={skip})"
+    );
+}

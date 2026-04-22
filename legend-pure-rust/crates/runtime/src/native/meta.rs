@@ -12,18 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Meta-model native functions: `pathToElement`, `elementToPath`, `match`.
+//! Meta-model native functions: `pathToElement`, `elementToPath`, `match`,
+//! `id`, `type`, `genericType`, `rawType`, `enumName`, `enumValues`,
+//! `toRepresentation`, `subTypeOf`.
 //!
 //! These bridge the Pure-level metamodel (`PackageableElement`,
 //! `ConcreteFunctionDefinition`, `Package`) with the compiled [`PureModel`].
 //! They are the foundation the Pure-native test orchestrator
 //! (`surveyor.pure`) uses to discover and run tests.
 
+use legend_pure_parser_pure::bootstrap;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
 use legend_pure_parser_pure::types::TypeExpr;
 use smol_str::SmolStr;
 
+use crate::date::DatePrecision;
 use crate::error::PureRuntimeError;
 use crate::heap::RuntimeHeap;
 use crate::native::{EvalContextTrait, NativeFunction, NativeRegistry, expect_args};
@@ -354,6 +358,267 @@ impl NativeFunction for Match {
 }
 
 // ---------------------------------------------------------------------------
+// id
+// ---------------------------------------------------------------------------
+
+/// Pure `id(Any[1]):String[1]`
+///
+/// Returns an identity string for any value. Heap objects are identified by
+/// `Anonymous_<ObjectId>` — matching the Java Pure runtime's convention for
+/// anonymous instances. Primitives render their canonical textual form
+/// (unquoted for strings). Model-element references render their fully
+/// qualified path.
+#[derive(Debug)]
+pub struct Id;
+
+impl NativeFunction for Id {
+    fn execute(
+        &self,
+        args: &[Value],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("id", args, 1)?;
+        let s = render_id(&args[0], ctx.model());
+        Ok(Value::String(SmolStr::new(s)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "id(Any[1]):String[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// type
+// ---------------------------------------------------------------------------
+
+/// Pure `type(Any[1]):Type[1]`
+///
+/// Returns the metamodel [`Type`] element describing `value`'s runtime class.
+/// Primitives resolve to their well-known bootstrap IDs (`Integer`, `Float`,
+/// `String`, ...). Heap objects resolve by their stored classifier FQN.
+/// Model-element references report themselves — the compiled metaclass is
+/// structural and identity-equal to the element.
+#[derive(Debug)]
+pub struct TypeOf;
+
+impl NativeFunction for TypeOf {
+    fn execute(
+        &self,
+        args: &[Value],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("type", args, 1)?;
+        let type_id = resolve_value_type(&args[0], ctx.model(), ctx.heap())?;
+        Ok(Value::Element(type_id))
+    }
+
+    fn signature(&self) -> &'static str {
+        "type(Any[1]):Type[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// genericType
+// ---------------------------------------------------------------------------
+
+/// Pure `genericType(Any[1]):GenericType[1]`
+///
+/// Wraps `type(value)` in a freshly allocated `GenericType` heap object.
+/// The allocated object has only the `rawType` property populated — type
+/// arguments (which would cover parametric types like `List<Integer>`) are
+/// left empty because the runtime does not yet reify generic arguments.
+#[derive(Debug)]
+pub struct GenericTypeOf;
+
+impl NativeFunction for GenericTypeOf {
+    fn execute(
+        &self,
+        args: &[Value],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("genericType", args, 1)?;
+        let type_id = resolve_value_type(&args[0], ctx.model(), ctx.heap())?;
+        let obj = ctx
+            .heap_mut()
+            .alloc_dynamic("meta::pure::metamodel::type::generics::GenericType");
+        ctx.heap_mut()
+            .mutate_add(obj, "rawType", &[Value::Element(type_id)])?;
+        Ok(Value::Object(obj))
+    }
+
+    fn signature(&self) -> &'static str {
+        "genericType(Any[1]):GenericType[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// rawType
+// ---------------------------------------------------------------------------
+
+/// Pure `rawType(GenericType[1]):Type[0..1]`
+///
+/// Reads the `rawType` property from a `GenericType` heap object. Returns
+/// [`Value::Unit`] if the property is unset — matching the `[0..1]`
+/// multiplicity contract.
+#[derive(Debug)]
+pub struct RawType;
+
+impl NativeFunction for RawType {
+    fn execute(
+        &self,
+        args: &[Value],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("rawType", args, 1)?;
+        let Value::Object(obj_id) = &args[0] else {
+            return Err(PureRuntimeError::type_mismatch("GenericType", &args[0]));
+        };
+        let values = ctx.heap().get_property_values(*obj_id, "rawType")?;
+        match values.head() {
+            Some(v) => Ok(v.clone()),
+            None => Ok(Value::Unit),
+        }
+    }
+
+    fn signature(&self) -> &'static str {
+        "rawType(GenericType[1]):Type[0..1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// enumName
+// ---------------------------------------------------------------------------
+
+/// Pure `enumName(Enumeration<Any>[1]):String[1]`
+///
+/// Returns the simple name of an enumeration element reference. The input is
+/// the `Enumeration` itself, not one of its values — to read a value's name
+/// use the string-formatted `<EnumName>.<ValueName>` that `Evaluator` produces
+/// for enum literals.
+#[derive(Debug)]
+pub struct EnumName;
+
+impl NativeFunction for EnumName {
+    fn execute(
+        &self,
+        args: &[Value],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("enumName", args, 1)?;
+        let id = as_element_id(&args[0])?;
+        match ctx.model().get_element(id) {
+            Element::Enumeration(_) => Ok(Value::String(ctx.model().element_name(id).clone())),
+            _ => Err(PureRuntimeError::type_mismatch("Enumeration", &args[0])),
+        }
+    }
+
+    fn signature(&self) -> &'static str {
+        "enumName(Enumeration<Any>[1]):String[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// enumValues
+// ---------------------------------------------------------------------------
+
+/// Pure `enumValues<T>(Enumeration<T>[1]):T[*]`
+///
+/// Expands an enumeration element to the collection of its member values —
+/// each member encoded as `"<EnumSimpleName>.<MemberName>"` to match the
+/// string representation produced by [`Evaluator::eval_enum_value`] and
+/// consumed by the equality machinery that `match`/`instanceOf` rely on.
+#[derive(Debug)]
+pub struct EnumValues;
+
+impl NativeFunction for EnumValues {
+    fn execute(
+        &self,
+        args: &[Value],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("enumValues", args, 1)?;
+        let id = as_element_id(&args[0])?;
+        let Element::Enumeration(enum_def) = ctx.model().get_element(id) else {
+            return Err(PureRuntimeError::type_mismatch("Enumeration", &args[0]));
+        };
+        let simple = ctx.model().element_name(id).clone();
+        let values: Vec<Value> = enum_def
+            .values
+            .iter()
+            .map(|v| Value::String(SmolStr::new(format!("{simple}.{}", v.name))))
+            .collect();
+        Ok(Value::from_vec(values))
+    }
+
+    fn signature(&self) -> &'static str {
+        "enumValues<T>(Enumeration<T>[1]):T[*]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// toRepresentation
+// ---------------------------------------------------------------------------
+
+/// Pure `toRepresentation(Any[1]):String[1]`
+///
+/// Renders a value as a round-trippable Pure source snippet: strings are
+/// single-quoted with embedded quotes escaped, numbers use their `Display`
+/// form, collections render as `[a, b, c]`, heap objects render as
+/// `<$classifier Anonymous_$id>`, and model elements render as their FQN.
+/// This is the debug/introspection counterpart to [`Id`] — it does not
+/// reuse the `id` native (avoiding a cross-native dispatch).
+#[derive(Debug)]
+pub struct ToRepresentation;
+
+impl NativeFunction for ToRepresentation {
+    fn execute(
+        &self,
+        args: &[Value],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("toRepresentation", args, 1)?;
+        let s = render_representation(&args[0], ctx.model(), ctx.heap());
+        Ok(Value::String(SmolStr::new(s)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "toRepresentation(Any[1]):String[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// subTypeOf
+// ---------------------------------------------------------------------------
+
+/// Pure `subTypeOf(Type[1], Type[1]):Boolean[1]`
+///
+/// Walks the class / primitive generalization chain starting from `child`,
+/// returning `true` as soon as `parent` is found. Reflexivity is honoured
+/// (`subTypeOf(T, T)` is `true`). Unresolved `TypeExpr::Generic` supertypes
+/// (still symbolic post-M3 parsing) are skipped silently — they cannot
+/// contribute a positive answer and must not abort the walk. Types that are
+/// neither [`Element::Class`] nor [`Element::PrimitiveType`] yield `false`.
+#[derive(Debug)]
+pub struct SubTypeOf;
+
+impl NativeFunction for SubTypeOf {
+    fn execute(
+        &self,
+        args: &[Value],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("subTypeOf", args, 2)?;
+        let child = as_element_id(&args[0])?;
+        let parent = as_element_id(&args[1])?;
+        Ok(Value::Boolean(is_sub_type_of(child, parent, ctx.model())))
+    }
+
+    fn signature(&self) -> &'static str {
+        "subTypeOf(Type[1], Type[1]):Boolean[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -447,18 +712,25 @@ fn build_element_path(
         ElementId::InstanceId { .. } => Some(model.get_node(id).parent_package),
     };
 
+    // Collect intermediate package names (everything between the element and
+    // the root package). We don't yet know whether we'll prepend "Root" —
+    // the Java Pure rule is that top-level elements (direct children of the
+    // root) never get a "Root" prefix, even when `includeRoot == true`. Only
+    // elements nested inside at least one named package do.
+    let mut intermediate_packages: Vec<SmolStr> = Vec::new();
     while let Some(pkg_id) = parent_pkg {
         let pkg = model.get_package(pkg_id);
         let is_root = pkg.parent.is_none();
         if is_root {
-            if include_root {
-                segments.push(SmolStr::new("Root"));
+            if include_root && !intermediate_packages.is_empty() {
+                intermediate_packages.push(SmolStr::new("Root"));
             }
             break;
         }
-        segments.push(pkg.name.clone());
+        intermediate_packages.push(pkg.name.clone());
         parent_pkg = pkg.parent;
     }
+    segments.extend(intermediate_packages);
 
     segments.reverse();
     segments
@@ -562,6 +834,133 @@ fn value_matches_type(
     }
 }
 
+/// Resolve the metamodel [`ElementId`] for a runtime [`Value`]'s type.
+///
+/// Primitives map to their bootstrap IDs. Heap objects look up their
+/// classifier's FQN — the stored path is split on `"::"` and resolved via
+/// the model's package tree. Element refs report themselves. `Value::Unit`,
+/// collections, maps, and functions fall back to `Any` (bootstrap top type)
+/// — this matches the Java runtime's conservative upper bound for values
+/// lacking a dedicated reified type.
+fn resolve_value_type(
+    value: &Value,
+    model: &PureModel,
+    heap: &RuntimeHeap,
+) -> Result<ElementId, PureRuntimeError> {
+    match value {
+        Value::Boolean(_) => Ok(bootstrap::BOOLEAN_ID),
+        Value::Integer(_) => Ok(bootstrap::INTEGER_ID),
+        Value::Float(_) => Ok(bootstrap::FLOAT_ID),
+        Value::Decimal(_) => Ok(bootstrap::DECIMAL_ID),
+        Value::String(_) => Ok(bootstrap::STRING_ID),
+        Value::Date(d) => Ok(match d.precision() {
+            DatePrecision::Day => bootstrap::STRICT_DATE_ID,
+            DatePrecision::Time(_) => bootstrap::DATE_TIME_ID,
+            // Year / Month precision — no finer bootstrap ID, classify as
+            // the abstract `Date`.
+            _ => bootstrap::DATE_ID,
+        }),
+        Value::StrictTime(_) => Ok(bootstrap::STRICT_TIME_ID),
+        Value::Element(id) => Ok(*id),
+        Value::Object(obj_id) => {
+            let classifier = heap.classifier(*obj_id)?;
+            let segments: Vec<SmolStr> = if classifier.is_empty() {
+                Vec::new()
+            } else {
+                classifier.split("::").map(SmolStr::new).collect()
+            };
+            model.resolve_by_path(&segments).ok_or_else(|| {
+                PureRuntimeError::EvaluationError(format!(
+                    "type: classifier '{classifier}' does not resolve to a known Type"
+                ))
+            })
+        }
+        // Collections / maps / functions / unit — no reified runtime type,
+        // classify as `Any`.
+        Value::Collection(_) | Value::Map(_) | Value::Function(_) | Value::Unit => {
+            Ok(bootstrap::ANY_ID)
+        }
+    }
+}
+
+/// Render the identity string for a value — powers the `id` native.
+fn render_id(value: &Value, model: &PureModel) -> String {
+    match value {
+        Value::Object(obj_id) => format!("Anonymous_{obj_id}"),
+        Value::Element(id) => build_element_path(model, *id, "::", false),
+        Value::String(s) => s.to_string(),
+        Value::Boolean(b) => b.to_string(),
+        Value::Integer(i) => i.to_string(),
+        Value::Float(f) => f.to_string(),
+        Value::Decimal(d) => d.to_string(),
+        Value::Date(d) => d.to_string(),
+        Value::StrictTime(t) => t.to_string(),
+        Value::Unit => String::new(),
+        // Composite — fall back to Display for a best-effort textual id.
+        other => other.to_string(),
+    }
+}
+
+/// Render a value as a Pure-source-like debug representation —
+/// powers the `toRepresentation` native.
+fn render_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -> String {
+    match value {
+        Value::String(s) => {
+            let escaped = s.replace('\'', "\\'");
+            format!("'{escaped}'")
+        }
+        Value::Boolean(b) => b.to_string(),
+        Value::Integer(i) => i.to_string(),
+        Value::Float(f) => f.to_string(),
+        Value::Decimal(d) => d.to_string(),
+        Value::Date(d) => format!("%{d}"),
+        Value::StrictTime(t) => format!("%{t}"),
+        Value::Element(id) => build_element_path(model, *id, "::", false),
+        Value::Object(obj_id) => {
+            let classifier = heap.classifier(*obj_id).unwrap_or("Object");
+            format!("<{classifier} Anonymous_{obj_id}>")
+        }
+        Value::Collection(v) => {
+            let parts: Vec<String> = v
+                .iter()
+                .map(|item| render_representation(item, model, heap))
+                .collect();
+            format!("[{}]", parts.join(", "))
+        }
+        Value::Unit => "[]".to_string(),
+        Value::Map(m) => format!("<Map size={}>", m.len()),
+        Value::Function(fv) => match fv.as_ref() {
+            FunctionValue::Lambda(_) => "<Lambda>".to_string(),
+            FunctionValue::Compiled(id) => format!("<Function:{id}>"),
+        },
+    }
+}
+
+/// Whether `child` is a subtype of (or equal to) `parent`.
+///
+/// Mirrors `crate::pure::resolve::is_subtype` — duplicated here because the
+/// pure-crate function is `pub(crate)` and we cannot edit that crate.
+fn is_sub_type_of(child: ElementId, parent: ElementId, model: &PureModel) -> bool {
+    if child == parent {
+        return true;
+    }
+    // Bootstrap package ElementIds have no `Element::Class`/`PrimitiveType`
+    // representation — bail out to avoid `get_element` on a package.
+    if child.is_package() || parent.is_package() {
+        return false;
+    }
+    match model.get_element(child) {
+        Element::Class(c) => c.super_types.iter().any(|st| match st {
+            TypeExpr::Named { element, .. } => is_sub_type_of(*element, parent, model),
+            _ => false,
+        }),
+        Element::PrimitiveType(p) => p
+            .super_type
+            .is_some_and(|sup| is_sub_type_of(sup, parent, model)),
+        _ => false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
@@ -591,4 +990,15 @@ pub fn register(registry: &mut NativeRegistry) {
     // with `"match_"` so the runtime's simple-name prefix fallback finds it
     // when the exact-FQN lookup misses. See [`NativeRegistry::find_by_prefix`].
     registry.register("match_Any_MANY__Function_$1_MANY$__T_m_", Match);
+    registry.register("id_Any_1__String_1_", Id);
+    registry.register("type_Any_1__Type_1_", TypeOf);
+    registry.register("genericType_Any_1__GenericType_1_", GenericTypeOf);
+    registry.register("rawType_GenericType_1__Type_$0_1$_", RawType);
+    registry.register("enumName_Enumeration_1__String_1_", EnumName);
+    // `enumValues` is generic — the compiler may mangle with different
+    // T-variable spellings at the call site. Register under a key with the
+    // `enumValues_` prefix so the simple-name fallback finds it.
+    registry.register("enumValues_Enumeration_1__T_MANY_", EnumValues);
+    registry.register("toRepresentation_Any_1__String_1_", ToRepresentation);
+    registry.register("subTypeOf_Type_1__Type_1__Boolean_1_", SubTypeOf);
 }
