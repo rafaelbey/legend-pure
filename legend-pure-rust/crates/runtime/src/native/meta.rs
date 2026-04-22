@@ -29,7 +29,7 @@ use smol_str::SmolStr;
 
 use crate::date::DatePrecision;
 use crate::error::PureRuntimeError;
-use crate::heap::RuntimeHeap;
+use crate::heap::{ObjectId, RuntimeHeap};
 use crate::native::{EvalContextTrait, NativeFunction, NativeRegistry, expect_args};
 use crate::value::{FunctionValue, Value};
 
@@ -122,10 +122,17 @@ impl NativeFunction for ElementToPath {
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Value, PureRuntimeError> {
         expect_args("elementToPath", args, 3)?;
-        let id = as_element_id(&args[0])?;
         let separator = args[1].as_string()?;
         let include_root = args[2].as_boolean()?;
-        let path = build_element_path(ctx.model(), id, separator.as_str(), include_root);
+        let path = match &args[0] {
+            Value::Element(id) => {
+                build_element_path(ctx.model(), *id, separator.as_str(), include_root)
+            }
+            Value::Object(obj_id) => {
+                build_ephemeral_path(ctx.heap(), *obj_id, separator.as_str(), include_root)
+            }
+            other => return Err(PureRuntimeError::type_mismatch("PackageableElement", other)),
+        };
         Ok(Value::String(SmolStr::new(path)))
     }
 
@@ -734,6 +741,85 @@ fn build_element_path(
 
     segments.reverse();
     segments
+        .iter()
+        .map(SmolStr::as_str)
+        .collect::<Vec<_>>()
+        .join(separator)
+}
+
+/// Build the qualified path for an ephemeral (heap-constructed) packageable
+/// element.
+///
+/// `^PackageableElement(name='X', package=^Package(...))` produces a
+/// `Value::Object` that has no `ElementId`. Walk the heap's `package` /
+/// `name` property chain instead. The outermost `^Package` — the one whose
+/// `package` property is empty — plays the role of the root. Match the
+/// Java Pure rule: a top-level element (direct child of the outermost
+/// package) never gets a "Root" prefix, even with `include_root=true`;
+/// the outermost package's own name is always suppressed unless it is
+/// *named* `"Root"` AND `include_root` is true AND there is at least one
+/// intermediate package segment.
+///
+/// An ephemeral with no `name` (e.g. `^PackageableElement()`) renders as
+/// the empty string.
+fn build_ephemeral_path(
+    heap: &RuntimeHeap,
+    obj_id: ObjectId,
+    separator: &str,
+    include_root: bool,
+) -> String {
+    let name_of = |oid: ObjectId| -> Option<SmolStr> {
+        let values = heap.get_property_values(oid, "name").ok()?;
+        values.iter().next().and_then(|v| match v {
+            Value::String(s) => Some(s.clone()),
+            _ => None,
+        })
+    };
+    let package_of = |oid: ObjectId| -> Option<ObjectId> {
+        let values = heap.get_property_values(oid, "package").ok()?;
+        values.iter().next().and_then(|v| match v {
+            Value::Object(p) => Some(*p),
+            _ => None,
+        })
+    };
+
+    // Leaf name — empty string if the ephemeral has no name at all.
+    let Some(leaf_name) = name_of(obj_id) else {
+        return String::new();
+    };
+
+    // Walk upward collecting names. The outermost package (one with no
+    // `package` property) is treated as the "root" marker.
+    let mut chain: Vec<SmolStr> = vec![leaf_name];
+    let mut cursor = package_of(obj_id);
+    let mut outermost_root_name: Option<SmolStr> = None;
+    while let Some(pkg_id) = cursor {
+        let next = package_of(pkg_id);
+        if next.is_none() {
+            // Outermost package — don't emit its name unconditionally;
+            // leave inclusion to the root-prefix rule below.
+            outermost_root_name = name_of(pkg_id);
+            break;
+        }
+        if let Some(n) = name_of(pkg_id) {
+            chain.push(n);
+        }
+        cursor = next;
+    }
+
+    // Apply the root-prefix rule: only prepend the outermost package name
+    // when `include_root == true` and there is at least one intermediate
+    // package segment (i.e. the element is nested, not top-level).
+    let has_intermediate = chain.len() > 1;
+    if include_root
+        && has_intermediate
+        && let Some(root_name) = outermost_root_name
+    {
+        chain.push(root_name);
+    }
+
+    chain.reverse();
+    chain
         .iter()
         .map(SmolStr::as_str)
         .collect::<Vec<_>>()

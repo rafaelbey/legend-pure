@@ -1039,6 +1039,79 @@ fn eval_find_returns_unit_when_no_match() {
 }
 
 #[test]
+fn eval_element_to_path_ephemeral_element() {
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            ^PackageableElement(
+                name='MyElement',
+                package=^Package(
+                    name='pkg',
+                    package=^Package(name='Root')
+                )
+            )->elementToPath();
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("pkg::MyElement".into()));
+}
+
+#[test]
+fn eval_element_to_path_ephemeral_element_include_root_true() {
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            ^PackageableElement(
+                name='MyElement',
+                package=^Package(
+                    name='pkg',
+                    package=^Package(name='Root')
+                )
+            )->elementToPath(true);
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("Root::pkg::MyElement".into()));
+}
+
+#[test]
+fn eval_element_to_path_ephemeral_element_non_root_outermost() {
+    // Outermost package is named "Other" (not "Root"). With include_root=true
+    // the outermost name is still used as the prefix.
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            ^PackageableElement(
+                name='MyElement',
+                package=^Package(
+                    name='pkg',
+                    package=^Package(name='Other')
+                )
+            )->elementToPath(true);
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("Other::pkg::MyElement".into()));
+}
+
+#[test]
+fn eval_element_to_path_ephemeral_nameless() {
+    // `^PackageableElement()` with no `name` renders as the empty string.
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            ^PackageableElement()->elementToPath();
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("".into()));
+}
+
+#[test]
 fn eval_surveyor_on_element_to_path_tests_has_nonzero_runs() {
     // Canary: after the Track 1–5 native rollout, surveyor should be able to
     // bucket real platform `<<test.Test>>` functions as PASS/FAIL/ERROR
