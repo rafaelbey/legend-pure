@@ -640,11 +640,23 @@ fn as_element_id(v: &Value) -> Result<ElementId, PureRuntimeError> {
 /// Resolve a package-qualified path to an element or a package.
 ///
 /// Walks all segments but the last as packages, then tries:
-/// 1. A child element (matched on simple name — function simple name, not mangled)
-/// 2. A child package
+/// 1. A child element — first by simple name (function `function_name`,
+///    not mangled), then by mangled element name so paths like
+///    `meta::pure::functions::boolean::greaterThan_Number_1__Number_1__Boolean_1_`
+///    resolve to the specific overload.
+/// 2. A child package.
+///
+/// Special cases for "the root package": `""`, `"Root"`, and a path
+/// equal to the separator (e.g. `"::"` with separator `"::"`, or `"."`
+/// with separator `"."`) all resolve to the root package.
 ///
 /// Returns `None` if any segment fails to resolve.
 fn resolve_path(model: &PureModel, path: &str, separator: &str) -> Option<ElementId> {
+    // Root-package sentinels.
+    if path.is_empty() || path == "Root" || (!separator.is_empty() && path == separator) {
+        return Some(ElementId::Package(model.root_package));
+    }
+
     let segments: Vec<&str> = if separator.is_empty() {
         vec![path]
     } else {
@@ -668,10 +680,17 @@ fn resolve_path(model: &PureModel, path: &str, separator: &str) -> Option<Elemen
     let last = segments[segments.len() - 1];
     let pkg = model.get_package(current);
 
-    // Prefer child-element match (uses function simple name for Function elements).
+    // Prefer child-element match by simple name (function simple name for
+    // Function elements). Falls through to a mangled-name match so
+    // overload-specific paths like `greaterThan_Number_1__Number_1__Boolean_1_`
+    // resolve directly.
     for &eid in &pkg.children_elements {
-        let name = element_simple_name(model, eid);
-        if name == last {
+        if element_simple_name(model, eid) == last {
+            return Some(eid);
+        }
+    }
+    for &eid in &pkg.children_elements {
+        if model.element_name(eid) == last {
             return Some(eid);
         }
     }
