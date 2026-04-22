@@ -1112,6 +1112,101 @@ fn eval_element_to_path_ephemeral_nameless() {
 }
 
 #[test]
+#[ignore = "broad surveyor canary across meta::pure::functions — prints full bucket breakdown"]
+fn eval_surveyor_broad_canary() {
+    use legend_pure_runtime::eval::Evaluator;
+
+    let packages = [
+        "meta::pure::functions::meta::tests",
+        "meta::pure::functions::collection::tests",
+        "meta::pure::functions::string::tests",
+        "meta::pure::functions::math::tests",
+        "meta::pure::functions::date::tests",
+        "meta::pure::functions::boolean::tests",
+        "meta::pure::functions::lang::tests",
+    ];
+
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+
+    for pkg in &packages {
+        let mut evaluator = Evaluator::new(&model, &registry);
+        let report_result = evaluator.call(
+            "meta::pure::test::surveyor::runTestsFromPath",
+            &[
+                Value::String(SmolStr::new(pkg)),
+                Value::String("".into()),
+            ],
+        );
+        let Ok(Value::Object(report_id)) = report_result else {
+            eprintln!("[{pkg}] surveyor failed: {report_result:?}");
+            continue;
+        };
+        let heap = evaluator.heap();
+        let read = |name: &str| -> i64 {
+            let values = heap.get_property_values(report_id, name).unwrap();
+            match values.iter().next() {
+                Some(Value::Integer(n)) => *n,
+                _ => -1,
+            }
+        };
+        let pass = read("passCount");
+        let fail = read("failCount");
+        let error = read("errorCount");
+        let skip = read("skipCount");
+        eprintln!(
+            "[{pkg}] pass={pass} fail={fail} error={error} skip={skip} total={}",
+            pass + fail + error + skip
+        );
+    }
+}
+
+#[test]
+fn eval_surveyor_element_to_path_all_tests_pass() {
+    // After the compiler's inherited-property-type-resolution fix, every
+    // `<<test.Test>>` function under `meta::pure::functions::meta::tests::elementToPath`
+    // should PASS. If this regresses, the surveyor has a real problem —
+    // diagnose before relaxing the assertion.
+    use legend_pure_runtime::eval::Evaluator;
+
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    let mut evaluator = Evaluator::new(&model, &registry);
+
+    let report = evaluator
+        .call(
+            "meta::pure::test::surveyor::runTestsFromPath",
+            &[
+                Value::String("meta::pure::functions::meta::tests::elementToPath".into()),
+                Value::String("".into()),
+            ],
+        )
+        .expect("surveyor should return a TestReport");
+
+    let Value::Object(report_id) = report else {
+        panic!("surveyor returned non-object: {report:?}");
+    };
+
+    let heap = evaluator.heap();
+    let read = |name: &str| -> i64 {
+        let values = heap.get_property_values(report_id, name).unwrap();
+        match values.iter().next() {
+            Some(Value::Integer(n)) => *n,
+            _ => -1,
+        }
+    };
+    let pass = read("passCount");
+    let fail = read("failCount");
+    let error = read("errorCount");
+    let skip = read("skipCount");
+    assert_eq!(
+        error, 0,
+        "expected 0 ERROR'd tests, got {error} (pass={pass}, fail={fail}, skip={skip})"
+    );
+    assert!(pass >= 7, "expected >=7 PASS, got {pass}");
+}
+
+#[test]
 fn eval_surveyor_on_element_to_path_tests_has_nonzero_runs() {
     // Canary: after the Track 1–5 native rollout, surveyor should be able to
     // bucket real platform `<<test.Test>>` functions as PASS/FAIL/ERROR

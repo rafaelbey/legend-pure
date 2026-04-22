@@ -859,31 +859,17 @@ fn infer_type_from_valuespec(
             target, property, ..
         } => {
             // Resolve the property's return type, substituting class-level
-            // generic parameters from the receiver's type arguments.
+            // generic parameters from the receiver's type arguments. Walks
+            // the supertype chain so inherited properties (e.g.
+            // `.package` on a `Package` value, inherited from
+            // `PackageableElement`) resolve.
             let target_eid = infer_type_from_valuespec(target, model, var_types)?;
             let receiver_type_args = extract_receiver_type_args(target, var_types);
-            let element = model.get_element(target_eid);
-            let (properties, qprops, type_params): (&[_], &[_], &[smol_str::SmolStr]) =
-                match element {
-                    Element::Class(c) => {
-                        (&c.properties, &c.qualified_properties, &c.type_parameters)
-                    }
-                    _ => return None,
-                };
-            // Search simple properties first, then qualified properties.
-            let prop_type: Option<&crate::types::TypeExpr> = properties
-                .iter()
-                .find(|p| p.name == *property)
-                .map(|p| &p.type_expr)
-                .or_else(|| {
-                    qprops
-                        .iter()
-                        .find(|p| p.name == *property)
-                        .map(|p| &p.return_type)
-                });
-            let prop_ty = prop_type?;
+            let (prop_ty_owned, type_params_owned) =
+                find_property_with_inheritance(target_eid, property, model)?;
             // Substitute class type params (T, U, …) from receiver's args.
-            let resolved = substitute_class_generics(prop_ty, type_params, &receiver_type_args);
+            let resolved =
+                substitute_class_generics(&prop_ty_owned, &type_params_owned, &receiver_type_args);
             match resolved {
                 crate::types::TypeExpr::Named { element, .. } => Some(element),
                 crate::types::TypeExpr::Generic(_) => Some(crate::bootstrap::ANY_ID),
@@ -892,6 +878,44 @@ fn infer_type_from_valuespec(
         }
         _ => None,
     }
+}
+
+/// Walk the class hierarchy searching for `property` starting at `eid`.
+///
+/// Returns the property's declared `TypeExpr` together with the type
+/// parameters of the *declaring* class (so the caller can substitute them
+/// against receiver type-arguments). Walks `super_types` breadth-first —
+/// `.package` on a `Package` value must find the `package` declaration
+/// inherited from `PackageableElement`.
+fn find_property_with_inheritance(
+    eid: ElementId,
+    property: &smol_str::SmolStr,
+    model: &crate::model::PureModel,
+) -> Option<(crate::types::TypeExpr, Vec<smol_str::SmolStr>)> {
+    use crate::types::TypeExpr;
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(eid);
+    while let Some(current) = queue.pop_front() {
+        if !visited.insert(current) {
+            continue;
+        }
+        let Element::Class(c) = model.get_element(current) else {
+            continue;
+        };
+        if let Some(p) = c.properties.iter().find(|p| p.name == *property) {
+            return Some((p.type_expr.clone(), c.type_parameters.clone()));
+        }
+        if let Some(q) = c.qualified_properties.iter().find(|q| q.name == *property) {
+            return Some((q.return_type.clone(), c.type_parameters.clone()));
+        }
+        for st in &c.super_types {
+            if let TypeExpr::Named { element, .. } = st {
+                queue.push_back(*element);
+            }
+        }
+    }
+    None
 }
 
 /// Extracts the type arguments from the receiver expression's stored type.
