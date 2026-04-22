@@ -54,7 +54,36 @@ fn numeric_cmp(a: &Value, b: &Value) -> Result<std::cmp::Ordering, PureRuntimeEr
 // equal
 // ---------------------------------------------------------------------------
 
-/// Pure `equal(Any[1], Any[1]): Boolean[1]` — structural equality.
+/// Pure `eq(Any[1], Any[1]): Boolean[1]` — identity / primitive equality.
+///
+/// For primitive values: compares by value.
+/// For objects: compares identity (`ObjectId == ObjectId`), not properties.
+/// This is NOT the same as `equal` — two objects with identical properties
+/// are `equal` but not `eq`.
+#[derive(Debug)]
+pub struct Eq;
+
+impl NativeFunction for Eq {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("eq", args, 2)?;
+        Ok(Value::Boolean(args[0] == args[1]))
+    }
+
+    fn signature(&self) -> &'static str {
+        "eq(Any[1], Any[1]): Boolean[1]"
+    }
+}
+
+/// Pure `equal(Any[*], Any[*]): Boolean[1]` — structural / value equality.
+///
+/// For primitives: compares by value (same as `eq`).
+/// For objects: key-property structural equality (deep); currently deferred —
+/// falls back to identity (`ObjectId == ObjectId`) for object comparisons.
+/// For collections: element-wise equality via `Value::PartialEq`.
 #[derive(Debug)]
 pub struct Equal;
 
@@ -69,7 +98,7 @@ impl NativeFunction for Equal {
     }
 
     fn signature(&self) -> &'static str {
-        "equal(Any[1], Any[1]): Boolean[1]"
+        "equal(Any[*], Any[*]): Boolean[1]"
     }
 }
 
@@ -158,10 +187,8 @@ impl NativeFunction for GreaterThanEqual {
 // ---------------------------------------------------------------------------
 
 /// Register all comparison native functions.
-///
-/// Note: `greaterThan` and `greaterThanEqual` are Pure functions (not native)
-/// that delegate to `lessThan`. They are not registered here.
 pub fn register(registry: &mut NativeRegistry) {
+    registry.register("eq_Any_1__Any_1__Boolean_1_", Eq);
     registry.register("equal_Any_MANY__Any_MANY__Boolean_1_", Equal);
     registry.register("lessThan_Number_1__Number_1__Boolean_1_", LessThan);
     registry.register(

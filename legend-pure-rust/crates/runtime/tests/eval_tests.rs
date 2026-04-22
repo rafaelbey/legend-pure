@@ -526,7 +526,7 @@ fn eval_closure_captures_and_binds_inner_let() {
         r"
         function test::f(): Integer[*] {
             let x = 100;
-            [1, 2]->map(y | 
+            [1, 2]->map(y |
                 let inner = $x;
                 $inner + $y
             );
@@ -542,4 +542,196 @@ fn eval_closure_captures_and_binds_inner_let() {
         }
         other => panic!("Expected Collection, got {other:?}"),
     }
+}
+
+// ===========================================================================
+// 8. Meta-model natives: pathToElement / elementToPath / element properties
+// ===========================================================================
+
+#[test]
+fn eval_path_to_element_resolves_package() {
+    // Resolve a package from its qualified path and then round-trip via
+    // elementToPath — the 1-arg Pure wrapper forwards to the 3-arg native.
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            pathToElement('meta::pure', '::')->elementToPath();
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("meta::pure".into()));
+}
+
+#[test]
+fn eval_path_to_element_resolves_nested_package() {
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            pathToElement('meta::pure::metamodel::type', '::')->elementToPath();
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("meta::pure::metamodel::type".into()));
+}
+
+#[test]
+fn eval_element_name_package() {
+    // $pkg.name returns the simple package name (scalar in the M3 metamodel).
+    let result = eval_pure(
+        r"
+        function test::f(): String[*] {
+            pathToElement('meta::pure', '::').name;
+        }
+        ",
+        "f__String_MANY_",
+    );
+    // Check that we got either a single-value or a collection containing 'pure'.
+    match result {
+        Value::String(s) => assert_eq!(s.as_str(), "pure"),
+        Value::Collection(v) => {
+            assert_eq!(v.len(), 1, "expected 1 element, got {}", v.len());
+            assert_eq!(v[0], Value::String("pure".into()));
+        }
+        other => panic!("Expected String or Collection, got {other:?}"),
+    }
+}
+
+#[test]
+fn eval_package_children_includes_sub_packages() {
+    // meta::pure has many sub-packages (metamodel, functions, test, ...).
+    // Just assert the collection is non-empty.
+    let result = eval_pure(
+        r"
+        function test::f(): Integer[1] {
+            pathToElement('meta::pure', '::').children->size();
+        }
+        ",
+        "f__Integer_1_",
+    );
+    match result {
+        Value::Integer(n) => assert!(n > 0, "expected non-empty children, got {n}"),
+        other => panic!("Expected Integer, got {other:?}"),
+    }
+}
+
+#[test]
+fn eval_element_to_path_with_custom_separator() {
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            elementToPath(pathToElement('meta::pure', '::'), '.', false);
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("meta.pure".into()));
+}
+
+#[test]
+fn eval_element_to_path_include_root() {
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            elementToPath(pathToElement('meta::pure', '::'), '::', true);
+        }
+        ",
+        "f__String_1_",
+    );
+    // Root package has empty name, so including it produces a leading '::'
+    assert_eq!(result, Value::String("::meta::pure".into()));
+}
+
+#[test]
+fn eval_surveyor_entry_point_reaches_build_test_group() {
+    // Regression canary: the Pure-native surveyor must reach `buildTestGroup`
+    // on a real platform path. It fails today inside `buildTestGroup` because
+    // `^Class(...)` object construction (`new`) isn't implemented — but
+    // getting this deep proves path resolution, element property access,
+    // `match`/`instanceOf`/`cast`, and collection/meta natives are wired up.
+    //
+    // When `new` lands this test should start passing (or progress to a
+    // different, more interesting failure); either way the assertion below
+    // surfaces the regression loudly.
+    use legend_pure_runtime::eval::Evaluator;
+
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    let mut evaluator = Evaluator::new(&model, &registry);
+
+    let result = evaluator.call(
+        "meta::pure::test::surveyor::runTestsFromPath",
+        &[
+            Value::String("meta::pure::functions::collection".into()),
+            Value::String("".into()),
+        ],
+    );
+    let err = result.expect_err(
+        "surveyor currently blocks on missing `new`; revisit this canary when that lands",
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Function not found: new"),
+        "unexpected surveyor failure — did a dependency regress?\n{msg}"
+    );
+    // buildTestGroup is deeper in the call chain than getTestFunctions.
+    // Requiring both frames in the stack is what proves the surveyor got
+    // past discovery into the per-package grouping phase.
+    assert!(
+        msg.contains("buildTestGroup"),
+        "expected buildTestGroup in stack, got: {msg}"
+    );
+}
+
+#[test]
+fn eval_cast_routes_through_prefix_fallback_despite_name_mangle_drift() {
+    // The `cast` native is registered as `cast_Any_m__V_1__V_m_` but the
+    // compiler mangles Pure-level `cast` call sites differently (e.g., T vs V
+    // type-variable naming). This must still route via the simple-name
+    // prefix fallback. Regressing here would silently break `cast` in any
+    // platform function that calls it.
+    let result = eval_pure(
+        r"
+        function test::f(): Integer[1] {
+            42->cast(@Integer);
+        }
+        ",
+        "f__Integer_1_",
+    );
+    assert_eq!(result, Value::Integer(42));
+}
+
+#[test]
+fn eval_instance_of_with_type_reference() {
+    // @X evaluates to Value::Element after the TypeReference change —
+    // instanceOf must accept it as its type argument.
+    let result = eval_pure(
+        r"
+        function test::f(): Boolean[1] {
+            42->instanceOf(@Integer);
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(result, Value::Boolean(true));
+}
+
+#[test]
+fn eval_match_dispatches_to_first_matching_lambda() {
+    // A simple match that distinguishes Integer from String. We feed
+    // an integer literal via a trivial wrapping — the lambda's declared
+    // parameter type drives dispatch.
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            42->match([
+                i: Integer[1] | 'int',
+                s: String[1] | 'str'
+            ]);
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("int".into()));
 }

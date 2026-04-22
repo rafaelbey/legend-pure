@@ -77,10 +77,6 @@ impl NativeFunction for If {
         let condition_val = ctx.eval_lambda(&args[0], &[])?;
         let condition = condition_val.as_boolean()?;
 
-        println!(
-            "If native condition = {} args[1] = {:?}",
-            condition, args[1]
-        );
         if condition {
             ctx.eval_lambda(&args[1], &[])
         } else {
@@ -98,6 +94,78 @@ impl NativeFunction for If {
 }
 
 // ---------------------------------------------------------------------------
+// eval — call a function value with 0-7 arguments
+// ---------------------------------------------------------------------------
+
+/// Pure `eval(func:Function<{...->V[m]}>[1], ...params):V[m]`
+///
+/// All 8 platform `eval` overloads (0–7 extra parameters) share this single
+/// implementation: extract `args[0]` as the callable and pass `args[1..]` as
+/// the arguments via `ctx.eval_lambda`, which handles both `Lambda` and `FunctionRef`.
+#[derive(Debug)]
+pub struct Eval;
+
+impl NativeFunction for Eval {
+    fn execute(
+        &self,
+        args: &[Value],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        if args.is_empty() {
+            return Err(PureRuntimeError::EvaluationError(
+                "eval: expected at least 1 argument (the function)".into(),
+            ));
+        }
+        let func = &args[0];
+        let params = &args[1..];
+        ctx.eval_lambda(func, params)
+    }
+
+    fn signature(&self) -> &'static str {
+        "eval(Function[1], ...): Any[*]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// print — write a value to stdout (used by println)
+// ---------------------------------------------------------------------------
+
+/// Pure `print(param:Any[*], max:Integer[1]):Nil[0]`
+///
+/// Writes each argument's [`Display`](std::fmt::Display) form to stdout,
+/// then returns [`Value::Unit`]. The `max` parameter is accepted for
+/// signature compatibility and ignored (the Java runtime uses it to cap
+/// graph-walk depth when rendering objects; the Rust interpreter currently
+/// always uses the scalar `Display`).
+#[derive(Debug)]
+pub struct Print;
+
+impl NativeFunction for Print {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("print", args, 2)?;
+        let payload = &args[0];
+        match payload {
+            Value::Collection(v) => {
+                for item in v.iter() {
+                    print!("{item}");
+                }
+            }
+            Value::Unit => {}
+            other => print!("{other}"),
+        }
+        Ok(Value::Unit)
+    }
+
+    fn signature(&self) -> &'static str {
+        "print(param:Any[*], max:Integer[1]):Nil[0]"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -105,4 +173,23 @@ impl NativeFunction for If {
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("letFunction_String_1__T_m__T_m_", LetFunction);
     registry.register("if_Boolean_1__Function_1__Function_1__T_m_", If);
+    registry.register("print_Any_MANY__Integer_1__Nil_0_", Print);
+
+    // eval — 8 arities (0–7 extra parameters).
+    // Mangled names derived from the platform source in essential/lang/eval/eval.pure
+    // via the same mangling rules as ast::element::FunctionSignature::mangled_name.
+    // eval — 8 arities (0–7 extra parameters).
+    // Mangled names derived from the platform source in essential/lang/eval/eval.pure.
+    registry.register("eval_Function_1__V_m_", Eval);
+    registry.register("eval_Function_1__T_n__V_m_", Eval);
+    registry.register("eval_Function_1__T_n__U_p__V_m_", Eval);
+    registry.register("eval_Function_1__T_n__U_p__W_q__V_m_", Eval);
+    registry.register("eval_Function_1__T_n__U_p__W_q__X_r__V_m_", Eval);
+    registry.register("eval_Function_1__T_n__U_p__W_q__X_r__Y_s__V_m_", Eval);
+    registry.register("eval_Function_1__T_n__U_p__W_q__X_r__Y_s__Z_t__V_m_", Eval);
+    // 7-extra-arg variant — type variables S[n],T[o],... match the Pure source declaration
+    registry.register(
+        "eval_Function_1__S_n__T_o__U_p__W_q__X_r__Y_s__Z_t__V_m_",
+        Eval,
+    );
 }

@@ -31,6 +31,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use im_rc::Vector as PVector;
+use legend_pure_parser_pure::ids::ElementId;
 use rust_decimal::Decimal;
 use smol_str::SmolStr;
 
@@ -101,18 +102,49 @@ pub enum Value {
     /// This is the key optimization for fold+put accumulator patterns.
     Map(Box<im_rc::HashMap<ValueKey, Value>>),
 
-    /// A first-class lambda (closure) — parameters + body + captured bindings.
+    /// A Pure `Function` value — anonymous lambda or compiled function reference.
     ///
-    /// Created by `ExprKind::Lambda` evaluation. Used by native functions
-    /// like `map`, `filter`, `fold`, and `if` via `ctx.eval_lambda()`.
-    Lambda(Box<LambdaClosure>),
+    /// Both `LambdaFunction` and `ConcreteFunctionDefinition` (or
+    /// `NativeFunctionDefinition`) are `Function` in Pure's type system.
+    /// Callers use `Value::Function` uniformly; dispatch strategy is determined
+    /// internally by the `FunctionValue` variant.
+    Function(Box<FunctionValue>),
+
+    /// A reference to a compiled model element (Package, Class, Function, etc.).
+    ///
+    /// Produced by [`ExprKind::PackageableElementRef`](legend_pure_parser_pure::types::ExprKind::PackageableElementRef)
+    /// and consumed by meta-model natives (`pathToElement`, `elementToPath`,
+    /// `match` on `PackageableElement` subtypes). Carries an [`ElementId`] —
+    /// a lightweight `Copy` handle into the [`PureModel`](legend_pure_parser_pure::model::PureModel).
+    Element(ElementId),
 
     /// The unit value — result of expressions with no meaningful return.
     /// Equivalent to `[]` with multiplicity `[0..0]`.
     Unit,
 }
 
-/// A lambda closure: parameters + body + captured variable bindings.
+/// A Pure `Function` value — anonymous lambda or compiled function reference.
+///
+/// In Pure's type system both share `Function<{Params->Result}>`.
+/// The variant drives dispatch in `Evaluator::eval_function_value`.
+#[derive(Debug, Clone)]
+pub enum FunctionValue {
+    /// Anonymous (inline) lambda: parameters, body expressions, and captured bindings.
+    ///
+    /// Mirrors Java's `LambdaFunction`.
+    Lambda(LambdaClosure),
+
+    /// Reference to a named compiled Pure function (native or concrete).
+    ///
+    /// The `ElementId` uniquely identifies the specific overload resolved by
+    /// the compiler. At call time the evaluator reads the mangled FQN via
+    /// `model.get_node(id).name` and routes through the native registry
+    /// (for `NativeFunctionDefinition`) or `call_user_function`
+    /// (for `ConcreteFunctionDefinition`).
+    Compiled(ElementId),
+}
+
+/// An anonymous lambda closure: parameters, body, and captured variable bindings.
 ///
 /// Mirrors Java's `LambdaFunction` + captured `VariableContext`.
 /// The `captures` map snapshots the enclosing scope at the point of
@@ -166,6 +198,7 @@ impl PartialEq for Value {
             (Self::StrictTime(a), Self::StrictTime(b)) => a == b,
             (Self::Object(a), Self::Object(b)) => a == b,
             (Self::Collection(a), Self::Collection(b)) => a == b,
+            (Self::Element(a), Self::Element(b)) => a == b,
             (Self::Unit, Self::Unit) => true,
             _ => false,
         }
@@ -314,7 +347,8 @@ impl Value {
             Self::Object(_) => "Object",
             Self::Collection(_) => "Collection",
             Self::Map(_) => "Map",
-            Self::Lambda(_) => "Lambda",
+            Self::Function(_) => "Function",
+            Self::Element(_) => "PackageableElement",
             Self::Unit => "Unit",
         }
     }
@@ -445,7 +479,11 @@ impl fmt::Display for Value {
                 write!(f, "]")
             }
             Self::Map(m) => write!(f, "<Map size={}>", m.len()),
-            Self::Lambda(_) => write!(f, "<Lambda>"),
+            Self::Function(fv) => match fv.as_ref() {
+                FunctionValue::Lambda(_) => write!(f, "<Lambda>"),
+                FunctionValue::Compiled(id) => write!(f, "<Function:{id}>"),
+            },
+            Self::Element(id) => write!(f, "<Element:{id}>"),
             Self::Unit => write!(f, "[]"),
         }
     }

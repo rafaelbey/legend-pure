@@ -14,7 +14,7 @@
 
 //! String native functions: `plus` (concatenation), `length`, `substring`,
 //! `indexOf`, `contains`, `startsWith`, `endsWith`, `toLower`, `toUpper`,
-//! `trim`, `toString`.
+//! `trim`, `toString`, `format`.
 
 use smol_str::SmolStr;
 
@@ -288,6 +288,81 @@ impl NativeFunction for ToString {
 }
 
 // ---------------------------------------------------------------------------
+// format
+// ---------------------------------------------------------------------------
+
+/// Produce a repr string for `%r`: strings are quoted, other values use Display.
+fn repr_value(v: &Value) -> String {
+    match v {
+        Value::String(s) => format!("'{s}'"),
+        other => other.to_string(),
+    }
+}
+
+/// Pure `format(String[1], Any[*]): String[1]`
+///
+/// Replaces `%s` (Display), `%r` (repr — strings quoted), `%d` (integer),
+/// `%f` (float) in the format string with successive values from `args[1]`.
+/// `args[1]` is the `Any[*]` collection of substitution values; if it is a
+/// `Value::Collection`, its elements are iterated; otherwise it is treated as
+/// a single-element list.
+#[derive(Debug)]
+pub struct Format;
+
+impl NativeFunction for Format {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("format", args, 2)?;
+        let template = args[0].as_string()?;
+
+        let subs: Vec<&Value> = match &args[1] {
+            Value::Collection(v) => v.iter().collect(),
+            single => vec![single],
+        };
+
+        let mut result = String::with_capacity(template.len());
+        let mut chars = template.chars().peekable();
+        let mut sub_idx = 0usize;
+
+        while let Some(c) = chars.next() {
+            if c != '%' {
+                result.push(c);
+                continue;
+            }
+            match chars.peek() {
+                Some(&spec) if matches!(spec, 's' | 'r' | 'd' | 'f') => {
+                    chars.next();
+                    let v = subs.get(sub_idx).copied().ok_or_else(|| {
+                        PureRuntimeError::EvaluationError(format!(
+                            "format: not enough arguments (needed arg {sub_idx})"
+                        ))
+                    })?;
+                    sub_idx += 1;
+                    match spec {
+                        'r' => result.push_str(&repr_value(v)),
+                        's' => match v {
+                            Value::String(s) => result.push_str(s.as_str()),
+                            other => result.push_str(&other.to_string()),
+                        },
+                        _ => result.push_str(&v.to_string()),
+                    }
+                }
+                _ => result.push('%'),
+            }
+        }
+
+        Ok(Value::String(SmolStr::new(result)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "format(String[1], Any[*]): String[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -312,6 +387,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("toUpper_String_1__String_1_", ToUpper);
     registry.register("trim_String_1__String_1_", Trim);
     registry.register("toString_Any_1__String_1_", ToString);
+    registry.register("format_String_1__Any_MANY__String_1_", Format);
 }
 
 #[cfg(test)]
@@ -424,6 +500,42 @@ mod tests {
                 .unwrap(),
             Value::String("42".into())
         );
+    }
+
+    #[test]
+    fn format_s_specifier() {
+        use crate::value::Value;
+        use im_rc::Vector;
+        let coll = Value::Collection(Box::new(Vector::from_iter([Value::String("world".into())])));
+        let r = Format
+            .execute(&[Value::String("hello %s".into()), coll], &mut NoOpEvalCtx)
+            .unwrap();
+        assert_eq!(r, Value::String("hello world".into()));
+    }
+
+    #[test]
+    fn format_r_specifier_quotes_string() {
+        use crate::value::Value;
+        use im_rc::Vector;
+        let coll = Value::Collection(Box::new(Vector::from_iter([Value::String("foo".into())])));
+        let r = Format
+            .execute(&[Value::String("%r".into()), coll], &mut NoOpEvalCtx)
+            .unwrap();
+        assert_eq!(r, Value::String("'foo'".into()));
+    }
+
+    #[test]
+    fn format_two_args() {
+        use crate::value::Value;
+        use im_rc::Vector;
+        let coll = Value::Collection(Box::new(Vector::from_iter([
+            Value::Integer(1),
+            Value::Integer(2),
+        ])));
+        let r = Format
+            .execute(&[Value::String("%s + %s".into()), coll], &mut NoOpEvalCtx)
+            .unwrap();
+        assert_eq!(r, Value::String("1 + 2".into()));
     }
 
     #[test]

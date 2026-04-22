@@ -62,7 +62,7 @@ use crate::error::{PureException, PureRuntimeError, StackFrame};
 use crate::heap::RuntimeHeap;
 use crate::hooks::{EvalHooks, NoOpHooks};
 use crate::native::{NativeFunction, NativeRegistry};
-use crate::value::{LambdaClosure, Value};
+use crate::value::{FunctionValue, LambdaClosure, Value};
 
 /// Evaluator state — holds mutable context during expression evaluation.
 ///
@@ -233,13 +233,24 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             ExprKind::Collection { elements } => self.eval_collection(elements),
 
             // -- Type reference -------------------------------------------
-            ExprKind::TypeReference { .. } | ExprKind::Column => Ok(Value::Unit),
+            // `@MyClass` / `@ConcreteFunctionDefinition<Any>` needs to survive into
+            // runtime values so `cast`, `instanceOf`, and `match` can inspect the
+            // target class. A bare structural reference (function type, generic
+            // variable) still has no runtime representation — fall back to `Unit`.
+            ExprKind::TypeReference { type_expr } => match type_expr {
+                legend_pure_parser_pure::types::TypeExpr::Named { element, .. } => {
+                    Ok(Value::Element(*element))
+                }
+                _ => Ok(Value::Unit),
+            },
+            ExprKind::Column => Ok(Value::Unit),
 
             // -- Bare element reference -----------------------------------
-            ExprKind::PackageableElementRef { element } => {
-                let node = self.model.get_node(*element);
-                Ok(Value::String(node.name.clone()))
-            }
+            // Produce a first-class Element handle so meta-model natives
+            // (pathToElement, elementToPath, match) can inspect it. Using
+            // the raw ElementId avoids the panic that get_node hits on
+            // Package variants.
+            ExprKind::PackageableElementRef { element } => Ok(Value::Element(*element)),
         }?;
 
         self.hooks.after_eval(&expr.source_info, &result);
@@ -271,9 +282,12 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     #[allow(clippy::result_large_err)]
     pub fn call(&mut self, name: &str, args: &[Value]) -> Result<Value, PureException> {
         let segments: Vec<SmolStr> = name.split("::").map(SmolStr::new).collect();
+        // Functions are stored with mangled names; use prefix-matching resolve.
+        // Fall back to exact resolve for non-function elements (Package, Class, etc.).
         let element_id = self
             .model
-            .resolve_by_path(&segments)
+            .resolve_function_by_path(&segments)
+            .or_else(|| self.model.resolve_by_path(&segments))
             .ok_or_else(|| PureException::from(PureRuntimeError::FunctionNotFound(name.into())))?;
 
         self.call_user_function(element_id, args, name)
@@ -293,6 +307,20 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     ) -> Result<Value, PureException> {
         let name = self.model.get_node(element_id).name.clone();
         self.call_user_function(element_id, &[], &name)
+    }
+
+    /// Call a Pure function by its resolved [`ElementId`] with explicit arguments.
+    ///
+    /// # Errors
+    /// Returns `PureException` if the element is not a function or evaluation fails.
+    #[allow(clippy::result_large_err)]
+    pub fn call_user_function_by_id_with_args(
+        &mut self,
+        element_id: ElementId,
+        args: &[Value],
+    ) -> Result<Value, PureException> {
+        let name = self.model.get_node(element_id).name.clone();
+        self.call_user_function(element_id, args, &name)
     }
 
     // -----------------------------------------------------------------------
@@ -388,21 +416,26 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             None => function_name,
         };
 
-        // 2a. Try native dispatch with exact FQN
+        // 2a. Try native dispatch with exact FQN.
         if let Some(native) = self.natives.get(lookup_key) {
             return self.dispatch_native(native, lookup_key, arguments, source_info);
         }
 
-        // 2b. Fallback: prefix-based native lookup using simple name.
-        //     This handles unresolved operators (where function is None) AND
-        //     standard library natives (if, map) whose compiled FQNs might not perfectly match
-        //     the statically registered FQN string in NativeRegistry.
-        if let Some(native) = self.natives.find_by_prefix(function_name) {
-            return self.dispatch_native(native, lookup_key, arguments, source_info);
-        }
-
-        // 3. Try user function dispatch
-        if let Some(element_id) = function {
+        // 2b. If the compiler resolved the call to a concrete (non-native) function,
+        //     dispatch to its body BEFORE the simple-name prefix fallback. A Pure
+        //     wrapper like `elementToPath(PackageableElement[1]):String[1]` delegates
+        //     to a higher-arity native — letting the prefix fallback fire here would
+        //     route the wrapper call straight into the native with the wrong arity.
+        //
+        //     Native function declarations (no body) intentionally fall through to 2c
+        //     so the prefix fallback can still paper over FQN-mangling mismatches for
+        //     `if`, `map`, and friends.
+        if let Some(element_id) = function
+            && matches!(
+                self.model.get_element(element_id),
+                Element::Function(f) if !f.is_native
+            )
+        {
             let mut args = Vec::with_capacity(arguments.len());
             for arg in arguments {
                 args.push(self.eval(arg)?);
@@ -410,9 +443,19 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             return self.call_user_function(element_id, &args, function_name);
         }
 
-        // 4. Function not found
+        // 2c. Unresolved call or native with an FQN mismatch: last-resort
+        //     prefix-based native lookup using the simple function name.
+        if let Some(native) = self.natives.find_by_prefix(function_name) {
+            return self.dispatch_native(native, lookup_key, arguments, source_info);
+        }
+
+        // 3. Nothing matched. If we reached here with a resolved element, it
+        //    must be a native declaration (no body) for which we have no Rust
+        //    implementation — don't call the empty body, that would silently
+        //    return `Unit` and mask the missing native. Surface it as a
+        //    FunctionNotFound so callers can classify it (PCT skip, CLI error).
         Err(PureException::from(PureRuntimeError::FunctionNotFound(
-            function_name.into(),
+            lookup_key.into(),
         )))
     }
 
@@ -448,7 +491,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                             captures: std::collections::HashMap::new(),
                         },
                     };
-                    Value::Lambda(Box::new(closure))
+                    Value::Function(Box::new(FunctionValue::Lambda(closure)))
                 })
                 .collect();
 
@@ -552,12 +595,147 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 .heap
                 .get_property(*id, property)
                 .map_err(PureException::from),
+            Value::Element(id) => {
+                let id = *id;
+                self.eval_element_property(id, property)
+                    .map_err(PureException::from)
+            }
             _ => Err(PureException::from(PureRuntimeError::EvaluationError(
                 format!(
                     "Property access on non-object value: {}.{}",
                     target_val.type_name(),
                     property
                 ),
+            ))),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Element property access
+    // -----------------------------------------------------------------------
+
+    /// Read a property of a model-element reference (`Value::Element`).
+    ///
+    /// Supports the M3 meta-model properties used by the Pure-level test
+    /// orchestrator (`surveyor.pure`):
+    /// - `name`         → simple name (function name for Functions, not mangled)
+    /// - `package`      → parent package as `Value::Element(Package(..))`, or `Unit` for root
+    /// - `children`     → for packages, child sub-packages + child elements as a Collection
+    /// - `stereotypes`  → for Functions, Classes, etc: a Collection of freshly-allocated
+    ///                    heap objects classifying as `meta::pure::metamodel::extension::Stereotype`
+    ///                    with `value`/`profile` properties — matches the M3 representation
+    ///                    surveyor expects.
+    fn eval_element_property(
+        &mut self,
+        id: ElementId,
+        property: &str,
+    ) -> Result<Value, PureRuntimeError> {
+        match property {
+            "name" => {
+                let name = match self.model.get_element(id) {
+                    Element::Function(f) => f.function_name.clone(),
+                    _ => self.model.element_name(id).clone(),
+                };
+                Ok(Value::String(name))
+            }
+            "package" => {
+                let parent = match id {
+                    ElementId::Package(pkg_id) => self
+                        .model
+                        .get_package(pkg_id)
+                        .parent
+                        .map(ElementId::Package),
+                    ElementId::InstanceId { .. } => {
+                        Some(ElementId::Package(self.model.get_node(id).parent_package))
+                    }
+                };
+                match parent {
+                    Some(pid) => Ok(Value::Element(pid)),
+                    None => Ok(Value::Unit),
+                }
+            }
+            "children" => match id {
+                ElementId::Package(pkg_id) => {
+                    let pkg = self.model.get_package(pkg_id);
+                    let mut items: Vec<Value> = Vec::with_capacity(
+                        pkg.children_packages.len() + pkg.children_elements.len(),
+                    );
+                    for &child_pkg_id in &pkg.children_packages {
+                        items.push(Value::Element(ElementId::Package(child_pkg_id)));
+                    }
+                    for &child_eid in &pkg.children_elements {
+                        items.push(Value::Element(child_eid));
+                    }
+                    Ok(Value::from_vec(items))
+                }
+                ElementId::InstanceId { .. } => Err(PureRuntimeError::EvaluationError(format!(
+                    "Property 'children' is only valid for Package elements, got element {id}"
+                ))),
+            },
+            "stereotypes" => {
+                // Clone into an owned Vec so we can release the immutable borrow
+                // of self.model before we mutate self.heap.
+                //
+                // Each access allocates fresh heap objects — identity is not preserved
+                // across calls (`$f.stereotypes == $f.stereotypes` is false). Surveyor
+                // only inspects `.value`/`.profile`, so this is fine. If callers start
+                // caring about identity, cache per-(element, property) on first read.
+                let stereos: Vec<(ElementId, SmolStr)> = match self.model.get_element(id) {
+                    Element::Function(f) => f
+                        .stereotypes
+                        .iter()
+                        .map(|s| (s.profile, s.value.clone()))
+                        .collect(),
+                    Element::Class(c) => c
+                        .stereotypes
+                        .iter()
+                        .map(|s| (s.profile, s.value.clone()))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                let mut items: Vec<Value> = Vec::with_capacity(stereos.len());
+                for (profile, value) in stereos {
+                    let obj = self
+                        .heap
+                        .alloc_dynamic("meta::pure::metamodel::extension::Stereotype");
+                    self.heap
+                        .mutate_add(obj, "value", &[Value::String(value)])?;
+                    self.heap
+                        .mutate_add(obj, "profile", &[Value::Element(profile)])?;
+                    items.push(Value::Object(obj));
+                }
+                Ok(Value::from_vec(items))
+            }
+            "taggedValues" => {
+                let tags: Vec<(ElementId, SmolStr, String)> = match self.model.get_element(id) {
+                    Element::Function(f) => f
+                        .tagged_values
+                        .iter()
+                        .map(|t| (t.profile, t.tag.clone(), t.value.clone()))
+                        .collect(),
+                    Element::Class(c) => c
+                        .tagged_values
+                        .iter()
+                        .map(|t| (t.profile, t.tag.clone(), t.value.clone()))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                let mut items: Vec<Value> = Vec::with_capacity(tags.len());
+                for (profile, tag, value) in tags {
+                    let obj = self
+                        .heap
+                        .alloc_dynamic("meta::pure::metamodel::extension::TaggedValue");
+                    self.heap.mutate_add(obj, "tag", &[Value::String(tag)])?;
+                    self.heap
+                        .mutate_add(obj, "profile", &[Value::Element(profile)])?;
+                    self.heap
+                        .mutate_add(obj, "value", &[Value::String(SmolStr::new(value))])?;
+                    items.push(Value::Object(obj));
+                }
+                Ok(Value::from_vec(items))
+            }
+            _ => Err(PureRuntimeError::EvaluationError(format!(
+                "Property '{property}' not supported on model element references"
             ))),
         }
     }
@@ -605,11 +783,11 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     ) -> Value {
         // Captures are empty for non-escaping lambdas (map/filter/fold).
         // The evaluator uses the enclosing context directly.
-        Value::Lambda(Box::new(LambdaClosure {
+        Value::Function(Box::new(FunctionValue::Lambda(LambdaClosure {
             parameters: parameters.to_vec(),
             body: body.to_vec(),
             captures: HashMap::new(),
-        }))
+        })))
     }
 
     // -----------------------------------------------------------------------
@@ -680,6 +858,78 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
 
         result
     }
+
+    /// Invoke a `Value::Function` with pre-evaluated arguments.
+    ///
+    /// Both `FunctionValue::Lambda` (anonymous closure) and `FunctionValue::Compiled`
+    /// (named compiled element) are `Function` in Pure's type system and dispatched
+    /// through the same entry point. The `FunctionValue` variant drives the internal
+    /// strategy — callers need not distinguish.
+    ///
+    /// # Errors
+    /// Returns `PureException` if `callable` is not a `Value::Function`, or if the
+    /// underlying evaluation fails.
+    #[allow(clippy::result_large_err)]
+    pub fn apply_callable(
+        &mut self,
+        callable: &Value,
+        args: &[Value],
+    ) -> Result<Value, PureException> {
+        match callable {
+            Value::Function(fv) => self.eval_function_value(fv, args),
+            other => Err(PureException::from(PureRuntimeError::EvaluationError(
+                format!("Expected Function, got {}", other.type_name()),
+            ))),
+        }
+    }
+
+    /// Dispatch a `FunctionValue` — anonymous lambda or compiled element.
+    #[allow(clippy::result_large_err)]
+    fn eval_function_value(
+        &mut self,
+        fv: &FunctionValue,
+        args: &[Value],
+    ) -> Result<Value, PureException> {
+        match fv {
+            FunctionValue::Lambda(closure) => self.eval_lambda_value(closure, args),
+            FunctionValue::Compiled(id) => {
+                // self.model has 'model lifetime — no conflict with &mut self for EvalContext.
+                let mangled: SmolStr = self.model.get_node(*id).name.clone();
+                self.dispatch_compiled_function(*id, &mangled, args)
+            }
+        }
+    }
+
+    /// Dispatch a compiled function element — native registry first, then user function.
+    ///
+    /// `mangled` is pre-read from `model.get_node(id).name` by the caller so this
+    /// method does not need to borrow the model (avoiding a double-borrow with `&mut self`).
+    #[allow(clippy::result_large_err)]
+    fn dispatch_compiled_function(
+        &mut self,
+        id: ElementId,
+        mangled: &SmolStr,
+        args: &[Value],
+    ) -> Result<Value, PureException> {
+        // self.natives is &'model NativeRegistry, so the native ref has 'model lifetime —
+        // no conflict with the &mut self borrow used to construct EvalContext below.
+        if let Some(native) = self.natives.get(mangled.as_str()) {
+            let result = {
+                let mut ctx = EvalContext { evaluator: self };
+                native.execute(args, &mut ctx)
+            };
+            return result.map_err(PureException::from);
+        }
+        // Try prefix-based match (handles simple-name registration in the native registry).
+        if let Some(native) = self.natives.find_by_prefix(mangled.as_str()) {
+            let result = {
+                let mut ctx = EvalContext { evaluator: self };
+                native.execute(args, &mut ctx)
+            };
+            return result.map_err(PureException::from);
+        }
+        self.call_user_function(id, args, mangled.as_str())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -711,12 +961,12 @@ impl<H: EvalHooks> crate::native::EvalContextTrait for EvalContext<'_, '_, H> {
         args: &[Value],
     ) -> Result<Value, PureRuntimeError> {
         match lambda_val {
-            Value::Lambda(closure) => self
+            Value::Function(_) => self
                 .evaluator
-                .eval_lambda_value(closure, args)
+                .apply_callable(lambda_val, args)
                 .map_err(|e| PureRuntimeError::EvaluationError(format!("{e}"))),
             _ => Err(PureRuntimeError::EvaluationError(format!(
-                "Expected lambda, got {}",
+                "Expected Function, got {}",
                 lambda_val.type_name()
             ))),
         }
@@ -736,6 +986,14 @@ impl<H: EvalHooks> crate::native::EvalContextTrait for EvalContext<'_, '_, H> {
 
     fn heap_mut(&mut self) -> &mut RuntimeHeap {
         &mut self.evaluator.heap
+    }
+
+    fn call_function(&mut self, callable: &Value, args: &[Value]) -> Result<Value, PureException> {
+        self.evaluator.apply_callable(callable, args)
+    }
+
+    fn model(&self) -> &legend_pure_parser_pure::model::PureModel {
+        self.evaluator.model
     }
 }
 
@@ -923,11 +1181,14 @@ mod tests {
             body: vec![make_expr(ExprKind::IntegerLiteral(42))],
         });
         match eval.eval(&expr).unwrap() {
-            Value::Lambda(lc) => {
-                assert_eq!(lc.parameters.len(), 0);
-                assert_eq!(lc.body.len(), 1);
-            }
-            other => panic!("Expected Lambda, got {other:?}"),
+            Value::Function(fv) => match *fv {
+                FunctionValue::Lambda(lc) => {
+                    assert_eq!(lc.parameters.len(), 0);
+                    assert_eq!(lc.body.len(), 1);
+                }
+                other => panic!("Expected FunctionValue::Lambda, got {other:?}"),
+            },
+            other => panic!("Expected Function, got {other:?}"),
         }
     }
 

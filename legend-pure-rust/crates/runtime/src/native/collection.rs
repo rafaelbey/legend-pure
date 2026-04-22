@@ -301,9 +301,21 @@ impl NativeFunction for Map {
         let source = args[0].to_collection();
         let lambda = &args[1];
 
-        let mut results = Vec::with_capacity(source.len());
+        // Pure collections are flat — a lambda returning `V[*]` or `V[0..1]`
+        // contributes zero, one, or many scalar elements to the result. We
+        // flatten Collection/Unit outputs here so downstream `.property`
+        // access sees scalars, not nested collections.
+        let mut results: Vec<Value> = Vec::with_capacity(source.len());
         for item in &source {
-            results.push(ctx.eval_lambda(lambda, std::slice::from_ref(item))?);
+            match ctx.eval_lambda(lambda, std::slice::from_ref(item))? {
+                Value::Collection(inner) => {
+                    for v in inner.iter() {
+                        results.push(v.clone());
+                    }
+                }
+                Value::Unit => {}
+                other => results.push(other),
+            }
         }
 
         Ok(Value::from_vec(results))
@@ -384,6 +396,180 @@ impl NativeFunction for Fold {
 }
 
 // ---------------------------------------------------------------------------
+// exists (lambda-dependent)
+// ---------------------------------------------------------------------------
+
+/// Pure `exists<T>(value:T[*], func:Function<{T[1]->Boolean[1]}>[1]):Boolean[1]`
+///
+/// Returns `true` as soon as any element satisfies the predicate. For an
+/// empty input returns `false`.
+#[derive(Debug)]
+pub struct Exists;
+
+impl NativeFunction for Exists {
+    fn execute(
+        &self,
+        args: &[Value],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("exists", args, 2)?;
+        let source = args[0].to_collection();
+        let lambda = &args[1];
+
+        for item in &source {
+            let predicate_result = ctx.eval_lambda(lambda, std::slice::from_ref(item))?;
+            if predicate_result.as_boolean()? {
+                return Ok(Value::Boolean(true));
+            }
+        }
+
+        Ok(Value::Boolean(false))
+    }
+
+    fn signature(&self) -> &'static str {
+        "exists(T[*], Function<{T[1]->Boolean[1]}>[1]): Boolean[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// forAll (lambda-dependent)
+// ---------------------------------------------------------------------------
+
+/// Pure `forAll<T>(value:T[*], func:Function<{T[1]->Boolean[1]}>[1]):Boolean[1]`
+///
+/// Returns `true` iff every element satisfies the predicate. For an empty
+/// input vacuously returns `true`.
+#[derive(Debug)]
+pub struct ForAll;
+
+impl NativeFunction for ForAll {
+    fn execute(
+        &self,
+        args: &[Value],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("forAll", args, 2)?;
+        let source = args[0].to_collection();
+        let lambda = &args[1];
+
+        for item in &source {
+            let predicate_result = ctx.eval_lambda(lambda, std::slice::from_ref(item))?;
+            if !predicate_result.as_boolean()? {
+                return Ok(Value::Boolean(false));
+            }
+        }
+
+        Ok(Value::Boolean(true))
+    }
+
+    fn signature(&self) -> &'static str {
+        "forAll(T[*], Function<{T[1]->Boolean[1]}>[1]): Boolean[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// removeDuplicates (non-lambda variant)
+// ---------------------------------------------------------------------------
+
+/// Pure `removeDuplicates<T>(value:T[*]):T[*]`
+///
+/// Returns a new collection with duplicate elements removed, preserving
+/// the first occurrence order. Uses `PartialEq` on [`Value`] for comparison.
+///
+/// Also accepts two optional `Function[0..1]` hasher/equator arguments in the
+/// richer signature (`removeDuplicates_T_MANY__Function_$0_1$__Function_$0_1$__T_MANY_`);
+/// those arguments are ignored here — we fall back to value equality, matching
+/// the default Pure semantics when no custom comparator is supplied.
+#[derive(Debug)]
+pub struct RemoveDuplicates;
+
+impl NativeFunction for RemoveDuplicates {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        // Accept 1-arg and 3-arg variants. The 3-arg variant has optional
+        // hash/equality lambdas that we currently ignore.
+        if args.is_empty() || args.len() > 3 {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "removeDuplicates: expected 1..=3 arguments, got {}",
+                args.len()
+            )));
+        }
+        let source = args[0].to_collection();
+
+        let mut seen: Vec<Value> = Vec::with_capacity(source.len());
+        let mut out: Vec<Value> = Vec::with_capacity(source.len());
+        for item in &source {
+            if !seen.iter().any(|s| s == item) {
+                seen.push(item.clone());
+                out.push(item.clone());
+            }
+        }
+
+        Ok(Value::from_vec(out))
+    }
+
+    fn signature(&self) -> &'static str {
+        "removeDuplicates(T[*]): T[*]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// toOne
+// ---------------------------------------------------------------------------
+
+/// Pure `toOne<T>(values:T[*]):T[1]` / `toOne<T>(values:T[0..1]):T[1]`
+///
+/// Asserts the collection contains exactly one element and returns that
+/// element as a scalar. Produces [`PureRuntimeError::MultiplicityViolation`]
+/// when the input is empty or has multiple elements.
+#[derive(Debug)]
+pub struct ToOne;
+
+impl NativeFunction for ToOne {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("toOne", args, 1)?;
+        Ok(args[0].to_one()?.clone())
+    }
+
+    fn signature(&self) -> &'static str {
+        "toOne(T[*]): T[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// isNotEmpty
+// ---------------------------------------------------------------------------
+
+/// Pure `isNotEmpty(Any[*]):Boolean[1]`
+///
+/// Counterpart of `isEmpty` — returns `true` when the collection has at least
+/// one element. Also `true` for any scalar value.
+#[derive(Debug)]
+pub struct IsNotEmpty;
+
+impl NativeFunction for IsNotEmpty {
+    fn execute(
+        &self,
+        args: &[Value],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Value, PureRuntimeError> {
+        expect_args("isNotEmpty", args, 1)?;
+        Ok(Value::Boolean(!args[0].is_empty()))
+    }
+
+    fn signature(&self) -> &'static str {
+        "isNotEmpty(Any[*]): Boolean[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -392,6 +578,7 @@ pub fn register(registry: &mut NativeRegistry) {
     // Non-lambda collection operations
     registry.register("size_Any_MANY__Integer_1_", Size);
     registry.register("isEmpty_Any_MANY__Boolean_1_", IsEmpty);
+    registry.register("isNotEmpty_Any_MANY__Boolean_1_", IsNotEmpty);
     registry.register("at_T_MANY__Integer_1__T_1_", At);
     registry.register("first_T_MANY__T_$0_1$_", First);
     registry.register("last_T_MANY__T_$0_1$_", Last);
@@ -409,6 +596,15 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("map_T_$0_1$__Function_1__V_$0_1$_", Map);
     registry.register("filter_T_MANY__Function_1__T_MANY_", Filter);
     registry.register("fold_T_MANY__Function_1__V_m__V_m_", Fold);
+    registry.register("exists_T_MANY__Function_1__Boolean_1_", Exists);
+    registry.register("forAll_T_MANY__Function_1__Boolean_1_", ForAll);
+    registry.register("toOne_T_MANY__T_1_", ToOne);
+    registry.register("toOne_T_$0_1$__T_1_", ToOne);
+    registry.register("removeDuplicates_T_MANY__T_MANY_", RemoveDuplicates);
+    registry.register(
+        "removeDuplicates_T_MANY__Function_$0_1$__Function_$0_1$__T_MANY_",
+        RemoveDuplicates,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -645,5 +841,92 @@ mod tests {
             Take.execute(&[int_collection(&[1])], &mut NoOpEvalCtx)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn is_not_empty_true_and_false() {
+        assert_eq!(
+            IsNotEmpty
+                .execute(&[int_collection(&[1, 2])], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            IsNotEmpty
+                .execute(&[Value::Unit], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::Boolean(false)
+        );
+        // Scalar counts as non-empty
+        assert_eq!(
+            IsNotEmpty
+                .execute(&[Value::Integer(7)], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn to_one_scalar_passthrough() {
+        assert_eq!(
+            ToOne
+                .execute(&[Value::Integer(42)], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::Integer(42)
+        );
+        assert_eq!(
+            ToOne
+                .execute(&[int_collection(&[42])], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::Integer(42)
+        );
+    }
+
+    #[test]
+    fn to_one_empty_errors() {
+        assert!(ToOne.execute(&[Value::Unit], &mut NoOpEvalCtx).is_err());
+        assert!(
+            ToOne
+                .execute(&[int_collection(&[])], &mut NoOpEvalCtx)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn to_one_multi_errors() {
+        assert!(
+            ToOne
+                .execute(&[int_collection(&[1, 2])], &mut NoOpEvalCtx)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn remove_duplicates_preserves_first_occurrence() {
+        let input = int_collection(&[1, 2, 1, 3, 2, 4]);
+        let result = RemoveDuplicates
+            .execute(&[input], &mut NoOpEvalCtx)
+            .unwrap();
+        assert_eq!(result, int_collection(&[1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn remove_duplicates_on_empty() {
+        assert_eq!(
+            RemoveDuplicates
+                .execute(&[Value::Unit], &mut NoOpEvalCtx)
+                .unwrap(),
+            Value::Unit
+        );
+    }
+
+    #[test]
+    fn remove_duplicates_ignores_trailing_hasher_args() {
+        // The 3-arg variant passes hash + equality lambdas that we currently ignore.
+        let input = int_collection(&[1, 1, 2]);
+        let result = RemoveDuplicates
+            .execute(&[input, Value::Unit, Value::Unit], &mut NoOpEvalCtx)
+            .unwrap();
+        assert_eq!(result, int_collection(&[1, 2]));
     }
 }
