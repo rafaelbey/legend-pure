@@ -810,14 +810,17 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             }
             _ => {
                 // Enum value access: `MyEnum.VALUE` where the compiler didn't
-                // pre-lower to `ExprKind::EnumValue`. Match the format used by
-                // `eval_enum_value` — `"SimpleName.VALUE"` — so equality
-                // comparisons between the two paths stay consistent.
+                // pre-lower to `ExprKind::EnumValue`. Emit the same
+                // first-class `Value::EnumValue` the `ExprKind::EnumValue`
+                // branch produces so comparisons and type() agree between
+                // the two paths.
                 if let Element::Enumeration(enum_def) = self.model.get_element(id)
                     && enum_def.values.iter().any(|v| v.name == property)
                 {
-                    let simple = self.model.element_name(id);
-                    return Ok(Value::String(SmolStr::new(format!("{simple}.{property}"))));
+                    return Ok(Value::EnumValue {
+                        enum_id: id,
+                        member: SmolStr::new(property),
+                    });
                 }
                 Err(PureRuntimeError::EvaluationError(format!(
                     "Property '{property}' not supported on model element references"
@@ -904,8 +907,10 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     // -----------------------------------------------------------------------
 
     fn eval_enum_value(&self, enum_element: ElementId, value: &str) -> Value {
-        let node = self.model.get_node(enum_element);
-        Value::String(SmolStr::new(format!("{}.{}", node.name, value)))
+        Value::EnumValue {
+            enum_id: enum_element,
+            member: SmolStr::new(value),
+        }
     }
 
     // -----------------------------------------------------------------------

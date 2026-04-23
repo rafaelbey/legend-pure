@@ -820,6 +820,30 @@ fn cmp_values(a: &Value, b: &Value) -> Result<std::cmp::Ordering, PureRuntimeErr
         (Value::String(x), Value::String(y)) => Ok(x.cmp(y)),
         (Value::Boolean(x), Value::Boolean(y)) => Ok(x.cmp(y)),
         (Value::Date(x), Value::Date(y)) => Ok(x.cmp(y)),
+        // Enum values sort by the member's declaration order within the
+        // enumeration (matching Java Pure's enum ordering). Values from
+        // different enumerations are unordered — surface as an explicit
+        // error rather than producing a misleading cross-enum ordering.
+        (
+            Value::EnumValue {
+                enum_id: e1,
+                member: m1,
+                ..
+            },
+            Value::EnumValue {
+                enum_id: e2,
+                member: m2,
+                ..
+            },
+        ) => {
+            if e1 == e2 {
+                Ok(m1.cmp(m2))
+            } else {
+                Err(PureRuntimeError::EvaluationError(format!(
+                    "sort: cannot compare EnumValues from different enumerations"
+                )))
+            }
+        }
         _ => Err(PureRuntimeError::EvaluationError(format!(
             "sort: cannot compare {} and {}",
             a.type_name(),
