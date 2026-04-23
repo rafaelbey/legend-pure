@@ -749,6 +749,9 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 }
                 Ok(Value::from_vec(items))
             }
+            "properties" | "qualifiedProperties" | "propertiesFromAssociations" => {
+                self.eval_class_member_collection(id, property)
+            }
             "generalizations" => {
                 // Synthesize `Generalization` heap objects — one per direct
                 // supertype. `getAllTypeGeneralisations` and `subTypeOf`
@@ -801,6 +804,57 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 )))
             }
         }
+    }
+
+    /// Surface the `properties` / `qualifiedProperties` / `propertiesFromAssociations`
+    /// list of a Class as a Collection of heap-backed wrapper objects.
+    ///
+    /// Each wrapper is classified so [`apply_callable`](Self::apply_callable) can
+    /// recognise it: a `Property` wrapper invoked with one argument performs
+    /// a plain property access on that argument (matches Pure's
+    /// `$propRef->eval($instance)` idiom). `QualifiedProperty` wrappers are
+    /// surfaced but invocation of their bodies is not yet implemented.
+    ///
+    /// The `_owner` and `name` heap slots carry the class id and member name
+    /// so callable wrappers know what to look up. `propertiesFromAssociations`
+    /// returns an empty collection until associations are modelled in the
+    /// compiler — emitting an empty list beats rejecting the property access
+    /// outright, which is Phase 1B's goal.
+    #[allow(clippy::result_large_err)]
+    fn eval_class_member_collection(
+        &mut self,
+        id: ElementId,
+        property: &str,
+    ) -> Result<Value, PureRuntimeError> {
+        // Snapshot names before we take the mutable heap borrow — reading
+        // the model and writing to the heap can't alias `self`.
+        let names: Vec<SmolStr> = match self.model.get_element(id) {
+            Element::Class(c) => match property {
+                "properties" => c.properties.iter().map(|p| p.name.clone()).collect(),
+                "qualifiedProperties" => c
+                    .qualified_properties
+                    .iter()
+                    .map(|q| q.name.clone())
+                    .collect(),
+                "propertiesFromAssociations" => Vec::new(),
+                _ => unreachable!("caller restricts property value"),
+            },
+            _ => Vec::new(),
+        };
+
+        let classifier = match property {
+            "qualifiedProperties" => "meta::pure::metamodel::function::property::QualifiedProperty",
+            _ => "meta::pure::metamodel::function::property::Property",
+        };
+
+        let mut items: Vec<Value> = Vec::with_capacity(names.len());
+        for name in names {
+            let obj = self.heap.alloc_dynamic(classifier);
+            self.heap.mutate_add(obj, "name", &[Value::String(name)])?;
+            self.heap.mutate_add(obj, "_owner", &[Value::Element(id)])?;
+            items.push(Value::Object(obj));
+        }
+        Ok(Value::from_vec(items))
     }
 
     // -----------------------------------------------------------------------
@@ -948,8 +1002,82 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             Value::Element(id) if matches!(self.model.get_element(*id), Element::Function(_)) => {
                 self.eval_function_value(&FunctionValue::Compiled(*id), args)
             }
+            // Property wrapper objects synthesised by `eval_class_member_collection`
+            // become callable here: `$propRef->eval($instance)` reads
+            // `$instance.<name>`, where `<name>` is the property name stored
+            // on the wrapper. This is the Pure idiom that `testEvaluateOne`
+            // exercises: `LA_Person.properties->filter(...)->toOne()->eval($p)`.
+            Value::Object(obj_id) => self.apply_object_callable(*obj_id, args),
             other => Err(PureException::from(PureRuntimeError::EvaluationError(
                 format!("Expected Function, got {}", other.type_name()),
+            ))),
+        }
+    }
+
+    /// Invoke a heap-object-shaped callable — currently just the `Property`
+    /// wrappers emitted by `.properties` on a Class. Returns a type error for
+    /// any other classifier so the common case (a non-function object) still
+    /// surfaces the actionable "Expected Function" message.
+    #[allow(clippy::result_large_err)]
+    fn apply_object_callable(
+        &mut self,
+        id: crate::heap::ObjectId,
+        args: &[Value],
+    ) -> Result<Value, PureException> {
+        let classifier = self.heap.classifier(id).map_err(PureException::from)?;
+        if classifier.ends_with("::Property") || classifier == "Property" {
+            if args.is_empty() {
+                return Err(PureException::from(PureRuntimeError::EvaluationError(
+                    "Property invocation expects the instance as its argument".into(),
+                )));
+            }
+            let name = self.read_wrapper_name(id)?;
+            return self.apply_property_to_instance(&name, &args[0]);
+        }
+        Err(PureException::from(PureRuntimeError::EvaluationError(
+            format!("Expected Function, got Object<{classifier}>"),
+        )))
+    }
+
+    /// Read the `name` slot of a Property / QualifiedProperty wrapper as a
+    /// plain string, erroring if it is missing or multi-valued.
+    #[allow(clippy::result_large_err)]
+    fn read_wrapper_name(&self, id: crate::heap::ObjectId) -> Result<SmolStr, PureException> {
+        let values = self
+            .heap
+            .get_property_values(id, "name")
+            .map_err(PureException::from)?;
+        match values.front() {
+            Some(Value::String(s)) => Ok(s.clone()),
+            _ => Err(PureException::from(PureRuntimeError::EvaluationError(
+                "Property wrapper is missing its 'name' slot".into(),
+            ))),
+        }
+    }
+
+    /// Perform a plain property access on `instance` by `name`, returning the
+    /// same multiplicity-normalised collection that the field-access path
+    /// would produce.
+    #[allow(clippy::result_large_err)]
+    fn apply_property_to_instance(
+        &self,
+        name: &str,
+        instance: &Value,
+    ) -> Result<Value, PureException> {
+        match instance {
+            Value::Object(obj_id) => {
+                let values = self
+                    .heap
+                    .get_property_values(*obj_id, name)
+                    .map_err(PureException::from)?;
+                let collected: Vec<Value> = values.iter().cloned().collect();
+                Ok(Value::from_vec(collected))
+            }
+            other => Err(PureException::from(PureRuntimeError::EvaluationError(
+                format!(
+                    "Property invocation expects an Object instance, got {}",
+                    other.type_name()
+                ),
             ))),
         }
     }
