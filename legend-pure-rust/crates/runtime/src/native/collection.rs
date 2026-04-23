@@ -844,6 +844,24 @@ fn cmp_values(a: &Value, b: &Value) -> Result<std::cmp::Ordering, PureRuntimeErr
                 )))
             }
         }
+        // Heap objects sort by allocation order (ObjectId). This is a
+        // stable but semantically arbitrary ordering — meaningful only
+        // when the caller cares about determinism, not Pure-level object
+        // identity. Tests that need property-based ordering must pass a
+        // key or comparator function.
+        (Value::Object(a), Value::Object(b)) => {
+            use std::cmp::Ordering as O;
+            let av = slotmap::Key::data(a).as_ffi();
+            let bv = slotmap::Key::data(b).as_ffi();
+            Ok(if av == bv {
+                O::Equal
+            } else if av < bv {
+                O::Less
+            } else {
+                O::Greater
+            })
+        }
+        (Value::Element(a), Value::Element(b)) => Ok(format!("{a}").cmp(&format!("{b}"))),
         _ => Err(PureRuntimeError::EvaluationError(format!(
             "sort: cannot compare {} and {}",
             a.type_name(),
