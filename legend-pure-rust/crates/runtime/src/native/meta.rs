@@ -276,9 +276,13 @@ impl NativeFunction for Cast {
         let subject = values[0].clone();
         let type_id = as_element_id(&values[1])?;
         let type_name = ctx.model().element_name(type_id).to_string();
+        // Error text follows the Java runtime's `Cast exception: X cannot
+        // be cast to Y` format. Platform tests (`assertError(|…->cast(@T),
+        // 'Cast exception: …')`) match on the string verbatim — the wording
+        // is a behavioural contract, not a stylistic choice.
         let mk_err = |v: &Value| {
             PureException::from(PureRuntimeError::EvaluationError(format!(
-                "cast: value of type {} is not an instance of {type_name}",
+                "Cast exception: {} cannot be cast to {type_name}",
                 v.type_name()
             )))
         };
@@ -1335,6 +1339,47 @@ impl NativeFunction for Deactivate {
     }
 }
 
+/// Pure `reactivate(vs:ValueSpecification[1], vars:Map<String, List<Any>>[1]):Any[*]`
+///
+/// Mirror of [`Deactivate`]. Java Pure re-evaluates a previously-deactivated
+/// value-spec, optionally substituting free variables from the `vars` map.
+/// The Rust runtime treats `Value::Function` closures as the ValueSpec
+/// proxy already (see [`Deactivate`] and the `expressionSequence` round-trip
+/// in `eval_property_access`), so reactivation just means invoking the
+/// closure. Non-closure specs pass through unchanged — they were never
+/// genuinely "deactivated" in the first place.
+///
+/// `vars` is currently ignored: the closures we store carry their own
+/// captures, so free-variable substitution is only needed for deep
+/// value-spec introspection the runtime does not yet model.
+#[derive(Debug)]
+pub struct Reactivate;
+
+impl NativeFunction for Reactivate {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        if args.is_empty() {
+            return Err(PureRuntimeError::EvaluationError(
+                "reactivate: expected at least 1 argument".into(),
+            )
+            .into());
+        }
+        let values = force_all(args, ctx)?;
+        let spec = &values[0];
+        match spec {
+            Value::Function(_) => Ok(Evaluated::new(ctx.call_function(spec, &[])?)),
+            other => Ok(Evaluated::new(other.clone())),
+        }
+    }
+
+    fn signature(&self) -> &'static str {
+        "reactivate(vs:ValueSpecification[1], vars:Map<String, List<Any>>[1]):Any[*]"
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
@@ -1382,4 +1427,8 @@ pub fn register(registry: &mut NativeRegistry) {
     );
     registry.register("evaluateAndDeactivate_T_m__T_m_", EvaluateAndDeactivate);
     registry.register("deactivate_Any_MANY__ValueSpecification_1_", Deactivate);
+    registry.register(
+        "reactivate_ValueSpecification_1__Map_1__Any_MANY_",
+        Reactivate,
+    );
 }
