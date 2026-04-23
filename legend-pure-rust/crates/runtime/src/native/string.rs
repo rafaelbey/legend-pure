@@ -17,10 +17,13 @@
 //! `trim`, `ltrim`, `rtrim`, `reverseString`, `replace`, `joinStrings`,
 //! `toString`, `format`.
 
+use legend_pure_parser_pure::types::ValueSpec;
 use smol_str::SmolStr;
 
-use crate::error::PureRuntimeError;
-use crate::native::{EvalContextTrait, NativeFunction, NativeRegistry, expect_args};
+use crate::error::{PureException, PureRuntimeError};
+use crate::native::{
+    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
+};
 use crate::value::Value;
 
 // ---------------------------------------------------------------------------
@@ -37,13 +40,16 @@ pub struct StringPlus;
 impl NativeFunction for StringPlus {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("plus (String)", args, 2)?;
-        let a = args[0].as_string()?;
-        let b = args[1].as_string()?;
-        Ok(Value::String(SmolStr::new(format!("{a}{b}"))))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("plus (String)", &values, 2)?;
+        let a = values[0].as_string()?;
+        let b = values[1].as_string()?;
+        Ok(Evaluated::new(Value::String(SmolStr::new(format!(
+            "{a}{b}"
+        )))))
     }
 
     fn signature(&self) -> &'static str {
@@ -62,13 +68,14 @@ pub struct Length;
 impl NativeFunction for Length {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("length", args, 1)?;
-        let s = args[0].as_string()?;
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("length", &values, 1)?;
+        let s = values[0].as_string()?;
         #[allow(clippy::cast_possible_wrap)]
-        Ok(Value::Integer(s.len() as i64))
+        Ok(Evaluated::new(Value::Integer(s.len() as i64)))
     }
 
     fn signature(&self) -> &'static str {
@@ -89,19 +96,20 @@ pub struct Substring;
 impl NativeFunction for Substring {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("substring", args, 3)?;
-        let s = args[0].as_string()?;
-        let start_i = args[1].as_integer()?.max(0);
-        let end_i = args[2].as_integer()?.max(0);
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("substring", &values, 3)?;
+        let s = values[0].as_string()?;
+        let start_i = values[1].as_integer()?.max(0);
+        let end_i = values[2].as_integer()?.max(0);
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let start = (start_i as usize).min(s.len());
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let end = (end_i as usize).min(s.len());
         let start = start.min(end);
-        Ok(Value::String(SmolStr::new(&s[start..end])))
+        Ok(Evaluated::new(Value::String(SmolStr::new(&s[start..end]))))
     }
 
     fn signature(&self) -> &'static str {
@@ -120,13 +128,14 @@ pub struct Contains;
 impl NativeFunction for Contains {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("contains", args, 2)?;
-        let s = args[0].as_string()?;
-        let sub = args[1].as_string()?;
-        Ok(Value::Boolean(s.contains(sub.as_str())))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("contains", &values, 2)?;
+        let s = values[0].as_string()?;
+        let sub = values[1].as_string()?;
+        Ok(Evaluated::new(Value::Boolean(s.contains(sub.as_str()))))
     }
 
     fn signature(&self) -> &'static str {
@@ -141,13 +150,16 @@ pub struct StartsWith;
 impl NativeFunction for StartsWith {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("startsWith", args, 2)?;
-        let s = args[0].as_string()?;
-        let prefix = args[1].as_string()?;
-        Ok(Value::Boolean(s.starts_with(prefix.as_str())))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("startsWith", &values, 2)?;
+        let s = values[0].as_string()?;
+        let prefix = values[1].as_string()?;
+        Ok(Evaluated::new(Value::Boolean(
+            s.starts_with(prefix.as_str()),
+        )))
     }
 
     fn signature(&self) -> &'static str {
@@ -162,13 +174,14 @@ pub struct EndsWith;
 impl NativeFunction for EndsWith {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("endsWith", args, 2)?;
-        let s = args[0].as_string()?;
-        let suffix = args[1].as_string()?;
-        Ok(Value::Boolean(s.ends_with(suffix.as_str())))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("endsWith", &values, 2)?;
+        let s = values[0].as_string()?;
+        let suffix = values[1].as_string()?;
+        Ok(Evaluated::new(Value::Boolean(s.ends_with(suffix.as_str()))))
     }
 
     fn signature(&self) -> &'static str {
@@ -185,15 +198,16 @@ pub struct IndexOf;
 impl NativeFunction for IndexOf {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("indexOf", args, 2)?;
-        let s = args[0].as_string()?;
-        let sub = args[1].as_string()?;
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("indexOf", &values, 2)?;
+        let s = values[0].as_string()?;
+        let sub = values[1].as_string()?;
         #[allow(clippy::cast_possible_wrap)]
         let idx = s.find(sub.as_str()).map_or(-1, |i| i as i64);
-        Ok(Value::Integer(idx))
+        Ok(Evaluated::new(Value::Integer(idx)))
     }
 
     fn signature(&self) -> &'static str {
@@ -212,12 +226,15 @@ pub struct ToLower;
 impl NativeFunction for ToLower {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("toLower", args, 1)?;
-        let s = args[0].as_string()?;
-        Ok(Value::String(SmolStr::new(s.to_lowercase())))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("toLower", &values, 1)?;
+        let s = values[0].as_string()?;
+        Ok(Evaluated::new(Value::String(SmolStr::new(
+            s.to_lowercase(),
+        ))))
     }
 
     fn signature(&self) -> &'static str {
@@ -232,12 +249,15 @@ pub struct ToUpper;
 impl NativeFunction for ToUpper {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("toUpper", args, 1)?;
-        let s = args[0].as_string()?;
-        Ok(Value::String(SmolStr::new(s.to_uppercase())))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("toUpper", &values, 1)?;
+        let s = values[0].as_string()?;
+        Ok(Evaluated::new(Value::String(SmolStr::new(
+            s.to_uppercase(),
+        ))))
     }
 
     fn signature(&self) -> &'static str {
@@ -252,12 +272,13 @@ pub struct Trim;
 impl NativeFunction for Trim {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("trim", args, 1)?;
-        let s = args[0].as_string()?;
-        Ok(Value::String(SmolStr::new(s.trim())))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("trim", &values, 1)?;
+        let s = values[0].as_string()?;
+        Ok(Evaluated::new(Value::String(SmolStr::new(s.trim()))))
     }
 
     fn signature(&self) -> &'static str {
@@ -276,11 +297,14 @@ pub struct ToString;
 impl NativeFunction for ToString {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("toString", args, 1)?;
-        Ok(Value::String(SmolStr::new(args[0].to_string())))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("toString", &values, 1)?;
+        Ok(Evaluated::new(Value::String(SmolStr::new(
+            values[0].to_string(),
+        ))))
     }
 
     fn signature(&self) -> &'static str {
@@ -313,13 +337,14 @@ pub struct Format;
 impl NativeFunction for Format {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("format", args, 2)?;
-        let template = args[0].as_string()?;
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("format", &values, 2)?;
+        let template = values[0].as_string()?;
 
-        let subs: Vec<&Value> = match &args[1] {
+        let subs: Vec<&Value> = match &values[1] {
             Value::Collection(v) => v.iter().collect(),
             single => vec![single],
         };
@@ -355,7 +380,7 @@ impl NativeFunction for Format {
             }
         }
 
-        Ok(Value::String(SmolStr::new(result)))
+        Ok(Evaluated::new(Value::String(SmolStr::new(result))))
     }
 
     fn signature(&self) -> &'static str {
@@ -374,12 +399,13 @@ pub struct Ltrim;
 impl NativeFunction for Ltrim {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("ltrim", args, 1)?;
-        let s = args[0].as_string()?;
-        Ok(Value::String(SmolStr::new(s.trim_start())))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("ltrim", &values, 1)?;
+        let s = values[0].as_string()?;
+        Ok(Evaluated::new(Value::String(SmolStr::new(s.trim_start()))))
     }
 
     fn signature(&self) -> &'static str {
@@ -394,12 +420,13 @@ pub struct Rtrim;
 impl NativeFunction for Rtrim {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("rtrim", args, 1)?;
-        let s = args[0].as_string()?;
-        Ok(Value::String(SmolStr::new(s.trim_end())))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("rtrim", &values, 1)?;
+        let s = values[0].as_string()?;
+        Ok(Evaluated::new(Value::String(SmolStr::new(s.trim_end()))))
     }
 
     fn signature(&self) -> &'static str {
@@ -420,13 +447,14 @@ pub struct ReverseString;
 impl NativeFunction for ReverseString {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("reverseString", args, 1)?;
-        let s = args[0].as_string()?;
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("reverseString", &values, 1)?;
+        let s = values[0].as_string()?;
         let reversed: String = s.chars().rev().collect();
-        Ok(Value::String(SmolStr::new(reversed)))
+        Ok(Evaluated::new(Value::String(SmolStr::new(reversed))))
     }
 
     fn signature(&self) -> &'static str {
@@ -446,17 +474,18 @@ pub struct Replace;
 impl NativeFunction for Replace {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("replace", args, 3)?;
-        let source = args[0].as_string()?;
-        let target = args[1].as_string()?;
-        let replacement = args[2].as_string()?;
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("replace", &values, 3)?;
+        let source = values[0].as_string()?;
+        let target = values[1].as_string()?;
+        let replacement = values[2].as_string()?;
         let out = source
             .as_str()
             .replace(target.as_str(), replacement.as_str());
-        Ok(Value::String(SmolStr::new(out)))
+        Ok(Evaluated::new(Value::String(SmolStr::new(out))))
     }
 
     fn signature(&self) -> &'static str {
@@ -476,7 +505,7 @@ impl NativeFunction for Replace {
 /// - `joinStrings(String[*], String[1], String[1], String[1]): String[1]` —
 ///   `prefix + elements.join(separator) + suffix`.
 ///
-/// The `execute` implementation dispatches on `args.len()` so a single
+/// The `execute` implementation dispatches on `values.len()` so a single
 /// struct can back both mangled registrations.
 #[derive(Debug)]
 pub struct JoinStrings;
@@ -484,24 +513,26 @@ pub struct JoinStrings;
 impl NativeFunction for JoinStrings {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        let (separator, prefix, suffix) = match args.len() {
-            2 => (args[1].as_string()?.clone(), None, None),
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        let (separator, prefix, suffix) = match values.len() {
+            2 => (values[1].as_string()?.clone(), None, None),
             4 => (
-                args[1].as_string()?.clone(),
-                Some(args[2].as_string()?.clone()),
-                Some(args[3].as_string()?.clone()),
+                values[1].as_string()?.clone(),
+                Some(values[2].as_string()?.clone()),
+                Some(values[3].as_string()?.clone()),
             ),
             n => {
                 return Err(PureRuntimeError::EvaluationError(format!(
                     "joinStrings: expected 2 or 4 argument(s), got {n}"
-                )));
+                ))
+                .into());
             }
         };
 
-        let coll = args[0].to_collection();
+        let coll = values[0].to_collection();
         let mut parts: Vec<String> = Vec::with_capacity(coll.len());
         for v in coll.iter() {
             parts.push(v.as_string()?.as_str().to_owned());
@@ -512,7 +543,7 @@ impl NativeFunction for JoinStrings {
             (Some(p), Some(s)) => format!("{p}{joined}{s}"),
             _ => joined,
         };
-        Ok(Value::String(SmolStr::new(result)))
+        Ok(Evaluated::new(Value::String(SmolStr::new(result))))
     }
 
     fn signature(&self) -> &'static str {
@@ -560,28 +591,23 @@ pub fn register(registry: &mut NativeRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::NoOpEvalCtx;
+    use crate::native::{MockCtx, force_all, lit_collection, lit_int, lit_str};
 
     #[test]
     fn string_plus() {
         let r = StringPlus
-            .execute(
-                &[
-                    Value::String("hello".into()),
-                    Value::String(" world".into()),
-                ],
-                &mut NoOpEvalCtx,
-            )
+            .execute(&[lit_str("hello"), lit_str(" world")], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::String("hello world".into()));
+        assert_eq!(r.into_value(), Value::String("hello world".into()));
     }
 
     #[test]
     fn string_length() {
         assert_eq!(
             Length
-                .execute(&[Value::String("hello".into())], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_str("hello")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(5)
         );
     }
@@ -590,26 +616,20 @@ mod tests {
     fn string_substring() {
         let r = Substring
             .execute(
-                &[
-                    Value::String("hello world".into()),
-                    Value::Integer(6),
-                    Value::Integer(11),
-                ],
-                &mut NoOpEvalCtx,
+                &[lit_str("hello world"), lit_int(6), lit_int(11)],
+                &mut MockCtx,
             )
             .unwrap();
-        assert_eq!(r, Value::String("world".into()));
+        assert_eq!(r.into_value(), Value::String("world".into()));
     }
 
     #[test]
     fn string_contains() {
         assert_eq!(
             Contains
-                .execute(
-                    &[Value::String("hello".into()), Value::String("ell".into())],
-                    &mut NoOpEvalCtx
-                )
-                .unwrap(),
+                .execute(&[lit_str("hello"), lit_str("ell")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Boolean(true)
         );
     }
@@ -618,11 +638,9 @@ mod tests {
     fn string_index_of_found() {
         assert_eq!(
             IndexOf
-                .execute(
-                    &[Value::String("hello".into()), Value::String("ll".into())],
-                    &mut NoOpEvalCtx
-                )
-                .unwrap(),
+                .execute(&[lit_str("hello"), lit_str("ll")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(2)
         );
     }
@@ -631,11 +649,9 @@ mod tests {
     fn string_index_of_not_found() {
         assert_eq!(
             IndexOf
-                .execute(
-                    &[Value::String("hello".into()), Value::String("xyz".into())],
-                    &mut NoOpEvalCtx
-                )
-                .unwrap(),
+                .execute(&[lit_str("hello"), lit_str("xyz")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(-1)
         );
     }
@@ -644,8 +660,9 @@ mod tests {
     fn string_to_lower() {
         assert_eq!(
             ToLower
-                .execute(&[Value::String("Hello".into())], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_str("Hello")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::String("hello".into())
         );
     }
@@ -653,8 +670,9 @@ mod tests {
     #[test]
     fn string_trim() {
         assert_eq!(
-            Trim.execute(&[Value::String("  hi  ".into())], &mut NoOpEvalCtx)
-                .unwrap(),
+            Trim.execute(&[lit_str("  hi  ")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::String("hi".into())
         );
     }
@@ -663,97 +681,64 @@ mod tests {
     fn to_string_integer() {
         assert_eq!(
             ToString
-                .execute(&[Value::Integer(42)], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_int(42)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::String("42".into())
         );
     }
 
     #[test]
     fn format_s_specifier() {
-        use crate::value::Value;
-        use im_rc::Vector;
-        let coll = Value::Collection(Box::new(Vector::from_iter([Value::String("world".into())])));
+        let coll = lit_collection(vec![lit_str("world")]);
         let r = Format
-            .execute(&[Value::String("hello %s".into()), coll], &mut NoOpEvalCtx)
+            .execute(&[lit_str("hello %s"), coll], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::String("hello world".into()));
+        assert_eq!(r.into_value(), Value::String("hello world".into()));
     }
 
     #[test]
     fn format_r_specifier_quotes_string() {
-        use crate::value::Value;
-        use im_rc::Vector;
-        let coll = Value::Collection(Box::new(Vector::from_iter([Value::String("foo".into())])));
+        let coll = lit_collection(vec![lit_str("foo")]);
         let r = Format
-            .execute(&[Value::String("%r".into()), coll], &mut NoOpEvalCtx)
+            .execute(&[lit_str("%r"), coll], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::String("'foo'".into()));
+        assert_eq!(r.into_value(), Value::String("'foo'".into()));
     }
 
     #[test]
     fn format_two_args() {
-        use crate::value::Value;
-        use im_rc::Vector;
-        let coll = Value::Collection(Box::new(Vector::from_iter([
-            Value::Integer(1),
-            Value::Integer(2),
-        ])));
+        let coll = lit_collection(vec![lit_int(1), lit_int(2)]);
         let r = Format
-            .execute(&[Value::String("%s + %s".into()), coll], &mut NoOpEvalCtx)
+            .execute(&[lit_str("%s + %s"), coll], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::String("1 + 2".into()));
+        assert_eq!(r.into_value(), Value::String("1 + 2".into()));
     }
 
     #[test]
     fn wrong_arg_count_errors() {
-        assert!(
-            StringPlus
-                .execute(&[Value::String("a".into())], &mut NoOpEvalCtx)
-                .is_err()
-        );
-        assert!(Length.execute(&[], &mut NoOpEvalCtx).is_err());
-        assert!(
-            Substring
-                .execute(&[Value::String("a".into())], &mut NoOpEvalCtx)
-                .is_err()
-        );
-        assert!(ToString.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(StringPlus.execute(&[lit_str("a")], &mut MockCtx).is_err());
+        assert!(Length.execute(&[], &mut MockCtx).is_err());
+        assert!(Substring.execute(&[lit_str("a")], &mut MockCtx).is_err());
+        assert!(ToString.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn type_mismatch_errors() {
         assert!(
             StringPlus
-                .execute(
-                    &[Value::Integer(1), Value::String("b".into())],
-                    &mut NoOpEvalCtx
-                )
+                .execute(&[lit_int(1), lit_str("b")], &mut MockCtx)
                 .is_err()
         );
-        assert!(
-            Length
-                .execute(&[Value::Integer(1)], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Length.execute(&[lit_int(1)], &mut MockCtx).is_err());
         assert!(
             Substring
-                .execute(
-                    &[
-                        Value::String("a".into()),
-                        Value::String("b".into()),
-                        Value::Integer(1)
-                    ],
-                    &mut NoOpEvalCtx
-                )
+                .execute(&[lit_str("a"), lit_str("b"), lit_int(1)], &mut MockCtx)
                 .is_err()
         );
         assert!(
             Contains
-                .execute(
-                    &[Value::String("a".into()), Value::Integer(1)],
-                    &mut NoOpEvalCtx
-                )
+                .execute(&[lit_str("a"), lit_int(1)], &mut MockCtx)
                 .is_err()
         );
     }
@@ -764,8 +749,9 @@ mod tests {
     fn ltrim_strips_leading_whitespace() {
         assert_eq!(
             Ltrim
-                .execute(&[Value::String("  hi  ".into())], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_str("  hi  ")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::String("hi  ".into())
         );
     }
@@ -774,32 +760,30 @@ mod tests {
     fn ltrim_empty_string() {
         assert_eq!(
             Ltrim
-                .execute(&[Value::String("".into())], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_str("")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::String("".into())
         );
     }
 
     #[test]
     fn ltrim_wrong_arg_count() {
-        assert!(Ltrim.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Ltrim.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn ltrim_type_mismatch() {
-        assert!(
-            Ltrim
-                .execute(&[Value::Integer(1)], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Ltrim.execute(&[lit_int(1)], &mut MockCtx).is_err());
     }
 
     #[test]
     fn rtrim_strips_trailing_whitespace() {
         assert_eq!(
             Rtrim
-                .execute(&[Value::String("  hi  ".into())], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_str("  hi  ")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::String("  hi".into())
         );
     }
@@ -808,8 +792,9 @@ mod tests {
     fn rtrim_empty_string() {
         assert_eq!(
             Rtrim
-                .execute(&[Value::String("".into())], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_str("")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::String("".into())
         );
     }
@@ -818,21 +803,15 @@ mod tests {
     fn rtrim_wrong_arg_count() {
         assert!(
             Rtrim
-                .execute(
-                    &[Value::String("a".into()), Value::String("b".into())],
-                    &mut NoOpEvalCtx
-                )
+                .execute(&[lit_str("a"), lit_str("b")], &mut MockCtx)
                 .is_err()
         );
     }
 
     #[test]
     fn rtrim_type_mismatch() {
-        assert!(
-            Rtrim
-                .execute(&[Value::Boolean(true)], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        use crate::native::lit_bool;
+        assert!(Rtrim.execute(&[lit_bool(true)], &mut MockCtx).is_err());
     }
 
     // -- reverseString --
@@ -841,8 +820,9 @@ mod tests {
     fn reverse_string_ascii() {
         assert_eq!(
             ReverseString
-                .execute(&[Value::String("hello".into())], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_str("hello")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::String("olleh".into())
         );
     }
@@ -851,8 +831,9 @@ mod tests {
     fn reverse_string_empty() {
         assert_eq!(
             ReverseString
-                .execute(&[Value::String("".into())], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_str("")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::String("".into())
         );
     }
@@ -863,24 +844,21 @@ mod tests {
         // produce invalid UTF-8. Reversing per char gives "olléh".
         assert_eq!(
             ReverseString
-                .execute(&[Value::String("héllo".into())], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_str("héllo")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::String("olléh".into())
         );
     }
 
     #[test]
     fn reverse_string_wrong_arg_count() {
-        assert!(ReverseString.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(ReverseString.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn reverse_string_type_mismatch() {
-        assert!(
-            ReverseString
-                .execute(&[Value::Integer(1)], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(ReverseString.execute(&[lit_int(1)], &mut MockCtx).is_err());
     }
 
     // -- replace --
@@ -889,40 +867,29 @@ mod tests {
     fn replace_replaces_all_occurrences() {
         let r = Replace
             .execute(
-                &[
-                    Value::String("foo bar foo".into()),
-                    Value::String("foo".into()),
-                    Value::String("baz".into()),
-                ],
-                &mut NoOpEvalCtx,
+                &[lit_str("foo bar foo"), lit_str("foo"), lit_str("baz")],
+                &mut MockCtx,
             )
             .unwrap();
-        assert_eq!(r, Value::String("baz bar baz".into()));
+        assert_eq!(r.into_value(), Value::String("baz bar baz".into()));
     }
 
     #[test]
     fn replace_no_match_returns_source_unchanged() {
         let r = Replace
             .execute(
-                &[
-                    Value::String("hello".into()),
-                    Value::String("xyz".into()),
-                    Value::String("abc".into()),
-                ],
-                &mut NoOpEvalCtx,
+                &[lit_str("hello"), lit_str("xyz"), lit_str("abc")],
+                &mut MockCtx,
             )
             .unwrap();
-        assert_eq!(r, Value::String("hello".into()));
+        assert_eq!(r.into_value(), Value::String("hello".into()));
     }
 
     #[test]
     fn replace_wrong_arg_count() {
         assert!(
             Replace
-                .execute(
-                    &[Value::String("a".into()), Value::String("b".into())],
-                    &mut NoOpEvalCtx
-                )
+                .execute(&[lit_str("a"), lit_str("b")], &mut MockCtx)
                 .is_err()
         );
     }
@@ -931,14 +898,7 @@ mod tests {
     fn replace_type_mismatch() {
         assert!(
             Replace
-                .execute(
-                    &[
-                        Value::String("a".into()),
-                        Value::Integer(1),
-                        Value::String("c".into()),
-                    ],
-                    &mut NoOpEvalCtx
-                )
+                .execute(&[lit_str("a"), lit_int(1), lit_str("c")], &mut MockCtx)
                 .is_err()
         );
     }
@@ -947,26 +907,20 @@ mod tests {
 
     #[test]
     fn join_strings_2arg_basic() {
-        use im_rc::Vector;
-        let coll = Value::Collection(Box::new(Vector::from_iter([
-            Value::String("a".into()),
-            Value::String("b".into()),
-            Value::String("c".into()),
-        ])));
+        let coll = lit_collection(vec![lit_str("a"), lit_str("b"), lit_str("c")]);
         let r = JoinStrings
-            .execute(&[coll, Value::String(",".into())], &mut NoOpEvalCtx)
+            .execute(&[coll, lit_str(",")], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::String("a,b,c".into()));
+        assert_eq!(r.into_value(), Value::String("a,b,c".into()));
     }
 
     #[test]
     fn join_strings_2arg_empty_collection() {
-        use im_rc::Vector;
-        let coll: Value = Value::Collection(Box::new(Vector::new()));
+        let coll = lit_collection(vec![]);
         let r = JoinStrings
-            .execute(&[coll, Value::String(",".into())], &mut NoOpEvalCtx)
+            .execute(&[coll, lit_str(",")], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::String("".into()));
+        assert_eq!(r.into_value(), Value::String("".into()));
     }
 
     #[test]
@@ -974,67 +928,44 @@ mod tests {
         // A bare String[1] value passed where String[*] is expected should
         // be treated as a one-element collection via Value::to_collection.
         let r = JoinStrings
-            .execute(
-                &[Value::String("lone".into()), Value::String(",".into())],
-                &mut NoOpEvalCtx,
-            )
+            .execute(&[lit_str("lone"), lit_str(",")], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::String("lone".into()));
+        assert_eq!(r.into_value(), Value::String("lone".into()));
     }
 
     #[test]
     fn join_strings_4arg_with_prefix_and_suffix() {
-        use im_rc::Vector;
-        let coll = Value::Collection(Box::new(Vector::from_iter([
-            Value::String("a".into()),
-            Value::String("b".into()),
-        ])));
+        let coll = lit_collection(vec![lit_str("a"), lit_str("b")]);
         let r = JoinStrings
             .execute(
-                &[
-                    coll,
-                    Value::String(", ".into()),
-                    Value::String("[".into()),
-                    Value::String("]".into()),
-                ],
-                &mut NoOpEvalCtx,
+                &[coll, lit_str(", "), lit_str("["), lit_str("]")],
+                &mut MockCtx,
             )
             .unwrap();
-        assert_eq!(r, Value::String("[a, b]".into()));
+        assert_eq!(r.into_value(), Value::String("[a, b]".into()));
     }
 
     #[test]
     fn join_strings_wrong_arg_count() {
-        assert!(JoinStrings.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(JoinStrings.execute(&[], &mut MockCtx).is_err());
         assert!(
             JoinStrings
-                .execute(&[Value::String("only".into())], &mut NoOpEvalCtx)
+                .execute(&[lit_str("only")], &mut MockCtx)
                 .is_err()
         );
         assert!(
             JoinStrings
-                .execute(
-                    &[
-                        Value::String("a".into()),
-                        Value::String("b".into()),
-                        Value::String("c".into()),
-                    ],
-                    &mut NoOpEvalCtx
-                )
+                .execute(&[lit_str("a"), lit_str("b"), lit_str("c")], &mut MockCtx)
                 .is_err()
         );
     }
 
     #[test]
     fn join_strings_element_type_mismatch() {
-        use im_rc::Vector;
-        let coll = Value::Collection(Box::new(Vector::from_iter([
-            Value::String("a".into()),
-            Value::Integer(1),
-        ])));
+        let coll = lit_collection(vec![lit_str("a"), lit_int(1)]);
         assert!(
             JoinStrings
-                .execute(&[coll, Value::String(",".into())], &mut NoOpEvalCtx)
+                .execute(&[coll, lit_str(",")], &mut MockCtx)
                 .is_err()
         );
     }

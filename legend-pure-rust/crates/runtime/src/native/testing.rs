@@ -19,10 +19,11 @@
 
 use std::time::Instant;
 
+use legend_pure_parser_pure::types::ValueSpec;
 use smol_str::SmolStr;
 
-use crate::error::{PureExceptionKind, PureRuntimeError};
-use crate::native::{EvalContextTrait, NativeFunction, NativeRegistry, expect_args};
+use crate::error::{PureException, PureExceptionKind, PureRuntimeError};
+use crate::native::{EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args};
 use crate::value::{FunctionValue, Value};
 
 // ---------------------------------------------------------------------------
@@ -31,42 +32,38 @@ use crate::value::{FunctionValue, Value};
 
 /// Pure `assert(Boolean[1], Function<{->String[1]}>[1]): Boolean[1]`
 ///
-/// Asserts a boolean condition. If false, evaluates the message lambda
-/// and returns an error with that message. Uses `defer_execution()` so
-/// the message lambda is only evaluated on failure.
+/// Asserts a boolean condition. If false, evaluates the message expression
+/// and returns an error with that message. The message is only evaluated
+/// on failure — short-circuit via direct `ctx.evaluate` calls.
 #[derive(Debug)]
 pub struct Assert;
 
 impl NativeFunction for Assert {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
+    ) -> Result<Evaluated, PureException> {
         expect_args("assert", args, 2)?;
-
-        // With defer_execution, arg[0] is a lambda wrapping the condition.
-        let condition_val = ctx.eval_lambda(&args[0], &[])?;
-        let condition = condition_val.as_boolean()?;
-
+        // Condition is plain `Boolean[1]` — force directly. Message is
+        // typed `Function<{->String[1]}>`, so the compiler wraps it in a
+        // zero-parameter lambda; `force_thunk` unwraps that only on failure
+        // so a passing assertion never builds its message.
+        let condition = ctx.evaluate(&args[0])?.as_boolean()?;
         if condition {
-            Ok(Value::Boolean(true))
+            Ok(Evaluated::new(Value::Boolean(true)))
         } else {
-            let msg_val = ctx.eval_lambda(&args[1], &[])?;
-            let msg = match msg_val.as_string() {
-                Ok(s) => s.to_string(),
-                Err(_) => "Assertion failed".to_string(),
-            };
-            Err(PureRuntimeError::AssertionFailed(msg))
+            let msg_val = crate::native::force_thunk(&args[1], ctx)?.into_value();
+            let msg = msg_val
+                .as_string()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|_| "Assertion failed".to_string());
+            Err(PureRuntimeError::AssertionFailed(msg).into())
         }
     }
 
     fn signature(&self) -> &'static str {
         "assert(Boolean[1], Function<{->String[1]}>[1]): Boolean[1]"
-    }
-
-    fn defer_execution(&self) -> bool {
-        true
     }
 }
 
@@ -91,15 +88,15 @@ pub struct ExecuteTest;
 impl NativeFunction for ExecuteTest {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
+    ) -> Result<Evaluated, PureException> {
         expect_args("executeTest", args, 1)?;
-        let test_fn = &args[0];
+        let test_fn_val = ctx.evaluate(&args[0])?.into_value();
 
-        let fqn = function_fqn(test_fn, ctx);
+        let fqn = function_fqn(&test_fn_val, ctx);
         let start = Instant::now();
-        let result = ctx.call_function(test_fn, &[]);
+        let result = ctx.call_function(&test_fn_val, &[]);
         let elapsed = start.elapsed().as_millis() as i64;
 
         let (status, message) = classify_outcome(result);
@@ -130,17 +127,18 @@ pub struct ExecutePCTTest;
 impl NativeFunction for ExecutePCTTest {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
+    ) -> Result<Evaluated, PureException> {
         expect_args("executePCTTest", args, 3)?;
-        let test_fn = &args[0];
-        let adapter = args[1].clone();
-        // args[2] is the exclusions Map — stored for future use
+        // Force testFn and adapter; leave exclusions (args[2]) unevaluated — it's ignored.
+        let test_fn_val = ctx.evaluate(&args[0])?.into_value();
+        let adapter = ctx.evaluate(&args[1])?.into_value();
+        // args[2] is the exclusions Map — ignored for now
 
-        let fqn = function_fqn(test_fn, ctx);
+        let fqn = function_fqn(&test_fn_val, ctx);
         let start = Instant::now();
-        let result = ctx.call_function(test_fn, &[adapter]);
+        let result = ctx.call_function(&test_fn_val, &[adapter]);
         let elapsed = start.elapsed().as_millis() as i64;
 
         let (status, message) = classify_outcome(result);
@@ -218,7 +216,7 @@ fn build_test_result(
     status: &str,
     elapsed: i64,
     message: Option<String>,
-) -> Result<Value, PureRuntimeError> {
+) -> Result<Evaluated, PureException> {
     let heap = ctx.heap_mut();
     let id = heap.alloc_dynamic("meta::pure::test::surveyor::TestResult");
     heap.mutate_add(id, "fqn", &[Value::String(SmolStr::new(fqn))])?;
@@ -227,7 +225,7 @@ fn build_test_result(
     if let Some(msg) = message {
         heap.mutate_add(id, "message", &[Value::String(SmolStr::new(msg))])?;
     }
-    Ok(Value::Object(id))
+    Ok(Evaluated::new(Value::Object(id)))
 }
 
 // ---------------------------------------------------------------------------
@@ -242,4 +240,37 @@ pub fn register(registry: &mut NativeRegistry) {
         "executePCTTest_Function_1__Function_1__Map_1__TestResult_1_",
         ExecutePCTTest,
     );
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::{MockCtx, lit_bool, lit_str};
+
+    #[test]
+    fn assert_true_passes() {
+        let r = Assert
+            .execute(&[lit_bool(true), lit_str("unreachable")], &mut MockCtx)
+            .unwrap();
+        assert_eq!(r.into_value(), Value::Boolean(true));
+    }
+
+    #[test]
+    fn assert_false_fails_with_message() {
+        let err = Assert
+            .execute(&[lit_bool(false), lit_str("oops")], &mut MockCtx)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("oops"), "expected 'oops' in: {msg}");
+    }
+
+    #[test]
+    fn assert_wrong_arg_count_errors() {
+        assert!(Assert.execute(&[lit_bool(true)], &mut MockCtx).is_err());
+        assert!(Assert.execute(&[], &mut MockCtx).is_err());
+    }
 }

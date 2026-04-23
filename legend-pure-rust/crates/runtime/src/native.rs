@@ -24,24 +24,35 @@
 //! - [`NativeFunction`] — trait that each built-in function implements.
 //! - [`NativeRegistry`] — lookup table mapping qualified function names to
 //!   their implementations.
-//! - [`EvalContextTrait`] — type-erased handle to the evaluator, passed to
-//!   native functions so they can invoke lambdas, access variables, etc.
+//! - [`EvalContextTrait`] — type-erased handle to the evaluator passed to
+//!   native functions so they can force argument expressions, invoke
+//!   callables, and reach the heap.
+//! - [`Evaluated`] — the activator result; wraps [`Value`] and will grow
+//!   inferred type, span, and multiplicity metadata over time without
+//!   churning native signatures.
 //!
-//! The evaluator calls [`NativeRegistry::get`] to dispatch to native functions.
-//! Native functions receive their arguments as `&[Value]` and an
-//! `&mut dyn EvalContextTrait` to access the evaluator. The evaluator wraps
-//! any error with source location to produce a [`PureException`](crate::error::PureException).
+//! # Expression-activator model
 //!
-//! # Lambda-dependent functions
+//! Natives receive **unevaluated** [`ValueSpec`]s. They call
+//! `ctx.evaluate(&spec)` on every argument they actually need, in whatever
+//! order matches their semantics. This mirrors Java Pure's
+//! `findValueSpecificationExecutor(...).execute(...)` pattern:
 //!
-//! Functions like `map`, `filter`, `fold`, and `if` use `ctx.eval_lambda()`
-//! to invoke lambda bodies. Functions like `if` also use
-//! [`NativeFunction::defer_execution`] to short-circuit argument evaluation.
+//! - Eager primitives (`plus`, `equal`) evaluate every argument up front.
+//! - Short-circuit natives (`and`, `or`, `if`) evaluate arguments on demand
+//!   and skip unused branches entirely — no more zero-param lambda wrapping.
+//! - Lambda-receiving natives (`map`, `filter`, `fold`) first evaluate the
+//!   lambda spec to a `Value::Function`, then invoke it per element via
+//!   [`EvalContextTrait::call_function`].
 
 use std::collections::HashMap;
 use std::fmt;
 
+#[cfg(test)]
+use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_pure::model::PureModel;
+use legend_pure_parser_pure::types::{ExprKind, ValueSpec};
+use rust_decimal::Decimal;
 use smol_str::SmolStr;
 
 use crate::context::VariableContext;
@@ -50,24 +61,113 @@ use crate::heap::RuntimeHeap;
 use crate::value::Value;
 
 // ---------------------------------------------------------------------------
-// EvalContextTrait — type-erased evaluator handle for native functions
+// Evaluated — forced-expression carrier
+// ---------------------------------------------------------------------------
+
+/// The result of forcing a Pure `ValueSpec`.
+///
+/// `Evaluated` wraps a runtime [`Value`] and carves out a place for the
+/// activation metadata we plan to add over time (inferred type, source
+/// span, multiplicity, … ). Native functions never see `Value` directly
+/// on the hot path — they take and return `Evaluated`, so adding new
+/// fields later won't churn 125 signatures a second time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Evaluated {
+    value: Value,
+}
+
+impl Evaluated {
+    /// Wrap a `Value` as a forced-expression result.
+    #[must_use]
+    pub fn new(value: Value) -> Self {
+        Self { value }
+    }
+
+    /// Borrow the underlying `Value`.
+    #[must_use]
+    pub fn value(&self) -> &Value {
+        &self.value
+    }
+
+    /// Consume into the bare `Value`.
+    #[must_use]
+    pub fn into_value(self) -> Value {
+        self.value
+    }
+
+    /// Interpret as a boolean. Errors if the underlying `Value` is not boolean.
+    ///
+    /// # Errors
+    /// Returns a `PureException` wrapping the `Value::as_boolean` error.
+    pub fn as_boolean(&self) -> Result<bool, PureException> {
+        self.value.as_boolean().map_err(Into::into)
+    }
+
+    /// Interpret as an integer. Errors if the underlying `Value` is not `Integer`.
+    ///
+    /// # Errors
+    /// Returns a `PureException` if the value is not an integer.
+    pub fn as_integer(&self) -> Result<i64, PureException> {
+        self.value.as_integer().map_err(Into::into)
+    }
+
+    /// Interpret as a float, promoting `Integer` automatically.
+    ///
+    /// # Errors
+    /// Returns a `PureException` if the value is neither float nor integer.
+    pub fn as_float(&self) -> Result<f64, PureException> {
+        self.value.as_float().map_err(Into::into)
+    }
+
+    /// Interpret as a string. Errors if the underlying `Value` is not `String`.
+    ///
+    /// # Errors
+    /// Returns a `PureException` if the value is not a string.
+    pub fn as_string(&self) -> Result<&SmolStr, PureException> {
+        self.value.as_string().map_err(Into::into)
+    }
+
+    /// Interpret as a decimal. Errors if the underlying `Value` is not `Decimal`.
+    ///
+    /// # Errors
+    /// Returns a `PureException` if the value is not a decimal.
+    pub fn as_decimal(&self) -> Result<Decimal, PureException> {
+        self.value.as_decimal().map_err(Into::into)
+    }
+
+    /// Flatten into a collection view. Scalar values become 1-element vectors.
+    #[must_use]
+    pub fn to_collection(&self) -> im_rc::Vector<Value> {
+        self.value.to_collection()
+    }
+}
+
+impl From<Value> for Evaluated {
+    fn from(value: Value) -> Self {
+        Self { value }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EvalContextTrait — expression activator
 // ---------------------------------------------------------------------------
 
 /// Type-erased handle to the evaluator, passed to native functions.
 ///
 /// This is the object-safe counterpart of the concrete `EvalContext` struct
-/// (defined in [`eval`](crate::eval)). It allows `NativeFunction` to remain
-/// object-safe (stored as `Box<dyn NativeFunction>`) while still having
-/// access to the evaluator's capabilities.
-///
-/// Mirrors Java's pattern where `NativeFunction.execute()` receives
-/// `FunctionExecutionInterpreted`, `VariableContext`, and `ProcessorSupport`.
+/// (defined in [`eval`](crate::eval)). It mirrors Java Pure's expression-
+/// activator pattern: the native receives raw `ValueSpec`s and calls
+/// [`evaluate`](Self::evaluate) on each one it wants to force.
 pub trait EvalContextTrait {
-    /// Evaluate a lambda closure with the given arguments.
+    /// Force a `ValueSpec` to a runtime [`Evaluated`] under the current scope.
+    ///
+    /// This is the sole entry point natives use to evaluate argument
+    /// expressions — the equivalent of Java's
+    /// `FunctionExecutionInterpreted.findValueSpecificationExecutor(...).execute(...)`.
     ///
     /// # Errors
-    /// Returns `PureRuntimeError` if evaluation fails or the value is not a lambda.
-    fn eval_lambda(&mut self, lambda: &Value, args: &[Value]) -> Result<Value, PureRuntimeError>;
+    /// Propagates any `PureException` raised while evaluating the expression.
+    fn evaluate(&mut self, spec: &ValueSpec) -> Result<Evaluated, PureException>;
 
     /// Access the variable context immutably.
     fn context(&self) -> &VariableContext;
@@ -81,27 +181,27 @@ pub trait EvalContextTrait {
     /// Access the runtime heap mutably.
     fn heap_mut(&mut self) -> &mut RuntimeHeap;
 
-    /// Call a Pure function value (lambda or compiled) with the given arguments,
-    /// returning the full [`PureException`] on failure.
+    /// Invoke a Pure callable (lambda or compiled function) with already-
+    /// forced argument values.
     ///
-    /// Unlike [`eval_lambda`](Self::eval_lambda), this preserves the exception
-    /// kind so callers can classify outcomes (PASS / FAIL / ERROR / SKIP).
+    /// Use this after forcing a callable expression via [`evaluate`](Self::evaluate):
+    /// the native materializes the `Value::Function` first, then invokes it
+    /// per-element with the runtime values it wants to bind.
     ///
     /// # Errors
-    /// Returns a [`PureException`] if evaluation fails.
+    /// Returns the callee's full [`PureException`] unchanged, so semantic
+    /// kinds (`AssertionFailed`, `ConstraintViolation`, …) survive the
+    /// native→user-code boundary.
     fn call_function(&mut self, callable: &Value, args: &[Value]) -> Result<Value, PureException>;
 
-    /// Access the compiled Pure model.
-    ///
-    /// Allows natives to resolve element names and type information.
+    /// Access the compiled Pure model (element lookup, type resolution).
     fn model(&self) -> &PureModel;
 
     /// Emit console output through the evaluator's configured sink.
     ///
     /// Pure's `print`/`println` natives call this instead of writing to
     /// stdout directly, so embedders (CLI, LSP, DAP, tests) can capture
-    /// or redirect output. The default implementation on `EvalHooks`
-    /// forwards to stdout, matching the previous behaviour.
+    /// or redirect output.
     fn console_output(&mut self, msg: &str);
 }
 
@@ -111,65 +211,42 @@ pub trait EvalContextTrait {
 
 /// A native (built-in) Pure function implemented in Rust.
 ///
-/// Native functions receive their arguments as a slice of [`Value`]s
-/// and an [`EvalContextTrait`] that provides access to the evaluator's
-/// capabilities (lambda evaluation, variable context, heap, model).
-/// The evaluator wraps any error with source location to produce a
-/// `PureException`.
+/// Each native is a zero-sized struct implementing this trait. The evaluator
+/// hands it raw `ValueSpec`s plus an [`EvalContextTrait`] activator; the
+/// native decides which arguments to force (and in what order) and returns
+/// an [`Evaluated`] result.
 ///
-/// This mirrors Java's `NativeFunction` which receives
-/// `VariableContext`, `FunctionExecutionInterpreted`, and
-/// `ProcessorSupport` in its `execute()` method.
-///
-/// # Implementors
-///
-/// Each native function is a zero-sized struct implementing this trait.
-/// This allows compile-time dispatch and zero allocation for the function
-/// objects themselves.
-///
-/// Simple natives (e.g., `plus`, `equal`) ignore the `ctx` parameter.
-/// Lambda-dependent natives (e.g., `map`, `filter`, `if`) use
-/// `ctx.eval_lambda()` to invoke lambda bodies.
+/// Simple natives (`plus`, `equal`) force every argument up front. Short-
+/// circuit natives (`and`, `or`, `if`) force on demand so unused branches
+/// stay unevaluated. Lambda-receiving natives (`map`, `filter`, `fold`)
+/// force the lambda spec to a `Value::Function`, then invoke it per-element
+/// via [`EvalContextTrait::call_function`].
 pub trait NativeFunction: fmt::Debug {
-    /// Execute the function with the given arguments and evaluation context.
+    /// Execute the native against its raw `ValueSpec` arguments.
     ///
-    /// Arguments are already evaluated (left-to-right) by the evaluator,
-    /// unless [`defer_execution`](Self::defer_execution) returns `true`.
-    ///
-    /// The `ctx` parameter provides access to the evaluator for:
-    /// - Invoking lambda bodies (`ctx.eval_lambda()`)
-    /// - Reading/writing variables (`ctx.context_mut()`)
-    /// - Accessing the object heap (`ctx.heap_mut()`)
+    /// The native is responsible for calling `ctx.evaluate(&arg)` on every
+    /// argument it needs. The evaluator does **not** pre-evaluate anything —
+    /// that's the point of the activator pattern.
     ///
     /// # Errors
-    /// Returns `PureRuntimeError` if argument count/types are wrong or
-    /// if the computation fails (e.g., division by zero).
+    /// Return a `PureException` for any failure (argument-count mismatch,
+    /// type error, propagated sub-expression error). The evaluator wraps
+    /// the returned exception with a stack frame before it bubbles up.
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError>;
+    ) -> Result<Evaluated, PureException>;
 
     /// The Pure function signature, for documentation and error messages.
     ///
     /// Example: `"plus(Integer[1], Integer[1]): Integer[1]"`
     fn signature(&self) -> &'static str;
-
-    /// Whether this native defers parameter evaluation.
-    ///
-    /// When `true`, the evaluator passes unevaluated expressions wrapped
-    /// as zero-parameter [`LambdaClosure`](crate::value::LambdaClosure)s
-    /// instead of fully evaluated values. The native function then
-    /// evaluates them on demand via `ctx.eval_lambda()`.
-    ///
-    /// This enables short-circuiting (e.g., `if` only evaluates the taken
-    /// branch) and matches Java's `deferParameterExecution()`.
-    ///
-    /// Defaults to `false` — most native functions eagerly evaluate args.
-    fn defer_execution(&self) -> bool {
-        false
-    }
 }
+
+// ---------------------------------------------------------------------------
+// NativeRegistry
+// ---------------------------------------------------------------------------
 
 /// Registry of native functions, keyed by mangled function FQN.
 ///
@@ -180,17 +257,6 @@ pub trait NativeFunction: fmt::Debug {
 /// Keys are mangled function names matching Java's
 /// `ConcreteFunctionDefinitionNameProcessor` format:
 /// `funcName_ParamType_Mult__ReturnType_Mult_`
-///
-/// # Example
-///
-/// ```ignore
-/// use legend_pure_runtime::native::NativeRegistry;
-///
-/// let registry = NativeRegistry::standard();
-/// let plus = registry.get("plus_Integer_MANY__Integer_1_").unwrap();
-/// let result = plus.execute(&[Value::Integer(2), Value::Integer(3)], &mut ctx);
-/// assert_eq!(result.unwrap(), Value::Integer(5));
-/// ```
 pub struct NativeRegistry {
     functions: HashMap<SmolStr, Box<dyn NativeFunction>>,
 }
@@ -222,11 +288,8 @@ impl NativeRegistry {
     /// Look up a native function by simple name prefix.
     ///
     /// Searches for a registered function whose FQN key starts with
-    /// `"{simple_name}_"`. This is the fallback path for operator calls
-    /// that the compiler lowered with simple names (e.g., `"plus"`)
-    /// before FQN resolution.
-    ///
-    /// Returns the first match, or `None` if no function matches.
+    /// `"{simple_name}_"`. Fallback path for operator calls the compiler
+    /// lowered with simple names before FQN resolution.
     #[must_use]
     pub fn find_by_prefix(&self, simple_name: &str) -> Option<&dyn NativeFunction> {
         let prefix = format!("{simple_name}_");
@@ -299,18 +362,18 @@ impl fmt::Debug for NativeRegistry {
 
 /// Validate that exactly `n` arguments were provided.
 ///
+/// Generic over argument type `T` so it works for both `&[Value]` (legacy
+/// callers still in-flight) and `&[ValueSpec]` (the new native API).
+///
 /// # Errors
-/// Returns `EvaluationError` with a descriptive message if the count is wrong.
-pub fn expect_args(
-    func_name: &str,
-    args: &[Value],
-    expected: usize,
-) -> Result<(), PureRuntimeError> {
+/// Returns a `PureException` wrapping an `EvaluationError` if the count is wrong.
+pub fn expect_args<T>(func_name: &str, args: &[T], expected: usize) -> Result<(), PureException> {
     if args.len() != expected {
         return Err(PureRuntimeError::EvaluationError(format!(
             "{func_name}: expected {expected} argument(s), got {}",
             args.len()
-        )));
+        ))
+        .into());
     }
     Ok(())
 }
@@ -318,19 +381,62 @@ pub fn expect_args(
 /// Validate that at least `min` arguments were provided.
 ///
 /// # Errors
-/// Returns `EvaluationError` if fewer than `min` arguments are present.
-pub fn expect_min_args(
-    func_name: &str,
-    args: &[Value],
-    min: usize,
-) -> Result<(), PureRuntimeError> {
+/// Returns a `PureException` if fewer than `min` arguments are present.
+pub fn expect_min_args<T>(func_name: &str, args: &[T], min: usize) -> Result<(), PureException> {
     if args.len() < min {
         return Err(PureRuntimeError::EvaluationError(format!(
             "{func_name}: expected at least {min} argument(s), got {}",
             args.len()
-        )));
+        ))
+        .into());
     }
     Ok(())
+}
+
+/// Force every argument spec to a concrete [`Value`].
+///
+/// Shared by eager natives — arithmetic, comparison, collection (non-lambda),
+/// string, math, datetime, meta, and most of lang. Short-circuit natives
+/// (`and`, `or`, `if`, `assert`) and lambda-receiving natives
+/// (`map`, `filter`, `fold`, `match`) call `ctx.evaluate` on individual
+/// args themselves and do not use this helper.
+///
+/// # Errors
+/// Propagates the first `PureException` raised while forcing an argument.
+pub(crate) fn force_all(
+    args: &[ValueSpec],
+    ctx: &mut dyn EvalContextTrait,
+) -> Result<Vec<Value>, PureException> {
+    let mut out = Vec::with_capacity(args.len());
+    for a in args {
+        out.push(ctx.evaluate(a)?.into_value());
+    }
+    Ok(out)
+}
+
+/// Force a `ValueSpec`, auto-invoking zero-parameter `Lambda` wrappers.
+///
+/// Pure signatures that use `Function<{->T[m]}>` parameters (e.g. `if`'s
+/// branches, `assert`'s message) arrive at the native as zero-parameter
+/// `Lambda` specs: the compiler wraps the argument expression in a `|expr`
+/// closure so evaluation can be deferred. Under the new activator model the
+/// native forces the spec itself, which would normally yield the closure
+/// `Value::Function(...)`.
+///
+/// This helper detects that shape and calls the closure with no arguments to
+/// produce the branch's actual value, matching the old `defer_execution +
+/// eval_lambda(&arg, &[])` behaviour without re-introducing the flag.
+pub fn force_thunk(
+    spec: &ValueSpec,
+    ctx: &mut dyn EvalContextTrait,
+) -> Result<Evaluated, PureException> {
+    if let ExprKind::Lambda { parameters, .. } = &*spec.kind
+        && parameters.is_empty()
+    {
+        let lambda_val = ctx.evaluate(spec)?.into_value();
+        return Ok(Evaluated::new(ctx.call_function(&lambda_val, &[])?));
+    }
+    ctx.evaluate(spec)
 }
 
 // ===========================================================================
@@ -374,44 +480,117 @@ pub mod math;
 pub mod datetime;
 
 // ---------------------------------------------------------------------------
-// Test helpers
+// Test helpers — literal ValueSpec builders + MockCtx
 // ---------------------------------------------------------------------------
 
-/// A no-op evaluation context stub for testing native functions.
-///
-/// All methods panic — this is only suitable for testing natives that
-/// don't use the evaluation context (i.e., simple arithmetic, comparison,
-/// string, and collection functions that ignore the `ctx` parameter).
+/// Construct a [`ValueSpec`] wrapping an [`IntegerLiteral`](ExprKind::IntegerLiteral).
 #[cfg(test)]
-pub(crate) struct NoOpEvalCtx;
+pub(crate) fn lit_int(n: i64) -> ValueSpec {
+    spec(ExprKind::IntegerLiteral(n))
+}
+
+/// Construct a [`ValueSpec`] wrapping a [`FloatLiteral`](ExprKind::FloatLiteral).
+#[cfg(test)]
+pub(crate) fn lit_float(f: f64) -> ValueSpec {
+    spec(ExprKind::FloatLiteral(f))
+}
+
+/// Construct a [`ValueSpec`] wrapping a [`DecimalLiteral`](ExprKind::DecimalLiteral).
+#[cfg(test)]
+pub(crate) fn lit_decimal(d: rust_decimal::Decimal) -> ValueSpec {
+    spec(ExprKind::DecimalLiteral(d))
+}
+
+/// Construct a [`ValueSpec`] wrapping a [`BooleanLiteral`](ExprKind::BooleanLiteral).
+#[cfg(test)]
+pub(crate) fn lit_bool(b: bool) -> ValueSpec {
+    spec(ExprKind::BooleanLiteral(b))
+}
+
+/// Construct a [`ValueSpec`] wrapping a [`StringLiteral`](ExprKind::StringLiteral).
+#[cfg(test)]
+pub(crate) fn lit_str(s: &str) -> ValueSpec {
+    spec(ExprKind::StringLiteral(s.into()))
+}
+
+/// Construct a [`ValueSpec`] wrapping a [`Collection`](ExprKind::Collection) literal.
+#[cfg(test)]
+pub(crate) fn lit_collection(elements: Vec<ValueSpec>) -> ValueSpec {
+    spec(ExprKind::Collection { elements })
+}
 
 #[cfg(test)]
-impl EvalContextTrait for NoOpEvalCtx {
-    fn eval_lambda(&mut self, _l: &Value, _a: &[Value]) -> Result<Value, PureRuntimeError> {
-        unreachable!("NoOpEvalCtx::eval_lambda should never be called in simple native tests")
+fn spec(kind: ExprKind) -> ValueSpec {
+    ValueSpec {
+        kind: Box::new(kind),
+        source_info: SourceInfo::new("<test>", 1, 1, 1, 1),
+        type_info: None,
     }
+}
+
+/// Mock evaluation context for unit-testing native functions.
+///
+/// [`MockCtx::evaluate`] supports **only** literal `ExprKind` shapes —
+/// `IntegerLiteral`, `FloatLiteral`, `DecimalLiteral`, `StringLiteral`,
+/// `BooleanLiteral`, and `Collection` of those. Every other variant
+/// panics with a pointer to `crates/runtime/tests/eval_tests.rs`, which
+/// is the home for any native test that needs real evaluator support
+/// (variables, lambda bodies, function calls, heap, model lookups, …).
+///
+/// All other `EvalContextTrait` methods panic — if your native uses the
+/// heap, model, or call_function, the test must live in the integration
+/// file with a real `Evaluator`.
+#[cfg(test)]
+pub(crate) struct MockCtx;
+
+#[cfg(test)]
+impl EvalContextTrait for MockCtx {
+    fn evaluate(&mut self, spec: &ValueSpec) -> Result<Evaluated, PureException> {
+        let v = match &*spec.kind {
+            ExprKind::IntegerLiteral(n) => Value::Integer(*n),
+            ExprKind::FloatLiteral(f) => Value::Float(*f),
+            ExprKind::DecimalLiteral(d) => Value::Decimal(*d),
+            ExprKind::StringLiteral(s) => Value::String(s.clone()),
+            ExprKind::BooleanLiteral(b) => Value::Boolean(*b),
+            ExprKind::Collection { elements } => {
+                let mut pv = im_rc::Vector::new();
+                for e in elements {
+                    pv.push_back(self.evaluate(e)?.into_value());
+                }
+                Value::Collection(Box::new(pv))
+            }
+            _ => unreachable!(
+                "MockCtx::evaluate only supports literal ExprKinds; move this test to \
+                 crates/runtime/tests/eval_tests.rs where a real Evaluator is available"
+            ),
+        };
+        Ok(Evaluated::new(v))
+    }
+
     fn context(&self) -> &VariableContext {
-        unreachable!("NoOpEvalCtx::context should never be called in simple native tests")
+        unreachable!("MockCtx::context should never be called in simple native tests")
     }
     fn context_mut(&mut self) -> &mut VariableContext {
-        unreachable!("NoOpEvalCtx::context_mut should never be called in simple native tests")
+        unreachable!("MockCtx::context_mut should never be called in simple native tests")
     }
     fn heap(&self) -> &RuntimeHeap {
-        unreachable!("NoOpEvalCtx::heap should never be called in simple native tests")
+        unreachable!("MockCtx::heap should never be called in simple native tests")
     }
     fn heap_mut(&mut self) -> &mut RuntimeHeap {
-        unreachable!("NoOpEvalCtx::heap_mut should never be called in simple native tests")
+        unreachable!("MockCtx::heap_mut should never be called in simple native tests")
     }
     fn call_function(&mut self, _c: &Value, _a: &[Value]) -> Result<Value, PureException> {
-        unreachable!("NoOpEvalCtx::call_function should never be called in simple native tests")
+        unreachable!(
+            "MockCtx::call_function should never be called in simple native tests; \
+             move this test to eval_tests.rs"
+        )
     }
     fn model(&self) -> &PureModel {
-        unreachable!("NoOpEvalCtx::model should never be called in simple native tests")
+        unreachable!("MockCtx::model should never be called in simple native tests")
     }
     fn console_output(&mut self, _msg: &str) {
-        // Silent sink — unit tests for side-effect-free natives don't
-        // observe console output, and routing to stdout would pollute
-        // the cargo-test display.
+        // Silent sink — unit tests for side-effect-free natives don't observe
+        // console output, and routing to stdout would pollute cargo-test output.
     }
 }
 
@@ -430,10 +609,10 @@ mod tests {
     impl NativeFunction for ConstantFn {
         fn execute(
             &self,
-            _args: &[Value],
+            _args: &[ValueSpec],
             _ctx: &mut dyn EvalContextTrait,
-        ) -> Result<Value, PureRuntimeError> {
-            Ok(self.0.clone())
+        ) -> Result<Evaluated, PureException> {
+            Ok(Evaluated::new(self.0.clone()))
         }
 
         fn signature(&self) -> &'static str {
@@ -447,8 +626,8 @@ mod tests {
         reg.register("myFunc", ConstantFn(Value::Integer(42)));
 
         let func = reg.get("myFunc").unwrap();
-        let result = func.execute(&[], &mut NoOpEvalCtx).unwrap();
-        assert_eq!(result, Value::Integer(42));
+        let result = func.execute(&[], &mut MockCtx).unwrap();
+        assert_eq!(result.into_value(), Value::Integer(42));
     }
 
     #[test]
@@ -469,15 +648,47 @@ mod tests {
 
     #[test]
     fn expect_args_validates() {
-        let args = vec![Value::Integer(1), Value::Integer(2)];
+        let args = vec![lit_int(1), lit_int(2)];
         assert!(expect_args("test", &args, 2).is_ok());
         assert!(expect_args("test", &args, 3).is_err());
     }
 
     #[test]
     fn expect_min_args_validates() {
-        let args = vec![Value::Integer(1)];
+        let args = vec![lit_int(1)];
         assert!(expect_min_args("test", &args, 1).is_ok());
         assert!(expect_min_args("test", &args, 2).is_err());
+    }
+
+    #[test]
+    fn mock_ctx_evaluates_literal() {
+        let mut ctx = MockCtx;
+        assert_eq!(
+            ctx.evaluate(&lit_int(7)).unwrap().into_value(),
+            Value::Integer(7)
+        );
+        assert_eq!(
+            ctx.evaluate(&lit_bool(true)).unwrap().into_value(),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            ctx.evaluate(&lit_str("hi")).unwrap().into_value(),
+            Value::String("hi".into())
+        );
+    }
+
+    #[test]
+    fn mock_ctx_evaluates_collection() {
+        let mut ctx = MockCtx;
+        let spec = lit_collection(vec![lit_int(1), lit_int(2), lit_int(3)]);
+        let v = ctx.evaluate(&spec).unwrap().into_value();
+        match v {
+            Value::Collection(pv) => {
+                assert_eq!(pv.len(), 3);
+                assert_eq!(pv[0], Value::Integer(1));
+                assert_eq!(pv[2], Value::Integer(3));
+            }
+            other => panic!("expected Collection, got {other:?}"),
+        }
     }
 }

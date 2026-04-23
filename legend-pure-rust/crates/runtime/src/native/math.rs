@@ -24,12 +24,19 @@
 //! [`rust_decimal::prelude::ToPrimitive::to_f64`] with a graceful fallback
 //! to an `EvaluationError` when the conversion fails.
 
+use legend_pure_parser_pure::types::ValueSpec;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 
-use crate::error::PureRuntimeError;
-use crate::native::{EvalContextTrait, NativeFunction, NativeRegistry, expect_args};
+use crate::error::{PureException, PureRuntimeError};
+use crate::native::{
+    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
+};
 use crate::value::Value;
+
+// ---------------------------------------------------------------------------
+// Shared helper — force all argument specs to concrete Values
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Shared helper — promote any numeric Value (including Decimal) to f64
@@ -62,15 +69,16 @@ pub struct Floor;
 impl NativeFunction for Floor {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("floor", args, 1)?;
-        let x = number_to_f64("floor", &args[0])?;
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("floor", &values, 1)?;
+        let x = number_to_f64("floor", &values[0])?;
         // cast_possible_truncation acceptable here — Pure's floor returns Integer and
         // values outside i64 range are genuinely out of spec.
         #[allow(clippy::cast_possible_truncation)]
-        Ok(Value::Integer(x.floor() as i64))
+        Ok(Evaluated::new(Value::Integer(x.floor() as i64)))
     }
 
     fn signature(&self) -> &'static str {
@@ -89,13 +97,14 @@ pub struct Ceiling;
 impl NativeFunction for Ceiling {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("ceiling", args, 1)?;
-        let x = number_to_f64("ceiling", &args[0])?;
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("ceiling", &values, 1)?;
+        let x = number_to_f64("ceiling", &values[0])?;
         #[allow(clippy::cast_possible_truncation)]
-        Ok(Value::Integer(x.ceil() as i64))
+        Ok(Evaluated::new(Value::Integer(x.ceil() as i64)))
     }
 
     fn signature(&self) -> &'static str {
@@ -114,13 +123,14 @@ pub struct Round;
 impl NativeFunction for Round {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("round", args, 1)?;
-        let x = number_to_f64("round", &args[0])?;
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("round", &values, 1)?;
+        let x = number_to_f64("round", &values[0])?;
         #[allow(clippy::cast_possible_truncation)]
-        Ok(Value::Integer(x.round() as i64))
+        Ok(Evaluated::new(Value::Integer(x.round() as i64)))
     }
 
     fn signature(&self) -> &'static str {
@@ -139,11 +149,12 @@ pub struct Sign;
 impl NativeFunction for Sign {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("sign", args, 1)?;
-        let x = number_to_f64("sign", &args[0])?;
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("sign", &values, 1)?;
+        let x = number_to_f64("sign", &values[0])?;
         let s = if x > 0.0 {
             1
         } else if x < 0.0 {
@@ -151,7 +162,7 @@ impl NativeFunction for Sign {
         } else {
             0
         };
-        Ok(Value::Integer(s))
+        Ok(Evaluated::new(Value::Integer(s)))
     }
 
     fn signature(&self) -> &'static str {
@@ -173,12 +184,13 @@ pub struct Sqrt;
 impl NativeFunction for Sqrt {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("sqrt", args, 1)?;
-        let x = number_to_f64("sqrt", &args[0])?;
-        Ok(Value::Float(x.sqrt()))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("sqrt", &values, 1)?;
+        let x = number_to_f64("sqrt", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.sqrt())))
     }
 
     fn signature(&self) -> &'static str {
@@ -197,12 +209,13 @@ pub struct Cbrt;
 impl NativeFunction for Cbrt {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("cbrt", args, 1)?;
-        let x = number_to_f64("cbrt", &args[0])?;
-        Ok(Value::Float(x.cbrt()))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("cbrt", &values, 1)?;
+        let x = number_to_f64("cbrt", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.cbrt())))
     }
 
     fn signature(&self) -> &'static str {
@@ -221,12 +234,13 @@ pub struct Exp;
 impl NativeFunction for Exp {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("exp", args, 1)?;
-        let x = number_to_f64("exp", &args[0])?;
-        Ok(Value::Float(x.exp()))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("exp", &values, 1)?;
+        let x = number_to_f64("exp", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.exp())))
     }
 
     fn signature(&self) -> &'static str {
@@ -247,12 +261,13 @@ pub struct Log;
 impl NativeFunction for Log {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("log", args, 1)?;
-        let x = number_to_f64("log", &args[0])?;
-        Ok(Value::Float(x.ln()))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("log", &values, 1)?;
+        let x = number_to_f64("log", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.ln())))
     }
 
     fn signature(&self) -> &'static str {
@@ -271,12 +286,13 @@ pub struct Log10;
 impl NativeFunction for Log10 {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("log10", args, 1)?;
-        let x = number_to_f64("log10", &args[0])?;
-        Ok(Value::Float(x.log10()))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("log10", &values, 1)?;
+        let x = number_to_f64("log10", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.log10())))
     }
 
     fn signature(&self) -> &'static str {
@@ -295,13 +311,14 @@ pub struct Pow;
 impl NativeFunction for Pow {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("pow", args, 2)?;
-        let base = number_to_f64("pow", &args[0])?;
-        let exp = number_to_f64("pow", &args[1])?;
-        Ok(Value::Float(base.powf(exp)))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("pow", &values, 2)?;
+        let base = number_to_f64("pow", &values[0])?;
+        let exp = number_to_f64("pow", &values[1])?;
+        Ok(Evaluated::new(Value::Float(base.powf(exp))))
     }
 
     fn signature(&self) -> &'static str {
@@ -320,12 +337,13 @@ pub struct Sin;
 impl NativeFunction for Sin {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("sin", args, 1)?;
-        let x = number_to_f64("sin", &args[0])?;
-        Ok(Value::Float(x.sin()))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("sin", &values, 1)?;
+        let x = number_to_f64("sin", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.sin())))
     }
 
     fn signature(&self) -> &'static str {
@@ -340,12 +358,13 @@ pub struct Cos;
 impl NativeFunction for Cos {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("cos", args, 1)?;
-        let x = number_to_f64("cos", &args[0])?;
-        Ok(Value::Float(x.cos()))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("cos", &values, 1)?;
+        let x = number_to_f64("cos", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.cos())))
     }
 
     fn signature(&self) -> &'static str {
@@ -360,12 +379,13 @@ pub struct Tan;
 impl NativeFunction for Tan {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("tan", args, 1)?;
-        let x = number_to_f64("tan", &args[0])?;
-        Ok(Value::Float(x.tan()))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("tan", &values, 1)?;
+        let x = number_to_f64("tan", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.tan())))
     }
 
     fn signature(&self) -> &'static str {
@@ -380,12 +400,13 @@ pub struct Cot;
 impl NativeFunction for Cot {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("cot", args, 1)?;
-        let x = number_to_f64("cot", &args[0])?;
-        Ok(Value::Float(1.0 / x.tan()))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("cot", &values, 1)?;
+        let x = number_to_f64("cot", &values[0])?;
+        Ok(Evaluated::new(Value::Float(1.0 / x.tan())))
     }
 
     fn signature(&self) -> &'static str {
@@ -405,12 +426,13 @@ pub struct Asin;
 impl NativeFunction for Asin {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("asin", args, 1)?;
-        let x = number_to_f64("asin", &args[0])?;
-        Ok(Value::Float(x.asin()))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("asin", &values, 1)?;
+        let x = number_to_f64("asin", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.asin())))
     }
 
     fn signature(&self) -> &'static str {
@@ -426,12 +448,13 @@ pub struct Acos;
 impl NativeFunction for Acos {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("acos", args, 1)?;
-        let x = number_to_f64("acos", &args[0])?;
-        Ok(Value::Float(x.acos()))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("acos", &values, 1)?;
+        let x = number_to_f64("acos", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.acos())))
     }
 
     fn signature(&self) -> &'static str {
@@ -446,12 +469,13 @@ pub struct Atan;
 impl NativeFunction for Atan {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("atan", args, 1)?;
-        let x = number_to_f64("atan", &args[0])?;
-        Ok(Value::Float(x.atan()))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("atan", &values, 1)?;
+        let x = number_to_f64("atan", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x.atan())))
     }
 
     fn signature(&self) -> &'static str {
@@ -467,13 +491,14 @@ pub struct Atan2;
 impl NativeFunction for Atan2 {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("atan2", args, 2)?;
-        let y = number_to_f64("atan2", &args[0])?;
-        let x = number_to_f64("atan2", &args[1])?;
-        Ok(Value::Float(y.atan2(x)))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("atan2", &values, 2)?;
+        let y = number_to_f64("atan2", &values[0])?;
+        let x = number_to_f64("atan2", &values[1])?;
+        Ok(Evaluated::new(Value::Float(y.atan2(x))))
     }
 
     fn signature(&self) -> &'static str {
@@ -492,12 +517,13 @@ pub struct ToFloat;
 impl NativeFunction for ToFloat {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("toFloat", args, 1)?;
-        let x = number_to_f64("toFloat", &args[0])?;
-        Ok(Value::Float(x))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("toFloat", &values, 1)?;
+        let x = number_to_f64("toFloat", &values[0])?;
+        Ok(Evaluated::new(Value::Float(x)))
     }
 
     fn signature(&self) -> &'static str {
@@ -517,11 +543,12 @@ pub struct ToDecimal;
 impl NativeFunction for ToDecimal {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("toDecimal", args, 1)?;
-        match &args[0] {
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("toDecimal", &values, 1)?;
+        let v = match &values[0] {
             Value::Decimal(d) => Ok(Value::Decimal(*d)),
             Value::Integer(i) => Ok(Value::Decimal(Decimal::from(*i))),
             Value::Float(f) => Decimal::from_f64_retain(*f)
@@ -530,9 +557,13 @@ impl NativeFunction for ToDecimal {
                     PureRuntimeError::EvaluationError(format!(
                         "toDecimal: cannot convert Float {f} to Decimal"
                     ))
-                }),
-            other => Err(PureRuntimeError::type_mismatch("Number", other)),
-        }
+                })
+                .map_err(PureException::from),
+            other => Err(PureException::from(PureRuntimeError::type_mismatch(
+                "Number", other,
+            ))),
+        }?;
+        Ok(Evaluated::new(v))
     }
 
     fn signature(&self) -> &'static str {
@@ -553,14 +584,16 @@ pub struct ParseInteger;
 impl NativeFunction for ParseInteger {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("parseInteger", args, 1)?;
-        let s = args[0].as_string()?;
-        s.parse::<i64>().map(Value::Integer).map_err(|e| {
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("parseInteger", &values, 1)?;
+        let s = values[0].as_string()?;
+        let n = s.parse::<i64>().map_err(|e| {
             PureRuntimeError::EvaluationError(format!("parseInteger: cannot parse {s:?}: {e}"))
-        })
+        })?;
+        Ok(Evaluated::new(Value::Integer(n)))
     }
 
     fn signature(&self) -> &'static str {
@@ -577,14 +610,16 @@ pub struct ParseFloat;
 impl NativeFunction for ParseFloat {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("parseFloat", args, 1)?;
-        let s = args[0].as_string()?;
-        s.parse::<f64>().map(Value::Float).map_err(|e| {
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("parseFloat", &values, 1)?;
+        let s = values[0].as_string()?;
+        let f = s.parse::<f64>().map_err(|e| {
             PureRuntimeError::EvaluationError(format!("parseFloat: cannot parse {s:?}: {e}"))
-        })
+        })?;
+        Ok(Evaluated::new(Value::Float(f)))
     }
 
     fn signature(&self) -> &'static str {
@@ -602,18 +637,20 @@ pub struct ParseBoolean;
 impl NativeFunction for ParseBoolean {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("parseBoolean", args, 1)?;
-        let s = args[0].as_string()?;
-        match s.as_str() {
-            "true" => Ok(Value::Boolean(true)),
-            "false" => Ok(Value::Boolean(false)),
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("parseBoolean", &values, 1)?;
+        let s = values[0].as_string()?;
+        let b = match s.as_str() {
+            "true" => Ok(true),
+            "false" => Ok(false),
             other => Err(PureRuntimeError::EvaluationError(format!(
                 "parseBoolean: expected \"true\" or \"false\", got {other:?}"
             ))),
-        }
+        }?;
+        Ok(Evaluated::new(Value::Boolean(b)))
     }
 
     fn signature(&self) -> &'static str {
@@ -673,12 +710,17 @@ mod tests {
     use rust_decimal::Decimal;
 
     use super::*;
-    use crate::native::NoOpEvalCtx;
+    use crate::native::{MockCtx, force_all, lit_bool, lit_decimal, lit_float, lit_int, lit_str};
 
     // Small helper — abs-difference comparison for floats. Avoids pulling in
     // `approx` or hand-rolling tolerances throughout the test body.
     fn approx_eq(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-10
+    }
+
+    /// Decimal-literal shim — mirrors the `ld` helper in arithmetic.rs.
+    fn ld(d: Decimal) -> legend_pure_parser_pure::types::ValueSpec {
+        lit_decimal(d)
     }
 
     // -----------------------------------------------------------------------
@@ -687,54 +729,42 @@ mod tests {
 
     #[test]
     fn floor_positive_float() {
-        let r = Floor
-            .execute(&[Value::Float(3.7)], &mut NoOpEvalCtx)
-            .unwrap();
-        assert_eq!(r, Value::Integer(3));
+        let r = Floor.execute(&[lit_float(3.7)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Integer(3));
     }
 
     #[test]
     fn floor_negative_float() {
-        let r = Floor
-            .execute(&[Value::Float(-3.2)], &mut NoOpEvalCtx)
-            .unwrap();
-        assert_eq!(r, Value::Integer(-4));
+        let r = Floor.execute(&[lit_float(-3.2)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Integer(-4));
     }
 
     #[test]
     fn floor_integer_passthrough() {
-        let r = Floor
-            .execute(&[Value::Integer(5)], &mut NoOpEvalCtx)
-            .unwrap();
-        assert_eq!(r, Value::Integer(5));
+        let r = Floor.execute(&[lit_int(5)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Integer(5));
     }
 
     #[test]
     fn floor_decimal() {
         let d = Decimal::from_str("4.9").unwrap();
-        let r = Floor
-            .execute(&[Value::Decimal(d)], &mut NoOpEvalCtx)
-            .unwrap();
-        assert_eq!(r, Value::Integer(4));
+        let r = Floor.execute(&[ld(d)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Integer(4));
     }
 
     #[test]
     fn floor_wrong_arg_count() {
-        assert!(Floor.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Floor.execute(&[], &mut MockCtx).is_err());
         assert!(
             Floor
-                .execute(&[Value::Float(1.0), Value::Float(2.0)], &mut NoOpEvalCtx)
+                .execute(&[lit_float(1.0), lit_float(2.0)], &mut MockCtx)
                 .is_err()
         );
     }
 
     #[test]
     fn floor_type_mismatch() {
-        assert!(
-            Floor
-                .execute(&[Value::String("hi".into())], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Floor.execute(&[lit_str("hi")], &mut MockCtx).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -743,32 +773,24 @@ mod tests {
 
     #[test]
     fn ceiling_positive_float() {
-        let r = Ceiling
-            .execute(&[Value::Float(3.2)], &mut NoOpEvalCtx)
-            .unwrap();
-        assert_eq!(r, Value::Integer(4));
+        let r = Ceiling.execute(&[lit_float(3.2)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Integer(4));
     }
 
     #[test]
     fn ceiling_negative_float() {
-        let r = Ceiling
-            .execute(&[Value::Float(-3.7)], &mut NoOpEvalCtx)
-            .unwrap();
-        assert_eq!(r, Value::Integer(-3));
+        let r = Ceiling.execute(&[lit_float(-3.7)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Integer(-3));
     }
 
     #[test]
     fn ceiling_wrong_arg_count() {
-        assert!(Ceiling.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Ceiling.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn ceiling_type_mismatch() {
-        assert!(
-            Ceiling
-                .execute(&[Value::Boolean(true)], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Ceiling.execute(&[lit_bool(true)], &mut MockCtx).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -779,14 +801,16 @@ mod tests {
     fn round_half_away_from_zero() {
         assert_eq!(
             Round
-                .execute(&[Value::Float(2.5)], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_float(2.5)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(3)
         );
         assert_eq!(
             Round
-                .execute(&[Value::Float(-2.5)], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_float(-2.5)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(-3)
         );
     }
@@ -795,24 +819,21 @@ mod tests {
     fn round_below_half() {
         assert_eq!(
             Round
-                .execute(&[Value::Float(2.4)], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_float(2.4)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(2)
         );
     }
 
     #[test]
     fn round_wrong_arg_count() {
-        assert!(Round.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Round.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn round_type_mismatch() {
-        assert!(
-            Round
-                .execute(&[Value::String("x".into())], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Round.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -822,8 +843,9 @@ mod tests {
     #[test]
     fn sign_positive() {
         assert_eq!(
-            Sign.execute(&[Value::Integer(7)], &mut NoOpEvalCtx)
-                .unwrap(),
+            Sign.execute(&[lit_int(7)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(1)
         );
     }
@@ -831,8 +853,9 @@ mod tests {
     #[test]
     fn sign_negative() {
         assert_eq!(
-            Sign.execute(&[Value::Float(-0.1)], &mut NoOpEvalCtx)
-                .unwrap(),
+            Sign.execute(&[lit_float(-0.1)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(-1)
         );
     }
@@ -840,23 +863,21 @@ mod tests {
     #[test]
     fn sign_zero() {
         assert_eq!(
-            Sign.execute(&[Value::Integer(0)], &mut NoOpEvalCtx)
-                .unwrap(),
+            Sign.execute(&[lit_int(0)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(0)
         );
     }
 
     #[test]
     fn sign_wrong_arg_count() {
-        assert!(Sign.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Sign.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn sign_type_mismatch() {
-        assert!(
-            Sign.execute(&[Value::String("x".into())], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Sign.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -865,27 +886,21 @@ mod tests {
 
     #[test]
     fn sqrt_positive() {
-        let r = Sqrt
-            .execute(&[Value::Integer(16)], &mut NoOpEvalCtx)
-            .unwrap();
-        assert_eq!(r, Value::Float(4.0));
+        let r = Sqrt.execute(&[lit_int(16)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Float(4.0));
     }
 
     #[test]
     fn sqrt_zero() {
-        let r = Sqrt
-            .execute(&[Value::Float(0.0)], &mut NoOpEvalCtx)
-            .unwrap();
-        assert_eq!(r, Value::Float(0.0));
+        let r = Sqrt.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Float(0.0));
     }
 
     #[test]
     fn sqrt_negative_is_nan() {
         // IEEE-754 sqrt of a negative yields NaN.
-        let r = Sqrt
-            .execute(&[Value::Float(-1.0)], &mut NoOpEvalCtx)
-            .unwrap();
-        match r {
+        let r = Sqrt.execute(&[lit_float(-1.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(f.is_nan(), "expected NaN, got {f}"),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -893,15 +908,12 @@ mod tests {
 
     #[test]
     fn sqrt_wrong_arg_count() {
-        assert!(Sqrt.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Sqrt.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn sqrt_type_mismatch() {
-        assert!(
-            Sqrt.execute(&[Value::String("x".into())], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Sqrt.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -910,10 +922,8 @@ mod tests {
 
     #[test]
     fn cbrt_positive() {
-        let r = Cbrt
-            .execute(&[Value::Float(27.0)], &mut NoOpEvalCtx)
-            .unwrap();
-        match r {
+        let r = Cbrt.execute(&[lit_float(27.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 3.0), "expected ~3.0, got {f}"),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -921,10 +931,8 @@ mod tests {
 
     #[test]
     fn cbrt_negative() {
-        let r = Cbrt
-            .execute(&[Value::Float(-8.0)], &mut NoOpEvalCtx)
-            .unwrap();
-        match r {
+        let r = Cbrt.execute(&[lit_float(-8.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, -2.0), "expected ~-2.0, got {f}"),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -932,15 +940,12 @@ mod tests {
 
     #[test]
     fn cbrt_wrong_arg_count() {
-        assert!(Cbrt.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Cbrt.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn cbrt_type_mismatch() {
-        assert!(
-            Cbrt.execute(&[Value::Boolean(false)], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Cbrt.execute(&[lit_bool(false)], &mut MockCtx).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -949,14 +954,14 @@ mod tests {
 
     #[test]
     fn exp_zero() {
-        let r = Exp.execute(&[Value::Float(0.0)], &mut NoOpEvalCtx).unwrap();
-        assert_eq!(r, Value::Float(1.0));
+        let r = Exp.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Float(1.0));
     }
 
     #[test]
     fn exp_one_is_e() {
-        let r = Exp.execute(&[Value::Float(1.0)], &mut NoOpEvalCtx).unwrap();
-        match r {
+        let r = Exp.execute(&[lit_float(1.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, std::f64::consts::E)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -964,21 +969,18 @@ mod tests {
 
     #[test]
     fn exp_wrong_arg_count() {
-        assert!(Exp.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Exp.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn exp_type_mismatch() {
-        assert!(
-            Exp.execute(&[Value::String("x".into())], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Exp.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     #[test]
     fn log_one_is_zero() {
-        let r = Log.execute(&[Value::Float(1.0)], &mut NoOpEvalCtx).unwrap();
-        match r {
+        let r = Log.execute(&[lit_float(1.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 0.0)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -987,9 +989,9 @@ mod tests {
     #[test]
     fn log_e_is_one() {
         let r = Log
-            .execute(&[Value::Float(std::f64::consts::E)], &mut NoOpEvalCtx)
+            .execute(&[lit_float(std::f64::consts::E)], &mut MockCtx)
             .unwrap();
-        match r {
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 1.0)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -997,8 +999,8 @@ mod tests {
 
     #[test]
     fn log_zero_is_neg_inf() {
-        let r = Log.execute(&[Value::Float(0.0)], &mut NoOpEvalCtx).unwrap();
-        match r {
+        let r = Log.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(f.is_infinite() && f.is_sign_negative()),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1006,23 +1008,18 @@ mod tests {
 
     #[test]
     fn log_wrong_arg_count() {
-        assert!(Log.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Log.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn log_type_mismatch() {
-        assert!(
-            Log.execute(&[Value::String("x".into())], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Log.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     #[test]
     fn log10_100_is_two() {
-        let r = Log10
-            .execute(&[Value::Float(100.0)], &mut NoOpEvalCtx)
-            .unwrap();
-        match r {
+        let r = Log10.execute(&[lit_float(100.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 2.0)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1030,10 +1027,8 @@ mod tests {
 
     #[test]
     fn log10_one_is_zero() {
-        let r = Log10
-            .execute(&[Value::Float(1.0)], &mut NoOpEvalCtx)
-            .unwrap();
-        match r {
+        let r = Log10.execute(&[lit_float(1.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 0.0)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1041,24 +1036,20 @@ mod tests {
 
     #[test]
     fn log10_wrong_arg_count() {
-        assert!(Log10.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Log10.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn log10_type_mismatch() {
-        assert!(
-            Log10
-                .execute(&[Value::Boolean(true)], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Log10.execute(&[lit_bool(true)], &mut MockCtx).is_err());
     }
 
     #[test]
     fn pow_squares() {
         let r = Pow
-            .execute(&[Value::Float(3.0), Value::Float(2.0)], &mut NoOpEvalCtx)
+            .execute(&[lit_float(3.0), lit_float(2.0)], &mut MockCtx)
             .unwrap();
-        match r {
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 9.0)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1067,9 +1058,9 @@ mod tests {
     #[test]
     fn pow_integer_exponent() {
         let r = Pow
-            .execute(&[Value::Integer(2), Value::Integer(10)], &mut NoOpEvalCtx)
+            .execute(&[lit_int(2), lit_int(10)], &mut MockCtx)
             .unwrap();
-        match r {
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 1024.0)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1077,17 +1068,14 @@ mod tests {
 
     #[test]
     fn pow_wrong_arg_count() {
-        assert!(Pow.execute(&[Value::Float(1.0)], &mut NoOpEvalCtx).is_err());
+        assert!(Pow.execute(&[lit_float(1.0)], &mut MockCtx).is_err());
     }
 
     #[test]
     fn pow_type_mismatch() {
         assert!(
-            Pow.execute(
-                &[Value::Float(1.0), Value::String("x".into())],
-                &mut NoOpEvalCtx
-            )
-            .is_err()
+            Pow.execute(&[lit_float(1.0), lit_str("x")], &mut MockCtx)
+                .is_err()
         );
     }
 
@@ -1097,8 +1085,8 @@ mod tests {
 
     #[test]
     fn sin_zero() {
-        let r = Sin.execute(&[Value::Float(0.0)], &mut NoOpEvalCtx).unwrap();
-        match r {
+        let r = Sin.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 0.0)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1107,12 +1095,9 @@ mod tests {
     #[test]
     fn sin_half_pi() {
         let r = Sin
-            .execute(
-                &[Value::Float(std::f64::consts::FRAC_PI_2)],
-                &mut NoOpEvalCtx,
-            )
+            .execute(&[lit_float(std::f64::consts::FRAC_PI_2)], &mut MockCtx)
             .unwrap();
-        match r {
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 1.0)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1120,21 +1105,18 @@ mod tests {
 
     #[test]
     fn sin_wrong_arg_count() {
-        assert!(Sin.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Sin.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn sin_type_mismatch() {
-        assert!(
-            Sin.execute(&[Value::String("x".into())], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Sin.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     #[test]
     fn cos_zero() {
-        let r = Cos.execute(&[Value::Float(0.0)], &mut NoOpEvalCtx).unwrap();
-        match r {
+        let r = Cos.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 1.0)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1143,9 +1125,9 @@ mod tests {
     #[test]
     fn cos_pi() {
         let r = Cos
-            .execute(&[Value::Float(std::f64::consts::PI)], &mut NoOpEvalCtx)
+            .execute(&[lit_float(std::f64::consts::PI)], &mut MockCtx)
             .unwrap();
-        match r {
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, -1.0)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1153,21 +1135,18 @@ mod tests {
 
     #[test]
     fn cos_wrong_arg_count() {
-        assert!(Cos.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Cos.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn cos_type_mismatch() {
-        assert!(
-            Cos.execute(&[Value::Boolean(true)], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Cos.execute(&[lit_bool(true)], &mut MockCtx).is_err());
     }
 
     #[test]
     fn tan_zero() {
-        let r = Tan.execute(&[Value::Float(0.0)], &mut NoOpEvalCtx).unwrap();
-        match r {
+        let r = Tan.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 0.0)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1176,12 +1155,9 @@ mod tests {
     #[test]
     fn tan_pi_over_four() {
         let r = Tan
-            .execute(
-                &[Value::Float(std::f64::consts::FRAC_PI_4)],
-                &mut NoOpEvalCtx,
-            )
+            .execute(&[lit_float(std::f64::consts::FRAC_PI_4)], &mut MockCtx)
             .unwrap();
-        match r {
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 1.0)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1189,26 +1165,20 @@ mod tests {
 
     #[test]
     fn tan_wrong_arg_count() {
-        assert!(Tan.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Tan.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn tan_type_mismatch() {
-        assert!(
-            Tan.execute(&[Value::String("x".into())], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Tan.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     #[test]
     fn cot_pi_over_four() {
         let r = Cot
-            .execute(
-                &[Value::Float(std::f64::consts::FRAC_PI_4)],
-                &mut NoOpEvalCtx,
-            )
+            .execute(&[lit_float(std::f64::consts::FRAC_PI_4)], &mut MockCtx)
             .unwrap();
-        match r {
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 1.0)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1217,8 +1187,8 @@ mod tests {
     #[test]
     fn cot_zero_is_infinite() {
         // 1 / tan(0) = 1 / 0 = +inf (IEEE-754).
-        let r = Cot.execute(&[Value::Float(0.0)], &mut NoOpEvalCtx).unwrap();
-        match r {
+        let r = Cot.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(f.is_infinite()),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1226,15 +1196,12 @@ mod tests {
 
     #[test]
     fn cot_wrong_arg_count() {
-        assert!(Cot.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Cot.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn cot_type_mismatch() {
-        assert!(
-            Cot.execute(&[Value::Boolean(true)], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Cot.execute(&[lit_bool(true)], &mut MockCtx).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -1243,10 +1210,8 @@ mod tests {
 
     #[test]
     fn asin_zero() {
-        let r = Asin
-            .execute(&[Value::Float(0.0)], &mut NoOpEvalCtx)
-            .unwrap();
-        match r {
+        let r = Asin.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 0.0)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1254,10 +1219,8 @@ mod tests {
 
     #[test]
     fn asin_one_is_half_pi() {
-        let r = Asin
-            .execute(&[Value::Float(1.0)], &mut NoOpEvalCtx)
-            .unwrap();
-        match r {
+        let r = Asin.execute(&[lit_float(1.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, std::f64::consts::FRAC_PI_2)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1265,10 +1228,8 @@ mod tests {
 
     #[test]
     fn asin_out_of_range_is_nan() {
-        let r = Asin
-            .execute(&[Value::Float(2.0)], &mut NoOpEvalCtx)
-            .unwrap();
-        match r {
+        let r = Asin.execute(&[lit_float(2.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(f.is_nan()),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1276,23 +1237,18 @@ mod tests {
 
     #[test]
     fn asin_wrong_arg_count() {
-        assert!(Asin.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Asin.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn asin_type_mismatch() {
-        assert!(
-            Asin.execute(&[Value::String("x".into())], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Asin.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     #[test]
     fn acos_one_is_zero() {
-        let r = Acos
-            .execute(&[Value::Float(1.0)], &mut NoOpEvalCtx)
-            .unwrap();
-        match r {
+        let r = Acos.execute(&[lit_float(1.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 0.0)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1300,10 +1256,8 @@ mod tests {
 
     #[test]
     fn acos_neg_one_is_pi() {
-        let r = Acos
-            .execute(&[Value::Float(-1.0)], &mut NoOpEvalCtx)
-            .unwrap();
-        match r {
+        let r = Acos.execute(&[lit_float(-1.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, std::f64::consts::PI)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1311,23 +1265,18 @@ mod tests {
 
     #[test]
     fn acos_wrong_arg_count() {
-        assert!(Acos.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Acos.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn acos_type_mismatch() {
-        assert!(
-            Acos.execute(&[Value::Boolean(false)], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Acos.execute(&[lit_bool(false)], &mut MockCtx).is_err());
     }
 
     #[test]
     fn atan_zero() {
-        let r = Atan
-            .execute(&[Value::Float(0.0)], &mut NoOpEvalCtx)
-            .unwrap();
-        match r {
+        let r = Atan.execute(&[lit_float(0.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 0.0)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1335,10 +1284,8 @@ mod tests {
 
     #[test]
     fn atan_one_is_pi_over_four() {
-        let r = Atan
-            .execute(&[Value::Float(1.0)], &mut NoOpEvalCtx)
-            .unwrap();
-        match r {
+        let r = Atan.execute(&[lit_float(1.0)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, std::f64::consts::FRAC_PI_4)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1346,24 +1293,21 @@ mod tests {
 
     #[test]
     fn atan_wrong_arg_count() {
-        assert!(Atan.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Atan.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn atan_type_mismatch() {
-        assert!(
-            Atan.execute(&[Value::String("x".into())], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Atan.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     #[test]
     fn atan2_quadrants() {
         // atan2(1, 1) = pi/4
         let r = Atan2
-            .execute(&[Value::Float(1.0), Value::Float(1.0)], &mut NoOpEvalCtx)
+            .execute(&[lit_float(1.0), lit_float(1.0)], &mut MockCtx)
             .unwrap();
-        match r {
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, std::f64::consts::FRAC_PI_4)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1373,9 +1317,9 @@ mod tests {
     fn atan2_zero_zero_is_zero() {
         // atan2(0, 0) is defined as 0 by IEEE-754.
         let r = Atan2
-            .execute(&[Value::Float(0.0), Value::Float(0.0)], &mut NoOpEvalCtx)
+            .execute(&[lit_float(0.0), lit_float(0.0)], &mut MockCtx)
             .unwrap();
-        match r {
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 0.0)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1383,21 +1327,14 @@ mod tests {
 
     #[test]
     fn atan2_wrong_arg_count() {
-        assert!(
-            Atan2
-                .execute(&[Value::Float(1.0)], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Atan2.execute(&[lit_float(1.0)], &mut MockCtx).is_err());
     }
 
     #[test]
     fn atan2_type_mismatch() {
         assert!(
             Atan2
-                .execute(
-                    &[Value::Float(1.0), Value::String("x".into())],
-                    &mut NoOpEvalCtx
-                )
+                .execute(&[lit_float(1.0), lit_str("x")], &mut MockCtx)
                 .is_err()
         );
     }
@@ -1408,27 +1345,21 @@ mod tests {
 
     #[test]
     fn to_float_from_integer() {
-        let r = ToFloat
-            .execute(&[Value::Integer(7)], &mut NoOpEvalCtx)
-            .unwrap();
-        assert_eq!(r, Value::Float(7.0));
+        let r = ToFloat.execute(&[lit_int(7)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Float(7.0));
     }
 
     #[test]
     fn to_float_from_float() {
-        let r = ToFloat
-            .execute(&[Value::Float(2.5)], &mut NoOpEvalCtx)
-            .unwrap();
-        assert_eq!(r, Value::Float(2.5));
+        let r = ToFloat.execute(&[lit_float(2.5)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Float(2.5));
     }
 
     #[test]
     fn to_float_from_decimal() {
         let d = Decimal::from_str("3.14").unwrap();
-        let r = ToFloat
-            .execute(&[Value::Decimal(d)], &mut NoOpEvalCtx)
-            .unwrap();
-        match r {
+        let r = ToFloat.execute(&[ld(d)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Float(f) => assert!(approx_eq(f, 3.14)),
             other => panic!("expected Float, got {other:?}"),
         }
@@ -1436,32 +1367,24 @@ mod tests {
 
     #[test]
     fn to_float_wrong_arg_count() {
-        assert!(ToFloat.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(ToFloat.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn to_float_type_mismatch() {
-        assert!(
-            ToFloat
-                .execute(&[Value::String("x".into())], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(ToFloat.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     #[test]
     fn to_decimal_from_integer() {
-        let r = ToDecimal
-            .execute(&[Value::Integer(5)], &mut NoOpEvalCtx)
-            .unwrap();
-        assert_eq!(r, Value::Decimal(Decimal::from(5)));
+        let r = ToDecimal.execute(&[lit_int(5)], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Decimal(Decimal::from(5)));
     }
 
     #[test]
     fn to_decimal_from_float() {
-        let r = ToDecimal
-            .execute(&[Value::Float(1.5)], &mut NoOpEvalCtx)
-            .unwrap();
-        match r {
+        let r = ToDecimal.execute(&[lit_float(1.5)], &mut MockCtx).unwrap();
+        match r.into_value() {
             Value::Decimal(d) => assert_eq!(d, Decimal::from_str("1.5").unwrap()),
             other => panic!("expected Decimal, got {other:?}"),
         }
@@ -1469,22 +1392,18 @@ mod tests {
 
     #[test]
     fn to_decimal_nan_errors() {
-        let r = ToDecimal.execute(&[Value::Float(f64::NAN)], &mut NoOpEvalCtx);
+        let r = ToDecimal.execute(&[lit_float(f64::NAN)], &mut MockCtx);
         assert!(r.is_err());
     }
 
     #[test]
     fn to_decimal_wrong_arg_count() {
-        assert!(ToDecimal.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(ToDecimal.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn to_decimal_type_mismatch() {
-        assert!(
-            ToDecimal
-                .execute(&[Value::String("x".into())], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(ToDecimal.execute(&[lit_str("x")], &mut MockCtx).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -1494,95 +1413,85 @@ mod tests {
     #[test]
     fn parse_integer_positive() {
         let r = ParseInteger
-            .execute(&[Value::String("123".into())], &mut NoOpEvalCtx)
+            .execute(&[lit_str("123")], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::Integer(123));
+        assert_eq!(r.into_value(), Value::Integer(123));
     }
 
     #[test]
     fn parse_integer_negative() {
         let r = ParseInteger
-            .execute(&[Value::String("-42".into())], &mut NoOpEvalCtx)
+            .execute(&[lit_str("-42")], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::Integer(-42));
+        assert_eq!(r.into_value(), Value::Integer(-42));
     }
 
     #[test]
     fn parse_integer_invalid_errors() {
         assert!(
             ParseInteger
-                .execute(&[Value::String("abc".into())], &mut NoOpEvalCtx)
+                .execute(&[lit_str("abc")], &mut MockCtx)
                 .is_err()
         );
     }
 
     #[test]
     fn parse_integer_wrong_arg_count() {
-        assert!(ParseInteger.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(ParseInteger.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn parse_integer_type_mismatch() {
-        assert!(
-            ParseInteger
-                .execute(&[Value::Integer(1)], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(ParseInteger.execute(&[lit_int(1)], &mut MockCtx).is_err());
     }
 
     #[test]
     fn parse_float_decimal_form() {
         let r = ParseFloat
-            .execute(&[Value::String("3.14".into())], &mut NoOpEvalCtx)
+            .execute(&[lit_str("3.14")], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::Float(3.14));
+        assert_eq!(r.into_value(), Value::Float(3.14));
     }
 
     #[test]
     fn parse_float_integer_form() {
-        let r = ParseFloat
-            .execute(&[Value::String("7".into())], &mut NoOpEvalCtx)
-            .unwrap();
-        assert_eq!(r, Value::Float(7.0));
+        let r = ParseFloat.execute(&[lit_str("7")], &mut MockCtx).unwrap();
+        assert_eq!(r.into_value(), Value::Float(7.0));
     }
 
     #[test]
     fn parse_float_invalid_errors() {
         assert!(
             ParseFloat
-                .execute(&[Value::String("not-a-number".into())], &mut NoOpEvalCtx)
+                .execute(&[lit_str("not-a-number")], &mut MockCtx)
                 .is_err()
         );
     }
 
     #[test]
     fn parse_float_wrong_arg_count() {
-        assert!(ParseFloat.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(ParseFloat.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn parse_float_type_mismatch() {
-        assert!(
-            ParseFloat
-                .execute(&[Value::Float(1.0)], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(ParseFloat.execute(&[lit_float(1.0)], &mut MockCtx).is_err());
     }
 
     #[test]
     fn parse_boolean_true() {
         let r = ParseBoolean
-            .execute(&[Value::String("true".into())], &mut NoOpEvalCtx)
+            .execute(&[lit_str("true")], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::Boolean(true));
+        assert_eq!(r.into_value(), Value::Boolean(true));
     }
 
     #[test]
     fn parse_boolean_false() {
         let r = ParseBoolean
-            .execute(&[Value::String("false".into())], &mut NoOpEvalCtx)
+            .execute(&[lit_str("false")], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::Boolean(false));
+        assert_eq!(r.into_value(), Value::Boolean(false));
     }
 
     #[test]
@@ -1590,12 +1499,12 @@ mod tests {
         // "True" / "TRUE" / "False" are NOT accepted per Pure spec.
         assert!(
             ParseBoolean
-                .execute(&[Value::String("True".into())], &mut NoOpEvalCtx)
+                .execute(&[lit_str("True")], &mut MockCtx)
                 .is_err()
         );
         assert!(
             ParseBoolean
-                .execute(&[Value::String("FALSE".into())], &mut NoOpEvalCtx)
+                .execute(&[lit_str("FALSE")], &mut MockCtx)
                 .is_err()
         );
     }
@@ -1604,21 +1513,21 @@ mod tests {
     fn parse_boolean_invalid_errors() {
         assert!(
             ParseBoolean
-                .execute(&[Value::String("yes".into())], &mut NoOpEvalCtx)
+                .execute(&[lit_str("yes")], &mut MockCtx)
                 .is_err()
         );
     }
 
     #[test]
     fn parse_boolean_wrong_arg_count() {
-        assert!(ParseBoolean.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(ParseBoolean.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn parse_boolean_type_mismatch() {
         assert!(
             ParseBoolean
-                .execute(&[Value::Boolean(true)], &mut NoOpEvalCtx)
+                .execute(&[lit_bool(true)], &mut MockCtx)
                 .is_err()
         );
     }

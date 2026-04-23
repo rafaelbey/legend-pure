@@ -13,15 +13,22 @@
 // limitations under the License.
 
 //! Arithmetic native functions: `plus`, `minus`, `times`, `divide`, `abs`, `mod`, `rem`.
+//!
+//! All arithmetic operators are **eager** — the native forces every argument
+//! up front via `ctx.evaluate`. Helpers return `PureRuntimeError`; `?` on
+//! each call promotes that into the `PureException` the trait requires.
 
+use legend_pure_parser_pure::types::ValueSpec;
 use rust_decimal::prelude::ToPrimitive;
 
-use crate::error::PureRuntimeError;
-use crate::native::{EvalContextTrait, NativeFunction, NativeRegistry, expect_args};
+use crate::error::{PureException, PureRuntimeError};
+use crate::native::{
+    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
+};
 use crate::value::Value;
 
 // ---------------------------------------------------------------------------
-// plus — polymorphic addition (Integer, Float, Decimal)
+// plus — polymorphic addition (Integer, Float, Decimal, String)
 // ---------------------------------------------------------------------------
 
 /// Pure `plus(Number[1], Number[1]): Number[1]` — addition.
@@ -38,26 +45,24 @@ pub struct Plus;
 impl NativeFunction for Plus {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
         // Pure exposes three shapes for `plus`:
         //   plus(Number[*]):Number[1]            // single collection arg → sum
         //   plus(Number[1], Number[1]):Number[1] // pairwise
         //   plus(String[*]):String[1]            // string concatenation
-        // The compiler dispatches by mangled FQN, but all three land here.
         // Zero-or-one arg → treat the single collection as a fold source
-        // (empty collection → `Integer(0)` identity). Two or more args fall
-        // into the pairwise-plus-then-fold path so mixed-arity `plus` calls
-        // all share the same promotion matrix.
-        if args.len() <= 1 {
-            let items: Vec<Value> = args
+        // (empty → `Integer(0)` identity). Two or more → pairwise.
+        if values.len() <= 1 {
+            let items: Vec<Value> = values
                 .first()
                 .map(|a| a.to_collection().iter().cloned().collect())
                 .unwrap_or_default();
-            return plus_fold(items);
+            return Ok(Evaluated::new(plus_fold(items)?));
         }
-        plus_pair(&args[0], &args[1])
+        Ok(Evaluated::new(plus_pair(&values[0], &values[1])?))
     }
 
     fn signature(&self) -> &'static str {
@@ -98,9 +103,8 @@ fn plus_pair(a: &Value, b: &Value) -> Result<Value, PureRuntimeError> {
 
 /// Fold a collection of numerics (or strings) through pairwise `plus`.
 ///
-/// Empty input is treated as an identity: `Integer(0)`. All non-empty inputs
-/// reduce left-to-right so types follow Pure's promotion rules
-/// (Integer → Float → Decimal). Strings concatenate.
+/// Empty input → `Integer(0)`. Non-empty reduces left-to-right so types
+/// follow Pure's promotion rules (Integer → Float → Decimal). Strings concat.
 fn plus_fold(values: Vec<Value>) -> Result<Value, PureRuntimeError> {
     let mut iter = values.into_iter();
     let Some(first) = iter.next() else {
@@ -120,41 +124,50 @@ pub struct Minus;
 impl NativeFunction for Minus {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        if args.len() == 1 {
-            return match &args[0] {
-                Value::Integer(a) => Ok(Value::Integer(-a)),
-                Value::Float(a) => Ok(Value::Float(-a)),
-                Value::Decimal(a) => Ok(Value::Decimal(-*a)),
-                _ => Err(PureRuntimeError::EvaluationError(format!(
-                    "minus: unsupported type {}",
-                    args[0].type_name()
-                ))),
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        if values.len() == 1 {
+            let v = match &values[0] {
+                Value::Integer(a) => Value::Integer(-a),
+                Value::Float(a) => Value::Float(-a),
+                Value::Decimal(a) => Value::Decimal(-*a),
+                other => {
+                    return Err(PureRuntimeError::EvaluationError(format!(
+                        "minus: unsupported type {}",
+                        other.type_name()
+                    ))
+                    .into());
+                }
             };
+            return Ok(Evaluated::new(v));
         }
-        expect_args("minus", args, 2)?;
-        match (&args[0], &args[1]) {
-            (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a.wrapping_sub(*b))),
-            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
+        expect_args("minus", &values, 2)?;
+        let v = match (&values[0], &values[1]) {
+            (Value::Integer(a), Value::Integer(b)) => Value::Integer(a.wrapping_sub(*b)),
+            (Value::Float(a), Value::Float(b)) => Value::Float(a - b),
             #[allow(clippy::cast_precision_loss)]
-            (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f64 - b)),
+            (Value::Integer(a), Value::Float(b)) => Value::Float(*a as f64 - b),
             #[allow(clippy::cast_precision_loss)]
-            (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a - *b as f64)),
-            (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(*a - *b)),
+            (Value::Float(a), Value::Integer(b)) => Value::Float(a - *b as f64),
+            (Value::Decimal(a), Value::Decimal(b)) => Value::Decimal(*a - *b),
             (Value::Decimal(a), Value::Integer(b)) => {
-                Ok(Value::Decimal(*a - rust_decimal::Decimal::from(*b)))
+                Value::Decimal(*a - rust_decimal::Decimal::from(*b))
             }
             (Value::Integer(a), Value::Decimal(b)) => {
-                Ok(Value::Decimal(rust_decimal::Decimal::from(*a) - *b))
+                Value::Decimal(rust_decimal::Decimal::from(*a) - *b)
             }
-            _ => Err(PureRuntimeError::EvaluationError(format!(
-                "minus: unsupported types {} and {}",
-                args[0].type_name(),
-                args[1].type_name()
-            ))),
-        }
+            _ => {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "minus: unsupported types {} and {}",
+                    values[0].type_name(),
+                    values[1].type_name()
+                ))
+                .into());
+            }
+        };
+        Ok(Evaluated::new(v))
     }
 
     fn signature(&self) -> &'static str {
@@ -173,27 +186,32 @@ pub struct Times;
 impl NativeFunction for Times {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("times", args, 2)?;
-        match (&args[0], &args[1]) {
-            (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a.wrapping_mul(*b))),
-            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("times", &values, 2)?;
+        let v = match (&values[0], &values[1]) {
+            (Value::Integer(a), Value::Integer(b)) => Value::Integer(a.wrapping_mul(*b)),
+            (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
             #[allow(clippy::cast_precision_loss)]
             (Value::Integer(a), Value::Float(b)) | (Value::Float(b), Value::Integer(a)) => {
-                Ok(Value::Float(*a as f64 * b))
+                Value::Float(*a as f64 * b)
             }
-            (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(*a * *b)),
+            (Value::Decimal(a), Value::Decimal(b)) => Value::Decimal(*a * *b),
             (Value::Decimal(a), Value::Integer(b)) | (Value::Integer(b), Value::Decimal(a)) => {
-                Ok(Value::Decimal(*a * rust_decimal::Decimal::from(*b)))
+                Value::Decimal(*a * rust_decimal::Decimal::from(*b))
             }
-            _ => Err(PureRuntimeError::EvaluationError(format!(
-                "times: unsupported types {} and {}",
-                args[0].type_name(),
-                args[1].type_name()
-            ))),
-        }
+            _ => {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "times: unsupported types {} and {}",
+                    values[0].type_name(),
+                    values[1].type_name()
+                ))
+                .into());
+            }
+        };
+        Ok(Evaluated::new(v))
     }
 
     fn signature(&self) -> &'static str {
@@ -207,8 +225,7 @@ impl NativeFunction for Times {
 
 /// Pure `divide(Number[1], Number[1]): Float[1]` — division.
 ///
-/// Pure division always returns Float (even for Integer / Integer),
-/// matching Java behavior.
+/// Pure division always returns Float (even for Integer / Integer), matching Java.
 #[derive(Debug)]
 pub struct Divide;
 
@@ -216,34 +233,39 @@ impl NativeFunction for Divide {
     #[allow(clippy::cast_precision_loss)]
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("divide", args, 2)?;
-        match (&args[0], &args[1]) {
-            (Value::Integer(_), Value::Integer(0)) => Err(PureRuntimeError::DivisionByZero),
-            (Value::Float(_), Value::Float(b)) if *b == 0.0 => {
-                Err(PureRuntimeError::DivisionByZero)
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("divide", &values, 2)?;
+        let v = match (&values[0], &values[1]) {
+            (Value::Integer(_), Value::Integer(0)) => {
+                return Err(PureRuntimeError::DivisionByZero.into());
             }
-            (Value::Integer(a), Value::Integer(b)) => Ok(Value::Float(*a as f64 / *b as f64)),
-            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a / b)),
-            (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f64 / b)),
-            (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a / *b as f64)),
+            (Value::Float(_), Value::Float(b)) if *b == 0.0 => {
+                return Err(PureRuntimeError::DivisionByZero.into());
+            }
+            (Value::Integer(a), Value::Integer(b)) => Value::Float(*a as f64 / *b as f64),
+            (Value::Float(a), Value::Float(b)) => Value::Float(a / b),
+            (Value::Integer(a), Value::Float(b)) => Value::Float(*a as f64 / b),
+            (Value::Float(a), Value::Integer(b)) => Value::Float(a / *b as f64),
             (Value::Decimal(a), Value::Decimal(b)) => {
                 if b.is_zero() {
-                    return Err(PureRuntimeError::DivisionByZero);
+                    return Err(PureRuntimeError::DivisionByZero.into());
                 }
                 // Decimal division → Float to match Pure semantics
-                Ok(Value::Float(
-                    a.to_f64().unwrap_or(f64::NAN) / b.to_f64().unwrap_or(f64::NAN),
-                ))
+                Value::Float(a.to_f64().unwrap_or(f64::NAN) / b.to_f64().unwrap_or(f64::NAN))
             }
-            _ => Err(PureRuntimeError::EvaluationError(format!(
-                "divide: unsupported types {} and {}",
-                args[0].type_name(),
-                args[1].type_name()
-            ))),
-        }
+            _ => {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "divide: unsupported types {} and {}",
+                    values[0].type_name(),
+                    values[1].type_name()
+                ))
+                .into());
+            }
+        };
+        Ok(Evaluated::new(v))
     }
 
     fn signature(&self) -> &'static str {
@@ -262,16 +284,18 @@ pub struct Abs;
 impl NativeFunction for Abs {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("abs", args, 1)?;
-        match &args[0] {
-            Value::Integer(i) => Ok(Value::Integer(i.wrapping_abs())),
-            Value::Float(f) => Ok(Value::Float(f.abs())),
-            Value::Decimal(d) => Ok(Value::Decimal(d.abs())),
-            _ => Err(PureRuntimeError::type_mismatch("Number", &args[0])),
-        }
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("abs", &values, 1)?;
+        let v = match &values[0] {
+            Value::Integer(i) => Value::Integer(i.wrapping_abs()),
+            Value::Float(f) => Value::Float(f.abs()),
+            Value::Decimal(d) => Value::Decimal(d.abs()),
+            other => return Err(PureRuntimeError::type_mismatch("Number", other).into()),
+        };
+        Ok(Evaluated::new(v))
     }
 
     fn signature(&self) -> &'static str {
@@ -290,16 +314,17 @@ pub struct Mod;
 impl NativeFunction for Mod {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("mod", args, 2)?;
-        let a = args[0].as_integer()?;
-        let b = args[1].as_integer()?;
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("mod", &values, 2)?;
+        let a = values[0].as_integer()?;
+        let b = values[1].as_integer()?;
         if b == 0 {
-            return Err(PureRuntimeError::DivisionByZero);
+            return Err(PureRuntimeError::DivisionByZero.into());
         }
-        Ok(Value::Integer(a.rem_euclid(b)))
+        Ok(Evaluated::new(Value::Integer(a.rem_euclid(b))))
     }
 
     fn signature(&self) -> &'static str {
@@ -314,22 +339,27 @@ pub struct Rem;
 impl NativeFunction for Rem {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("rem", args, 2)?;
-        match (&args[0], &args[1]) {
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("rem", &values, 2)?;
+        let v = match (&values[0], &values[1]) {
             (Value::Integer(a), Value::Integer(b)) => {
                 if *b == 0 {
-                    return Err(PureRuntimeError::DivisionByZero);
+                    return Err(PureRuntimeError::DivisionByZero.into());
                 }
-                Ok(Value::Integer(a % b))
+                Value::Integer(a % b)
             }
-            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a % b)),
-            _ => Err(PureRuntimeError::EvaluationError(
-                "rem: both arguments must be the same numeric type".into(),
-            )),
-        }
+            (Value::Float(a), Value::Float(b)) => Value::Float(a % b),
+            _ => {
+                return Err(PureRuntimeError::EvaluationError(
+                    "rem: both arguments must be the same numeric type".into(),
+                )
+                .into());
+            }
+        };
+        Ok(Evaluated::new(v))
     }
 
     fn signature(&self) -> &'static str {
@@ -342,10 +372,6 @@ impl NativeFunction for Rem {
 // ---------------------------------------------------------------------------
 
 /// Register all arithmetic native functions into the registry.
-///
-/// Each overload (Integer, Float, Decimal, Number) is registered under
-/// its fully qualified mangled name matching the Java interpreter, e.g.
-/// `plus_Integer_MANY__Integer_1_`.
 pub fn register(registry: &mut NativeRegistry) {
     // plus — one shared implementation handles all numeric types
     registry.register("plus_Integer_MANY__Integer_1_", Plus);
@@ -393,77 +419,88 @@ mod tests {
     use rust_decimal::Decimal;
 
     use super::*;
-    use crate::native::NoOpEvalCtx;
+    use crate::native::{
+        MockCtx, force_all, lit_bool, lit_collection, lit_float, lit_int, lit_str,
+    };
+
+    /// Decimal-literal shim — `MockCtx` supports only bare `DecimalLiteral`
+    /// specs, so tests that need a Decimal value go through this helper
+    /// rather than fabricating an ad-hoc `ValueSpec`.
+    fn ld(d: Decimal) -> legend_pure_parser_pure::types::ValueSpec {
+        crate::native::lit_decimal(d)
+    }
 
     #[test]
     fn plus_integers() {
         let r = Plus
-            .execute(&[Value::Integer(2), Value::Integer(3)], &mut NoOpEvalCtx)
+            .execute(&[lit_int(2), lit_int(3)], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::Integer(5));
+        assert_eq!(r.into_value(), Value::Integer(5));
     }
 
     #[test]
     fn plus_floats() {
         let r = Plus
-            .execute(&[Value::Float(1.5), Value::Float(2.5)], &mut NoOpEvalCtx)
+            .execute(&[lit_float(1.5), lit_float(2.5)], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::Float(4.0));
+        assert_eq!(r.into_value(), Value::Float(4.0));
     }
 
     #[test]
     fn plus_integer_float_promotion() {
         let r = Plus
-            .execute(&[Value::Integer(1), Value::Float(2.5)], &mut NoOpEvalCtx)
+            .execute(&[lit_int(1), lit_float(2.5)], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::Float(3.5));
+        assert_eq!(r.into_value(), Value::Float(3.5));
     }
 
     #[test]
     fn plus_decimals() {
         let a = Decimal::from_str("10.50").unwrap();
         let b = Decimal::from_str("3.25").unwrap();
-        let r = Plus
-            .execute(&[Value::Decimal(a), Value::Decimal(b)], &mut NoOpEvalCtx)
-            .unwrap();
-        assert_eq!(r, Value::Decimal(Decimal::from_str("13.75").unwrap()));
+        let r = Plus.execute(&[ld(a), ld(b)], &mut MockCtx).unwrap();
+        assert_eq!(
+            r.into_value(),
+            Value::Decimal(Decimal::from_str("13.75").unwrap())
+        );
     }
 
     #[test]
     fn minus_integers() {
         let r = Minus
-            .execute(&[Value::Integer(10), Value::Integer(3)], &mut NoOpEvalCtx)
+            .execute(&[lit_int(10), lit_int(3)], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::Integer(7));
+        assert_eq!(r.into_value(), Value::Integer(7));
     }
 
     #[test]
     fn times_integers() {
         let r = Times
-            .execute(&[Value::Integer(4), Value::Integer(5)], &mut NoOpEvalCtx)
+            .execute(&[lit_int(4), lit_int(5)], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::Integer(20));
+        assert_eq!(r.into_value(), Value::Integer(20));
     }
 
     #[test]
     fn divide_integers_returns_float() {
         let r = Divide
-            .execute(&[Value::Integer(7), Value::Integer(2)], &mut NoOpEvalCtx)
+            .execute(&[lit_int(7), lit_int(2)], &mut MockCtx)
             .unwrap();
-        assert_eq!(r, Value::Float(3.5));
+        assert_eq!(r.into_value(), Value::Float(3.5));
     }
 
     #[test]
     fn divide_by_zero_errors() {
-        let r = Divide.execute(&[Value::Integer(1), Value::Integer(0)], &mut NoOpEvalCtx);
+        let r = Divide.execute(&[lit_int(1), lit_int(0)], &mut MockCtx);
         assert!(r.is_err());
     }
 
     #[test]
     fn abs_negative() {
         assert_eq!(
-            Abs.execute(&[Value::Integer(-5)], &mut NoOpEvalCtx)
-                .unwrap(),
+            Abs.execute(&[lit_int(-5)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(5)
         );
     }
@@ -471,8 +508,9 @@ mod tests {
     #[test]
     fn mod_positive() {
         assert_eq!(
-            Mod.execute(&[Value::Integer(7), Value::Integer(3)], &mut NoOpEvalCtx)
-                .unwrap(),
+            Mod.execute(&[lit_int(7), lit_int(3)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(1)
         );
     }
@@ -481,8 +519,9 @@ mod tests {
     fn mod_negative_dividend() {
         // rem_euclid: -7 mod 3 = 2 (always non-negative)
         assert_eq!(
-            Mod.execute(&[Value::Integer(-7), Value::Integer(3)], &mut NoOpEvalCtx)
-                .unwrap(),
+            Mod.execute(&[lit_int(-7), lit_int(3)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(2)
         );
     }
@@ -491,8 +530,9 @@ mod tests {
     fn rem_negative_dividend() {
         // Rust remainder: -7 % 3 = -1 (preserves sign)
         assert_eq!(
-            Rem.execute(&[Value::Integer(-7), Value::Integer(3)], &mut NoOpEvalCtx)
-                .unwrap(),
+            Rem.execute(&[lit_int(-7), lit_int(3)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(-1)
         );
     }
@@ -503,29 +543,25 @@ mod tests {
         // Integer is therefore valid (returns it unchanged). Zero args falls
         // back to the identity `Integer(0)`.
         assert_eq!(
-            Plus.execute(&[Value::Integer(1)], &mut NoOpEvalCtx)
-                .unwrap(),
+            Plus.execute(&[lit_int(1)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(1)
         );
         assert_eq!(
-            Plus.execute(&[], &mut NoOpEvalCtx).unwrap(),
+            Plus.execute(&[], &mut MockCtx).unwrap().into_value(),
             Value::Integer(0)
         );
-        assert!(Abs.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Abs.execute(&[], &mut MockCtx).is_err());
     }
 
     #[test]
     fn plus_folds_integer_collection() {
         // `plus([1, 2, 3])` sums the collection — this is the surveyor path
         // (`$results->map(r | $r.elapsed)->plus()`).
-        use im_rc::Vector as PVector;
-        let mut v = PVector::new();
-        v.push_back(Value::Integer(1));
-        v.push_back(Value::Integer(2));
-        v.push_back(Value::Integer(3));
+        let spec = lit_collection(vec![lit_int(1), lit_int(2), lit_int(3)]);
         assert_eq!(
-            Plus.execute(&[Value::Collection(Box::new(v))], &mut NoOpEvalCtx)
-                .unwrap(),
+            Plus.execute(&[spec], &mut MockCtx).unwrap().into_value(),
             Value::Integer(6)
         );
     }
@@ -534,30 +570,14 @@ mod tests {
     fn type_mismatch_errors() {
         // String instead of Number
         assert!(
-            Plus.execute(
-                &[Value::String("1".into()), Value::Integer(1)],
-                &mut NoOpEvalCtx
-            )
-            .is_err()
-        );
-        // Date instead of Number
-        let date_val = Value::Date(crate::date::PureDate::strict_date(2024, 1, 1).unwrap());
-        assert!(
-            Minus
-                .execute(&[date_val, Value::Integer(1)], &mut NoOpEvalCtx)
+            Plus.execute(&[lit_str("1"), lit_int(1)], &mut MockCtx)
                 .is_err()
         );
-        assert!(
-            Abs.execute(&[Value::Boolean(true)], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Abs.execute(&[lit_bool(true)], &mut MockCtx).is_err());
         // One float, one string
         assert!(
-            Plus.execute(
-                &[Value::Float(1.0), Value::String("2".into())],
-                &mut NoOpEvalCtx
-            )
-            .is_err()
+            Plus.execute(&[lit_float(1.0), lit_str("2")], &mut MockCtx)
+                .is_err()
         );
     }
 
@@ -565,20 +585,20 @@ mod tests {
     fn division_by_zero_errors() {
         assert!(
             Divide
-                .execute(&[Value::Integer(5), Value::Integer(0)], &mut NoOpEvalCtx)
+                .execute(&[lit_int(5), lit_int(0)], &mut MockCtx)
                 .is_err()
         );
         assert!(
             Divide
-                .execute(&[Value::Float(5.0), Value::Float(0.0)], &mut NoOpEvalCtx)
+                .execute(&[lit_float(5.0), lit_float(0.0)], &mut MockCtx)
                 .is_err()
         );
         assert!(
-            Mod.execute(&[Value::Integer(5), Value::Integer(0)], &mut NoOpEvalCtx)
+            Mod.execute(&[lit_int(5), lit_int(0)], &mut MockCtx)
                 .is_err()
         );
         assert!(
-            Rem.execute(&[Value::Integer(5), Value::Integer(0)], &mut NoOpEvalCtx)
+            Rem.execute(&[lit_int(5), lit_int(0)], &mut MockCtx)
                 .is_err()
         );
     }

@@ -16,9 +16,12 @@
 //! `range`, `take`, `drop`, `concatenate`, `map`, `filter`, `fold`.
 
 use im_rc::Vector as PVector;
+use legend_pure_parser_pure::types::ValueSpec;
 
-use crate::error::PureRuntimeError;
-use crate::native::{EvalContextTrait, NativeFunction, NativeRegistry, expect_args};
+use crate::error::{PureException, PureRuntimeError};
+use crate::native::{
+    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
+};
 use crate::value::Value;
 
 // ---------------------------------------------------------------------------
@@ -32,13 +35,14 @@ pub struct Size;
 impl NativeFunction for Size {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("size", args, 1)?;
-        let coll = args[0].to_collection();
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("size", &values, 1)?;
+        let coll = values[0].to_collection();
         #[allow(clippy::cast_possible_wrap)]
-        Ok(Value::Integer(coll.len() as i64))
+        Ok(Evaluated::new(Value::Integer(coll.len() as i64)))
     }
 
     fn signature(&self) -> &'static str {
@@ -57,11 +61,12 @@ pub struct IsEmpty;
 impl NativeFunction for IsEmpty {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("isEmpty", args, 1)?;
-        Ok(Value::Boolean(args[0].is_empty()))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("isEmpty", &values, 1)?;
+        Ok(Evaluated::new(Value::Boolean(values[0].is_empty())))
     }
 
     fn signature(&self) -> &'static str {
@@ -82,24 +87,27 @@ pub struct At;
 impl NativeFunction for At {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("at", args, 2)?;
-        let coll = args[0].to_collection();
-        let idx = args[1].as_integer()?;
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("at", &values, 2)?;
+        let coll = values[0].to_collection();
+        let idx = values[1].as_integer()?;
         if idx < 0 {
             return Err(PureRuntimeError::EvaluationError(format!(
                 "at: index cannot be negative, got {idx}"
-            )));
+            ))
+            .into());
         }
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let idx = idx as usize;
-        coll.get(idx).cloned().ok_or_else(|| {
+        coll.get(idx).cloned().map(Evaluated::new).ok_or_else(|| {
             PureRuntimeError::EvaluationError(format!(
                 "at: index {idx} out of bounds for collection of size {}",
                 coll.len()
             ))
+            .into()
         })
     }
 
@@ -119,15 +127,17 @@ pub struct First;
 impl NativeFunction for First {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("first", args, 1)?;
-        match &args[0] {
-            Value::Collection(v) => Ok(v.front().cloned().unwrap_or(Value::Unit)),
-            Value::Unit => Ok(Value::Unit),
-            other => Ok(other.clone()), // scalar is its own first
-        }
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("first", &values, 1)?;
+        let result = match &values[0] {
+            Value::Collection(v) => v.front().cloned().unwrap_or(Value::Unit),
+            Value::Unit => Value::Unit,
+            other => other.clone(), // scalar is its own first
+        };
+        Ok(Evaluated::new(result))
     }
 
     fn signature(&self) -> &'static str {
@@ -142,15 +152,17 @@ pub struct Last;
 impl NativeFunction for Last {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("last", args, 1)?;
-        match &args[0] {
-            Value::Collection(v) => Ok(v.back().cloned().unwrap_or(Value::Unit)),
-            Value::Unit => Ok(Value::Unit),
-            other => Ok(other.clone()),
-        }
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("last", &values, 1)?;
+        let result = match &values[0] {
+            Value::Collection(v) => v.back().cloned().unwrap_or(Value::Unit),
+            Value::Unit => Value::Unit,
+            other => other.clone(),
+        };
+        Ok(Evaluated::new(result))
     }
 
     fn signature(&self) -> &'static str {
@@ -172,17 +184,18 @@ pub struct Range;
 impl NativeFunction for Range {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("range", args, 3)?;
-        let start = args[0].as_integer()?;
-        let end_exclusive = args[1].as_integer()?;
-        let increment = args[2].as_integer()?;
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("range", &values, 3)?;
+        let start = values[0].as_integer()?;
+        let end_exclusive = values[1].as_integer()?;
+        let increment = values[2].as_integer()?;
         if increment == 0 {
-            return Err(PureRuntimeError::EvaluationError(
-                "range: step cannot be zero".into(),
-            ));
+            return Err(
+                PureRuntimeError::EvaluationError("range: step cannot be zero".into()).into(),
+            );
         }
         let mut result = PVector::new();
         let mut i = start;
@@ -197,7 +210,7 @@ impl NativeFunction for Range {
                 i += increment;
             }
         }
-        Ok(Value::Collection(Box::new(result)))
+        Ok(Evaluated::new(Value::Collection(Box::new(result))))
     }
 
     fn signature(&self) -> &'static str {
@@ -216,15 +229,16 @@ pub struct Take;
 impl NativeFunction for Take {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("take", args, 2)?;
-        let coll = args[0].to_collection();
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("take", &values, 2)?;
+        let coll = values[0].to_collection();
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let n = args[1].as_integer()?.max(0) as usize;
+        let n = values[1].as_integer()?.max(0) as usize;
         let n = n.min(coll.len());
-        Ok(Value::Collection(Box::new(coll.take(n))))
+        Ok(Evaluated::new(Value::Collection(Box::new(coll.take(n)))))
     }
 
     fn signature(&self) -> &'static str {
@@ -239,15 +253,16 @@ pub struct Drop;
 impl NativeFunction for Drop {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("drop", args, 2)?;
-        let coll = args[0].to_collection();
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("drop", &values, 2)?;
+        let coll = values[0].to_collection();
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let n = args[1].as_integer()?.max(0) as usize;
+        let n = values[1].as_integer()?.max(0) as usize;
         let n = n.min(coll.len());
-        Ok(Value::Collection(Box::new(coll.skip(n))))
+        Ok(Evaluated::new(Value::Collection(Box::new(coll.skip(n)))))
     }
 
     fn signature(&self) -> &'static str {
@@ -266,14 +281,15 @@ pub struct Concatenate;
 impl NativeFunction for Concatenate {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("concatenate", args, 2)?;
-        let mut a = args[0].to_collection();
-        let b = args[1].to_collection();
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("concatenate", &values, 2)?;
+        let mut a = values[0].to_collection();
+        let b = values[1].to_collection();
         a.append(b);
-        Ok(Value::Collection(Box::new(a)))
+        Ok(Evaluated::new(Value::Collection(Box::new(a))))
     }
 
     fn signature(&self) -> &'static str {
@@ -294,12 +310,12 @@ pub struct Map;
 impl NativeFunction for Map {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
+    ) -> Result<Evaluated, PureException> {
         expect_args("map", args, 2)?;
-        let source = args[0].to_collection();
-        let lambda = &args[1];
+        let source = ctx.evaluate(&args[0])?.into_value().to_collection();
+        let lambda_val = ctx.evaluate(&args[1])?.into_value();
 
         // Pure collections are flat — a lambda returning `V[*]` or `V[0..1]`
         // contributes zero, one, or many scalar elements to the result. We
@@ -307,7 +323,7 @@ impl NativeFunction for Map {
         // access sees scalars, not nested collections.
         let mut results: Vec<Value> = Vec::with_capacity(source.len());
         for item in &source {
-            match ctx.eval_lambda(lambda, std::slice::from_ref(item))? {
+            match ctx.call_function(&lambda_val, std::slice::from_ref(item))? {
                 Value::Collection(inner) => {
                     for v in inner.iter() {
                         results.push(v.clone());
@@ -318,7 +334,7 @@ impl NativeFunction for Map {
             }
         }
 
-        Ok(Value::from_vec(results))
+        Ok(Evaluated::new(Value::from_vec(results)))
     }
 
     fn signature(&self) -> &'static str {
@@ -339,22 +355,22 @@ pub struct Filter;
 impl NativeFunction for Filter {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
+    ) -> Result<Evaluated, PureException> {
         expect_args("filter", args, 2)?;
-        let source = args[0].to_collection();
-        let lambda = &args[1];
+        let source = ctx.evaluate(&args[0])?.into_value().to_collection();
+        let lambda_val = ctx.evaluate(&args[1])?.into_value();
 
         let mut results = Vec::with_capacity(source.len());
         for item in &source {
-            let predicate_result = ctx.eval_lambda(lambda, std::slice::from_ref(item))?;
-            if predicate_result.as_boolean()? {
+            let pred = ctx.call_function(&lambda_val, std::slice::from_ref(item))?;
+            if pred.as_boolean()? {
                 results.push(item.clone());
             }
         }
 
-        Ok(Value::from_vec(results))
+        Ok(Evaluated::new(Value::from_vec(results)))
     }
 
     fn signature(&self) -> &'static str {
@@ -375,19 +391,19 @@ pub struct Fold;
 impl NativeFunction for Fold {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
+    ) -> Result<Evaluated, PureException> {
         expect_args("fold", args, 3)?;
-        let source = args[0].to_collection();
-        let lambda = &args[1];
-        let mut accumulator = args[2].clone();
+        let source = ctx.evaluate(&args[0])?.into_value().to_collection();
+        let lambda_val = ctx.evaluate(&args[1])?.into_value();
+        let mut accumulator = ctx.evaluate(&args[2])?.into_value();
 
         for item in &source {
-            accumulator = ctx.eval_lambda(lambda, &[item.clone(), accumulator])?;
+            accumulator = ctx.call_function(&lambda_val, &[item.clone(), accumulator])?;
         }
 
-        Ok(accumulator)
+        Ok(Evaluated::new(accumulator))
     }
 
     fn signature(&self) -> &'static str {
@@ -409,21 +425,21 @@ pub struct Exists;
 impl NativeFunction for Exists {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
+    ) -> Result<Evaluated, PureException> {
         expect_args("exists", args, 2)?;
-        let source = args[0].to_collection();
-        let lambda = &args[1];
+        let source = ctx.evaluate(&args[0])?.into_value().to_collection();
+        let lambda_val = ctx.evaluate(&args[1])?.into_value();
 
         for item in &source {
-            let predicate_result = ctx.eval_lambda(lambda, std::slice::from_ref(item))?;
-            if predicate_result.as_boolean()? {
-                return Ok(Value::Boolean(true));
+            let pred = ctx.call_function(&lambda_val, std::slice::from_ref(item))?;
+            if pred.as_boolean()? {
+                return Ok(Evaluated::new(Value::Boolean(true)));
             }
         }
 
-        Ok(Value::Boolean(false))
+        Ok(Evaluated::new(Value::Boolean(false)))
     }
 
     fn signature(&self) -> &'static str {
@@ -445,21 +461,21 @@ pub struct ForAll;
 impl NativeFunction for ForAll {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
+    ) -> Result<Evaluated, PureException> {
         expect_args("forAll", args, 2)?;
-        let source = args[0].to_collection();
-        let lambda = &args[1];
+        let source = ctx.evaluate(&args[0])?.into_value().to_collection();
+        let lambda_val = ctx.evaluate(&args[1])?.into_value();
 
         for item in &source {
-            let predicate_result = ctx.eval_lambda(lambda, std::slice::from_ref(item))?;
-            if !predicate_result.as_boolean()? {
-                return Ok(Value::Boolean(false));
+            let pred = ctx.call_function(&lambda_val, std::slice::from_ref(item))?;
+            if !pred.as_boolean()? {
+                return Ok(Evaluated::new(Value::Boolean(false)));
             }
         }
 
-        Ok(Value::Boolean(true))
+        Ok(Evaluated::new(Value::Boolean(true)))
     }
 
     fn signature(&self) -> &'static str {
@@ -486,18 +502,20 @@ pub struct RemoveDuplicates;
 impl NativeFunction for RemoveDuplicates {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
         // Accept 1-arg and 3-arg variants. The 3-arg variant has optional
         // hash/equality lambdas that we currently ignore.
-        if args.is_empty() || args.len() > 3 {
+        if values.is_empty() || values.len() > 3 {
             return Err(PureRuntimeError::EvaluationError(format!(
                 "removeDuplicates: expected 1..=3 arguments, got {}",
-                args.len()
-            )));
+                values.len()
+            ))
+            .into());
         }
-        let source = args[0].to_collection();
+        let source = values[0].to_collection();
 
         let mut seen: Vec<Value> = Vec::with_capacity(source.len());
         let mut out: Vec<Value> = Vec::with_capacity(source.len());
@@ -508,7 +526,7 @@ impl NativeFunction for RemoveDuplicates {
             }
         }
 
-        Ok(Value::from_vec(out))
+        Ok(Evaluated::new(Value::from_vec(out)))
     }
 
     fn signature(&self) -> &'static str {
@@ -531,11 +549,12 @@ pub struct ToOne;
 impl NativeFunction for ToOne {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("toOne", args, 1)?;
-        Ok(args[0].to_one()?.clone())
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("toOne", &values, 1)?;
+        Ok(Evaluated::new(values[0].to_one()?.clone()))
     }
 
     fn signature(&self) -> &'static str {
@@ -557,11 +576,12 @@ pub struct IsNotEmpty;
 impl NativeFunction for IsNotEmpty {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("isNotEmpty", args, 1)?;
-        Ok(Value::Boolean(!args[0].is_empty()))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("isNotEmpty", &values, 1)?;
+        Ok(Evaluated::new(Value::Boolean(!values[0].is_empty())))
     }
 
     fn signature(&self) -> &'static str {
@@ -584,13 +604,16 @@ pub struct Contains;
 impl NativeFunction for Contains {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("contains", args, 2)?;
-        let haystack = args[0].to_collection();
-        let needle = &args[1];
-        Ok(Value::Boolean(haystack.iter().any(|v| v == needle)))
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("contains", &values, 2)?;
+        let haystack = values[0].to_collection();
+        let needle = &values[1];
+        Ok(Evaluated::new(Value::Boolean(
+            haystack.iter().any(|v| v == needle),
+        )))
     }
 
     fn signature(&self) -> &'static str {
@@ -613,13 +636,14 @@ pub struct Reverse;
 impl NativeFunction for Reverse {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("reverse", args, 1)?;
-        let source = args[0].to_collection();
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("reverse", &values, 1)?;
+        let source = values[0].to_collection();
         let reversed: Vec<Value> = source.iter().rev().cloned().collect();
-        Ok(Value::from_vec(reversed))
+        Ok(Evaluated::new(Value::from_vec(reversed)))
     }
 
     fn signature(&self) -> &'static str {
@@ -641,18 +665,20 @@ pub struct IndexOf;
 impl NativeFunction for IndexOf {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("indexOf", args, 2)?;
-        let haystack = args[0].to_collection();
-        let needle = &args[1];
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("indexOf", &values, 2)?;
+        let haystack = values[0].to_collection();
+        let needle = &values[1];
         let idx = haystack.iter().position(|v| v == needle);
-        match idx {
+        let result = match idx {
             #[allow(clippy::cast_possible_wrap)]
-            Some(i) => Ok(Value::Integer(i as i64)),
-            None => Ok(Value::Integer(-1)),
-        }
+            Some(i) => Value::Integer(i as i64),
+            None => Value::Integer(-1),
+        };
+        Ok(Evaluated::new(result))
     }
 
     fn signature(&self) -> &'static str {
@@ -674,21 +700,21 @@ pub struct Find;
 impl NativeFunction for Find {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
+    ) -> Result<Evaluated, PureException> {
         expect_args("find", args, 2)?;
-        let source = args[0].to_collection();
-        let lambda = &args[1];
+        let source = ctx.evaluate(&args[0])?.into_value().to_collection();
+        let lambda_val = ctx.evaluate(&args[1])?.into_value();
 
         for item in &source {
-            let predicate_result = ctx.eval_lambda(lambda, std::slice::from_ref(item))?;
-            if predicate_result.as_boolean()? {
-                return Ok(item.clone());
+            let pred = ctx.call_function(&lambda_val, std::slice::from_ref(item))?;
+            if pred.as_boolean()? {
+                return Ok(Evaluated::new(item.clone()));
             }
         }
 
-        Ok(Value::Unit)
+        Ok(Evaluated::new(Value::Unit))
     }
 
     fn signature(&self) -> &'static str {
@@ -710,14 +736,15 @@ pub struct Add;
 impl NativeFunction for Add {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("add", args, 2)?;
-        let mut coll = args[0].to_collection();
-        coll.push_back(args[1].clone());
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("add", &values, 2)?;
+        let mut coll = values[0].to_collection();
+        coll.push_back(values[1].clone());
         let as_vec: Vec<Value> = coll.into_iter().collect();
-        Ok(Value::from_vec(as_vec))
+        Ok(Evaluated::new(Value::from_vec(as_vec)))
     }
 
     fn signature(&self) -> &'static str {
@@ -741,13 +768,14 @@ pub struct Slice;
 impl NativeFunction for Slice {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("slice", args, 3)?;
-        let source = args[0].to_collection();
-        let start = args[1].as_integer()?;
-        let end = args[2].as_integer()?;
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("slice", &values, 3)?;
+        let source = values[0].to_collection();
+        let start = values[1].as_integer()?;
+        let end = values[2].as_integer()?;
 
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let start = start.max(0) as usize;
@@ -757,7 +785,7 @@ impl NativeFunction for Slice {
         let end = end.min(source.len());
 
         if start >= end {
-            return Ok(Value::Unit);
+            return Ok(Evaluated::new(Value::Unit));
         }
 
         // PVector::slice takes Range; we iterate to keep it simple & avoid
@@ -768,7 +796,7 @@ impl NativeFunction for Slice {
             .take(end - start)
             .cloned()
             .collect();
-        Ok(Value::from_vec(out))
+        Ok(Evaluated::new(Value::from_vec(out)))
     }
 
     fn signature(&self) -> &'static str {
@@ -815,13 +843,14 @@ pub struct Sort;
 impl NativeFunction for Sort {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("sort", args, 3)?;
-        let source = args[0].to_collection();
-        let key_fn = lambda_or_none(&args[1]);
-        let comp_fn = lambda_or_none(&args[2]);
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("sort", &values, 3)?;
+        let source = values[0].to_collection();
+        let key_fn = lambda_or_none(&values[1]);
+        let comp_fn = lambda_or_none(&values[2]);
 
         // Pre-compute key(x) once per element when a key is supplied,
         // so we don't re-invoke the lambda during every comparison.
@@ -829,7 +858,7 @@ impl NativeFunction for Sort {
         let keys: Vec<Value> = if let Some(k) = key_fn {
             let mut out = Vec::with_capacity(items.len());
             for it in &items {
-                out.push(ctx.eval_lambda(k, &[it.clone()])?);
+                out.push(ctx.call_function(k, &[it.clone()])?);
             }
             out
         } else {
@@ -846,14 +875,14 @@ impl NativeFunction for Sort {
                 if cmp_err.is_some() {
                     return std::cmp::Ordering::Equal;
                 }
-                match ctx.eval_lambda(cf, &[keys[i].clone(), keys[j].clone()]) {
+                match ctx.call_function(cf, &[keys[i].clone(), keys[j].clone()]) {
                     Ok(Value::Integer(n)) => n.cmp(&0),
                     Ok(other) => {
                         cmp_err = Some(PureRuntimeError::type_mismatch("Integer", &other));
                         std::cmp::Ordering::Equal
                     }
                     Err(e) => {
-                        cmp_err = Some(e);
+                        cmp_err = Some(PureRuntimeError::EvaluationError(format!("{e}")));
                         std::cmp::Ordering::Equal
                     }
                 }
@@ -870,11 +899,11 @@ impl NativeFunction for Sort {
             });
         }
         if let Some(e) = cmp_err {
-            return Err(e);
+            return Err(e.into());
         }
 
         let sorted: Vec<Value> = indices.into_iter().map(|i| items[i].clone()).collect();
-        Ok(Value::from_vec(sorted))
+        Ok(Evaluated::new(Value::from_vec(sorted)))
     }
 
     fn signature(&self) -> &'static str {
@@ -910,19 +939,20 @@ pub struct RemoveAllOptimized;
 impl NativeFunction for RemoveAllOptimized {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("removeAllOptimized", args, 2)?;
-        let source = args[0].to_collection();
-        let to_remove = args[1].to_collection();
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("removeAllOptimized", &values, 2)?;
+        let source = values[0].to_collection();
+        let to_remove = values[1].to_collection();
 
         let out: Vec<Value> = source
             .iter()
             .filter(|v| !to_remove.iter().any(|r| r == *v))
             .cloned()
             .collect();
-        Ok(Value::from_vec(out))
+        Ok(Evaluated::new(Value::from_vec(out)))
     }
 
     fn signature(&self) -> &'static str {
@@ -990,8 +1020,15 @@ pub fn register(registry: &mut NativeRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::NoOpEvalCtx;
+    use crate::native::{MockCtx, force_all, lit_collection, lit_int, lit_str};
 
+    /// Build a `ValueSpec` for an integer collection — mirrors the old `int_collection`
+    /// helper but produces a `ValueSpec` suitable for `MockCtx`.
+    fn int_spec(items: &[i64]) -> ValueSpec {
+        lit_collection(items.iter().map(|&i| lit_int(i)).collect())
+    }
+
+    /// Build the expected `Value::Collection` for assertions.
     fn int_collection(items: &[i64]) -> Value {
         let mut v = PVector::new();
         for &i in items {
@@ -1003,8 +1040,9 @@ mod tests {
     #[test]
     fn size_of_collection() {
         assert_eq!(
-            Size.execute(&[int_collection(&[1, 2, 3])], &mut NoOpEvalCtx)
-                .unwrap(),
+            Size.execute(&[int_spec(&[1, 2, 3])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(3)
         );
     }
@@ -1012,8 +1050,9 @@ mod tests {
     #[test]
     fn size_of_scalar() {
         assert_eq!(
-            Size.execute(&[Value::Integer(42)], &mut NoOpEvalCtx)
-                .unwrap(),
+            Size.execute(&[lit_int(42)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(1)
         );
     }
@@ -1021,7 +1060,9 @@ mod tests {
     #[test]
     fn size_of_unit() {
         assert_eq!(
-            Size.execute(&[Value::Unit], &mut NoOpEvalCtx).unwrap(),
+            Size.execute(&[lit_collection(vec![])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(0)
         );
     }
@@ -1029,7 +1070,10 @@ mod tests {
     #[test]
     fn is_empty_true() {
         assert_eq!(
-            IsEmpty.execute(&[Value::Unit], &mut NoOpEvalCtx).unwrap(),
+            IsEmpty
+                .execute(&[lit_collection(vec![])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Boolean(true)
         );
     }
@@ -1038,8 +1082,9 @@ mod tests {
     fn is_empty_false() {
         assert_eq!(
             IsEmpty
-                .execute(&[Value::Integer(1)], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_int(1)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Boolean(false)
         );
     }
@@ -1047,11 +1092,9 @@ mod tests {
     #[test]
     fn at_valid_index() {
         assert_eq!(
-            At.execute(
-                &[int_collection(&[10, 20, 30]), Value::Integer(1)],
-                &mut NoOpEvalCtx
-            )
-            .unwrap(),
+            At.execute(&[int_spec(&[10, 20, 30]), lit_int(1)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(20)
         );
     }
@@ -1059,11 +1102,8 @@ mod tests {
     #[test]
     fn at_out_of_bounds() {
         assert!(
-            At.execute(
-                &[int_collection(&[10, 20]), Value::Integer(5)],
-                &mut NoOpEvalCtx
-            )
-            .is_err()
+            At.execute(&[int_spec(&[10, 20]), lit_int(5)], &mut MockCtx)
+                .is_err()
         );
     }
 
@@ -1071,8 +1111,9 @@ mod tests {
     fn first_of_collection() {
         assert_eq!(
             First
-                .execute(&[int_collection(&[10, 20, 30])], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[int_spec(&[10, 20, 30])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(10)
         );
     }
@@ -1080,7 +1121,10 @@ mod tests {
     #[test]
     fn first_of_empty() {
         assert_eq!(
-            First.execute(&[Value::Unit], &mut NoOpEvalCtx).unwrap(),
+            First
+                .execute(&[lit_collection(vec![])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Unit
         );
     }
@@ -1088,8 +1132,9 @@ mod tests {
     #[test]
     fn last_of_collection() {
         assert_eq!(
-            Last.execute(&[int_collection(&[10, 20, 30])], &mut NoOpEvalCtx)
-                .unwrap(),
+            Last.execute(&[int_spec(&[10, 20, 30])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(30)
         );
     }
@@ -1097,44 +1142,36 @@ mod tests {
     #[test]
     fn range_ascending() {
         let r = Range
-            .execute(
-                &[Value::Integer(0), Value::Integer(5), Value::Integer(1)],
-                &mut NoOpEvalCtx,
-            )
-            .unwrap();
+            .execute(&[lit_int(0), lit_int(5), lit_int(1)], &mut MockCtx)
+            .unwrap()
+            .into_value();
         assert_eq!(r, int_collection(&[0, 1, 2, 3, 4]));
     }
 
     #[test]
     fn range_with_step() {
         let r = Range
-            .execute(
-                &[Value::Integer(0), Value::Integer(10), Value::Integer(3)],
-                &mut NoOpEvalCtx,
-            )
-            .unwrap();
+            .execute(&[lit_int(0), lit_int(10), lit_int(3)], &mut MockCtx)
+            .unwrap()
+            .into_value();
         assert_eq!(r, int_collection(&[0, 3, 6, 9]));
     }
 
     #[test]
     fn range_descending() {
         let r = Range
-            .execute(
-                &[Value::Integer(5), Value::Integer(0), Value::Integer(-1)],
-                &mut NoOpEvalCtx,
-            )
-            .unwrap();
+            .execute(&[lit_int(5), lit_int(0), lit_int(-1)], &mut MockCtx)
+            .unwrap()
+            .into_value();
         assert_eq!(r, int_collection(&[5, 4, 3, 2, 1]));
     }
 
     #[test]
     fn take_elements() {
         assert_eq!(
-            Take.execute(
-                &[int_collection(&[1, 2, 3, 4, 5]), Value::Integer(3)],
-                &mut NoOpEvalCtx
-            )
-            .unwrap(),
+            Take.execute(&[int_spec(&[1, 2, 3, 4, 5]), lit_int(3)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             int_collection(&[1, 2, 3])
         );
     }
@@ -1142,11 +1179,9 @@ mod tests {
     #[test]
     fn drop_elements() {
         assert_eq!(
-            Drop.execute(
-                &[int_collection(&[1, 2, 3, 4, 5]), Value::Integer(2)],
-                &mut NoOpEvalCtx
-            )
-            .unwrap(),
+            Drop.execute(&[int_spec(&[1, 2, 3, 4, 5]), lit_int(2)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             int_collection(&[3, 4, 5])
         );
     }
@@ -1155,11 +1190,9 @@ mod tests {
     fn concatenate_collections() {
         assert_eq!(
             Concatenate
-                .execute(
-                    &[int_collection(&[1, 2]), int_collection(&[3, 4])],
-                    &mut NoOpEvalCtx
-                )
-                .unwrap(),
+                .execute(&[int_spec(&[1, 2]), int_spec(&[3, 4])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             int_collection(&[1, 2, 3, 4])
         );
     }
@@ -1167,77 +1200,58 @@ mod tests {
     #[test]
     fn type_mismatch_errors() {
         assert!(
-            At.execute(
-                &[int_collection(&[1, 2]), Value::String("1".into())],
-                &mut NoOpEvalCtx
-            )
-            .is_err()
-        );
-        assert!(
-            Range
-                .execute(
-                    &[
-                        Value::String("1".into()),
-                        Value::Integer(5),
-                        Value::Integer(1)
-                    ],
-                    &mut NoOpEvalCtx
-                )
+            At.execute(&[int_spec(&[1, 2]), lit_str("1")], &mut MockCtx)
                 .is_err()
         );
         assert!(
-            Take.execute(
-                &[int_collection(&[1, 2]), Value::String("1".into())],
-                &mut NoOpEvalCtx
-            )
-            .is_err()
+            Range
+                .execute(&[lit_str("1"), lit_int(5), lit_int(1)], &mut MockCtx)
+                .is_err()
         );
         assert!(
-            Drop.execute(
-                &[int_collection(&[1, 2]), Value::String("1".into())],
-                &mut NoOpEvalCtx
-            )
-            .is_err()
+            Take.execute(&[int_spec(&[1, 2]), lit_str("1")], &mut MockCtx)
+                .is_err()
+        );
+        assert!(
+            Drop.execute(&[int_spec(&[1, 2]), lit_str("1")], &mut MockCtx)
+                .is_err()
         );
     }
 
     #[test]
     fn wrong_arg_count_errors() {
-        assert!(Size.execute(&[], &mut NoOpEvalCtx).is_err());
-        assert!(
-            At.execute(&[int_collection(&[1])], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Size.execute(&[], &mut MockCtx).is_err());
+        assert!(At.execute(&[int_spec(&[1])], &mut MockCtx).is_err());
         assert!(
             Range
-                .execute(&[Value::Integer(1), Value::Integer(5)], &mut NoOpEvalCtx)
+                .execute(&[lit_int(1), lit_int(5)], &mut MockCtx)
                 .is_err()
         );
-        assert!(
-            Take.execute(&[int_collection(&[1])], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Take.execute(&[int_spec(&[1])], &mut MockCtx).is_err());
     }
 
     #[test]
     fn is_not_empty_true_and_false() {
         assert_eq!(
             IsNotEmpty
-                .execute(&[int_collection(&[1, 2])], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[int_spec(&[1, 2])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Boolean(true)
         );
         assert_eq!(
             IsNotEmpty
-                .execute(&[Value::Unit], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_collection(vec![])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Boolean(false)
         );
         // Scalar counts as non-empty
         assert_eq!(
             IsNotEmpty
-                .execute(&[Value::Integer(7)], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_int(7)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Boolean(true)
         );
     }
@@ -1246,43 +1260,42 @@ mod tests {
     fn to_one_scalar_passthrough() {
         assert_eq!(
             ToOne
-                .execute(&[Value::Integer(42)], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_int(42)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(42)
         );
         assert_eq!(
             ToOne
-                .execute(&[int_collection(&[42])], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[int_spec(&[42])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(42)
         );
     }
 
     #[test]
     fn to_one_empty_errors() {
-        assert!(ToOne.execute(&[Value::Unit], &mut NoOpEvalCtx).is_err());
         assert!(
             ToOne
-                .execute(&[int_collection(&[])], &mut NoOpEvalCtx)
+                .execute(&[lit_collection(vec![])], &mut MockCtx)
                 .is_err()
         );
+        assert!(ToOne.execute(&[int_spec(&[])], &mut MockCtx).is_err());
     }
 
     #[test]
     fn to_one_multi_errors() {
-        assert!(
-            ToOne
-                .execute(&[int_collection(&[1, 2])], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(ToOne.execute(&[int_spec(&[1, 2])], &mut MockCtx).is_err());
     }
 
     #[test]
     fn remove_duplicates_preserves_first_occurrence() {
-        let input = int_collection(&[1, 2, 1, 3, 2, 4]);
+        let input = int_spec(&[1, 2, 1, 3, 2, 4]);
         let result = RemoveDuplicates
-            .execute(&[input], &mut NoOpEvalCtx)
-            .unwrap();
+            .execute(&[input], &mut MockCtx)
+            .unwrap()
+            .into_value();
         assert_eq!(result, int_collection(&[1, 2, 3, 4]));
     }
 
@@ -1290,8 +1303,9 @@ mod tests {
     fn remove_duplicates_on_empty() {
         assert_eq!(
             RemoveDuplicates
-                .execute(&[Value::Unit], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_collection(vec![])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Unit
         );
     }
@@ -1299,10 +1313,14 @@ mod tests {
     #[test]
     fn remove_duplicates_ignores_trailing_hasher_args() {
         // The 3-arg variant passes hash + equality lambdas that we currently ignore.
-        let input = int_collection(&[1, 1, 2]);
+        let input = int_spec(&[1, 1, 2]);
         let result = RemoveDuplicates
-            .execute(&[input, Value::Unit, Value::Unit], &mut NoOpEvalCtx)
-            .unwrap();
+            .execute(
+                &[input, lit_collection(vec![]), lit_collection(vec![])],
+                &mut MockCtx,
+            )
+            .unwrap()
+            .into_value();
         assert_eq!(result, int_collection(&[1, 2]));
     }
 
@@ -1314,11 +1332,9 @@ mod tests {
     fn contains_finds_element() {
         assert_eq!(
             Contains
-                .execute(
-                    &[int_collection(&[1, 2, 3]), Value::Integer(2)],
-                    &mut NoOpEvalCtx
-                )
-                .unwrap(),
+                .execute(&[int_spec(&[1, 2, 3]), lit_int(2)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Boolean(true)
         );
     }
@@ -1327,11 +1343,9 @@ mod tests {
     fn contains_missing_element() {
         assert_eq!(
             Contains
-                .execute(
-                    &[int_collection(&[1, 2, 3]), Value::Integer(99)],
-                    &mut NoOpEvalCtx
-                )
-                .unwrap(),
+                .execute(&[int_spec(&[1, 2, 3]), lit_int(99)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Boolean(false)
         );
     }
@@ -1340,19 +1354,16 @@ mod tests {
     fn contains_on_empty_is_false() {
         assert_eq!(
             Contains
-                .execute(&[Value::Unit, Value::Integer(1)], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_collection(vec![]), lit_int(1)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Boolean(false)
         );
     }
 
     #[test]
     fn contains_wrong_arg_count() {
-        assert!(
-            Contains
-                .execute(&[int_collection(&[1])], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Contains.execute(&[int_spec(&[1])], &mut MockCtx).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -1363,8 +1374,9 @@ mod tests {
     fn reverse_multi_element() {
         assert_eq!(
             Reverse
-                .execute(&[int_collection(&[1, 2, 3])], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[int_spec(&[1, 2, 3])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             int_collection(&[3, 2, 1])
         );
     }
@@ -1373,8 +1385,9 @@ mod tests {
     fn reverse_single_element_is_noop() {
         assert_eq!(
             Reverse
-                .execute(&[Value::Integer(7)], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_int(7)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(7)
         );
     }
@@ -1382,14 +1395,17 @@ mod tests {
     #[test]
     fn reverse_empty_returns_unit() {
         assert_eq!(
-            Reverse.execute(&[Value::Unit], &mut NoOpEvalCtx).unwrap(),
+            Reverse
+                .execute(&[lit_collection(vec![])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Unit
         );
     }
 
     #[test]
     fn reverse_wrong_arg_count() {
-        assert!(Reverse.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Reverse.execute(&[], &mut MockCtx).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -1400,11 +1416,9 @@ mod tests {
     fn index_of_found() {
         assert_eq!(
             IndexOf
-                .execute(
-                    &[int_collection(&[10, 20, 30]), Value::Integer(20)],
-                    &mut NoOpEvalCtx
-                )
-                .unwrap(),
+                .execute(&[int_spec(&[10, 20, 30]), lit_int(20)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(1)
         );
     }
@@ -1413,11 +1427,9 @@ mod tests {
     fn index_of_not_found_returns_minus_one() {
         assert_eq!(
             IndexOf
-                .execute(
-                    &[int_collection(&[10, 20, 30]), Value::Integer(99)],
-                    &mut NoOpEvalCtx
-                )
-                .unwrap(),
+                .execute(&[int_spec(&[10, 20, 30]), lit_int(99)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(-1)
         );
     }
@@ -1426,19 +1438,16 @@ mod tests {
     fn index_of_empty_returns_minus_one() {
         assert_eq!(
             IndexOf
-                .execute(&[Value::Unit, Value::Integer(1)], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_collection(vec![]), lit_int(1)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(-1)
         );
     }
 
     #[test]
     fn index_of_wrong_arg_count() {
-        assert!(
-            IndexOf
-                .execute(&[Value::Integer(1)], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(IndexOf.execute(&[lit_int(1)], &mut MockCtx).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -1450,10 +1459,7 @@ mod tests {
 
     #[test]
     fn find_wrong_arg_count() {
-        assert!(
-            Find.execute(&[int_collection(&[1])], &mut NoOpEvalCtx)
-                .is_err()
-        );
+        assert!(Find.execute(&[int_spec(&[1])], &mut MockCtx).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -1463,11 +1469,9 @@ mod tests {
     #[test]
     fn add_appends_to_collection() {
         assert_eq!(
-            Add.execute(
-                &[int_collection(&[1, 2]), Value::Integer(3)],
-                &mut NoOpEvalCtx
-            )
-            .unwrap(),
+            Add.execute(&[int_spec(&[1, 2]), lit_int(3)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             int_collection(&[1, 2, 3])
         );
     }
@@ -1475,8 +1479,9 @@ mod tests {
     #[test]
     fn add_to_empty_yields_singleton() {
         assert_eq!(
-            Add.execute(&[Value::Unit, Value::Integer(1)], &mut NoOpEvalCtx)
-                .unwrap(),
+            Add.execute(&[lit_collection(vec![]), lit_int(1)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(1)
         );
     }
@@ -1484,15 +1489,16 @@ mod tests {
     #[test]
     fn add_to_scalar_promotes_to_collection() {
         assert_eq!(
-            Add.execute(&[Value::Integer(1), Value::Integer(2)], &mut NoOpEvalCtx)
-                .unwrap(),
+            Add.execute(&[lit_int(1), lit_int(2)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             int_collection(&[1, 2])
         );
     }
 
     #[test]
     fn add_wrong_arg_count() {
-        assert!(Add.execute(&[Value::Integer(1)], &mut NoOpEvalCtx).is_err());
+        assert!(Add.execute(&[lit_int(1)], &mut MockCtx).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -1504,14 +1510,11 @@ mod tests {
         assert_eq!(
             Slice
                 .execute(
-                    &[
-                        int_collection(&[10, 20, 30, 40, 50]),
-                        Value::Integer(1),
-                        Value::Integer(4)
-                    ],
-                    &mut NoOpEvalCtx
+                    &[int_spec(&[10, 20, 30, 40, 50]), lit_int(1), lit_int(4)],
+                    &mut MockCtx,
                 )
-                .unwrap(),
+                .unwrap()
+                .into_value(),
             int_collection(&[20, 30, 40])
         );
     }
@@ -1521,14 +1524,11 @@ mod tests {
         assert_eq!(
             Slice
                 .execute(
-                    &[
-                        int_collection(&[1, 2, 3]),
-                        Value::Integer(2),
-                        Value::Integer(2)
-                    ],
-                    &mut NoOpEvalCtx
+                    &[int_spec(&[1, 2, 3]), lit_int(2), lit_int(2)],
+                    &mut MockCtx,
                 )
-                .unwrap(),
+                .unwrap()
+                .into_value(),
             Value::Unit
         );
     }
@@ -1538,14 +1538,11 @@ mod tests {
         assert_eq!(
             Slice
                 .execute(
-                    &[
-                        int_collection(&[1, 2, 3]),
-                        Value::Integer(1),
-                        Value::Integer(99)
-                    ],
-                    &mut NoOpEvalCtx
+                    &[int_spec(&[1, 2, 3]), lit_int(1), lit_int(99)],
+                    &mut MockCtx,
                 )
-                .unwrap(),
+                .unwrap()
+                .into_value(),
             int_collection(&[2, 3])
         );
     }
@@ -1555,12 +1552,8 @@ mod tests {
         assert!(
             Slice
                 .execute(
-                    &[
-                        int_collection(&[1, 2, 3]),
-                        Value::String("1".into()),
-                        Value::Integer(2)
-                    ],
-                    &mut NoOpEvalCtx
+                    &[int_spec(&[1, 2, 3]), lit_str("1"), lit_int(2)],
+                    &mut MockCtx,
                 )
                 .is_err()
         );
@@ -1570,10 +1563,7 @@ mod tests {
     fn slice_wrong_arg_count() {
         assert!(
             Slice
-                .execute(
-                    &[int_collection(&[1, 2, 3]), Value::Integer(0)],
-                    &mut NoOpEvalCtx
-                )
+                .execute(&[int_spec(&[1, 2, 3]), lit_int(0)], &mut MockCtx)
                 .is_err()
         );
     }
@@ -1586,10 +1576,15 @@ mod tests {
     fn sort_integers_ascending() {
         assert_eq!(
             Sort.execute(
-                &[int_collection(&[3, 1, 2]), Value::Unit, Value::Unit],
-                &mut NoOpEvalCtx
+                &[
+                    int_spec(&[3, 1, 2]),
+                    lit_collection(vec![]),
+                    lit_collection(vec![])
+                ],
+                &mut MockCtx,
             )
-            .unwrap(),
+            .unwrap()
+            .into_value(),
             int_collection(&[1, 2, 3])
         );
     }
@@ -1598,10 +1593,11 @@ mod tests {
     fn sort_single_element_is_noop() {
         assert_eq!(
             Sort.execute(
-                &[Value::Integer(5), Value::Unit, Value::Unit],
-                &mut NoOpEvalCtx
+                &[lit_int(5), lit_collection(vec![]), lit_collection(vec![])],
+                &mut MockCtx,
             )
-            .unwrap(),
+            .unwrap()
+            .into_value(),
             Value::Integer(5)
         );
     }
@@ -1609,27 +1605,35 @@ mod tests {
     #[test]
     fn sort_empty_returns_unit() {
         assert_eq!(
-            Sort.execute(&[Value::Unit, Value::Unit, Value::Unit], &mut NoOpEvalCtx)
-                .unwrap(),
+            Sort.execute(
+                &[
+                    lit_collection(vec![]),
+                    lit_collection(vec![]),
+                    lit_collection(vec![]),
+                ],
+                &mut MockCtx,
+            )
+            .unwrap()
+            .into_value(),
             Value::Unit
         );
     }
 
     #[test]
     fn sort_mixed_types_errors() {
-        let mut v = PVector::new();
-        v.push_back(Value::Integer(1));
-        v.push_back(Value::String("oops".into()));
-        let input = Value::Collection(Box::new(v));
+        let input = lit_collection(vec![lit_int(1), lit_str("oops")]);
         assert!(
-            Sort.execute(&[input, Value::Unit, Value::Unit], &mut NoOpEvalCtx)
-                .is_err()
+            Sort.execute(
+                &[input, lit_collection(vec![]), lit_collection(vec![])],
+                &mut MockCtx,
+            )
+            .is_err()
         );
     }
 
     #[test]
     fn sort_wrong_arg_count() {
-        assert!(Sort.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(Sort.execute(&[], &mut MockCtx).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -1641,10 +1645,11 @@ mod tests {
         assert_eq!(
             RemoveAllOptimized
                 .execute(
-                    &[int_collection(&[1, 2, 3, 2, 4]), int_collection(&[2, 4])],
-                    &mut NoOpEvalCtx
+                    &[int_spec(&[1, 2, 3, 2, 4]), int_spec(&[2, 4])],
+                    &mut MockCtx,
                 )
-                .unwrap(),
+                .unwrap()
+                .into_value(),
             int_collection(&[1, 3])
         );
     }
@@ -1653,8 +1658,12 @@ mod tests {
     fn remove_all_optimized_with_empty_removal_list_is_identity() {
         assert_eq!(
             RemoveAllOptimized
-                .execute(&[int_collection(&[1, 2, 3]), Value::Unit], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(
+                    &[int_spec(&[1, 2, 3]), lit_collection(vec![])],
+                    &mut MockCtx,
+                )
+                .unwrap()
+                .into_value(),
             int_collection(&[1, 2, 3])
         );
     }
@@ -1663,8 +1672,9 @@ mod tests {
     fn remove_all_optimized_empty_source() {
         assert_eq!(
             RemoveAllOptimized
-                .execute(&[Value::Unit, int_collection(&[1])], &mut NoOpEvalCtx)
-                .unwrap(),
+                .execute(&[lit_collection(vec![]), int_spec(&[1])], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Unit
         );
     }
@@ -1673,7 +1683,7 @@ mod tests {
     fn remove_all_optimized_wrong_arg_count() {
         assert!(
             RemoveAllOptimized
-                .execute(&[int_collection(&[1])], &mut NoOpEvalCtx)
+                .execute(&[int_spec(&[1])], &mut MockCtx)
                 .is_err()
         );
     }

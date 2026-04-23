@@ -24,13 +24,15 @@
 use legend_pure_parser_pure::bootstrap;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
-use legend_pure_parser_pure::types::TypeExpr;
+use legend_pure_parser_pure::types::{TypeExpr, ValueSpec};
 use smol_str::SmolStr;
 
 use crate::date::DatePrecision;
-use crate::error::PureRuntimeError;
+use crate::error::{PureException, PureRuntimeError};
 use crate::heap::{ObjectId, RuntimeHeap};
-use crate::native::{EvalContextTrait, NativeFunction, NativeRegistry, expect_args};
+use crate::native::{
+    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
+};
 use crate::value::{FunctionValue, Value};
 
 // ---------------------------------------------------------------------------
@@ -48,17 +50,19 @@ pub struct PathToElement;
 impl NativeFunction for PathToElement {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("pathToElement", args, 2)?;
-        let path = args[0].as_string()?;
-        let separator = args[1].as_string()?;
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("pathToElement", &values, 2)?;
+        let path = values[0].as_string()?;
+        let separator = values[1].as_string()?;
         match resolve_path(ctx.model(), path.as_str(), separator.as_str()) {
-            Some(id) => Ok(Value::Element(id)),
+            Some(id) => Ok(Evaluated::new(Value::Element(id))),
             None => Err(PureRuntimeError::EvaluationError(format!(
                 "pathToElement: path not found: '{path}'"
-            ))),
+            ))
+            .into()),
         }
     }
 
@@ -81,15 +85,16 @@ pub struct LenientPathToElement;
 impl NativeFunction for LenientPathToElement {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("lenientPathToElement", args, 2)?;
-        let path = args[0].as_string()?;
-        let separator = args[1].as_string()?;
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("lenientPathToElement", &values, 2)?;
+        let path = values[0].as_string()?;
+        let separator = values[1].as_string()?;
         match resolve_path(ctx.model(), path.as_str(), separator.as_str()) {
-            Some(id) => Ok(Value::Element(id)),
-            None => Ok(Value::Unit),
+            Some(id) => Ok(Evaluated::new(Value::Element(id))),
+            None => Ok(Evaluated::new(Value::Unit)),
         }
     }
 
@@ -118,22 +123,25 @@ pub struct ElementToPath;
 impl NativeFunction for ElementToPath {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("elementToPath", args, 3)?;
-        let separator = args[1].as_string()?;
-        let include_root = args[2].as_boolean()?;
-        let path = match &args[0] {
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("elementToPath", &values, 3)?;
+        let separator = values[1].as_string()?;
+        let include_root = values[2].as_boolean()?;
+        let path = match &values[0] {
             Value::Element(id) => {
                 build_element_path(ctx.model(), *id, separator.as_str(), include_root)
             }
             Value::Object(obj_id) => {
                 build_ephemeral_path(ctx.heap(), *obj_id, separator.as_str(), include_root)
             }
-            other => return Err(PureRuntimeError::type_mismatch("PackageableElement", other)),
+            other => {
+                return Err(PureRuntimeError::type_mismatch("PackageableElement", other).into());
+            }
         };
-        Ok(Value::String(SmolStr::new(path)))
+        Ok(Evaluated::new(Value::String(SmolStr::new(path))))
     }
 
     fn signature(&self) -> &'static str {
@@ -159,16 +167,17 @@ pub struct SourceInformation;
 impl NativeFunction for SourceInformation {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("sourceInformation", args, 1)?;
-        let Value::Element(id) = &args[0] else {
-            return Ok(Value::Unit);
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("sourceInformation", &values, 1)?;
+        let Value::Element(id) = &values[0] else {
+            return Ok(Evaluated::new(Value::Unit));
         };
         // Package elements have no ElementNode — surface that as "no info".
         let ElementId::InstanceId { .. } = id else {
-            return Ok(Value::Unit);
+            return Ok(Evaluated::new(Value::Unit));
         };
         let node = ctx.model().get_node(*id);
         let source = node.source_info.clone();
@@ -203,7 +212,7 @@ impl NativeFunction for SourceInformation {
             "endColumn",
             &[Value::Integer(i64::from(source.end_column))],
         )?;
-        Ok(Value::Object(obj))
+        Ok(Evaluated::new(Value::Object(obj)))
     }
 
     fn signature(&self) -> &'static str {
@@ -225,18 +234,19 @@ pub struct InstanceOf;
 impl NativeFunction for InstanceOf {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("instanceOf", args, 2)?;
-        let subject = &args[0];
-        let type_id = as_element_id(&args[1])?;
-        Ok(Value::Boolean(value_matches_type(
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("instanceOf", &values, 2)?;
+        let subject = &values[0];
+        let type_id = as_element_id(&values[1])?;
+        Ok(Evaluated::new(Value::Boolean(value_matches_type(
             ctx.model(),
             subject,
             type_id,
             ctx.heap(),
-        )))
+        ))))
     }
 
     fn signature(&self) -> &'static str {
@@ -258,20 +268,21 @@ pub struct Cast;
 impl NativeFunction for Cast {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("cast", args, 2)?;
-        let subject = args[0].clone();
-        let type_id = as_element_id(&args[1])?;
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("cast", &values, 2)?;
+        let subject = values[0].clone();
+        let type_id = as_element_id(&values[1])?;
         let type_name = ctx.model().element_name(type_id).to_string();
-        let check = |v: &Value| value_matches_type(ctx.model(), v, type_id, ctx.heap());
         let mk_err = |v: &Value| {
-            PureRuntimeError::EvaluationError(format!(
+            PureException::from(PureRuntimeError::EvaluationError(format!(
                 "cast: value of type {} is not an instance of {type_name}",
                 v.type_name()
-            ))
+            )))
         };
+        let check = |v: &Value| value_matches_type(ctx.model(), v, type_id, ctx.heap());
         match &subject {
             Value::Collection(coll) => {
                 for v in coll.iter() {
@@ -279,12 +290,12 @@ impl NativeFunction for Cast {
                         return Err(mk_err(v));
                     }
                 }
-                Ok(subject)
+                Ok(Evaluated::new(subject))
             }
-            Value::Unit => Ok(Value::Unit),
+            Value::Unit => Ok(Evaluated::new(Value::Unit)),
             other => {
                 if check(other) {
-                    Ok(subject)
+                    Ok(Evaluated::new(subject))
                 } else {
                     Err(mk_err(other))
                 }
@@ -318,12 +329,13 @@ pub struct Match;
 impl NativeFunction for Match {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("match", args, 2)?;
-        let subject = args[0].clone();
-        let functions = args[1].to_collection();
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("match", &values, 2)?;
+        let subject = values[0].clone();
+        let functions = values[1].to_collection();
 
         for func_val in functions.iter() {
             let Value::Function(fv) = func_val else {
@@ -335,7 +347,7 @@ impl NativeFunction for Match {
 
             // Zero-arg lambda is a catch-all branch.
             if lambda.parameters.is_empty() {
-                return ctx.eval_lambda(func_val, &[]);
+                return ctx.call_function(func_val, &[]).map(Evaluated::new);
             }
 
             let param = &lambda.parameters[0];
@@ -350,13 +362,14 @@ impl NativeFunction for Match {
             };
 
             if is_match {
-                return ctx.eval_lambda(func_val, &[subject]);
+                return ctx.call_function(func_val, &[subject]).map(Evaluated::new);
             }
         }
 
         Err(PureRuntimeError::EvaluationError(format!(
             "match: no branch matched for value: {subject}"
-        )))
+        ))
+        .into())
     }
 
     fn signature(&self) -> &'static str {
@@ -381,12 +394,13 @@ pub struct Id;
 impl NativeFunction for Id {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("id", args, 1)?;
-        let s = render_id(&args[0], ctx.model());
-        Ok(Value::String(SmolStr::new(s)))
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("id", &values, 1)?;
+        let s = render_id(&values[0], ctx.model());
+        Ok(Evaluated::new(Value::String(SmolStr::new(s))))
     }
 
     fn signature(&self) -> &'static str {
@@ -411,12 +425,13 @@ pub struct TypeOf;
 impl NativeFunction for TypeOf {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("type", args, 1)?;
-        let type_id = resolve_value_type(&args[0], ctx.model(), ctx.heap())?;
-        Ok(Value::Element(type_id))
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("type", &values, 1)?;
+        let type_id = resolve_value_type(&values[0], ctx.model(), ctx.heap())?;
+        Ok(Evaluated::new(Value::Element(type_id)))
     }
 
     fn signature(&self) -> &'static str {
@@ -440,17 +455,18 @@ pub struct GenericTypeOf;
 impl NativeFunction for GenericTypeOf {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("genericType", args, 1)?;
-        let type_id = resolve_value_type(&args[0], ctx.model(), ctx.heap())?;
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("genericType", &values, 1)?;
+        let type_id = resolve_value_type(&values[0], ctx.model(), ctx.heap())?;
         let obj = ctx
             .heap_mut()
             .alloc_dynamic("meta::pure::metamodel::type::generics::GenericType");
         ctx.heap_mut()
             .mutate_add(obj, "rawType", &[Value::Element(type_id)])?;
-        Ok(Value::Object(obj))
+        Ok(Evaluated::new(Value::Object(obj)))
     }
 
     fn signature(&self) -> &'static str {
@@ -473,17 +489,18 @@ pub struct RawType;
 impl NativeFunction for RawType {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("rawType", args, 1)?;
-        let Value::Object(obj_id) = &args[0] else {
-            return Err(PureRuntimeError::type_mismatch("GenericType", &args[0]));
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("rawType", &values, 1)?;
+        let Value::Object(obj_id) = &values[0] else {
+            return Err(PureRuntimeError::type_mismatch("GenericType", &values[0]).into());
         };
-        let values = ctx.heap().get_property_values(*obj_id, "rawType")?;
-        match values.head() {
-            Some(v) => Ok(v.clone()),
-            None => Ok(Value::Unit),
+        let heap_values = ctx.heap().get_property_values(*obj_id, "rawType")?;
+        match heap_values.head() {
+            Some(v) => Ok(Evaluated::new(v.clone())),
+            None => Ok(Evaluated::new(Value::Unit)),
         }
     }
 
@@ -508,14 +525,17 @@ pub struct EnumName;
 impl NativeFunction for EnumName {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("enumName", args, 1)?;
-        let id = as_element_id(&args[0])?;
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("enumName", &values, 1)?;
+        let id = as_element_id(&values[0])?;
         match ctx.model().get_element(id) {
-            Element::Enumeration(_) => Ok(Value::String(ctx.model().element_name(id).clone())),
-            _ => Err(PureRuntimeError::type_mismatch("Enumeration", &args[0])),
+            Element::Enumeration(_) => Ok(Evaluated::new(Value::String(
+                ctx.model().element_name(id).clone(),
+            ))),
+            _ => Err(PureRuntimeError::type_mismatch("Enumeration", &values[0]).into()),
         }
     }
 
@@ -540,21 +560,22 @@ pub struct EnumValues;
 impl NativeFunction for EnumValues {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("enumValues", args, 1)?;
-        let id = as_element_id(&args[0])?;
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("enumValues", &values, 1)?;
+        let id = as_element_id(&values[0])?;
         let Element::Enumeration(enum_def) = ctx.model().get_element(id) else {
-            return Err(PureRuntimeError::type_mismatch("Enumeration", &args[0]));
+            return Err(PureRuntimeError::type_mismatch("Enumeration", &values[0]).into());
         };
         let simple = ctx.model().element_name(id).clone();
-        let values: Vec<Value> = enum_def
+        let enum_values: Vec<Value> = enum_def
             .values
             .iter()
             .map(|v| Value::String(SmolStr::new(format!("{simple}.{}", v.name))))
             .collect();
-        Ok(Value::from_vec(values))
+        Ok(Evaluated::new(Value::from_vec(enum_values)))
     }
 
     fn signature(&self) -> &'static str {
@@ -580,12 +601,13 @@ pub struct ToRepresentation;
 impl NativeFunction for ToRepresentation {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("toRepresentation", args, 1)?;
-        let s = render_representation(&args[0], ctx.model(), ctx.heap());
-        Ok(Value::String(SmolStr::new(s)))
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("toRepresentation", &values, 1)?;
+        let s = render_representation(&values[0], ctx.model(), ctx.heap());
+        Ok(Evaluated::new(Value::String(SmolStr::new(s))))
     }
 
     fn signature(&self) -> &'static str {
@@ -611,13 +633,18 @@ pub struct SubTypeOf;
 impl NativeFunction for SubTypeOf {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("subTypeOf", args, 2)?;
-        let child = as_element_id(&args[0])?;
-        let parent = as_element_id(&args[1])?;
-        Ok(Value::Boolean(is_sub_type_of(child, parent, ctx.model())))
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("subTypeOf", &values, 2)?;
+        let child = as_element_id(&values[0])?;
+        let parent = as_element_id(&values[1])?;
+        Ok(Evaluated::new(Value::Boolean(is_sub_type_of(
+            child,
+            parent,
+            ctx.model(),
+        ))))
     }
 
     fn signature(&self) -> &'static str {
@@ -630,10 +657,10 @@ impl NativeFunction for SubTypeOf {
 // ---------------------------------------------------------------------------
 
 /// Extract an `ElementId` from a [`Value::Element`].
-fn as_element_id(v: &Value) -> Result<ElementId, PureRuntimeError> {
+fn as_element_id(v: &Value) -> Result<ElementId, PureException> {
     match v {
         Value::Element(id) => Ok(*id),
-        other => Err(PureRuntimeError::type_mismatch("PackageableElement", other)),
+        other => Err(PureRuntimeError::type_mismatch("PackageableElement", other).into()),
     }
 }
 
@@ -817,7 +844,7 @@ fn resolve_value_type(
     value: &Value,
     model: &PureModel,
     heap: &RuntimeHeap,
-) -> Result<ElementId, PureRuntimeError> {
+) -> Result<ElementId, PureException> {
     match value {
         Value::Boolean(_) => Ok(bootstrap::BOOLEAN_ID),
         Value::Integer(_) => Ok(bootstrap::INTEGER_ID),
@@ -844,6 +871,7 @@ fn resolve_value_type(
                 PureRuntimeError::EvaluationError(format!(
                     "type: classifier '{classifier}' does not resolve to a known Type"
                 ))
+                .into()
             })
         }
         // Collections / maps / functions / unit — no reified runtime type,
