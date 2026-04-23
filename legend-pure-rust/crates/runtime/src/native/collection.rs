@@ -22,7 +22,7 @@ use crate::error::{PureException, PureRuntimeError};
 use crate::native::{
     EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
 };
-use crate::value::Value;
+use crate::value::{Value, ValueKey};
 
 // ---------------------------------------------------------------------------
 // size
@@ -985,6 +985,196 @@ impl NativeFunction for RemoveAllOptimized {
 }
 
 // ---------------------------------------------------------------------------
+// Map primitives: newMap / get / keys
+// ---------------------------------------------------------------------------
+
+/// Coerce a runtime [`Value`] into a hashable [`ValueKey`].
+///
+/// Only types listed in `ValueKey` can be used as map keys — primitives,
+/// dates, and heap objects (keyed by identity). Collections, maps, and
+/// functions never compare meaningfully and raise an explicit error rather
+/// than silently misbehaving. Mirrors the Java runtime's "key types must be
+/// `equality-safe`" constraint.
+fn value_to_key(v: &Value) -> Result<ValueKey, PureException> {
+    match v {
+        Value::Boolean(b) => Ok(ValueKey::Boolean(*b)),
+        Value::Integer(i) => Ok(ValueKey::Integer(*i)),
+        Value::Decimal(d) => Ok(ValueKey::Decimal(*d)),
+        Value::String(s) => Ok(ValueKey::String(s.clone())),
+        Value::Date(d) => Ok(ValueKey::Date(*d)),
+        Value::StrictTime(t) => Ok(ValueKey::StrictTime(*t)),
+        Value::Object(id) => Ok(ValueKey::Object(*id)),
+        other => Err(PureRuntimeError::EvaluationError(format!(
+            "Map key must be a hashable primitive or object identity, got {}",
+            other.type_name()
+        ))
+        .into()),
+    }
+}
+
+/// Inverse of [`value_to_key`] — recover the original [`Value`] shape from
+/// a stored key so `keys()` can emit the collection.
+fn key_to_value(k: &ValueKey) -> Value {
+    match k {
+        ValueKey::Boolean(b) => Value::Boolean(*b),
+        ValueKey::Integer(i) => Value::Integer(*i),
+        ValueKey::Decimal(d) => Value::Decimal(*d),
+        ValueKey::String(s) => Value::String(s.clone()),
+        ValueKey::Date(d) => Value::Date(*d),
+        ValueKey::StrictTime(t) => Value::StrictTime(*t),
+        ValueKey::Object(id) => Value::Object(*id),
+    }
+}
+
+/// Pure `newMap<U,V>(pairs:Pair<U,V>[*]):Map<U,V>[1]`
+///
+/// Fold a collection of `Pair` heap objects (each with `first` / `second`
+/// properties) into an `im_rc::HashMap`-backed `Value::Map`. The second
+/// overload (`newMap(pairs, p:Property[*])`) takes a property-list used
+/// as an equality key by the Java runtime — we accept and ignore it for
+/// now because Rust's `ValueKey` already drives equality from the value.
+#[derive(Debug)]
+pub struct NewMap;
+
+impl NativeFunction for NewMap {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        // `args[0]` is the pair collection; `args[1]` (optional) is the
+        // custom-key property list, not yet honoured.
+        if values.is_empty() {
+            return Err(PureRuntimeError::EvaluationError(
+                "newMap: expected at least 1 argument (the pairs)".into(),
+            )
+            .into());
+        }
+        let pairs = values[0].to_collection();
+        let mut map = im_rc::HashMap::new();
+        for pair in pairs.iter() {
+            let Value::Object(obj_id) = pair else {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "newMap: expected Pair<U,V>, got {}",
+                    pair.type_name()
+                ))
+                .into());
+            };
+            let first_vals = ctx.heap().get_property_values(*obj_id, "first")?;
+            let second_vals = ctx.heap().get_property_values(*obj_id, "second")?;
+            let Some(k) = first_vals.iter().next() else {
+                return Err(PureRuntimeError::EvaluationError(
+                    "newMap: Pair.first is empty".into(),
+                )
+                .into());
+            };
+            let Some(v) = second_vals.iter().next() else {
+                return Err(PureRuntimeError::EvaluationError(
+                    "newMap: Pair.second is empty".into(),
+                )
+                .into());
+            };
+            let key = value_to_key(k)?;
+            map.insert(key, v.clone());
+        }
+        Ok(Evaluated::new(Value::Map(Box::new(map))))
+    }
+
+    fn signature(&self) -> &'static str {
+        "newMap<U,V>(pairs:Pair<U,V>[*]):Map<U,V>[1]"
+    }
+}
+
+/// Pure `get<U,V>(m:Map<U,V>[1], key:U[1]):V[0..1]`
+///
+/// Returns the value bound to `key` or [`Value::Unit`] when the map has
+/// no mapping.
+#[derive(Debug)]
+pub struct Get;
+
+impl NativeFunction for Get {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("get", &values, 2)?;
+        let Value::Map(m) = &values[0] else {
+            return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
+        };
+        let key = value_to_key(&values[1])?;
+        match m.get(&key) {
+            Some(v) => Ok(Evaluated::new(v.clone())),
+            None => Ok(Evaluated::new(Value::Unit)),
+        }
+    }
+
+    fn signature(&self) -> &'static str {
+        "get<U,V>(m:Map<U,V>[1], key:U[1]):V[0..1]"
+    }
+}
+
+/// Pure `put<U,V>(m:Map<U,V>[1], key:U[1], value:V[1]):Map<U,V>[1]`
+///
+/// Returns a new map with `key -> value` added (or replaced). The
+/// original map is untouched — HAMT structural sharing keeps this O(log N).
+#[derive(Debug)]
+pub struct Put;
+
+impl NativeFunction for Put {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("put", &values, 3)?;
+        let Value::Map(m) = &values[0] else {
+            return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
+        };
+        let key = value_to_key(&values[1])?;
+        let mut updated = (**m).clone();
+        updated.insert(key, values[2].clone());
+        Ok(Evaluated::new(Value::Map(Box::new(updated))))
+    }
+
+    fn signature(&self) -> &'static str {
+        "put<U,V>(m:Map<U,V>[1], key:U[1], value:V[1]):Map<U,V>[1]"
+    }
+}
+
+/// Pure `keys<U,V>(m:Map<U,V>[1]):U[*]`
+///
+/// Returns the map's keys as a collection. Ordering follows the
+/// underlying HAMT's iteration order — deterministic per run, but not
+/// insertion-ordered. Platform tests assert set-equality (`assertEquals`
+/// with a single key or sorted sets), not a specific order.
+#[derive(Debug)]
+pub struct Keys;
+
+impl NativeFunction for Keys {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("keys", &values, 1)?;
+        let Value::Map(m) = &values[0] else {
+            return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
+        };
+        let items: Vec<Value> = m.keys().map(key_to_value).collect();
+        Ok(Evaluated::new(Value::from_vec(items)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "keys<U,V>(m:Map<U,V>[1]):U[*]"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -1035,6 +1225,12 @@ pub fn register(registry: &mut NativeRegistry) {
 
     // Lambda-dependent additional operations
     registry.register("find_T_MANY__Function_1__T_$0_1$_", Find);
+
+    // Map primitives
+    registry.register("newMap_Pair_MANY__Map_1_", NewMap);
+    registry.register("get_Map_1__U_1__V_$0_1$_", Get);
+    registry.register("keys_Map_1__U_MANY_", Keys);
+    registry.register("put_Map_1__U_1__V_1__Map_1_", Put);
 }
 
 // ---------------------------------------------------------------------------
