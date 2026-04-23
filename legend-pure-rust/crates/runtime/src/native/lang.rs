@@ -21,11 +21,14 @@
 
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
+use legend_pure_parser_pure::types::ValueSpec;
 use smol_str::SmolStr;
 
-use crate::error::PureRuntimeError;
+use crate::error::{PureException, PureRuntimeError};
 use crate::heap::ObjectId;
-use crate::native::{EvalContextTrait, NativeFunction, NativeRegistry, expect_args};
+use crate::native::{
+    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
+};
 use crate::value::Value;
 
 // ---------------------------------------------------------------------------
@@ -43,14 +46,15 @@ pub struct LetFunction;
 impl NativeFunction for LetFunction {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("letFunction", args, 2)?;
-        let name = args[0].as_string()?;
-        let value = args[1].clone();
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("letFunction", &values, 2)?;
+        let name = values[0].as_string()?;
+        let value = values[1].clone();
         ctx.context_mut().set(name.clone(), value.clone());
-        Ok(value)
+        Ok(Evaluated::new(value))
     }
 
     fn signature(&self) -> &'static str {
@@ -64,38 +68,29 @@ impl NativeFunction for LetFunction {
 
 /// Pure `if(Boolean[1], Function<{->T[m]}>[1], Function<{->T[m]}>[1]): T[m]`
 ///
-/// Short-circuiting conditional. Uses `defer_execution()` so the evaluator
-/// wraps both branches as zero-parameter lambdas. Only the taken branch
-/// is evaluated.
+/// Short-circuiting conditional. Forces each argument on demand so only the
+/// taken branch is evaluated. The condition and branches are raw `ValueSpec`s
+/// — the native calls `ctx.evaluate` directly in the right order.
 #[derive(Debug)]
 pub struct If;
 
 impl NativeFunction for If {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
+    ) -> Result<Evaluated, PureException> {
         expect_args("if", args, 3)?;
-
-        // With defer_execution, arg[0] is a lambda wrapping the boolean condition.
-        // Evaluate it to get the actual boolean.
-        let condition_val = ctx.eval_lambda(&args[0], &[])?;
-        let condition = condition_val.as_boolean()?;
-
-        if condition {
-            ctx.eval_lambda(&args[1], &[])
-        } else {
-            ctx.eval_lambda(&args[2], &[])
-        }
+        let cond = crate::native::force_thunk(&args[0], ctx)?.as_boolean()?;
+        let branch = if cond { &args[1] } else { &args[2] };
+        // Branches are typed `Function<{->T[m]}>` — the compiler lowers them
+        // as zero-parameter `Lambda` wrappers. `force_thunk` unwraps that so
+        // the caller gets the branch's value, not the closure itself.
+        crate::native::force_thunk(branch, ctx)
     }
 
     fn signature(&self) -> &'static str {
         "if(Boolean[1], Function<{->T[m]}>[1], Function<{->T[m]}>[1]): T[m]"
-    }
-
-    fn defer_execution(&self) -> bool {
-        true
     }
 }
 
@@ -107,24 +102,26 @@ impl NativeFunction for If {
 ///
 /// All 8 platform `eval` overloads (0–7 extra parameters) share this single
 /// implementation: extract `args[0]` as the callable and pass `args[1..]` as
-/// the arguments via `ctx.eval_lambda`, which handles both `Lambda` and `FunctionRef`.
+/// the arguments via `ctx.call_function`.
 #[derive(Debug)]
 pub struct Eval;
 
 impl NativeFunction for Eval {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
+    ) -> Result<Evaluated, PureException> {
         if args.is_empty() {
             return Err(PureRuntimeError::EvaluationError(
                 "eval: expected at least 1 argument (the function)".into(),
-            ));
+            )
+            .into());
         }
-        let func = &args[0];
-        let params = &args[1..];
-        ctx.eval_lambda(func, params)
+        let values = force_all(args, ctx)?;
+        let func = &values[0];
+        let params = &values[1..];
+        Ok(Evaluated::new(ctx.call_function(func, params)?))
     }
 
     fn signature(&self) -> &'static str {
@@ -149,11 +146,12 @@ pub struct Print;
 impl NativeFunction for Print {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        expect_args("print", args, 2)?;
-        match &args[0] {
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("print", &values, 2)?;
+        match &values[0] {
             Value::Collection(v) => {
                 for item in v.iter() {
                     ctx.console_output(&format!("{item}"));
@@ -162,7 +160,7 @@ impl NativeFunction for Print {
             Value::Unit => {}
             other => ctx.console_output(&format!("{other}")),
         }
-        Ok(Value::Unit)
+        Ok(Evaluated::new(Value::Unit))
     }
 
     fn signature(&self) -> &'static str {
@@ -195,27 +193,29 @@ pub struct New;
 impl NativeFunction for New {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        if args.len() < 2 {
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        if values.len() < 2 {
             return Err(PureRuntimeError::EvaluationError(format!(
                 "new: expected at least 2 arguments (class, id), got {}",
-                args.len()
-            )));
+                values.len()
+            ))
+            .into());
         }
-        let class_id = match &args[0] {
+        let class_id = match &values[0] {
             Value::Element(id) => *id,
             other => {
-                return Err(PureRuntimeError::type_mismatch("Class", other));
+                return Err(PureRuntimeError::type_mismatch("Class", other).into());
             }
         };
-        let _id = &args[1]; // ignored — Pure's Java impl uses this only as a debug label
+        let _id = &values[1]; // ignored — Pure's Java impl uses this only as a debug label
         let classifier = class_fqn(ctx.model(), class_id);
 
         let obj = ctx.heap_mut().alloc_dynamic(classifier);
-        apply_key_value_pairs(ctx, obj, &args[2..])?;
-        Ok(Value::Object(obj))
+        apply_key_value_pairs(ctx, obj, &values[2..])?;
+        Ok(Evaluated::new(Value::Object(obj)))
     }
 
     fn signature(&self) -> &'static str {
@@ -244,37 +244,40 @@ pub struct Copy;
 impl NativeFunction for Copy {
     fn execute(
         &self,
-        args: &[Value],
+        args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
-        if args.is_empty() {
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        if values.is_empty() {
             return Err(PureRuntimeError::EvaluationError(
                 "copy: expected at least 1 argument (source)".into(),
-            ));
+            )
+            .into());
         }
-        let source_id = args[0].as_object()?;
+        let source_id = values[0].as_object()?;
 
         // Snapshot classifier + properties before we take a mutable heap borrow.
         let classifier: String = ctx.heap().classifier(source_id)?.to_owned();
         let names = ctx.heap().property_names(source_id)?;
         let mut original_props: Vec<(SmolStr, Vec<Value>)> = Vec::with_capacity(names.len());
         for name in names {
-            let values: Vec<Value> = ctx
+            let prop_values: Vec<Value> = ctx
                 .heap()
                 .get_property_values(source_id, name.as_str())?
                 .iter()
                 .cloned()
                 .collect();
-            original_props.push((name, values));
+            original_props.push((name, prop_values));
         }
 
         let obj = ctx.heap_mut().alloc_dynamic(classifier);
-        for (name, values) in original_props {
-            ctx.heap_mut().mutate_add(obj, name.as_str(), &values)?;
+        for (name, prop_values) in original_props {
+            ctx.heap_mut()
+                .mutate_add(obj, name.as_str(), &prop_values)?;
         }
 
-        apply_key_value_pairs(ctx, obj, &args[1..])?;
-        Ok(Value::Object(obj))
+        apply_key_value_pairs(ctx, obj, &values[1..])?;
+        Ok(Evaluated::new(Value::Object(obj)))
     }
 
     fn signature(&self) -> &'static str {
@@ -288,12 +291,13 @@ fn apply_key_value_pairs(
     ctx: &mut dyn EvalContextTrait,
     obj: ObjectId,
     kvs: &[Value],
-) -> Result<(), PureRuntimeError> {
+) -> Result<(), PureException> {
     if kvs.len() % 2 != 0 {
         return Err(PureRuntimeError::EvaluationError(format!(
             "object construction: expected key/value pairs, got {} extra arguments",
             kvs.len()
-        )));
+        ))
+        .into());
     }
     let mut i = 0;
     while i < kvs.len() {

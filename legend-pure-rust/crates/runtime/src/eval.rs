@@ -61,7 +61,7 @@ use crate::date::PureDate;
 use crate::error::{PureException, PureRuntimeError, StackFrame};
 use crate::heap::RuntimeHeap;
 use crate::hooks::{EvalHooks, NoOpHooks};
-use crate::native::{NativeFunction, NativeRegistry};
+use crate::native::{Evaluated, NativeFunction, NativeRegistry};
 use crate::value::{FunctionValue, LambdaClosure, Value};
 
 /// Evaluator state — holds mutable context during expression evaluation.
@@ -398,13 +398,12 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     /// Dispatch a function call — the most complex evaluation case.
     ///
     /// Strategy (mirrors Java's `FunctionExpressionExecutor`):
-    /// 1. Resolve the function's mangled FQN from the compiled model
-    /// 2. Check if the FQN is in the `NativeRegistry`
-    ///    - If `native.defer_execution()` → pass unevaluated arg expressions
-    ///    - Else → evaluate all arguments left-to-right, pass Values
-    ///    - Call native.execute(args, &mut `EvalContext`)
-    /// 3. If function has a resolved `ElementId` → call user function
-    /// 4. Error: function not found
+    /// 1. Resolve the function's mangled FQN from the compiled model.
+    /// 2. Check if the FQN is in the `NativeRegistry` — if so, hand the
+    ///    native the raw argument `ValueSpec`s and let it drive its own
+    ///    evaluation order through `ctx.evaluate` (the activator pattern).
+    /// 3. If the function has a resolved `ElementId`, call the user function.
+    /// 4. Error: function not found.
     #[allow(clippy::result_large_err)]
     fn eval_function_call(
         &mut self,
@@ -468,7 +467,11 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     // Native function dispatch
     // -----------------------------------------------------------------------
 
-    /// Dispatch a native function, handling both deferred and eager execution.
+    /// Dispatch a native function using the expression-activator model.
+    ///
+    /// Hands the native the raw `ValueSpec` arguments unchanged — each native
+    /// drives its own evaluation order through `ctx.evaluate`. Any exception
+    /// the native raises is decorated with a stack frame before bubbling up.
     #[allow(clippy::result_large_err)]
     fn dispatch_native(
         &mut self,
@@ -477,55 +480,13 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         arguments: &[ValueSpec],
         source_info: &legend_pure_parser_ast::SourceInfo,
     ) -> Result<Value, PureException> {
-        if native.defer_execution() {
-            // Deferred execution: pass unevaluated expressions as lambdas.
-            let deferred_args: Vec<Value> = arguments
-                .iter()
-                .map(|arg| {
-                    let closure = match &*arg.kind {
-                        legend_pure_parser_pure::types::ExprKind::Lambda { parameters, body } => {
-                            LambdaClosure {
-                                parameters: parameters.clone(),
-                                body: body.clone(),
-                                captures: std::collections::HashMap::new(),
-                            }
-                        }
-                        _ => LambdaClosure {
-                            parameters: vec![],
-                            body: vec![arg.clone()],
-                            captures: std::collections::HashMap::new(),
-                        },
-                    };
-                    Value::Function(Box::new(FunctionValue::Lambda(closure)))
-                })
-                .collect();
-
-            let result = {
-                let mut ctx = EvalContext { evaluator: self };
-                native.execute(&deferred_args, &mut ctx)
-            };
-
-            return result.map_err(|e| {
-                PureException::from(e).with_frame(StackFrame {
-                    function_name: lookup_key.into(),
-                    source: source_info.clone(),
-                })
-            });
-        }
-
-        // Eager evaluation: evaluate all arguments left-to-right
-        let mut args = Vec::with_capacity(arguments.len());
-        for arg in arguments {
-            args.push(self.eval(arg)?);
-        }
-
         let result = {
             let mut ctx = EvalContext { evaluator: self };
-            native.execute(&args, &mut ctx)
+            native.execute(arguments, &mut ctx)
         };
 
-        result.map_err(|e| {
-            PureException::from(e).with_frame(StackFrame {
+        result.map(Evaluated::into_value).map_err(|e| {
+            e.with_frame(StackFrame {
                 function_name: lookup_key.into(),
                 source: source_info.clone(),
             })
@@ -974,6 +935,12 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     ///
     /// `mangled` is pre-read from `model.get_node(id).name` by the caller so this
     /// method does not need to borrow the model (avoiding a double-borrow with `&mut self`).
+    ///
+    /// Native functions receive `&[ValueSpec]` in the new activator model, but
+    /// `apply_callable` has already forced its arguments to `&[Value]`. To
+    /// bridge, we bind each pre-forced value under a reserved synthetic name
+    /// in a fresh scope and hand the native variable-reference specs — calling
+    /// `ctx.evaluate` on them round-trips back to the bound value.
     #[allow(clippy::result_large_err)]
     fn dispatch_compiled_function(
         &mut self,
@@ -983,22 +950,46 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     ) -> Result<Value, PureException> {
         // self.natives is &'model NativeRegistry, so the native ref has 'model lifetime —
         // no conflict with the &mut self borrow used to construct EvalContext below.
-        if let Some(native) = self.natives.get(mangled.as_str()) {
-            let result = {
-                let mut ctx = EvalContext { evaluator: self };
-                native.execute(args, &mut ctx)
-            };
-            return result.map_err(PureException::from);
-        }
-        // Try prefix-based match (handles simple-name registration in the native registry).
-        if let Some(native) = self.natives.find_by_prefix(mangled.as_str()) {
-            let result = {
-                let mut ctx = EvalContext { evaluator: self };
-                native.execute(args, &mut ctx)
-            };
-            return result.map_err(PureException::from);
+        let native = self
+            .natives
+            .get(mangled.as_str())
+            .or_else(|| self.natives.find_by_prefix(mangled.as_str()));
+        if let Some(native) = native {
+            return self.execute_native_with_values(native, args);
         }
         self.call_user_function(id, args, mangled.as_str())
+    }
+
+    /// Invoke a native with already-forced `&[Value]` arguments.
+    ///
+    /// Binds each value under `__native_arg_{i}` in a fresh scope and passes
+    /// the native synthesised `Variable { name }` specs. This preserves the
+    /// `&[ValueSpec]` execute signature without forcing the caller to
+    /// reconstruct source expressions.
+    #[allow(clippy::result_large_err)]
+    fn execute_native_with_values(
+        &mut self,
+        native: &dyn NativeFunction,
+        args: &[Value],
+    ) -> Result<Value, PureException> {
+        self.context.push_scope();
+        let mut specs = Vec::with_capacity(args.len());
+        let placeholder_source = legend_pure_parser_ast::SourceInfo::new("<dispatch>", 0, 0, 0, 0);
+        for (i, v) in args.iter().enumerate() {
+            let name: SmolStr = format!("__native_arg_{i}").into();
+            self.context.set(name.clone(), v.clone());
+            specs.push(ValueSpec {
+                kind: Box::new(ExprKind::Variable { name }),
+                source_info: placeholder_source.clone(),
+                type_info: None,
+            });
+        }
+        let result = {
+            let mut ctx = EvalContext { evaluator: self };
+            native.execute(&specs, &mut ctx)
+        };
+        self.context.pop_scope();
+        result.map(Evaluated::into_value)
     }
 }
 
@@ -1025,33 +1016,8 @@ impl<'model, H: EvalHooks> EvalContext<'_, 'model, H> {
 }
 
 impl<H: EvalHooks> crate::native::EvalContextTrait for EvalContext<'_, '_, H> {
-    fn eval_lambda(
-        &mut self,
-        lambda_val: &Value,
-        args: &[Value],
-    ) -> Result<Value, PureRuntimeError> {
-        match lambda_val {
-            Value::Function(_) => self
-                .evaluator
-                .apply_callable(lambda_val, args)
-                .map_err(|e| {
-                    // Preserve the semantic kind across the native→lambda
-                    // boundary. Assertion failures from inside a lambda
-                    // invoked by a native (e.g. `assertEquals` body evaluated
-                    // via `if_...->eval()`) must stay as `AssertionFailed`
-                    // so test classifiers bucket them as FAIL, not ERROR.
-                    match e.kind {
-                        crate::error::PureExceptionKind::AssertionFailed(msg) => {
-                            PureRuntimeError::AssertionFailed(msg)
-                        }
-                        _ => PureRuntimeError::EvaluationError(format!("{e}")),
-                    }
-                }),
-            _ => Err(PureRuntimeError::EvaluationError(format!(
-                "Expected Function, got {}",
-                lambda_val.type_name()
-            ))),
-        }
+    fn evaluate(&mut self, spec: &ValueSpec) -> Result<Evaluated, PureException> {
+        self.evaluator.eval(spec).map(Evaluated::new)
     }
 
     fn context(&self) -> &VariableContext {

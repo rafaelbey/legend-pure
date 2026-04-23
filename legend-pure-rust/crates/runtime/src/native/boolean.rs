@@ -13,25 +13,42 @@
 // limitations under the License.
 
 //! Boolean native functions: `and`, `or`, `not`.
+//!
+//! `and` and `or` are the canonical **short-circuit** exemplars. They force
+//! the left operand through `ctx.evaluate`, inspect the boolean outcome,
+//! and skip the right operand entirely when the result is already decided.
+//! This matches Pure's `&&` / `||` semantics and is the new model for
+//! every native that used to opt into `defer_execution` — the native owns
+//! its own evaluation order through the activator.
 
-use crate::error::PureRuntimeError;
-use crate::native::{EvalContextTrait, NativeFunction, NativeRegistry, expect_args};
+use legend_pure_parser_pure::types::ValueSpec;
+
+use crate::error::PureException;
+use crate::native::{EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args};
 use crate::value::Value;
 
-/// Pure `and(Boolean[1], Boolean[1]): Boolean[1]`
+/// Pure `and(Boolean[1], Boolean[1]): Boolean[1]` — short-circuit.
+///
+/// When the left operand is `false`, the right operand is never forced —
+/// so patterns like `$x->instanceOf(T) && $x->cast(@T).field == …` work:
+/// a failing cast on the RHS stays un-evaluated whenever the runtime
+/// type-check on the LHS returns `false`.
 #[derive(Debug)]
 pub struct And;
 
 impl NativeFunction for And {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
         expect_args("and", args, 2)?;
-        let a = args[0].as_boolean()?;
-        let b = args[1].as_boolean()?;
-        Ok(Value::Boolean(a && b))
+        let lhs = ctx.evaluate(&args[0])?.as_boolean()?;
+        if !lhs {
+            return Ok(Evaluated::new(Value::Boolean(false)));
+        }
+        let rhs = ctx.evaluate(&args[1])?.as_boolean()?;
+        Ok(Evaluated::new(Value::Boolean(rhs)))
     }
 
     fn signature(&self) -> &'static str {
@@ -39,20 +56,25 @@ impl NativeFunction for And {
     }
 }
 
-/// Pure `or(Boolean[1], Boolean[1]): Boolean[1]`
+/// Pure `or(Boolean[1], Boolean[1]): Boolean[1]` — short-circuit.
+///
+/// Mirrors [`And`] with `true`-short-circuit semantics.
 #[derive(Debug)]
 pub struct Or;
 
 impl NativeFunction for Or {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
         expect_args("or", args, 2)?;
-        let a = args[0].as_boolean()?;
-        let b = args[1].as_boolean()?;
-        Ok(Value::Boolean(a || b))
+        let lhs = ctx.evaluate(&args[0])?.as_boolean()?;
+        if lhs {
+            return Ok(Evaluated::new(Value::Boolean(true)));
+        }
+        let rhs = ctx.evaluate(&args[1])?.as_boolean()?;
+        Ok(Evaluated::new(Value::Boolean(rhs)))
     }
 
     fn signature(&self) -> &'static str {
@@ -67,12 +89,12 @@ pub struct Not;
 impl NativeFunction for Not {
     fn execute(
         &self,
-        args: &[Value],
-        _ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Value, PureRuntimeError> {
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
         expect_args("not", args, 1)?;
-        let a = args[0].as_boolean()?;
-        Ok(Value::Boolean(!a))
+        let a = ctx.evaluate(&args[0])?.as_boolean()?;
+        Ok(Evaluated::new(Value::Boolean(!a)))
     }
 
     fn signature(&self) -> &'static str {
@@ -90,16 +112,14 @@ pub fn register(registry: &mut NativeRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::NoOpEvalCtx;
+    use crate::native::{MockCtx, lit_bool, lit_int, lit_str};
 
     #[test]
     fn and_true_true() {
         assert_eq!(
-            And.execute(
-                &[Value::Boolean(true), Value::Boolean(true)],
-                &mut NoOpEvalCtx
-            )
-            .unwrap(),
+            And.execute(&[lit_bool(true), lit_bool(true)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Boolean(true)
         );
     }
@@ -107,11 +127,9 @@ mod tests {
     #[test]
     fn and_true_false() {
         assert_eq!(
-            And.execute(
-                &[Value::Boolean(true), Value::Boolean(false)],
-                &mut NoOpEvalCtx
-            )
-            .unwrap(),
+            And.execute(&[lit_bool(true), lit_bool(false)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Boolean(false)
         );
     }
@@ -119,11 +137,9 @@ mod tests {
     #[test]
     fn or_false_true() {
         assert_eq!(
-            Or.execute(
-                &[Value::Boolean(false), Value::Boolean(true)],
-                &mut NoOpEvalCtx
-            )
-            .unwrap(),
+            Or.execute(&[lit_bool(false), lit_bool(true)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Boolean(true)
         );
     }
@@ -131,34 +147,57 @@ mod tests {
     #[test]
     fn not_true() {
         assert_eq!(
-            Not.execute(&[Value::Boolean(true)], &mut NoOpEvalCtx)
-                .unwrap(),
+            Not.execute(&[lit_bool(true)], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Boolean(false)
         );
     }
 
     #[test]
     fn type_error_on_non_boolean() {
+        // Non-Boolean LHS always errors — `and`/`or` force it to decide.
         assert!(
-            And.execute(&[Value::Integer(1), Value::Boolean(true)], &mut NoOpEvalCtx)
+            And.execute(&[lit_int(1), lit_bool(true)], &mut MockCtx)
                 .is_err()
         );
+        // RHS errors only when LHS forces us to evaluate it: `and(true, X)`
+        // descends into X, `or(true, X)` short-circuits and never touches X.
         assert!(
-            Or.execute(
-                &[Value::Boolean(true), Value::String("true".into())],
-                &mut NoOpEvalCtx
-            )
-            .is_err()
+            And.execute(&[lit_bool(true), lit_str("true")], &mut MockCtx)
+                .is_err()
         );
-        assert!(Not.execute(&[Value::Integer(0)], &mut NoOpEvalCtx).is_err());
+        assert_eq!(
+            Or.execute(&[lit_bool(true), lit_str("true")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Boolean(true)
+        );
+        assert!(Not.execute(&[lit_int(0)], &mut MockCtx).is_err());
+    }
+
+    #[test]
+    fn short_circuit_skips_rhs() {
+        // `and(false, _)` returns false without evaluating the RHS.
+        // A type-error RHS therefore stays silent.
+        assert_eq!(
+            And.execute(&[lit_bool(false), lit_str("oops")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Boolean(false)
+        );
+        // `or(true, _)` mirrors with true.
+        assert_eq!(
+            Or.execute(&[lit_bool(true), lit_str("oops")], &mut MockCtx)
+                .unwrap()
+                .into_value(),
+            Value::Boolean(true)
+        );
     }
 
     #[test]
     fn wrong_arg_count_errors() {
-        assert!(
-            And.execute(&[Value::Boolean(true)], &mut NoOpEvalCtx)
-                .is_err()
-        );
-        assert!(Not.execute(&[], &mut NoOpEvalCtx).is_err());
+        assert!(And.execute(&[lit_bool(true)], &mut MockCtx).is_err());
+        assert!(Not.execute(&[], &mut MockCtx).is_err());
     }
 }
