@@ -282,7 +282,7 @@ impl NativeFunction for Cast {
                 v.type_name()
             )))
         };
-        let check = |v: &Value| value_matches_type(ctx.model(), v, type_id, ctx.heap());
+        let check = |v: &Value| cast_compatible(v, type_id, ctx.model(), ctx.heap());
         match &subject {
             Value::Collection(coll) => {
                 for v in coll.iter() {
@@ -816,20 +816,85 @@ fn value_matches_type(
         "Date" | "DateTime" | "StrictDate" => matches!(value, Value::Date(_)),
         "StrictTime" => matches!(value, Value::StrictTime(_)),
         _ => {
-            // Fallback: heap-object classifier prefix/suffix match against the
-            // type class's simple name. Conservative — only covers exact name
-            // match at the end of the classifier FQN.
+            // Fallback 1: heap-object classifier exact-name match.
             if let Value::Object(obj_id) = value
                 && let Ok(classifier) = heap.classifier(*obj_id)
-            {
-                return classifier
+                && classifier
                     .rsplit("::")
                     .next()
-                    .is_some_and(|tail| tail == type_name.as_str());
+                    .is_some_and(|tail| tail == type_name.as_str())
+            {
+                return true;
+            }
+            // Fallback 2: supertype-chain walk (the instanceOf direction).
+            // Resolve the value's runtime type and walk its ancestors — a
+            // value satisfies the type when its type extends the target.
+            // This is what makes `$la_address->instanceOf(LA_GeographicEntity)`
+            // and `$p8->cast(@Integer)` succeed for non-equal but related
+            // types without every type-check growing bespoke Class wiring.
+            if let Ok(value_type_id) = resolve_value_type(value, model, heap) {
+                return type_extends(model, value_type_id, type_class_id);
             }
             false
         }
     }
+}
+
+/// True when `descendant` extends (transitively) `ancestor` — or is `ancestor`.
+///
+/// Walks `Class::super_types` and `PrimitiveType::super_type` upward. Used by
+/// [`value_matches_type`] and [`cast_compatible`] so hierarchy-aware runtime
+/// checks don't each re-implement the chain walk.
+fn type_extends(model: &PureModel, descendant: ElementId, ancestor: ElementId) -> bool {
+    let mut stack: Vec<ElementId> = vec![descendant];
+    let mut visited: std::collections::HashSet<ElementId> = std::collections::HashSet::new();
+    while let Some(id) = stack.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        if id == ancestor {
+            return true;
+        }
+        match model.get_element(id) {
+            Element::Class(c) => {
+                for st in &c.super_types {
+                    if let legend_pure_parser_pure::types::TypeExpr::Named { element, .. } = st {
+                        stack.push(*element);
+                    }
+                }
+            }
+            Element::PrimitiveType(p) => {
+                if let Some(super_id) = p.super_type {
+                    stack.push(super_id);
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Cast-direction type check — succeeds in either direction of the lattice.
+///
+/// A cast succeeds when:
+/// - the value already matches the target ([`value_matches_type`], which also
+///   covers primitives and the instanceOf-direction subtype walk); **or**
+/// - the target extends the value's type — Pure's "primitive extension
+///   downcast" idiom (`1->cast(@P8)` where `P8 extends Integer`). The target
+///   refines a supertype, and the runtime trusts the source of the cast.
+fn cast_compatible(
+    value: &Value,
+    target_id: ElementId,
+    model: &PureModel,
+    heap: &RuntimeHeap,
+) -> bool {
+    if value_matches_type(model, value, target_id, heap) {
+        return true;
+    }
+    let Ok(value_type_id) = resolve_value_type(value, model, heap) else {
+        return false;
+    };
+    type_extends(model, target_id, value_type_id)
 }
 
 /// Resolve the metamodel [`ElementId`] for a runtime [`Value`]'s type.
