@@ -575,12 +575,52 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 self.eval_element_property(id, property)
                     .map_err(PureException::from)
             }
+            Value::Function(fv) => self
+                .eval_function_property(fv, property, &target_val)
+                .map_err(PureException::from),
             _ => Err(PureException::from(PureRuntimeError::EvaluationError(
                 format!(
                     "Property access on non-object value: {}.{}",
                     target_val.type_name(),
                     property
                 ),
+            ))),
+        }
+    }
+
+    /// Synthesize Function-metamodel properties for a [`Value::Function`].
+    ///
+    /// Pure code reads a handful of properties off lambdas and compiled
+    /// function refs — most importantly `expressionSequence`, which the
+    /// `^LambdaFunction(expressionSequence = $fn.expressionSequence)` idiom
+    /// uses to clone a lambda. We return the function itself wrapped as a
+    /// single-element collection so the `New` native's LambdaFunction
+    /// shortcut can round-trip it back into an invokable `Value::Function`.
+    #[allow(clippy::result_large_err)]
+    fn eval_function_property(
+        &self,
+        fv: &FunctionValue,
+        property: &str,
+        target_val: &Value,
+    ) -> Result<Value, PureRuntimeError> {
+        match property {
+            "expressionSequence" => {
+                let mut pv = PVector::new();
+                pv.push_back(target_val.clone());
+                Ok(Value::Collection(Box::new(pv)))
+            }
+            "functionName" | "name" => {
+                let name = match fv {
+                    FunctionValue::Compiled(id) => match self.model.get_element(*id) {
+                        Element::Function(f) => f.function_name.clone(),
+                        _ => self.model.element_name(*id).clone(),
+                    },
+                    FunctionValue::Lambda(_) => SmolStr::new_static("<lambda>"),
+                };
+                Ok(Value::String(name))
+            }
+            other => Err(PureRuntimeError::EvaluationError(format!(
+                "Property '{other}' not supported on Function value"
             ))),
         }
     }
