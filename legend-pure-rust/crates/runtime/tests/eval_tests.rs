@@ -1210,11 +1210,11 @@ fn eval_surveyor_string_tests_fail_histogram() {
 }
 
 fn surveyor_error_histogram(package: &str) {
-    surveyor_outcome_histogram(package, "TestStatus.ERROR");
+    surveyor_outcome_histogram(package, "ERROR");
 }
 
 fn surveyor_fail_histogram(package: &str) {
-    surveyor_outcome_histogram(package, "TestStatus.FAIL");
+    surveyor_outcome_histogram(package, "FAIL");
 }
 
 fn surveyor_outcome_histogram(package: &str, target_status: &str) {
@@ -1250,8 +1250,7 @@ fn surveyor_outcome_histogram(package: &str, target_status: &str) {
             .get_property_values(*res_id, "status")
             .ok()
             .and_then(|v| v.iter().next().cloned());
-        let matches_target =
-            matches!(&status, Some(Value::String(s)) if s.as_str() == target_status);
+        let matches_target = matches!(&status, Some(Value::EnumValue { member, .. }) if member.as_str() == target_status);
         if !matches_target {
             continue;
         }
@@ -1353,7 +1352,8 @@ fn eval_surveyor_missing_natives_harvest() {
                 .get_property_values(*res_id, "status")
                 .ok()
                 .and_then(|v| v.iter().next().cloned());
-            if !matches!(&status, Some(Value::String(s)) if s.as_str() == "TestStatus.SKIP") {
+            if !matches!(&status, Some(Value::EnumValue { member, .. }) if member.as_str() == "SKIP")
+            {
                 continue;
             }
             let msg = evaluator

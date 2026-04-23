@@ -158,10 +158,14 @@ impl NativeFunction for ExecutePCTTest {
 /// [`Evaluator::eval_enum_value`](crate::eval::Evaluator) and the enum-value
 /// branch of `eval_element_property`. The surveyor compares with
 /// `$r.status == TestStatus.PASS` — the two sides must agree string-for-string.
-const STATUS_PASS: &str = "TestStatus.PASS";
-const STATUS_FAIL: &str = "TestStatus.FAIL";
-const STATUS_ERROR: &str = "TestStatus.ERROR";
-const STATUS_SKIP: &str = "TestStatus.SKIP";
+// Member names in `meta::pure::test::surveyor::TestStatus`. Stored as the
+// `member` field of the `Value::EnumValue` this native writes to the
+// `TestResult.status` slot so surveyor-side `$r.status == TestStatus.PASS`
+// comparisons structurally agree (same `enum_id` + same `member`).
+const STATUS_PASS: &str = "PASS";
+const STATUS_FAIL: &str = "FAIL";
+const STATUS_ERROR: &str = "ERROR";
+const STATUS_SKIP: &str = "SKIP";
 
 /// Extract a human-readable FQN from a function-valued argument.
 ///
@@ -210,6 +214,11 @@ fn classify_outcome(
 }
 
 /// Allocate a `TestResult` heap object and populate its properties.
+///
+/// The `status` slot holds a `Value::EnumValue` backed by the Pure
+/// `meta::pure::test::surveyor::TestStatus` enumeration. The surveyor
+/// filter compares `$r.status == TestStatus.PASS` — structural equality
+/// requires both sides carry the same `enum_id` + `member`.
 fn build_test_result(
     ctx: &mut dyn EvalContextTrait,
     fqn: String,
@@ -217,10 +226,33 @@ fn build_test_result(
     elapsed: i64,
     message: Option<String>,
 ) -> Result<Evaluated, PureException> {
+    // Resolve the `TestStatus` enumeration once per call — the surveyor
+    // filter compares `$r.status == TestStatus.PASS`, which requires both
+    // sides to carry the same enum_id.
+    let test_status_path: [SmolStr; 5] = [
+        SmolStr::new_static("meta"),
+        SmolStr::new_static("pure"),
+        SmolStr::new_static("test"),
+        SmolStr::new_static("surveyor"),
+        SmolStr::new_static("TestStatus"),
+    ];
+    let enum_id = ctx
+        .model()
+        .resolve_by_path(&test_status_path)
+        .ok_or_else(|| {
+            PureRuntimeError::EvaluationError(
+                "testing: meta::pure::test::surveyor::TestStatus not found".into(),
+            )
+        })?;
+    let status_value = Value::EnumValue {
+        enum_id,
+        member: SmolStr::new(status),
+    };
+
     let heap = ctx.heap_mut();
     let id = heap.alloc_dynamic("meta::pure::test::surveyor::TestResult");
     heap.mutate_add(id, "fqn", &[Value::String(SmolStr::new(fqn))])?;
-    heap.mutate_add(id, "status", &[Value::String(SmolStr::new(status))])?;
+    heap.mutate_add(id, "status", &[status_value])?;
     heap.mutate_add(id, "elapsed", &[Value::Integer(elapsed)])?;
     if let Some(msg) = message {
         heap.mutate_add(id, "message", &[Value::String(SmolStr::new(msg))])?;

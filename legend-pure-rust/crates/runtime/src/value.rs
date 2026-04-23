@@ -118,6 +118,30 @@ pub enum Value {
     /// a lightweight `Copy` handle into the [`PureModel`](legend_pure_parser_pure::model::PureModel).
     Element(ElementId),
 
+    /// A Pure enumeration value (e.g. `MyEnum.CITY`).
+    ///
+    /// Carries the owning enumeration's [`ElementId`] directly so
+    /// `type()` / `instanceOf` / `genericType` resolve the enum element
+    /// in O(1) without reverse-engineering a string. Equality is
+    /// structural: two `EnumValue`s are equal iff their `enum_id` and
+    /// `member` both match — so two enums with the same simple name in
+    /// different packages never collide.
+    ///
+    /// The enumeration's human-readable name is **not** cached here —
+    /// it is recoverable from `enum_id` via
+    /// [`PureModel::element_name`](legend_pure_parser_pure::model::PureModel::element_name),
+    /// and denormalising it would split identity from presentation and
+    /// invite drift. Renderers that need the pretty `EnumName.MEMBER`
+    /// form (`render_representation`, `render_id`) already have model
+    /// access; the [`Display`] impl prints just the `member`, mirroring
+    /// how [`Value::Object`] prints the id without the classifier.
+    EnumValue {
+        /// The owning [`Enumeration`](legend_pure_parser_pure::model::Element::Enumeration) element.
+        enum_id: ElementId,
+        /// The value's member name (e.g. `"CITY"`).
+        member: SmolStr,
+    },
+
     /// The unit value — result of expressions with no meaningful return.
     /// Equivalent to `[]` with multiplicity `[0..0]`.
     Unit,
@@ -199,6 +223,18 @@ impl PartialEq for Value {
             (Self::Object(a), Self::Object(b)) => a == b,
             (Self::Collection(a), Self::Collection(b)) => a == b,
             (Self::Element(a), Self::Element(b)) => a == b,
+            (
+                Self::EnumValue {
+                    enum_id: e1,
+                    member: m1,
+                    ..
+                },
+                Self::EnumValue {
+                    enum_id: e2,
+                    member: m2,
+                    ..
+                },
+            ) => e1 == e2 && m1 == m2,
             (Self::Unit, Self::Unit) => true,
             _ => false,
         }
@@ -349,6 +385,7 @@ impl Value {
             Self::Map(_) => "Map",
             Self::Function(_) => "Function",
             Self::Element(_) => "PackageableElement",
+            Self::EnumValue { .. } => "EnumValue",
             Self::Unit => "Unit",
         }
     }
@@ -484,6 +521,11 @@ impl fmt::Display for Value {
                 FunctionValue::Compiled(id) => write!(f, "<Function:{id}>"),
             },
             Self::Element(id) => write!(f, "<Element:{id}>"),
+            // Display prints just the member — matches `Value::Object`
+            // printing the id without the classifier. Consumers that
+            // need the qualified `EnumName.MEMBER` form have model
+            // access (see `render_representation` / `render_id`).
+            Self::EnumValue { member, .. } => write!(f, "{member}"),
             Self::Unit => write!(f, "[]"),
         }
     }

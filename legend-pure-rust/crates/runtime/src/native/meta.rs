@@ -1026,6 +1026,7 @@ fn resolve_value_type(
         Value::Float(_) => Ok(bootstrap::FLOAT_ID),
         Value::Decimal(_) => Ok(bootstrap::DECIMAL_ID),
         Value::String(_) => Ok(bootstrap::STRING_ID),
+        Value::EnumValue { enum_id, .. } => Ok(*enum_id),
         Value::Date(d) => Ok(match d.precision() {
             DatePrecision::Day => bootstrap::STRICT_DATE_ID,
             DatePrecision::Time(_) => bootstrap::DATE_TIME_ID,
@@ -1124,6 +1125,9 @@ fn render_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -
             FunctionValue::Lambda(_) => "<Lambda>".to_string(),
             FunctionValue::Compiled(id) => format!("<Function:{id}>"),
         },
+        Value::EnumValue { enum_id, member } => {
+            format!("{}.{member}", model.element_name(*enum_id))
+        }
     }
 }
 
