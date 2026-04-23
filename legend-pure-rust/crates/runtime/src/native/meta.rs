@@ -1351,6 +1351,58 @@ impl NativeFunction for Deactivate {
     }
 }
 
+/// Pure `openVariableValues(f:Function<Any>[1]):Map<String, List<Any>>[1]`
+///
+/// Returns the function's captured-variable environment as a `Map<String,
+/// List<Any>>`. For a `LambdaClosure` the map contains one entry per
+/// captured binding, with each value wrapped in a fresh `List<Any>` heap
+/// object (the shape surveyor tests read back via `$res->get('a').values`).
+/// Compiled function references have no captures — returns an empty map.
+///
+/// The `Value::Function` target is forced first (so the arg can be an
+/// `ExprKind::Lambda` spec). Non-function values raise a type error.
+#[derive(Debug)]
+pub struct OpenVariableValues;
+
+impl NativeFunction for OpenVariableValues {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("openVariableValues", &values, 1)?;
+        let Value::Function(fv) = &values[0] else {
+            return Err(PureRuntimeError::type_mismatch("Function", &values[0]).into());
+        };
+        // Snapshot captures before the mutable heap borrow.
+        let captures: Vec<(SmolStr, Value)> = match fv.as_ref() {
+            FunctionValue::Lambda(closure) => closure
+                .captures
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            FunctionValue::Compiled(_) => Vec::new(),
+        };
+        let mut map = im_rc::HashMap::new();
+        for (name, value) in captures {
+            // Wrap each captured binding in a `List<Any>(values=…)` heap
+            // object so `$map->get(name).values` round-trips through the
+            // Java-shaped List container the platform tests expect.
+            let list_id = ctx
+                .heap_mut()
+                .alloc_dynamic("meta::pure::functions::collection::List");
+            ctx.heap_mut().mutate_add(list_id, "values", &[value])?;
+            map.insert(crate::value::ValueKey::String(name), Value::Object(list_id));
+        }
+        Ok(Evaluated::new(Value::Map(Box::new(map))))
+    }
+
+    fn signature(&self) -> &'static str {
+        "openVariableValues(f:Function<Any>[1]):Map<String, List<Any>>[1]"
+    }
+}
+
 /// Pure `genericTypeClass(g:GenericType[1]):Class<Any>[0..1]`
 ///
 /// Reads the GenericType's `rawType` property and returns it only when it
@@ -1551,4 +1603,5 @@ pub fn register(registry: &mut NativeRegistry) {
         "elementPath_PackageableElement_1__PackageableElement_$1_MANY$_",
         ElementPath,
     );
+    registry.register("openVariableValues_Function_1__Map_1_", OpenVariableValues);
 }
