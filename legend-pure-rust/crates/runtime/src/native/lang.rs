@@ -130,6 +130,93 @@ impl NativeFunction for Eval {
 }
 
 // ---------------------------------------------------------------------------
+// evaluate — call a function with parameters wrapped in List<Any> objects
+// ---------------------------------------------------------------------------
+
+/// Pure `evaluate(func:Function<Any>[1], params:List<Any>[*]):Any[*]`
+///
+/// Sibling of [`Eval`] with a different calling convention: each function
+/// parameter arrives as a `List<Any>(values=...)` heap object instead of
+/// a raw arg. We unpack each list's `values` property and flatten them into
+/// the final arg vector passed to [`EvalContextTrait::call_function`].
+///
+/// Pattern seen across the platform: the surveyor builds a lambda clone via
+/// `^LambdaFunction(expressionSequence=$fn.expressionSequence)` and invokes
+/// it with `->evaluate([])` (no params) or
+/// `->evaluate([^List<Any>(values=x), ^List<Any>(values=[y,z])])` (two lists).
+#[derive(Debug)]
+pub struct Evaluate;
+
+impl NativeFunction for Evaluate {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        if args.is_empty() {
+            return Err(PureRuntimeError::EvaluationError(
+                "evaluate: expected at least 1 argument (the function)".into(),
+            )
+            .into());
+        }
+        let values = force_all(args, ctx)?;
+        let func = values[0].clone();
+
+        // Each remaining arg is either a `List<Any>` heap object with a
+        // `values` property, a collection of such lists (multi-valued
+        // `List<Any>[*]`), or `Unit` (empty). Flatten into the function's
+        // positional parameters: one `List.values` = one parameter binding.
+        let mut params: Vec<Value> = Vec::new();
+        for rest in &values[1..] {
+            match rest {
+                Value::Unit => {}
+                Value::Collection(v) => {
+                    for entry in v.iter() {
+                        push_list_values(ctx, entry, &mut params)?;
+                    }
+                }
+                other => push_list_values(ctx, other, &mut params)?,
+            }
+        }
+        Ok(Evaluated::new(ctx.call_function(&func, &params)?))
+    }
+
+    fn signature(&self) -> &'static str {
+        "evaluate(func:Function<Any>[1], params:List<Any>[*]):Any[*]"
+    }
+}
+
+/// Read a single `List<Any>` argument's `values` property and append the
+/// flattened contents to `out`. Non-object inputs are treated as a direct
+/// scalar parameter binding (surveyor sometimes passes raw values).
+fn push_list_values(
+    ctx: &mut dyn EvalContextTrait,
+    v: &Value,
+    out: &mut Vec<Value>,
+) -> Result<(), PureException> {
+    match v {
+        Value::Object(id) => {
+            let values = ctx.heap().get_property_values(*id, "values")?;
+            // A List<Any>.values of multiplicity [*] reduces to a single
+            // bound positional parameter: the collection itself (or the
+            // scalar, if single). This matches Java Pure's List-packing
+            // convention — the receiver function sees one param per List.
+            let mut copy: Vec<Value> = Vec::with_capacity(values.len());
+            for val in values.iter() {
+                copy.push(val.clone());
+            }
+            out.push(Value::from_vec(copy));
+            Ok(())
+        }
+        Value::Unit => Ok(()),
+        other => {
+            out.push(other.clone());
+            Ok(())
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // print — write a value to stdout (used by println)
 // ---------------------------------------------------------------------------
 
@@ -213,6 +300,21 @@ impl NativeFunction for New {
         let _id = &values[1]; // ignored — Pure's Java impl uses this only as a debug label
         let classifier = class_fqn(ctx.model(), class_id);
 
+        // Shortcut: `^LambdaFunction(expressionSequence = <lambda>)` is the
+        // surveyor's lambda-cloning idiom. When the construction's only
+        // keyword is `expressionSequence` carrying a single Function value,
+        // return that Function directly instead of allocating a heap object.
+        // This keeps the round-trip `$fn.expressionSequence` →
+        // `^LambdaFunction(expressionSequence=…)` → `->evaluate([])`
+        // working without requiring full `ValueSpecification` heap modelling
+        // on the lambda body. See boolean/and.pure's
+        // `testShortCircuitInDynamicEvaluation` for the motivating pattern.
+        if is_lambda_function_classifier(&classifier)
+            && let Some(fn_val) = try_lambda_shortcut(&values[2..])
+        {
+            return Ok(Evaluated::new(fn_val));
+        }
+
         let obj = ctx.heap_mut().alloc_dynamic(classifier);
         apply_key_value_pairs(ctx, obj, &values[2..])?;
         Ok(Evaluated::new(Value::Object(obj)))
@@ -282,6 +384,41 @@ impl NativeFunction for Copy {
 
     fn signature(&self) -> &'static str {
         "copy<T>(source:T[1], keyExpressions:KeyExpression[*]):T[1]"
+    }
+}
+
+/// Recognise the `LambdaFunction` classifier family used by Pure's
+/// `^LambdaFunction(expressionSequence = …)` clone idiom.
+fn is_lambda_function_classifier(classifier: &str) -> bool {
+    // The classifier is the class's full path in `a::b::LambdaFunction` form,
+    // or the bare `LambdaFunction` for unqualified references.
+    classifier == "LambdaFunction"
+        || classifier.ends_with("::LambdaFunction")
+        || classifier == "Function"
+        || classifier.ends_with("::Function")
+}
+
+/// Detect the `(expressionSequence, <single Function>)` key/value pair
+/// emitted by `^LambdaFunction(expressionSequence = $fn.expressionSequence)`.
+///
+/// Returns the underlying `Value::Function` when the shortcut applies,
+/// so `New` can return it directly instead of allocating a heap object.
+fn try_lambda_shortcut(kvs: &[Value]) -> Option<Value> {
+    if kvs.len() != 2 {
+        return None;
+    }
+    let Value::String(key) = &kvs[0] else {
+        return None;
+    };
+    if key != "expressionSequence" {
+        return None;
+    }
+    match &kvs[1] {
+        Value::Function(_) => Some(kvs[1].clone()),
+        Value::Collection(v) if v.len() == 1 && matches!(v[0], Value::Function(_)) => {
+            Some(v[0].clone())
+        }
+        _ => None,
     }
 }
 
@@ -375,4 +512,9 @@ pub fn register(registry: &mut NativeRegistry) {
         "eval_Function_1__S_n__T_o__U_p__W_q__X_r__Y_s__Z_t__V_m_",
         Eval,
     );
+
+    // evaluate(func, List<Any>[*]) — companion of eval with parameter lists
+    // packed into `List<Any>` heap objects. See `evaluate.pure` platform
+    // source. Mangled name matches the stored FQN.
+    registry.register("evaluate_Function_1__List_MANY__Any_MANY_", Evaluate);
 }
