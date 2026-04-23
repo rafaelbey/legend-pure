@@ -162,10 +162,13 @@ impl NativeFunction for ExecutePCTTest {
 // `member` field of the `Value::EnumValue` this native writes to the
 // `TestResult.status` slot so surveyor-side `$r.status == TestStatus.PASS`
 // comparisons structurally agree (same `enum_id` + same `member`).
+//
+// `SKIP` intentionally has no constant here — this native never produces a
+// SKIP result. See [`classify_outcome`] for the policy: SKIP is reserved
+// for the surveyor's exclusion-map path, not a bucket for runtime gaps.
 const STATUS_PASS: &str = "PASS";
 const STATUS_FAIL: &str = "FAIL";
 const STATUS_ERROR: &str = "ERROR";
-const STATUS_SKIP: &str = "SKIP";
 
 /// Extract a human-readable FQN from a function-valued argument.
 ///
@@ -188,7 +191,29 @@ fn function_fqn(callable: &Value, ctx: &dyn EvalContextTrait) -> String {
     }
 }
 
-/// Classify a function call result into (status_string, optional_message).
+/// Classify a function call result into (status_name, optional_message).
+///
+/// Status values are *member* names (`"PASS"`, `"FAIL"`, `"ERROR"`,
+/// `"SKIP"`) that [`build_test_result`] pairs with the `TestStatus`
+/// enumeration's [`ElementId`] to build the [`Value::EnumValue`] the
+/// surveyor stores in `TestResult.status`.
+///
+/// # Classification policy
+///
+/// - `AssertionFailed` / `ConstraintViolation` → FAIL. The test's
+///   behavioural contract was violated — the assertion evaluated to
+///   `false` or a class constraint tripped.
+/// - Everything else → ERROR. The runtime did not complete the test's
+///   execution, whatever the cause (type mismatch, missing native,
+///   cast failure, division by zero, …).
+///
+/// **SKIP is deliberately not produced by this function.** A SKIP
+/// result in Pure's surveyor means "this test is expected to be
+/// excluded" — driven by `executePCTTest`'s `exclusions` map or an
+/// explicit `test.ExcludePlatform` annotation. Skipping on
+/// `FunctionNotFound` (by kind or by message substring) would hide
+/// real runtime gaps as "intentional exclusions", breaking the Java-
+/// parity signal the ERROR bucket exists to surface.
 fn classify_outcome(
     result: Result<Value, crate::error::PureException>,
 ) -> (&'static str, Option<String>) {
@@ -199,14 +224,6 @@ fn classify_outcome(
             match &e.kind {
                 PureExceptionKind::AssertionFailed(_)
                 | PureExceptionKind::ConstraintViolation { .. } => (STATUS_FAIL, Some(msg)),
-                PureExceptionKind::ExecutionError(PureRuntimeError::FunctionNotFound(_)) => {
-                    (STATUS_SKIP, Some(msg))
-                }
-                PureExceptionKind::ExecutionError(PureRuntimeError::EvaluationError(inner))
-                    if inner.contains("Function not found:") =>
-                {
-                    (STATUS_SKIP, Some(msg))
-                }
                 _ => (STATUS_ERROR, Some(msg)),
             }
         }
