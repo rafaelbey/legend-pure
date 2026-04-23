@@ -840,6 +840,112 @@ fn value_matches_type(
     }
 }
 
+/// Direct parents of `id` in declaration order, with an implicit edge to
+/// `Any` when a Class / PrimitiveType declares none.
+fn direct_parents(model: &PureModel, id: ElementId) -> Vec<ElementId> {
+    let mut parents: Vec<ElementId> = Vec::new();
+    match model.get_element(id) {
+        Element::Class(c) => {
+            for st in &c.super_types {
+                if let legend_pure_parser_pure::types::TypeExpr::Named { element, .. } = st {
+                    parents.push(*element);
+                }
+            }
+        }
+        Element::PrimitiveType(p) => {
+            if let Some(sup) = p.super_type {
+                parents.push(sup);
+            }
+        }
+        _ => return parents,
+    }
+    if parents.is_empty()
+        && id != bootstrap::ANY_ID
+        && matches!(
+            model.get_element(id),
+            Element::Class(_) | Element::PrimitiveType(_)
+        )
+    {
+        parents.push(bootstrap::ANY_ID);
+    }
+    parents
+}
+
+/// C3 linearization — Python-style MRO. Produces the ordered supertype
+/// chain Pure's `generalizations(Type)` expects (and that `assertIs` /
+/// `assertEquals` compare against element-by-element).
+///
+/// For a class with multiple parents, the chain orders each parent's own
+/// MRO pre-visited, merging them so each type appears exactly once and
+/// relative order within each input list is preserved. Mirrors the classic
+/// C3 algorithm with a conservative fallback: if the merge is inconsistent
+/// (diamond with conflicting orderings) we emit the remaining candidates
+/// in arrival order rather than panicking.
+fn linearize_c3(model: &PureModel, id: ElementId) -> Vec<ElementId> {
+    fn walk(
+        model: &PureModel,
+        id: ElementId,
+        cache: &mut std::collections::HashMap<ElementId, Vec<ElementId>>,
+    ) -> Vec<ElementId> {
+        if let Some(cached) = cache.get(&id) {
+            return cached.clone();
+        }
+        let parents = direct_parents(model, id);
+        let parent_lines: Vec<Vec<ElementId>> =
+            parents.iter().map(|p| walk(model, *p, cache)).collect();
+        let mut lists: Vec<std::collections::VecDeque<ElementId>> = parent_lines
+            .into_iter()
+            .map(|v| v.into_iter().collect())
+            .collect();
+        if !parents.is_empty() {
+            lists.push(parents.iter().copied().collect());
+        }
+
+        let mut result: Vec<ElementId> = vec![id];
+        loop {
+            // Trim empty lists.
+            lists.retain(|l| !l.is_empty());
+            if lists.is_empty() {
+                break;
+            }
+            // Take the first candidate that appears only as head in any list.
+            let mut picked: Option<ElementId> = None;
+            for list in &lists {
+                if let Some(head) = list.front().copied() {
+                    let in_tail = lists.iter().any(|other| {
+                        let mut it = other.iter();
+                        let _ = it.next(); // skip head
+                        it.any(|&x| x == head)
+                    });
+                    if !in_tail {
+                        picked = Some(head);
+                        break;
+                    }
+                }
+            }
+            // Fallback: inconsistent hierarchy — take the first head
+            // available rather than panicking. Keeps the native total.
+            let pick = match picked {
+                Some(p) => p,
+                None => match lists.first().and_then(|l| l.front().copied()) {
+                    Some(p) => p,
+                    None => break,
+                },
+            };
+            result.push(pick);
+            for list in lists.iter_mut() {
+                if list.front() == Some(&pick) {
+                    list.pop_front();
+                }
+            }
+        }
+        cache.insert(id, result.clone());
+        result
+    }
+    let mut cache = std::collections::HashMap::new();
+    walk(model, id, &mut cache)
+}
+
 /// True when `descendant` extends (transitively) `ancestor` — or is `ancestor`.
 ///
 /// Walks `Class::super_types` and `PrimitiveType::super_type` upward. Used by
@@ -1047,35 +1153,10 @@ impl NativeFunction for Generalizations {
         let values = force_all(args, ctx)?;
         expect_args("generalizations", &values, 1)?;
         let type_id = as_element_id(&values[0])?;
-        // Walk the chain collecting ancestors — including the input itself,
-        // per Pure's `Type[1..*]` return multiplicity.
-        let mut chain: Vec<Value> = Vec::new();
-        let mut stack: Vec<legend_pure_parser_pure::ids::ElementId> = vec![type_id];
-        let mut seen: std::collections::HashSet<legend_pure_parser_pure::ids::ElementId> =
-            std::collections::HashSet::new();
-        while let Some(id) = stack.pop() {
-            if !seen.insert(id) {
-                continue;
-            }
-            chain.push(Value::Element(id));
-            match ctx.model().get_element(id) {
-                Element::Class(c) => {
-                    for st in &c.super_types {
-                        if let legend_pure_parser_pure::types::TypeExpr::Named { element, .. } = st
-                        {
-                            stack.push(*element);
-                        }
-                    }
-                }
-                Element::PrimitiveType(p) => {
-                    if let Some(sup) = p.super_type {
-                        stack.push(sup);
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(Evaluated::new(Value::from_vec(chain)))
+        let chain = linearize_c3(ctx.model(), type_id);
+        Ok(Evaluated::new(Value::from_vec(
+            chain.into_iter().map(Value::Element).collect(),
+        )))
     }
 
     fn signature(&self) -> &'static str {

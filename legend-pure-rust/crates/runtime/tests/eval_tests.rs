@@ -1186,7 +1186,33 @@ fn eval_surveyor_string_tests_error_histogram() {
     surveyor_error_histogram("meta::pure::functions::string::tests");
 }
 
+#[test]
+#[ignore = "diagnostic: bucket meta::tests FAILs by first line of message"]
+fn eval_surveyor_meta_tests_fail_histogram() {
+    surveyor_fail_histogram("meta::pure::functions::meta::tests");
+}
+
+#[test]
+#[ignore = "diagnostic: bucket lang::tests FAILs by first line of message"]
+fn eval_surveyor_lang_tests_fail_histogram() {
+    surveyor_fail_histogram("meta::pure::functions::lang::tests");
+}
+
+#[test]
+#[ignore = "diagnostic: bucket string::tests FAILs by first line of message"]
+fn eval_surveyor_string_tests_fail_histogram() {
+    surveyor_fail_histogram("meta::pure::functions::string::tests");
+}
+
 fn surveyor_error_histogram(package: &str) {
+    surveyor_outcome_histogram(package, "TestStatus.ERROR");
+}
+
+fn surveyor_fail_histogram(package: &str) {
+    surveyor_outcome_histogram(package, "TestStatus.FAIL");
+}
+
+fn surveyor_outcome_histogram(package: &str, target_status: &str) {
     use legend_pure_runtime::eval::Evaluator;
     use std::collections::BTreeMap;
 
@@ -1210,7 +1236,7 @@ fn surveyor_error_histogram(package: &str) {
     let results = heap.get_property_values(report_id, "results").unwrap();
 
     let mut histogram: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut error_count = 0;
+    let mut outcome_count = 0;
     for val in results.iter() {
         let Value::Object(res_id) = val else {
             continue;
@@ -1219,12 +1245,12 @@ fn surveyor_error_histogram(package: &str) {
             .get_property_values(*res_id, "status")
             .ok()
             .and_then(|v| v.iter().next().cloned());
-        let is_error =
-            matches!(&status, Some(Value::String(s)) if s.as_str() == "TestStatus.ERROR");
-        if !is_error {
+        let matches_target =
+            matches!(&status, Some(Value::String(s)) if s.as_str() == target_status);
+        if !matches_target {
             continue;
         }
-        error_count += 1;
+        outcome_count += 1;
         let fqn = heap
             .get_property_values(*res_id, "fqn")
             .ok()
@@ -1260,7 +1286,7 @@ fn surveyor_error_histogram(package: &str) {
             .or_default()
             .push(format!("{fqn} || {msg}"));
     }
-    eprintln!("\n=== {package} ERROR histogram ({error_count} errors) ===");
+    eprintln!("\n=== {package} {target_status} histogram ({outcome_count} results) ===",);
     let mut rows: Vec<_> = histogram.iter().collect();
     rows.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
     for (bucket, tests) in rows {
