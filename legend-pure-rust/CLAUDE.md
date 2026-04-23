@@ -3,6 +3,10 @@
 This file provides guidance to Claude Code (claude.ai/code) when working inside the
 Rust workspace. It supplements the root `/CLAUDE.md` with Rust-specific details.
 
+**Key references:**
+→ [`docs/PURE_LANGUAGE_SPEC.md`](docs/PURE_LANGUAGE_SPEC.md) — formal grammar, operator precedence, type system, compiler pipeline
+→ [`BACKLOG.md`](BACKLOG.md) — unified backlog
+
 ## Workspace Overview
 
 Cargo workspace (edition 2024) that reimplements the Legend Pure parser, compiler, and
@@ -95,6 +99,41 @@ CI (`/.github/workflows/rust.yml`) runs format-check → `lint-lib` → `lint` �
   validated by `scripts/check-copyright.sh`.
 - Snapshot tests use `insta` — run `cargo insta review` when protocol JSON changes.
 - Default visibility `pub(crate)`; only expose `pub` when it's part of the crate's API.
+
+## Correctness policy: no tactical test-pass hacks
+
+We are building **parity with Java Pure**, not "tests that pass today". Every
+fix must be structurally correct, or it's not a fix — it's debt that makes
+the next Java-divergence bug harder to find.
+
+- **Fix at the source of truth.** If Java emits `X`, produce `X` where the
+  data is born (build script, parser, compiler, model), not where it's
+  displayed. Stack traces, error messages, `SourceInformation.source`, and
+  protocol JSON should all see the same canonical value. When they diverge,
+  any one of them is wrong.
+- **No pattern-matching on test-specific shapes.** Never write a branch
+  that reads *"if the input starts with `essential/`, prepend
+  `/platform/pure/`"* — that's tuned to a test fixture and breaks the
+  moment user code or a renamed directory enters the picture. If the
+  convention is `/platform/pure/<rel>`, produce it uniformly from the
+  build step, not conditionally at the consumer.
+- **Don't transform intermediate values to satisfy an assertion.** When a
+  test expects `X` and we produce `Y`, the answer is "why does the pipeline
+  produce `Y` instead of `X`?" — not "how do we post-process `Y` into `X`
+  at the last native before the assertion?".
+- **Prefer one correct layer over many half-correct ones.** A single
+  structural fix usually removes several symptomatic bugs at once. Shallow
+  fixes tend to multiply.
+- **If the right fix is too large for this change, defer cleanly.** Mark
+  the test `#[ignore = "needs <structural fix>"]` with a one-line reason
+  and file a follow-up. Never paper over with a guard that only works for
+  this test's input.
+- **"The test passes" ≠ "the behaviour is correct."** A green check on a
+  narrowly tuned fix is worse than a red one, because the red one keeps
+  pointing at the real work.
+
+This applies doubly to Java-parity work: the platform tests exist precisely
+to detect divergence from Java semantics. Gaming them erases that signal.
 
 ## Key Traits & Derive Macros
 
