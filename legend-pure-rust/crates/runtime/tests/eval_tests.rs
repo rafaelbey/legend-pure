@@ -1304,10 +1304,14 @@ fn surveyor_outcome_histogram(package: &str, target_status: &str) {
     }
 }
 
-/// Harvest every distinct `Function not found: FQN` signalled by a SKIP
-/// result across all surveyor packages. Groups by simple name (the part
-/// before the first mangled-type segment) so we can spot families of
-/// missing overloads the Rust registry hasn't wired up yet.
+/// Harvest every distinct `Function not found: FQN` signalled by an
+/// ERROR-bucket result across all surveyor packages. Groups by simple
+/// name (the part before the first mangled-type segment) so we can
+/// spot families of missing overloads the Rust registry hasn't wired
+/// up yet. Previously targeted the SKIP bucket when `classify_outcome`
+/// downgraded FunctionNotFound; now that classification policy is
+/// strict (no message-based SKIP), those same results surface in the
+/// ERROR bucket.
 #[test]
 #[ignore = "diagnostic: list missing-native FQNs across all surveyor packages"]
 fn eval_surveyor_missing_natives_harvest() {
@@ -1352,7 +1356,7 @@ fn eval_surveyor_missing_natives_harvest() {
                 .get_property_values(*res_id, "status")
                 .ok()
                 .and_then(|v| v.iter().next().cloned());
-            if !matches!(&status, Some(Value::EnumValue { member, .. }) if member.as_str() == "SKIP")
+            if !matches!(&status, Some(Value::EnumValue { member, .. }) if member.as_str() == "ERROR")
             {
                 continue;
             }
