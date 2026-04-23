@@ -470,6 +470,28 @@ impl NativeFunction for GenericTypeOf {
             .alloc_dynamic("meta::pure::metamodel::type::generics::GenericType");
         ctx.heap_mut()
             .mutate_add(obj, "rawType", &[Value::Element(type_id)])?;
+
+        // When the value itself is a Class or Enumeration element
+        // reference, the genericType is parameterised on that element —
+        // `CC_Person->genericType()` yields `Class<CC_Person>`, so
+        // `typeArguments[0].rawType` reads back as `CC_Person`. Populate
+        // the single-argument shape; other kinds (instances, primitives,
+        // enum values) have no parameterisation.
+        if let Value::Element(elem_id) = &values[0] {
+            let arg_eligible = matches!(
+                ctx.model().get_element(*elem_id),
+                Element::Class(_) | Element::Enumeration(_)
+            );
+            if arg_eligible {
+                let arg_gt = ctx
+                    .heap_mut()
+                    .alloc_dynamic("meta::pure::metamodel::type::generics::GenericType");
+                ctx.heap_mut()
+                    .mutate_add(arg_gt, "rawType", &[Value::Element(*elem_id)])?;
+                ctx.heap_mut()
+                    .mutate_add(obj, "typeArguments", &[Value::Object(arg_gt)])?;
+            }
+        }
         Ok(Evaluated::new(Value::Object(obj)))
     }
 
