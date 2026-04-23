@@ -1097,20 +1097,21 @@ fn render_id(value: &Value, model: &PureModel) -> String {
 /// powers the `toRepresentation` native.
 fn render_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -> String {
     match value {
-        Value::String(s) => {
-            let escaped = s.replace('\'', "\\'");
-            format!("'{escaped}'")
-        }
+        Value::String(s) => format!("'{}'", escape_string_repr(s)),
         Value::Boolean(b) => b.to_string(),
         Value::Integer(i) => i.to_string(),
-        Value::Float(f) => f.to_string(),
+        Value::Float(f) => render_float_repr(*f),
         Value::Decimal(d) => d.to_string(),
         Value::Date(d) => format!("%{d}"),
         Value::StrictTime(t) => format!("%{t}"),
         Value::Element(id) => build_element_path(model, *id, "::", false),
         Value::Object(obj_id) => {
-            let classifier = heap.classifier(*obj_id).unwrap_or("Object");
-            format!("<{classifier} Anonymous_{obj_id}>")
+            // Java Pure renders object instances as `<Anonymous_{id}>` with
+            // no classifier prefix. `testClassInstanceToRepresentation`
+            // checks `startsWith('<Anonymous_')`; the classifier belongs
+            // on `type()`, not on the instance's textual identity.
+            let _ = heap;
+            format!("<Anonymous_{obj_id}>")
         }
         Value::Collection(v) => {
             let parts: Vec<String> = v
@@ -1128,6 +1129,44 @@ fn render_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -
         Value::EnumValue { enum_id, member } => {
             format!("{}.{member}", model.element_name(*enum_id))
         }
+    }
+}
+
+/// Escape a Pure string for `toRepresentation` output.
+///
+/// Backslashes are doubled first so subsequent replacements don't
+/// double-escape. Single quotes and newlines are then escaped to their
+/// Pure-source equivalents — `'\\'->toRepresentation() == '\'\\\\\''`
+/// and `'\n'->toRepresentation() == '\'\\n\''`.
+fn escape_string_repr(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace('\n', "\\n")
+}
+
+/// Render a `Float` for `toRepresentation` with Java Pure's formatting rules.
+///
+/// - Whole floats keep a trailing `.0` (`17.0->toRepresentation == '17.0'`).
+/// - Large / small finite numbers render in fixed-point, not scientific
+///   (`134.21e6->toRepresentation == '134210000.0'`,
+///   `0.000000013421->toRepresentation == '0.000000013421'`).
+/// - `±inf` / `NaN` fall through to `f64::to_string`.
+fn render_float_repr(f: f64) -> String {
+    if !f.is_finite() {
+        return f.to_string();
+    }
+    // 15 digits after the decimal is safe for `f64`'s ~15–17 significant
+    // digits; trimming trailing zeros (but keeping at least one after the
+    // decimal point) gives the shortest fixed-point form.
+    let fixed = format!("{f:.15}");
+    if let Some(dot_idx) = fixed.find('.') {
+        let mut end = fixed.len();
+        while end > dot_idx + 2 && fixed.as_bytes()[end - 1] == b'0' {
+            end -= 1;
+        }
+        fixed[..end].to_string()
+    } else {
+        format!("{fixed}.0")
     }
 }
 
