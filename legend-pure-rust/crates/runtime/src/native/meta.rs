@@ -1003,6 +1003,32 @@ fn cast_compatible(
     type_extends(model, target_id, value_type_id)
 }
 
+/// Detect an enum-value string and return the owning Enumeration's id.
+///
+/// Enum values round-trip through `Value::String("EnumName.MEMBER")` — the
+/// shape `eval_enum_value` and the enum-fallback branch of
+/// `eval_element_property` emit. To classify such a value's runtime type,
+/// split on the final `.`, resolve the prefix as a model path (supporting
+/// either the simple name or a fully-qualified `pkg::Enum.MEMBER`), and
+/// confirm the resolved element is an `Enumeration`. Returns `None` for
+/// regular strings so the caller falls back to `String`.
+fn enum_value_type(model: &PureModel, s: &str) -> Option<ElementId> {
+    let (prefix, member) = s.rsplit_once('.')?;
+    if member.is_empty() || prefix.is_empty() {
+        return None;
+    }
+    // Accept the simple-name form (one path segment) plus fully-qualified
+    // `pkg::Enum.MEMBER` by splitting on `::`.
+    let segments: Vec<SmolStr> = prefix.split("::").map(SmolStr::new).collect();
+    let id = model.resolve_by_path(&segments)?;
+    match model.get_element(id) {
+        Element::Enumeration(enum_def) if enum_def.values.iter().any(|v| v.name == member) => {
+            Some(id)
+        }
+        _ => None,
+    }
+}
+
 /// Resolve the metamodel [`ElementId`] for a runtime [`Value`]'s type.
 ///
 /// Primitives map to their bootstrap IDs. Heap objects look up their
@@ -1021,7 +1047,17 @@ fn resolve_value_type(
         Value::Integer(_) => Ok(bootstrap::INTEGER_ID),
         Value::Float(_) => Ok(bootstrap::FLOAT_ID),
         Value::Decimal(_) => Ok(bootstrap::DECIMAL_ID),
-        Value::String(_) => Ok(bootstrap::STRING_ID),
+        Value::String(s) => {
+            // Enum values arrive as `Value::String("EnumName.MEMBER")` because
+            // that is the shape `eval_enum_value` and the enum-fallback branch
+            // of `eval_element_property` emit. If the prefix resolves to an
+            // Enumeration in the model, the value's runtime type is that
+            // enumeration. Otherwise it is a plain String.
+            if let Some(enum_id) = enum_value_type(model, s.as_str()) {
+                return Ok(enum_id);
+            }
+            Ok(bootstrap::STRING_ID)
+        }
         Value::Date(d) => Ok(match d.precision() {
             DatePrecision::Day => bootstrap::STRICT_DATE_ID,
             DatePrecision::Time(_) => bootstrap::DATE_TIME_ID,
@@ -1030,7 +1066,20 @@ fn resolve_value_type(
             _ => bootstrap::DATE_ID,
         }),
         Value::StrictTime(_) => Ok(bootstrap::STRICT_TIME_ID),
-        Value::Element(id) => Ok(*id),
+        Value::Element(id) => {
+            // The runtime type of an element reference is its metaclass
+            // (`type(CC_Person) == Class`). `metatype_of` already centralises
+            // the element-kind → M3 metaclass lookup for the compiler; we
+            // reuse it here so `type(...)` / `genericType(...)` agree with
+            // dispatch.
+            if let Some(meta_id) = legend_pure_parser_pure::bootstrap::metatype_of(
+                model,
+                model.get_element(*id),
+            ) {
+                return Ok(meta_id);
+            }
+            Ok(*id)
+        }
         Value::Object(obj_id) => {
             let classifier = heap.classifier(*obj_id)?;
             let segments: Vec<SmolStr> = if classifier.is_empty() {
