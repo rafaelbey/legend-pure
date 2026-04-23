@@ -55,6 +55,16 @@ fn generate() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
+                // Embed paths in the Java Pure "resource URL" form —
+                // `/platform/pure/<relative>`. That matches the upstream
+                // convention platform tests assert against (e.g.
+                // `Class.sourceInformation.source ==
+                // '/platform/pure/essential/meta/source/sourceInformation.pure'`)
+                // and gives every downstream consumer (parser, error
+                // display, SourceInformation native) a single source of
+                // truth rather than reconstructing the prefix ad-hoc.
+                let canonical_path_str = format!("/platform/pure/{relative_path_str}");
+
                 let absolute_path = fs::canonicalize(path)
                     .map_err(|e| format!("canonicalize failed for {}: {e}", path.display()))?;
                 let abs_path_str = absolute_path
@@ -64,7 +74,7 @@ fn generate() -> Result<(), Box<dyn std::error::Error>> {
 
                 let _ = write!(
                     generated_code,
-                    "    PureSourceFile {{\n        path: \"{relative_path_str}\",\n        content: include_str!(\"{abs_path_str}\"),\n    }},\n"
+                    "    PureSourceFile {{\n        path: \"{canonical_path_str}\",\n        content: include_str!(\"{abs_path_str}\"),\n    }},\n"
                 );
 
                 println!("cargo:rerun-if-changed={abs_path_str}");
