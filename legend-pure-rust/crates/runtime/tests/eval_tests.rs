@@ -850,7 +850,12 @@ fn eval_id_of_integer_returns_display() {
 }
 
 #[test]
-fn eval_id_of_element_returns_fqn() {
+fn eval_id_of_element_returns_simple_name() {
+    // `id()` on a model-element reference returns the **simple name**, not
+    // the qualified path — matches Java Pure and the `testId`/`testPrimitives`
+    // PCT tests (`CC_Person->id() == 'CC_Person'`, not the full
+    // `meta::pure::...::CC_Person` path). `elementToPath` remains the native
+    // for qualified-path rendering.
     let result = eval_pure(
         r"
         function test::f(): String[1] {
@@ -859,7 +864,7 @@ fn eval_id_of_element_returns_fqn() {
         ",
         "f__String_1_",
     );
-    assert_eq!(result, Value::String("meta::pure".into()));
+    assert_eq!(result, Value::String("pure".into()));
 }
 
 #[test]
