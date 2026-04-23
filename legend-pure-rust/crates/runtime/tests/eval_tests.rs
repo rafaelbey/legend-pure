@@ -1274,6 +1274,93 @@ fn surveyor_error_histogram(package: &str) {
     }
 }
 
+/// Harvest every distinct `Function not found: FQN` signalled by a SKIP
+/// result across all surveyor packages. Groups by simple name (the part
+/// before the first mangled-type segment) so we can spot families of
+/// missing overloads the Rust registry hasn't wired up yet.
+#[test]
+#[ignore = "diagnostic: list missing-native FQNs across all surveyor packages"]
+fn eval_surveyor_missing_natives_harvest() {
+    use legend_pure_runtime::eval::Evaluator;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let packages = [
+        "meta::pure::functions::meta::tests",
+        "meta::pure::functions::collection::tests",
+        "meta::pure::functions::string::tests",
+        "meta::pure::functions::math::tests",
+        "meta::pure::functions::date::tests",
+        "meta::pure::functions::boolean::tests",
+        "meta::pure::functions::lang::tests",
+    ];
+
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    let mut evaluator = Evaluator::new(&model, &registry);
+    let mut by_simple: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+    for pkg in packages {
+        let report = evaluator
+            .call(
+                "meta::pure::test::surveyor::runTestsFromPath",
+                &[Value::String(SmolStr::new(pkg)), Value::String("".into())],
+            )
+            .expect("runTestsFromPath returns a TestReport");
+        let Value::Object(report_id) = report else {
+            continue;
+        };
+        let results = evaluator
+            .heap()
+            .get_property_values(report_id, "results")
+            .unwrap_or_else(|_| im_rc::Vector::new());
+        for val in results.iter() {
+            let Value::Object(res_id) = val else {
+                continue;
+            };
+            let status = evaluator
+                .heap()
+                .get_property_values(*res_id, "status")
+                .ok()
+                .and_then(|v| v.iter().next().cloned());
+            if !matches!(&status, Some(Value::String(s)) if s.as_str() == "TestStatus.SKIP") {
+                continue;
+            }
+            let msg = evaluator
+                .heap()
+                .get_property_values(*res_id, "message")
+                .ok()
+                .and_then(|v| v.iter().next().cloned())
+                .and_then(|v| match v {
+                    Value::String(s) => Some(s.to_string()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            // Lines that actually name the missing function — accept both
+            // "Function not found: X" and error wrapping variants.
+            for line in msg.lines() {
+                let trimmed = line.trim_matches('"').trim();
+                if let Some(rest) = trimmed.strip_prefix("Function not found: ") {
+                    let fqn = rest.trim().trim_end_matches('"').to_string();
+                    let simple = fqn.split('_').next().unwrap_or(&fqn).to_string();
+                    by_simple.entry(simple).or_default().insert(fqn);
+                }
+            }
+        }
+    }
+
+    eprintln!(
+        "\n=== Missing-native harvest: {} distinct simple names, {} distinct mangled FQNs ===",
+        by_simple.len(),
+        by_simple.values().map(BTreeSet::len).sum::<usize>()
+    );
+    for (simple, fqns) in &by_simple {
+        eprintln!("\n[{}] {} ({} variants)", fqns.len(), simple, fqns.len());
+        for fqn in fqns {
+            eprintln!("    {fqn}");
+        }
+    }
+}
+
 #[test]
 #[ignore = "broad surveyor canary across meta::pure::functions — prints full bucket breakdown"]
 fn eval_surveyor_broad_canary() {

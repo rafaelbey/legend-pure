@@ -1026,6 +1026,164 @@ fn is_sub_type_of(child: ElementId, parent: ElementId, model: &PureModel) -> boo
 }
 
 // ---------------------------------------------------------------------------
+// generalizations (function form)
+// ---------------------------------------------------------------------------
+
+/// Pure `generalizations(class:Type[1]):Type[1..*]`
+///
+/// Returns the transitive supertype chain of a Type — the class itself plus
+/// every ancestor reachable via `Class::super_types` / `PrimitiveType::super_type`.
+/// Complements the `.generalizations` property (which wraps each supertype in
+/// a `Generalization` heap object); this function returns the raw Type refs.
+#[derive(Debug)]
+pub struct Generalizations;
+
+impl NativeFunction for Generalizations {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("generalizations", &values, 1)?;
+        let type_id = as_element_id(&values[0])?;
+        // Walk the chain collecting ancestors — including the input itself,
+        // per Pure's `Type[1..*]` return multiplicity.
+        let mut chain: Vec<Value> = Vec::new();
+        let mut stack: Vec<legend_pure_parser_pure::ids::ElementId> = vec![type_id];
+        let mut seen: std::collections::HashSet<legend_pure_parser_pure::ids::ElementId> =
+            std::collections::HashSet::new();
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            chain.push(Value::Element(id));
+            match ctx.model().get_element(id) {
+                Element::Class(c) => {
+                    for st in &c.super_types {
+                        if let legend_pure_parser_pure::types::TypeExpr::Named { element, .. } = st
+                        {
+                            stack.push(*element);
+                        }
+                    }
+                }
+                Element::PrimitiveType(p) => {
+                    if let Some(sup) = p.super_type {
+                        stack.push(sup);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(Evaluated::new(Value::from_vec(chain)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "generalizations(class:Type[1]):Type[1..*]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// extractEnumValue
+// ---------------------------------------------------------------------------
+
+/// Pure `extractEnumValue<T>(enumeration:Enumeration<T>[1], value:String[1]):T[1]`
+///
+/// Returns the enum-value form `"SimpleName.NAME"` for the `name`d member of
+/// `enumeration`, matching the string shape [`Evaluator::eval_enum_value`]
+/// emits so `==` comparisons agree both directions.
+#[derive(Debug)]
+pub struct ExtractEnumValue;
+
+impl NativeFunction for ExtractEnumValue {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("extractEnumValue", &values, 2)?;
+        let enum_id = as_element_id(&values[0])?;
+        let name = values[1].as_string()?;
+        let Element::Enumeration(enum_def) = ctx.model().get_element(enum_id) else {
+            return Err(PureRuntimeError::EvaluationError(
+                "extractEnumValue: first argument must reference an Enumeration".into(),
+            )
+            .into());
+        };
+        if !enum_def.values.iter().any(|v| v.name == *name) {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "extractEnumValue: enumeration has no value '{name}'"
+            ))
+            .into());
+        }
+        let simple = ctx.model().element_name(enum_id);
+        Ok(Evaluated::new(Value::String(SmolStr::new(format!(
+            "{simple}.{name}"
+        )))))
+    }
+
+    fn signature(&self) -> &'static str {
+        "extractEnumValue(Enumeration[1], String[1]):T[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// evaluateAndDeactivate / deactivate — round-trip identities
+// ---------------------------------------------------------------------------
+
+/// Pure `evaluateAndDeactivate<T|m>(var:T[m]):T[m]`
+///
+/// Java Pure evaluates the ValueSpec then strips activation metadata. The
+/// Rust runtime has already forced the argument (every ValueSpec reaches a
+/// native as a `Value`), so this is an identity — the platform-level chains
+/// that call it (`{|expr}.expressionSequence->evaluateAndDeactivate()`)
+/// just want the resulting value back out.
+#[derive(Debug)]
+pub struct EvaluateAndDeactivate;
+
+impl NativeFunction for EvaluateAndDeactivate {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let mut values = force_all(args, ctx)?;
+        expect_args("evaluateAndDeactivate", &values, 1)?;
+        Ok(Evaluated::new(values.pop().unwrap_or(Value::Unit)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "evaluateAndDeactivate<T|m>(var:T[m]):T[m]"
+    }
+}
+
+/// Pure `deactivate(var:Any[*]):ValueSpecification[1]`
+///
+/// Java Pure wraps the input in a `ValueSpecification` so later `reactivate`
+/// calls can re-evaluate. We return the value directly — our runtime uses
+/// the value itself as the spec proxy (the `expressionSequence` round-trip
+/// path already treats the materialised closure as the spec).
+#[derive(Debug)]
+pub struct Deactivate;
+
+impl NativeFunction for Deactivate {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let mut values = force_all(args, ctx)?;
+        expect_args("deactivate", &values, 1)?;
+        Ok(Evaluated::new(values.pop().unwrap_or(Value::Unit)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "deactivate(var:Any[*]):ValueSpecification[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -1065,4 +1223,11 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("enumValues_Enumeration_1__T_MANY_", EnumValues);
     registry.register("toRepresentation_Any_1__String_1_", ToRepresentation);
     registry.register("subTypeOf_Type_1__Type_1__Boolean_1_", SubTypeOf);
+    registry.register("generalizations_Type_1__Type_$1_MANY$_", Generalizations);
+    registry.register(
+        "extractEnumValue_Enumeration_1__String_1__T_1_",
+        ExtractEnumValue,
+    );
+    registry.register("evaluateAndDeactivate_T_m__T_m_", EvaluateAndDeactivate);
+    registry.register("deactivate_Any_MANY__ValueSpecification_1_", Deactivate);
 }
