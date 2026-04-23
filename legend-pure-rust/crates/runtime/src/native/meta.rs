@@ -1072,10 +1072,9 @@ fn resolve_value_type(
             // the element-kind → M3 metaclass lookup for the compiler; we
             // reuse it here so `type(...)` / `genericType(...)` agree with
             // dispatch.
-            if let Some(meta_id) = legend_pure_parser_pure::bootstrap::metatype_of(
-                model,
-                model.get_element(*id),
-            ) {
+            if let Some(meta_id) =
+                legend_pure_parser_pure::bootstrap::metatype_of(model, model.get_element(*id))
+            {
                 return Ok(meta_id);
             }
             Ok(*id)
@@ -1159,9 +1158,32 @@ fn render_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -
 ///
 /// Mirrors `crate::pure::resolve::is_subtype` — duplicated here because the
 /// pure-crate function is `pub(crate)` and we cannot edit that crate.
+///
+/// Honours two implicit edges the compiler does not materialise:
+/// - Every Class / PrimitiveType implicitly extends `Any`, so an empty
+///   `super_types` chain terminates at the top of the lattice rather than
+///   the first node the walk sees. `SA->subTypeOf(Any)` expects `true`
+///   even though `SA` declares no explicit `extends`.
+/// - `Nil` is the bottom type — a subtype of every type, by definition.
+///   Matches the Pure-level `_subTypeOf` branch (`if($subType == Nil, |true, …)`).
 fn is_sub_type_of(child: ElementId, parent: ElementId, model: &PureModel) -> bool {
     if child == parent {
         return true;
+    }
+    // Bottom-type shortcut: Nil is a subtype of every other type.
+    if child == legend_pure_parser_pure::bootstrap::NIL_ID {
+        return true;
+    }
+    // Top-type shortcut: every Class / PrimitiveType is a subtype of Any,
+    // whether or not the declaration says so explicitly.
+    if parent == legend_pure_parser_pure::bootstrap::ANY_ID {
+        if child == legend_pure_parser_pure::bootstrap::ANY_ID {
+            return true;
+        }
+        return matches!(
+            model.get_element(child),
+            Element::Class(_) | Element::PrimitiveType(_)
+        );
     }
     // Bootstrap package ElementIds have no `Element::Class`/`PrimitiveType`
     // representation — bail out to avoid `get_element` on a package.
