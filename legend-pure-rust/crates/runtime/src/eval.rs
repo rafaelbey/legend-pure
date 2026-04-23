@@ -758,7 +758,15 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 // walk these. Each wraps a `GenericType` with `rawType`
                 // pointing to the supertype element, and `specific`
                 // pointing back to `id` (the subtype).
-                let super_eids: Vec<ElementId> = match self.model.get_element(id) {
+                //
+                // Classes / primitives that declare no explicit `extends`
+                // implicitly extend `Any` — the compiler does not
+                // materialise that edge, so we add it here when the
+                // declared chain is empty and the element is not `Any`
+                // itself. Without this, the Pure-level helpers
+                // (`getAllTypeGeneralisations`, `_subTypeOf(..., Any)`)
+                // fail to reach the top of the lattice.
+                let declared: Vec<ElementId> = match self.model.get_element(id) {
                     Element::Class(c) => c
                         .super_types
                         .iter()
@@ -769,6 +777,18 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                         .collect(),
                     Element::PrimitiveType(p) => p.super_type.into_iter().collect(),
                     _ => Vec::new(),
+                };
+                let is_typelike = matches!(
+                    self.model.get_element(id),
+                    Element::Class(_) | Element::PrimitiveType(_)
+                );
+                let super_eids: Vec<ElementId> = if declared.is_empty()
+                    && is_typelike
+                    && id != legend_pure_parser_pure::bootstrap::ANY_ID
+                {
+                    vec![legend_pure_parser_pure::bootstrap::ANY_ID]
+                } else {
+                    declared
                 };
                 let mut items = Vec::with_capacity(super_eids.len());
                 for super_eid in super_eids {
