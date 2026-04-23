@@ -1351,6 +1351,109 @@ impl NativeFunction for Deactivate {
     }
 }
 
+/// Pure `genericTypeClass(g:GenericType[1]):Class<Any>[0..1]`
+///
+/// Reads the GenericType's `rawType` property and returns it only when it
+/// references a Class element. Primitive types, Enumerations, Measures,
+/// Associations, Profiles, and empty-rawType generic types all produce
+/// [`Value::Unit`] — matching `testGenericTypeClassPrimitive` /
+/// `testGenericTypeClassFromEnumVal` which `assertEmpty` the result.
+///
+/// The signature is declared as `Class<Any>[1]` in the platform source but
+/// Java Pure's implementation is `[0..1]` in practice — the platform tests
+/// assert empty results across multiple non-Class inputs. Matching that
+/// behaviour rather than raising on empty rawType.
+#[derive(Debug)]
+pub struct GenericTypeClass;
+
+impl NativeFunction for GenericTypeClass {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("genericTypeClass", &values, 1)?;
+        let Value::Object(obj_id) = &values[0] else {
+            return Err(PureRuntimeError::type_mismatch("GenericType", &values[0]).into());
+        };
+        let raw_type_vals = ctx.heap().get_property_values(*obj_id, "rawType")?;
+        let Some(first) = raw_type_vals.iter().next() else {
+            return Ok(Evaluated::new(Value::Unit));
+        };
+        let raw_type = first.clone();
+        let Value::Element(id) = raw_type else {
+            return Ok(Evaluated::new(Value::Unit));
+        };
+        match ctx.model().get_element(id) {
+            Element::Class(_) => Ok(Evaluated::new(Value::Element(id))),
+            _ => Ok(Evaluated::new(Value::Unit)),
+        }
+    }
+
+    fn signature(&self) -> &'static str {
+        "genericTypeClass(g:GenericType[1]):Class<Any>[0..1]"
+    }
+}
+
+/// Pure `elementPath(element:PackageableElement[1]):PackageableElement[1..*]`
+///
+/// Returns the chain of elements from the root package down to `element`:
+/// `[Root, pkg1, pkg1::pkg2, …, element]`. Each intermediate entry is the
+/// `Value::Element` of a package on the path; the final entry is the input
+/// element itself. Mirrors Java Pure's `.elementPath` accessor used for
+/// reflection-heavy code generation (`elementToPath.pure::testElementPath`).
+#[derive(Debug)]
+pub struct ElementPath;
+
+impl NativeFunction for ElementPath {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("elementPath", &values, 1)?;
+        let id = as_element_id(&values[0])?;
+
+        // Walk the parent chain up to the root. For instance elements, the
+        // chain starts with the element's own parent package; for a package
+        // it starts with the package's own parent. The element / package
+        // itself is appended last before we reverse.
+        let mut chain: Vec<legend_pure_parser_pure::ids::ElementId> = vec![id];
+        let mut cursor: Option<legend_pure_parser_pure::ids::ElementId> = match id {
+            legend_pure_parser_pure::ids::ElementId::InstanceId { .. } => {
+                Some(legend_pure_parser_pure::ids::ElementId::Package(
+                    ctx.model().get_node(id).parent_package,
+                ))
+            }
+            legend_pure_parser_pure::ids::ElementId::Package(pkg_id) => ctx
+                .model()
+                .get_package(pkg_id)
+                .parent
+                .map(legend_pure_parser_pure::ids::ElementId::Package),
+        };
+        while let Some(step) = cursor {
+            chain.push(step);
+            cursor = match step {
+                legend_pure_parser_pure::ids::ElementId::Package(pid) => ctx
+                    .model()
+                    .get_package(pid)
+                    .parent
+                    .map(legend_pure_parser_pure::ids::ElementId::Package),
+                _ => None,
+            };
+        }
+        chain.reverse();
+        let items: Vec<Value> = chain.into_iter().map(Value::Element).collect();
+        Ok(Evaluated::new(Value::from_vec(items)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "elementPath(element:PackageableElement[1]):PackageableElement[1..*]"
+    }
+}
+
 /// Pure `reactivate(vs:ValueSpecification[1], vars:Map<String, List<Any>>[1]):Any[*]`
 ///
 /// Mirror of [`Deactivate`]. Java Pure re-evaluates a previously-deactivated
@@ -1442,5 +1545,10 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register(
         "reactivate_ValueSpecification_1__Map_1__Any_MANY_",
         Reactivate,
+    );
+    registry.register("genericTypeClass_GenericType_1__Class_1_", GenericTypeClass);
+    registry.register(
+        "elementPath_PackageableElement_1__PackageableElement_$1_MANY$_",
+        ElementPath,
     );
 }
