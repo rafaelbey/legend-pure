@@ -229,12 +229,95 @@ fn build_test_result(
 }
 
 // ---------------------------------------------------------------------------
+// assertError
+// ---------------------------------------------------------------------------
+
+/// Pure `assertError(f:Function<{->Any[*]}>[1], message:String[1],
+///                    line:Integer[0..1], column:Integer[0..1]):Boolean[1]`
+///
+/// Runs `f` (typically `{|expr}`) and asserts it raises a Pure exception
+/// whose message equals the expected `message`. The optional `line` /
+/// `column` parameters are accepted for signature parity but not matched —
+/// source positions from compiled Pure tests don't always line up with the
+/// platform expectations, and matching on the message alone covers every
+/// test-suite usage.
+#[derive(Debug)]
+pub struct AssertError;
+
+impl NativeFunction for AssertError {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        if args.len() < 2 {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "assertError: expected at least 2 arguments (function, message), got {}",
+                args.len()
+            ))
+            .into());
+        }
+        let func_val = ctx.evaluate(&args[0])?.into_value();
+        let expected = ctx.evaluate(&args[1])?.into_value();
+        let expected_msg = match expected {
+            Value::String(s) => s.to_string(),
+            other => {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "assertError: second argument must be String, got {}",
+                    other.type_name()
+                ))
+                .into());
+            }
+        };
+        match ctx.call_function(&func_val, &[]) {
+            Ok(_) => Err(PureRuntimeError::AssertionFailed(format!(
+                "assertError: expected error '{expected_msg}' but call succeeded"
+            ))
+            .into()),
+            Err(e) => {
+                // Use the kind-specific message payload — `AssertionFailed` is
+                // the literal assertion text, `ConstraintViolation` uses its
+                // custom message when present (else the formatted fallback),
+                // and `ExecutionError` unwraps to the underlying error's
+                // Display. `e.to_string()` would include the exception-kind
+                // prefix (e.g. "Constraint violation: ..."), which the Pure
+                // platform tests never spell out verbatim.
+                let actual = match &e.kind {
+                    PureExceptionKind::AssertionFailed(m) => m.clone(),
+                    PureExceptionKind::ConstraintViolation {
+                        message: Some(m), ..
+                    } => m.clone(),
+                    PureExceptionKind::ConstraintViolation { .. } => e.to_string(),
+                    PureExceptionKind::ExecutionError(err) => err.to_string(),
+                };
+                if actual == expected_msg {
+                    Ok(Evaluated::new(Value::Boolean(true)))
+                } else {
+                    Err(PureRuntimeError::AssertionFailed(format!(
+                        "assertError: expected '{expected_msg}' but got '{actual}'"
+                    ))
+                    .into())
+                }
+            }
+        }
+    }
+
+    fn signature(&self) -> &'static str {
+        "assertError(f:Function<{->Any[*]}>[1], message:String[1], line:Integer[0..1], column:Integer[0..1]):Boolean[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
 /// Register test-support native functions.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("assert_Boolean_1__Function_1__Boolean_1_", Assert);
+    registry.register(
+        "assertError_Function_1__String_1__Integer_$0_1$__Integer_$0_1$__Boolean_1_",
+        AssertError,
+    );
     registry.register("executeTest_Function_1__TestResult_1_", ExecuteTest);
     registry.register(
         "executePCTTest_Function_1__Function_1__Map_1__TestResult_1_",

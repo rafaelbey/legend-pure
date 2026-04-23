@@ -208,6 +208,9 @@ impl NativeFunction for GreaterThanEqual {
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("eq_Any_1__Any_1__Boolean_1_", Eq);
     registry.register("equal_Any_MANY__Any_MANY__Boolean_1_", Equal);
+    // `is(Any[1], Any[1]):Boolean[1]` shares `eq`'s semantics — identity
+    // comparison for primitives, same-ObjectId for heap objects.
+    registry.register("is_Any_1__Any_1__Boolean_1_", Eq);
     registry.register("lessThan_Number_1__Number_1__Boolean_1_", LessThan);
     registry.register(
         "lessThanEqual_Number_1__Number_1__Boolean_1_",
