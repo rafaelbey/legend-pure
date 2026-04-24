@@ -976,7 +976,24 @@ fn linearize_c3(model: &PureModel, id: ElementId) -> Vec<ElementId> {
 /// Walks `Class::super_types` and `PrimitiveType::super_type` upward. Used by
 /// [`value_matches_type`] and [`cast_compatible`] so hierarchy-aware runtime
 /// checks don't each re-implement the chain walk.
-fn type_extends(model: &PureModel, descendant: ElementId, ancestor: ElementId) -> bool {
+/// Convenience: is the element identified by `descendant_id` a subtype of
+/// the M3 class named by `ancestor_fqn`? Resolves the FQN against the
+/// model and walks the supertype chain via [`type_extends`].
+///
+/// Returns `false` when either the FQN fails to resolve or the descendant
+/// isn't in the chain. Useful for classifier checks where the caller only
+/// knows a string path (`m3_paths::FUNCTION_EXPRESSION`) and the concrete
+/// instance may be a registered subclass (`SimpleFunctionExpression`).
+pub(crate) fn classifier_extends_m3(
+    model: &PureModel,
+    descendant_id: ElementId,
+    ancestor_fqn: &str,
+) -> bool {
+    crate::m3_paths::resolve(model, ancestor_fqn)
+        .is_some_and(|ancestor| type_extends(model, descendant_id, ancestor))
+}
+
+pub(crate) fn type_extends(model: &PureModel, descendant: ElementId, ancestor: ElementId) -> bool {
     let mut stack: Vec<ElementId> = vec![descendant];
     let mut visited: std::collections::HashSet<ElementId> = std::collections::HashSet::new();
     while let Some(id) = stack.pop() {
@@ -1760,10 +1777,13 @@ fn reactivate_value(value: &Value, ctx: &mut dyn EvalContextTrait) -> Result<Val
         return Ok(value.clone());
     };
     let classifier = ctx.heap().classifier(*obj_id)?.to_string();
-    let classifier_id = crate::m3_paths::resolve(ctx.model(), &classifier);
+    let Some(classifier_id) = crate::m3_paths::resolve(ctx.model(), &classifier) else {
+        // Unknown classifier — not a spec wrapper we know how to walk.
+        return Ok(value.clone());
+    };
 
     // InstanceValue — unwrap `.values`, reactivating each entry.
-    if classifier_id == crate::m3_paths::resolve(ctx.model(), crate::m3_paths::INSTANCE_VALUE) {
+    if classifier_extends_m3(ctx.model(), classifier_id, crate::m3_paths::INSTANCE_VALUE) {
         let vals = ctx.heap().get_property_values(*obj_id, "values")?;
         let raw: Vec<Value> = vals.iter().cloned().collect();
         let mut out: Vec<Value> = Vec::with_capacity(raw.len());
@@ -1783,8 +1803,11 @@ fn reactivate_value(value: &Value, ctx: &mut dyn EvalContextTrait) -> Result<Val
     }
 
     // VariableExpression — resolve from the current scope.
-    if classifier_id == crate::m3_paths::resolve(ctx.model(), crate::m3_paths::VARIABLE_EXPRESSION)
-    {
+    if classifier_extends_m3(
+        ctx.model(),
+        classifier_id,
+        crate::m3_paths::VARIABLE_EXPRESSION,
+    ) {
         let name_vals = ctx.heap().get_property_values(*obj_id, "name")?;
         let Some(Value::String(name)) = name_vals.iter().next() else {
             return Err(PureRuntimeError::EvaluationError(
@@ -1801,13 +1824,15 @@ fn reactivate_value(value: &Value, ctx: &mut dyn EvalContextTrait) -> Result<Val
         .into());
     }
 
-    // SimpleFunctionExpression / FunctionExpression — reactivate each
-    // parameter and dispatch the call.
-    let is_function_expr = classifier_id
-        == crate::m3_paths::resolve(ctx.model(), crate::m3_paths::SIMPLE_FUNCTION_EXPRESSION)
-        || classifier_id
-            == crate::m3_paths::resolve(ctx.model(), crate::m3_paths::FUNCTION_EXPRESSION);
-    if is_function_expr {
+    // FunctionExpression (abstract) — `SimpleFunctionExpression` and any
+    // future subclass share the same `func` / `parametersValues` shape,
+    // so a single subtype check covers the family instead of listing
+    // every concrete subclass explicitly.
+    if classifier_extends_m3(
+        ctx.model(),
+        classifier_id,
+        crate::m3_paths::FUNCTION_EXPRESSION,
+    ) {
         let params = ctx
             .heap()
             .get_property_values(*obj_id, "parametersValues")?;
