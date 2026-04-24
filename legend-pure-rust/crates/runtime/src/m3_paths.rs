@@ -36,55 +36,60 @@ type classifier = str;
 
 /// `meta::pure::metamodel::function::property::Property` — heap wrapper for
 /// a Class property reference, surfaced by `.properties` on a Class.
-pub const PROPERTY: &str = "meta::pure::metamodel::function::property::Property";
+pub const PROPERTY: &classifier = "meta::pure::metamodel::function::property::Property";
 
 /// `meta::pure::metamodel::function::property::QualifiedProperty` — heap
 /// wrapper for a derived property reference, surfaced by
 /// `.qualifiedProperties` on a Class.
-pub const QUALIFIED_PROPERTY: &str = "meta::pure::metamodel::function::property::QualifiedProperty";
+pub const QUALIFIED_PROPERTY: &classifier =
+    "meta::pure::metamodel::function::property::QualifiedProperty";
 
 /// `meta::pure::metamodel::function::LambdaFunction` — M3 class for anonymous
 /// lambdas; recognised by the `New` native's lambda-clone shortcut.
-pub const LAMBDA_FUNCTION: &str = "meta::pure::metamodel::function::LambdaFunction";
+pub const LAMBDA_FUNCTION: &classifier = "meta::pure::metamodel::function::LambdaFunction";
 
 /// `meta::pure::metamodel::function::Function` — M3 base class for all
 /// functions; also accepted by the lambda-clone shortcut.
-pub const FUNCTION: &str = "meta::pure::metamodel::function::Function";
+pub const FUNCTION: &classifier = "meta::pure::metamodel::function::Function";
 
 /// `meta::pure::metamodel::extension::Stereotype` — heap wrapper for a
 /// `<<stereotype>>` annotation.
-pub const STEREOTYPE: &str = "meta::pure::metamodel::extension::Stereotype";
+pub const STEREOTYPE: &classifier = "meta::pure::metamodel::extension::Stereotype";
 
 /// `meta::pure::metamodel::extension::TaggedValue` — heap wrapper for a
 /// `{tag = 'value'}` annotation.
-pub const TAGGED_VALUE: &str = "meta::pure::metamodel::extension::TaggedValue";
+pub const TAGGED_VALUE: &classifier = "meta::pure::metamodel::extension::TaggedValue";
 
 /// `meta::pure::metamodel::type::generics::GenericType` — heap wrapper for
 /// a parameterised type instance returned by `genericType(...)`.
-pub const GENERIC_TYPE: &str = "meta::pure::metamodel::type::generics::GenericType";
+pub const GENERIC_TYPE: &classifier = "meta::pure::metamodel::type::generics::GenericType";
 
 /// `meta::pure::metamodel::relationship::Generalization` — heap wrapper for
 /// a single supertype edge returned by `.generalizations`.
-pub const GENERALIZATION: &str = "meta::pure::metamodel::relationship::Generalization";
+pub const GENERALIZATION: &classifier = "meta::pure::metamodel::relationship::Generalization";
 
 /// `meta::pure::functions::meta::SourceInformation` — return shape of the
 /// `sourceInformation(Any[1]):SourceInformation[0..1]` native.
-pub const SOURCE_INFORMATION: &str = "meta::pure::functions::meta::SourceInformation";
+pub const SOURCE_INFORMATION: &classifier = "meta::pure::functions::meta::SourceInformation";
 
 /// `meta::pure::functions::collection::List` — a `List<T>(values=…)` wrapper
 /// used pervasively by `evaluate(Function, List[*])`.
-pub const LIST: &str = "meta::pure::functions::collection::List";
+pub const LIST: &classifier = "meta::pure::functions::collection::List";
+
+/// `meta::pure::functions::collection::Pair` — `Pair<U,V>(first=…, second=…)`
+/// wrapper underpinning `pair()` and Map entry iteration (`keyValues`).
+pub const PAIR: &classifier = "meta::pure::functions::collection::Pair";
 
 /// `meta::pure::test::surveyor::TestResult` — heap-object shape returned
 /// by the Pure-level test surveyor's per-test result builder.
-pub const TEST_RESULT: &str = "meta::pure::test::surveyor::TestResult";
+pub const TEST_RESULT: &classifier = "meta::pure::test::surveyor::TestResult";
 
 /// Resolve a `::`-qualified FQN to its [`ElementId`], returning `None` if
 /// any segment doesn't resolve. Used alongside the constants above to
 /// compare heap-object classifiers by structural identity instead of
 /// textual suffix matching.
 #[must_use]
-pub fn resolve(model: &PureModel, fqn: &str) -> Option<ElementId> {
+pub fn resolve(model: &PureModel, fqn: &classifier) -> Option<ElementId> {
     if fqn.is_empty() {
         return None;
     }
