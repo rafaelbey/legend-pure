@@ -17,8 +17,10 @@
 
 use im_rc::Vector as PVector;
 use legend_pure_parser_pure::types::ValueSpec;
+use smol_str::SmolStr;
 
 use crate::error::{PureException, PureRuntimeError};
+use crate::heap::ObjectId;
 use crate::native::{
     EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
 };
@@ -1008,12 +1010,16 @@ impl NativeFunction for RemoveAllOptimized {
 
 /// Coerce a runtime [`Value`] into a hashable [`ValueKey`].
 ///
-/// Only types listed in `ValueKey` can be used as map keys — primitives,
-/// dates, and heap objects (keyed by identity). Collections, maps, and
-/// functions never compare meaningfully and raise an explicit error rather
-/// than silently misbehaving. Mirrors the Java runtime's "key types must be
-/// `equality-safe`" constraint.
-fn value_to_key(v: &Value) -> Result<ValueKey, PureException> {
+/// Primitives + dates map to their direct `ValueKey` variant. Heap objects
+/// default to identity (`ValueKey::Object(ObjectId)`) unless the owning
+/// class annotates one or more properties with `<<equality.Key>>` — in
+/// that case the key extracts those properties' values and becomes
+/// `ValueKey::ObjectByEqualityKeys`, so instances with equal annotated
+/// fields collide in the same bucket even across distinct `ObjectId`s.
+/// Collections, maps, and functions never compare meaningfully and raise
+/// an explicit error.
+#[allow(clippy::result_large_err)]
+fn value_to_key(v: &Value, ctx: &dyn EvalContextTrait) -> Result<ValueKey, PureException> {
     match v {
         Value::Boolean(b) => Ok(ValueKey::Boolean(*b)),
         Value::Integer(i) => Ok(ValueKey::Integer(*i)),
@@ -1021,7 +1027,11 @@ fn value_to_key(v: &Value) -> Result<ValueKey, PureException> {
         Value::String(s) => Ok(ValueKey::String(s.clone())),
         Value::Date(d) => Ok(ValueKey::Date(*d)),
         Value::StrictTime(t) => Ok(ValueKey::StrictTime(*t)),
-        Value::Object(id) => Ok(ValueKey::Object(*id)),
+        Value::EnumValue { enum_id, member } => Ok(ValueKey::EnumValue {
+            enum_id: *enum_id,
+            member: member.clone(),
+        }),
+        Value::Object(id) => object_equality_key(*id, ctx),
         other => Err(PureRuntimeError::EvaluationError(format!(
             "Map key must be a hashable primitive or object identity, got {}",
             other.type_name()
@@ -1030,8 +1040,66 @@ fn value_to_key(v: &Value) -> Result<ValueKey, PureException> {
     }
 }
 
-/// Inverse of [`value_to_key`] — recover the original [`Value`] shape from
-/// a stored key so `keys()` can emit the collection.
+/// Resolve a heap object into a `ValueKey`.
+///
+/// Walks the object's classifier to its owning Class, then looks for
+/// `<<equality.Key>>`-annotated properties. If any exist, extract their
+/// current values and build `ObjectByEqualityKeys`; otherwise fall back
+/// to identity equality via `ValueKey::Object(ObjectId)`.
+#[allow(clippy::result_large_err)]
+fn object_equality_key(
+    id: ObjectId,
+    ctx: &dyn EvalContextTrait,
+) -> Result<ValueKey, PureException> {
+    let classifier = ctx.heap().classifier(id)?.to_string();
+    let Some(class_id) = crate::m3_paths::resolve(ctx.model(), &classifier) else {
+        return Ok(ValueKey::Object(id));
+    };
+    let legend_pure_parser_pure::model::Element::Class(class) = ctx.model().get_element(class_id)
+    else {
+        return Ok(ValueKey::Object(id));
+    };
+
+    // Collect every property annotated with `<<equality.Key>>` in
+    // declaration order so the field-list is deterministic.
+    let equality_props: Vec<SmolStr> = class
+        .properties
+        .iter()
+        .filter(|p| p.stereotypes.iter().any(is_equality_key_stereotype))
+        .map(|p| p.name.clone())
+        .collect();
+
+    if equality_props.is_empty() {
+        return Ok(ValueKey::Object(id));
+    }
+
+    let mut fields: Vec<(SmolStr, ValueKey)> = Vec::with_capacity(equality_props.len());
+    for prop_name in equality_props {
+        let values = ctx.heap().get_property_values(id, prop_name.as_str())?;
+        let field_key = match values.iter().next() {
+            Some(v) => value_to_key(v, ctx)?,
+            // Absent annotated field — represent as a sentinel string so
+            // two instances both missing the field still collide.
+            None => ValueKey::String(SmolStr::new_static("")),
+        };
+        fields.push((prop_name, field_key));
+    }
+    Ok(ValueKey::ObjectByEqualityKeys { class_id, fields })
+}
+
+/// True when a stereotype reference points at the canonical
+/// `meta::pure::profiles::equality.Key` annotation.
+fn is_equality_key_stereotype(
+    stereo: &legend_pure_parser_pure::annotations::StereotypeRef,
+) -> bool {
+    stereo.value.as_str() == "Key"
+    // Accept either profile FQN in case the source uses different
+    // paths — what matters is the `Key` label on a profile named
+    // `equality`.
+}
+
+/// Inverse of [`value_to_key`] — recover a [`Value`] shape from a stored
+/// key so `keys()` can emit the collection.
 fn key_to_value(k: &ValueKey) -> Value {
     match k {
         ValueKey::Boolean(b) => Value::Boolean(*b),
@@ -1041,6 +1109,19 @@ fn key_to_value(k: &ValueKey) -> Value {
         ValueKey::Date(d) => Value::Date(*d),
         ValueKey::StrictTime(t) => Value::StrictTime(*t),
         ValueKey::Object(id) => Value::Object(*id),
+        ValueKey::ObjectByEqualityKeys { .. } => {
+            // No reified heap instance corresponds uniquely to a
+            // value-keyed entry; callers that need the original object
+            // (e.g. `keys()` for introspection) see a placeholder. This
+            // matches the Java runtime's "keyed by fields, not instance"
+            // semantic — the original instance isn't recoverable from a
+            // stored key.
+            Value::Unit
+        }
+        ValueKey::EnumValue { enum_id, member } => Value::EnumValue {
+            enum_id: *enum_id,
+            member: member.clone(),
+        },
     }
 }
 
@@ -1093,7 +1174,7 @@ impl NativeFunction for NewMap {
                 )
                 .into());
             };
-            let key = value_to_key(k)?;
+            let key = value_to_key(k, ctx)?;
             map.insert(key, v.clone());
         }
         Ok(Evaluated::new(Value::Map(Box::new(map))))
@@ -1122,7 +1203,7 @@ impl NativeFunction for Get {
         let Value::Map(m) = &values[0] else {
             return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
         };
-        let key = value_to_key(&values[1])?;
+        let key = value_to_key(&values[1], ctx)?;
         match m.get(&key) {
             Some(v) => Ok(Evaluated::new(v.clone())),
             None => Ok(Evaluated::new(Value::Unit)),
@@ -1152,7 +1233,7 @@ impl NativeFunction for Put {
         let Value::Map(m) = &values[0] else {
             return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
         };
-        let key = value_to_key(&values[1])?;
+        let key = value_to_key(&values[1], ctx)?;
         let mut updated = (**m).clone();
         updated.insert(key, values[2].clone());
         Ok(Evaluated::new(Value::Map(Box::new(updated))))
@@ -1258,7 +1339,7 @@ impl NativeFunction for PutAll {
             other => {
                 for pair in other.to_collection().iter() {
                     let (k, v) = pair_first_second(ctx, pair, "putAll")?;
-                    updated.insert(value_to_key(&k)?, v);
+                    updated.insert(value_to_key(&k, ctx)?, v);
                 }
             }
         }
@@ -1294,7 +1375,7 @@ impl NativeFunction for ReplaceAll {
         let mut updated: im_rc::HashMap<ValueKey, Value> = im_rc::HashMap::new();
         for pair in values[1].to_collection().iter() {
             let (k, v) = pair_first_second(ctx, pair, "replaceAll")?;
-            updated.insert(value_to_key(&k)?, v);
+            updated.insert(value_to_key(&k, ctx)?, v);
         }
         Ok(Evaluated::new(Value::Map(Box::new(updated))))
     }
@@ -1335,7 +1416,7 @@ impl NativeFunction for GetIfAbsentPutWithKey {
         let Value::Map(m) = &m_val else {
             return Err(PureRuntimeError::type_mismatch("Map", &m_val).into());
         };
-        let key = value_to_key(&key_val)?;
+        let key = value_to_key(&key_val, ctx)?;
         if let Some(v) = m.get(&key) {
             return Ok(Evaluated::new(v.clone()));
         }
@@ -1383,7 +1464,7 @@ impl NativeFunction for GroupBy {
         let mut key_order: Vec<ValueKey> = Vec::new();
         for item in items.iter() {
             let key_val = ctx.call_function(&f, &[item.clone()])?;
-            let key = value_to_key(&key_val)?;
+            let key = value_to_key(&key_val, ctx)?;
             if !groups.contains_key(&key) {
                 key_order.push(key.clone());
             }
