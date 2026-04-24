@@ -267,7 +267,7 @@ fn build_test_result(
     };
 
     let heap = ctx.heap_mut();
-    let id = heap.alloc_dynamic("meta::pure::test::surveyor::TestResult");
+    let id = heap.alloc_dynamic(crate::m3_paths::TEST_RESULT);
     heap.mutate_add(id, "fqn", &[Value::String(SmolStr::new(fqn))])?;
     heap.mutate_add(id, "status", &[status_value])?;
     heap.mutate_add(id, "elapsed", &[Value::Integer(elapsed)])?;

@@ -954,8 +954,9 @@ fn eval_enum_name_of_user_enum() {
 
 #[test]
 fn eval_enum_values_expands_to_each_member() {
-    // enumValues returns one "EnumName.Member" entry per declared value in
-    // declaration order.
+    // enumValues returns one `Value::EnumValue { enum_id, member }` entry
+    // per declared value in declaration order. The result's enum_id field
+    // points at the same Color Enumeration element across every member.
     let result = eval_pure(
         r"
         Enum test::Color { RED, GREEN, BLUE }
@@ -969,9 +970,26 @@ fn eval_enum_values_expands_to_each_member() {
     match result {
         Value::Collection(v) => {
             assert_eq!(v.len(), 3);
-            assert_eq!(v[0], Value::String("Color.RED".into()));
-            assert_eq!(v[1], Value::String("Color.GREEN".into()));
-            assert_eq!(v[2], Value::String("Color.BLUE".into()));
+            let members: Vec<(SmolStr, SmolStr)> = v
+                .iter()
+                .filter_map(|val| match val {
+                    Value::EnumValue { enum_id: _, member } => Some((SmolStr::new("Color"), member.clone())),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(members.len(), 3, "all entries must be EnumValue, got {v:?}");
+            assert_eq!(members[0].1, "RED");
+            assert_eq!(members[1].1, "GREEN");
+            assert_eq!(members[2].1, "BLUE");
+            if let (
+                Value::EnumValue { enum_id: e0, .. },
+                Value::EnumValue { enum_id: e1, .. },
+                Value::EnumValue { enum_id: e2, .. },
+            ) = (&v[0], &v[1], &v[2])
+            {
+                assert_eq!(e0, e1);
+                assert_eq!(e1, e2);
+            }
         }
         other => panic!("Expected Collection, got {other:?}"),
     }
@@ -1295,11 +1313,11 @@ fn surveyor_outcome_histogram(package: &str, target_status: &str) {
     rows.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
     for (bucket, tests) in rows {
         eprintln!("\n[{}] {}", tests.len(), bucket);
-        for (i, t) in tests.iter().enumerate().take(3) {
+        for (i, t) in tests.iter().enumerate().take(40) {
             eprintln!("    {}. {}", i + 1, t);
         }
-        if tests.len() > 3 {
-            eprintln!("    ... and {} more", tests.len() - 3);
+        if tests.len() > 40 {
+            eprintln!("    ... and {} more", tests.len() - 40);
         }
     }
 }
