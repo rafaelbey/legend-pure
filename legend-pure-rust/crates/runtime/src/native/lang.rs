@@ -532,7 +532,9 @@ impl NativeFunction for DynamicNew {
                         if supplied_keys.contains(&p.name) {
                             None
                         } else {
-                            p.default_value.as_ref().map(|e| (p.name.clone(), e.clone()))
+                            p.default_value
+                                .as_ref()
+                                .map(|e| (p.name.clone(), e.clone()))
                         }
                     })
                     .collect()
@@ -771,7 +773,24 @@ pub fn register(registry: &mut NativeRegistry) {
     // against the same native; unused hook args are silently discarded
     // because the basic construction path doesn't invoke them.
     registry.register("dynamicNew_Class_1__KeyValue_MANY__Any_1_", DynamicNew);
-    registry.register("dynamicNew_GenericType_1__KeyValue_MANY__Any_1_", DynamicNew);
+    registry.register(
+        "dynamicNew_GenericType_1__KeyValue_MANY__Any_1_",
+        DynamicNew,
+    );
+    // Override-hook overloads — additional `Function<{...}>[0..1]`
+    // parameters (property override / default override / post-init
+    // hook) follow the KeyValue collection. The basic `DynamicNew`
+    // impl silently ignores args past position 1, so the hook-bearing
+    // tests flip provided none of them actually exercise the hooks.
+    // Invoking the hooks properly is tracked separately.
+    registry.register(
+        "dynamicNew_Class_1__KeyValue_MANY__Function_$0_1$__Function_$0_1$__Any_$0_1$__Any_1_",
+        DynamicNew,
+    );
+    registry.register(
+        "dynamicNew_GenericType_1__KeyValue_MANY__Function_$0_1$__Function_$0_1$__Any_$0_1$__Any_1_",
+        DynamicNew,
+    );
 
     // eval — 8 arities (0–7 extra parameters).
     // Mangled names derived from the platform source in essential/lang/eval/eval.pure
