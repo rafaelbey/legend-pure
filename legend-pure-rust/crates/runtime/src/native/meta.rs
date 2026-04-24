@@ -1722,16 +1722,125 @@ impl NativeFunction for Reactivate {
             .into());
         }
         let values = force_all(args, ctx)?;
-        let spec = &values[0];
-        match spec {
-            Value::Function(_) => Ok(Evaluated::new(ctx.call_function(spec, &[])?)),
-            other => Ok(Evaluated::new(other.clone())),
-        }
+        let spec = values[0].clone();
+        Ok(Evaluated::new(reactivate_value(&spec, ctx)?))
     }
 
     fn signature(&self) -> &'static str {
         "reactivate(vs:ValueSpecification[1], vars:Map<String, List<Any>>[1]):Any[*]"
     }
+}
+
+/// Recursively re-evaluate an AST-metamodel heap wrapper back to its
+/// runtime value.
+///
+/// Mirrors [`deactivate_spec`] in reverse:
+/// - `InstanceValue { values }` → flatten `.values` (each element itself
+///   reactivated, so nested `InstanceValue { values = [x] }` collapses).
+/// - `VariableExpression { name }` → look up `name` in the current
+///   evaluator scope; Java Pure's optional `vars` Map argument isn't
+///   threaded through here, matching the existing native's behaviour.
+/// - `SimpleFunctionExpression { func, functionName, parametersValues }`
+///   → reactivate each parameter, resolve the callable (prefer the
+///   stored `func` element, fall back to dispatching by `functionName`),
+///   and invoke via `ctx.call_function`.
+/// - Any other heap object / scalar passes through unchanged.
+#[allow(clippy::result_large_err)]
+fn reactivate_value(value: &Value, ctx: &mut dyn EvalContextTrait) -> Result<Value, PureException> {
+    let Value::Object(obj_id) = value else {
+        // Non-wrapper values (primitives, functions) reactivate to
+        // themselves — invoking a `Value::Function` used to live here;
+        // deactivate now always wraps it as `InstanceValue`, so the
+        // function arm would fire only when a raw function flows in
+        // without going through deactivate first. Preserve that
+        // invoke-on-raw-function shim.
+        if let Value::Function(_) = value {
+            return ctx.call_function(value, &[]);
+        }
+        return Ok(value.clone());
+    };
+    let classifier = ctx.heap().classifier(*obj_id)?.to_string();
+    let classifier_id = crate::m3_paths::resolve(ctx.model(), &classifier);
+
+    // InstanceValue — unwrap `.values`, reactivating each entry.
+    if classifier_id == crate::m3_paths::resolve(ctx.model(), crate::m3_paths::INSTANCE_VALUE) {
+        let vals = ctx.heap().get_property_values(*obj_id, "values")?;
+        let raw: Vec<Value> = vals.iter().cloned().collect();
+        let mut out: Vec<Value> = Vec::with_capacity(raw.len());
+        for v in raw {
+            let reactivated = reactivate_value(&v, ctx)?;
+            match reactivated {
+                Value::Collection(coll) => {
+                    for inner in coll.iter() {
+                        out.push(inner.clone());
+                    }
+                }
+                Value::Unit => {}
+                other => out.push(other),
+            }
+        }
+        return Ok(Value::from_vec(out));
+    }
+
+    // VariableExpression — resolve from the current scope.
+    if classifier_id == crate::m3_paths::resolve(ctx.model(), crate::m3_paths::VARIABLE_EXPRESSION)
+    {
+        let name_vals = ctx.heap().get_property_values(*obj_id, "name")?;
+        let Some(Value::String(name)) = name_vals.iter().next() else {
+            return Err(PureRuntimeError::EvaluationError(
+                "reactivate: VariableExpression is missing its 'name' slot".into(),
+            )
+            .into());
+        };
+        if let Some(v) = ctx.context().get(name) {
+            return Ok(v.clone());
+        }
+        return Err(PureRuntimeError::EvaluationError(format!(
+            "reactivate: variable '{name}' not bound in the current scope"
+        ))
+        .into());
+    }
+
+    // SimpleFunctionExpression / FunctionExpression — reactivate each
+    // parameter and dispatch the call.
+    let is_function_expr = classifier_id
+        == crate::m3_paths::resolve(ctx.model(), crate::m3_paths::SIMPLE_FUNCTION_EXPRESSION)
+        || classifier_id
+            == crate::m3_paths::resolve(ctx.model(), crate::m3_paths::FUNCTION_EXPRESSION);
+    if is_function_expr {
+        let params = ctx
+            .heap()
+            .get_property_values(*obj_id, "parametersValues")?;
+        let raw_params: Vec<Value> = params.iter().cloned().collect();
+        let mut reactivated_params: Vec<Value> = Vec::with_capacity(raw_params.len());
+        for p in raw_params {
+            reactivated_params.push(reactivate_value(&p, ctx)?);
+        }
+        let func_vals = ctx.heap().get_property_values(*obj_id, "func")?;
+        if let Some(func_val) = func_vals.iter().next() {
+            return ctx.call_function(&func_val.clone(), &reactivated_params);
+        }
+        // No resolved `func` element — fall back to dispatching by
+        // `functionName`. Uncommon in practice but keeps the wrapper
+        // shape robust.
+        let name_vals = ctx.heap().get_property_values(*obj_id, "functionName")?;
+        let Some(Value::String(_name)) = name_vals.iter().next() else {
+            return Err(PureRuntimeError::EvaluationError(
+                "reactivate: SimpleFunctionExpression is missing both 'func' and 'functionName'"
+                    .into(),
+            )
+            .into());
+        };
+        return Err(PureRuntimeError::EvaluationError(
+            "reactivate: simple-name dispatch for SimpleFunctionExpression without 'func' is not implemented"
+                .into(),
+        )
+        .into());
+    }
+
+    // Any other heap object — not a deactivated spec we know about; pass
+    // through unchanged.
+    Ok(value.clone())
 }
 
 // ---------------------------------------------------------------------------
