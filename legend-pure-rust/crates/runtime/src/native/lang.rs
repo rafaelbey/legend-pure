@@ -317,6 +317,7 @@ impl NativeFunction for New {
 
         let obj = ctx.heap_mut().alloc_dynamic(classifier);
         apply_key_value_pairs(ctx, obj, &values[2..])?;
+        populate_association_inverses(ctx, obj, class_id, &values[2..])?;
         Ok(Evaluated::new(Value::Object(obj)))
     }
 
@@ -450,8 +451,94 @@ fn try_lambda_shortcut(kvs: &[Value]) -> Option<Value> {
     }
 }
 
-/// Walk a flat `[key1, val1, key2, val2, ...]` slice and `mutate_add` each
+/// Populate association reverse-links for every Association-backed property
+/// just assigned to `obj`.
+///
+/// When Pure code writes `^Person(firm=firmX)`, the `Employment` association
+/// dictates that `firmX.employees` must also contain the new person. Java
+/// Pure maintains this invariant implicitly; the Rust heap does not, so we
+/// walk the key/value pairs after construction and inject the reverse edge.
+///
+/// Algorithm per `(key, value)` pair:
+/// 1. Look up `association_properties[class_id]` — a list of
+///    `(association_id, prop_idx)` where `assoc.properties[prop_idx]` has
+///    type = `class_id` (i.e., points back AT us).
+/// 2. In each such association with exactly two properties, the property
+///    at `1 - prop_idx` is the one *injected into* `class_id` (the one
+///    the caller may have just set).
+/// 3. If that injected property's name matches `key` and the assigned
+///    value is a heap `Value::Object`, append `obj` to the target
+///    object's `assoc.properties[prop_idx].name` slot — the inverse.
+#[allow(clippy::result_large_err)]
+fn populate_association_inverses(
+    ctx: &mut dyn EvalContextTrait,
+    obj: ObjectId,
+    class_id: ElementId,
+    kvs: &[Value],
+) -> Result<(), PureException> {
+    if kvs.len() % 2 != 0 {
+        return Ok(()); // Arity already validated by apply_key_value_pairs
+    }
+
+    // Snapshot the association entries once — cheap O(n) per property but we
+    // avoid re-borrowing the model mid-loop.
+    let entries: Vec<(ElementId, usize)> = ctx.model().association_properties(class_id).to_vec();
+    if entries.is_empty() {
+        return Ok(());
+    }
+
+    // For each forward assignment key, find the matching injected property
+    // and its inverse, then mutate the target object's inverse slot.
+    let mut i = 0;
+    while i < kvs.len() {
+        let Value::String(key) = &kvs[i] else {
+            i += 2;
+            continue;
+        };
+        let assigned = kvs[i + 1].clone();
+        for (assoc_id, prop_idx_pointing_to_self) in &entries {
+            let Element::Association(assoc) = ctx.model().get_element(*assoc_id) else {
+                continue;
+            };
+            if assoc.properties.len() != 2 {
+                continue; // n-ary associations: inverse isn't a single peer
+            }
+            let injected_idx = 1 - *prop_idx_pointing_to_self;
+            let injected_name = assoc.properties[injected_idx].name.clone();
+            if injected_name.as_str() != key.as_str() {
+                continue;
+            }
+            let inverse_name = assoc.properties[*prop_idx_pointing_to_self].name.clone();
+
+            let targets: Vec<ObjectId> = match &assigned {
+                Value::Object(id) => vec![*id],
+                Value::Collection(v) => v
+                    .iter()
+                    .filter_map(|x| match x {
+                        Value::Object(id) => Some(*id),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            for target in targets {
+                ctx.heap_mut()
+                    .mutate_add(target, inverse_name.as_str(), &[Value::Object(obj)])?;
+            }
+        }
+        i += 2;
+    }
+    Ok(())
+}
+
+/// Walk a flat `[key1, val1, key2, val2, ...]` slice and `mutate_set` each
 /// pair onto `obj`. Collections are expanded so property storage stays flat.
+///
+/// Uses set (replace) rather than add (append) semantics: `^$src(prop='new')`
+/// in Pure replaces `prop`'s value with `'new'`, it does not append. `New`
+/// constructs fresh empty objects where this distinction is moot, but
+/// `Copy` pre-populates from the source and relies on the reset behaviour
+/// so the override doesn't leak the original value into the slot.
 fn apply_key_value_pairs(
     ctx: &mut dyn EvalContextTrait,
     obj: ObjectId,
@@ -473,7 +560,7 @@ fn apply_key_value_pairs(
             Value::Unit => Vec::new(),
             other => vec![other],
         };
-        ctx.heap_mut().mutate_add(obj, key.as_str(), &values)?;
+        ctx.heap_mut().mutate_set(obj, key.as_str(), &values)?;
         i += 2;
     }
     Ok(())
