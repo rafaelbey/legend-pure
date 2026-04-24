@@ -36,7 +36,7 @@ in its crate directory; this file provides the high-level view.
 | Item | Priority | Notes |
 |------|----------|-------|
 | Full generic unification (`Z` propagation) | P2 | Java uses `TypeInferenceObserver` |
-| Lambda parameter type inference | P2 | Infer from expected `Function<{…}>` type |
+| Lambda parameter type inference | P2 | Infer from expected `Function<{…}>` type. Also required for operator dispatch inside generic lambda bodies — e.g. `{x, y | $x + $y}->eval('1', '2')` binds `Z = String` at the call site; without the inference the body lowers `+` to the numeric `plus` FQN and string arguments reach the wrong native (`testEvalTwo` regression). Fix: when a lambda flows into a `Function<{T[m]->…}>` parameter and the caller supplies known-type arguments, rebind lambda-param types before lowering the body; per-call-site specialisation if the same body is reused for multiple types. |
 | Numeric coercion (`Integer` → `Float`) | P3 | Java has implicit widening |
 | Return type influence on dispatch | P3 | Expected return type narrows candidates |
 | Move bootstrap chunk 0 to compile-time | P2 | Saves ~1ms startup |

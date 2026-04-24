@@ -1104,6 +1104,10 @@ fn expression_arithmetic_desugars_to_function_call() {
     match model.get_element(id) {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1, "body should have 1 expression");
+            // `1 + 2` desugars to `plus([1, 2])` — a single-arg call
+            // wrapping a Collection of the two operands. Matches the
+            // Pure-level signature `plus(Number[*]):Number[1]` and
+            // Java Pure's single-param dispatch.
             match &*f.body[0].kind {
                 ExprKind::FunctionCall {
                     function,
@@ -1112,9 +1116,15 @@ fn expression_arithmetic_desugars_to_function_call() {
                 } => {
                     assert!(function.is_none(), "built-in operator has no element ID");
                     assert_eq!(function_name.as_str(), "plus");
-                    assert_eq!(arguments.len(), 2);
-                    assert!(matches!(&*arguments[0].kind, ExprKind::IntegerLiteral(1)));
-                    assert!(matches!(&*arguments[1].kind, ExprKind::IntegerLiteral(2)));
+                    assert_eq!(arguments.len(), 1, "plus takes a single collection arg");
+                    match &*arguments[0].kind {
+                        ExprKind::Collection { elements } => {
+                            assert_eq!(elements.len(), 2);
+                            assert!(matches!(&*elements[0].kind, ExprKind::IntegerLiteral(1)));
+                            assert!(matches!(&*elements[1].kind, ExprKind::IntegerLiteral(2)));
+                        }
+                        other => panic!("expected Collection arg, got {other:?}"),
+                    }
                 }
                 other => panic!("expected FunctionCall, got {other:?}"),
             }

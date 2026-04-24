@@ -49,28 +49,27 @@ impl NativeFunction for Plus {
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
-        // Pure exposes three shapes for `plus`:
-        //   plus(Number[*]):Number[1]            // single collection arg → sum
-        //   plus(Number[1], Number[1]):Number[1] // pairwise
-        //   plus(String[*]):String[1]            // string concatenation
-        // Zero-or-one arg → treat the single collection as a fold source
-        // (empty → `Integer(0)` identity). Two or more → pairwise.
-        if values.len() <= 1 {
-            let items: Vec<Value> = values
-                .first()
-                .map(|a| a.to_collection().iter().cloned().collect())
-                .unwrap_or_default();
-            return Ok(Evaluated::new(plus_fold(items)?));
-        }
-        Ok(Evaluated::new(plus_pair(&values[0], &values[1])?))
+        // Pure's sole numeric `plus` signature is `(Number[*]):Number[1]`
+        // (plus `(Decimal[*]):Decimal[1]`). The compiler lowers `a + b`
+        // to `plus([a, b])` so the native always receives a single
+        // argument. String concatenation is a distinct native
+        // (`StringPlus`, mangled `plus_String_MANY__String_1_`) —
+        // compile-time dispatch must route String operands there; this
+        // native strictly handles numerics and errors on String input.
+        expect_args("plus", &values, 1)?;
+        let items: Vec<Value> = values[0].to_collection().iter().cloned().collect();
+        Ok(Evaluated::new(plus_fold(items)?))
     }
 
     fn signature(&self) -> &'static str {
-        "plus(Number[1], Number[1]): Number[1]"
+        "plus(Number[*]): Number[1]"
     }
 }
 
-/// Pairwise `plus` — the promotion matrix shared by all `plus` shapes.
+/// Pairwise `plus` — the promotion matrix for the numeric `plus` shapes
+/// (Integer / Float / Decimal). String concatenation has its own
+/// dedicated native (`StringPlus`, registered as
+/// `plus_String_MANY__String_1_`), so this fold never sees strings.
 fn plus_pair(a: &Value, b: &Value) -> Result<Value, PureRuntimeError> {
     match (a, b) {
         (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a.wrapping_add(*b))),
@@ -85,13 +84,6 @@ fn plus_pair(a: &Value, b: &Value) -> Result<Value, PureRuntimeError> {
         }
         (Value::Integer(a), Value::Decimal(b)) => {
             Ok(Value::Decimal(rust_decimal::Decimal::from(*a) + *b))
-        }
-        // Fallback for unresolved 'plus' operator strings
-        (Value::String(a), Value::String(b)) => {
-            let mut joined = String::with_capacity(a.len() + b.len());
-            joined.push_str(a);
-            joined.push_str(b);
-            Ok(Value::String(joined.into()))
         }
         _ => Err(PureRuntimeError::EvaluationError(format!(
             "plus: unsupported types {} and {}",
@@ -128,71 +120,83 @@ impl NativeFunction for Minus {
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
-        if values.len() == 1 {
-            let v = match &values[0] {
-                Value::Integer(a) => Value::Integer(-a),
-                Value::Float(a) => Value::Float(-a),
-                Value::Decimal(a) => Value::Decimal(-*a),
-                // Unary minus on a unit-tagged number negates the
-                // numeric payload while preserving the unit tag —
-                // `-5 RomanLength~Pes` stays in `RomanLength~Pes`.
-                Value::UnitInstance { unit_id, inner } => {
-                    let negated = match inner.as_ref() {
-                        Value::Integer(a) => Value::Integer(-a),
-                        Value::Float(a) => Value::Float(-a),
-                        Value::Decimal(a) => Value::Decimal(-*a),
-                        other => {
-                            return Err(PureRuntimeError::EvaluationError(format!(
-                                "minus: unit-tagged value has unsupported inner type {}",
-                                other.type_name()
-                            ))
-                            .into());
-                        }
-                    };
-                    Value::UnitInstance {
-                        unit_id: *unit_id,
-                        inner: Box::new(negated),
-                    }
-                }
-                other => {
-                    return Err(PureRuntimeError::EvaluationError(format!(
-                        "minus: unsupported type {}",
-                        other.type_name()
-                    ))
-                    .into());
-                }
-            };
-            return Ok(Evaluated::new(v));
-        }
-        expect_args("minus", &values, 2)?;
-        let v = match (&values[0], &values[1]) {
-            (Value::Integer(a), Value::Integer(b)) => Value::Integer(a.wrapping_sub(*b)),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a - b),
-            #[allow(clippy::cast_precision_loss)]
-            (Value::Integer(a), Value::Float(b)) => Value::Float(*a as f64 - b),
-            #[allow(clippy::cast_precision_loss)]
-            (Value::Float(a), Value::Integer(b)) => Value::Float(a - *b as f64),
-            (Value::Decimal(a), Value::Decimal(b)) => Value::Decimal(*a - *b),
-            (Value::Decimal(a), Value::Integer(b)) => {
-                Value::Decimal(*a - rust_decimal::Decimal::from(*b))
-            }
-            (Value::Integer(a), Value::Decimal(b)) => {
-                Value::Decimal(rust_decimal::Decimal::from(*a) - *b)
-            }
-            _ => {
-                return Err(PureRuntimeError::EvaluationError(format!(
-                    "minus: unsupported types {} and {}",
-                    values[0].type_name(),
-                    values[1].type_name()
-                ))
-                .into());
-            }
-        };
-        Ok(Evaluated::new(v))
+        // Pure's sole `minus` signature is `(Number[*]):Number[1]`. The
+        // compiler lowers `a - b` / `-x` to `minus([a, b])` / `minus([x])`
+        // so the native always receives a single argument. Normalise via
+        // `to_collection()` — this also handles the legacy direct-scalar
+        // call shape some tests still emit from `->eval(x)`.
+        expect_args("minus", &values, 1)?;
+        let items: Vec<Value> = values[0].to_collection().iter().cloned().collect();
+        Ok(Evaluated::new(minus_fold(items)?))
     }
 
     fn signature(&self) -> &'static str {
-        "minus(Number[1], Number[1]): Number[1]"
+        "minus(Number[*]): Number[1]"
+    }
+}
+
+/// Unary negation on a single numeric value. Unit-tagged values
+/// negate the payload and keep the unit tag intact.
+fn minus_unary(v: &Value) -> Result<Value, PureRuntimeError> {
+    match v {
+        Value::Integer(a) => Ok(Value::Integer(-a)),
+        Value::Float(a) => Ok(Value::Float(-a)),
+        Value::Decimal(a) => Ok(Value::Decimal(-*a)),
+        Value::UnitInstance { unit_id, inner } => {
+            let negated = minus_unary(inner)?;
+            Ok(Value::UnitInstance {
+                unit_id: *unit_id,
+                inner: Box::new(negated),
+            })
+        }
+        other => Err(PureRuntimeError::EvaluationError(format!(
+            "minus: unsupported type {}",
+            other.type_name()
+        ))),
+    }
+}
+
+/// Pairwise subtraction with Integer → Float → Decimal promotion, mirroring
+/// `plus_pair`'s matrix.
+fn minus_pair(a: &Value, b: &Value) -> Result<Value, PureRuntimeError> {
+    match (a, b) {
+        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a.wrapping_sub(*b))),
+        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
+        #[allow(clippy::cast_precision_loss)]
+        (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f64 - b)),
+        #[allow(clippy::cast_precision_loss)]
+        (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a - *b as f64)),
+        (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(*a - *b)),
+        (Value::Decimal(a), Value::Integer(b)) => {
+            Ok(Value::Decimal(*a - rust_decimal::Decimal::from(*b)))
+        }
+        (Value::Integer(a), Value::Decimal(b)) => {
+            Ok(Value::Decimal(rust_decimal::Decimal::from(*a) - *b))
+        }
+        _ => Err(PureRuntimeError::EvaluationError(format!(
+            "minus: unsupported types {} and {}",
+            a.type_name(),
+            b.type_name()
+        ))),
+    }
+}
+
+/// Fold a collection of numerics through pairwise subtraction, mirroring
+/// Java Pure's `Minus.execute` switch on size:
+/// - empty → `Integer(0)`
+/// - size 1 → unary negate (`0 - x = -x`)
+/// - size ≥ 2 → left-fold subtract: `[x, y, z, …]` → `x - y - z - …`
+fn minus_fold(values: Vec<Value>) -> Result<Value, PureRuntimeError> {
+    let mut iter = values.into_iter();
+    let Some(first) = iter.next() else {
+        return Ok(Value::Integer(0));
+    };
+    match iter.next() {
+        None => minus_unary(&first),
+        Some(second) => {
+            let initial = minus_pair(&first, &second)?;
+            iter.try_fold(initial, |acc, next| minus_pair(&acc, &next))
+        }
     }
 }
 
@@ -211,33 +215,52 @@ impl NativeFunction for Times {
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
-        expect_args("times", &values, 2)?;
-        let v = match (&values[0], &values[1]) {
-            (Value::Integer(a), Value::Integer(b)) => Value::Integer(a.wrapping_mul(*b)),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
-            #[allow(clippy::cast_precision_loss)]
-            (Value::Integer(a), Value::Float(b)) | (Value::Float(b), Value::Integer(a)) => {
-                Value::Float(*a as f64 * b)
-            }
-            (Value::Decimal(a), Value::Decimal(b)) => Value::Decimal(*a * *b),
-            (Value::Decimal(a), Value::Integer(b)) | (Value::Integer(b), Value::Decimal(a)) => {
-                Value::Decimal(*a * rust_decimal::Decimal::from(*b))
-            }
-            _ => {
-                return Err(PureRuntimeError::EvaluationError(format!(
-                    "times: unsupported types {} and {}",
-                    values[0].type_name(),
-                    values[1].type_name()
-                ))
-                .into());
-            }
-        };
-        Ok(Evaluated::new(v))
+        // Pure's sole `times` signature is `(Number[*]):Number[1]`. The
+        // compiler lowers `a * b` to `times([a, b])`; this native always
+        // receives a single argument.
+        expect_args("times", &values, 1)?;
+        let items: Vec<Value> = values[0].to_collection().iter().cloned().collect();
+        Ok(Evaluated::new(times_fold(items)?))
     }
 
     fn signature(&self) -> &'static str {
-        "times(Number[1], Number[1]): Number[1]"
+        "times(Number[*]): Number[1]"
     }
+}
+
+/// Pairwise multiplication with Integer → Float → Decimal promotion,
+/// mirroring `plus_pair`'s matrix.
+fn times_pair(a: &Value, b: &Value) -> Result<Value, PureRuntimeError> {
+    match (a, b) {
+        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a.wrapping_mul(*b))),
+        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
+        #[allow(clippy::cast_precision_loss)]
+        (Value::Integer(a), Value::Float(b)) | (Value::Float(b), Value::Integer(a)) => {
+            Ok(Value::Float(*a as f64 * b))
+        }
+        (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(*a * *b)),
+        (Value::Decimal(a), Value::Integer(b)) | (Value::Integer(b), Value::Decimal(a)) => {
+            Ok(Value::Decimal(*a * rust_decimal::Decimal::from(*b)))
+        }
+        _ => Err(PureRuntimeError::EvaluationError(format!(
+            "times: unsupported types {} and {}",
+            a.type_name(),
+            b.type_name()
+        ))),
+    }
+}
+
+/// Fold a collection of numerics through pairwise multiplication, mirroring
+/// Java Pure's `Times.execute` switch on size:
+/// - empty → `Integer(1)` (multiplicative identity)
+/// - size 1 → unchanged
+/// - size ≥ 2 → left-fold multiply
+fn times_fold(values: Vec<Value>) -> Result<Value, PureRuntimeError> {
+    let mut iter = values.into_iter();
+    let Some(first) = iter.next() else {
+        return Ok(Value::Integer(1));
+    };
+    iter.try_fold(first, |acc, next| times_pair(&acc, &next))
 }
 
 // ---------------------------------------------------------------------------
@@ -454,7 +477,10 @@ mod tests {
     #[test]
     fn plus_integers() {
         let r = Plus
-            .execute(&[lit_int(2), lit_int(3)], &mut MockCtx)
+            .execute(
+                &[crate::native::lit_collection(vec![lit_int(2), lit_int(3)])],
+                &mut MockCtx,
+            )
             .unwrap();
         assert_eq!(r.into_value(), Value::Integer(5));
     }
@@ -462,7 +488,13 @@ mod tests {
     #[test]
     fn plus_floats() {
         let r = Plus
-            .execute(&[lit_float(1.5), lit_float(2.5)], &mut MockCtx)
+            .execute(
+                &[crate::native::lit_collection(vec![
+                    lit_float(1.5),
+                    lit_float(2.5),
+                ])],
+                &mut MockCtx,
+            )
             .unwrap();
         assert_eq!(r.into_value(), Value::Float(4.0));
     }
@@ -470,7 +502,13 @@ mod tests {
     #[test]
     fn plus_integer_float_promotion() {
         let r = Plus
-            .execute(&[lit_int(1), lit_float(2.5)], &mut MockCtx)
+            .execute(
+                &[crate::native::lit_collection(vec![
+                    lit_int(1),
+                    lit_float(2.5),
+                ])],
+                &mut MockCtx,
+            )
             .unwrap();
         assert_eq!(r.into_value(), Value::Float(3.5));
     }
@@ -479,7 +517,12 @@ mod tests {
     fn plus_decimals() {
         let a = Decimal::from_str("10.50").unwrap();
         let b = Decimal::from_str("3.25").unwrap();
-        let r = Plus.execute(&[ld(a), ld(b)], &mut MockCtx).unwrap();
+        let r = Plus
+            .execute(
+                &[crate::native::lit_collection(vec![ld(a), ld(b)])],
+                &mut MockCtx,
+            )
+            .unwrap();
         assert_eq!(
             r.into_value(),
             Value::Decimal(Decimal::from_str("13.75").unwrap())
@@ -489,7 +532,10 @@ mod tests {
     #[test]
     fn minus_integers() {
         let r = Minus
-            .execute(&[lit_int(10), lit_int(3)], &mut MockCtx)
+            .execute(
+                &[crate::native::lit_collection(vec![lit_int(10), lit_int(3)])],
+                &mut MockCtx,
+            )
             .unwrap();
         assert_eq!(r.into_value(), Value::Integer(7));
     }
@@ -497,7 +543,10 @@ mod tests {
     #[test]
     fn times_integers() {
         let r = Times
-            .execute(&[lit_int(4), lit_int(5)], &mut MockCtx)
+            .execute(
+                &[crate::native::lit_collection(vec![lit_int(4), lit_int(5)])],
+                &mut MockCtx,
+            )
             .unwrap();
         assert_eq!(r.into_value(), Value::Integer(20));
     }
@@ -560,9 +609,10 @@ mod tests {
 
     #[test]
     fn wrong_arg_count_errors() {
-        // `plus` accepts a single collection argument (fold form) — a lone
-        // Integer is therefore valid (returns it unchanged). Zero args falls
-        // back to the identity `Integer(0)`.
+        // `plus` takes exactly one `Number[*]` argument. A lone Integer
+        // literal is normalised to a singleton collection and returns
+        // unchanged. An empty collection returns the identity `Integer(0)`.
+        // Zero arguments at the native-call level is an arity violation.
         assert_eq!(
             Plus.execute(&[lit_int(1)], &mut MockCtx)
                 .unwrap()
@@ -570,9 +620,12 @@ mod tests {
             Value::Integer(1)
         );
         assert_eq!(
-            Plus.execute(&[], &mut MockCtx).unwrap().into_value(),
+            Plus.execute(&[crate::native::lit_collection(Vec::new())], &mut MockCtx)
+                .unwrap()
+                .into_value(),
             Value::Integer(0)
         );
+        assert!(Plus.execute(&[], &mut MockCtx).is_err());
         assert!(Abs.execute(&[], &mut MockCtx).is_err());
     }
 
