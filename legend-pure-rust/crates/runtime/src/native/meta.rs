@@ -1413,17 +1413,26 @@ impl NativeFunction for OpenVariableValues {
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
         expect_args("openVariableValues", &values, 1)?;
-        let Value::Function(fv) = &values[0] else {
-            return Err(PureRuntimeError::type_mismatch("Function", &values[0]).into());
-        };
-        // Snapshot captures before the mutable heap borrow.
-        let captures: Vec<(SmolStr, Value)> = match fv.as_ref() {
-            FunctionValue::Lambda(closure) => closure
-                .captures
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-            FunctionValue::Compiled(_) => Vec::new(),
+        // Accept either a first-class `Value::Function` (anonymous lambdas
+        // and `FunctionValue::Compiled` references) or a `Value::Element`
+        // pointing at a compiled Function — `pathToElement` returns the
+        // latter, and `testOpenVariableValuesForFunction` hands the result
+        // straight to this native.
+        let captures: Vec<(SmolStr, Value)> = match &values[0] {
+            Value::Function(fv) => match fv.as_ref() {
+                FunctionValue::Lambda(closure) => closure
+                    .captures
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                FunctionValue::Compiled(_) => Vec::new(),
+            },
+            Value::Element(id) if matches!(ctx.model().get_element(*id), Element::Function(_)) => {
+                Vec::new()
+            }
+            other => {
+                return Err(PureRuntimeError::type_mismatch("Function", other).into());
+            }
         };
         let mut map = im_rc::HashMap::new();
         for (name, value) in captures {
@@ -1513,6 +1522,39 @@ impl NativeFunction for ElementPath {
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
         expect_args("elementPath", &values, 1)?;
+
+        // Ephemeral packageable elements built via `^Package(...)` /
+        // `^PackageableElement(...)` live on the heap rather than in the
+        // model. Walk their `package` property chain to produce the same
+        // `[root, ..., self]` shape the Element path produces, matching
+        // `testEphemeralPackageableElement`.
+        if let Value::Object(obj_id) = &values[0] {
+            let mut chain: Vec<Value> = vec![Value::Object(*obj_id)];
+            let mut cursor: Option<crate::heap::ObjectId> = {
+                let pkg_vals = ctx.heap().get_property_values(*obj_id, "package")?;
+                match pkg_vals.iter().next() {
+                    Some(Value::Object(pid)) => Some(*pid),
+                    _ => None,
+                }
+            };
+            let mut visited = std::collections::HashSet::new();
+            while let Some(step) = cursor {
+                if !visited.insert(step) {
+                    break;
+                }
+                chain.push(Value::Object(step));
+                cursor = {
+                    let pkg_vals = ctx.heap().get_property_values(step, "package")?;
+                    match pkg_vals.iter().next() {
+                        Some(Value::Object(pid)) => Some(*pid),
+                        _ => None,
+                    }
+                };
+            }
+            chain.reverse();
+            return Ok(Evaluated::new(Value::from_vec(chain)));
+        }
+
         let id = as_element_id(&values[0])?;
         let root_id = ctx.model().root_package;
 
