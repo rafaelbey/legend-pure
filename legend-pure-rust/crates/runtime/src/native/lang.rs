@@ -397,13 +397,26 @@ impl NativeFunction for Copy {
             original_props.push((name, prop_values));
         }
 
-        let obj = ctx.heap_mut().alloc_dynamic(classifier);
-        for (name, prop_values) in original_props {
-            ctx.heap_mut()
-                .mutate_add(obj, name.as_str(), &prop_values)?;
+        let obj = ctx.heap_mut().alloc_dynamic(classifier.clone());
+        // Flatten carried-over properties into a `[key1, val1, key2, val2, …]`
+        // slice compatible with `populate_association_inverses` — the copy
+        // should appear in every association inverse its source belonged
+        // to (e.g. a copied Person is appended to `firm.employees` so
+        // `assertSameElements([$bob, $pierre], $firmX.employees)` holds).
+        let mut carried_kvs: Vec<Value> = Vec::with_capacity(original_props.len() * 2);
+        for (name, prop_values) in &original_props {
+            carried_kvs.push(Value::String(name.clone()));
+            carried_kvs.push(Value::from_vec(prop_values.clone()));
+            ctx.heap_mut().mutate_add(obj, name.as_str(), prop_values)?;
         }
 
         apply_key_value_pairs(ctx, obj, &values[1..])?;
+
+        if let Some(class_id) = crate::m3_paths::resolve(ctx.model(), &classifier) {
+            populate_association_inverses(ctx, obj, class_id, &carried_kvs)?;
+            populate_association_inverses(ctx, obj, class_id, &values[1..])?;
+        }
+
         Ok(Evaluated::new(Value::Object(obj)))
     }
 
