@@ -258,6 +258,9 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
         let actual_idx = alloc_node(name);
         let elem_idx = elements.alloc(Element::PrimitiveType(PrimitiveType {
             super_type: Some(super_type),
+            super_type_value_arguments: Vec::new(),
+            type_variable_parameters: Vec::new(),
+            constraints: Vec::new(),
         }));
 
         debug_assert_eq!(actual_idx, expected_id.local_idx());

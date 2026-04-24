@@ -19,6 +19,11 @@ use super::{Parser, R};
 
 impl Parser {
     /// Parses: `Primitive [(<<stereos>> | {tags})*] fqn::Name[(params)] extends BaseType [\n constraints\n]`
+    ///
+    /// The optional `[…]` block holds constraints — same grammar as class
+    /// constraints. Evaluated at cast/new time with `$this` bound to the
+    /// value and any `type_variable_parameters` bound to their call-site
+    /// type-variable-values.
     pub(crate) fn parse_primitive_def(&mut self) -> R<Element> {
         let si = self.cursor.current_source_info();
         self.cursor.expect(TokenKind::Primitive)?;
@@ -30,17 +35,19 @@ impl Parser {
         self.cursor.expect(TokenKind::Extends)?;
         let super_type = self.parse_type_reference()?;
 
-        // Skip optional constraint block: [ $this < $x ]
-        if self.cursor.eat(TokenKind::LBracket) {
-            self.cursor
-                .skip_balanced(TokenKind::LBracket, TokenKind::RBracket);
-        }
+        // Optional constraint block — reuse the class-constraint grammar.
+        let constraints = if self.cursor.check(TokenKind::LBracket) {
+            self.parse_constraints()?
+        } else {
+            vec![]
+        };
 
         Ok(Element::Primitive(PrimitiveDef {
             package: header.package,
             name: header.name,
             type_variable_parameters,
             super_type,
+            constraints,
             source_info: si,
         }))
     }

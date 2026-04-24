@@ -156,6 +156,13 @@ impl Annotated for Element {
 // ---------------------------------------------------------------------------
 
 /// A primitive type definition: `Primitive meta::pure::MyInt extends Integer`.
+///
+/// Primitives may declare parametric-value inputs and constraints:
+/// `Primitive P(x:Integer[1]) extends Integer [$this < $x]`. The
+/// constraint expressions are checked at cast/new time, with `$this`
+/// bound to the target value and `$x` (or whatever the type-variable
+/// parameter was named) bound to the type-variable-VALUE supplied at
+/// the reference site (`@P(8)` binds `x = 8`).
 #[derive(Debug, Clone, PartialEq, crate::PackageableElement)]
 pub struct PrimitiveDef {
     /// The package.
@@ -166,6 +173,9 @@ pub struct PrimitiveDef {
     pub super_type: TypeReference,
     /// Type variable parameters, e.g., `(x:Integer[1])`.
     pub type_variable_parameters: Vec<TypeVariableParameter>,
+    /// Constraints declared in the `[…]` block after the base type.
+    /// Evaluated at cast/new time against the value being produced.
+    pub constraints: Vec<Constraint>,
     /// Source location.
     pub source_info: SourceInfo,
 }

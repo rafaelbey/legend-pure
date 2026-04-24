@@ -283,6 +283,26 @@ impl NativeFunction for Cast {
         let subject = values[0].clone();
         let type_id = as_element_id(&values[1])?;
         let type_name = ctx.model().element_name(type_id).to_string();
+        // Extract type-variable-values from the source `@P(8)` reference.
+        // Forced `Value::Element` drops them; we peek the original spec
+        // tree so `cast(10, @P(8))` can bind `x = 8` for the constraint
+        // evaluation below. The compiler stores them as
+        // `TypeExpr::Named { value_arguments, … }` in the `TypeReference`
+        // ExprKind produced by `@P(8)` — see `lower_type_reference`.
+        let type_value_args: Vec<legend_pure_parser_pure::types::ConstValue> = if args.len() > 1 {
+            match &*args[1].kind {
+                legend_pure_parser_pure::types::ExprKind::TypeReference {
+                    type_expr:
+                        legend_pure_parser_pure::types::TypeExpr::Named {
+                            value_arguments, ..
+                        },
+                    ..
+                } => value_arguments.clone(),
+                _ => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
         // Error text follows the Java runtime's `Cast exception: X cannot
         // be cast to Y` format. Platform tests (`assertError(|…->cast(@T),
         // 'Cast exception: …')`) match on the string verbatim — the wording
@@ -293,30 +313,160 @@ impl NativeFunction for Cast {
                 v.type_name()
             )))
         };
-        let check = |v: &Value| cast_compatible(v, type_id, ctx.model(), ctx.heap());
-        match &subject {
-            Value::Collection(coll) => {
-                for v in coll.iter() {
-                    if !check(v) {
-                        return Err(mk_err(v));
-                    }
-                }
-                Ok(Evaluated::new(subject))
-            }
-            Value::Unit => Ok(Evaluated::new(Value::Unit)),
-            other => {
-                if check(other) {
-                    Ok(Evaluated::new(subject))
-                } else {
-                    Err(mk_err(other))
-                }
+        // Two-phase: first verify type compatibility for every element
+        // (immutable borrow of the heap), then evaluate constraints
+        // (mutable borrow of the context). Collecting each item up front
+        // keeps the closure's immutable borrow of `ctx` scoped to the
+        // first loop.
+        let items: Vec<Value> = match &subject {
+            Value::Collection(coll) => coll.iter().cloned().collect(),
+            Value::Unit => return Ok(Evaluated::new(Value::Unit)),
+            other => vec![other.clone()],
+        };
+        for v in &items {
+            if !cast_compatible(v, type_id, ctx.model(), ctx.heap()) {
+                return Err(mk_err(v));
             }
         }
+        for v in &items {
+            evaluate_primitive_constraints(ctx, type_id, v, &type_value_args)?;
+        }
+        Ok(Evaluated::new(subject))
     }
 
     fn signature(&self) -> &'static str {
         "cast<V|m>(p:Any[m], typ:V[1]):V[m]"
     }
+}
+
+/// Run every constraint declared on the target primitive type (and its
+/// ancestor parametric primitives) against `subject`. Raises
+/// [`PureExceptionKind::ConstraintViolation`] on the first failure,
+/// matching Java Pure's message shape
+/// `"Constraint :[<id>] violated in the Class <name>[, Message: <msg>]"`.
+///
+/// Inheritance walk: when the target's `super_type` is itself a
+/// parametric primitive (`Primitive OP8 extends OP(8)`), the parent's
+/// constraints are evaluated with the parent's `super_type_value_arguments`
+/// bound in scope — that's how `@OP8` inherits OP's `$this < $x` with
+/// `x = 8`. The walk stops at the first bootstrap primitive (Integer /
+/// String / etc.) since those carry no constraints.
+///
+/// Scope bindings for each constraint body:
+/// - `$this` → the value being cast
+/// - each `type_variable_parameter` at this level → the matching
+///   positional `value_args` entry (either the caller's `@P(8)` bindings
+///   or the child's `extends OP(8)` bindings when walking up).
+///
+/// Non-primitive targets and primitives with no constraints in their
+/// inheritance chain are a no-op.
+#[allow(clippy::result_large_err)]
+fn evaluate_primitive_constraints(
+    ctx: &mut dyn EvalContextTrait,
+    type_id: legend_pure_parser_pure::ids::ElementId,
+    subject: &Value,
+    type_value_args: &[legend_pure_parser_pure::types::ConstValue],
+) -> Result<(), PureException> {
+    // Collect the inheritance chain up front (element_id, value_args used
+    // to bind that level's type variables). Starts at the cast target
+    // with caller-supplied args; each step uses the child's
+    // `super_type_value_arguments` to bind the parent's parameters.
+    let mut chain: Vec<(
+        legend_pure_parser_pure::ids::ElementId,
+        Vec<legend_pure_parser_pure::types::ConstValue>,
+    )> = Vec::new();
+    {
+        let mut current = Some((type_id, type_value_args.to_vec()));
+        let mut visited: std::collections::HashSet<legend_pure_parser_pure::ids::ElementId> =
+            std::collections::HashSet::new();
+        while let Some((id, args)) = current {
+            if !visited.insert(id) {
+                break;
+            }
+            match ctx.model().get_element(id) {
+                Element::PrimitiveType(prim) => {
+                    let next_args = prim.super_type_value_arguments.clone();
+                    current = prim.super_type.map(|s| (s, next_args));
+                }
+                _ => current = None,
+            }
+            chain.push((id, args));
+        }
+    }
+    for (level_id, level_args) in chain {
+        let (constraints, param_names, prim_name) = match ctx.model().get_element(level_id) {
+            Element::PrimitiveType(prim) if !prim.constraints.is_empty() => {
+                let names: Vec<SmolStr> = prim
+                    .type_variable_parameters
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect();
+                (
+                    prim.constraints.clone(),
+                    names,
+                    ctx.model().element_name(level_id).clone(),
+                )
+            }
+            _ => continue,
+        };
+        ctx.context_mut().push_scope();
+        ctx.context_mut()
+            .set(SmolStr::new_static("this"), subject.clone());
+        for (i, name) in param_names.iter().enumerate() {
+            if let Some(cv) = level_args.get(i) {
+                let v = match cv {
+                    legend_pure_parser_pure::types::ConstValue::Integer(n) => Value::Integer(*n),
+                    legend_pure_parser_pure::types::ConstValue::String(s) => {
+                        Value::String(SmolStr::new(s))
+                    }
+                };
+                ctx.context_mut().set(name.clone(), v);
+            }
+        }
+        let mut first_failure: Option<PureException> = None;
+        for (idx, constraint) in constraints.iter().enumerate() {
+            match ctx.evaluate(&constraint.function) {
+                Ok(eval) => {
+                    if matches!(eval.into_value(), Value::Boolean(true)) {
+                        continue;
+                    }
+                }
+                Err(e) => {
+                    first_failure = Some(e);
+                    break;
+                }
+            }
+            let message = match constraint.message.as_ref().map(|m| ctx.evaluate(m)) {
+                Some(Ok(eval)) => match eval.into_value() {
+                    Value::String(s) => Some(s.to_string()),
+                    _ => None,
+                },
+                Some(Err(e)) => {
+                    first_failure = Some(e);
+                    break;
+                }
+                None => None,
+            };
+            let constraint_id = constraint
+                .name
+                .clone()
+                .unwrap_or_else(|| SmolStr::new(idx.to_string()));
+            first_failure = Some(PureException::constraint(
+                constraint_id,
+                crate::error::ConstraintKind::Class,
+                prim_name.clone(),
+                message,
+                constraint.source_info.clone(),
+                Vec::new(),
+            ));
+            break;
+        }
+        ctx.context_mut().pop_scope();
+        if let Some(e) = first_failure {
+            return Err(e);
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
