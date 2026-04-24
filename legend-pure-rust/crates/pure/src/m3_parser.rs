@@ -624,7 +624,12 @@ impl<'a> M3Parser<'a> {
         self.alloc_element(
             name,
             package_segments,
-            Element::PrimitiveType(crate::types::PrimitiveType { super_type }),
+            Element::PrimitiveType(crate::types::PrimitiveType {
+                super_type,
+                super_type_value_arguments: Vec::new(),
+                type_variable_parameters: Vec::new(),
+                constraints: Vec::new(),
+            }),
         );
     }
 

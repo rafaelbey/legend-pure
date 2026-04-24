@@ -715,9 +715,12 @@ mod tests {
             name_source_info: test_source(),
             parent_package: model.root_package,
         });
-        chunk
-            .elements
-            .alloc(Element::PrimitiveType(PrimitiveType { super_type: None }));
+        chunk.elements.alloc(Element::PrimitiveType(PrimitiveType {
+            super_type: None,
+            super_type_value_arguments: Vec::new(),
+            type_variable_parameters: Vec::new(),
+            constraints: Vec::new(),
+        }));
         model.chunks.push(chunk);
 
         let id = ElementId::InstanceId {

@@ -926,7 +926,12 @@ fn create_shell(element: &ast::Element) -> Element {
             canonical_unit: None,
             non_canonical_units: vec![],
         }),
-        ast::Element::Primitive(_) => Element::PrimitiveType(PrimitiveType { super_type: None }),
+        ast::Element::Primitive(_) => Element::PrimitiveType(PrimitiveType {
+            super_type: None,
+            super_type_value_arguments: Vec::new(),
+            type_variable_parameters: Vec::new(),
+            constraints: Vec::new(),
+        }),
     }
 }
 
@@ -1082,13 +1087,24 @@ fn hydrate_element_signature(
             })
         }
         ast::Element::Primitive(prim_def) => {
-            let super_type = resolve::resolve_type_ref(&prim_def.super_type, ctx, errors).and_then(
-                |te| match te {
-                    TypeExpr::Named { element, .. } => Some(element),
-                    _ => None,
-                },
-            );
-            Element::PrimitiveType(PrimitiveType { super_type })
+            let super_named = resolve::resolve_type_ref(&prim_def.super_type, ctx, errors);
+            let (super_type, super_type_value_arguments) = match super_named {
+                Some(TypeExpr::Named {
+                    element,
+                    value_arguments,
+                    ..
+                }) => (Some(element), value_arguments),
+                _ => (None, Vec::new()),
+            };
+            let type_variable_parameters =
+                lower_type_variable_parameters(&prim_def.type_variable_parameters, ctx, errors);
+            let constraints = lower_constraints(&prim_def.constraints, ctx, errors);
+            Element::PrimitiveType(PrimitiveType {
+                super_type,
+                super_type_value_arguments,
+                type_variable_parameters,
+                constraints,
+            })
         }
     }
 }
@@ -1177,6 +1193,28 @@ fn lower_parameters(
                 name: p.name.clone(),
                 type_expr,
                 multiplicity,
+                source_info: p.source_info.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Lowers AST `TypeVariableParameter`s to compiled `Parameter`s.
+/// Used by Class and Primitive to carry parametric-value declarations
+/// (e.g. the `x:Integer[1]` in `Primitive P(x:Integer[1])`).
+fn lower_type_variable_parameters(
+    params: &[legend_pure_parser_ast::type_ref::TypeVariableParameter],
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Vec<crate::types::Parameter> {
+    params
+        .iter()
+        .filter_map(|p| {
+            let type_expr = resolve::resolve_type_ref(&p.type_ref, ctx, errors)?;
+            Some(crate::types::Parameter {
+                name: p.name.clone(),
+                type_expr,
+                multiplicity: resolve::lower_multiplicity(&p.multiplicity),
                 source_info: p.source_info.clone(),
             })
         })

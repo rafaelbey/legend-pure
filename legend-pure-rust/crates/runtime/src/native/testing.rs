@@ -325,18 +325,36 @@ impl NativeFunction for AssertError {
             .into()),
             Err(e) => {
                 // Use the kind-specific message payload — `AssertionFailed` is
-                // the literal assertion text, `ConstraintViolation` uses its
-                // custom message when present (else the formatted fallback),
-                // and `ExecutionError` unwraps to the underlying error's
-                // Display. `e.to_string()` would include the exception-kind
-                // prefix (e.g. "Constraint violation: ..."), which the Pure
-                // platform tests never spell out verbatim.
+                // the literal assertion text, `ConstraintViolation` renders in
+                // Pure's canonical `"Constraint :[<id>] violated in the Class
+                // <name>[, Message: <msg>]"` shape (no source-location prefix,
+                // no `(PRE)`/`(POST)` for class-kind constraints), and
+                // `ExecutionError` unwraps to the underlying error's Display.
+                // `e.to_string()` would include the exception-kind prefix
+                // (e.g. "Constraint violation: (resource:… line:… column:…)"),
+                // which the Pure platform tests never spell out verbatim.
                 let actual = match &e.kind {
                     PureExceptionKind::AssertionFailed(m) => m.clone(),
                     PureExceptionKind::ConstraintViolation {
-                        message: Some(m), ..
-                    } => m.clone(),
-                    PureExceptionKind::ConstraintViolation { .. } => e.to_string(),
+                        constraint_id,
+                        constraint_kind,
+                        owner,
+                        message,
+                    } => {
+                        let kind_label = match constraint_kind {
+                            crate::error::ConstraintKind::Class => "",
+                            crate::error::ConstraintKind::Pre => "(PRE) ",
+                            crate::error::ConstraintKind::Post => "(POST) ",
+                        };
+                        match message {
+                            Some(m) => format!(
+                                "Constraint {kind_label}:[{constraint_id}] violated in the Class {owner}, Message: {m}"
+                            ),
+                            None => format!(
+                                "Constraint {kind_label}:[{constraint_id}] violated in the Class {owner}"
+                            ),
+                        }
+                    }
                     PureExceptionKind::ExecutionError(err) => err.to_string(),
                 };
                 if actual == expected_msg {

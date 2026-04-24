@@ -423,6 +423,22 @@ pub struct PrimitiveType {
     /// All 11 primitives have `Some(parent)` pointing to their parent in
     /// the type tree (e.g., `Integer.super_type = Some(NUMBER_ID)`).
     pub super_type: Option<crate::ids::ElementId>,
+    /// Type-variable VALUES bound on the parent at declaration time —
+    /// `Primitive OP8 extends OP(8)` stores `[ConstValue::Integer(8)]`
+    /// here so cast-time constraint inheritance can evaluate OP's
+    /// `$this < $x` constraint with `x = 8`. Empty when the parent is
+    /// non-parametric or the binding is absent.
+    pub super_type_value_arguments: Vec<ConstValue>,
+    /// Type-variable parameters declared on a parametric primitive, e.g.
+    /// `Primitive P(x:Integer[1]) extends Integer` gives one parameter
+    /// named `x`. Bound at cast/new time from the type-variable-values
+    /// supplied at the reference site (`@P(8)` binds `x = 8`).
+    pub type_variable_parameters: Vec<Parameter>,
+    /// Constraints declared in the `[…]` block after the base type.
+    /// Checked at cast/new time with `$this` bound to the candidate
+    /// value and every `type_variable_parameters` entry bound to its
+    /// call-site value. Empty for bootstrap primitives.
+    pub constraints: Vec<crate::nodes::class::Constraint>,
 }
 
 // ---------------------------------------------------------------------------
