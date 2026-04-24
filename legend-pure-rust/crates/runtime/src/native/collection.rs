@@ -654,9 +654,10 @@ impl NativeFunction for Contains {
         expect_args("contains", &values, 2)?;
         let haystack = values[0].to_collection();
         let needle = &values[1];
-        Ok(Evaluated::new(Value::Boolean(
-            haystack.iter().any(|v| v == needle),
-        )))
+        let ctx_ref: &dyn EvalContextTrait = ctx;
+        Ok(Evaluated::new(Value::Boolean(haystack.iter().any(|v| {
+            crate::native::equality::values_equal(ctx_ref, v, needle)
+        }))))
     }
 
     fn signature(&self) -> &'static str {
@@ -715,7 +716,10 @@ impl NativeFunction for IndexOf {
         expect_args("indexOf", &values, 2)?;
         let haystack = values[0].to_collection();
         let needle = &values[1];
-        let idx = haystack.iter().position(|v| v == needle);
+        let ctx_ref: &dyn EvalContextTrait = ctx;
+        let idx = haystack
+            .iter()
+            .position(|v| crate::native::equality::values_equal(ctx_ref, v, needle));
         let result = match idx {
             #[allow(clippy::cast_possible_wrap)]
             Some(i) => Value::Integer(i as i64),
@@ -1032,9 +1036,14 @@ impl NativeFunction for RemoveAllOptimized {
         let source = values[0].to_collection();
         let to_remove = values[1].to_collection();
 
+        let ctx_ref: &dyn EvalContextTrait = ctx;
         let out: Vec<Value> = source
             .iter()
-            .filter(|v| !to_remove.iter().any(|r| r == *v))
+            .filter(|v| {
+                !to_remove
+                    .iter()
+                    .any(|r| crate::native::equality::values_equal(ctx_ref, r, v))
+            })
             .cloned()
             .collect();
         Ok(Evaluated::new(Value::from_vec(out)))
