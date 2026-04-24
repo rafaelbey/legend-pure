@@ -190,6 +190,22 @@ pub enum DateValue {
         second: i8,
         /// Sub-second nanoseconds (`0–999_999_999`).
         subsecond_nanos: i32,
+        /// Number of fractional-second digits the literal was written with
+        /// (1–9). `0` means no fractional part was present. Preserved so
+        /// `toRepresentation` can round-trip the exact source form:
+        /// `%…T00:00:00.000` → `.000` (3 digits), `%…T00:00:00.0000` → `.0000`.
+        subsecond_digits: u8,
+        /// `true` if the literal included `:ss` seconds (or finer). `false`
+        /// for `%…T00:00` minute-only literals. Needed so `toRepresentation`
+        /// can round-trip `%2014-01-01T00:00+0000` without promoting to
+        /// `00:00:00`.
+        has_seconds: bool,
+        /// Signed minute offset from UTC the literal specified (`+0500`
+        /// → `300`, `-0500` → `-300`). `None` when the literal carried no
+        /// explicit timezone suffix. The runtime normalises to UTC at
+        /// construction time — this field exists only so the parser can
+        /// report whether the source had a TZ marker.
+        tz_offset_minutes: Option<i16>,
     },
     /// Strict time: `%10:30:00`.
     StrictTime {
@@ -201,6 +217,9 @@ pub enum DateValue {
         second: i8,
         /// Sub-second nanoseconds (`0–999_999_999`).
         subsecond_nanos: i32,
+        /// Number of fractional-second digits the literal was written
+        /// with (1–9). `0` means no fractional part.
+        subsecond_digits: u8,
     },
 }
 

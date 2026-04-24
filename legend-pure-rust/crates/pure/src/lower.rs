@@ -888,25 +888,21 @@ fn parse_datetime(s: &str) -> Option<DateValue> {
         return None;
     }
 
-    // Time may have fractional seconds: HH:MM:SS or HH:MM:SS.nnn
-    let (time_main, subsec_str) = match time_part.split_once('.') {
+    // Split the time component into `main_HH:MM[:SS]`, optional `.frac`,
+    // and optional `±HHMM` TZ marker — each may be present or absent.
+    let (time_body, tz_offset_minutes) = split_tz(time_part);
+    let (time_main, subsec_str) = match time_body.split_once('.') {
         Some((main, frac)) => (main, frac),
-        None => (time_part, ""),
+        None => (time_body, ""),
     };
-    // Strip timezone suffix if present (e.g., "+0000")
-    let time_main = time_main
-        .split_once('+')
-        .map_or(time_main, |(main, _)| main);
-    let time_main = time_main
-        .split_once('-')
-        .map_or(time_main, |(main, _)| main);
 
     let time_parts: Vec<&str> = time_main.split(':').collect();
     if time_parts.len() < 2 {
         return None;
     }
 
-    let nanos = parse_subsecond_nanos(subsec_str);
+    let (nanos, digits) = parse_subsecond_parts(subsec_str);
+    let has_seconds = time_parts.len() >= 3;
 
     Some(DateValue::DateTime {
         year: date_parts[0].parse().ok()?,
@@ -916,49 +912,75 @@ fn parse_datetime(s: &str) -> Option<DateValue> {
         minute: time_parts[1].parse().ok()?,
         second: time_parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0),
         subsecond_nanos: nanos,
+        subsecond_digits: digits,
+        has_seconds,
+        tz_offset_minutes,
     })
 }
 
 /// Parses `"10:30:00"` → `DateValue::StrictTime`.
 fn parse_strict_time(s: &str) -> Option<DateValue> {
     let s = s.strip_prefix('%').unwrap_or(s);
-    let (time_main, subsec_str) = match s.split_once('.') {
+    let (time_body, _tz) = split_tz(s);
+    let (time_main, subsec_str) = match time_body.split_once('.') {
         Some((main, frac)) => (main, frac),
-        None => (s, ""),
+        None => (time_body, ""),
     };
     let parts: Vec<&str> = time_main.split(':').collect();
     if parts.len() < 2 {
         return None;
     }
-    let nanos = parse_subsecond_nanos(subsec_str);
+    let (nanos, digits) = parse_subsecond_parts(subsec_str);
     Some(DateValue::StrictTime {
         hour: parts[0].parse().ok()?,
         minute: parts[1].parse().ok()?,
         second: parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0),
         subsecond_nanos: nanos,
+        subsecond_digits: digits,
     })
 }
 
-/// Converts a fractional seconds string (e.g., `"123"`, `"12345"`) to nanoseconds.
-fn parse_subsecond_nanos(frac: &str) -> i32 {
-    if frac.is_empty() {
-        return 0;
-    }
-    // Strip any trailing timezone info from the frac part
-    let frac = frac.split_once('+').map_or(frac, |(main, _)| main);
-    let frac = frac.split_once('-').map_or(frac, |(main, _)| main);
-    // Pad/truncate to 9 digits
-    let mut padded = String::with_capacity(9);
-    for (i, c) in frac.chars().enumerate() {
-        if i >= 9 {
-            break;
+/// Split a time body on its trailing `±HHMM` offset marker.
+///
+/// Returns `(body_without_tz, Some(offset_minutes))` when a marker is
+/// present, else `(body, None)`. The `-` / `+` matching targets the LAST
+/// occurrence so `-0500` doesn't get confused with fractional-second
+/// separators (`.` takes precedence).
+fn split_tz(s: &str) -> (&str, Option<i16>) {
+    // Find the last `+` or `-` that has exactly 4 trailing digits (HHMM).
+    for (idx, _) in s.char_indices().rev() {
+        let byte = s.as_bytes()[idx];
+        if byte == b'+' || byte == b'-' {
+            let tail = &s[idx..];
+            if tail.len() == 5 && tail[1..].as_bytes().iter().all(u8::is_ascii_digit) {
+                let sign: i16 = if byte == b'+' { 1 } else { -1 };
+                let hh: i16 = tail[1..3].parse().unwrap_or(0);
+                let mm: i16 = tail[3..5].parse().unwrap_or(0);
+                return (&s[..idx], Some(sign * (hh * 60 + mm)));
+            }
         }
-        padded.push(c);
     }
+    (s, None)
+}
+
+/// Split a fractional-second string into `(nanoseconds, digits_present)`.
+///
+/// `digits_present` counts the source digits (1–9, capped at 9). `0`
+/// means no fractional component was supplied. The nanos value is
+/// padded to 9 digits on the right so 3-digit `.352` becomes
+/// `352_000_000` nanoseconds.
+fn parse_subsecond_parts(frac: &str) -> (i32, u8) {
+    if frac.is_empty() {
+        return (0, 0);
+    }
+    let trimmed: String = frac.chars().take(9).collect();
+    let digits: u8 = trimmed.len() as u8;
+    let mut padded = String::with_capacity(9);
+    padded.push_str(&trimmed);
     while padded.len() < 9 {
         padded.push('0');
     }
-    padded.parse().unwrap_or(0)
+    (padded.parse().unwrap_or(0), digits)
 }
 
 // ---------------------------------------------------------------------------
@@ -1067,7 +1089,10 @@ mod tests {
                 hour: 10,
                 minute: 30,
                 second: 0,
-                subsecond_nanos: 0
+                subsecond_nanos: 0,
+                subsecond_digits: 0,
+                has_seconds: true,
+                tz_offset_minutes: None,
             }
         );
     }
@@ -1084,7 +1109,50 @@ mod tests {
                 hour: 10,
                 minute: 30,
                 second: 45,
-                subsecond_nanos: 123_000_000
+                subsecond_nanos: 123_000_000,
+                subsecond_digits: 3,
+                has_seconds: true,
+                tz_offset_minutes: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_datetime_with_tz() {
+        let dv = parse_datetime("%2024-01-15T10:30:45.352-0500").unwrap();
+        assert_eq!(
+            dv,
+            DateValue::DateTime {
+                year: 2024,
+                month: 1,
+                day: 15,
+                hour: 10,
+                minute: 30,
+                second: 45,
+                subsecond_nanos: 352_000_000,
+                subsecond_digits: 3,
+                has_seconds: true,
+                tz_offset_minutes: Some(-300),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_datetime_minute_only() {
+        let dv = parse_datetime("%2014-1-1T0:00+0000").unwrap();
+        assert_eq!(
+            dv,
+            DateValue::DateTime {
+                year: 2014,
+                month: 1,
+                day: 1,
+                hour: 0,
+                minute: 0,
+                second: 0,
+                subsecond_nanos: 0,
+                subsecond_digits: 0,
+                has_seconds: false,
+                tz_offset_minutes: Some(0),
             }
         );
     }
@@ -1098,7 +1166,8 @@ mod tests {
                 hour: 10,
                 minute: 30,
                 second: 0,
-                subsecond_nanos: 0
+                subsecond_nanos: 0,
+                subsecond_digits: 0,
             }
         );
     }
@@ -1112,17 +1181,18 @@ mod tests {
                 hour: 14,
                 minute: 5,
                 second: 30,
-                subsecond_nanos: 500_000_000
+                subsecond_nanos: 500_000_000,
+                subsecond_digits: 1,
             }
         );
     }
 
     #[test]
-    fn parse_subsecond_nanos_padding() {
-        assert_eq!(parse_subsecond_nanos("1"), 100_000_000);
-        assert_eq!(parse_subsecond_nanos("12"), 120_000_000);
-        assert_eq!(parse_subsecond_nanos("123"), 123_000_000);
-        assert_eq!(parse_subsecond_nanos("123456789"), 123_456_789);
-        assert_eq!(parse_subsecond_nanos(""), 0);
+    fn parse_subsecond_parts_padding() {
+        assert_eq!(parse_subsecond_parts("1"), (100_000_000, 1));
+        assert_eq!(parse_subsecond_parts("12"), (120_000_000, 2));
+        assert_eq!(parse_subsecond_parts("123"), (123_000_000, 3));
+        assert_eq!(parse_subsecond_parts("123456789"), (123_456_789, 9));
+        assert_eq!(parse_subsecond_parts(""), (0, 0));
     }
 }

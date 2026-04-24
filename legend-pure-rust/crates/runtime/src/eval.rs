@@ -351,13 +351,16 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 minute,
                 second,
                 subsecond_nanos,
+                subsecond_digits,
+                has_seconds,
+                tz_offset_minutes,
             } => {
-                let precision = if *subsecond_nanos > 0 {
-                    crate::date::TimePrecision::Subsecond(9)
-                } else {
-                    crate::date::TimePrecision::Second
-                };
-                let date = PureDate::datetime(
+                // Pure stores every DateTime in UTC. Shift by the source TZ
+                // offset so `%…T20:54-0500` lands at `…T01:54+0000`. We
+                // build an intermediate `jiff::civil::DateTime`, subtract
+                // the source offset to obtain UTC, and then hand the
+                // resulting components to `PureDate::datetime`.
+                let civil = jiff::civil::DateTime::new(
                     *year,
                     *month,
                     *day,
@@ -365,6 +368,38 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                     *minute,
                     *second,
                     *subsecond_nanos,
+                )
+                .map_err(|e| {
+                    PureException::from(PureRuntimeError::EvaluationError(format!(
+                        "Invalid datetime literal: {e}"
+                    )))
+                })?;
+                let shifted = if let Some(offset) = tz_offset_minutes {
+                    civil
+                        .checked_sub(jiff::Span::new().minutes(i64::from(*offset)))
+                        .map_err(|e| {
+                            PureException::from(PureRuntimeError::EvaluationError(format!(
+                                "Invalid datetime timezone shift: {e}"
+                            )))
+                        })?
+                } else {
+                    civil
+                };
+                let precision = if *subsecond_digits > 0 {
+                    crate::date::TimePrecision::Subsecond(*subsecond_digits)
+                } else if *has_seconds {
+                    crate::date::TimePrecision::Second
+                } else {
+                    crate::date::TimePrecision::Minute
+                };
+                let date = PureDate::datetime(
+                    shifted.year(),
+                    shifted.month(),
+                    shifted.day(),
+                    shifted.hour(),
+                    shifted.minute(),
+                    shifted.second(),
+                    shifted.subsec_nanosecond(),
                     precision,
                 )
                 .map_err(|e| {
@@ -379,6 +414,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 minute,
                 second,
                 subsecond_nanos,
+                subsecond_digits: _,
             } => {
                 let time = crate::date::StrictTime::new(*hour, *minute, *second, *subsecond_nanos)
                     .map_err(|e| {
