@@ -345,6 +345,48 @@ impl RuntimeHeap {
         }
     }
 
+    /// Replace every value stored at `property` with `values` in one step.
+    ///
+    /// `mutate_add` appends; this resets the slot. Used by `new` / `copy`
+    /// overrides where Pure's semantics is "the caller's value IS the new
+    /// value", not "append to whatever was there". Without this, copying a
+    /// Pure instance and overriding a property via `^$src(prop='new')`
+    /// would leave `['old', 'new']` in the slot.
+    ///
+    /// # Errors
+    /// Returns `InvalidObjectId` if the ID is stale or invalid.
+    pub fn mutate_set(
+        &mut self,
+        id: ObjectId,
+        property: &str,
+        values: &[Value],
+    ) -> Result<(), PureRuntimeError> {
+        let entry = self
+            .objects
+            .get_mut(id)
+            .ok_or(PureRuntimeError::InvalidObjectId(id))?;
+
+        match entry {
+            HeapEntry::Dynamic(obj) => {
+                let mut pv = PVector::new();
+                for v in values {
+                    pv.push_back(v.clone());
+                }
+                obj.properties.insert(SmolStr::new(property), pv);
+                Ok(())
+            }
+            HeapEntry::Typed(obj) => {
+                // Typed objects don't support slot-reset — fall back to
+                // overwriting via repeated set_property. `TypedObject` has
+                // its own semantic for property shape.
+                for v in values {
+                    obj.set_property(property, v.clone())?;
+                }
+                Ok(())
+            }
+        }
+    }
+
     // -- Typed Access (compiled code fast path) --
 
     /// Downcast a heap entry to a concrete typed struct.
