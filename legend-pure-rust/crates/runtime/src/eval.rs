@@ -710,9 +710,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 };
                 let mut items: Vec<Value> = Vec::with_capacity(stereos.len());
                 for (profile, value) in stereos {
-                    let obj = self
-                        .heap
-                        .alloc_dynamic("meta::pure::metamodel::extension::Stereotype");
+                    let obj = self.heap.alloc_dynamic(crate::m3_paths::STEREOTYPE);
                     self.heap
                         .mutate_add(obj, "value", &[Value::String(value)])?;
                     self.heap
@@ -737,9 +735,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 };
                 let mut items: Vec<Value> = Vec::with_capacity(tags.len());
                 for (profile, tag, value) in tags {
-                    let obj = self
-                        .heap
-                        .alloc_dynamic("meta::pure::metamodel::extension::TaggedValue");
+                    let obj = self.heap.alloc_dynamic(crate::m3_paths::TAGGED_VALUE);
                     self.heap.mutate_add(obj, "tag", &[Value::String(tag)])?;
                     self.heap
                         .mutate_add(obj, "profile", &[Value::Element(profile)])?;
@@ -792,14 +788,10 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 };
                 let mut items = Vec::with_capacity(super_eids.len());
                 for super_eid in super_eids {
-                    let gt_obj = self
-                        .heap
-                        .alloc_dynamic("meta::pure::metamodel::type::generics::GenericType");
+                    let gt_obj = self.heap.alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
                     self.heap
                         .mutate_add(gt_obj, "rawType", &[Value::Element(super_eid)])?;
-                    let gen_obj = self
-                        .heap
-                        .alloc_dynamic("meta::pure::metamodel::relationship::Generalization");
+                    let gen_obj = self.heap.alloc_dynamic(crate::m3_paths::GENERALIZATION);
                     self.heap
                         .mutate_add(gen_obj, "general", &[Value::Object(gt_obj)])?;
                     self.heap
@@ -866,8 +858,8 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         };
 
         let classifier = match property {
-            "qualifiedProperties" => "meta::pure::metamodel::function::property::QualifiedProperty",
-            _ => "meta::pure::metamodel::function::property::Property",
+            "qualifiedProperties" => crate::m3_paths::QUALIFIED_PROPERTY,
+            _ => crate::m3_paths::PROPERTY,
         };
 
         let mut items: Vec<Value> = Vec::with_capacity(names.len());
@@ -885,14 +877,72 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     // -----------------------------------------------------------------------
 
     #[allow(clippy::result_large_err)]
-    #[allow(clippy::used_underscore_binding)]
     fn eval_qualified_property(
         &mut self,
         target: &ValueSpec,
         property: &str,
         arguments: &[ValueSpec],
     ) -> Result<Value, PureException> {
-        let _target_val = self.eval(target)?;
+        let target_val = self.eval(target)?;
+
+        // Universal `.all` — every Class has an implicit `MyClass.all` that
+        // returns every heap instance classified as `MyClass` or any of its
+        // subclasses. Mirrors Java Pure's platform-level `.all` accessor.
+        if property == "all"
+            && let Value::Element(class_id) = target_val
+            && matches!(self.model.get_element(class_id), Element::Class(_))
+        {
+            let target_path =
+                crate::model_utils::build_element_path(&self.model, class_id, "::", false);
+            let mut instances: Vec<Value> = Vec::new();
+            for (obj_id, classifier) in self.heap.iter_classifiers() {
+                if classifier == target_path {
+                    instances.push(Value::Object(obj_id));
+                }
+            }
+            return Ok(Value::from_vec(instances));
+        }
+
+        // Direct QP invocation on a heap instance: `$instance.qp(args)`.
+        // Resolve the instance's classifier → Class → `qualified_properties`
+        // entry matching `property`, then evaluate the QP body with `this`
+        // bound to the instance and positional params bound from `arguments`.
+        if let Value::Object(obj_id) = target_val {
+            let classifier = self
+                .heap
+                .classifier(obj_id)
+                .map_err(PureException::from)?
+                .to_string();
+            let segments: Vec<SmolStr> = if classifier.is_empty() {
+                Vec::new()
+            } else {
+                classifier.split("::").map(SmolStr::new).collect()
+            };
+            if let Some(class_id) = self.model.resolve_by_path(&segments)
+                && let Element::Class(class) = self.model.get_element(class_id)
+                && let Some(qp) = class
+                    .qualified_properties
+                    .iter()
+                    .find(|q| q.name == property)
+            {
+                let params = qp.parameters.clone();
+                let body = qp.body.clone();
+                let mut args_v: Vec<Value> = Vec::with_capacity(arguments.len());
+                for arg in arguments {
+                    args_v.push(self.eval(arg)?);
+                }
+                self.context.push_scope();
+                self.context
+                    .set(SmolStr::new("this"), Value::Object(obj_id));
+                for (param, arg) in params.iter().zip(args_v.iter()) {
+                    self.context.set(param.name.clone(), arg.clone());
+                }
+                let result = self.eval_body(&body);
+                self.context.pop_scope();
+                return result;
+            }
+        }
+
         let mut _args = Vec::with_capacity(arguments.len());
         for arg in arguments {
             _args.push(self.eval(arg)?);
@@ -1039,29 +1089,94 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         }
     }
 
-    /// Invoke a heap-object-shaped callable — currently just the `Property`
-    /// wrappers emitted by `.properties` on a Class. Returns a type error for
-    /// any other classifier so the common case (a non-function object) still
-    /// surfaces the actionable "Expected Function" message.
+    /// Invoke a heap-object-shaped callable — `Property` wrappers emitted by
+    /// `.properties` and `QualifiedProperty` wrappers emitted by
+    /// `.qualifiedProperties`. Dispatches by resolving the classifier string
+    /// to an M3 `ElementId` and comparing against the canonical
+    /// `meta::pure::metamodel::function::property::{Property,QualifiedProperty}`
+    /// IDs, so we don't rely on textual suffix matching. Returns a type
+    /// error for any other classifier so the common case (a non-function
+    /// object) still surfaces the actionable "Expected Function" message.
     #[allow(clippy::result_large_err)]
     fn apply_object_callable(
         &mut self,
         id: crate::heap::ObjectId,
         args: &[Value],
     ) -> Result<Value, PureException> {
-        let classifier = self.heap.classifier(id).map_err(PureException::from)?;
-        if classifier.ends_with("::Property") || classifier == "Property" {
-            if args.is_empty() {
-                return Err(PureException::from(PureRuntimeError::EvaluationError(
-                    "Property invocation expects the instance as its argument".into(),
-                )));
+        let classifier = self
+            .heap
+            .classifier(id)
+            .map_err(PureException::from)?
+            .to_string();
+        match callable_wrapper_kind(self.model, &classifier) {
+            Some(WrapperKind::Property) => {
+                if args.is_empty() {
+                    return Err(PureException::from(PureRuntimeError::EvaluationError(
+                        "Property invocation expects the instance as its argument".into(),
+                    )));
+                }
+                let name = self.read_wrapper_name(id)?;
+                self.apply_property_to_instance(&name, &args[0])
             }
-            let name = self.read_wrapper_name(id)?;
-            return self.apply_property_to_instance(&name, &args[0]);
+            Some(WrapperKind::QualifiedProperty) => self.apply_qualified_property(id, args),
+            None => Err(PureException::from(PureRuntimeError::EvaluationError(
+                format!("Expected Function, got Object<{classifier}>"),
+            ))),
         }
-        Err(PureException::from(PureRuntimeError::EvaluationError(
-            format!("Expected Function, got Object<{classifier}>"),
-        )))
+    }
+
+    /// Invoke a `QualifiedProperty` wrapper — reads `name` + `_owner` off the
+    /// wrapper, locates the QP definition on the owner Class, binds the first
+    /// arg as `this` and the remainder as the QP's declared parameters, then
+    /// evaluates the QP body. Mirrors `evaluate_Function_1__List_MANY__Any_MANY_`'s
+    /// dispatch path for `LA_Person.qualifiedProperties` entries.
+    #[allow(clippy::result_large_err)]
+    fn apply_qualified_property(
+        &mut self,
+        id: crate::heap::ObjectId,
+        args: &[Value],
+    ) -> Result<Value, PureException> {
+        let name = self.read_wrapper_name(id)?;
+        let owner_vals = self
+            .heap
+            .get_property_values(id, "_owner")
+            .map_err(PureException::from)?;
+        let Some(Value::Element(owner_id)) = owner_vals.front().cloned() else {
+            return Err(PureException::from(PureRuntimeError::EvaluationError(
+                "QualifiedProperty wrapper is missing its '_owner' slot".into(),
+            )));
+        };
+        let Element::Class(class) = self.model.get_element(owner_id) else {
+            return Err(PureException::from(PureRuntimeError::EvaluationError(
+                format!("QualifiedProperty owner is not a Class: {owner_id:?}"),
+            )));
+        };
+        let Some(qp) = class.qualified_properties.iter().find(|q| q.name == name) else {
+            return Err(PureException::from(PureRuntimeError::EvaluationError(
+                format!(
+                    "QualifiedProperty '{name}' not found on class {}",
+                    self.model.element_name(owner_id)
+                ),
+            )));
+        };
+        if args.is_empty() {
+            return Err(PureException::from(PureRuntimeError::EvaluationError(
+                format!("QualifiedProperty '{name}' requires a receiver instance"),
+            )));
+        }
+        let params = qp.parameters.clone();
+        let body = qp.body.clone();
+
+        self.context.push_scope();
+        // `this` — the receiver instance.
+        self.context.set(SmolStr::new("this"), args[0].clone());
+        // Declared parameters bound positionally from args[1..].
+        for (param, arg) in params.iter().zip(args.iter().skip(1)) {
+            self.context.set(param.name.clone(), arg.clone());
+        }
+        let result = self.eval_body(&body);
+        self.context.pop_scope();
+        result
     }
 
     /// Read the `name` slot of a Property / QualifiedProperty wrapper as a
@@ -1249,6 +1364,35 @@ impl<H: EvalHooks> std::fmt::Debug for Evaluator<'_, H> {
             .field("context_depth", &self.context.depth())
             .finish()
     }
+}
+
+/// Classify a heap object by resolving its classifier string to a
+/// well-known M3 `ElementId`. Used by `apply_object_callable` to dispatch
+/// Property / QualifiedProperty wrappers without relying on textual
+/// suffix matching. Returns `None` if the classifier doesn't correspond
+/// to one of the callable wrapper classes.
+pub(crate) fn callable_wrapper_kind(model: &PureModel, classifier: &str) -> Option<WrapperKind> {
+    let id = crate::m3_paths::resolve(model, classifier)?;
+    if crate::m3_paths::resolve(model, crate::m3_paths::PROPERTY) == Some(id) {
+        Some(WrapperKind::Property)
+    } else if crate::m3_paths::resolve(model, crate::m3_paths::QUALIFIED_PROPERTY) == Some(id) {
+        Some(WrapperKind::QualifiedProperty)
+    } else {
+        None
+    }
+}
+
+/// Callable wrapper classification — see [`callable_wrapper_kind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WrapperKind {
+    /// `meta::pure::metamodel::function::property::Property` — a Class
+    /// property reference, invoked as `$propRef->eval($instance)` to read
+    /// the named property from `$instance`.
+    Property,
+    /// `meta::pure::metamodel::function::property::QualifiedProperty` — a
+    /// derived/qualified property reference, invoked via
+    /// `$qp->evaluate(^List<Any>(values=$instance), …)`.
+    QualifiedProperty,
 }
 
 // ---------------------------------------------------------------------------

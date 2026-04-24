@@ -183,7 +183,7 @@ impl NativeFunction for SourceInformation {
         let source = node.source_info.clone();
         let obj = ctx
             .heap_mut()
-            .alloc_dynamic("meta::pure::functions::meta::SourceInformation");
+            .alloc_dynamic(crate::m3_paths::SOURCE_INFORMATION);
         let heap = ctx.heap_mut();
         heap.mutate_add(obj, "source", &[Value::String(source.source.clone())])?;
         heap.mutate_add(
@@ -465,9 +465,7 @@ impl NativeFunction for GenericTypeOf {
         let values = force_all(args, ctx)?;
         expect_args("genericType", &values, 1)?;
         let type_id = resolve_value_type(&values[0], ctx.model(), ctx.heap())?;
-        let obj = ctx
-            .heap_mut()
-            .alloc_dynamic("meta::pure::metamodel::type::generics::GenericType");
+        let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
         ctx.heap_mut()
             .mutate_add(obj, "rawType", &[Value::Element(type_id)])?;
 
@@ -483,9 +481,7 @@ impl NativeFunction for GenericTypeOf {
                 Element::Class(_) | Element::Enumeration(_)
             );
             if arg_eligible {
-                let arg_gt = ctx
-                    .heap_mut()
-                    .alloc_dynamic("meta::pure::metamodel::type::generics::GenericType");
+                let arg_gt = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
                 ctx.heap_mut()
                     .mutate_add(arg_gt, "rawType", &[Value::Element(*elem_id)])?;
                 ctx.heap_mut()
@@ -595,11 +591,13 @@ impl NativeFunction for EnumValues {
         let Element::Enumeration(enum_def) = ctx.model().get_element(id) else {
             return Err(PureRuntimeError::type_mismatch("Enumeration", &values[0]).into());
         };
-        let simple = ctx.model().element_name(id).clone();
         let enum_values: Vec<Value> = enum_def
             .values
             .iter()
-            .map(|v| Value::String(SmolStr::new(format!("{simple}.{}", v.name))))
+            .map(|v| Value::EnumValue {
+                enum_id: id,
+                member: v.name.clone(),
+            })
             .collect();
         Ok(Evaluated::new(Value::from_vec(enum_values)))
     }
@@ -815,6 +813,7 @@ fn value_matches_type(
             if matches!(model.get_element(*id), Element::Class(_))),
         "Enumeration" => matches!(value, Value::Element(id)
             if matches!(model.get_element(*id), Element::Enumeration(_))),
+        "Enum" => matches!(value, Value::EnumValue { .. }),
         "Profile" => matches!(value, Value::Element(id)
             if matches!(model.get_element(*id), Element::Profile(_))),
         "Association" => matches!(value, Value::Element(id)
@@ -1115,6 +1114,26 @@ fn render_id(value: &Value, model: &PureModel) -> String {
     }
 }
 
+/// Render an Element reference for `toRepresentation`.
+///
+/// Functions are rendered with their mangled signature leaf
+/// (`pkg::pkg::name_Type_Mult_…`) so every overload has a distinct
+/// representation. All other elements use the simple-name leaf matching
+/// Java Pure's `elementToPath` output.
+fn render_element_representation(model: &PureModel, id: ElementId) -> String {
+    if let Element::Function(_) = model.get_element(id) {
+        let path = build_element_path(model, id, "::", false);
+        let mangled = model.element_name(id);
+        if let Some((prefix, _leaf)) = path.rsplit_once("::") {
+            format!("{prefix}::{mangled}")
+        } else {
+            mangled.to_string()
+        }
+    } else {
+        build_element_path(model, id, "::", false)
+    }
+}
+
 /// Render a value as a Pure-source-like debug representation —
 /// powers the `toRepresentation` native.
 fn render_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -> String {
@@ -1126,7 +1145,7 @@ fn render_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -
         Value::Decimal(d) => d.to_string(),
         Value::Date(d) => format!("%{d}"),
         Value::StrictTime(t) => format!("%{t}"),
-        Value::Element(id) => build_element_path(model, *id, "::", false),
+        Value::Element(id) => render_element_representation(model, *id),
         Value::Object(obj_id) => {
             // Java Pure renders object instances as `<Anonymous_{id}>` with
             // no classifier prefix. `testClassInstanceToRepresentation`
@@ -1279,9 +1298,9 @@ impl NativeFunction for Generalizations {
 
 /// Pure `extractEnumValue<T>(enumeration:Enumeration<T>[1], value:String[1]):T[1]`
 ///
-/// Returns the enum-value form `"SimpleName.NAME"` for the `name`d member of
-/// `enumeration`, matching the string shape [`Evaluator::eval_enum_value`]
-/// emits so `==` comparisons agree both directions.
+/// Returns `Value::EnumValue { enum_id, member }` so structural equality
+/// matches the same shape `Evaluator::eval_enum_value` emits for literal
+/// `MyEnum.MEMBER` accesses.
 #[derive(Debug)]
 pub struct ExtractEnumValue;
 
@@ -1307,10 +1326,10 @@ impl NativeFunction for ExtractEnumValue {
             ))
             .into());
         }
-        let simple = ctx.model().element_name(enum_id);
-        Ok(Evaluated::new(Value::String(SmolStr::new(format!(
-            "{simple}.{name}"
-        )))))
+        Ok(Evaluated::new(Value::EnumValue {
+            enum_id,
+            member: SmolStr::new(&*name),
+        }))
     }
 
     fn signature(&self) -> &'static str {
@@ -1411,9 +1430,7 @@ impl NativeFunction for OpenVariableValues {
             // Wrap each captured binding in a `List<Any>(values=…)` heap
             // object so `$map->get(name).values` round-trips through the
             // Java-shaped List container the platform tests expect.
-            let list_id = ctx
-                .heap_mut()
-                .alloc_dynamic("meta::pure::functions::collection::List");
+            let list_id = ctx.heap_mut().alloc_dynamic(crate::m3_paths::LIST);
             ctx.heap_mut().mutate_add(list_id, "values", &[value])?;
             map.insert(crate::value::ValueKey::String(name), Value::Object(list_id));
         }
@@ -1472,11 +1489,19 @@ impl NativeFunction for GenericTypeClass {
 
 /// Pure `elementPath(element:PackageableElement[1]):PackageableElement[1..*]`
 ///
-/// Returns the chain of elements from the root package down to `element`:
-/// `[Root, pkg1, pkg1::pkg2, …, element]`. Each intermediate entry is the
-/// `Value::Element` of a package on the path; the final entry is the input
-/// element itself. Mirrors Java Pure's `.elementPath` accessor used for
-/// reflection-heavy code generation (`elementToPath.pure::testElementPath`).
+/// Mirror of Java Pure's `PackageableElement.getUserObjectPathForPackageableElement`.
+/// Walks the `_package` chain up to — but omitting — any element whose
+/// package is null (Java `_package=null` semantics). The Rust model pins
+/// bootstrap M3 orphans (`Package`, `Any`, `Nil`, primitive types) to the
+/// root package as a non-`Option` default, so here we replicate Java's
+/// null-parent behaviour by treating a direct-child-of-root, non-`Package`
+/// element as an orphan: the chain collapses to `[element]`.
+///
+/// Examples:
+/// - `elementPath(Package)` → `[Package]` (Java null-parent case)
+/// - `elementPath(::)` → `[::]` (target is root itself)
+/// - `elementPath(meta)` → `[::, meta]` (non-orphan package child of root)
+/// - `elementPath(CC_Person)` → `[::, meta, …, CC_Person]`
 #[derive(Debug)]
 pub struct ElementPath;
 
@@ -1489,11 +1514,17 @@ impl NativeFunction for ElementPath {
         let values = force_all(args, ctx)?;
         expect_args("elementPath", &values, 1)?;
         let id = as_element_id(&values[0])?;
+        let root_id = ctx.model().root_package;
 
-        // Walk the parent chain up to the root. For instance elements, the
-        // chain starts with the element's own parent package; for a package
-        // it starts with the package's own parent. The element / package
-        // itself is appended last before we reverse.
+        // Treat bootstrap M3 orphans (non-package elements whose parent is
+        // the root package) as having no package chain — Java Pure encodes
+        // the same elements with `_package=null`, giving `[element]`.
+        if let legend_pure_parser_pure::ids::ElementId::InstanceId { .. } = id
+            && ctx.model().get_node(id).parent_package == root_id
+        {
+            return Ok(Evaluated::new(Value::from_vec(vec![Value::Element(id)])));
+        }
+
         let mut chain: Vec<legend_pure_parser_pure::ids::ElementId> = vec![id];
         let mut cursor: Option<legend_pure_parser_pure::ids::ElementId> = match id {
             legend_pure_parser_pure::ids::ElementId::InstanceId { .. } => {

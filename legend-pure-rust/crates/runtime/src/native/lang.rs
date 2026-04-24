@@ -309,7 +309,7 @@ impl NativeFunction for New {
         // working without requiring full `ValueSpecification` heap modelling
         // on the lambda body. See boolean/and.pure's
         // `testShortCircuitInDynamicEvaluation` for the motivating pattern.
-        if is_lambda_function_classifier(&classifier)
+        if is_lambda_function_class(ctx.model(), class_id)
             && let Some(fn_val) = try_lambda_shortcut(&values[2..])
         {
             return Ok(Evaluated::new(fn_val));
@@ -387,15 +387,19 @@ impl NativeFunction for Copy {
     }
 }
 
-/// Recognise the `LambdaFunction` classifier family used by Pure's
+/// Recognise the `LambdaFunction` / `Function` M3 classes used by Pure's
 /// `^LambdaFunction(expressionSequence = …)` clone idiom.
-fn is_lambda_function_classifier(classifier: &str) -> bool {
-    // The classifier is the class's full path in `a::b::LambdaFunction` form,
-    // or the bare `LambdaFunction` for unqualified references.
-    classifier == "LambdaFunction"
-        || classifier.ends_with("::LambdaFunction")
-        || classifier == "Function"
-        || classifier.ends_with("::Function")
+///
+/// Compares by resolved [`ElementId`] against the canonical
+/// `meta::pure::metamodel::function::{Function,LambdaFunction}` paths — not
+/// by textual suffix match on the classifier string — so unrelated classes
+/// named `LambdaFunction` in user code don't trigger the shortcut.
+fn is_lambda_function_class(
+    model: &legend_pure_parser_pure::model::PureModel,
+    class_id: legend_pure_parser_pure::ids::ElementId,
+) -> bool {
+    crate::m3_paths::resolve(model, crate::m3_paths::LAMBDA_FUNCTION) == Some(class_id)
+        || crate::m3_paths::resolve(model, crate::m3_paths::FUNCTION) == Some(class_id)
 }
 
 /// Detect the `(expressionSequence, <single Function>)` key/value pair

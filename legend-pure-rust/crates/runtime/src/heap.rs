@@ -380,6 +380,19 @@ impl RuntimeHeap {
         }
     }
 
+    /// Iterator over `(ObjectId, classifier)` pairs for every live heap
+    /// object. Used by the universal `.all` qualified property to scan for
+    /// instances of a given class (honouring subtype chains at the caller).
+    pub fn iter_classifiers(&self) -> impl Iterator<Item = (ObjectId, &str)> {
+        self.objects.iter().map(|(id, entry)| {
+            let classifier = match entry {
+                HeapEntry::Dynamic(d) => d.classifier.as_str(),
+                HeapEntry::Typed(t) => t.classifier_path(),
+            };
+            (id, classifier)
+        })
+    }
+
     /// Number of objects currently on the heap.
     #[must_use]
     pub fn len(&self) -> usize {
