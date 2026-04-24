@@ -425,6 +425,149 @@ impl NativeFunction for Copy {
     }
 }
 
+/// Pure
+/// `dynamicNew(class:Class<Any>[1], kvs:KeyValue[*]):Any[1]` /
+/// `dynamicNew(gt:GenericType[1], kvs:KeyValue[*]):Any[1]`
+///
+/// Reflective `new` — the class (or its `GenericType` wrapper) is
+/// resolved at runtime, and property assignments come in as a
+/// collection of `KeyValue` heap objects with `key: String[1]` and
+/// `value: Any[*]`. Java Pure's variants additionally accept property-
+/// override / default-override / post-init hook functions; those
+/// overloads aren't handled here yet (registered separately under
+/// their own mangled keys once implementation lands).
+///
+/// Defaulting behaviour — when a property on the target class declares
+/// a `default_value` expression and the caller didn't supply a
+/// `KeyValue` for that property, the default is evaluated in the
+/// current scope and stored on the new instance. Caller-supplied
+/// values always win over defaults (mirrors `^Class(prop=val)` +
+/// default interaction in the compiler).
+#[derive(Debug)]
+pub struct DynamicNew;
+
+impl NativeFunction for DynamicNew {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        if values.len() < 2 {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "dynamicNew: expected at least 2 arguments (class/genericType, kvs), got {}",
+                values.len()
+            ))
+            .into());
+        }
+
+        // Resolve the target class — accept a direct Class Element or a
+        // `GenericType` heap wrapper whose `rawType` points at one.
+        let class_id = match &values[0] {
+            Value::Element(id) => *id,
+            Value::Object(obj_id) => {
+                let raw_type_vals = ctx.heap().get_property_values(*obj_id, "rawType")?;
+                match raw_type_vals.iter().next() {
+                    Some(Value::Element(id)) => *id,
+                    _ => {
+                        return Err(PureRuntimeError::EvaluationError(
+                            "dynamicNew: GenericType wrapper has no resolved rawType".into(),
+                        )
+                        .into());
+                    }
+                }
+            }
+            other => {
+                return Err(PureRuntimeError::type_mismatch("Class or GenericType", other).into());
+            }
+        };
+        if !matches!(ctx.model().get_element(class_id), Element::Class(_)) {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "dynamicNew: element {} is not a Class",
+                ctx.model().element_name(class_id)
+            ))
+            .into());
+        }
+
+        let classifier = class_fqn(ctx.model(), class_id);
+        let obj = ctx.heap_mut().alloc_dynamic(classifier);
+
+        // Snapshot the KeyValue entries up front so subsequent heap
+        // mutations (applying defaults, overlaying values) don't trip
+        // up the iteration.
+        let kvs = values[1].to_collection();
+        let mut supplied: Vec<(SmolStr, Vec<Value>)> = Vec::with_capacity(kvs.len());
+        let mut supplied_keys: std::collections::HashSet<SmolStr> =
+            std::collections::HashSet::with_capacity(kvs.len());
+        for kv in kvs.iter() {
+            let Value::Object(kv_id) = kv else {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "dynamicNew: expected KeyValue, got {}",
+                    kv.type_name()
+                ))
+                .into());
+            };
+            let key_vals = ctx.heap().get_property_values(*kv_id, "key")?;
+            let Some(Value::String(key)) = key_vals.iter().next() else {
+                return Err(PureRuntimeError::EvaluationError(
+                    "dynamicNew: KeyValue.key is missing or not a String".into(),
+                )
+                .into());
+            };
+            let value_vals = ctx.heap().get_property_values(*kv_id, "value")?;
+            let flat: Vec<Value> = value_vals.iter().cloned().collect();
+            supplied_keys.insert(key.clone());
+            supplied.push((key.clone(), flat));
+        }
+
+        // Apply per-property defaults for any property the caller didn't
+        // override. We evaluate the default expression in the current
+        // context — the `default_value: Option<Expression>` compiles to a
+        // ValueSpec just like any other expression.
+        let default_specs: Vec<(SmolStr, legend_pure_parser_pure::types::ValueSpec)> =
+            if let Element::Class(c) = ctx.model().get_element(class_id) {
+                c.properties
+                    .iter()
+                    .filter_map(|p| {
+                        if supplied_keys.contains(&p.name) {
+                            None
+                        } else {
+                            p.default_value.as_ref().map(|e| (p.name.clone(), e.clone()))
+                        }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        for (name, spec) in default_specs {
+            let v = ctx.evaluate(&spec)?.into_value();
+            let flat: Vec<Value> = match v {
+                Value::Collection(coll) => coll.iter().cloned().collect(),
+                Value::Unit => Vec::new(),
+                other => vec![other],
+            };
+            ctx.heap_mut().mutate_set(obj, name.as_str(), &flat)?;
+        }
+
+        // Overlay caller-supplied bindings. Build a flat [k, v, k, v]
+        // slice so we can reuse `populate_association_inverses` for
+        // bidirectional-association maintenance.
+        let mut assoc_kvs: Vec<Value> = Vec::with_capacity(supplied.len() * 2);
+        for (key, flat) in supplied {
+            ctx.heap_mut().mutate_set(obj, key.as_str(), &flat)?;
+            assoc_kvs.push(Value::String(key));
+            assoc_kvs.push(Value::from_vec(flat));
+        }
+        populate_association_inverses(ctx, obj, class_id, &assoc_kvs)?;
+
+        Ok(Evaluated::new(Value::Object(obj)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "dynamicNew(class:Class[1]|GenericType[1], kvs:KeyValue[*]):Any[1]"
+    }
+}
+
 /// Recognise the `LambdaFunction` / `Function` M3 classes used by Pure's
 /// `^LambdaFunction(expressionSequence = …)` clone idiom.
 ///
@@ -622,6 +765,13 @@ pub fn register(registry: &mut NativeRegistry) {
     // under a key that begins with the simple name.
     registry.register("new_Class_1__String_1__KeyExpression_MANY__T_1_", New);
     registry.register("copy_T_1__KeyExpression_MANY__T_1_", Copy);
+    // Basic dynamicNew — Class / GenericType receivers, no override hooks.
+    // The hook-bearing overloads (property / default / post-init lambdas)
+    // share the same mangled `dynamicNew_*` family and are registered
+    // against the same native; unused hook args are silently discarded
+    // because the basic construction path doesn't invoke them.
+    registry.register("dynamicNew_Class_1__KeyValue_MANY__Any_1_", DynamicNew);
+    registry.register("dynamicNew_GenericType_1__KeyValue_MANY__Any_1_", DynamicNew);
 
     // eval — 8 arities (0–7 extra parameters).
     // Mangled names derived from the platform source in essential/lang/eval/eval.pure
