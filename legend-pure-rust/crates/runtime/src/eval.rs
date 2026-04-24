@@ -771,6 +771,17 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             "name" => {
                 let name = match self.model.get_element(id) {
                     Element::Function(f) => f.function_name.clone(),
+                    // Unit elements are stored with a `Measure~Unit`
+                    // composite identity to keep names globally unique,
+                    // but Pure's `$unit.name` idiom reads the local
+                    // unit segment only — matching Java Pure semantics
+                    // and the `->find(u | $u.name == 'Stadium')` test
+                    // pattern in testNewUnitIndirectUnit.
+                    Element::Unit(_) => {
+                        let full = self.model.element_name(id);
+                        full.rsplit_once('~')
+                            .map_or_else(|| full.clone(), |(_, local)| SmolStr::new(local))
+                    }
                     _ => self.model.element_name(id).clone(),
                 };
                 Ok(Value::String(name))
@@ -935,6 +946,30 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                         enum_id: id,
                         member: SmolStr::new(property),
                     });
+                }
+                // Measure introspection — `RomanLength.canonicalUnit` and
+                // `.nonCanonicalUnits` reflect the compiled Measure node
+                // directly. Used by `newUnit(RomanLength.canonicalUnit->
+                // toOne(), 5)` / similar runtime-resolved unit lookups.
+                if let Element::Measure(m) = self.model.get_element(id) {
+                    match property {
+                        "canonicalUnit" => {
+                            return Ok(match m.canonical_unit {
+                                Some(u) => Value::Element(u),
+                                None => Value::Unit,
+                            });
+                        }
+                        "nonCanonicalUnits" => {
+                            let items: Vec<Value> = m
+                                .non_canonical_units
+                                .iter()
+                                .copied()
+                                .map(Value::Element)
+                                .collect();
+                            return Ok(Value::from_vec(items));
+                        }
+                        _ => {}
+                    }
                 }
                 Err(PureRuntimeError::EvaluationError(format!(
                     "Property '{property}' not supported on model element references"
