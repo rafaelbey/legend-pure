@@ -648,6 +648,12 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 }
                 Ok(Value::from_vec(out))
             }
+            // `$p.address.name` where `$p.address` is `[0..1]` and empty
+            // auto-maps to empty, not a type error. Pure's property-access
+            // semantics propagate `[0]` multiplicity through nested reads —
+            // matches `property_access_on_value`'s Unit arm used by the
+            // Collection-auto-map path.
+            Value::Unit => Ok(Value::Unit),
             _ => Err(PureException::from(PureRuntimeError::EvaluationError(
                 format!(
                     "Property access on non-object value: {}.{}",
