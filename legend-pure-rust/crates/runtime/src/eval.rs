@@ -1077,18 +1077,27 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     // Lambda creation
     // -----------------------------------------------------------------------
 
-    #[allow(clippy::unused_self)]
     fn eval_lambda_creation(
         &self,
         parameters: &[legend_pure_parser_pure::types::Parameter],
         body: &[ValueSpec],
     ) -> Value {
-        // Captures are empty for non-escaping lambdas (map/filter/fold).
-        // The evaluator uses the enclosing context directly.
+        // Reify free-variable captures from the enclosing scope. Non-escaping
+        // lambdas (map/filter/fold) still use the live context for evaluation;
+        // captures exist so escaping lambdas — returned across a function
+        // boundary, reflected via `openVariableValues`, or unpacked by the
+        // surveyor — can round-trip their closure environment.
+        let free = collect_free_variables(body, parameters);
+        let mut captures = HashMap::with_capacity(free.len());
+        for name in free {
+            if let Some(val) = self.context.get(&name) {
+                captures.insert(name, val.clone());
+            }
+        }
         Value::Function(Box::new(FunctionValue::Lambda(LambdaClosure {
             parameters: parameters.to_vec(),
             body: body.to_vec(),
-            captures: HashMap::new(),
+            captures,
         })))
     }
 
@@ -1493,6 +1502,105 @@ impl<H: EvalHooks> std::fmt::Debug for Evaluator<'_, H> {
             .field("heap_objects", &self.heap.len())
             .field("context_depth", &self.context.depth())
             .finish()
+    }
+}
+
+/// Collect the free-variable names of a lambda `body` given its declared
+/// `parameters`. A "free" variable is any `Variable { name }` reference in
+/// the body that isn't introduced by one of the lambda's own parameters or
+/// by a `let` / nested-lambda binding along the walk.
+///
+/// Used at lambda-creation time to snapshot the enclosing scope into the
+/// closure's `captures` map so an escaping lambda keeps seeing the values
+/// it closed over — `openVariableValues($lambda)` depends on this.
+pub(crate) fn collect_free_variables(
+    body: &[ValueSpec],
+    parameters: &[legend_pure_parser_pure::types::Parameter],
+) -> std::collections::HashSet<SmolStr> {
+    let mut binders: std::collections::HashSet<SmolStr> =
+        parameters.iter().map(|p| p.name.clone()).collect();
+    let mut free: std::collections::HashSet<SmolStr> = std::collections::HashSet::new();
+    for spec in body {
+        walk_free_variables(spec, &mut binders, &mut free);
+    }
+    free
+}
+
+/// Walk a single `ValueSpec`, accumulating free variables into `free` and
+/// respecting `let`-desugared bindings in the caller's `binders` set.
+fn walk_free_variables(
+    spec: &ValueSpec,
+    binders: &mut std::collections::HashSet<SmolStr>,
+    free: &mut std::collections::HashSet<SmolStr>,
+) {
+    match &*spec.kind {
+        ExprKind::Variable { name } => {
+            if !binders.contains(name) {
+                free.insert(name.clone());
+            }
+        }
+        ExprKind::FunctionCall {
+            function_name,
+            arguments,
+            ..
+        } => {
+            // `let x = rhs` lowers to `FunctionCall("letFunction",
+            // [StringLiteral("x"), rhs])`. The rhs may reference free
+            // variables / captures, so it's visited first. Only then does
+            // `x` enter the binder set for the remainder of the body the
+            // caller is iterating over.
+            if function_name.as_str() == "letFunction" && arguments.len() == 2 {
+                if let ExprKind::StringLiteral(binding_name) = &*arguments[0].kind {
+                    walk_free_variables(&arguments[1], binders, free);
+                    binders.insert(binding_name.clone());
+                    return;
+                }
+            }
+            for arg in arguments {
+                walk_free_variables(arg, binders, free);
+            }
+        }
+        ExprKind::Lambda {
+            parameters: inner_params,
+            body: inner_body,
+        } => {
+            // Nested lambda: its own parameters shadow the outer scope
+            // within `inner_body`. Fork the binder set so outer code
+            // after the nested lambda still sees the outer view.
+            let mut inner_binders = binders.clone();
+            for p in inner_params {
+                inner_binders.insert(p.name.clone());
+            }
+            for inner in inner_body {
+                walk_free_variables(inner, &mut inner_binders, free);
+            }
+        }
+        ExprKind::PropertyAccess { target, .. } => {
+            walk_free_variables(target, binders, free);
+        }
+        ExprKind::QualifiedPropertyAccess {
+            target, arguments, ..
+        } => {
+            walk_free_variables(target, binders, free);
+            for arg in arguments {
+                walk_free_variables(arg, binders, free);
+            }
+        }
+        ExprKind::Collection { elements } => {
+            for e in elements {
+                walk_free_variables(e, binders, free);
+            }
+        }
+        ExprKind::IntegerLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::DecimalLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::BooleanLiteral(_)
+        | ExprKind::DateLiteral(_)
+        | ExprKind::EnumValue { .. }
+        | ExprKind::TypeReference { .. }
+        | ExprKind::PackageableElementRef { .. }
+        | ExprKind::Column => {}
     }
 }
 
