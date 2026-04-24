@@ -80,6 +80,29 @@ pub const LIST: &classifier = "meta::pure::functions::collection::List";
 /// wrapper underpinning `pair()` and Map entry iteration (`keyValues`).
 pub const PAIR: &classifier = "meta::pure::functions::collection::Pair";
 
+/// `meta::pure::metamodel::valuespecification::VariableExpression` —
+/// AST-metamodel node for a `$name` variable reference. Produced by
+/// `deactivate(varRef)` so the AST can be introspected.
+pub const VARIABLE_EXPRESSION: &classifier =
+    "meta::pure::metamodel::valuespecification::VariableExpression";
+
+/// `meta::pure::metamodel::valuespecification::InstanceValue` —
+/// AST-metamodel node for a literal / collection / pre-computed value.
+/// Produced by `deactivate(lit)` or `deactivate([collection])`.
+pub const INSTANCE_VALUE: &classifier = "meta::pure::metamodel::valuespecification::InstanceValue";
+
+/// `meta::pure::metamodel::valuespecification::FunctionExpression` —
+/// AST-metamodel base for function-call nodes.
+pub const FUNCTION_EXPRESSION: &classifier =
+    "meta::pure::metamodel::valuespecification::FunctionExpression";
+
+/// `meta::pure::metamodel::valuespecification::SimpleFunctionExpression` —
+/// AST-metamodel node for a resolved function call. Produced by
+/// `deactivate(fnCall)`; carries `func`, `functionName`, and
+/// `parametersValues`.
+pub const SIMPLE_FUNCTION_EXPRESSION: &classifier =
+    "meta::pure::metamodel::valuespecification::SimpleFunctionExpression";
+
 /// `meta::pure::test::surveyor::TestResult` — heap-object shape returned
 /// by the Pure-level test surveyor's per-test result builder.
 pub const TEST_RESULT: &classifier = "meta::pure::test::surveyor::TestResult";
