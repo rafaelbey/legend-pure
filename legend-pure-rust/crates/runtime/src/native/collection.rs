@@ -172,6 +172,47 @@ impl NativeFunction for Last {
     }
 }
 
+/// Pure `init<T>(set:T[*]):T[*]` — all but the last element.
+///
+/// Returns an empty collection for `Unit`, the input unchanged for a
+/// single scalar (since there's no "last to drop" conceptually), and
+/// every element except the final one for a multi-element collection.
+/// The platform docstring is "the initial segment of the collection".
+#[derive(Debug)]
+pub struct Init;
+
+impl NativeFunction for Init {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("init", &values, 1)?;
+        let result = match &values[0] {
+            Value::Collection(v) => {
+                if v.is_empty() {
+                    Value::Unit
+                } else {
+                    let mut trimmed = (**v).clone();
+                    trimmed.pop_back();
+                    let as_vec: Vec<Value> = trimmed.iter().cloned().collect();
+                    Value::from_vec(as_vec)
+                }
+            }
+            // Scalar / Unit: no "last" to drop; mirror Java Pure's
+            // behaviour of returning the empty segment.
+            Value::Unit => Value::Unit,
+            _ => Value::Unit,
+        };
+        Ok(Evaluated::new(result))
+    }
+
+    fn signature(&self) -> &'static str {
+        "init<T>(set:T[*]):T[*]"
+    }
+}
+
 // ---------------------------------------------------------------------------
 // range
 // ---------------------------------------------------------------------------
@@ -1535,6 +1576,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("at_T_MANY__Integer_1__T_1_", At);
     registry.register("first_T_MANY__T_$0_1$_", First);
     registry.register("last_T_MANY__T_$0_1$_", Last);
+    registry.register("init_T_MANY__T_MANY_", Init);
     registry.register(
         "range_Integer_1__Integer_1__Integer_1__Integer_MANY_",
         Range,
