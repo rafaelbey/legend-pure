@@ -26,7 +26,7 @@ impl Parser {
         let header = self.parse_element_header()?;
         self.cursor.expect(TokenKind::LBrace)?;
         let (properties, qualified_properties) = self.parse_class_body()?;
-        self.cursor.expect(TokenKind::RBrace)?;
+        let close = self.cursor.expect(TokenKind::RBrace)?;
         Ok(Element::Association(AssociationDef {
             package: header.package,
             name: header.name,
@@ -34,7 +34,7 @@ impl Parser {
             qualified_properties,
             stereotypes: header.stereotypes,
             tagged_values: header.tagged_values,
-            source_info: start,
+            source_info: start.merge(&close.source_info),
         }))
     }
 }

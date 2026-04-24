@@ -328,6 +328,7 @@ fn pass_declare(
             for (element_idx, element) in section.elements.iter().enumerate() {
                 let simple_name = ast_element_name(element);
                 let source_info = ast_element_source(element);
+                let name_source_info = ast_element_name_source(element);
 
                 // Resolve package path
                 let pkg_path = ast_element_package_path(element);
@@ -379,6 +380,7 @@ fn pass_declare(
                     ElementNode {
                         name: element_name.clone(),
                         source_info: source_info.clone(),
+                        name_source_info: name_source_info.clone(),
                         parent_package: package_id,
                     },
                     shell,
@@ -462,6 +464,7 @@ fn allocate_unit_shells(
             ElementNode {
                 name: SmolStr::new(format!("{}~{unit_name}", measure_def.name.value)),
                 source_info: unit_def.source_info.clone(),
+                name_source_info: unit_def.source_info.clone(),
                 parent_package: package_id,
             },
             unit_shell,
@@ -1224,6 +1227,27 @@ fn ast_element_name(element: &ast::Element) -> SmolStr {
 /// Extracts the source info from an AST element.
 fn ast_element_source(element: &ast::Element) -> &SourceInfo {
     element.source_info()
+}
+
+/// Extracts the source span of the element's **name identifier** (the
+/// `XTestClass` in `Class meta::pure::…::XTestClass { … }`), falling
+/// back to the full declaration span for element kinds that don't
+/// carry a separate name span.
+///
+/// Matches Java Pure's `SourceInformation.line`/`column` (distinct from
+/// `startLine`/`startColumn`).
+fn ast_element_name_source(element: &ast::Element) -> &SourceInfo {
+    use legend_pure_parser_ast::Spanned;
+    match element {
+        ast::Element::Class(c) => c.name.source_info(),
+        ast::Element::Function(f) => f.name.source_info(),
+        ast::Element::NativeFunction(f) => f.name.source_info(),
+        ast::Element::Association(a) => a.name.source_info(),
+        ast::Element::Enumeration(e) => e.name.source_info(),
+        ast::Element::Profile(p) => p.name.source_info(),
+        ast::Element::Measure(m) => m.name.source_info(),
+        ast::Element::Primitive(p) => p.name.source_info(),
+    }
 }
 
 /// Extracts the package path segments from an AST element.

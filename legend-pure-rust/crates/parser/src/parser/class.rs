@@ -59,7 +59,7 @@ impl Parser {
 
         self.cursor.expect(TokenKind::LBrace)?;
         let (properties, qualified_properties) = self.parse_class_body()?;
-        self.cursor.expect(TokenKind::RBrace)?;
+        let close = self.cursor.expect(TokenKind::RBrace)?;
 
         Ok(Element::Class(ClassDef {
             package: header.package,
@@ -73,7 +73,7 @@ impl Parser {
             constraints,
             stereotypes: header.stereotypes,
             tagged_values: header.tagged_values,
-            source_info: start,
+            source_info: start.merge(&close.source_info),
         }))
     }
 

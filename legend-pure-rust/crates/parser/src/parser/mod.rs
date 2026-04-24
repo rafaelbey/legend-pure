@@ -261,24 +261,32 @@ impl Parser {
         Ok(pkg)
     }
 
-    /// Parse a qualified name, returning (package, name).
+    /// Parse a qualified name, returning `(package, name, name_source_info)`.
+    ///
+    /// `name_source_info` points at the **last** segment — the simple name
+    /// itself, not the full FQN span. Callers that need the full span can
+    /// reconstruct it from the package's first-segment span; the name span
+    /// is for `SourceInformation.line`/`column` parity with Java Pure.
     pub(crate) fn parse_qualified_name(&mut self) -> R<(Option<Package>, SmolStr, SourceInfo)> {
         let (first, first_si) = self.cursor.expect_identifier_or_keyword()?;
         if !self.cursor.check(TokenKind::PathSep) {
             return Ok((None, first, first_si));
         }
-        let mut pkg = Package::root(first, first_si.clone());
+        let mut pkg = Package::root(first, first_si);
         while self.cursor.eat(TokenKind::PathSep) {
             let (seg, si) = self.cursor.expect_identifier_or_keyword()?;
             if self.cursor.check(TokenKind::PathSep) {
                 pkg = pkg.child(seg, si);
             } else {
-                return Ok((Some(pkg), seg, first_si));
+                return Ok((Some(pkg), seg, si));
             }
         }
-        // Last segment in package is actually the name
+        // Last segment in package is actually the name — shouldn't happen
+        // since the inner return covers the has-trailing-segment case, but
+        // preserve graceful handling for malformed input.
         let name = SmolStr::new(pkg.name());
-        Ok((pkg.parent().cloned(), name, first_si))
+        let si = legend_pure_parser_ast::source_info::Spanned::source_info(&pkg).clone();
+        Ok((pkg.parent().cloned(), name, si))
     }
 
     /// Parses the common element header: `(<<stereotypes>> | {tagged_values})* pkg::Name`.

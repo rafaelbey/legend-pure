@@ -110,8 +110,8 @@ expression: json
         }
       ],
       "sourceInformation": {
-        "endColumn": 5,
-        "endLine": 17,
+        "endColumn": 1,
+        "endLine": 22,
         "sourceId": "class_simple.pure",
         "startColumn": 1,
         "startLine": 17

@@ -9,8 +9,8 @@ expression: json
       "name": "doc",
       "package": "meta::pure::profiles",
       "sourceInformation": {
-        "endColumn": 7,
-        "endLine": 17,
+        "endColumn": 1,
+        "endLine": 21,
         "sourceId": "profile.pure",
         "startColumn": 1,
         "startLine": 17

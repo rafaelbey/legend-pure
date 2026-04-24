@@ -181,6 +181,7 @@ impl NativeFunction for SourceInformation {
         };
         let node = ctx.model().get_node(*id);
         let source = node.source_info.clone();
+        let name_source = node.name_source_info.clone();
         let obj = ctx
             .heap_mut()
             .alloc_dynamic(crate::m3_paths::SOURCE_INFORMATION);
@@ -196,11 +197,17 @@ impl NativeFunction for SourceInformation {
             "startColumn",
             &[Value::Integer(i64::from(source.start_column))],
         )?;
-        heap.mutate_add(obj, "line", &[Value::Integer(i64::from(source.start_line))])?;
+        // `line`/`column` = name-identifier position, distinct from the
+        // declaration start — Java Pure parity for SourceInformation.
+        heap.mutate_add(
+            obj,
+            "line",
+            &[Value::Integer(i64::from(name_source.start_line))],
+        )?;
         heap.mutate_add(
             obj,
             "column",
-            &[Value::Integer(i64::from(source.start_column))],
+            &[Value::Integer(i64::from(name_source.start_column))],
         )?;
         heap.mutate_add(
             obj,

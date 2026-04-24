@@ -220,6 +220,7 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
         nodes.alloc(ElementNode {
             name: SmolStr::new(name),
             source_info: synthetic_source.clone(),
+            name_source_info: synthetic_source.clone(),
             parent_package: root_package,
         })
     };

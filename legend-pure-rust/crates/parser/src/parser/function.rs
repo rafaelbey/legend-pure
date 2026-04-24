@@ -48,10 +48,20 @@ impl Parser {
         self.cursor.expect(TokenKind::RBracket)?;
         self.cursor.expect(TokenKind::LBrace)?;
         let body = self.parse_expression_list()?;
-        self.cursor.expect(TokenKind::RBrace)?;
+        let body_close = self.cursor.expect(TokenKind::RBrace)?;
+        let mut span = start.merge(&body_close.source_info);
         // Parse optional function test block: { testName | func(args) => expected; }
         let tests = if self.cursor.check(TokenKind::LBrace) {
-            self.parse_function_tests()?
+            let parsed = self.parse_function_tests()?;
+            // Function tests live inside the function's declaration; extend
+            // the span to cover them too (matches Java Pure endLine).
+            if let Some(last) = parsed
+                .last()
+                .map(|t| legend_pure_parser_ast::source_info::Spanned::source_info(t))
+            {
+                span = span.merge(last);
+            }
+            parsed
         } else {
             vec![]
         };
@@ -67,7 +77,7 @@ impl Parser {
             stereotypes: header.stereotypes,
             tagged_values: header.tagged_values,
             tests,
-            source_info: start,
+            source_info: span,
         }))
     }
 
@@ -93,7 +103,7 @@ impl Parser {
         self.cursor.expect(TokenKind::LBracket)?;
         let return_multiplicity = self.parse_multiplicity()?;
         self.cursor.expect(TokenKind::RBracket)?;
-        self.cursor.expect(TokenKind::Semicolon)?;
+        let semi = self.cursor.expect(TokenKind::Semicolon)?;
         Ok(Element::NativeFunction(NativeFunctionDef {
             package: header.package,
             name: header.name,
@@ -104,7 +114,7 @@ impl Parser {
             return_multiplicity,
             stereotypes: header.stereotypes,
             tagged_values: header.tagged_values,
-            source_info: start,
+            source_info: start.merge(&semi.source_info),
         }))
     }
 

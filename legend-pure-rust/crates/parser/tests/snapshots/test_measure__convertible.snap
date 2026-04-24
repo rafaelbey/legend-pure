@@ -28,9 +28,9 @@ SourceFile {
                             source_info: SourceInfo {
                                 source: "test.pure",
                                 start_line: 17,
-                                start_column: 9,
+                                start_column: 14,
                                 end_line: 17,
-                                end_column: 11,
+                                end_column: 23,
                             },
                         },
                         canonical_unit: Some(
@@ -174,8 +174,8 @@ SourceFile {
                             source: "test.pure",
                             start_line: 17,
                             start_column: 1,
-                            end_line: 17,
-                            end_column: 7,
+                            end_line: 22,
+                            end_column: 1,
                         },
                     },
                 ),

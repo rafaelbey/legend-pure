@@ -463,6 +463,7 @@ impl<'a> M3Parser<'a> {
         let idx = self.nodes.alloc(ElementNode {
             name: name.clone(),
             source_info: synthetic_source(),
+            name_source_info: synthetic_source(),
             parent_package: crate::ids::PackageId(0), // placeholder — wired later
         });
         let elem_idx = self.elements.alloc(element);
