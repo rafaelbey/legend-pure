@@ -249,13 +249,87 @@ fn lower_arithmetic(
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
-    let name = match e.op {
-        ast_expr::ArithmeticOp::Plus => "plus",
-        ast_expr::ArithmeticOp::Minus => "minus",
-        ast_expr::ArithmeticOp::Times => "times",
-        ast_expr::ArithmeticOp::Divide => "divide",
-    };
-    binary_op(name, &e.left, &e.right, &e.source_info, ctx, errors)
+    match e.op {
+        // `plus` / `minus` / `times` are declared in the platform with the
+        // single-parameter signature `(Number[*]):Number[1]` (see
+        // `platform/pure/grammar/functions/math/operation/{plus,minus,times}.pure`),
+        // so the native always receives **one** collection argument. The
+        // surface-level operator desugars to `op([left, right])`, matching
+        // Java Pure's handoff where `Plus.execute` reads `params.get(0)`
+        // and iterates `.values`.
+        ast_expr::ArithmeticOp::Plus => {
+            variadic_op("plus", &e.left, &e.right, &e.source_info, ctx, errors)
+        }
+        ast_expr::ArithmeticOp::Minus => {
+            variadic_op("minus", &e.left, &e.right, &e.source_info, ctx, errors)
+        }
+        ast_expr::ArithmeticOp::Times => {
+            variadic_op("times", &e.left, &e.right, &e.source_info, ctx, errors)
+        }
+        // `divide(Number[1], Number[1]):Float[1]` is genuinely pairwise —
+        // the Pure signature takes two `[1]` arguments. Keep the pair
+        // lowering untouched.
+        ast_expr::ArithmeticOp::Divide => {
+            binary_op("divide", &e.left, &e.right, &e.source_info, ctx, errors)
+        }
+    }
+}
+
+/// Lowers `a OP b` for a T[*]-parameter native: `op([left, right])`.
+/// The single Collection argument matches the Java Pure dispatch shape —
+/// `op.execute(params)` then reads `params.get(0).values` to iterate.
+///
+/// For `plus`, when either operand is statically recognisable as a
+/// String (literal or an already-resolved `plus_String_*` subtree),
+/// emit the exact mangled FQN `plus_String_MANY__String_1_` so the
+/// runtime dispatches directly to `StringPlus` instead of falling
+/// through the prefix fallback to the numeric variant. Until Pass 2
+/// type inference is wired into operator lowering this is our
+/// compile-time hook for `'prefix' + $x` chains.
+fn variadic_op(
+    name: &str,
+    left: &ast_expr::Expression,
+    right: &ast_expr::Expression,
+    source_info: &SourceInfo,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let l = lower_expression(left, ctx, errors)?;
+    let r = lower_expression(right, ctx, errors)?;
+    let resolved_name: SmolStr =
+        if name == "plus" && (is_string_typed_spec(&l.kind) || is_string_typed_spec(&r.kind)) {
+            SmolStr::new_static("plus_String_MANY__String_1_")
+        } else {
+            SmolStr::new(name)
+        };
+    let collection = untyped(
+        ExprKind::Collection {
+            elements: vec![l, r],
+        },
+        source_info.clone(),
+    );
+    Some(untyped(
+        ExprKind::FunctionCall {
+            function: None,
+            function_name: resolved_name,
+            arguments: vec![collection],
+        },
+        source_info.clone(),
+    ))
+}
+
+/// Static hint: is this lowered `ExprKind` producing a String at runtime?
+/// Recognises string literals and nested `plus_String_*` calls so a chain
+/// like `'a' + $b + $c` propagates the string dispatch through every
+/// nested `+`.
+fn is_string_typed_spec(kind: &ExprKind) -> bool {
+    match kind {
+        ExprKind::StringLiteral(_) => true,
+        ExprKind::FunctionCall { function_name, .. } => {
+            function_name.as_str() == "plus_String_MANY__String_1_"
+        }
+        _ => false,
+    }
 }
 
 /// Lowers comparison: `a == b` → `FunctionCall("equal", [a, b])`.
@@ -327,13 +401,32 @@ fn lower_unary_not(
     unary_op("not", &e.operand, &e.source_info, ctx, errors)
 }
 
-/// Lowers `-expr` → `FunctionCall("minus", [expr])`.
+/// Lowers `-expr` → `FunctionCall("minus", [Collection([expr])])`.
+///
+/// Mirrors the variadic lowering used for `a - b` — `minus` has the single
+/// signature `(Number[*]):Number[1]`, so even the unary form feeds a
+/// singleton collection. Java Pure's `Minus.execute` handles `size == 1`
+/// as unary negate (`0 - x`); our native does the same.
 fn lower_unary_minus(
     e: &ast_expr::UnaryMinusExpr,
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
-    unary_op("minus", &e.operand, &e.source_info, ctx, errors)
+    let operand = lower_expression(&e.operand, ctx, errors)?;
+    let collection = untyped(
+        ExprKind::Collection {
+            elements: vec![operand],
+        },
+        e.source_info.clone(),
+    );
+    Some(untyped(
+        ExprKind::FunctionCall {
+            function: None,
+            function_name: SmolStr::new("minus"),
+            arguments: vec![collection],
+        },
+        e.source_info.clone(),
+    ))
 }
 
 /// Lowers `~~~expr` → `FunctionCall("bitwiseNot", [expr])`.

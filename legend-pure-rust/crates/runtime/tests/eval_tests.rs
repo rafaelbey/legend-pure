@@ -1212,6 +1212,12 @@ fn eval_surveyor_string_tests_error_histogram() {
 }
 
 #[test]
+#[ignore = "diagnostic: bucket math::tests errors by first line of message"]
+fn eval_surveyor_math_tests_error_histogram() {
+    surveyor_error_histogram("meta::pure::functions::math::tests");
+}
+
+#[test]
 #[ignore = "diagnostic: bucket meta::tests FAILs by first line of message"]
 fn eval_surveyor_meta_tests_fail_histogram() {
     surveyor_fail_histogram("meta::pure::functions::meta::tests");

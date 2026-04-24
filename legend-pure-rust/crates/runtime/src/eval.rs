@@ -1801,13 +1801,17 @@ mod tests {
         let model = test_model();
         let registry = NativeRegistry::standard();
         let mut eval = Evaluator::new(&model, &registry);
+        // `plus` has the single signature `(Number[*]):Number[1]`, so the
+        // call shape is `plus([2, 3])` — one argument wrapping a Collection.
         let expr = make_expr(ExprKind::FunctionCall {
             function: None,
             function_name: "plus_Number_MANY__Number_1_".into(),
-            arguments: vec![
-                make_expr(ExprKind::IntegerLiteral(2)),
-                make_expr(ExprKind::IntegerLiteral(3)),
-            ],
+            arguments: vec![make_expr(ExprKind::Collection {
+                elements: vec![
+                    make_expr(ExprKind::IntegerLiteral(2)),
+                    make_expr(ExprKind::IntegerLiteral(3)),
+                ],
+            })],
         });
         assert_eq!(eval.eval(&expr).unwrap(), Value::Integer(5));
     }
@@ -1817,21 +1821,25 @@ mod tests {
         let model = test_model();
         let registry = NativeRegistry::standard();
         let mut eval = Evaluator::new(&model, &registry);
-        // plus(2, times(3, 4)) -> 14
+        // plus([2, times([3, 4])]) -> 14
         let expr = make_expr(ExprKind::FunctionCall {
             function: None,
             function_name: "plus_Number_MANY__Number_1_".into(),
-            arguments: vec![
-                make_expr(ExprKind::IntegerLiteral(2)),
-                make_expr(ExprKind::FunctionCall {
-                    function: None,
-                    function_name: "times_Number_MANY__Number_1_".into(),
-                    arguments: vec![
-                        make_expr(ExprKind::IntegerLiteral(3)),
-                        make_expr(ExprKind::IntegerLiteral(4)),
-                    ],
-                }),
-            ],
+            arguments: vec![make_expr(ExprKind::Collection {
+                elements: vec![
+                    make_expr(ExprKind::IntegerLiteral(2)),
+                    make_expr(ExprKind::FunctionCall {
+                        function: None,
+                        function_name: "times_Number_MANY__Number_1_".into(),
+                        arguments: vec![make_expr(ExprKind::Collection {
+                            elements: vec![
+                                make_expr(ExprKind::IntegerLiteral(3)),
+                                make_expr(ExprKind::IntegerLiteral(4)),
+                            ],
+                        })],
+                    }),
+                ],
+            })],
         });
         assert_eq!(eval.eval(&expr).unwrap(), Value::Integer(14));
     }

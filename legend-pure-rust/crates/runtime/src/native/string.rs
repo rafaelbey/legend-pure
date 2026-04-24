@@ -30,10 +30,14 @@ use crate::value::Value;
 // plus (string concatenation)
 // ---------------------------------------------------------------------------
 
-/// Pure `plus(String[1], String[1]): String[1]` — string concatenation.
+/// Pure `plus(String[*]): String[1]` — string concatenation over a
+/// collection of strings. Single signature mirroring Java Pure's
+/// `StringPlus.execute`, which reads `params.get(0).values` and
+/// concatenates in order.
 ///
-/// Note: This is registered as `stringPlus` to avoid collision with
-/// numeric `plus`. The evaluator dispatches based on argument types.
+/// The compiler lowers `a + b` for String operands to
+/// `plus_String_MANY__String_1_([a, b])`, so the native always
+/// receives exactly one Collection argument.
 #[derive(Debug)]
 pub struct StringPlus;
 
@@ -44,16 +48,17 @@ impl NativeFunction for StringPlus {
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
-        expect_args("plus (String)", &values, 2)?;
-        let a = values[0].as_string()?;
-        let b = values[1].as_string()?;
-        Ok(Evaluated::new(Value::String(SmolStr::new(format!(
-            "{a}{b}"
-        )))))
+        expect_args("plus (String)", &values, 1)?;
+        let items = values[0].to_collection();
+        let mut out = String::new();
+        for item in items.iter() {
+            out.push_str(item.as_string()?.as_str());
+        }
+        Ok(Evaluated::new(Value::String(SmolStr::new(&out))))
     }
 
     fn signature(&self) -> &'static str {
-        "plus(String[1], String[1]): String[1]"
+        "plus(String[*]): String[1]"
     }
 }
 
@@ -595,8 +600,17 @@ mod tests {
 
     #[test]
     fn string_plus() {
+        // StringPlus takes a single `String[*]` argument — a Collection of
+        // strings that get concatenated in order. Matches Java Pure's
+        // `StringPlus.execute` which iterates `params.get(0).values`.
         let r = StringPlus
-            .execute(&[lit_str("hello"), lit_str(" world")], &mut MockCtx)
+            .execute(
+                &[crate::native::lit_collection(vec![
+                    lit_str("hello"),
+                    lit_str(" world"),
+                ])],
+                &mut MockCtx,
+            )
             .unwrap();
         assert_eq!(r.into_value(), Value::String("hello world".into()));
     }
@@ -717,7 +731,10 @@ mod tests {
 
     #[test]
     fn wrong_arg_count_errors() {
-        assert!(StringPlus.execute(&[lit_str("a")], &mut MockCtx).is_err());
+        // StringPlus takes exactly 1 Collection argument; 0 args is a
+        // wrong-arity error. A singleton Collection is valid (concats to
+        // just that string).
+        assert!(StringPlus.execute(&[], &mut MockCtx).is_err());
         assert!(Length.execute(&[], &mut MockCtx).is_err());
         assert!(Substring.execute(&[lit_str("a")], &mut MockCtx).is_err());
         assert!(ToString.execute(&[], &mut MockCtx).is_err());
