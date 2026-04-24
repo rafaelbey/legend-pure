@@ -96,6 +96,16 @@ pub struct Evaluator<'model, H: EvalHooks = NoOpHooks> {
     /// Immutable registry of native functions.
     natives: &'model NativeRegistry,
 
+    /// Memoised per-class member wrappers (`.properties`,
+    /// `.qualifiedProperties`, `.propertiesFromAssociations`). Keyed by
+    /// `(class_element_id, member-kind)` — the same query returns the same
+    /// `Value::Object(obj_id)` set every time, so
+    /// `assertIs(CC_Address.properties->at(0), CC_Address.properties->at(0))`
+    /// holds. The wrappers are functionally pure (they read class metadata,
+    /// not heap state), so no invalidation is needed for the evaluator's
+    /// lifetime.
+    member_wrapper_cache: HashMap<(ElementId, &'static str), Vec<Value>>,
+
     /// Instrumentation hooks (zero-cost for `NoOpHooks`).
     hooks: H,
 }
@@ -111,6 +121,7 @@ impl<'model> Evaluator<'model, NoOpHooks> {
             heap: RuntimeHeap::new(),
             context: VariableContext::new(),
             natives,
+            member_wrapper_cache: HashMap::new(),
             hooks: NoOpHooks,
         }
     }
@@ -128,6 +139,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             heap: RuntimeHeap::new(),
             context: VariableContext::new(),
             natives,
+            member_wrapper_cache: HashMap::new(),
             hooks,
         }
     }
@@ -951,10 +963,27 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         id: ElementId,
         property: &str,
     ) -> Result<Value, PureRuntimeError> {
+        // Normalise the property name to a static key for cache lookups.
+        let kind: &'static str = match property {
+            "properties" => "properties",
+            "qualifiedProperties" => "qualifiedProperties",
+            "propertiesFromAssociations" => "propertiesFromAssociations",
+            _ => unreachable!("caller restricts property value"),
+        };
+
+        // Cached wrappers: the set of Property / QualifiedProperty heap
+        // objects for a Class is functionally pure (it reads only class
+        // metadata), so repeat queries return the same ObjectIds. This is
+        // what `assertIs($class.properties->at(0), $class.properties->at(0))`
+        // relies on.
+        if let Some(cached) = self.member_wrapper_cache.get(&(id, kind)) {
+            return Ok(Value::from_vec(cached.clone()));
+        }
+
         // Snapshot names before we take the mutable heap borrow — reading
         // the model and writing to the heap can't alias `self`.
         let names: Vec<SmolStr> = match self.model.get_element(id) {
-            Element::Class(c) => match property {
+            Element::Class(c) => match kind {
                 "properties" => c.properties.iter().map(|p| p.name.clone()).collect(),
                 "qualifiedProperties" => c
                     .qualified_properties
@@ -962,12 +991,12 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                     .map(|q| q.name.clone())
                     .collect(),
                 "propertiesFromAssociations" => Vec::new(),
-                _ => unreachable!("caller restricts property value"),
+                _ => unreachable!("kind is one of the three above"),
             },
             _ => Vec::new(),
         };
 
-        let classifier = match property {
+        let classifier = match kind {
             "qualifiedProperties" => crate::m3_paths::QUALIFIED_PROPERTY,
             _ => crate::m3_paths::PROPERTY,
         };
@@ -979,6 +1008,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             self.heap.mutate_add(obj, "_owner", &[Value::Element(id)])?;
             items.push(Value::Object(obj));
         }
+        self.member_wrapper_cache.insert((id, kind), items.clone());
         Ok(Value::from_vec(items))
     }
 

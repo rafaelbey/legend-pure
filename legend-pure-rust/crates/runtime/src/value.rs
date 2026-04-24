@@ -186,7 +186,9 @@ pub struct LambdaClosure {
 /// A hashable key for `Map` entries.
 ///
 /// Only value types that are meaningfully comparable can be map keys.
-/// Objects are keyed by identity (`ObjectId`).
+/// Objects default to identity (`ObjectId`); Classes that annotate
+/// properties with the `<<equality.Key>>` stereotype opt into
+/// value-based equality via `ObjectByEqualityKeys`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ValueKey {
     /// Boolean key.
@@ -201,8 +203,29 @@ pub enum ValueKey {
     Date(PureDate),
     /// `StrictTime` key.
     StrictTime(StrictTime),
-    /// Object identity key.
+    /// Object identity key — heap identity; used when the class has no
+    /// `<<equality.Key>>`-annotated properties.
     Object(ObjectId),
+    /// Value-based object key for classes that annotate one or more
+    /// properties with `<<equality.Key>>`. Two instances hash / compare
+    /// equal iff every annotated field's key agrees. `class_id` is
+    /// included so instances of different classes never collide, even
+    /// when their annotated fields coincidentally match.
+    ObjectByEqualityKeys {
+        /// Resolved element ID of the owning Class.
+        class_id: ElementId,
+        /// Ordered `(property_name, key)` pairs for every
+        /// `<<equality.Key>>`-annotated property on the class.
+        fields: Vec<(SmolStr, ValueKey)>,
+    },
+    /// Enum value key — structural `(enum_id, member)` matching
+    /// `Value::EnumValue`'s own equality.
+    EnumValue {
+        /// Enumeration element ID.
+        enum_id: ElementId,
+        /// Member name.
+        member: SmolStr,
+    },
 }
 
 // ---------------------------------------------------------------------------
