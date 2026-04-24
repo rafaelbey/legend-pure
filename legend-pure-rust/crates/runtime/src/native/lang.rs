@@ -521,26 +521,40 @@ impl NativeFunction for DynamicNew {
         }
 
         // Apply per-property defaults for any property the caller didn't
-        // override. We evaluate the default expression in the current
-        // context — the `default_value: Option<Expression>` compiles to a
-        // ValueSpec just like any other expression.
-        let default_specs: Vec<(SmolStr, legend_pure_parser_pure::types::ValueSpec)> =
-            if let Element::Class(c) = ctx.model().get_element(class_id) {
-                c.properties
-                    .iter()
-                    .filter_map(|p| {
-                        if supplied_keys.contains(&p.name) {
-                            None
-                        } else {
-                            p.default_value
-                                .as_ref()
-                                .map(|e| (p.name.clone(), e.clone()))
-                        }
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
+        // override. Walk the supertype chain child-first so that a
+        // redeclared property on a subclass wins over the parent's
+        // default (Pure MRO: most-specific class owns the effective
+        // default). Evaluate each `default_value` expression in the
+        // current context — it's a regular ValueSpec.
+        let default_specs: Vec<(SmolStr, legend_pure_parser_pure::types::ValueSpec)> = {
+            let mut acc: Vec<(SmolStr, legend_pure_parser_pure::types::ValueSpec)> = Vec::new();
+            let mut seen: std::collections::HashSet<SmolStr> = supplied_keys.clone();
+            let mut visited: std::collections::HashSet<ElementId> =
+                std::collections::HashSet::new();
+            let mut stack: Vec<ElementId> = vec![class_id];
+            while let Some(id) = stack.pop() {
+                if !visited.insert(id) {
+                    continue;
+                }
+                let Element::Class(c) = ctx.model().get_element(id) else {
+                    continue;
+                };
+                for p in &c.properties {
+                    if !seen.insert(p.name.clone()) {
+                        continue;
+                    }
+                    if let Some(expr) = &p.default_value {
+                        acc.push((p.name.clone(), expr.clone()));
+                    }
+                }
+                for st in &c.super_types {
+                    if let legend_pure_parser_pure::types::TypeExpr::Named { element, .. } = st {
+                        stack.push(*element);
+                    }
+                }
+            }
+            acc
+        };
         for (name, spec) in default_specs {
             let v = ctx.evaluate(&spec)?.into_value();
             let flat: Vec<Value> = match v {
