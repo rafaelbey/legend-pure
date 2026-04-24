@@ -1096,19 +1096,10 @@ fn object_equality_key(
     let Some(class_id) = crate::m3_paths::resolve(ctx.model(), &classifier) else {
         return Ok(ValueKey::Object(id));
     };
-    let legend_pure_parser_pure::model::Element::Class(class) = ctx.model().get_element(class_id)
-    else {
-        return Ok(ValueKey::Object(id));
-    };
 
-    // Collect every property annotated with `<<equality.Key>>` in
-    // declaration order so the field-list is deterministic.
-    let equality_props: Vec<SmolStr> = class
-        .properties
-        .iter()
-        .filter(|p| p.stereotypes.iter().any(is_equality_key_stereotype))
-        .map(|p| p.name.clone())
-        .collect();
+    // Canonical `<<equality.Key>>` property list (profile identity +
+    // stereotype label both checked in the shared helper).
+    let equality_props = crate::native::equality::equality_key_properties(ctx.model(), class_id);
 
     if equality_props.is_empty() {
         return Ok(ValueKey::Object(id));
@@ -1126,17 +1117,6 @@ fn object_equality_key(
         fields.push((prop_name, field_key));
     }
     Ok(ValueKey::ObjectByEqualityKeys { class_id, fields })
-}
-
-/// True when a stereotype reference points at the canonical
-/// `meta::pure::profiles::equality.Key` annotation.
-fn is_equality_key_stereotype(
-    stereo: &legend_pure_parser_pure::annotations::StereotypeRef,
-) -> bool {
-    stereo.value.as_str() == "Key"
-    // Accept either profile FQN in case the source uses different
-    // paths — what matters is the `Key` label on a profile named
-    // `equality`.
 }
 
 /// Inverse of [`value_to_key`] — recover a [`Value`] shape from a stored

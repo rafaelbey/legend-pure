@@ -86,9 +86,10 @@ impl NativeFunction for Eq {
 /// Pure `equal(Any[*], Any[*]): Boolean[1]` — structural / value equality.
 ///
 /// For primitives: compares by value (same as `eq`).
-/// For objects: key-property structural equality (deep); currently deferred —
-/// falls back to identity (`ObjectId == ObjectId`) for object comparisons.
-/// For collections: element-wise equality via `Value::PartialEq`.
+/// For collections: element-wise equality, recursing via `values_equal`.
+/// For heap objects: if the classifier declares any `<<equality.Key>>`
+/// property, compares those property values recursively; otherwise
+/// falls back to `ObjectId` identity. See [`crate::native::equality`].
 #[derive(Debug)]
 pub struct Equal;
 
@@ -100,7 +101,8 @@ impl NativeFunction for Equal {
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
         expect_args("equal", &values, 2)?;
-        Ok(Evaluated::new(Value::Boolean(values[0] == values[1])))
+        let result = crate::native::equality::values_equal(ctx, &values[0], &values[1]);
+        Ok(Evaluated::new(Value::Boolean(result)))
     }
 
     fn signature(&self) -> &'static str {

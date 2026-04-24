@@ -449,6 +449,10 @@ pub mod arithmetic;
 /// Comparison native functions: `equal`, `lessThan`, etc.
 pub mod comparison;
 
+/// Heap-aware structural equality used by `equal` and `<<equality.Key>>`
+/// map-key lookups.
+pub mod equality;
+
 /// Boolean native functions: `and`, `or`, `not`.
 pub mod boolean;
 

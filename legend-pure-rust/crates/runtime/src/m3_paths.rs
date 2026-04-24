@@ -107,6 +107,12 @@ pub const SIMPLE_FUNCTION_EXPRESSION: &classifier =
 /// by the Pure-level test surveyor's per-test result builder.
 pub const TEST_RESULT: &classifier = "meta::pure::test::surveyor::TestResult";
 
+/// `meta::pure::profiles::equality` — Profile whose `Key` stereotype
+/// marks class properties as structural-equality keys. A `<<equality.Key>>`
+/// stereotype ref matches iff `profile` resolves to this FQN and
+/// `value == "Key"`.
+pub const EQUALITY_PROFILE: &classifier = "meta::pure::profiles::equality";
+
 /// Resolve a `::`-qualified FQN to its [`ElementId`], returning `None` if
 /// any segment doesn't resolve. Used alongside the constants above to
 /// compare heap-object classifiers by structural identity instead of
