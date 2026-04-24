@@ -768,7 +768,12 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         property: &str,
     ) -> Result<Value, PureRuntimeError> {
         match property {
-            "name" => {
+            // `functionName` is M3's name for a Function element's simple
+            // name — `Function.functionName: String[1]`. `name` is the
+            // generic shared property on `ModelElement` / `PackageableElement`.
+            // For Function elements both return the same unmangled simple
+            // name; for other kinds only `name` applies.
+            "name" | "functionName" => {
                 let name = match self.model.get_element(id) {
                     Element::Function(f) => f.function_name.clone(),
                     // Unit elements are stored with a `Measure~Unit`
