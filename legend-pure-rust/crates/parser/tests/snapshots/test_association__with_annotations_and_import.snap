@@ -49,9 +49,9 @@ SourceFile {
                             source_info: SourceInfo {
                                 source: "test.pure",
                                 start_line: 3,
-                                start_column: 61,
+                                start_column: 68,
                                 end_line: 3,
-                                end_column: 65,
+                                end_column: 75,
                             },
                         },
                         properties: [
@@ -179,8 +179,8 @@ SourceFile {
                             source: "test.pure",
                             start_line: 3,
                             start_column: 1,
-                            end_line: 3,
-                            end_column: 11,
+                            end_line: 7,
+                            end_column: 1,
                         },
                     },
                 ),

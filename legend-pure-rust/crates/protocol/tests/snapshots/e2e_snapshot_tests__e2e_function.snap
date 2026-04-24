@@ -104,8 +104,8 @@ expression: json
         "upperBound": 1
       },
       "sourceInformation": {
-        "endColumn": 8,
-        "endLine": 17,
+        "endColumn": 1,
+        "endLine": 20,
         "sourceId": "function.pure",
         "startColumn": 1,
         "startLine": 17

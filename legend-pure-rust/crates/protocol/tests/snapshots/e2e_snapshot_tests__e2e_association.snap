@@ -76,8 +76,8 @@ expression: json
         }
       ],
       "sourceInformation": {
-        "endColumn": 11,
-        "endLine": 17,
+        "endColumn": 1,
+        "endLine": 21,
         "sourceId": "association.pure",
         "startColumn": 1,
         "startLine": 17

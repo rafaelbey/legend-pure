@@ -44,8 +44,8 @@ expression: json
         }
       ],
       "sourceInformation": {
-        "endColumn": 5,
-        "endLine": 17,
+        "endColumn": 1,
+        "endLine": 20,
         "sourceId": "multi_element.pure",
         "startColumn": 1,
         "startLine": 17
@@ -56,8 +56,8 @@ expression: json
       "name": "Status",
       "package": "model",
       "sourceInformation": {
-        "endColumn": 4,
-        "endLine": 22,
+        "endColumn": 1,
+        "endLine": 26,
         "sourceId": "multi_element.pure",
         "startColumn": 1,
         "startLine": 22
@@ -198,8 +198,8 @@ expression: json
         "upperBound": 1
       },
       "sourceInformation": {
-        "endColumn": 8,
-        "endLine": 28,
+        "endColumn": 1,
+        "endLine": 31,
         "sourceId": "multi_element.pure",
         "startColumn": 1,
         "startLine": 28

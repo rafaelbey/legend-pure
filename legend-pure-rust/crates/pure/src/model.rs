@@ -60,8 +60,19 @@ pub struct ElementNode {
     /// (e.g., `"plus_Integer_MANY__Integer_1_"`).
     /// For all other elements this is the simple name (e.g., `"Person"`).
     pub name: SmolStr,
-    /// Source location in the original `.pure` file.
+    /// Source span covering the entire declaration (`Class … { … }`,
+    /// `function … { … }`), from keyword to closing brace.
     pub source_info: SourceInfo,
+    /// Source span covering just the element **name** identifier inside
+    /// the declaration — the `XTestClass` in
+    /// `Class meta::pure::…::XTestClass { … }`, or the
+    /// `testFunctionSourceInformation` in
+    /// `function <<test.Test>> meta::pure::…::testFunctionSourceInformation(): …`.
+    ///
+    /// Matches Java Pure's `SourceInformation.line`/`column` (as distinct
+    /// from `startLine`/`startColumn`). Synthetic elements (bootstrap,
+    /// package shells, M3 parser) reuse `source_info`.
+    pub name_source_info: SourceInfo,
     /// The package this element belongs to.
     pub parent_package: PackageId,
 }
@@ -683,6 +694,7 @@ mod tests {
         let node_idx = chunk.nodes.alloc(ElementNode {
             name: SmolStr::new("Person"),
             source_info: test_source(),
+            name_source_info: test_source(),
             parent_package: PackageId(0),
         });
         let elem_idx = chunk.elements.alloc(Element::Class(empty_class()));
@@ -700,6 +712,7 @@ mod tests {
         chunk.nodes.alloc(ElementNode {
             name: SmolStr::new("String"),
             source_info: test_source(),
+            name_source_info: test_source(),
             parent_package: model.root_package,
         });
         chunk

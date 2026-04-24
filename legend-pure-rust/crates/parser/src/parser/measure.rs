@@ -36,13 +36,13 @@ impl Parser {
                 non_canonical_units.push(unit);
             }
         }
-        self.cursor.expect(TokenKind::RBrace)?;
+        let close = self.cursor.expect(TokenKind::RBrace)?;
         Ok(Element::Measure(MeasureDef {
             package: header.package,
             name: header.name,
             canonical_unit,
             non_canonical_units,
-            source_info: start,
+            source_info: start.merge(&close.source_info),
         }))
     }
 

@@ -38,14 +38,14 @@ impl Parser {
             });
             self.cursor.eat(TokenKind::Comma);
         }
-        self.cursor.expect(TokenKind::RBrace)?;
+        let close = self.cursor.expect(TokenKind::RBrace)?;
         Ok(Element::Enumeration(EnumDef {
             package: header.package,
             name: header.name,
             values,
             stereotypes: header.stereotypes,
             tagged_values: header.tagged_values,
-            source_info: start,
+            source_info: start.merge(&close.source_info),
         }))
     }
 }
