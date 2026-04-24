@@ -1100,6 +1100,10 @@ fn resolve_value_type(
                 .into()
             })
         }
+        // A unit-tagged numeric value — runtime type is the owning Unit
+        // element, so `instanceOf(5 RomanLength~Pes, RomanLength~Pes)`
+        // resolves via the normal subtype walk.
+        Value::UnitInstance { unit_id, .. } => Ok(*unit_id),
         // Collections / maps / functions / unit — no reified runtime type,
         // classify as `Any`.
         Value::Collection(_) | Value::Map(_) | Value::Function(_) | Value::Unit => {
@@ -1186,6 +1190,25 @@ fn render_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -
         },
         Value::EnumValue { enum_id, member } => {
             format!("{}.{member}", model.element_name(*enum_id))
+        }
+        // Pure source form: `<inner> <Measure>~<Unit>` — e.g. `5
+        // RomanLength~Pes`. The `Unit` element's parent_package is the
+        // `Measure` so we climb one level to compose the pretty name.
+        Value::UnitInstance { unit_id, inner } => {
+            let unit_name = model.element_name(*unit_id);
+            let measure_name = match unit_id {
+                legend_pure_parser_pure::ids::ElementId::InstanceId { .. } => {
+                    let parent_pkg = model.get_node(*unit_id).parent_package;
+                    model.get_package(parent_pkg).name.clone()
+                }
+                legend_pure_parser_pure::ids::ElementId::Package(_) => smol_str::SmolStr::new(""),
+            };
+            let inner_repr = render_representation(inner, model, heap);
+            if measure_name.is_empty() {
+                format!("{inner_repr} {unit_name}")
+            } else {
+                format!("{inner_repr} {measure_name}~{unit_name}")
+            }
         }
     }
 }
@@ -1933,6 +1956,86 @@ fn reactivate_value(value: &Value, ctx: &mut dyn EvalContextTrait) -> Result<Val
 }
 
 // ---------------------------------------------------------------------------
+// Unit primitives
+// ---------------------------------------------------------------------------
+
+/// Pure `newUnit(type:Unit[1], value:Number[1]):Any[1]`
+///
+/// Tags a numeric value with a unit-of-measurement, producing a
+/// `Value::UnitInstance` whose runtime type is the `Unit` element.
+/// `5 RomanLength~Pes` lowers to `newUnit(RomanLength~Pes, 5)`
+/// (`lower_unit_instance`), so this native is the single
+/// construction path for unit-tagged numbers.
+#[derive(Debug)]
+pub struct NewUnit;
+
+impl NativeFunction for NewUnit {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("newUnit", &values, 2)?;
+        let unit_id = as_element_id(&values[0])?;
+        match ctx.model().get_element(unit_id) {
+            Element::Unit(_) => {}
+            _ => {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "newUnit: first argument must reference a Unit element, got {}",
+                    values[0].type_name()
+                ))
+                .into());
+            }
+        }
+        match &values[1] {
+            Value::Integer(_) | Value::Float(_) | Value::Decimal(_) => {}
+            other => {
+                return Err(PureRuntimeError::type_mismatch("Number", other).into());
+            }
+        }
+        Ok(Evaluated::new(Value::UnitInstance {
+            unit_id,
+            inner: Box::new(values[1].clone()),
+        }))
+    }
+
+    fn signature(&self) -> &'static str {
+        "newUnit(type:Unit[1], value:Number[1]):Any[1]"
+    }
+}
+
+/// Pure `getUnitValue(unit:Any[1]):Number[1]`
+///
+/// Extracts the numeric payload from a unit-tagged value, discarding
+/// the unit tag. Mirrors Java Pure's coercion-friendly accessor.
+#[derive(Debug)]
+pub struct GetUnitValue;
+
+impl NativeFunction for GetUnitValue {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("getUnitValue", &values, 1)?;
+        match &values[0] {
+            Value::UnitInstance { inner, .. } => Ok(Evaluated::new((**inner).clone())),
+            other => Err(PureRuntimeError::EvaluationError(format!(
+                "getUnitValue: expected a unit-tagged value, got {}",
+                other.type_name()
+            ))
+            .into()),
+        }
+    }
+
+    fn signature(&self) -> &'static str {
+        "getUnitValue(unit:Any[1]):Number[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -1979,6 +2082,8 @@ pub fn register(registry: &mut NativeRegistry) {
     );
     registry.register("evaluateAndDeactivate_T_m__T_m_", EvaluateAndDeactivate);
     registry.register("deactivate_Any_MANY__ValueSpecification_1_", Deactivate);
+    registry.register("newUnit_Unit_1__Number_1__Any_1_", NewUnit);
+    registry.register("getUnitValue_Any_1__Number_1_", GetUnitValue);
     registry.register(
         "reactivate_ValueSpecification_1__Map_1__Any_MANY_",
         Reactivate,

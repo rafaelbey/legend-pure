@@ -133,6 +133,27 @@ impl NativeFunction for Minus {
                 Value::Integer(a) => Value::Integer(-a),
                 Value::Float(a) => Value::Float(-a),
                 Value::Decimal(a) => Value::Decimal(-*a),
+                // Unary minus on a unit-tagged number negates the
+                // numeric payload while preserving the unit tag —
+                // `-5 RomanLength~Pes` stays in `RomanLength~Pes`.
+                Value::UnitInstance { unit_id, inner } => {
+                    let negated = match inner.as_ref() {
+                        Value::Integer(a) => Value::Integer(-a),
+                        Value::Float(a) => Value::Float(-a),
+                        Value::Decimal(a) => Value::Decimal(-*a),
+                        other => {
+                            return Err(PureRuntimeError::EvaluationError(format!(
+                                "minus: unit-tagged value has unsupported inner type {}",
+                                other.type_name()
+                            ))
+                            .into());
+                        }
+                    };
+                    Value::UnitInstance {
+                        unit_id: *unit_id,
+                        inner: Box::new(negated),
+                    }
+                }
                 other => {
                     return Err(PureRuntimeError::EvaluationError(format!(
                         "minus: unsupported type {}",

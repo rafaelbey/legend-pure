@@ -142,6 +142,25 @@ pub enum Value {
         member: SmolStr,
     },
 
+    /// A numeric value tagged with a unit of measurement.
+    ///
+    /// Produced by `newUnit(unit, n)` or the compiled form of the
+    /// `5 RomanLength~Pes` literal (which `lower_unit_instance` desugars
+    /// to a `newUnit` call). `unit_id` points at the `Unit` element
+    /// (child of a `Measure`); `inner` is the numeric payload as a
+    /// plain `Value::Integer` / `Value::Float` / `Value::Decimal`.
+    ///
+    /// Two `UnitInstance`s are equal iff they share the same `unit_id`
+    /// AND their inner values compare equal — so `5 Pes` and `5 Cubitum`
+    /// are distinct even when their inner numbers match, matching
+    /// Java Pure's unit-aware equality.
+    UnitInstance {
+        /// The owning [`Unit`](legend_pure_parser_pure::model::Element::Unit) element.
+        unit_id: ElementId,
+        /// The numeric payload — always one of `Integer`, `Float`, or `Decimal`.
+        inner: Box<Value>,
+    },
+
     /// The unit value — result of expressions with no meaningful return.
     /// Equivalent to `[]` with multiplicity `[0..0]`.
     Unit,
@@ -258,6 +277,16 @@ impl PartialEq for Value {
                     ..
                 },
             ) => e1 == e2 && m1 == m2,
+            (
+                Self::UnitInstance {
+                    unit_id: u1,
+                    inner: i1,
+                },
+                Self::UnitInstance {
+                    unit_id: u2,
+                    inner: i2,
+                },
+            ) => u1 == u2 && i1 == i2,
             (Self::Unit, Self::Unit) => true,
             _ => false,
         }
@@ -409,6 +438,7 @@ impl Value {
             Self::Function(_) => "Function",
             Self::Element(_) => "PackageableElement",
             Self::EnumValue { .. } => "EnumValue",
+            Self::UnitInstance { .. } => "UnitInstance",
             Self::Unit => "Unit",
         }
     }
@@ -549,6 +579,10 @@ impl fmt::Display for Value {
             // need the qualified `EnumName.MEMBER` form have model
             // access (see `render_representation` / `render_id`).
             Self::EnumValue { member, .. } => write!(f, "{member}"),
+            // `{inner} <UnitId>` — a terse trace form; the pretty
+            // `5 RomanLength~Pes` shape needs model access, so
+            // `render_representation` handles that elsewhere.
+            Self::UnitInstance { unit_id, inner } => write!(f, "{inner} <Unit:{unit_id}>"),
             Self::Unit => write!(f, "[]"),
         }
     }

@@ -73,6 +73,7 @@ in its crate directory; this file provides the high-level view.
 | Standard registry built into `Evaluator` | P2 | Default `Evaluator::new` without explicit registry |
 | Compiled function support | P2 | AOT-compiled Pure → Rust for hot paths |
 | Full PCT native coverage | P1 | Complete remaining stdlib functions |
+| Native arity checks: drop or keep? | P2 | Every native currently calls `expect_args("name", &values, N)`. The compiler's Pass 2 dispatcher already narrows overloads by param count during FQN mangling, so by the time a call reaches the registry the arity is structurally correct. Investigate: (a) can any call path reach a native with the wrong arity (e.g. reflective calls via `eval` / `evaluate` / `apply_callable`)? (b) if not, replace `expect_args` with `debug_assert_eq!` or delete it to cut ~50 lines of boilerplate. If yes, keep it but move to a shared wrapper so the message format stays consistent. |
 
 ---
 
