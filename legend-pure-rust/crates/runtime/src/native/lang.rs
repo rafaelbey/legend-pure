@@ -356,6 +356,30 @@ impl NativeFunction for Copy {
             )
             .into());
         }
+
+        // Copying a `Value::Element` — `^$functionRef()` in Pure. Elements
+        // aren't heap-backed, so we materialise a fresh heap Object
+        // classified by the element's metatype (`ConcreteFunctionDefinition`,
+        // `Class`, etc. via `bootstrap::metatype_of`). Subsequent introspection
+        // (`$copy->genericType().rawType`) then resolves to the same metatype
+        // the original's element reflection would produce.
+        if let Value::Element(elem_id) = &values[0] {
+            let element = ctx.model().get_element(*elem_id);
+            let Some(meta_id) =
+                legend_pure_parser_pure::bootstrap::metatype_of(ctx.model(), element)
+            else {
+                return Err(PureRuntimeError::EvaluationError(
+                    "copy: element has no M3 metatype — cannot materialise".into(),
+                )
+                .into());
+            };
+            let classifier =
+                crate::model_utils::build_element_path(ctx.model(), meta_id, "::", false);
+            let obj = ctx.heap_mut().alloc_dynamic(classifier);
+            apply_key_value_pairs(ctx, obj, &values[1..])?;
+            return Ok(Evaluated::new(Value::Object(obj)));
+        }
+
         let source_id = values[0].as_object()?;
 
         // Snapshot classifier + properties before we take a mutable heap borrow.

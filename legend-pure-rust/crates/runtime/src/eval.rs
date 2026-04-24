@@ -1271,10 +1271,13 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
 
     /// Perform a plain property access on `instance` by `name`, returning the
     /// same multiplicity-normalised collection that the field-access path
-    /// would produce.
+    /// would produce. Routes Element receivers through the element-property
+    /// path so metamodel introspection (`$type->properties()->filter(p |
+    /// $p->eval($functionElement) != …)`) can read synthesised Function /
+    /// Class fields the same way as direct `$element.name` access.
     #[allow(clippy::result_large_err)]
     fn apply_property_to_instance(
-        &self,
+        &mut self,
         name: &str,
         instance: &Value,
     ) -> Result<Value, PureException> {
@@ -1286,6 +1289,23 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                     .map_err(PureException::from)?;
                 let collected: Vec<Value> = values.iter().cloned().collect();
                 Ok(Value::from_vec(collected))
+            }
+            Value::Element(id) => {
+                // Function elements expose a small set of metamodel fields
+                // (`expressionSequence`, `functionName`, `name`) via the
+                // Function-value path. Route through it first so the
+                // `^$func()` → `.properties->eval($func)` metamodel-
+                // introspection chain reads the same fields it would off a
+                // `Value::Function` receiver.
+                if matches!(self.model.get_element(*id), Element::Function(_)) {
+                    let fv = FunctionValue::Compiled(*id);
+                    let target = Value::Function(Box::new(fv.clone()));
+                    if let Ok(v) = self.eval_function_property(&fv, name, &target) {
+                        return Ok(v);
+                    }
+                }
+                self.eval_element_property(*id, name)
+                    .map_err(PureException::from)
             }
             other => Err(PureException::from(PureRuntimeError::EvaluationError(
                 format!(
