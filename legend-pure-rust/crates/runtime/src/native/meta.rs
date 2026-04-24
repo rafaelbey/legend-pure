@@ -1360,11 +1360,16 @@ impl NativeFunction for ExtractEnumValue {
 
 /// Pure `evaluateAndDeactivate<T|m>(var:T[m]):T[m]`
 ///
-/// Java Pure evaluates the ValueSpec then strips activation metadata. The
-/// Rust runtime has already forced the argument (every ValueSpec reaches a
-/// native as a `Value`), so this is an identity — the platform-level chains
-/// that call it (`{|expr}.expressionSequence->evaluateAndDeactivate()`)
-/// just want the resulting value back out.
+/// Java Pure evaluates the value then re-wraps it as a deactivated
+/// ValueSpecification. Semantically equivalent to `deactivate(evaluate(x))`.
+/// This matters for lambdas: `{|true}->evaluateAndDeactivate()` produces a
+/// LambdaFunction-shaped heap object whose `.expressionSequence` is the
+/// deactivated body — so downstream reflection
+/// (`...expressionSequence->cast(@InstanceValue).values`) can walk the
+/// evaluated body without losing the "this is a ValueSpec" shape.
+///
+/// For scalar / collection inputs we evaluate per-argument and wrap the
+/// result in an `InstanceValue` — the deactivate-of-evaluated form.
 #[derive(Debug)]
 pub struct EvaluateAndDeactivate;
 
@@ -1374,14 +1379,73 @@ impl NativeFunction for EvaluateAndDeactivate {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        let mut values = force_all(args, ctx)?;
-        expect_args("evaluateAndDeactivate", &values, 1)?;
-        Ok(Evaluated::new(values.pop().unwrap_or(Value::Unit)))
+        if args.len() != 1 {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "evaluateAndDeactivate: expected 1 argument, got {}",
+                args.len()
+            ))
+            .into());
+        }
+        let value = ctx.evaluate(&args[0])?.into_value();
+
+        // Lambda input: materialise a heap-wrapped LambdaFunction whose
+        // `expressionSequence` contains each body expression after a
+        // full evaluate-then-deactivate pass. The resulting wrapper
+        // behaves like a Pure `LambdaFunction` instance for property
+        // access — `.expressionSequence` reads the deactivated body
+        // back via the normal heap-object path.
+        if let Value::Function(fv) = &value
+            && let FunctionValue::Lambda(closure) = fv.as_ref()
+        {
+            let body_specs = closure.body.clone();
+            let mut deactivated_body: Vec<Value> = Vec::with_capacity(body_specs.len());
+            for spec in &body_specs {
+                let evaluated = ctx.evaluate(spec)?.into_value();
+                deactivated_body.push(instance_value_wrap(evaluated, ctx)?);
+            }
+            let obj = ctx
+                .heap_mut()
+                .alloc_dynamic(crate::m3_paths::LAMBDA_FUNCTION);
+            ctx.heap_mut()
+                .mutate_add(obj, "expressionSequence", &deactivated_body)?;
+            return Ok(Evaluated::new(Value::Object(obj)));
+        }
+
+        // Collection input: map element-wise, wrapping each as an
+        // InstanceValue. Callers apply `.map(v | $v.name)` and similar —
+        // the per-element spec shape is what the chain needs.
+        if let Value::Collection(items) = value.clone() {
+            let mut out: Vec<Value> = Vec::with_capacity(items.len());
+            for v in items.iter() {
+                out.push(instance_value_wrap(v.clone(), ctx)?);
+            }
+            return Ok(Evaluated::new(Value::from_vec(out)));
+        }
+
+        // Scalar / single-value input: wrap in a single InstanceValue.
+        Ok(Evaluated::new(instance_value_wrap(value, ctx)?))
     }
 
     fn signature(&self) -> &'static str {
         "evaluateAndDeactivate<T|m>(var:T[m]):T[m]"
     }
+}
+
+/// Wrap a runtime value in a fresh `InstanceValue` heap object with
+/// `values = [value]` — the canonical deactivated shape for a
+/// pre-evaluated scalar / collection entry.
+#[allow(clippy::result_large_err)]
+fn instance_value_wrap(v: Value, ctx: &mut dyn EvalContextTrait) -> Result<Value, PureException> {
+    let obj = ctx
+        .heap_mut()
+        .alloc_dynamic(crate::m3_paths::INSTANCE_VALUE);
+    let values: Vec<Value> = match v {
+        Value::Collection(coll) => coll.iter().cloned().collect(),
+        Value::Unit => Vec::new(),
+        other => vec![other],
+    };
+    ctx.heap_mut().mutate_add(obj, "values", &values)?;
+    Ok(Value::Object(obj))
 }
 
 /// Pure `deactivate(var:Any[*]):ValueSpecification[1]`
