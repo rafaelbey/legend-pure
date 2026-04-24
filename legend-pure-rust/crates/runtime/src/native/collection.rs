@@ -1192,6 +1192,255 @@ impl NativeFunction for Keys {
     }
 }
 
+/// Pure `keyValues<U,V>(m:Map<U,V>[1]):Pair<U,V>[*]`
+///
+/// Materialise the map's entries as a collection of `Pair<U,V>` heap
+/// objects (classifier `meta::pure::functions::collection::Pair`) with
+/// `first` = key, `second` = value. Ordering follows the HAMT's
+/// iteration order — deterministic per run, not insertion-ordered.
+#[derive(Debug)]
+pub struct KeyValues;
+
+impl NativeFunction for KeyValues {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("keyValues", &values, 1)?;
+        let Value::Map(m) = &values[0] else {
+            return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
+        };
+        let mut items: Vec<Value> = Vec::with_capacity(m.len());
+        for (k, v) in m.iter() {
+            let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::PAIR);
+            ctx.heap_mut()
+                .mutate_add(obj, "first", &[key_to_value(k)])?;
+            ctx.heap_mut().mutate_add(obj, "second", &[v.clone()])?;
+            items.push(Value::Object(obj));
+        }
+        Ok(Evaluated::new(Value::from_vec(items)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "keyValues<U,V>(m:Map<U,V>[1]):Pair<U,V>[*]"
+    }
+}
+
+/// Pure `putAll<U,V>(m:Map<U,V>[1], pairs:Pair<U,V>[*]):Map<U,V>[1]` /
+/// `putAll<U,V>(m:Map<U,V>[1], o:Map<U,V>[1]):Map<U,V>[1]`
+///
+/// Returns a fresh map with all entries of `m` plus every entry from the
+/// second argument (collection of `Pair` objects or another `Map`). The
+/// second argument's bindings overwrite colliding keys in `m`.
+#[derive(Debug)]
+pub struct PutAll;
+
+impl NativeFunction for PutAll {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("putAll", &values, 2)?;
+        let Value::Map(base) = &values[0] else {
+            return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
+        };
+        let mut updated = (**base).clone();
+        match &values[1] {
+            Value::Map(other) => {
+                for (k, v) in other.iter() {
+                    updated.insert(k.clone(), v.clone());
+                }
+            }
+            other => {
+                for pair in other.to_collection().iter() {
+                    let (k, v) = pair_first_second(ctx, pair, "putAll")?;
+                    updated.insert(value_to_key(&k)?, v);
+                }
+            }
+        }
+        Ok(Evaluated::new(Value::Map(Box::new(updated))))
+    }
+
+    fn signature(&self) -> &'static str {
+        "putAll<U,V>(m:Map<U,V>[1], entries:(Pair<U,V>[*]|Map<U,V>[1])):Map<U,V>[1]"
+    }
+}
+
+/// Pure `replaceAll<U,V>(m:Map<U,V>[1], pairs:Pair<U,V>[*]):Map<U,V>[1]`
+///
+/// Returns a fresh map containing only the entries produced by folding
+/// `pairs`. Any existing keys on `m` that aren't in the new pair list are
+/// dropped. Mirrors Java Pure's `^Map<U,V>(_func=$m._func)` reset
+/// semantics — the resulting map preserves the original's custom-key
+/// function (when one exists) but discards every stored binding.
+#[derive(Debug)]
+pub struct ReplaceAll;
+
+impl NativeFunction for ReplaceAll {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("replaceAll", &values, 2)?;
+        let Value::Map(_) = &values[0] else {
+            return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
+        };
+        let mut updated: im_rc::HashMap<ValueKey, Value> = im_rc::HashMap::new();
+        for pair in values[1].to_collection().iter() {
+            let (k, v) = pair_first_second(ctx, pair, "replaceAll")?;
+            updated.insert(value_to_key(&k)?, v);
+        }
+        Ok(Evaluated::new(Value::Map(Box::new(updated))))
+    }
+
+    fn signature(&self) -> &'static str {
+        "replaceAll<U,V>(m:Map<U,V>[1], pairs:Pair<U,V>[*]):Map<U,V>[1]"
+    }
+}
+
+/// Pure
+/// `getIfAbsentPutWithKey<U,V>(m:Map<U,V>[1], key:U[1], func:Function<{U[1]->V[0..1]}>[1]):V[0..1]`
+///
+/// Returns the value at `key` if present. Otherwise evaluates
+/// `func(key)` and returns that result. Java Pure additionally mutates
+/// the map in place; our immutable `im_rc::HashMap`-backed `Value::Map`
+/// does not — tests that assert post-call mutation (`$m->get(k)` after
+/// the call) still fail, and the structural fix (interior-mutable
+/// wrapper) is tracked separately.
+#[derive(Debug)]
+pub struct GetIfAbsentPutWithKey;
+
+impl NativeFunction for GetIfAbsentPutWithKey {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        if args.len() != 3 {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "getIfAbsentPutWithKey: expected 3 arguments, got {}",
+                args.len()
+            ))
+            .into());
+        }
+        let m_val = ctx.evaluate(&args[0])?.into_value();
+        let key_val = ctx.evaluate(&args[1])?.into_value();
+        let func_val = ctx.evaluate(&args[2])?.into_value();
+        let Value::Map(m) = &m_val else {
+            return Err(PureRuntimeError::type_mismatch("Map", &m_val).into());
+        };
+        let key = value_to_key(&key_val)?;
+        if let Some(v) = m.get(&key) {
+            return Ok(Evaluated::new(v.clone()));
+        }
+        let result = ctx.call_function(&func_val, &[key_val])?;
+        Ok(Evaluated::new(result))
+    }
+
+    fn signature(&self) -> &'static str {
+        "getIfAbsentPutWithKey<U,V>(m:Map<U,V>[1], key:U[1], func:Function<{U[1]->V[0..1]}>[1]):V[0..1]"
+    }
+}
+
+/// Pure `groupBy<X,K>(xs:X[*], f:Function<{X[1]->K[1]}>[1]):Map<K,List<X>>[1]`
+///
+/// For each item in `xs`, evaluate `f(item)` to produce a grouping key,
+/// then bucket the items into a `Map<K, List<X>>` where each `List`
+/// preserves the original order. The `List` is materialised as a
+/// `meta::pure::functions::collection::List` heap object with the
+/// grouped items stored in its `values` property — matching the shape
+/// other natives consume via `List.values`.
+#[derive(Debug)]
+pub struct GroupBy;
+
+impl NativeFunction for GroupBy {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        if args.len() != 2 {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "groupBy: expected 2 arguments, got {}",
+                args.len()
+            ))
+            .into());
+        }
+        let xs = ctx.evaluate(&args[0])?.into_value();
+        let f = ctx.evaluate(&args[1])?.into_value();
+        let items = xs.to_collection();
+
+        // Preserve insertion order of keys so `.keys()` output is
+        // reproducible. im_rc::HashMap doesn't guarantee order, so we
+        // track order separately via a Vec<ValueKey> of first-seen keys.
+        let mut groups: im_rc::HashMap<ValueKey, Vec<Value>> = im_rc::HashMap::new();
+        let mut key_order: Vec<ValueKey> = Vec::new();
+        for item in items.iter() {
+            let key_val = ctx.call_function(&f, &[item.clone()])?;
+            let key = value_to_key(&key_val)?;
+            if !groups.contains_key(&key) {
+                key_order.push(key.clone());
+            }
+            groups.entry(key).or_default().push(item.clone());
+        }
+
+        let mut map: im_rc::HashMap<ValueKey, Value> = im_rc::HashMap::new();
+        for key in key_order {
+            let bucket = groups.remove(&key).unwrap_or_default();
+            let list_obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::LIST);
+            for v in &bucket {
+                ctx.heap_mut()
+                    .mutate_add(list_obj, "values", &[v.clone()])?;
+            }
+            map.insert(key, Value::Object(list_obj));
+        }
+        Ok(Evaluated::new(Value::Map(Box::new(map))))
+    }
+
+    fn signature(&self) -> &'static str {
+        "groupBy<X,K>(xs:X[*], f:Function<{X[1]->K[1]}>[1]):Map<K,List<X>>[1]"
+    }
+}
+
+/// Read the `first` / `second` properties of a `Pair` heap object. Emits
+/// a consistent error message tagged with the caller's native name so
+/// failure traces point at the right native.
+#[allow(clippy::result_large_err)]
+fn pair_first_second(
+    ctx: &mut dyn EvalContextTrait,
+    pair: &Value,
+    native_name: &'static str,
+) -> Result<(Value, Value), PureException> {
+    let Value::Object(obj_id) = pair else {
+        return Err(PureRuntimeError::EvaluationError(format!(
+            "{native_name}: expected Pair<U,V>, got {}",
+            pair.type_name()
+        ))
+        .into());
+    };
+    let first_vals = ctx.heap().get_property_values(*obj_id, "first")?;
+    let second_vals = ctx.heap().get_property_values(*obj_id, "second")?;
+    let Some(k) = first_vals.iter().next() else {
+        return Err(PureRuntimeError::EvaluationError(format!(
+            "{native_name}: Pair.first is empty"
+        ))
+        .into());
+    };
+    let Some(v) = second_vals.iter().next() else {
+        return Err(PureRuntimeError::EvaluationError(format!(
+            "{native_name}: Pair.second is empty"
+        ))
+        .into());
+    };
+    Ok((k.clone(), v.clone()))
+}
+
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
@@ -1249,6 +1498,15 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("get_Map_1__U_1__V_$0_1$_", Get);
     registry.register("keys_Map_1__U_MANY_", Keys);
     registry.register("put_Map_1__U_1__V_1__Map_1_", Put);
+    registry.register("keyValues_Map_1__Pair_MANY_", KeyValues);
+    registry.register("putAll_Map_1__Map_1__Map_1_", PutAll);
+    registry.register("putAll_Map_1__Pair_MANY__Map_1_", PutAll);
+    registry.register("replaceAll_Map_1__Pair_MANY__Map_1_", ReplaceAll);
+    registry.register(
+        "getIfAbsentPutWithKey_Map_1__U_1__Function_1__V_$0_1$_",
+        GetIfAbsentPutWithKey,
+    );
+    registry.register("groupBy_X_MANY__Function_1__Map_1_", GroupBy);
 }
 
 // ---------------------------------------------------------------------------

@@ -973,7 +973,9 @@ fn eval_enum_values_expands_to_each_member() {
             let members: Vec<(SmolStr, SmolStr)> = v
                 .iter()
                 .filter_map(|val| match val {
-                    Value::EnumValue { enum_id: _, member } => Some((SmolStr::new("Color"), member.clone())),
+                    Value::EnumValue { enum_id: _, member } => {
+                        Some((SmolStr::new("Color"), member.clone()))
+                    }
                     _ => None,
                 })
                 .collect();
@@ -1225,6 +1227,12 @@ fn eval_surveyor_lang_tests_fail_histogram() {
 #[ignore = "diagnostic: bucket string::tests FAILs by first line of message"]
 fn eval_surveyor_string_tests_fail_histogram() {
     surveyor_fail_histogram("meta::pure::functions::string::tests");
+}
+
+#[test]
+#[ignore = "diagnostic: bucket collection::tests FAILs by first line of message"]
+fn eval_surveyor_collection_tests_fail_histogram() {
+    surveyor_fail_histogram("meta::pure::functions::collection::tests");
 }
 
 fn surveyor_error_histogram(package: &str) {

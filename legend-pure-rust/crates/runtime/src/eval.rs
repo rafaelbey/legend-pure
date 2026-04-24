@@ -578,11 +578,85 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             Value::Function(fv) => self
                 .eval_function_property(fv, property, &target_val)
                 .map_err(PureException::from),
+            // Pure auto-maps property access over a collection:
+            // `persons.firstName` produces the flattened collection of every
+            // `firstName` value across every person in `persons`. Recurse
+            // per element and concatenate — `from_vec` normalises the single-
+            // vs. many case so scalar receivers keep working.
+            Value::Collection(items) => {
+                let items = items.clone();
+                let mut out: Vec<Value> = Vec::new();
+                for item in items.iter() {
+                    let v = self.property_access_on_value(item, property)?;
+                    match v {
+                        Value::Unit => {}
+                        Value::Collection(inner) => {
+                            for x in inner.iter() {
+                                out.push(x.clone());
+                            }
+                        }
+                        other => out.push(other),
+                    }
+                }
+                Ok(Value::from_vec(out))
+            }
             _ => Err(PureException::from(PureRuntimeError::EvaluationError(
                 format!(
                     "Property access on non-object value: {}.{}",
                     target_val.type_name(),
                     property
+                ),
+            ))),
+        }
+    }
+
+    /// Read `property` off a pre-evaluated [`Value`] — used by the
+    /// collection-auto-map path to recurse without re-evaluating the
+    /// receiver expression. Mirrors `eval_property_access` without the
+    /// wrapper `self.eval(target)` step.
+    #[allow(clippy::result_large_err)]
+    fn property_access_on_value(
+        &mut self,
+        value: &Value,
+        property: &str,
+    ) -> Result<Value, PureException> {
+        match value {
+            Value::Object(id) => {
+                let values = self
+                    .heap
+                    .get_property_values(*id, property)
+                    .map_err(PureException::from)?;
+                let collected: Vec<Value> = values.iter().cloned().collect();
+                Ok(Value::from_vec(collected))
+            }
+            Value::Element(id) => self
+                .eval_element_property(*id, property)
+                .map_err(PureException::from),
+            Value::Function(fv) => self
+                .eval_function_property(fv, property, value)
+                .map_err(PureException::from),
+            Value::Collection(items) => {
+                let items = items.clone();
+                let mut out: Vec<Value> = Vec::new();
+                for item in items.iter() {
+                    let v = self.property_access_on_value(item, property)?;
+                    match v {
+                        Value::Unit => {}
+                        Value::Collection(inner) => {
+                            for x in inner.iter() {
+                                out.push(x.clone());
+                            }
+                        }
+                        other => out.push(other),
+                    }
+                }
+                Ok(Value::from_vec(out))
+            }
+            Value::Unit => Ok(Value::Unit),
+            other => Err(PureException::from(PureRuntimeError::EvaluationError(
+                format!(
+                    "Property access on non-object value: {}.{property}",
+                    other.type_name()
                 ),
             ))),
         }
