@@ -807,11 +807,14 @@ fn infer_let_type(
 // New instance
 // ---------------------------------------------------------------------------
 
-/// Lowers `^MyClass(prop='val')` → `FunctionCall("new", [class, name, kvs...])`.
+/// Lowers `^MyClass<TypeArg, …>(prop='val')` →
+/// `FunctionCall("new", [class, name, [type_arg_refs], kvs...])`.
 ///
-/// Matches the Java M3 desugaring: the class is resolved as an element
-/// reference, followed by the class name as a string, then key-value pairs
-/// as alternating string-name/value arguments.
+/// Position 2 is the (possibly empty) collection of resolved type-argument
+/// elements — `^List<String>(values=…)` puts `[String]` there so the
+/// runtime can hang the bindings off the new instance and `genericType()`
+/// surface them via `typeArguments`. Position 0/1 stay as the class element
+/// + simple name, position 3.. carries flat key/value pairs as before.
 fn lower_new_instance(
     e: &ast_expr::NewInstanceExpr,
     ctx: &mut ResolutionContext<'_>,
@@ -819,14 +822,37 @@ fn lower_new_instance(
 ) -> Option<ValueSpec> {
     let class_id = resolve::resolve_element_ptr(&e.class, &e.source_info, ctx, errors)?;
 
-    // Build argument list: class_ref, className_string, key1, val1, key2, val2, ...
-    let mut arguments = Vec::with_capacity(2 + e.assignments.len() * 2);
+    let mut arguments = Vec::with_capacity(3 + e.assignments.len() * 2);
     arguments.push(untyped(
         ExprKind::PackageableElementRef { element: class_id },
         e.source_info.clone(),
     ));
     arguments.push(untyped(
         ExprKind::StringLiteral(SmolStr::new(e.class.name.as_str())),
+        e.source_info.clone(),
+    ));
+    // Resolve each type argument to its concrete Element reference.
+    // Anonymous structural types (function types, generics) and unresolved
+    // bindings are dropped silently — they have no runtime element to
+    // surface through `genericType().typeArguments`.
+    let type_arg_specs: Vec<ValueSpec> = e
+        .type_arguments
+        .iter()
+        .filter_map(|ta| {
+            let resolved = resolve::resolve_type_ref(ta, ctx, errors)?;
+            match resolved {
+                crate::types::TypeExpr::Named { element, .. } => Some(untyped(
+                    ExprKind::PackageableElementRef { element },
+                    ta.source_info.clone(),
+                )),
+                _ => None,
+            }
+        })
+        .collect();
+    arguments.push(untyped(
+        ExprKind::Collection {
+            elements: type_arg_specs,
+        },
         e.source_info.clone(),
     ));
     for kv in &e.assignments {

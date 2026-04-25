@@ -622,6 +622,19 @@ impl NativeFunction for GenericTypeOf {
         let values = force_all(args, ctx)?;
         expect_args("genericType", &values, 1)?;
         let type_id = resolve_value_type(&values[0], ctx.model(), ctx.heap())?;
+        // Heap-instance values created with `^Class<T1, T2>(…)` carry a
+        // `__typeArguments` reserved slot — pull it before allocating the
+        // wrapper so we can mirror those bindings into the GenericType's
+        // own `typeArguments` list.
+        let instance_type_args: Vec<Value> = match &values[0] {
+            Value::Object(obj_id) => ctx
+                .heap()
+                .get_property_values(*obj_id, "__typeArguments")
+                .ok()
+                .map(|v| v.iter().cloned().collect())
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
         let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
         ctx.heap_mut()
             .mutate_add(obj, "rawType", &[Value::Element(type_id)])?;
@@ -644,6 +657,22 @@ impl NativeFunction for GenericTypeOf {
                 ctx.heap_mut()
                     .mutate_add(obj, "typeArguments", &[Value::Object(arg_gt)])?;
             }
+        }
+        // Heap-instance type bindings (`^List<String>(…)` → `[String]`)
+        // surface as `typeArguments[i]` GenericType wrappers each carrying
+        // a single `rawType` ref. Empty when the construction site had no
+        // `<…>` parameters or the args weren't resolvable to elements.
+        if !instance_type_args.is_empty() {
+            let mut arg_objs: Vec<Value> = Vec::with_capacity(instance_type_args.len());
+            for arg in instance_type_args {
+                if let Value::Element(arg_id) = arg {
+                    let arg_gt = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
+                    ctx.heap_mut()
+                        .mutate_add(arg_gt, "rawType", &[Value::Element(arg_id)])?;
+                    arg_objs.push(Value::Object(arg_gt));
+                }
+            }
+            ctx.heap_mut().mutate_add(obj, "typeArguments", &arg_objs)?;
         }
         Ok(Evaluated::new(Value::Object(obj)))
     }
