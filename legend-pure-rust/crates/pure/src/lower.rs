@@ -33,6 +33,7 @@
 
 use legend_pure_parser_ast::expression as ast_expr;
 use legend_pure_parser_ast::source_info::{SourceInfo, Spanned};
+use legend_pure_parser_ast::type_ref as ast_type;
 use smol_str::SmolStr;
 
 use crate::error::CompilationError;
@@ -852,6 +853,32 @@ fn lower_new_instance(
     arguments.push(untyped(
         ExprKind::Collection {
             elements: type_arg_specs,
+        },
+        e.source_info.clone(),
+    ));
+    // Type-variable VALUES — `^MyClass(10)(text=…)` binds `x = 10` for
+    // the `x:Integer[1]` parameter declared on `MyClass(x:Integer[1])`.
+    // Lowered as a parallel collection so the runtime can store the
+    // bindings on the heap and qualified properties / class
+    // constraints can resolve `$x` against the receiver instance.
+    let type_var_value_specs: Vec<ValueSpec> = e
+        .type_variable_values
+        .iter()
+        .map(|tv| {
+            let (kind, span) = match tv {
+                ast_type::TypeVariableValue::Integer(n, s) => {
+                    (ExprKind::IntegerLiteral(*n), s.clone())
+                }
+                ast_type::TypeVariableValue::String(s, sp) => {
+                    (ExprKind::StringLiteral(SmolStr::new(s)), sp.clone())
+                }
+            };
+            untyped(kind, span)
+        })
+        .collect();
+    arguments.push(untyped(
+        ExprKind::Collection {
+            elements: type_var_value_specs,
         },
         e.source_info.clone(),
     ));

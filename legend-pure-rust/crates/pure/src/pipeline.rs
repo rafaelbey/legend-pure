@@ -840,6 +840,7 @@ fn create_shell(element: &ast::Element) -> Element {
     match element {
         ast::Element::Class(_) => Element::Class(Class {
             type_parameters: vec![],
+            type_variable_parameters: vec![],
             super_types: vec![],
             properties: vec![],
             qualified_properties: vec![],
@@ -973,8 +974,11 @@ fn hydrate_element_signature(
             let tagged_values =
                 resolve::resolve_tagged_values(&class_def.tagged_values, ctx, errors);
 
+            let type_variable_parameters =
+                lower_type_variable_parameters(&class_def.type_variable_parameters, ctx, errors);
             Element::Class(Class {
                 type_parameters: class_def.type_parameters.clone(),
+                type_variable_parameters,
                 super_types,
                 properties,
                 qualified_properties,

@@ -1443,10 +1443,11 @@ fn expression_new_instance_desugars_to_new() {
                     ..
                 } => {
                     assert_eq!(function_name.as_str(), "new");
-                    // class_ref, class_name_string, [type_args], key1, val1,
-                    // key2, val2 — position 2 is the parsed `<T1, T2>`
-                    // collection (empty here, no type args were declared).
-                    assert_eq!(arguments.len(), 7);
+                    // class_ref, class_name_string, [type_args],
+                    // [type_var_values], key1, val1, key2, val2 —
+                    // positions 2 and 3 are the parsed `<T1, T2>` and
+                    // `(10, 'ok')` collections (both empty here).
+                    assert_eq!(arguments.len(), 8);
                     // First arg is the class element ref
                     assert!(matches!(
                         &*arguments[0].kind,
@@ -1462,23 +1463,28 @@ fn expression_new_instance_desugars_to_new() {
                         &*arguments[2].kind,
                         ExprKind::Collection { elements } if elements.is_empty()
                     ));
-                    // Fourth arg is first key name
+                    // Fourth arg is the (empty) type-variable-values collection
                     assert!(matches!(
                         &*arguments[3].kind,
-                        ExprKind::StringLiteral(name) if name == "first"
+                        ExprKind::Collection { elements } if elements.is_empty()
                     ));
-                    // Fifth arg is first value
+                    // Fifth arg is first key name
                     assert!(matches!(
                         &*arguments[4].kind,
-                        ExprKind::StringLiteral(val) if val == "hello"
+                        ExprKind::StringLiteral(name) if name == "first"
                     ));
-                    // Sixth arg is second key name
+                    // Sixth arg is first value
                     assert!(matches!(
                         &*arguments[5].kind,
+                        ExprKind::StringLiteral(val) if val == "hello"
+                    ));
+                    // Seventh arg is second key name
+                    assert!(matches!(
+                        &*arguments[6].kind,
                         ExprKind::StringLiteral(name) if name == "second"
                     ));
-                    // Seventh arg is second value
-                    assert!(matches!(&*arguments[6].kind, ExprKind::IntegerLiteral(42)));
+                    // Eighth arg is second value
+                    assert!(matches!(&*arguments[7].kind, ExprKind::IntegerLiteral(42)));
                 }
                 other => panic!("expected new(), got {other:?}"),
             }
