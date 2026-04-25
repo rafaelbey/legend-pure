@@ -405,12 +405,18 @@ impl Parser {
                             let (next, _) = self.cursor.expect_identifier_or_keyword()?;
                             prop = SmolStr::new(format!("{prop}.{next}"));
                         }
-                        self.cursor.eat(TokenKind::Plus); // += (append) syntax
+                        // `+=` (append) vs `=` (replace) — record on the
+                        // KeyValuePair so the runtime can pick `mutate_add`
+                        // (append to existing values) or `mutate_set`
+                        // (replace). Java threads this through as the
+                        // `KeyValue.add` slot; mirror that semantics.
+                        let augmented = self.cursor.eat(TokenKind::Plus);
                         self.cursor.expect(TokenKind::Equals)?;
                         let val = self.parse_expression()?;
                         assignments.push(KeyValuePair {
                             key: prop,
                             value: val,
+                            augmented,
                             source_info: kv_si,
                         });
                         self.cursor.eat(TokenKind::Comma);
@@ -525,12 +531,18 @@ impl Parser {
                         let (next, _) = self.cursor.expect_identifier_or_keyword()?;
                         prop = SmolStr::new(format!("{prop}.{next}"));
                     }
-                    self.cursor.eat(TokenKind::Plus); // += (append) syntax
+                    // `+=` is a no-op on `^Class(...)` (no carried values
+                    // to append to), but the parser tolerates it for symmetry
+                    // with the copy-expression form. Recording the flag keeps
+                    // the AST honest; the runtime collapses to `mutate_set`
+                    // either way on a fresh allocation.
+                    let augmented = self.cursor.eat(TokenKind::Plus);
                     self.cursor.expect(TokenKind::Equals)?;
                     let val = self.parse_expression()?;
                     assignments.push(KeyValuePair {
                         key: prop,
                         value: val,
+                        augmented,
                         source_info: kv_si,
                     });
                     self.cursor.eat(TokenKind::Comma);

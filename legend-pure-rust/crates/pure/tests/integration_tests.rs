@@ -1444,10 +1444,14 @@ fn expression_new_instance_desugars_to_new() {
                 } => {
                     assert_eq!(function_name.as_str(), "new");
                     // class_ref, class_name_string, [type_args],
-                    // [type_var_values], key1, val1, key2, val2 —
-                    // positions 2 and 3 are the parsed `<T1, T2>` and
-                    // `(10, 'ok')` collections (both empty here).
-                    assert_eq!(arguments.len(), 8);
+                    // [type_var_values], (key1, val1, augmented1),
+                    // (key2, val2, augmented2) — positions 2 and 3 are
+                    // the parsed `<T1, T2>` and `(10, 'ok')` collections
+                    // (both empty here); positions 4.. carry triples
+                    // matching the runtime's `apply_key_value_triples`
+                    // input shape (the augmented bool distinguishes `=`
+                    // from `+=`, both `false` here).
+                    assert_eq!(arguments.len(), 10);
                     // First arg is the class element ref
                     assert!(matches!(
                         &*arguments[0].kind,
@@ -1478,13 +1482,23 @@ fn expression_new_instance_desugars_to_new() {
                         &*arguments[5].kind,
                         ExprKind::StringLiteral(val) if val == "hello"
                     ));
-                    // Seventh arg is second key name
+                    // Seventh arg is the augmented flag for the first pair
                     assert!(matches!(
                         &*arguments[6].kind,
+                        ExprKind::BooleanLiteral(false)
+                    ));
+                    // Eighth arg is second key name
+                    assert!(matches!(
+                        &*arguments[7].kind,
                         ExprKind::StringLiteral(name) if name == "second"
                     ));
-                    // Eighth arg is second value
-                    assert!(matches!(&*arguments[7].kind, ExprKind::IntegerLiteral(42)));
+                    // Ninth arg is second value
+                    assert!(matches!(&*arguments[8].kind, ExprKind::IntegerLiteral(42)));
+                    // Tenth arg is the augmented flag for the second pair
+                    assert!(matches!(
+                        &*arguments[9].kind,
+                        ExprKind::BooleanLiteral(false)
+                    ));
                 }
                 other => panic!("expected new(), got {other:?}"),
             }

@@ -98,6 +98,7 @@ SourceFile {
                                                     },
                                                 ),
                                             ),
+                                            augmented: false,
                                             source_info: SourceInfo {
                                                 source: "test.pure",
                                                 start_line: 4,
@@ -152,6 +153,7 @@ SourceFile {
                                                                     },
                                                                 ),
                                                             ),
+                                                            augmented: false,
                                                             source_info: SourceInfo {
                                                                 source: "test.pure",
                                                                 start_line: 4,
@@ -170,6 +172,7 @@ SourceFile {
                                                     },
                                                 },
                                             ),
+                                            augmented: false,
                                             source_info: SourceInfo {
                                                 source: "test.pure",
                                                 start_line: 4,

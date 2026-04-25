@@ -465,7 +465,7 @@ fn compose_new_instance(w: &mut IndentWriter, e: &NewInstanceExpr) {
             w.write(", ");
         }
         w.write(&maybe_quote(&kv.key));
-        w.write("=");
+        w.write(if kv.augmented { "+=" } else { "=" });
         compose_expression(w, &kv.value);
     }
     w.write(")");
@@ -480,7 +480,7 @@ fn compose_copy(w: &mut IndentWriter, e: &CopyExpr) {
             w.write(", ");
         }
         w.write(&maybe_quote(&kv.key));
-        w.write("=");
+        w.write(if kv.augmented { "+=" } else { "=" });
         compose_expression(w, &kv.value);
     }
     w.write(")");

@@ -611,13 +611,25 @@ pub struct CopyExpr {
     pub source_info: SourceInfo,
 }
 
-/// A key-value pair in a new instance: `propName = expr`.
+/// A key-value pair in a new instance: `propName = expr` or `propName += expr`.
+///
+/// `augmented` distinguishes the two assignment forms:
+/// - `false` → `propName = expr` — replaces the slot's contents (Java
+///   `KeyValue.add = false`, runtime `mutate_set`).
+/// - `true` → `propName += expr` — appends to the slot, preserving any
+///   carried-over source values (Java `KeyValue.add = true`, runtime
+///   `mutate_add`). On `^Class(...)` constructions there is no prior
+///   value, so `+=` and `=` produce the same result; on `^$src(...)` copy
+///   expressions the distinction is load-bearing.
 #[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct KeyValuePair {
     /// The property name.
     pub key: Identifier,
     /// The value expression.
     pub value: Expression,
+    /// `true` for `propName += expr` (append); `false` for `propName = expr`
+    /// (replace). See struct-level docs for semantics.
+    pub augmented: bool,
     /// Source location.
     pub source_info: SourceInfo,
 }
