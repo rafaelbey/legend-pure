@@ -522,11 +522,22 @@ impl NativeFunction for JoinStrings {
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
+        // Pure signature: `joinStrings(strings, prefix, separator, suffix)`
+        // for the 4-arg overload; `joinStrings(strings, separator)` for the
+        // 2-arg one. The previous code swapped prefix and separator —
+        // `'rrr2'->joinStrings('[', ', ', ']')` produced `, 'rrr2'['eee2']`
+        // (separator-then-element-then-prefix-then-element-then-suffix)
+        // because the index map landed `values[1]→separator,
+        // values[2]→prefix`. The Pure platform itself uses
+        // `joinStrings('\nexpected: [', ', ', ']')` so the broken order
+        // emitted by `assertSameElements` / size-many `assertEquals`
+        // diff messages was bucketing all collection comparisons under
+        // a misformatted "Assert failure" string.
         let (separator, prefix, suffix) = match values.len() {
             2 => (values[1].as_string()?.clone(), None, None),
             4 => (
-                values[1].as_string()?.clone(),
-                Some(values[2].as_string()?.clone()),
+                values[2].as_string()?.clone(),
+                Some(values[1].as_string()?.clone()),
                 Some(values[3].as_string()?.clone()),
             ),
             n => {
