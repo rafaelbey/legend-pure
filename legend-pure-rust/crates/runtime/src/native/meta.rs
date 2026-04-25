@@ -674,12 +674,151 @@ impl NativeFunction for GenericTypeOf {
             }
             ctx.heap_mut().mutate_add(obj, "typeArguments", &arg_objs)?;
         }
+        // Lambda + compiled-function values reify as a `FunctionType`
+        // heap wrapper inside `typeArguments[0]` — Java parity for
+        // `$f.genericType().typeArguments->at(0).rawType->toOne()
+        //   ->cast(@FunctionType).parameters` reading back the lambda's
+        // declared parameter list. Without this `typeArguments` is empty
+        // and the cast fails. Done here (rather than upstream of the
+        // outer `obj` allocation) so the existing `rawType` plumbing
+        // remains the single source of truth for the genericType's own
+        // class.
+        if let Value::Function(fv) = &values[0] {
+            let func_type_obj = build_function_type_wrapper(ctx, fv)?;
+            let arg_gt = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
+            ctx.heap_mut()
+                .mutate_add(arg_gt, "rawType", &[Value::Object(func_type_obj)])?;
+            ctx.heap_mut()
+                .mutate_add(obj, "typeArguments", &[Value::Object(arg_gt)])?;
+        }
         Ok(Evaluated::new(Value::Object(obj)))
     }
 
     fn signature(&self) -> &'static str {
         "genericType(Any[1]):GenericType[1]"
     }
+}
+
+/// Allocate a `meta::pure::metamodel::type::FunctionType` heap wrapper
+/// describing a `Value::Function`'s signature.
+///
+/// For lambdas: every declared parameter becomes a `VariableExpression`
+/// child carrying `name` plus a `genericType` GenericType wrapping the
+/// parameter's resolved type, with multiplicity reified as a sibling
+/// `Multiplicity` wrapper. The lambda body's static return type isn't
+/// known at this layer (no Pass-2.5 inference plumbed through to
+/// runtime values); leave `returnType` / `returnMultiplicity` empty so
+/// callers see Java's "unknown" shape rather than a wrong concrete one.
+///
+/// For compiled function references: pull `parameters`, `return_type`
+/// and `return_multiplicity` straight off the `Function` compiled node
+/// — these are exactly what the Java `Function.parameters`/`returnType`
+/// reflective slots return.
+#[allow(clippy::result_large_err)]
+fn build_function_type_wrapper(
+    ctx: &mut dyn EvalContextTrait,
+    fv: &crate::value::FunctionValue,
+) -> Result<crate::heap::ObjectId, PureException> {
+    let func_type_obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::FUNCTION_TYPE);
+    let (params, return_type, return_mult) = match fv {
+        crate::value::FunctionValue::Lambda(closure) => (closure.parameters.clone(), None, None),
+        crate::value::FunctionValue::Compiled(id) => {
+            if let Element::Function(f) = ctx.model().get_element(*id) {
+                (
+                    f.parameters.clone(),
+                    Some(f.return_type.clone()),
+                    Some(f.return_multiplicity.clone()),
+                )
+            } else {
+                (Vec::new(), None, None)
+            }
+        }
+    };
+
+    let mut param_objs: Vec<Value> = Vec::with_capacity(params.len());
+    for p in &params {
+        let var_expr_obj = ctx
+            .heap_mut()
+            .alloc_dynamic(crate::m3_paths::VARIABLE_EXPRESSION);
+        ctx.heap_mut()
+            .mutate_add(var_expr_obj, "name", &[Value::String(p.name.clone())])?;
+        if let Some(type_id) = type_expr_to_element(&p.type_expr) {
+            let p_gt = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
+            ctx.heap_mut()
+                .mutate_add(p_gt, "rawType", &[Value::Element(type_id)])?;
+            ctx.heap_mut()
+                .mutate_add(var_expr_obj, "genericType", &[Value::Object(p_gt)])?;
+        }
+        let mult_obj = build_multiplicity_wrapper(ctx, &p.multiplicity)?;
+        ctx.heap_mut()
+            .mutate_add(var_expr_obj, "multiplicity", &[Value::Object(mult_obj)])?;
+        param_objs.push(Value::Object(var_expr_obj));
+    }
+    if !param_objs.is_empty() {
+        ctx.heap_mut()
+            .mutate_add(func_type_obj, "parameters", &param_objs)?;
+    }
+
+    if let Some(rt) = return_type
+        && let Some(rt_id) = type_expr_to_element(&rt)
+    {
+        let rt_gt = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
+        ctx.heap_mut()
+            .mutate_add(rt_gt, "rawType", &[Value::Element(rt_id)])?;
+        ctx.heap_mut()
+            .mutate_add(func_type_obj, "returnType", &[Value::Object(rt_gt)])?;
+    }
+    if let Some(rm) = return_mult {
+        let rm_obj = build_multiplicity_wrapper(ctx, &rm)?;
+        ctx.heap_mut().mutate_add(
+            func_type_obj,
+            "returnMultiplicity",
+            &[Value::Object(rm_obj)],
+        )?;
+    }
+    Ok(func_type_obj)
+}
+
+/// Best-effort `TypeExpr → ElementId`. Generic / parametric type slots
+/// have no element to point at; leave the caller to handle by skipping
+/// the `rawType` slot rather than fabricating one.
+fn type_expr_to_element(ty: &legend_pure_parser_pure::types::TypeExpr) -> Option<ElementId> {
+    match ty {
+        legend_pure_parser_pure::types::TypeExpr::Named { element, .. } => Some(*element),
+        _ => None,
+    }
+}
+
+/// Allocate a `meta::pure::metamodel::multiplicity::Multiplicity` heap
+/// wrapper carrying `lowerBound` / `upperBound` integer slots. Mirrors
+/// the subset of `Multiplicity.<lower|upper>Bound` Pure code typically
+/// reads off lambda parameter / return signatures; richer fields
+/// (`name` for variable multiplicities, etc.) are not yet exposed.
+#[allow(clippy::result_large_err)]
+fn build_multiplicity_wrapper(
+    ctx: &mut dyn EvalContextTrait,
+    m: &legend_pure_parser_pure::types::Multiplicity,
+) -> Result<crate::heap::ObjectId, PureException> {
+    use legend_pure_parser_pure::types::Multiplicity as M;
+    let (lower, upper): (i64, Option<i64>) = match m {
+        M::PureOne => (1, Some(1)),
+        M::ZeroOrOne => (0, Some(1)),
+        M::ZeroOrMany => (0, None),
+        M::OneOrMany => (1, None),
+        M::Range { lower, upper } => (i64::from(*lower), upper.map(i64::from)),
+        // Multiplicity variables (`m` in `reverse<T|m>(…)`) act like
+        // `[*]` at the runtime layer where the binding hasn't been
+        // resolved.
+        M::Variable(_) => (0, None),
+    };
+    let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::MULTIPLICITY);
+    ctx.heap_mut()
+        .mutate_add(obj, "lowerBound", &[Value::Integer(lower)])?;
+    if let Some(u) = upper {
+        ctx.heap_mut()
+            .mutate_add(obj, "upperBound", &[Value::Integer(u)])?;
+    }
+    Ok(obj)
 }
 
 // ---------------------------------------------------------------------------
