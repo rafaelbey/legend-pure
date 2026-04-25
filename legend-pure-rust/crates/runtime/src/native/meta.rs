@@ -1760,17 +1760,33 @@ impl NativeFunction for EvaluateAndDeactivate {
         }
 
         // Collection input: map element-wise, wrapping each as an
-        // InstanceValue. Callers apply `.map(v | $v.name)` and similar —
-        // the per-element spec shape is what the chain needs.
+        // InstanceValue — but skip values that are already deactivated
+        // ValueSpecification heap nodes (`InstanceValue`,
+        // `VariableExpression`, `FunctionExpression` /
+        // `SimpleFunctionExpression`). Re-wrapping those would shadow
+        // their own properties (`VE.name` reads would resolve against
+        // the wrapping `InstanceValue` and miss the original VE),
+        // breaking `parameters->evaluateAndDeactivate()->map(v |
+        // $v.name)` style chains used by e.g.
+        // `testEvaluateAndDeactivate`.
         if let Value::Collection(items) = value.clone() {
             let mut out: Vec<Value> = Vec::with_capacity(items.len());
             for v in items.iter() {
-                out.push(instance_value_wrap(v.clone(), ctx)?);
+                if is_already_deactivated(ctx, v) {
+                    out.push(v.clone());
+                } else {
+                    out.push(instance_value_wrap(v.clone(), ctx)?);
+                }
             }
             return Ok(Evaluated::new(Value::from_vec(out)));
         }
 
-        // Scalar / single-value input: wrap in a single InstanceValue.
+        // Scalar / single-value input: wrap in a single InstanceValue
+        // unless the value itself is already a deactivated AST node
+        // (same rationale as the collection branch above).
+        if is_already_deactivated(ctx, &value) {
+            return Ok(Evaluated::new(value));
+        }
         Ok(Evaluated::new(instance_value_wrap(value, ctx)?))
     }
 
@@ -1782,6 +1798,31 @@ impl NativeFunction for EvaluateAndDeactivate {
 /// Wrap a runtime value in a fresh `InstanceValue` heap object with
 /// `values = [value]` — the canonical deactivated shape for a
 /// pre-evaluated scalar / collection entry.
+
+/// Detect whether `v` already represents an M3
+/// `ValueSpecification` heap node — `InstanceValue`,
+/// `VariableExpression`, or any concrete `FunctionExpression`
+/// subclass. Used by [`EvaluateAndDeactivate`] to skip the
+/// `instance_value_wrap` step on values that the chain already
+/// produced as deactivated AST nodes (re-wrapping them would
+/// shadow their own properties — `VE.name` would resolve against
+/// the wrapping `InstanceValue` and read empty).
+fn is_already_deactivated(ctx: &dyn EvalContextTrait, v: &Value) -> bool {
+    let Value::Object(obj_id) = v else {
+        return false;
+    };
+    let Ok(classifier) = ctx.heap().classifier(*obj_id) else {
+        return false;
+    };
+    let model = ctx.model();
+    let Some(class_id) = crate::m3_paths::resolve(model, classifier) else {
+        return false;
+    };
+    classifier_extends_m3(model, class_id, crate::m3_paths::INSTANCE_VALUE)
+        || classifier_extends_m3(model, class_id, crate::m3_paths::VARIABLE_EXPRESSION)
+        || classifier_extends_m3(model, class_id, crate::m3_paths::FUNCTION_EXPRESSION)
+}
+
 #[allow(clippy::result_large_err)]
 fn instance_value_wrap(v: Value, ctx: &mut dyn EvalContextTrait) -> Result<Value, PureException> {
     let obj = ctx
