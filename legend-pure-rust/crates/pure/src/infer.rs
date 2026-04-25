@@ -186,7 +186,8 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                 None
             };
 
-            let result = infer_function_call(ctx, *function, function_name, let_name, &arg_types);
+            let result =
+                infer_function_call(ctx, *function, function_name, let_name, &arg_types);
             return set_and_return(expr, result);
         }
 
@@ -315,11 +316,19 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
 }
 
 /// Sets `expr.type_info` and returns the resolved type.
+///
+/// Honours pre-set `type_info` — when lowering already populated it
+/// (e.g. `lower_new_instance` captures `^Class<T>(...)`'s parametric
+/// shape directly from the AST), Pass 2.5 must not overwrite it. The
+/// AST is more authoritative than the inferred-from-arg-types form
+/// because it carries syntactic type-args the runtime-shaped argument
+/// stream has already flattened away.
 fn set_and_return(expr: &mut ValueSpec, result: Option<ResolvedType>) -> Option<ResolvedType> {
+    if let Some(existing) = expr.type_info.as_deref() {
+        return Some(existing.clone());
+    }
     if let Some(r) = result.clone() {
         expr.type_info = Some(Box::new(r));
-    } else {
-        expr.type_info = None;
     }
     result
 }
@@ -365,10 +374,38 @@ fn infer_function_call(
         });
     }
 
-    // Resolved user function — use its declared return type
+    // Resolved user function — apply generic substitution from arg
+    // types so `class<T>(T[*]):Class<T>[1]` called with `$l1: List<String>`
+    // produces `Class<List<String>>` instead of bare `Class<T>`. Without
+    // this, downstream calls like `new($l1->class(), '')` wouldn't see
+    // T's binding.
+    //
+    // The substitution feeds on each arg's `arg_ty.type_expr`. That
+    // type_expr must carry the parametric shape — e.g. `Named{LA_List,
+    // [String]}` — for binding to work. Capturing parametric info into
+    // `type_info` at the lowering layer (so `^LA_List<String>(...)` and
+    // `cast(@LA_List<String>)` and `extends LA_List<String>` all share
+    // the same type-info plumbing) is the upstream prerequisite. This
+    // helper just consumes whatever `arg_ty.type_expr` already carries.
     if let Some(Element::Function(f)) = function.and_then(|id| ctx.model.try_get_element(id)) {
+        let mut bindings: std::collections::HashMap<SmolStr, TypeExpr> =
+            std::collections::HashMap::new();
+        for (param, arg_ty) in f.parameters.iter().zip(arg_types.iter()) {
+            let Some(arg_ty) = arg_ty else { continue };
+            crate::resolve::bind_type(
+                &param.type_expr,
+                &arg_ty.type_expr,
+                &mut bindings,
+                ctx.model,
+            );
+        }
+        let type_expr = if bindings.is_empty() {
+            f.return_type.clone()
+        } else {
+            crate::resolve::substitute_type(&f.return_type, &bindings)
+        };
         return Some(ResolvedType {
-            type_expr: f.return_type.clone(),
+            type_expr,
             multiplicity: f.return_multiplicity.clone(),
         });
     }

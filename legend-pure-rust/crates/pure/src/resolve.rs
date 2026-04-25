@@ -929,6 +929,86 @@ fn infer_type_from_valuespec(
     }
 }
 
+/// Sibling of [`infer_type_from_valuespec`] that returns the FULL
+/// `TypeExpr` (preserving `type_arguments`) instead of just an
+/// `ElementId`. Used where parametric bindings matter — most
+/// importantly inside [`infer_generic_bindings`], where treating
+/// `$l1: List<String>` as `Named{List, []}` (the cheap path's loss)
+/// caused `T` in `class<T>(T[*]):Class<T>[1]` to bind to bare `List`
+/// rather than `List<String>`. With `type_arguments` preserved, the
+/// substituted return type comes out `Class<List<String>>`, and the
+/// `new(Class<T>, '')` arm below can read T from arg[0]'s inferred
+/// shape.
+///
+/// Mirrors `infer_type_from_valuespec`'s structure but returns
+/// `Option<TypeExpr>`. Most arms just call back into the cheap fn
+/// and wrap; the value-add is in the arms that carry parametric
+/// bindings: `Variable` (read declared type from scope, including
+/// type_arguments), `FunctionCall` (substitute T-bindings into the
+/// resolved function's return type, preserving the result's
+/// type_arguments — this is what makes `$l1->class()` produce
+/// `Class<List<String>>` instead of bare `Class`),
+/// `PropertyAccess` (substitute class-level generics).
+pub(crate) fn infer_typeexpr_from_valuespec(
+    vs: &crate::types::ValueSpec,
+    model: &crate::model::PureModel,
+    var_types: &VarTypes,
+) -> Option<crate::types::TypeExpr> {
+    use crate::types::{ExprKind, TypeExpr};
+    let bare = |eid: ElementId| TypeExpr::Named {
+        element: eid,
+        type_arguments: vec![],
+        value_arguments: vec![],
+    };
+    match vs.kind.as_ref() {
+        // Variable: look up the declared TypeExpr and return it as-is —
+        // this is the load-bearing case for Lane B. `var_types` stores
+        // (TypeExpr, Multiplicity); the stored TypeExpr already carries
+        // type_arguments from the parameter declaration.
+        ExprKind::Variable { name } => var_types.get(name).map(|(te, _)| te.clone()),
+        // TypeReference: the wrapped type literally is the value's type.
+        ExprKind::TypeReference { type_expr } => Some(type_expr.clone()),
+        // FunctionCall: substitute T-bindings from call-site args into
+        // the resolved function's return type. This is what flows
+        // `<String>` from `$l1: List<String>` through
+        // `class<T>(T[*]):Class<T>[1]` to a `Class<List<String>>` result.
+        ExprKind::FunctionCall {
+            function,
+            arguments,
+            ..
+        } => {
+            let fid = (*function)?;
+            let crate::model::Element::Function(f) = model.get_element(fid) else {
+                return None;
+            };
+            let bindings = infer_generic_bindings(&f.parameters, arguments, model, var_types);
+            Some(substitute_type(&f.return_type, &bindings.ty))
+        }
+        // PropertyAccess: same machinery as the cheap fn but return the
+        // substituted TypeExpr instead of just its element.
+        ExprKind::PropertyAccess { target, property }
+        | ExprKind::QualifiedPropertyAccess {
+            target, property, ..
+        } => {
+            let target_eid = infer_type_from_valuespec(target, model, var_types)?;
+            let receiver_type_args = extract_receiver_type_args(target, var_types);
+            let (prop_ty_owned, type_params_owned) =
+                find_property_with_inheritance(target_eid, property, model)?;
+            Some(substitute_class_generics(
+                &prop_ty_owned,
+                &type_params_owned,
+                &receiver_type_args,
+            ))
+        }
+        // Everything else — degrade to the cheap fn and wrap as a bare
+        // Named TypeExpr (no type_args, no value_args). Literals,
+        // PackageableElementRef, EnumValue, Collection LUB all fall
+        // here. Lane B doesn't currently need type_args for any of
+        // these; if a future caller does, this is the place to refine.
+        _ => infer_type_from_valuespec(vs, model, var_types).map(bare),
+    }
+}
+
 /// Walk the class hierarchy searching for `property` starting at `eid`.
 ///
 /// Returns the property's declared `TypeExpr` together with the type
@@ -1305,16 +1385,15 @@ pub(crate) fn infer_generic_bindings(
                 }
             }
         }
-        // Derive the arg's "type expression" — for TypeReference, use the
-        // wrapped type; otherwise build a bare Named from the inferred id.
-        let arg_type_expr: Option<TypeExpr> = match arg.kind.as_ref() {
-            ExprKind::TypeReference { type_expr } => Some(type_expr.clone()),
-            _ => infer_type_from_valuespec(arg, model, var_types).map(|eid| TypeExpr::Named {
-                element: eid,
-                type_arguments: vec![],
-                value_arguments: vec![],
-            }),
-        };
+        // Derive the arg's "type expression" — preserve `type_arguments`
+        // through the inference so generic substitution sees the FULL
+        // parametric shape. The previous version dropped `type_arguments`
+        // unconditionally, which made `class<T>(T[*]):Class<T>[1]` bind
+        // T to the bare element rather than the parametric TypeExpr.
+        // Now `$l1: List<String>` flows through as `Named{List, [String]}`
+        // and the substituted return type comes out `Class<List<String>>`.
+        let arg_type_expr: Option<TypeExpr> =
+            infer_typeexpr_from_valuespec(arg, model, var_types);
         if let Some(arg_ty) = arg_type_expr {
             bind_type(&param.type_expr, &arg_ty, &mut bindings.ty, model);
         }
@@ -1383,7 +1462,7 @@ pub(crate) fn infer_generic_bindings(
 ///
 /// If `T` is already bound and a second arg binds `T` to a different type,
 /// the binding is updated to the LUB of the two types rather than first-wins.
-fn bind_type(
+pub(crate) fn bind_type(
     param_ty: &crate::types::TypeExpr,
     arg_ty: &crate::types::TypeExpr,
     out: &mut HashMap<SmolStr, crate::types::TypeExpr>,

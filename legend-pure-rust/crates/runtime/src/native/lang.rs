@@ -322,6 +322,46 @@ impl NativeFunction for New {
         let mut type_args: Vec<Value> = Vec::new();
         let mut type_var_values: Vec<Value> = Vec::new();
         let mut kvs_offset = values.len(); // default: no kvs
+        // Back-fill `type_args` from the compiler-tracked type of the
+        // first argument when the call shape is the Pure-source
+        // `new(class, id)` family (no explicit type-arg metadata in the
+        // value stream). Lowering pre-sets `type_info` on
+        // `^Class<T>(...)` calls and Pass 2.5's substitution propagates
+        // `Class<T>` through e.g. `$l1->class()` (whose param is `T[*]`
+        // and return is `Class<T>`). When `args[0]` is the result of
+        // `class()` (or any other `Class<X>`-typed expression),
+        // `args[0].type_info.type_expr` is `Named{Class_metatype,
+        // [Named{X, [innerArgs...]}]}` and we want `__typeArguments` on
+        // the new instance to be `innerArgs` — i.e., the type
+        // arguments of the *target* class, not the wrapping `Class<>`.
+        // Resolve the M3 Class metatype ElementId once and compare by
+        // identity — never by classifier string. The check guards the
+        // back-fill against any non-`Class<X>`-shaped first arg. The
+        // canonical FQN lives in `m3_paths::CLASS` so any future move
+        // of the Class metatype's package only needs updating in one
+        // place.
+        let class_metatype_id = crate::m3_paths::resolve(ctx.model(), crate::m3_paths::CLASS);
+        if !args.is_empty()
+            && let Some(ti) = args[0].type_info.as_deref()
+            && let legend_pure_parser_pure::types::TypeExpr::Named {
+                element: outer_eid,
+                type_arguments: outer_args,
+                ..
+            } = &ti.type_expr
+            && Some(*outer_eid) == class_metatype_id
+            && let Some(legend_pure_parser_pure::types::TypeExpr::Named {
+                type_arguments: inner_args,
+                ..
+            }) = outer_args.first()
+            && !inner_args.is_empty()
+        {
+            for ta in inner_args {
+                if let legend_pure_parser_pure::types::TypeExpr::Named { element, .. } = ta {
+                    type_args.push(Value::Element(*element));
+                }
+            }
+            tracing::debug!(?type_args, "New::execute: back-filled type_args from args[0].type_info");
+        }
         if values.len() >= 3 {
             // Probe whether position 2 looks like the compiler-emitted
             // type-args slot (Unit, single Element, or Collection of

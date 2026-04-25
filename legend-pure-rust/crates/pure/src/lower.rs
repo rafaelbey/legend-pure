@@ -1149,22 +1149,28 @@ fn lower_new_instance(
         ExprKind::StringLiteral(SmolStr::new(e.class.name.as_str())),
         e.source_info.clone(),
     ));
-    // Resolve each type argument to its concrete Element reference.
-    // Anonymous structural types (function types, generics) and unresolved
-    // bindings are dropped silently — they have no runtime element to
-    // surface through `genericType().typeArguments`.
-    let type_arg_specs: Vec<ValueSpec> = e
+    // Resolve each type argument fully — keep the FULL `TypeExpr` (with
+    // its own nested type_arguments) for the call's `type_info` below.
+    // Also extract the runtime-shaped element refs the New native
+    // currently consumes from arguments[2]. Anonymous structural types
+    // (function types, generics) and unresolved bindings are dropped
+    // silently from the runtime stream — they have no element to
+    // surface through `genericType().typeArguments` — but they're still
+    // captured in the type_info if resolution succeeded.
+    let resolved_type_args: Vec<crate::types::TypeExpr> = e
         .type_arguments
         .iter()
-        .filter_map(|ta| {
-            let resolved = resolve::resolve_type_ref(ta, ctx, errors)?;
-            match resolved {
-                crate::types::TypeExpr::Named { element, .. } => Some(untyped(
-                    ExprKind::PackageableElementRef { element },
-                    ta.source_info.clone(),
-                )),
-                _ => None,
-            }
+        .filter_map(|ta| resolve::resolve_type_ref(ta, ctx, errors))
+        .collect();
+    let type_arg_specs: Vec<ValueSpec> = resolved_type_args
+        .iter()
+        .zip(e.type_arguments.iter())
+        .filter_map(|(resolved, ta)| match resolved {
+            crate::types::TypeExpr::Named { element, .. } => Some(untyped(
+                ExprKind::PackageableElementRef { element: *element },
+                ta.source_info.clone(),
+            )),
+            _ => None,
         })
         .collect();
     arguments.push(untyped(
@@ -1218,14 +1224,34 @@ fn lower_new_instance(
         ));
     }
 
-    Some(untyped(
-        ExprKind::FunctionCall {
+    // Capture the parametric type the AST already carries — `^Class<T>(...)`
+    // syntactically means "a `Class<T>` instance", so the lowered call
+    // expresses that directly via `type_info` rather than relying on
+    // downstream consumers (Pass 2.5, runtime `New::execute`, the
+    // resolver) to re-derive it from the runtime-shaped arg stream.
+    // This keeps the type-capture step (lowering reads the AST) decoupled
+    // from each consumer's needs (`new`, `cast(@T)`, `class A extends T`,
+    // future generic-aware operators) — they all read the same
+    // `type_info`. Consumers that don't need parametrics (`^MyClass(...)`
+    // with no `<T>`) get a bare `Named` here, indistinguishable from
+    // what Pass 2.5 would have inferred.
+    let type_info = Some(Box::new(crate::types::ResolvedType {
+        type_expr: crate::types::TypeExpr::Named {
+            element: class_id,
+            type_arguments: resolved_type_args,
+            value_arguments: vec![],
+        },
+        multiplicity: crate::types::Multiplicity::PureOne,
+    }));
+    Some(ValueSpec {
+        kind: Box::new(ExprKind::FunctionCall {
             function: None,
             function_name: SmolStr::new_static("new"),
             arguments,
-        },
-        e.source_info.clone(),
-    ))
+        }),
+        source_info: e.source_info.clone(),
+        type_info,
+    })
 }
 
 // ---------------------------------------------------------------------------

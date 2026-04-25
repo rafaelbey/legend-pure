@@ -60,6 +60,14 @@ pub const STEREOTYPE: &classifier = "meta::pure::metamodel::extension::Stereotyp
 /// `{tag = 'value'}` annotation.
 pub const TAGGED_VALUE: &classifier = "meta::pure::metamodel::extension::TaggedValue";
 
+/// `meta::pure::metamodel::type::Class` — the M3 metatype every
+/// user-defined Class is an instance of. Used by the type-info back-fill
+/// in `New::execute` to identify a `Class<T>`-typed first argument
+/// (resolve to its [`ElementId`] and compare against the inferred
+/// `args[0].type_info`'s outer element). Identity-based, never
+/// classifier-string compared.
+pub const CLASS: &classifier = "meta::pure::metamodel::type::Class";
+
 /// `meta::pure::metamodel::type::generics::GenericType` — heap wrapper for
 /// a parameterised type instance returned by `genericType(...)`.
 pub const GENERIC_TYPE: &classifier = "meta::pure::metamodel::type::generics::GenericType";
