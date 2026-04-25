@@ -31,9 +31,58 @@ use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
 use smol_str::SmolStr;
 
+use std::cell::Cell;
+
 use crate::heap::ObjectId;
 use crate::native::EvalContextTrait;
 use crate::value::Value;
+
+thread_local! {
+    /// Recursion depth for `values_equal` / `objects_equal`. Mutual
+    /// recursion across collection elements + `<<equality.Key>>`
+    /// properties has no inherent bound today; pathological inputs
+    /// (deeply nested `List<List<…>>`, an equality-keyed self-
+    /// referential class) would blow the Rust stack — default 8 MB
+    /// on the main thread but as little as 512 KB on spawned threads.
+    /// This stopgap converts the segfault-class bug into a Pure-level
+    /// "not equal" answer: if recursion exceeds [`MAX_EQUALITY_DEPTH`]
+    /// we return `false` (best-effort: an actually-equal pair past
+    /// the limit reads as unequal, but the alternative is process
+    /// abort). The proper fix is an explicit work-stack with a
+    /// visited-set cycle guard — tracked in BACKLOG.
+    static EQ_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Maximum mutual recursion depth before [`values_equal`] / [`objects_equal`]
+/// short-circuit to `false`. 1000 frames is well above the deepest legitimate
+/// Pure value graph we've seen; pathological cycles or overly nested data
+/// hit the limit instead of overflowing the Rust stack.
+const MAX_EQUALITY_DEPTH: usize = 1000;
+
+/// RAII guard that bumps [`EQ_DEPTH`] on construction and decrements on
+/// drop. Returns `None` once the depth limit is reached so the caller
+/// can short-circuit without entering another recursive frame.
+struct DepthGuard;
+
+impl DepthGuard {
+    fn enter() -> Option<Self> {
+        EQ_DEPTH.with(|d| {
+            let cur = d.get();
+            if cur >= MAX_EQUALITY_DEPTH {
+                None
+            } else {
+                d.set(cur + 1);
+                Some(Self)
+            }
+        })
+    }
+}
+
+impl Drop for DepthGuard {
+    fn drop(&mut self) {
+        EQ_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
 
 /// Structural value equality, heap-aware.
 ///
@@ -43,6 +92,9 @@ use crate::value::Value;
 /// declares any; otherwise fall back to `ObjectId` identity.
 #[must_use]
 pub fn values_equal(ctx: &dyn EvalContextTrait, a: &Value, b: &Value) -> bool {
+    let Some(_guard) = DepthGuard::enter() else {
+        return false;
+    };
     match (a, b) {
         (Value::Collection(xs), Value::Collection(ys)) => {
             xs.len() == ys.len()
