@@ -535,22 +535,47 @@ impl NativeFunction for Copy {
         }
 
         apply_key_value_triples(ctx, obj, &plain_kvs)?;
-        apply_path_property_updates(ctx, source_id, obj, &path_kvs)?;
+        // Path-property updates clone every nested object whose
+        // first segment is overridden, returning each clone's ObjectId
+        // so the end-of-Copy inverse walk below visits them too. The
+        // clones inherit every association slot from their source
+        // (e.g. a cloned LA_Division parent carries `firm=$firmX`),
+        // so their inverses (`$firmX.organizations`) need to be
+        // populated separately from the outer `obj`'s.
+        let cloned_objs = apply_path_property_updates(ctx, source_id, obj, &path_kvs)?;
 
+        // Single end-of-Copy inverse walk per affected object —
+        // matches Java Pure's `Copy.java:236` (`updateReverseProperties(
+        // newInstance, ...)`) which fires once at the end.
+        // `sync_object_inverses` reads the object's CURRENT slot
+        // values rather than walking the kvs that built it, so it
+        // naturally sees the post-`mutate_set` state — a property
+        // overridden by `plain_kvs` no longer points at the source's
+        // value, so the inverse on the source's old peer doesn't get
+        // a spurious entry. Also visits each clone produced by
+        // `apply_path_property_updates` so cloned nested objects sync
+        // their own inverses (e.g. the cloned parent's
+        // `firm=$firmX` flows into `$firmX.organizations`, fixing
+        // testDeepCopyWithAssociation2).
         if let Some(class_id) = crate::m3_paths::resolve(ctx.model(), &classifier) {
-            populate_association_inverses(ctx, obj, class_id, &carried_kvs)?;
-            populate_association_inverses(ctx, obj, class_id, &plain_kvs)?;
-            // Re-establish inverses for path-overridden top-level
-            // properties — read the freshly-set value off the new
-            // object and feed it through the same mechanism so the
-            // cloned nested object's inverse-side list is updated.
-            for head in &path_overrides {
-                let new_vals = ctx.heap().get_property_values(obj, head.as_str())?;
-                let assigned = Value::from_vec(new_vals.iter().cloned().collect());
-                let synthetic = vec![Value::String(head.clone()), assigned, Value::Boolean(false)];
-                populate_association_inverses(ctx, obj, class_id, &synthetic)?;
+            sync_object_inverses(ctx, obj, class_id)?;
+        }
+        for clone_obj in cloned_objs {
+            let clone_classifier = ctx.heap().classifier(clone_obj)?.to_owned();
+            if let Some(clone_class_id) =
+                crate::m3_paths::resolve(ctx.model(), &clone_classifier)
+            {
+                sync_object_inverses(ctx, clone_obj, clone_class_id)?;
             }
         }
+        // The carried-kvs / plain-kvs / path-head triple of
+        // `populate_association_inverses` calls was retired here —
+        // every effect that loop produced is now produced by
+        // `sync_object_inverses` reading the object's final slot
+        // state. The `path_overrides` variable above is still used
+        // by the carried-property seeding loop (line 529) to skip
+        // re-`mutate_add`ing properties the user is overriding.
+        let _ = (carried_kvs, &path_overrides);
 
         Ok(Evaluated::new(Value::Object(obj)))
     }
@@ -844,8 +869,10 @@ fn populate_association_inverses(
     }
 
     // Snapshot the association entries once — cheap O(n) per property but we
-    // avoid re-borrowing the model mid-loop.
-    let entries: Vec<(ElementId, usize)> = ctx.model().association_properties(class_id).to_vec();
+    // avoid re-borrowing the model mid-loop. Walk supertypes too, so a
+    // subclass `^LA_Division(firm=$firmX)` finds the `firm`/`organizations`
+    // association declared against the LA_Organization supertype.
+    let entries: Vec<(ElementId, usize)> = collect_inherited_association_properties(ctx.model(), class_id);
     if entries.is_empty() {
         return Ok(());
     }
@@ -888,6 +915,26 @@ fn populate_association_inverses(
                 _ => Vec::new(),
             };
             for target in targets {
+                // Idempotency guard — match Java Pure's `New.java:318`
+                // (`if (!currentValues.contains(instance))`). Without this,
+                // each pass through `populate_association_inverses` would
+                // append a fresh entry, so the same Copy that calls the
+                // helper multiple times (carried + plain + per-path-head
+                // synthetic) would double-bind the inverse on every shared
+                // target. Read the target's current inverse-slot values
+                // and skip the `mutate_add` if `obj` is already present
+                // by ObjectId. This is also a precondition for Lane A's
+                // Step 3 — the end-of-Copy single re-walk would otherwise
+                // regress `testDeepCopyWithAssociation1` (`gsNYC.employees`
+                // would receive `$bob` twice).
+                let already_present = ctx
+                    .heap()
+                    .get_property_values(target, inverse_name.as_str())
+                    .map(|vs| vs.iter().any(|v| matches!(v, Value::Object(id) if *id == obj)))
+                    .unwrap_or(false);
+                if already_present {
+                    continue;
+                }
                 ctx.heap_mut()
                     .mutate_add(target, inverse_name.as_str(), &[Value::Object(obj)])?;
             }
@@ -1079,7 +1126,7 @@ fn apply_path_property_updates(
     source_id: ObjectId,
     target_id: ObjectId,
     kvs: &[Value],
-) -> Result<(), PureException> {
+) -> Result<Vec<ObjectId>, PureException> {
     use std::collections::BTreeMap;
 
     // Group `(first_segment → [(rest_path, value, augmented), …])` so
@@ -1109,6 +1156,13 @@ fn apply_path_property_updates(
         i += 3;
     }
 
+    // Track every clone ID produced — direct clones at this level plus
+    // any deeper clones from recursive calls. The caller (`Copy::execute`)
+    // walks each clone's classifier associations to sync inverses; without
+    // that, a cloned nested object's carried-over association slot (e.g.
+    // `firm=$firmX` on the cloned LA_Division parent) never appears in
+    // the inverse-side collection (e.g. `$firmX.organizations`).
+    let mut all_clones: Vec<ObjectId> = Vec::new();
     for (head, updates) in groups {
         let nested = ctx.heap().get_property_values(source_id, head.as_str())?;
         let mut cloned: Vec<Value> = Vec::with_capacity(nested.len());
@@ -1120,6 +1174,7 @@ fn apply_path_property_updates(
                 .into());
             };
             let clone_id = clone_heap_object(ctx, *inner_id)?;
+            all_clones.push(clone_id);
             // Group updates between leaf-set ('name = "X"') and
             // further-nested path-set ('address.name = "X"' against this
             // clone). Multi-level paths recurse via
@@ -1138,12 +1193,121 @@ fn apply_path_property_updates(
             }
             apply_key_value_triples(ctx, clone_id, &leaf_kvs)?;
             if !nested_path_kvs.is_empty() {
-                apply_path_property_updates(ctx, *inner_id, clone_id, &nested_path_kvs)?;
+                let nested_clones =
+                    apply_path_property_updates(ctx, *inner_id, clone_id, &nested_path_kvs)?;
+                all_clones.extend(nested_clones);
             }
             cloned.push(Value::Object(clone_id));
         }
         ctx.heap_mut()
             .mutate_set(target_id, head.as_str(), &cloned)?;
+    }
+    Ok(all_clones)
+}
+
+/// Walks the supertype chain of `class_id` and accumulates every
+/// association entry (`(association_id, prop_idx_pointing_to_self)`)
+/// the class participates in — directly or via inheritance. The compiler
+/// indexes association_properties only on the property's *declared*
+/// target type (`PureModel::association_properties` keyed by the type
+/// the association declared), so a subclass inherits no entries from
+/// `model.derived.association_properties` directly. Without walking
+/// supertypes, `^LA_Division(firm=$firmX)` (where `firm` is declared
+/// on `LA_Organization`'s `LA_FirmOrganizations` association) wouldn't
+/// produce any inverse on `$firmX.organizations`. Mirrors Java Pure's
+/// `_ClassAccessor.allAssociations()`.
+fn collect_inherited_association_properties(
+    model: &legend_pure_parser_pure::model::PureModel,
+    class_id: ElementId,
+) -> Vec<(ElementId, usize)> {
+    use legend_pure_parser_pure::types::TypeExpr;
+    let mut acc: Vec<(ElementId, usize)> = Vec::new();
+    let mut seen: std::collections::HashSet<(ElementId, usize)> = std::collections::HashSet::new();
+    let mut visited: std::collections::HashSet<ElementId> = std::collections::HashSet::new();
+    let mut stack: Vec<ElementId> = vec![class_id];
+    while let Some(cid) = stack.pop() {
+        if !visited.insert(cid) {
+            continue;
+        }
+        for entry in model.association_properties(cid) {
+            if seen.insert(*entry) {
+                acc.push(*entry);
+            }
+        }
+        if let Element::Class(c) = model.get_element(cid) {
+            for st in &c.super_types {
+                if let TypeExpr::Named { element, .. } = st {
+                    stack.push(*element);
+                }
+            }
+        }
+    }
+    acc
+}
+
+/// Java-faithful end-of-Copy inverse synchronisation
+/// (parity with `New.java::updateReverseProperties` invoked from
+/// `Copy.java:236`). Walks every association the object's classifier
+/// participates in, reads the object's CURRENT slot value for the
+/// injected (forward) side, and idempotently appends `obj` to each
+/// target's inverse-side slot.
+///
+/// Reading the post-mutation slot value (rather than the kvs that
+/// built it) makes the helper insensitive to which path the value
+/// arrived through — carried-from-source, plain-override, path-clone
+/// reassignment all converge on the same final state, and the inverse
+/// reflects it exactly once. The idempotency guard mirrors Java's
+/// `if (!currentValues.contains(instance))` at `New.java:318`.
+///
+/// Scope: only the `obj` passed in. Callers that produce multiple
+/// affected instances (e.g. `Copy::execute` plus path-property clones)
+/// must invoke this helper once per object.
+#[allow(clippy::result_large_err)]
+fn sync_object_inverses(
+    ctx: &mut dyn EvalContextTrait,
+    obj: ObjectId,
+    class_id: ElementId,
+) -> Result<(), PureException> {
+    let entries: Vec<(ElementId, usize)> = collect_inherited_association_properties(ctx.model(), class_id);
+    if entries.is_empty() {
+        return Ok(());
+    }
+    for (assoc_id, prop_idx_pointing_to_self) in entries {
+        let Element::Association(assoc) = ctx.model().get_element(assoc_id) else {
+            continue;
+        };
+        if assoc.properties.len() != 2 {
+            continue; // n-ary associations: inverse isn't a single peer
+        }
+        let injected_idx = 1 - prop_idx_pointing_to_self;
+        let injected_name = assoc.properties[injected_idx].name.clone();
+        let inverse_name = assoc.properties[prop_idx_pointing_to_self].name.clone();
+
+        let targets: Vec<ObjectId> = ctx
+            .heap()
+            .get_property_values(obj, injected_name.as_str())
+            .map(|vs| {
+                vs.iter()
+                    .filter_map(|v| match v {
+                        Value::Object(id) => Some(*id),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for target in targets {
+            let already_present = ctx
+                .heap()
+                .get_property_values(target, inverse_name.as_str())
+                .map(|vs| vs.iter().any(|v| matches!(v, Value::Object(id) if *id == obj)))
+                .unwrap_or(false);
+            if already_present {
+                continue;
+            }
+            ctx.heap_mut()
+                .mutate_add(target, inverse_name.as_str(), &[Value::Object(obj)])?;
+        }
     }
     Ok(())
 }
