@@ -1369,7 +1369,7 @@ fn render_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -
             format!("[{}]", parts.join(", "))
         }
         Value::Unit => "[]".to_string(),
-        Value::Map(m) => format!("<Map size={}>", m.len()),
+        Value::Map(m) => format!("<Map size={}>", m.borrow().entries.len()),
         Value::Function(fv) => match fv.as_ref() {
             FunctionValue::Lambda(_) => "<Lambda>".to_string(),
             FunctionValue::Compiled(id) => format!("<Function:{id}>"),
@@ -1816,16 +1816,21 @@ impl NativeFunction for OpenVariableValues {
                 return Err(PureRuntimeError::type_mismatch("Function", other).into());
             }
         };
-        let mut map = im_rc::HashMap::new();
+        let mut entries = im_rc::HashMap::new();
         for (name, value) in captures {
             // Wrap each captured binding in a `List<Any>(values=…)` heap
             // object so `$map->get(name).values` round-trips through the
             // Java-shaped List container the platform tests expect.
             let list_id = ctx.heap_mut().alloc_dynamic(crate::m3_paths::LIST);
             ctx.heap_mut().mutate_add(list_id, "values", &[value])?;
-            map.insert(crate::value::ValueKey::String(name), Value::Object(list_id));
+            entries.insert(crate::value::ValueKey::String(name), Value::Object(list_id));
         }
-        Ok(Evaluated::new(Value::Map(Box::new(map))))
+        Ok(Evaluated::new(Value::Map(std::rc::Rc::new(
+            std::cell::RefCell::new(crate::value::MapState {
+                entries,
+                get_if_absent_counter: 0,
+            }),
+        ))))
     }
 
     fn signature(&self) -> &'static str {
