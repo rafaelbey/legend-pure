@@ -68,6 +68,17 @@ pub const TAGGED_VALUE: &classifier = "meta::pure::metamodel::extension::TaggedV
 /// classifier-string compared.
 pub const CLASS: &classifier = "meta::pure::metamodel::type::Class";
 
+/// `meta::pure::metamodel::function::KeyExpression` — the M3 wrapper a
+/// Pure-source `new(class, id, [keyExpressions])` call uses to package a
+/// (key, value, add) property assignment. The `NewWithKeyExpressions`
+/// native (registered separately from compiler-internal `New`) decodes
+/// these by walking the heap object's `key`, `expression`, and `add`
+/// slots — never probing the classifier string. The `KeyExpression`
+/// objects themselves are constructed via the compiler-internal fast
+/// path so this decoder is the canonical home of all KeyExpression
+/// recognition.
+pub const KEY_EXPRESSION: &classifier = "meta::pure::metamodel::function::KeyExpression";
+
 /// `meta::pure::metamodel::type::generics::GenericType` — heap wrapper for
 /// a parameterised type instance returned by `genericType(...)`.
 pub const GENERIC_TYPE: &classifier = "meta::pure::metamodel::type::generics::GenericType";

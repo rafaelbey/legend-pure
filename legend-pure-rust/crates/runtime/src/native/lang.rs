@@ -299,144 +299,367 @@ impl NativeFunction for New {
             }
         };
         let _id = &values[1]; // ignored — Pure's Java impl uses this only as a debug label
-        // Two call shapes converge on this native:
+        // Compiler-emitted shape: `[class, id, type_args_coll,
+        // type_var_values_coll, key1, val1, augmented1, …]`. The
+        // metadata slots are always present (empty Unit/Collection if
+        // no `<…>` was declared). No probing — this native is
+        // registered only for the compiler's call shape; the
+        // documented Pure-source `new(class, id, [keyExprs])` family
+        // dispatches to `NewWithKeyExpressions` instead.
         //
-        //   * Compiler-emitted `^Class<T1, T2>(prop=val, …)` — args[2] is a
-        //     Collection of resolved type-argument elements (or empty when
-        //     no `<…>` was declared); args[3..] is the flat key/value pair
-        //     sequence. Detected by args[2] being a Collection whose entries
-        //     (when present) are `Value::Element`.
-        //
-        //   * Pure-source `new(class, id)` / `new(class, id, [keyExprs])` —
-        //     direct calls to the platform's declared overloads. No type
-        //     arguments; args[2] (when present) is a Collection of
-        //     `KeyExpression` heap objects per the M3 signature. Full
-        //     KeyExpression decoding isn't implemented yet — surface the
-        //     shape and skip property hydration.
-        // Compiler-emitted `^Class<TArgs>(typeVars)(props)` flows through
-        // here as: [class, name, type_args_coll, type_var_values_coll,
-        // key1, val1, …]. Pure-source `new(class, id)` /
-        // `new(class, id, [keyExprs])` direct calls lack the metadata
-        // slots and surface as 2- or 3-arg calls — detect via the shape
-        // of position 2.
+        // The 2-arg Pure-source `new(class, id)` overload also lands
+        // here via the simple-name prefix fallback (no explicit
+        // `new_Class_1__String_1__T_1_` registration). It carries no
+        // metadata slots; type_args fall back to args[0].type_info
+        // exactly like NewWithKeyExpressions does.
+        let class_metatype_id = crate::m3_paths::resolve(ctx.model(), crate::m3_paths::CLASS);
         let mut type_args: Vec<Value> = Vec::new();
         let mut type_var_values: Vec<Value> = Vec::new();
-        let mut kvs_offset = values.len(); // default: no kvs
-        // Back-fill `type_args` from the compiler-tracked type of the
-        // first argument when the call shape is the Pure-source
-        // `new(class, id)` family (no explicit type-arg metadata in the
-        // value stream). Lowering pre-sets `type_info` on
-        // `^Class<T>(...)` calls and Pass 2.5's substitution propagates
-        // `Class<T>` through e.g. `$l1->class()` (whose param is `T[*]`
-        // and return is `Class<T>`). When `args[0]` is the result of
-        // `class()` (or any other `Class<X>`-typed expression),
-        // `args[0].type_info.type_expr` is `Named{Class_metatype,
-        // [Named{X, [innerArgs...]}]}` and we want `__typeArguments` on
-        // the new instance to be `innerArgs` — i.e., the type
-        // arguments of the *target* class, not the wrapping `Class<>`.
-        // Resolve the M3 Class metatype ElementId once and compare by
-        // identity — never by classifier string. The check guards the
-        // back-fill against any non-`Class<X>`-shaped first arg. The
-        // canonical FQN lives in `m3_paths::CLASS` so any future move
-        // of the Class metatype's package only needs updating in one
-        // place.
-        let class_metatype_id = crate::m3_paths::resolve(ctx.model(), crate::m3_paths::CLASS);
-        if !args.is_empty()
-            && let Some(ti) = args[0].type_info.as_deref()
-            && let legend_pure_parser_pure::types::TypeExpr::Named {
-                element: outer_eid,
-                type_arguments: outer_args,
-                ..
-            } = &ti.type_expr
-            && Some(*outer_eid) == class_metatype_id
-            && let Some(legend_pure_parser_pure::types::TypeExpr::Named {
-                type_arguments: inner_args,
-                ..
-            }) = outer_args.first()
-            && !inner_args.is_empty()
-        {
-            for ta in inner_args {
-                if let legend_pure_parser_pure::types::TypeExpr::Named { element, .. } = ta {
-                    type_args.push(Value::Element(*element));
-                }
-            }
-            tracing::debug!(?type_args, "New::execute: back-filled type_args from args[0].type_info");
-        }
+        let mut kvs_offset = 2;
         if values.len() >= 3 {
-            // Probe whether position 2 looks like the compiler-emitted
-            // type-args slot (Unit, single Element, or Collection of
-            // Elements only) — anything else is a Pure-source call shape
-            // and the metadata slots aren't there.
-            let pos2_is_type_args = match &values[2] {
-                Value::Unit | Value::Element(_) => true,
-                Value::Collection(coll) => coll.iter().all(|v| matches!(v, Value::Element(_))),
-                _ => false,
-            };
-            if pos2_is_type_args {
-                match &values[2] {
-                    Value::Collection(coll) => type_args = coll.iter().cloned().collect(),
-                    Value::Element(_) => type_args = vec![values[2].clone()],
-                    _ => {}
-                }
-                if values.len() >= 4 {
-                    match &values[3] {
-                        Value::Unit => {}
-                        Value::Collection(coll) => {
-                            type_var_values = coll.iter().cloned().collect();
-                        }
-                        other => {
-                            type_var_values = vec![other.clone()];
-                        }
+            match &values[2] {
+                Value::Unit => {}
+                Value::Element(_) => type_args = vec![values[2].clone()],
+                Value::Collection(coll) => type_args = coll.iter().cloned().collect(),
+                _ => {}
+            }
+            if values.len() >= 4 {
+                match &values[3] {
+                    Value::Unit => {}
+                    Value::Collection(coll) => {
+                        type_var_values = coll.iter().cloned().collect();
                     }
-                    kvs_offset = 4;
-                } else {
-                    kvs_offset = 3;
+                    other => type_var_values = vec![other.clone()],
                 }
-            } else if matches!(&values[2], Value::Collection(_)) {
-                // Pure-source `new(class, id, [keyExprs])` — KeyExpression
-                // hydration is a separate backlog item. Skip the slot.
-                kvs_offset = values.len();
+                kvs_offset = 4;
             } else {
-                // Old-style flat key/value pairs starting at position 2 —
-                // compiler no longer emits this shape, but tolerate it.
-                kvs_offset = 2;
+                kvs_offset = 3;
             }
         }
-        let classifier = class_fqn(ctx.model(), class_id);
-
-        // Shortcut: `^LambdaFunction(expressionSequence = <lambda>)` is the
-        // surveyor's lambda-cloning idiom. When the construction's only
-        // keyword is `expressionSequence` carrying a single Function value,
-        // return that Function directly instead of allocating a heap object.
-        // This keeps the round-trip `$fn.expressionSequence` →
-        // `^LambdaFunction(expressionSequence=…)` → `->evaluate([])`
-        // working without requiring full `ValueSpecification` heap modelling
-        // on the lambda body. See boolean/and.pure's
-        // `testShortCircuitInDynamicEvaluation` for the motivating pattern.
-        if is_lambda_function_class(ctx.model(), class_id)
-            && let Some(fn_val) = try_lambda_shortcut(&values[kvs_offset..])
-        {
-            return Ok(Evaluated::new(fn_val));
+        // Pure-source 2-arg shape (no metadata slots): back-fill from
+        // args[0].type_info. Only fires when the explicit slot above
+        // didn't already provide them.
+        if type_args.is_empty() {
+            type_args = back_fill_type_args(args, class_metatype_id);
         }
-
-        let obj = ctx.heap_mut().alloc_dynamic(classifier);
-        if !type_args.is_empty() {
-            ctx.heap_mut()
-                .mutate_set(obj, "__typeArguments", &type_args)?;
-        }
-        if !type_var_values.is_empty() {
-            ctx.heap_mut()
-                .mutate_set(obj, "__typeVariableValues", &type_var_values)?;
-        }
-        apply_key_value_triples(ctx, obj, &values[kvs_offset..])?;
-        populate_association_inverses(ctx, obj, class_id, &values[kvs_offset..])?;
-        evaluate_class_constraints(ctx, class_id, obj, &type_var_values)?;
-        Ok(Evaluated::new(Value::Object(obj)))
+        let triples: Vec<(SmolStr, Vec<Value>, bool)> =
+            triples_from_flat_kv_stream(&values[kvs_offset..])?;
+        finish_construction(
+            ctx,
+            class_id,
+            type_args,
+            type_var_values,
+            triples,
+            /*lambda_shortcut_args*/ Some(&values[kvs_offset..]),
+        )
     }
 
     fn signature(&self) -> &'static str {
         "new<T>(class:Class<T>[1], id:String[1], keyExpressions:KeyExpression[*]):T[1]"
     }
+}
+
+/// Pure
+/// `new<T>(class:Class<T>[1], id:String[1], keyExpressions:KeyExpression[*]):T[1]`
+///
+/// The platform-declared overload that takes a list of M3
+/// `KeyExpression` heap objects (each carrying `key:InstanceValue` and
+/// `expression:InstanceValue`). Distinct from the compiler-internal
+/// `New` native — the compiler's `^Class(prop=val)` lowering still
+/// targets the flat-triple shape (see `New`); this native handles
+/// Pure-source `new(class, '', [^KeyExpression(...)])` calls.
+///
+/// Decodes each KeyExpression by reading its `key`, `expression`, and
+/// `add` slots, then funnels through the shared `finish_construction`
+/// path so heap allocation, `__typeArguments` back-fill, association
+/// inverses, and constraint evaluation are identical for both
+/// overloads. Recognition uses M3 identity (`m3_paths::KEY_EXPRESSION`
+/// resolved to its `ElementId`); never classifier-string compared.
+#[derive(Debug)]
+pub struct NewWithKeyExpressions;
+
+impl NativeFunction for NewWithKeyExpressions {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        if values.len() < 2 {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "new(class, id, [keyExpressions]): expected at least 2 arguments, got {}",
+                values.len()
+            ))
+            .into());
+        }
+        let class_id = match &values[0] {
+            Value::Element(id) => *id,
+            other => return Err(PureRuntimeError::type_mismatch("Class", other).into()),
+        };
+        let _id = &values[1];
+        // Back-fill type_args from the compiler-tracked type of args[0]
+        // (Lane B infrastructure). When args[0] is a `Class<X>`-typed
+        // expression — e.g. the result of `$l1->class()` whose Pass 2.5
+        // type is `Class<List<String>>` — extract the inner `<...>` for
+        // the new instance's `__typeArguments`. M3 identity throughout:
+        // the outer-element check uses `m3_paths::CLASS`'s resolved
+        // ElementId, never classifier strings.
+        let class_metatype_id = crate::m3_paths::resolve(ctx.model(), crate::m3_paths::CLASS);
+        let type_args = back_fill_type_args(args, class_metatype_id);
+        // Decode the KeyExpression collection (or unwrapped singleton)
+        // using M3 identity — see `decode_key_expressions`.
+        let key_expr_id = crate::m3_paths::resolve(ctx.model(), crate::m3_paths::KEY_EXPRESSION);
+        let key_expr_payload: Vec<&Value> = if values.len() >= 3 {
+            match &values[2] {
+                Value::Collection(coll) => coll.iter().collect(),
+                Value::Unit => Vec::new(),
+                single => vec![single],
+            }
+        } else {
+            Vec::new()
+        };
+        let triples = decode_key_expressions(ctx, key_expr_id, &key_expr_payload)?;
+        finish_construction(
+            ctx,
+            class_id,
+            type_args,
+            Vec::new(),
+            triples,
+            /*lambda_shortcut_args*/ None,
+        )
+    }
+
+    fn signature(&self) -> &'static str {
+        "new<T>(class:Class<T>[1], id:String[1], keyExpressions:KeyExpression[*]):T[1]"
+    }
+}
+
+/// Read parametric type-args off `args[0].type_info` when the inferred
+/// type is `Class<X<...>>` and return the inner `<...>` as a list of
+/// `Value::Element`. Identity-based: the outer element must match the
+/// resolved `m3_paths::CLASS` id. Empty when args is empty, type_info
+/// is missing, or the shape doesn't match.
+fn back_fill_type_args(args: &[ValueSpec], class_metatype_id: Option<ElementId>) -> Vec<Value> {
+    let mut type_args = Vec::new();
+    if !args.is_empty()
+        && let Some(ti) = args[0].type_info.as_deref()
+        && let legend_pure_parser_pure::types::TypeExpr::Named {
+            element: outer_eid,
+            type_arguments: outer_args,
+            ..
+        } = &ti.type_expr
+        && Some(*outer_eid) == class_metatype_id
+        && let Some(legend_pure_parser_pure::types::TypeExpr::Named {
+            type_arguments: inner_args,
+            ..
+        }) = outer_args.first()
+        && !inner_args.is_empty()
+    {
+        for ta in inner_args {
+            if let legend_pure_parser_pure::types::TypeExpr::Named { element, .. } = ta {
+                type_args.push(Value::Element(*element));
+            }
+        }
+    }
+    type_args
+}
+
+/// Walk an M3 KeyExpression collection and return the canonical
+/// `(name, values, augmented)` triple stream the construction helpers
+/// expect. Identity check uses the pre-resolved KeyExpression M3
+/// element id — never the classifier string. Each KeyExpression's
+/// `key` slot is expected to wrap a String value (directly or inside
+/// an InstanceValue's `.values`); the `expression` slot's value(s)
+/// flow through unchanged. The `add` slot defaults to `false` when
+/// absent or non-Boolean (matches `^KeyExpression(key=…, expression=…)`
+/// constructions that don't set the augmented flag).
+#[allow(clippy::result_large_err)]
+fn decode_key_expressions(
+    ctx: &mut dyn EvalContextTrait,
+    key_expr_id: Option<ElementId>,
+    payload: &[&Value],
+) -> Result<Vec<(SmolStr, Vec<Value>, bool)>, PureException> {
+    let mut out = Vec::with_capacity(payload.len());
+    for v in payload {
+        let Value::Object(obj_id) = v else { continue };
+        // Identity gate — only walk objects classified as
+        // KeyExpression. Non-KeyExpression objects in the collection
+        // are silently skipped so the helper composes with mixed
+        // payloads.
+        let classifier = ctx.heap().classifier(*obj_id)?.to_owned();
+        let resolved = crate::m3_paths::resolve(ctx.model(), &classifier);
+        if resolved != key_expr_id {
+            continue;
+        }
+        let key_vals = ctx.heap().get_property_values(*obj_id, "key")?;
+        let key_str = unwrap_instance_value_string(&key_vals.iter().cloned().collect::<Vec<_>>(), ctx)?;
+        let expr_vals = ctx.heap().get_property_values(*obj_id, "expression")?;
+        let expr_payload: Vec<Value> = expr_vals.iter().cloned().collect();
+        let expression_values = unwrap_instance_value_list(&expr_payload, ctx)?;
+        let add_vals = ctx.heap().get_property_values(*obj_id, "add")?;
+        let add = matches!(add_vals.iter().next(), Some(Value::Boolean(true)));
+        out.push((key_str, expression_values, add));
+    }
+    Ok(out)
+}
+
+/// Read the property name a `KeyExpression.key` slot holds. The slot
+/// can carry either a bare `Value::String` or an `InstanceValue`
+/// wrapper whose `.values` contains the string (the canonical M3
+/// shape produced by `^KeyExpression(key=^InstanceValue(values='prop',
+/// …))`). Errors for any other shape so misuse surfaces eagerly
+/// instead of silently dropping the assignment.
+#[allow(clippy::result_large_err)]
+fn unwrap_instance_value_string(
+    payload: &[Value],
+    ctx: &mut dyn EvalContextTrait,
+) -> Result<SmolStr, PureException> {
+    let Some(first) = payload.first() else {
+        return Err(PureRuntimeError::EvaluationError(
+            "KeyExpression.key is empty".into(),
+        )
+        .into());
+    };
+    match first {
+        Value::String(s) => Ok(s.clone()),
+        Value::Object(obj_id) => {
+            let inner = ctx.heap().get_property_values(*obj_id, "values")?;
+            match inner.iter().next() {
+                Some(Value::String(s)) => Ok(s.clone()),
+                _ => Err(PureRuntimeError::EvaluationError(
+                    "KeyExpression.key's InstanceValue.values is missing or not a String".into(),
+                )
+                .into()),
+            }
+        }
+        other => Err(PureRuntimeError::type_mismatch("String or InstanceValue", other).into()),
+    }
+}
+
+/// Read the value(s) a `KeyExpression.expression` slot holds. Unwraps
+/// an `InstanceValue` wrapper around a literal/collection (Pure's
+/// canonical M3 shape) into its `.values` payload. A bare value is
+/// passed through unchanged.
+#[allow(clippy::result_large_err)]
+fn unwrap_instance_value_list(
+    payload: &[Value],
+    ctx: &mut dyn EvalContextTrait,
+) -> Result<Vec<Value>, PureException> {
+    if payload.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Single InstanceValue wrapper — unwrap to its `values` payload.
+    if let [Value::Object(obj_id)] = payload {
+        let inner = ctx.heap().get_property_values(*obj_id, "values")?;
+        if !inner.is_empty() {
+            return Ok(inner.iter().cloned().collect());
+        }
+    }
+    // Bare value(s) — pass through.
+    Ok(payload.to_vec())
+}
+
+/// Convert the compiler-emitted flat `[k, v, augmented, k, v, augmented, …]`
+/// stream into the canonical triple form the construction helpers
+/// consume. Mirrors `apply_key_value_triples`'s arity guard so the
+/// upstream check fires here once instead of in every call site.
+#[allow(clippy::result_large_err)]
+fn triples_from_flat_kv_stream(
+    kvs: &[Value],
+) -> Result<Vec<(SmolStr, Vec<Value>, bool)>, PureException> {
+    if kvs.len() % 3 != 0 {
+        return Err(PureRuntimeError::EvaluationError(format!(
+            "object construction: expected (key, value, augmented) triples, got {} extra arguments",
+            kvs.len()
+        ))
+        .into());
+    }
+    let mut out = Vec::with_capacity(kvs.len() / 3);
+    let mut i = 0;
+    while i < kvs.len() {
+        let key = kvs[i].as_string()?.clone();
+        let value = kvs[i + 1].clone();
+        let augmented = matches!(&kvs[i + 2], Value::Boolean(true));
+        let values = match value {
+            Value::Collection(coll) => coll.iter().cloned().collect(),
+            Value::Unit => Vec::new(),
+            other => vec![other],
+        };
+        out.push((key, values, augmented));
+        i += 3;
+    }
+    Ok(out)
+}
+
+/// Shared tail of both `New` overloads. Allocates the heap object,
+/// applies type-arg + type-var-value metadata, applies the property
+/// triples, fires off association inverse propagation, and evaluates
+/// constraints. Lambda shortcut: when the construction is targeting
+/// `LambdaFunction`-shaped classes and the payload reduces to a
+/// single Function value (the `^LambdaFunction(expressionSequence =
+/// $fn)` clone idiom), the shortcut returns the function value
+/// directly without allocating — only the compiler-emitted call shape
+/// passes the shortcut probe (Pure-source KeyExpression construction
+/// of a Function would be unusual; left out for now).
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
+fn finish_construction(
+    ctx: &mut dyn EvalContextTrait,
+    class_id: ElementId,
+    type_args: Vec<Value>,
+    type_var_values: Vec<Value>,
+    triples: Vec<(SmolStr, Vec<Value>, bool)>,
+    lambda_shortcut_args: Option<&[Value]>,
+) -> Result<Evaluated, PureException> {
+    let classifier = class_fqn(ctx.model(), class_id);
+    if is_lambda_function_class(ctx.model(), class_id)
+        && let Some(args_for_shortcut) = lambda_shortcut_args
+        && let Some(fn_val) = try_lambda_shortcut(args_for_shortcut)
+    {
+        return Ok(Evaluated::new(fn_val));
+    }
+
+    let obj = ctx.heap_mut().alloc_dynamic(classifier);
+    if !type_args.is_empty() {
+        ctx.heap_mut()
+            .mutate_set(obj, "__typeArguments", &type_args)?;
+    }
+    if !type_var_values.is_empty() {
+        ctx.heap_mut()
+            .mutate_set(obj, "__typeVariableValues", &type_var_values)?;
+    }
+    apply_property_triples(ctx, obj, &triples)?;
+    // Re-flatten triples back to the kv-stream shape that
+    // `populate_association_inverses` consumes — the helper drives
+    // its inverse walk off `(key, value, augmented)` triples already,
+    // so this is a thin re-pack rather than a reimplementation.
+    let mut flat: Vec<Value> = Vec::with_capacity(triples.len() * 3);
+    for (k, v, a) in &triples {
+        flat.push(Value::String(k.clone()));
+        flat.push(Value::from_vec(v.clone()));
+        flat.push(Value::Boolean(*a));
+    }
+    populate_association_inverses(ctx, obj, class_id, &flat)?;
+    evaluate_class_constraints(ctx, class_id, obj, &type_var_values)?;
+    Ok(Evaluated::new(Value::Object(obj)))
+}
+
+/// Apply each `(name, values, augmented)` triple to the heap object
+/// — `mutate_add` for `+=` (augmented), `mutate_set` for `=`
+/// (replace).
+#[allow(clippy::result_large_err)]
+fn apply_property_triples(
+    ctx: &mut dyn EvalContextTrait,
+    obj: ObjectId,
+    triples: &[(SmolStr, Vec<Value>, bool)],
+) -> Result<(), PureException> {
+    for (key, values, augmented) in triples {
+        if *augmented {
+            ctx.heap_mut().mutate_add(obj, key.as_str(), values)?;
+        } else {
+            ctx.heap_mut().mutate_set(obj, key.as_str(), values)?;
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1502,11 +1725,33 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("letFunction_String_1__T_m__T_m_", LetFunction);
     registry.register("if_Boolean_1__Function_1__Function_1__T_m_", If);
     registry.register("print_Any_MANY__Integer_1__Nil_0_", Print);
-    // `new` and `copy` are invoked through the simple-name prefix fallback —
-    // the compiler lowers `^Class(...)` / `^$src(...)` with raw `"new"` /
-    // `"copy"` function names and no resolved ElementId, so we register
-    // under a key that begins with the simple name.
-    registry.register("new_Class_1__String_1__KeyExpression_MANY__T_1_", New);
+    // `new` is split across two natives by call shape:
+    //
+    // - `New` handles the compiler-emitted `^Class<T>(prop=val, …)`
+    //   shape (`[class, id, type_args, type_var_values, k1, v1, a1, …]`).
+    //   Registered under a synthetic FQN whose mangled segment sorts
+    //   alphabetically *before* the KeyExpression overload so the
+    //   simple-name prefix fallback (`find_by_prefix("new")` → smallest
+    //   key wins) routes compiler-emitted calls here. The `Any` segment
+    //   is the canonical "any-shape positional payload" placeholder; it
+    //   doesn't correspond to a Pure-declared overload.
+    //
+    // - `NewWithKeyExpressions` handles the platform-declared
+    //   `new(class, id, [^KeyExpression(...)])` shape. Resolved by exact
+    //   mangled-name lookup when Pure-source code calls `new(...)` — the
+    //   resolver picks this overload by signature, and dispatch hits it
+    //   directly without falling through to the prefix fallback.
+    //
+    // Splitting eliminates the previous heuristic probing inside `New`
+    // and lets each native trust its declared shape.
+    registry.register(
+        "new_Class_1__String_1__Any_MANY__T_1_",
+        New,
+    );
+    registry.register(
+        "new_Class_1__String_1__KeyExpression_MANY__T_1_",
+        NewWithKeyExpressions,
+    );
     registry.register("copy_T_1__KeyExpression_MANY__T_1_", Copy);
     // Basic dynamicNew — Class / GenericType receivers, no override hooks.
     // The hook-bearing overloads (property / default / post-init lambdas)
