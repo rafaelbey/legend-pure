@@ -1290,49 +1290,6 @@ fn class_fqn(model: &PureModel, id: ElementId) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// getHiddenPayload — read the GetterOverride wrapper's payload slot
-// ---------------------------------------------------------------------------
-
-/// Pure `getHiddenPayload(o:Any[1]):Any[0..1]`
-///
-/// Reads `o.elementOverride.hiddenPayload` — the opaque slot
-/// `dynamicNew(…, hiddenPayload)` parks for the override lambdas to
-/// pull during property dispatch (test pattern:
-/// `^D_D(name = $o->cast(@D_A).a + $o->getHiddenPayload()->cast(@String)->toOne())`).
-/// Returns `Value::Unit` when the receiver has no `elementOverride`
-/// (i.e., wasn't constructed via the hook-bearing `dynamicNew`
-/// overloads) or the payload is unset.
-#[derive(Debug)]
-pub struct GetHiddenPayload;
-
-impl NativeFunction for GetHiddenPayload {
-    fn execute(
-        &self,
-        args: &[ValueSpec],
-        ctx: &mut dyn EvalContextTrait,
-    ) -> Result<Evaluated, PureException> {
-        let values = force_all(args, ctx)?;
-        expect_args("getHiddenPayload", &values, 1)?;
-        let Value::Object(obj_id) = &values[0] else {
-            return Ok(Evaluated::new(Value::Unit));
-        };
-        let override_vals = ctx.heap().get_property_values(*obj_id, "elementOverride")?;
-        let Some(Value::Object(override_id)) = override_vals.iter().next().cloned() else {
-            return Ok(Evaluated::new(Value::Unit));
-        };
-        let payload = ctx
-            .heap()
-            .get_property_values(override_id, "hiddenPayload")?;
-        let collected: Vec<Value> = payload.iter().cloned().collect();
-        Ok(Evaluated::new(Value::from_vec(collected)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "getHiddenPayload(o:Any[1]):Any[0..1]"
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -1352,7 +1309,6 @@ pub fn register(registry: &mut NativeRegistry) {
     // share the same mangled `dynamicNew_*` family and are registered
     // against the same native; unused hook args are silently discarded
     // because the basic construction path doesn't invoke them.
-    registry.register("getHiddenPayload_Any_1__Any_1_", GetHiddenPayload);
     registry.register("dynamicNew_Class_1__KeyValue_MANY__Any_1_", DynamicNew);
     registry.register(
         "dynamicNew_GenericType_1__KeyValue_MANY__Any_1_",
