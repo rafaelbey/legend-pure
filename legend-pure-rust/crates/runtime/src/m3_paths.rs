@@ -132,6 +132,15 @@ pub const FUNCTION_TYPE: &classifier = "meta::pure::metamodel::type::FunctionTyp
 /// cardinalities through the reflective metamodel.
 pub const MULTIPLICITY: &classifier = "meta::pure::metamodel::multiplicity::Multiplicity";
 
+/// `meta::pure::metamodel::multiplicity::MultiplicityValue` — heap wrapper
+/// for the `lowerBound` / `upperBound` slot value on a Multiplicity
+/// (`MultiplicityValue.value : Integer[1]`). Required so reflective
+/// reads like `$m.lowerBound.value` resolve to a heap object whose
+/// `value` slot is the bound integer (per
+/// `legend-pure-core/.../platform/pure/grammar/m3.pure:1400`).
+pub const MULTIPLICITY_VALUE: &classifier =
+    "meta::pure::metamodel::multiplicity::MultiplicityValue";
+
 /// `meta::pure::metamodel::valuespecification::InstanceValue` —
 /// AST-metamodel node for a literal / collection / pre-computed value.
 /// Produced by `deactivate(lit)` or `deactivate([collection])`.
