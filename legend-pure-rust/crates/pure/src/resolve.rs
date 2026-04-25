@@ -870,11 +870,27 @@ fn infer_type_from_valuespec(
             // Compute the LUB (least upper bound) of all element types.
             // [1, 2, 3] → Integer, [1, 2.5] → Number, ["a", "b"] → String.
             let mut lub: Option<ElementId> = None;
-            for elem in elements {
-                if let Some(elem_type) = infer_type_from_valuespec(elem, model, var_types) {
+            for (i, elem) in elements.iter().enumerate() {
+                let elem_type = infer_type_from_valuespec(elem, model, var_types);
+                tracing::trace!(
+                    i,
+                    elem_kind = format!("{:?}", elem.kind).chars().take(80).collect::<String>(),
+                    elem_type = ?elem_type.map(|e| model.element_name(e).to_string()),
+                    "Collection LUB element"
+                );
+                if let Some(elem_type) = elem_type {
                     lub = Some(match lub {
                         None => elem_type,
-                        Some(current) => least_upper_bound(current, elem_type, model),
+                        Some(current) => {
+                            let merged = least_upper_bound(current, elem_type, model);
+                            tracing::trace!(
+                                lhs = %model.element_name(current),
+                                rhs = %model.element_name(elem_type),
+                                merged = %model.element_name(merged),
+                                "LUB merge"
+                            );
+                            merged
+                        }
                     });
                 }
             }

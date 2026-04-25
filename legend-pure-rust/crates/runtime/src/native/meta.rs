@@ -2253,13 +2253,20 @@ fn reactivate_value(value: &Value, ctx: &mut dyn EvalContextTrait) -> Result<Val
         // without going through deactivate first. Preserve that
         // invoke-on-raw-function shim.
         if let Value::Function(_) = value {
+            tracing::debug!("reactivate: raw Function value → invoke with no args");
             return ctx.call_function(value, &[]);
         }
+        tracing::trace!(
+            value_type = value.type_name(),
+            "reactivate: non-Object pass-through"
+        );
         return Ok(value.clone());
     };
     let classifier = ctx.heap().classifier(*obj_id)?.to_string();
+    tracing::debug!(?obj_id, %classifier, "reactivate: classifier dispatch");
     let Some(classifier_id) = crate::m3_paths::resolve(ctx.model(), &classifier) else {
         // Unknown classifier — not a spec wrapper we know how to walk.
+        tracing::trace!(%classifier, "reactivate: unresolvable classifier — pass-through");
         return Ok(value.clone());
     };
 
@@ -2271,17 +2278,21 @@ fn reactivate_value(value: &Value, ctx: &mut dyn EvalContextTrait) -> Result<Val
     // M3 evolution wouldn't be misrouted.
     let model = ctx.model();
     if classifier_extends_m3(model, classifier_id, crate::m3_paths::INSTANCE_VALUE) {
+        tracing::debug!("reactivate: → instance_value handler");
         return reactivate_instance_value(*obj_id, ctx);
     }
     if classifier_extends_m3(model, classifier_id, crate::m3_paths::VARIABLE_EXPRESSION) {
+        tracing::debug!("reactivate: → variable_expression handler");
         return reactivate_variable_expression(*obj_id, ctx);
     }
     if classifier_extends_m3(model, classifier_id, crate::m3_paths::FUNCTION_EXPRESSION) {
+        tracing::debug!("reactivate: → function_expression handler");
         return reactivate_function_expression(*obj_id, ctx);
     }
 
     // Any other heap object — not a deactivated spec we know about; pass
     // through unchanged.
+    tracing::trace!(%classifier, "reactivate: classifier not a known spec wrapper — pass-through");
     Ok(value.clone())
 }
 
