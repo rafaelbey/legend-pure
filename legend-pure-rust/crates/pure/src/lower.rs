@@ -280,13 +280,36 @@ fn lower_arithmetic(
 /// The single Collection argument matches the Java Pure dispatch shape —
 /// `op.execute(params)` then reads `params.get(0).values` to iterate.
 ///
-/// For `plus`, when either operand is statically recognisable as a
-/// String (literal or an already-resolved `plus_String_*` subtree),
-/// emit the exact mangled FQN `plus_String_MANY__String_1_` so the
-/// runtime dispatches directly to `StringPlus` instead of falling
-/// through the prefix fallback to the numeric variant. Until Pass 2
-/// type inference is wired into operator lowering this is our
-/// compile-time hook for `'prefix' + $x` chains.
+/// Routes overload selection through `resolve_function_call` — the same
+/// machinery every other call site uses. The resolver narrows
+/// `plus(Number[*])` vs `plus(String[*])` (etc.) by inferring the
+/// operand collection's LUB type from `infer_type_from_valuespec`, which
+/// transparently handles `cast(@T)` (via generic substitution on the
+/// resolved `cast<T>` signature), `PropertyAccess` (declared property
+/// type), variable declarations, literals, and nested call returns.
+///
+/// **Encapsulation:** operator code never special-cases `cast` or any
+/// other type-shaping primitive; downstream of any value, the operator
+/// sees the value's *declared type*, not its expression shape. New
+/// type-shaping primitives (e.g. multiplicity coercions like `toOne`)
+/// pick up the same treatment as soon as their inference lives in
+/// `infer_type_from_valuespec`.
+///
+/// **Fail-fast:** when the resolver can't pick a unique overload, it
+/// pushes a diagnostic and returns `None`; we propagate `None` so the
+/// caller sees a compile-time miss instead of the runtime falling
+/// through prefix-name dispatch (which used to silently pick numeric
+/// `plus` and fail on String operands at runtime). Trace-driven
+/// debugging: run with
+///     RUST_LOG=legend_pure_parser_pure::resolve=debug
+/// to see per-call narrowing decisions and identify the operand whose
+/// type couldn't be inferred.
+#[tracing::instrument(
+    name = "variadic_op",
+    level = "debug",
+    skip(left, right, ctx, errors),
+    fields(op = %name, src = %source_info.source, line = source_info.start_line),
+)]
 fn variadic_op(
     name: &str,
     left: &ast_expr::Expression,
@@ -297,187 +320,41 @@ fn variadic_op(
 ) -> Option<ValueSpec> {
     let l = lower_expression(left, ctx, errors)?;
     let r = lower_expression(right, ctx, errors)?;
-    let resolved_name: SmolStr = if name == "plus"
-        && (is_string_typed_spec(&l.kind)
-            || is_string_typed_spec(&r.kind)
-            || is_string_typed_var(&l.kind, ctx)
-            || is_string_typed_var(&r.kind, ctx)
-            || infer_static_element(&l.kind, ctx) == Some(crate::bootstrap::STRING_ID)
-            || infer_static_element(&r.kind, ctx) == Some(crate::bootstrap::STRING_ID))
-    {
-        SmolStr::new_static("plus_String_MANY__String_1_")
-    } else {
-        SmolStr::new(name)
-    };
     let collection = untyped(
         ExprKind::Collection {
             elements: vec![l, r],
         },
         source_info.clone(),
     );
+    let arguments = vec![collection];
+    let ptr = synthetic_unqualified_ptr(name, source_info);
+    let function_id =
+        resolve::resolve_function_call(&ptr, 1, &arguments, source_info, ctx, errors)?;
     Some(untyped(
         ExprKind::FunctionCall {
-            function: None,
-            function_name: resolved_name,
-            arguments: vec![collection],
+            function: Some(function_id),
+            function_name: SmolStr::new(name),
+            arguments,
         },
         source_info.clone(),
     ))
 }
 
-/// Static hint: is this lowered `ExprKind` producing a String at runtime?
-/// Recognises string literals and nested `plus_String_*` calls so a chain
-/// like `'a' + $b + $c` propagates the string dispatch through every
-/// nested `+`.
-fn is_string_typed_spec(kind: &ExprKind) -> bool {
-    match kind {
-        ExprKind::StringLiteral(_) => true,
-        ExprKind::FunctionCall { function_name, .. } => {
-            function_name.as_str() == "plus_String_MANY__String_1_"
-        }
-        _ => false,
+/// Build an unqualified `PackageableElementPtr` from a bare function
+/// name, anchored at `source_info`. Lets [`variadic_op`] feed
+/// `resolve_function_call` the same shape it would receive from a
+/// user-written `plus(x, y)` call so overload resolution walks the
+/// import scopes uniformly.
+fn synthetic_unqualified_ptr(
+    name: &str,
+    source_info: &SourceInfo,
+) -> legend_pure_parser_ast::annotation::PackageableElementPtr {
+    use legend_pure_parser_ast::annotation::PackageableElementPtr;
+    PackageableElementPtr {
+        package: None,
+        name: SmolStr::new(name),
+        source_info: source_info.clone(),
     }
-}
-
-/// Static hint: is this `ExprKind` a `Variable` whose tracked type is
-/// String? Reads from `ctx.variable_types`, which is populated for
-/// function/lambda parameters and let bindings — including by Lane L6's
-/// lambda-parameter inference, so `{x, y | $x + $y}->eval('1', '2')`
-/// dispatches `+` to the String overload.
-fn is_string_typed_var(kind: &ExprKind, ctx: &ResolutionContext<'_>) -> bool {
-    let ExprKind::Variable { name } = kind else {
-        return false;
-    };
-    let Some((ty, _)) = ctx.variable_types.get(name) else {
-        return false;
-    };
-    matches!(
-        ty,
-        crate::types::TypeExpr::Named { element, .. } if *element == crate::bootstrap::STRING_ID
-    )
-}
-
-/// Best-effort static-type inference for a lowered `ExprKind`.
-///
-/// Returns the `ElementId` the expression statically produces when we
-/// can determine it from local information — variable declarations,
-/// `cast(@T)` annotations, transparent multiplicity wrappers
-/// (`toOne` / `toZeroOne` / `toMany` / `toOneMany`), nested property
-/// access, the receiver of an arrow-call, or known-shape function-call
-/// returns. `None` when the expression's type isn't locally inferrable
-/// (generic dispatch, complex method chains we don't yet model, etc.).
-///
-/// Why this exists: operator dispatch (`+` / `-` / `*` / etc.) and
-/// other compile-time decisions need the static type of operands to
-/// pick the right overload. Without inference, `$o->cast(@String).a +
-/// $b` lowers `+` to numeric `plus`, and the runtime fails on String
-/// inputs even though the cast had told the compiler `$o` is a
-/// `D_A`-shaped class with a String-typed `.a`.
-///
-/// Cast semantics — per Pure's design, `cast(@T)` is a *compile-time*
-/// type assertion: the compiler trusts that the value is `T` from
-/// then on; the runtime simply verifies. Downstream code reading the
-/// cast result should be indistinguishable from reading a value of
-/// type `T` directly. That's exactly what this helper gives back —
-/// `cast` is one branch among many, not a special case for callers.
-fn infer_static_element(
-    kind: &ExprKind,
-    ctx: &ResolutionContext<'_>,
-) -> Option<crate::ids::ElementId> {
-    match kind {
-        // Literals — direct mapping to bootstrap primitives.
-        ExprKind::StringLiteral(_) => Some(crate::bootstrap::STRING_ID),
-        ExprKind::IntegerLiteral(_) => Some(crate::bootstrap::INTEGER_ID),
-        ExprKind::FloatLiteral(_) => Some(crate::bootstrap::FLOAT_ID),
-        ExprKind::DecimalLiteral(_) => Some(crate::bootstrap::DECIMAL_ID),
-        ExprKind::BooleanLiteral(_) => Some(crate::bootstrap::BOOLEAN_ID),
-
-        // Variable refs — read the declared type from scope.
-        ExprKind::Variable { name } => match ctx.variable_types.get(name)?.0 {
-            crate::types::TypeExpr::Named { element, .. } => Some(element),
-            _ => None,
-        },
-
-        // Function calls we can introspect by name.
-        ExprKind::FunctionCall {
-            function_name,
-            arguments,
-            ..
-        } => match function_name.as_str() {
-            // `cast(@T)` lowers as `FunctionCall("cast", [target, @T])`.
-            // The compile-time type IS T — that's the whole point of cast.
-            "cast" if arguments.len() >= 2 => match &*arguments[1].kind {
-                ExprKind::TypeReference {
-                    type_expr: crate::types::TypeExpr::Named { element, .. },
-                } => Some(*element),
-                _ => None,
-            },
-            // Multiplicity coercions are type-transparent — they only
-            // change the cardinality, not the element type.
-            "toOne" | "toZeroOne" | "toMany" | "toOneMany" if !arguments.is_empty() => {
-                infer_static_element(&arguments[0].kind, ctx)
-            }
-            // `plus_String_MANY__String_1_` is the post-mangling shape
-            // of a String concatenation — known to return String.
-            "plus_String_MANY__String_1_" => Some(crate::bootstrap::STRING_ID),
-            _ => None,
-        },
-
-        // Property access — recurse on the target to find its class,
-        // then look up the property's declared type. Walks supertypes
-        // so inherited properties resolve too. Mirrors what runtime
-        // property access does, but at compile time so dispatch can
-        // see the result type.
-        ExprKind::PropertyAccess { target, property } => {
-            let target_class = infer_static_element(&target.kind, ctx)?;
-            let prop_type = lookup_property_type(target_class, property, ctx)?;
-            match prop_type {
-                crate::types::TypeExpr::Named { element, .. } => Some(element),
-                _ => None,
-            }
-        }
-
-        // A bare element ref (`Class`, `String`, …) IS the element
-        // itself — useful for chains like `D_A.properties` where the
-        // receiver is the metatype.
-        ExprKind::PackageableElementRef { element } => Some(*element),
-
-        _ => None,
-    }
-}
-
-/// Look up the declared type of a property by name on `class_id` or
-/// any of its supertypes (declaration order, breadth-first). Returns
-/// `None` when the class doesn't declare the property. Used by
-/// [`infer_static_element`] for `target.prop` chains so e.g.
-/// `cast(@D_A).a` resolves to D_A's declared `a: String[1]`.
-fn lookup_property_type(
-    class_id: crate::ids::ElementId,
-    prop_name: &str,
-    ctx: &ResolutionContext<'_>,
-) -> Option<crate::types::TypeExpr> {
-    let mut visited: std::collections::HashSet<crate::ids::ElementId> =
-        std::collections::HashSet::new();
-    let mut stack: Vec<crate::ids::ElementId> = vec![class_id];
-    while let Some(cid) = stack.pop() {
-        if !visited.insert(cid) {
-            continue;
-        }
-        let crate::model::Element::Class(c) = ctx.model.get_element(cid) else {
-            continue;
-        };
-        for p in &c.properties {
-            if p.name.as_str() == prop_name {
-                return Some(p.type_expr.clone());
-            }
-        }
-        for st in &c.super_types {
-            if let crate::types::TypeExpr::Named { element, .. } = st {
-                stack.push(*element);
-            }
-        }
-    }
-    None
 }
 
 /// Lowers comparison: `a == b` → `FunctionCall("equal", [a, b])`.
@@ -829,7 +706,6 @@ fn compute_lambda_param_expectations(
     slots: &[Option<ValueSpec>],
     ctx: &ResolutionContext<'_>,
 ) -> Vec<Option<Vec<Option<(crate::types::TypeExpr, crate::types::Multiplicity)>>>> {
-    use crate::model::Element;
     use crate::types::TypeExpr;
 
     let crate::model::Element::Function(callee_fn) = ctx.model.get_element(callee) else {
