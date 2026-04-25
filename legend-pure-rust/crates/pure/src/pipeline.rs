@@ -117,6 +117,16 @@ pub fn compile(
     // them to TypeExpr::Named { element } for subtype checking.
     resolve_m3_supertypes(&mut model);
 
+    // Inject `Any.classifierGenericType` and `Any.elementOverride`
+    // properties — m3.pure declares them on `Any` but our `m3_parser`
+    // intentionally defers parsing the dense slot expression into
+    // typed properties. Adding the bare names + resolved types here
+    // unblocks the platform `properties()` accumulator (concatenates
+    // declared + association + inherited recursively up to Any), which
+    // surveyor's `testProperties` asserts as size 7 — without these
+    // two slots the count ran short.
+    wire_any_reflective_properties(&mut model);
+
     let mut errors = Vec::new();
 
     // ---- Pass 1: Declaration ----
@@ -250,6 +260,94 @@ struct UnitMapping {
 /// Names whose *declared* class type parameter includes the same identifier
 /// (e.g. the M3 `Property` class has a type parameter `T`) remain generic —
 /// those are real type variables.
+/// Wire up `Any`'s two M3 reflective properties — `classifierGenericType:
+/// GenericType[0..1]` and `elementOverride: ElementOverride[0..1]` —
+/// after `m3_parser` has registered the rest of the metamodel.
+///
+/// The bootstrap allocates `Any` with `properties: vec![]` so the
+/// canonical slot ID stays predictable; m3.pure declares these
+/// properties via the dense `^Root.children[...]` syntax that
+/// `m3_parser` currently skips. Filling them in here keeps the
+/// reflective surface complete without re-parsing the bootstrap
+/// region or growing m3_parser to handle the slot syntax.
+///
+/// Looks up `GenericType` and `ElementOverride` by their canonical
+/// FQN and silently no-ops if either resolution fails (e.g. the
+/// model was built without the M3 metamodel registered, as in some
+/// micro-tests).
+fn wire_any_reflective_properties(model: &mut PureModel) {
+    use crate::bootstrap::{ANY_ID, BOOTSTRAP_CHUNK_ID};
+    use crate::nodes::class::Property;
+    use crate::types::{Multiplicity, TypeExpr};
+    use legend_pure_parser_ast::SourceInfo;
+
+    let synth = SourceInfo::new("<bootstrap-Any-properties>", 0, 0, 0, 0);
+    let generic_type_id = model.resolve_by_path(&[
+        SmolStr::new("meta"),
+        SmolStr::new("pure"),
+        SmolStr::new("metamodel"),
+        SmolStr::new("type"),
+        SmolStr::new("generics"),
+        SmolStr::new("GenericType"),
+    ]);
+    let element_override_id = model.resolve_by_path(&[
+        SmolStr::new("meta"),
+        SmolStr::new("pure"),
+        SmolStr::new("metamodel"),
+        SmolStr::new("type"),
+        SmolStr::new("ElementOverride"),
+    ]);
+    let Some(generic_type_id) = generic_type_id else {
+        return;
+    };
+    let Some(element_override_id) = element_override_id else {
+        return;
+    };
+
+    let chunk = &mut model.chunks[BOOTSTRAP_CHUNK_ID as usize];
+    let Element::Class(any_cls) = chunk.elements.get_mut(ANY_ID.local_idx()) else {
+        return;
+    };
+    // Guard against double-injection if the pipeline runs twice (unit
+    // tests, hot-reload scenarios) — bail when the slots are already
+    // populated.
+    if any_cls
+        .properties
+        .iter()
+        .any(|p| p.name == "classifierGenericType" || p.name == "elementOverride")
+    {
+        return;
+    }
+    any_cls.properties.push(Property {
+        name: SmolStr::new("classifierGenericType"),
+        type_expr: TypeExpr::Named {
+            element: generic_type_id,
+            type_arguments: vec![],
+            value_arguments: vec![],
+        },
+        multiplicity: Multiplicity::ZeroOrOne,
+        source_info: synth.clone(),
+        aggregation: None,
+        default_value: None,
+        stereotypes: Vec::new(),
+        tagged_values: Vec::new(),
+    });
+    any_cls.properties.push(Property {
+        name: SmolStr::new("elementOverride"),
+        type_expr: TypeExpr::Named {
+            element: element_override_id,
+            type_arguments: vec![],
+            value_arguments: vec![],
+        },
+        multiplicity: Multiplicity::ZeroOrOne,
+        source_info: synth,
+        aggregation: None,
+        default_value: None,
+        stereotypes: Vec::new(),
+        tagged_values: Vec::new(),
+    });
+}
+
 fn resolve_m3_supertypes(model: &mut PureModel) {
     use crate::bootstrap::BOOTSTRAP_CHUNK_ID;
     use crate::types::TypeExpr;
