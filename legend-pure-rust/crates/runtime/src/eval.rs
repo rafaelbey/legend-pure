@@ -1206,7 +1206,30 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                     .iter()
                     .map(|q| q.name.clone())
                     .collect(),
-                "propertiesFromAssociations" => Vec::new(),
+                // Association-injected properties: walk every association
+                // referencing this class and collect the *other* side's
+                // name (the one injected onto this class). Mirrors Java
+                // Pure's `Class.propertiesFromAssociations`. Without this
+                // the platform `properties()` accumulator (which
+                // concatenates `properties + propertiesFromAssociations
+                // + recursive(generalizations.properties)`) misses every
+                // association-side property — `testProperties` saw 4 of
+                // 7 expected entries on `CC_Address`.
+                "propertiesFromAssociations" => self
+                    .model
+                    .association_properties(id)
+                    .iter()
+                    .filter_map(|(assoc_id, prop_idx_self)| {
+                        let Element::Association(assoc) = self.model.get_element(*assoc_id) else {
+                            return None;
+                        };
+                        if assoc.properties.len() != 2 {
+                            return None;
+                        }
+                        let injected_idx = 1 - *prop_idx_self;
+                        Some(assoc.properties[injected_idx].name.clone())
+                    })
+                    .collect(),
                 _ => unreachable!("kind is one of the three above"),
             },
             _ => Vec::new(),
