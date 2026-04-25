@@ -646,16 +646,27 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             }
             Value::Element(id) => {
                 let id = *id;
-                // Function elements expose Function-value-shaped reads
-                // (`expressionSequence`, `functionName`) through the
-                // same `eval_function_property` path the
-                // `Value::Function` arm uses below — without this both
-                // `$f.expressionSequence` and `$p->eval($f)` (which
-                // routes through `apply_property_to_instance`) need
-                // to call into the Function dispatch, but only the
-                // latter does. Mirror it here so direct property
-                // access on a Function Element gets the same shape
-                // that the Property-wrapper path produces.
+                // Step 3 of the unified-reflection refactor: route
+                // Element-side property reads through the bootstrapped
+                // metamodel heap row first. When a slot has been
+                // populated (by future steps or by a prior write
+                // reaching here through `^Class<…>(…)` instance
+                // construction), the heap is the source of truth and
+                // we return its value without hitting the
+                // Element-side dispatch table at all. Falls back to
+                // `eval_function_property` (for Function elements,
+                // matching the existing dispatch) and then
+                // `eval_element_property` for everything else.
+                if let Some(oid) = target_val.as_object_id(&self.heap) {
+                    let values = self
+                        .heap
+                        .get_property_values(oid, property)
+                        .map_err(PureException::from)?;
+                    let collected: Vec<Value> = values.iter().cloned().collect();
+                    if !collected.is_empty() {
+                        return Ok(Value::from_vec(collected));
+                    }
+                }
                 if matches!(self.model.get_element(id), Element::Function(_)) {
                     let fv = FunctionValue::Compiled(id);
                     let fn_val = Value::Function(Box::new(fv.clone()));
@@ -666,9 +677,24 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 self.eval_element_property(id, property)
                     .map_err(PureException::from)
             }
-            Value::Function(fv) => self
-                .eval_function_property(fv, property, &target_val)
-                .map_err(PureException::from),
+            Value::Function(fv) => {
+                // Same heap-first routing for Function values: a
+                // compiled function-element has a metamodel row,
+                // lambdas don't (their slots are computed from the
+                // closure on demand by `eval_function_property`).
+                if let Some(oid) = target_val.as_object_id(&self.heap) {
+                    let values = self
+                        .heap
+                        .get_property_values(oid, property)
+                        .map_err(PureException::from)?;
+                    let collected: Vec<Value> = values.iter().cloned().collect();
+                    if !collected.is_empty() {
+                        return Ok(Value::from_vec(collected));
+                    }
+                }
+                self.eval_function_property(fv, property, &target_val)
+                    .map_err(PureException::from)
+            }
             // Pure auto-maps property access over a collection:
             // `persons.firstName` produces the flattened collection of every
             // `firstName` value across every person in `persons`. Recurse
