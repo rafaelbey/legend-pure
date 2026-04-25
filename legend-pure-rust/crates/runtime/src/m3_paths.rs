@@ -80,6 +80,12 @@ pub const LIST: &classifier = "meta::pure::functions::collection::List";
 /// wrapper underpinning `pair()` and Map entry iteration (`keyValues`).
 pub const PAIR: &classifier = "meta::pure::functions::collection::Pair";
 
+/// `meta::pure::functions::collection::MapStats` — single-property
+/// (`getIfAbsentCounter:Integer[1]`) wrapper returned by the
+/// `getMapStats` native; mirrors Java Pure's `PureMapStats` exposed
+/// through `MapCoreInstance.getStats()`.
+pub const MAP_STATS: &classifier = "meta::pure::functions::collection::MapStats";
+
 /// `meta::pure::metamodel::valuespecification::VariableExpression` —
 /// AST-metamodel node for a `$name` variable reference. Produced by
 /// `deactivate(varRef)` so the AST can be introspected.

@@ -27,8 +27,10 @@
 //! Object references use [`ObjectId`] handles into the [`RuntimeHeap`](super::heap::RuntimeHeap),
 //! providing identity-preserving semantics for `mutateAdd`.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
+use std::rc::Rc;
 
 use im_rc::Vector as PVector;
 use legend_pure_parser_pure::ids::ElementId;
@@ -37,6 +39,27 @@ use smol_str::SmolStr;
 
 use crate::date::{PureDate, StrictTime};
 use crate::heap::ObjectId;
+
+/// Backing state for a [`Value::Map`].
+///
+/// Keeps the entries and the `getIfAbsentCounter` together so they share
+/// the same `Rc<RefCell<…>>` identity — mirrors Java Pure's
+/// `MapCoreInstance` which holds a mutable map alongside its
+/// `PureMapStats`. Mutating natives (`getIfAbsentPutWithKey`) reach
+/// through `Rc<RefCell<MapState>>::borrow_mut()`; non-mutating natives
+/// read via `borrow()`. Two distinct `MapState` values with the same
+/// entries are equal (see [`Value::eq`]) — identity is for sharing, not
+/// for equality.
+#[derive(Debug, Clone, Default)]
+pub struct MapState {
+    /// HAMT-backed entries — `im_rc::HashMap` keeps `clone()` O(1) for
+    /// reads and `insert` O(log N) with structural sharing.
+    pub entries: im_rc::HashMap<ValueKey, Value>,
+    /// Number of times `getIfAbsentPutWithKey` evaluated its lambda
+    /// because the key was absent. Surfaced to Pure code by the
+    /// `getMapStats` native via a `MapStats` heap object.
+    pub get_if_absent_counter: i64,
+}
 
 /// A runtime value produced by evaluating a Pure expression.
 ///
@@ -96,11 +119,25 @@ pub enum Value {
     /// via structural sharing instead of full copies.
     Collection(Box<PVector<Value>>),
 
-    /// A Pure `Map<K, V>` — backed by a HAMT persistent hash map.
+    /// A Pure `Map<K, V>` — entries plus stats live behind a shared,
+    /// interior-mutable cell so that mutating natives like
+    /// `getIfAbsentPutWithKey` are observable through every binding that
+    /// references the same `Value::Map`.
     ///
-    /// `put` operations produce new maps via structural sharing.
-    /// This is the key optimization for fold+put accumulator patterns.
-    Map(Box<im_rc::HashMap<ValueKey, Value>>),
+    /// In Java Pure the `MapCoreInstance` is a heap object whose entries
+    /// are mutated in place; the parity here is `Rc<RefCell<MapState>>`.
+    /// Pure semantics for `put` / `putAll` / `replaceAll` still produce
+    /// fresh map identities (the Java natives explicitly construct a new
+    /// `MapCoreInstance`); only `getIfAbsentPutWithKey` mutates the shared
+    /// cell in place. The stats counter (incremented when
+    /// `getIfAbsentPutWithKey` materialises a missing entry) lives next
+    /// to the entries so it shares the same identity.
+    ///
+    /// `Rc<RefCell<…>>` is `!Send` — see `RuntimeHeap`'s thread-safety
+    /// note: the runtime is already thread-local, so this is the natural
+    /// representation for a tree-walking interpreter that mirrors Java's
+    /// mutable map semantics.
+    Map(Rc<RefCell<MapState>>),
 
     /// A Pure `Function` value — anonymous lambda or compiled function reference.
     ///
@@ -264,6 +301,13 @@ impl PartialEq for Value {
             (Self::StrictTime(a), Self::StrictTime(b)) => a == b,
             (Self::Object(a), Self::Object(b)) => a == b,
             (Self::Collection(a), Self::Collection(b)) => a == b,
+            // Map equality is structural over entries (Pure semantics):
+            // two distinct `Rc<RefCell<MapState>>`s with the same
+            // bindings compare equal. Stats are bookkeeping, not part of
+            // value identity.
+            (Self::Map(a), Self::Map(b)) => {
+                Rc::ptr_eq(a, b) || a.borrow().entries == b.borrow().entries
+            }
             (Self::Element(a), Self::Element(b)) => a == b,
             (
                 Self::EnumValue {
@@ -568,7 +612,7 @@ impl fmt::Display for Value {
                 }
                 write!(f, "]")
             }
-            Self::Map(m) => write!(f, "<Map size={}>", m.len()),
+            Self::Map(m) => write!(f, "<Map size={}>", m.borrow().entries.len()),
             Self::Function(fv) => match fv.as_ref() {
                 FunctionValue::Lambda(_) => write!(f, "<Lambda>"),
                 FunctionValue::Compiled(id) => write!(f, "<Function:{id}>"),

@@ -24,7 +24,7 @@ use crate::heap::ObjectId;
 use crate::native::{
     EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
 };
-use crate::value::{Value, ValueKey};
+use crate::value::{MapState, Value, ValueKey};
 
 // ---------------------------------------------------------------------------
 // size
@@ -1181,7 +1181,7 @@ impl NativeFunction for NewMap {
             .into());
         }
         let pairs = values[0].to_collection();
-        let mut map = im_rc::HashMap::new();
+        let mut entries = im_rc::HashMap::new();
         for pair in pairs.iter() {
             let Value::Object(obj_id) = pair else {
                 return Err(PureRuntimeError::EvaluationError(format!(
@@ -1205,14 +1205,29 @@ impl NativeFunction for NewMap {
                 .into());
             };
             let key = value_to_key(k, ctx)?;
-            map.insert(key, v.clone());
+            entries.insert(key, v.clone());
         }
-        Ok(Evaluated::new(Value::Map(Box::new(map))))
+        Ok(Evaluated::new(Value::Map(new_map_cell(entries, 0))))
     }
 
     fn signature(&self) -> &'static str {
         "newMap<U,V>(pairs:Pair<U,V>[*]):Map<U,V>[1]"
     }
+}
+
+/// Wrap a freshly-built [`MapState`] in the `Rc<RefCell<…>>` cell that
+/// `Value::Map` carries. Keeps the construction site for new map
+/// identities centralised — every `put` / `putAll` / `replaceAll` / etc.
+/// allocates a fresh cell so Pure semantics ("`put` returns a new map")
+/// stays intact, while `getIfAbsentPutWithKey` mutates an existing cell.
+fn new_map_cell(
+    entries: im_rc::HashMap<ValueKey, Value>,
+    get_if_absent_counter: i64,
+) -> std::rc::Rc<std::cell::RefCell<MapState>> {
+    std::rc::Rc::new(std::cell::RefCell::new(MapState {
+        entries,
+        get_if_absent_counter,
+    }))
 }
 
 /// Pure `get<U,V>(m:Map<U,V>[1], key:U[1]):V[0..1]`
@@ -1234,7 +1249,7 @@ impl NativeFunction for Get {
             return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
         };
         let key = value_to_key(&values[1], ctx)?;
-        match m.get(&key) {
+        match m.borrow().entries.get(&key) {
             Some(v) => Ok(Evaluated::new(v.clone())),
             None => Ok(Evaluated::new(Value::Unit)),
         }
@@ -1247,8 +1262,22 @@ impl NativeFunction for Get {
 
 /// Pure `put<U,V>(m:Map<U,V>[1], key:U[1], value:V[1]):Map<U,V>[1]`
 ///
-/// Returns a new map with `key -> value` added (or replaced). The
-/// original map is untouched — HAMT structural sharing keeps this O(log N).
+/// Returns a **new** map (fresh `Rc<RefCell<MapState>>`) carrying every
+/// entry of `m` plus `key -> value`. Mirrors Java Pure's `Put.java`:
+///
+/// ```java
+/// MapCoreInstance newMap = new MapCoreInstance(map, true, processorSupport);
+/// newMap.getMap().put(key, value);
+/// return newMap;
+/// ```
+///
+/// `m` is untouched — HAMT structural sharing keeps the entry copy
+/// O(log N), and the returned cell has `get_if_absent_counter` reset
+/// to zero (Java's `MapCoreInstance` copy ctor does the same when
+/// `copyData=true` would normally clone the stats — but `Put` never
+/// reads the stats so reset is the simplest correct choice; tests that
+/// observe stats use `getIfAbsentPutWithKey`, which mutates in place
+/// and never goes through `Put`).
 #[derive(Debug)]
 pub struct Put;
 
@@ -1264,9 +1293,9 @@ impl NativeFunction for Put {
             return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
         };
         let key = value_to_key(&values[1], ctx)?;
-        let mut updated = (**m).clone();
+        let mut updated = m.borrow().entries.clone();
         updated.insert(key, values[2].clone());
-        Ok(Evaluated::new(Value::Map(Box::new(updated))))
+        Ok(Evaluated::new(Value::Map(new_map_cell(updated, 0))))
     }
 
     fn signature(&self) -> &'static str {
@@ -1294,7 +1323,8 @@ impl NativeFunction for Keys {
         let Value::Map(m) = &values[0] else {
             return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
         };
-        let items: Vec<Value> = m.keys().map(key_to_value).collect();
+        let state = m.borrow();
+        let items: Vec<Value> = state.entries.keys().map(key_to_value).collect();
         Ok(Evaluated::new(Value::from_vec(items)))
     }
 
@@ -1323,8 +1353,19 @@ impl NativeFunction for KeyValues {
         let Value::Map(m) = &values[0] else {
             return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
         };
-        let mut items: Vec<Value> = Vec::with_capacity(m.len());
-        for (k, v) in m.iter() {
+        // Snapshot the entries so we don't hold a borrow on the cell while
+        // mutating the heap (the heap is independent of the map cell, but
+        // keeping the borrow tight protects against any future re-entry).
+        let snapshot: Vec<(ValueKey, Value)> = {
+            let state = m.borrow();
+            state
+                .entries
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        };
+        let mut items: Vec<Value> = Vec::with_capacity(snapshot.len());
+        for (k, v) in &snapshot {
             let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::PAIR);
             ctx.heap_mut()
                 .mutate_add(obj, "first", &[key_to_value(k)])?;
@@ -1359,11 +1400,21 @@ impl NativeFunction for PutAll {
         let Value::Map(base) = &values[0] else {
             return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
         };
-        let mut updated = (**base).clone();
+        // Clone the base entries; HAMT structural sharing keeps this O(1).
+        let mut updated: im_rc::HashMap<ValueKey, Value> = base.borrow().entries.clone();
         match &values[1] {
             Value::Map(other) => {
-                for (k, v) in other.iter() {
-                    updated.insert(k.clone(), v.clone());
+                // Snapshot the other map's entries before iterating so we
+                // never hold a borrow on `other` across the insertion loop
+                // (and so `other == base` aliasing stays sound).
+                let other_entries: Vec<(ValueKey, Value)> = other
+                    .borrow()
+                    .entries
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                for (k, v) in other_entries {
+                    updated.insert(k, v);
                 }
             }
             other => {
@@ -1373,7 +1424,7 @@ impl NativeFunction for PutAll {
                 }
             }
         }
-        Ok(Evaluated::new(Value::Map(Box::new(updated))))
+        Ok(Evaluated::new(Value::Map(new_map_cell(updated, 0))))
     }
 
     fn signature(&self) -> &'static str {
@@ -1407,7 +1458,7 @@ impl NativeFunction for ReplaceAll {
             let (k, v) = pair_first_second(ctx, pair, "replaceAll")?;
             updated.insert(value_to_key(&k, ctx)?, v);
         }
-        Ok(Evaluated::new(Value::Map(Box::new(updated))))
+        Ok(Evaluated::new(Value::Map(new_map_cell(updated, 0))))
     }
 
     fn signature(&self) -> &'static str {
@@ -1418,12 +1469,22 @@ impl NativeFunction for ReplaceAll {
 /// Pure
 /// `getIfAbsentPutWithKey<U,V>(m:Map<U,V>[1], key:U[1], func:Function<{U[1]->V[0..1]}>[1]):V[0..1]`
 ///
-/// Returns the value at `key` if present. Otherwise evaluates
-/// `func(key)` and returns that result. Java Pure additionally mutates
-/// the map in place; our immutable `im_rc::HashMap`-backed `Value::Map`
-/// does not — tests that assert post-call mutation (`$m->get(k)` after
-/// the call) still fail, and the structural fix (interior-mutable
-/// wrapper) is tracked separately.
+/// Returns the value at `key` if present. Otherwise increments the map's
+/// `getIfAbsentCounter`, evaluates `func(key)`, stores the result under
+/// `key` in the same shared `MapState`, and returns it. The map is
+/// observably mutated for every binding that points at the same
+/// `Rc<RefCell<MapState>>` — mirrors Java Pure's `MapCoreInstance` which
+/// holds an in-place mutable map alongside its `PureMapStats`
+/// (see `GetIfAbsentPutWithKey.java`).
+///
+/// **Borrow discipline:** the borrow on the cell is released *before*
+/// `ctx.call_function` runs the lambda, so a re-entrant call into
+/// natives that read or mutate the same map (`get`, `put`,
+/// `getIfAbsentPutWithKey` recursively, …) does not panic. The counter
+/// is incremented up front to match Java's ordering — Eclipse
+/// Collections' `getIfAbsentPutWithKey` calls the lambda after entering
+/// the absent branch, and the `incrementGetIfAbsentCounter()` call sits
+/// at the top of that lambda body.
 #[derive(Debug)]
 pub struct GetIfAbsentPutWithKey;
 
@@ -1447,15 +1508,72 @@ impl NativeFunction for GetIfAbsentPutWithKey {
             return Err(PureRuntimeError::type_mismatch("Map", &m_val).into());
         };
         let key = value_to_key(&key_val, ctx)?;
-        if let Some(v) = m.get(&key) {
-            return Ok(Evaluated::new(v.clone()));
+
+        // Read-only check first; drop the borrow before any reentrant
+        // call so a lambda may safely touch the same map.
+        if let Some(existing) = {
+            let state = m.borrow();
+            state.entries.get(&key).cloned()
+        } {
+            return Ok(Evaluated::new(existing));
         }
+
+        // Java order: bump the stats counter, then evaluate the lambda,
+        // then insert. The counter increment lives in the lambda body in
+        // Java (see `GetIfAbsentPutWithKey.java`), but Pure code can
+        // never observe the intermediate state because lambda evaluation
+        // runs to completion before the next statement.
+        m.borrow_mut().get_if_absent_counter += 1;
+
         let result = ctx.call_function(&func_val, &[key_val])?;
+
+        // Re-borrow to install the new entry. Pure's signature is
+        // `V[0..1]`, so a `Value::Unit` result represents "absent" and
+        // we still record it (matches Java: `getIfAbsentPutWithKey`
+        // unconditionally stores the lambda's return).
+        m.borrow_mut().entries.insert(key, result.clone());
+
         Ok(Evaluated::new(result))
     }
 
     fn signature(&self) -> &'static str {
         "getIfAbsentPutWithKey<U,V>(m:Map<U,V>[1], key:U[1], func:Function<{U[1]->V[0..1]}>[1]):V[0..1]"
+    }
+}
+
+/// Pure `getMapStats<U,V>(m:Map<U,V>[1]):MapStats[0..1]`
+///
+/// Materialises the map's mutation stats as a
+/// `meta::pure::functions::collection::MapStats` heap object with a
+/// single `getIfAbsentCounter:Integer[1]` property. Mirrors Java Pure's
+/// `MapCoreInstance.getStats()` plus the
+/// `wrapValueSpecification(stats, …)` wrapping in the interpreted
+/// engine. Returns the stats object even when the counter is zero —
+/// the test reads `.getIfAbsentCounter` directly on the result and
+/// would NPE on an empty multiplicity.
+#[derive(Debug)]
+pub struct GetMapStats;
+
+impl NativeFunction for GetMapStats {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("getMapStats", &values, 1)?;
+        let Value::Map(m) = &values[0] else {
+            return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
+        };
+        let counter = m.borrow().get_if_absent_counter;
+        let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::MAP_STATS);
+        ctx.heap_mut()
+            .mutate_add(obj, "getIfAbsentCounter", &[Value::Integer(counter)])?;
+        Ok(Evaluated::new(Value::Object(obj)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "getMapStats<U,V>(m:Map<U,V>[1]):MapStats[0..1]"
     }
 }
 
@@ -1511,7 +1629,7 @@ impl NativeFunction for GroupBy {
             }
             map.insert(key, Value::Object(list_obj));
         }
-        Ok(Evaluated::new(Value::Map(Box::new(map))))
+        Ok(Evaluated::new(Value::Map(new_map_cell(map, 0))))
     }
 
     fn signature(&self) -> &'static str {
@@ -1619,6 +1737,7 @@ pub fn register(registry: &mut NativeRegistry) {
         GetIfAbsentPutWithKey,
     );
     registry.register("groupBy_X_MANY__Function_1__Map_1_", GroupBy);
+    registry.register("getMapStats_Map_1__MapStats_$0_1$_", GetMapStats);
 }
 
 // ---------------------------------------------------------------------------
