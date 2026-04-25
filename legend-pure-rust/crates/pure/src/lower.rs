@@ -38,7 +38,9 @@ use smol_str::SmolStr;
 
 use crate::error::CompilationError;
 use crate::resolve::{self, ResolutionContext};
-use crate::types::{DateValue, ExprKind, ValueSpec};
+use crate::types::{
+    DateValue, ExprKind, Multiplicity, RelationColumnLowered, ResolvedType, TypeExpr, ValueSpec,
+};
 
 /// Convenience: wrap an `ExprKind` into a `ValueSpec` with no type info.
 fn untyped(kind: ExprKind, source_info: SourceInfo) -> ValueSpec {
@@ -46,6 +48,17 @@ fn untyped(kind: ExprKind, source_info: SourceInfo) -> ValueSpec {
         kind: Box::new(kind),
         source_info,
         type_info: None,
+    }
+}
+
+/// Convenience: wrap an `ExprKind` into a `ValueSpec` whose `type_info`
+/// is pre-set at lowering time. Honoured by `set_and_return` in Pass 2.5,
+/// matching the `lower_new_instance` pattern for parametric type capture.
+fn typed(kind: ExprKind, source_info: SourceInfo, ty: ResolvedType) -> ValueSpec {
+    ValueSpec {
+        kind: Box::new(kind),
+        source_info,
+        type_info: Some(Box::new(ty)),
     }
 }
 
@@ -90,7 +103,7 @@ pub(crate) fn lower_expression(
         ast_expr::Expression::Lambda(e) => lower_lambda(e, ctx, errors),
         ast_expr::Expression::Let(e) => lower_let(e, ctx, errors),
         ast_expr::Expression::NewInstance(e) => lower_new_instance(e, ctx, errors),
-        ast_expr::Expression::Column(e) => Some(lower_column(e)),
+        ast_expr::Expression::Column(e) => lower_column(e, ctx, errors),
         ast_expr::Expression::Island(_) => {
             // Island lowering is deferred — the AST node is sufficient
             // for protocol serialization and composer roundtripping.
@@ -813,11 +826,35 @@ fn lower_member_access(
 // ---------------------------------------------------------------------------
 
 /// Lowers `@MyType` → `TypeReference`.
+///
+/// Special case: `@(name:Type[mult], …)` (relation type at expression
+/// position) lowers to `ExprKind::RelationLiteral` instead, with the
+/// column metadata captured at lowering time. The runtime allocator
+/// materialises a `RelationType` heap object whose `columns` slot
+/// carries the lowered specs. The lowered ValueSpec carries
+/// `type_info = RelationType<Any>[1]` so dispatch + inference see the
+/// same shape `resolve_type_spec(TypeSpec::Relation)` reports.
 fn lower_type_reference(
     e: &ast_expr::TypeReferenceExpr,
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
+    if let ast_type::TypeSpec::Relation(rt) = &e.type_ref {
+        let columns = lower_relation_columns(&rt.columns, ctx, errors);
+        let relation_type_id = resolve_relation_type_id(ctx)?;
+        return Some(typed(
+            ExprKind::RelationLiteral { columns },
+            e.source_info.clone(),
+            ResolvedType {
+                type_expr: TypeExpr::Named {
+                    element: relation_type_id,
+                    type_arguments: vec![],
+                    value_arguments: vec![],
+                },
+                multiplicity: Multiplicity::PureOne,
+            },
+        ));
+    }
     let type_expr = resolve::resolve_type_spec(&e.type_ref, ctx, errors)?;
     Some(untyped(
         ExprKind::TypeReference { type_expr },
@@ -1347,15 +1384,115 @@ fn lower_slice(
 }
 
 // ---------------------------------------------------------------------------
-// Column (TDS — placeholder)
+// Column / Relation literals
 // ---------------------------------------------------------------------------
 
-/// Lowers a column expression to a placeholder `ValueSpec::Column`.
+/// Lowers `~name` / `~[name:Type[mult], …]` → `ColSpecArrayLiteral`.
 ///
-/// Full TDS column lowering is deferred — the source info is preserved
-/// for diagnostics and protocol output.
-fn lower_column(e: &ast_expr::ColumnBuilderExpr) -> ValueSpec {
-    untyped(ExprKind::Column, e.source_info.clone())
+/// Captures column triples (`name`, resolved `type_element`, `multiplicity`)
+/// at lowering time so the runtime allocator can materialise the
+/// `ColSpecArray` heap shape without re-resolving names. The lowered
+/// ValueSpec carries `type_info = ColSpecArray<Any>[1]` so dispatch +
+/// inference see the same shape.
+///
+/// Lambda-bearing `~name:x|$x+1` columns and column-spec arrays inside
+/// `funcColSpecArray` / `aggColSpecArray` are not exercised by the
+/// initial RelationType test surface — those columns are dropped here.
+/// Add a follow-up if a subsequent test forces them.
+fn lower_column(
+    e: &ast_expr::ColumnBuilderExpr,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let columns = lower_relation_columns_from_specs(&e.columns, ctx, errors);
+    let col_spec_array_id = resolve_col_spec_array_id(ctx)?;
+    Some(typed(
+        ExprKind::ColSpecArrayLiteral { columns },
+        e.source_info.clone(),
+        ResolvedType {
+            type_expr: TypeExpr::Named {
+                element: col_spec_array_id,
+                type_arguments: vec![],
+                value_arguments: vec![],
+            },
+            multiplicity: Multiplicity::PureOne,
+        },
+    ))
+}
+
+/// Resolves AST `RelationColumn`s into the lowered triple form. Used by
+/// the `RelationLiteral` lowering path (`@(cols)`).
+fn lower_relation_columns(
+    cols: &[ast_type::RelationColumn],
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Vec<RelationColumnLowered> {
+    cols.iter()
+        .filter_map(|c| {
+            let type_expr = resolve::resolve_type_ref(&c.type_ref, ctx, errors)?;
+            let type_element = match type_expr {
+                TypeExpr::Named { element, .. } => element,
+                _ => return None,
+            };
+            let multiplicity = c
+                .multiplicity
+                .as_ref()
+                .map_or(Multiplicity::ZeroOrOne, resolve::lower_multiplicity);
+            Some(RelationColumnLowered {
+                name: c.name.clone(),
+                type_element,
+                multiplicity,
+            })
+        })
+        .collect()
+}
+
+/// Resolves AST `ColumnSpec`s into the lowered triple form. Used by the
+/// `ColSpecArrayLiteral` lowering path (`~[cols]`).
+fn lower_relation_columns_from_specs(
+    cols: &[ast_expr::ColumnSpec],
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Vec<RelationColumnLowered> {
+    cols.iter()
+        .filter_map(|c| {
+            let (type_ref, mult) = match &c.type_spec {
+                Some(ast_expr::ColumnTypeSpec::Typed(tr, m)) => (tr, m.as_ref()),
+                _ => return None,
+            };
+            let type_expr = resolve::resolve_type_ref(type_ref, ctx, errors)?;
+            let type_element = match type_expr {
+                TypeExpr::Named { element, .. } => element,
+                _ => return None,
+            };
+            let multiplicity = mult.map_or(Multiplicity::ZeroOrOne, resolve::lower_multiplicity);
+            Some(RelationColumnLowered {
+                name: c.name.clone(),
+                type_element,
+                multiplicity,
+            })
+        })
+        .collect()
+}
+
+fn resolve_relation_type_id(ctx: &mut ResolutionContext<'_>) -> Option<crate::ids::ElementId> {
+    ctx.model.resolve_by_path(&[
+        SmolStr::new("meta"),
+        SmolStr::new("pure"),
+        SmolStr::new("metamodel"),
+        SmolStr::new("relation"),
+        SmolStr::new("RelationType"),
+    ])
+}
+
+fn resolve_col_spec_array_id(ctx: &mut ResolutionContext<'_>) -> Option<crate::ids::ElementId> {
+    ctx.model.resolve_by_path(&[
+        SmolStr::new("meta"),
+        SmolStr::new("pure"),
+        SmolStr::new("metamodel"),
+        SmolStr::new("relation"),
+        SmolStr::new("ColSpecArray"),
+    ])
 }
 
 // ---------------------------------------------------------------------------

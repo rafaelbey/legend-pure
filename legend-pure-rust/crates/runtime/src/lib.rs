@@ -62,5 +62,6 @@ pub mod hooks;
 pub mod m3_paths;
 pub mod model_utils;
 pub mod native;
+pub mod relation;
 pub mod scope_guard;
 pub mod value;
