@@ -1686,7 +1686,28 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                     .get_property_values(*obj_id, name)
                     .map_err(PureException::from)?;
                 let collected: Vec<Value> = values.iter().cloned().collect();
-                Ok(Value::from_vec(collected))
+                if !collected.is_empty() {
+                    return Ok(Value::from_vec(collected));
+                }
+                // Empty slot: same GetterOverride fallback as
+                // `eval_property_access` so that
+                // `D_A->getProperty('d')->toOne()->eval($r)` reads the
+                // override-provided value when `$r.d` does. Without
+                // this, dynamicNew's testDynamicNewWithClass /
+                // testDynamicNewWithGenericType assertions of the form
+                // `assertEquals('rrr2', D_A->getProperty('d')->toOne()
+                //                       ->eval($r)->cast(@D_D).name)`
+                // see `Unit` from the empty slot read while the direct
+                // `$r.d.name` chain (which goes through
+                // `eval_property_access`) returns the override result.
+                if name == "elementOverride"
+                    || name == "getterOverrideToOne"
+                    || name == "getterOverrideToMany"
+                    || name == "hiddenPayload"
+                {
+                    return Ok(Value::Unit);
+                }
+                self.try_getter_override(*obj_id, name)
             }
             Value::Element(id) => {
                 // Function elements expose a small set of metamodel fields
