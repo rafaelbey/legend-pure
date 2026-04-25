@@ -2304,9 +2304,20 @@ fn reactivate_value(value: &Value, ctx: &mut dyn EvalContextTrait) -> Result<Val
             return ctx.call_function(&func_val.clone(), &reactivated_params);
         }
         // No resolved `func` element — fall back to dispatching by
-        // `functionName`. Uncommon in practice but keeps the wrapper
-        // shape robust.
+        // `functionName`. Search the model globally for a function
+        // whose simple name matches and whose declared arity matches
+        // the reactivated parameter count. Picks the first match
+        // (sufficient for the deactivate→reactivate round-trip
+        // patterns surveyor exercises; full overload resolution is
+        // tracked under "Reactivate inner-call dispatch" in the
+        // backlog).
         let name_vals = ctx.heap().get_property_values(*obj_id, "functionName")?;
+        if let Some(Value::String(name)) = name_vals.iter().next().cloned()
+            && let Some(fn_id) =
+                find_function_by_simple_name(ctx.model(), &name, reactivated_params.len())
+        {
+            return ctx.call_function(&Value::Element(fn_id), &reactivated_params);
+        }
         let Some(Value::String(_name)) = name_vals.iter().next() else {
             return Err(PureRuntimeError::EvaluationError(
                 "reactivate: SimpleFunctionExpression is missing both 'func' and 'functionName'"
@@ -2324,6 +2335,55 @@ fn reactivate_value(value: &Value, ctx: &mut dyn EvalContextTrait) -> Result<Val
     // Any other heap object — not a deactivated spec we know about; pass
     // through unchanged.
     Ok(value.clone())
+}
+
+/// Locate a Function `ElementId` by its simple (unmangled) name.
+/// Walks every package in the model looking for a matching
+/// `Function::function_name`. Prefers an exact arity match when
+/// possible (proper overload picking), falling back to the first
+/// any-arity match — required because compiler-emitted call shapes
+/// like `new(class, name, type_args, type_var_values, k1, v1,
+/// augm1, …)` carry many more positional args than the declared
+/// `new(class, id, keyExpressions:KeyExpression[*])` signature, but
+/// the native still handles them variadically.
+///
+/// Used by [`reactivate_value`] to dispatch a deactivated
+/// `SimpleFunctionExpression` whose `func` slot was lost (only
+/// `functionName` survived). Callers needing full overload
+/// resolution should reach for the compiler's `resolve_function_call`
+/// instead.
+fn find_function_by_simple_name(
+    model: &PureModel,
+    simple_name: &str,
+    arity: usize,
+) -> Option<ElementId> {
+    let mut exact: Option<ElementId> = None;
+    let mut any: Option<ElementId> = None;
+    let mut stack: Vec<legend_pure_parser_pure::ids::PackageId> = vec![model.root_package];
+    let mut visited: std::collections::HashSet<legend_pure_parser_pure::ids::PackageId> =
+        std::collections::HashSet::new();
+    while let Some(pkg_id) = stack.pop() {
+        if !visited.insert(pkg_id) {
+            continue;
+        }
+        let pkg = model.get_package(pkg_id);
+        for child_pkg in &pkg.children_packages {
+            stack.push(*child_pkg);
+        }
+        for child_eid in &pkg.children_elements {
+            if let Element::Function(f) = model.get_element(*child_eid)
+                && f.function_name == simple_name
+            {
+                if any.is_none() {
+                    any = Some(*child_eid);
+                }
+                if f.parameters.len() == arity {
+                    exact = Some(*child_eid);
+                }
+            }
+        }
+    }
+    exact.or(any)
 }
 
 // ---------------------------------------------------------------------------
