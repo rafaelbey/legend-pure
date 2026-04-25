@@ -301,7 +301,9 @@ fn variadic_op(
         && (is_string_typed_spec(&l.kind)
             || is_string_typed_spec(&r.kind)
             || is_string_typed_var(&l.kind, ctx)
-            || is_string_typed_var(&r.kind, ctx))
+            || is_string_typed_var(&r.kind, ctx)
+            || infer_static_element(&l.kind, ctx) == Some(crate::bootstrap::STRING_ID)
+            || infer_static_element(&r.kind, ctx) == Some(crate::bootstrap::STRING_ID))
     {
         SmolStr::new_static("plus_String_MANY__String_1_")
     } else {
@@ -353,6 +355,129 @@ fn is_string_typed_var(kind: &ExprKind, ctx: &ResolutionContext<'_>) -> bool {
         ty,
         crate::types::TypeExpr::Named { element, .. } if *element == crate::bootstrap::STRING_ID
     )
+}
+
+/// Best-effort static-type inference for a lowered `ExprKind`.
+///
+/// Returns the `ElementId` the expression statically produces when we
+/// can determine it from local information — variable declarations,
+/// `cast(@T)` annotations, transparent multiplicity wrappers
+/// (`toOne` / `toZeroOne` / `toMany` / `toOneMany`), nested property
+/// access, the receiver of an arrow-call, or known-shape function-call
+/// returns. `None` when the expression's type isn't locally inferrable
+/// (generic dispatch, complex method chains we don't yet model, etc.).
+///
+/// Why this exists: operator dispatch (`+` / `-` / `*` / etc.) and
+/// other compile-time decisions need the static type of operands to
+/// pick the right overload. Without inference, `$o->cast(@String).a +
+/// $b` lowers `+` to numeric `plus`, and the runtime fails on String
+/// inputs even though the cast had told the compiler `$o` is a
+/// `D_A`-shaped class with a String-typed `.a`.
+///
+/// Cast semantics — per Pure's design, `cast(@T)` is a *compile-time*
+/// type assertion: the compiler trusts that the value is `T` from
+/// then on; the runtime simply verifies. Downstream code reading the
+/// cast result should be indistinguishable from reading a value of
+/// type `T` directly. That's exactly what this helper gives back —
+/// `cast` is one branch among many, not a special case for callers.
+fn infer_static_element(
+    kind: &ExprKind,
+    ctx: &ResolutionContext<'_>,
+) -> Option<crate::ids::ElementId> {
+    match kind {
+        // Literals — direct mapping to bootstrap primitives.
+        ExprKind::StringLiteral(_) => Some(crate::bootstrap::STRING_ID),
+        ExprKind::IntegerLiteral(_) => Some(crate::bootstrap::INTEGER_ID),
+        ExprKind::FloatLiteral(_) => Some(crate::bootstrap::FLOAT_ID),
+        ExprKind::DecimalLiteral(_) => Some(crate::bootstrap::DECIMAL_ID),
+        ExprKind::BooleanLiteral(_) => Some(crate::bootstrap::BOOLEAN_ID),
+
+        // Variable refs — read the declared type from scope.
+        ExprKind::Variable { name } => match ctx.variable_types.get(name)?.0 {
+            crate::types::TypeExpr::Named { element, .. } => Some(element),
+            _ => None,
+        },
+
+        // Function calls we can introspect by name.
+        ExprKind::FunctionCall {
+            function_name,
+            arguments,
+            ..
+        } => match function_name.as_str() {
+            // `cast(@T)` lowers as `FunctionCall("cast", [target, @T])`.
+            // The compile-time type IS T — that's the whole point of cast.
+            "cast" if arguments.len() >= 2 => match &*arguments[1].kind {
+                ExprKind::TypeReference {
+                    type_expr: crate::types::TypeExpr::Named { element, .. },
+                } => Some(*element),
+                _ => None,
+            },
+            // Multiplicity coercions are type-transparent — they only
+            // change the cardinality, not the element type.
+            "toOne" | "toZeroOne" | "toMany" | "toOneMany" if !arguments.is_empty() => {
+                infer_static_element(&arguments[0].kind, ctx)
+            }
+            // `plus_String_MANY__String_1_` is the post-mangling shape
+            // of a String concatenation — known to return String.
+            "plus_String_MANY__String_1_" => Some(crate::bootstrap::STRING_ID),
+            _ => None,
+        },
+
+        // Property access — recurse on the target to find its class,
+        // then look up the property's declared type. Walks supertypes
+        // so inherited properties resolve too. Mirrors what runtime
+        // property access does, but at compile time so dispatch can
+        // see the result type.
+        ExprKind::PropertyAccess { target, property } => {
+            let target_class = infer_static_element(&target.kind, ctx)?;
+            let prop_type = lookup_property_type(target_class, property, ctx)?;
+            match prop_type {
+                crate::types::TypeExpr::Named { element, .. } => Some(element),
+                _ => None,
+            }
+        }
+
+        // A bare element ref (`Class`, `String`, …) IS the element
+        // itself — useful for chains like `D_A.properties` where the
+        // receiver is the metatype.
+        ExprKind::PackageableElementRef { element } => Some(*element),
+
+        _ => None,
+    }
+}
+
+/// Look up the declared type of a property by name on `class_id` or
+/// any of its supertypes (declaration order, breadth-first). Returns
+/// `None` when the class doesn't declare the property. Used by
+/// [`infer_static_element`] for `target.prop` chains so e.g.
+/// `cast(@D_A).a` resolves to D_A's declared `a: String[1]`.
+fn lookup_property_type(
+    class_id: crate::ids::ElementId,
+    prop_name: &str,
+    ctx: &ResolutionContext<'_>,
+) -> Option<crate::types::TypeExpr> {
+    let mut visited: std::collections::HashSet<crate::ids::ElementId> =
+        std::collections::HashSet::new();
+    let mut stack: Vec<crate::ids::ElementId> = vec![class_id];
+    while let Some(cid) = stack.pop() {
+        if !visited.insert(cid) {
+            continue;
+        }
+        let crate::model::Element::Class(c) = ctx.model.get_element(cid) else {
+            continue;
+        };
+        for p in &c.properties {
+            if p.name.as_str() == prop_name {
+                return Some(p.type_expr.clone());
+            }
+        }
+        for st in &c.super_types {
+            if let crate::types::TypeExpr::Named { element, .. } = st {
+                stack.push(*element);
+            }
+        }
+    }
+    None
 }
 
 /// Lowers comparison: `a == b` → `FunctionCall("equal", [a, b])`.
