@@ -451,7 +451,10 @@ impl Parser {
                 } else {
                     vec![]
                 };
-                let _ = type_arguments; // TODO: store in NewInstanceExpr when compiler needs it
+                // type_arguments: thread through to NewInstanceExpr so the
+                // compiler can preserve them in the lowered `new(…)` call —
+                // `^List<String>(values=…)` instances need their element-side
+                // bindings reflected at runtime via `genericType().typeArguments`.
 
                 // Optional type variable values: (10, 'ok')
                 let type_variable_values = if self.cursor.check(TokenKind::LParen) {
@@ -535,7 +538,7 @@ impl Parser {
                 self.cursor.expect(TokenKind::RParen)?;
                 Ok(Expression::NewInstance(NewInstanceExpr {
                     class: class_ref,
-                    type_arguments: vec![],
+                    type_arguments,
                     type_variable_values,
                     assignments,
                     source_info: si,

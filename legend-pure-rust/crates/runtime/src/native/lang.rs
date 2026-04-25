@@ -298,6 +298,57 @@ impl NativeFunction for New {
             }
         };
         let _id = &values[1]; // ignored — Pure's Java impl uses this only as a debug label
+        // Two call shapes converge on this native:
+        //
+        //   * Compiler-emitted `^Class<T1, T2>(prop=val, …)` — args[2] is a
+        //     Collection of resolved type-argument elements (or empty when
+        //     no `<…>` was declared); args[3..] is the flat key/value pair
+        //     sequence. Detected by args[2] being a Collection whose entries
+        //     (when present) are `Value::Element`.
+        //
+        //   * Pure-source `new(class, id)` / `new(class, id, [keyExprs])` —
+        //     direct calls to the platform's declared overloads. No type
+        //     arguments; args[2] (when present) is a Collection of
+        //     `KeyExpression` heap objects per the M3 signature. Full
+        //     KeyExpression decoding isn't implemented yet — surface the
+        //     shape and skip property hydration.
+        let mut type_args: Vec<Value> = Vec::new();
+        let mut kvs_offset = values.len(); // default: no kvs
+        if values.len() >= 3 {
+            match &values[2] {
+                // Empty `^Class()` constructions lower the position-2 type-arg
+                // Collection to `Value::Unit` (zero-element from_vec).
+                // Treat as the compiler-emitted shape with no type args.
+                Value::Unit => {
+                    kvs_offset = 3;
+                }
+                Value::Collection(coll) => {
+                    let all_elements = coll.iter().all(|v| matches!(v, Value::Element(_)));
+                    if all_elements {
+                        type_args = coll.iter().cloned().collect();
+                        kvs_offset = 3;
+                    } else {
+                        // Pure-source `new(class, id, [keyExprs])` — leave kvs
+                        // untouched; KeyExpression hydration is a separate
+                        // backlog item.
+                        kvs_offset = values.len();
+                    }
+                }
+                // Single Element at position 2 — compiler-emitted shape
+                // where exactly one type arg was provided (`from_vec` collapses
+                // a one-element vector to its scalar).
+                Value::Element(_) => {
+                    type_args = vec![values[2].clone()];
+                    kvs_offset = 3;
+                }
+                _ => {
+                    // Old-style flat key/value pairs starting at position 2 —
+                    // compiler no longer emits this shape, but tolerate it
+                    // for any direct callers.
+                    kvs_offset = 2;
+                }
+            }
+        }
         let classifier = class_fqn(ctx.model(), class_id);
 
         // Shortcut: `^LambdaFunction(expressionSequence = <lambda>)` is the
@@ -310,14 +361,18 @@ impl NativeFunction for New {
         // on the lambda body. See boolean/and.pure's
         // `testShortCircuitInDynamicEvaluation` for the motivating pattern.
         if is_lambda_function_class(ctx.model(), class_id)
-            && let Some(fn_val) = try_lambda_shortcut(&values[2..])
+            && let Some(fn_val) = try_lambda_shortcut(&values[kvs_offset..])
         {
             return Ok(Evaluated::new(fn_val));
         }
 
         let obj = ctx.heap_mut().alloc_dynamic(classifier);
-        apply_key_value_pairs(ctx, obj, &values[2..])?;
-        populate_association_inverses(ctx, obj, class_id, &values[2..])?;
+        if !type_args.is_empty() {
+            ctx.heap_mut()
+                .mutate_set(obj, "__typeArguments", &type_args)?;
+        }
+        apply_key_value_pairs(ctx, obj, &values[kvs_offset..])?;
+        populate_association_inverses(ctx, obj, class_id, &values[kvs_offset..])?;
         Ok(Evaluated::new(Value::Object(obj)))
     }
 
