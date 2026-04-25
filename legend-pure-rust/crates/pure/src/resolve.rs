@@ -1797,7 +1797,7 @@ fn is_lambda_compatible(
     skip(candidates, lowered_args, model, var_types),
     fields(n_candidates = candidates.len(), n_args = lowered_args.len()),
 )]
-fn narrow_candidates_by_type(
+pub(crate) fn narrow_candidates_by_type(
     candidates: &[ElementId],
     lowered_args: &[crate::types::ValueSpec],
     model: &crate::model::PureModel,

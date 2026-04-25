@@ -614,9 +614,32 @@ fn lower_args_with_lambda_inference(
         }
     }
 
-    // Find a unique callable candidate by name + arity (no type narrowing —
-    // lambda slots are still empty). If 0 or >1 match, skip inference.
-    let candidate = unique_overload_by_arity(function_ptr, total_arity, ctx);
+    // Find a callable candidate by name + arity. If exactly one matches,
+    // use it. If multiple match, mirror `resolve_function_call`'s
+    // narrowing path (`resolve.rs:730-748`) and disambiguate by the
+    // already-lowered non-lambda arg types — empty lambda slots become
+    // unbound-variable placeholders that the narrower treats as
+    // compatibility-don't-care. Falls back to no-expectations only when
+    // narrowing yields 0 or >1 candidates.
+    let by_arity = candidates_by_arity(function_ptr, total_arity, ctx);
+    let candidate = match by_arity.len() {
+        0 => None,
+        1 => Some(by_arity[0]),
+        _ => {
+            let placeholder_args = slots_with_placeholders(&slots);
+            let narrowed = resolve::narrow_candidates_by_type(
+                &by_arity,
+                &placeholder_args,
+                ctx.model,
+                &ctx.variable_types,
+            );
+            if narrowed.len() == 1 {
+                Some(narrowed[0])
+            } else {
+                None
+            }
+        }
+    };
 
     // Compute expected param types per lambda slot.
     let lambda_expectations: Vec<
@@ -660,14 +683,19 @@ fn unwrap_group(expr: &ast_expr::Expression) -> &ast_expr::Expression {
     cur
 }
 
-/// Returns the unique function `ElementId` matching `ptr.name()` with the
+/// Returns every function `ElementId` matching `ptr.name()` with the
 /// given total arity, searching the same import scopes used by
-/// `resolve_function_call`. Returns `None` if 0 or >1 candidates match.
-fn unique_overload_by_arity(
+/// `resolve_function_call`. Empty when nothing matches.
+///
+/// Multi-candidate disambiguation lives at the call site: when more than
+/// one matches arity, the orchestrator narrows by type using the lowered
+/// non-lambda args (mirroring `resolve_function_call`'s narrowing path
+/// at `resolve.rs:730-748`).
+fn candidates_by_arity(
     ptr: &legend_pure_parser_ast::annotation::PackageableElementPtr,
     arity: usize,
     ctx: &ResolutionContext<'_>,
-) -> Option<crate::ids::ElementId> {
+) -> Vec<crate::ids::ElementId> {
     use crate::model::Element;
     let name = &ptr.name;
     let mut candidates: Vec<crate::ids::ElementId> = Vec::new();
@@ -700,11 +728,29 @@ fn unique_overload_by_arity(
         }
     }
 
-    if candidates.len() == 1 {
-        Some(candidates[0])
-    } else {
-        None
-    }
+    candidates
+}
+
+/// Build a positional `Vec<ValueSpec>` from a `Vec<Option<ValueSpec>>`,
+/// substituting an unbound-variable placeholder for empty slots. The
+/// placeholder is invisible to `narrow_candidates_by_type`'s
+/// `is_type_compatible` check (`infer_type_from_valuespec` returns `None`
+/// for unbound variables, and `is_type_compatible(None, ...)` returns
+/// `true`), so positional indexing is preserved without imposing a
+/// constraint on the lambda slot.
+fn slots_with_placeholders(slots: &[Option<ValueSpec>]) -> Vec<ValueSpec> {
+    slots
+        .iter()
+        .map(|opt| {
+            opt.clone().unwrap_or_else(|| ValueSpec {
+                kind: Box::new(ExprKind::Variable {
+                    name: SmolStr::new_static("__lambda_placeholder"),
+                }),
+                source_info: SourceInfo::new("<lambda-inference>", 0, 0, 0, 0),
+                type_info: None,
+            })
+        })
+        .collect()
 }
 
 /// For each argument slot, computes the expected lambda parameter

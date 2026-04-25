@@ -1209,6 +1209,28 @@ fn eval_surveyor_meta_tests_error_histogram() {
 }
 
 #[test]
+fn eval_lambda_param_inference_narrows_overloads() {
+    // Locks the bug fixed by the type-narrowing step in
+    // `lower_args_with_lambda_inference`. Pure's platform `map` declares
+    // three arity-2 overloads; without narrowing, the orchestrator gives
+    // up and types `s` as `Any[1]`, which causes `+` to dispatch to a
+    // non-string overload and the lambda to silently return nothing.
+    // After the fix, narrowing by `['a','b']` (the concrete first arg)
+    // collapses the overload set to one and feeds `String[1]` into the
+    // lambda body's type info.
+    let result = eval_pure(
+        r#"
+        function test::f(): String[1]
+        {
+            ['a','b']->map(s| $s + 'X')->joinStrings(',')
+        }
+        "#,
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("aX,bX".into()));
+}
+
+#[test]
 fn eval_relation_at_chain_returns_relation_type() {
     // Locks in the `@(x:String)->genericType().rawType->cast(@RelationType<Any>)`
     // chain that `meta::pure::functions::meta::tests::addColumns` needs as
