@@ -139,7 +139,7 @@ pub fn compile(
     // Resolve everything EXCEPT function expression bodies.
     // After this pass, all function signatures (params, return types) are
     // available for type-based dispatch during body compilation.
-    let (id_to_decl, import_scope_cache, resolve_caches) = pass_define_signatures(
+    let (id_to_decl, mut import_scope_cache, mut resolve_caches) = pass_define_signatures(
         &sorted,
         source_files,
         &declarations,
@@ -149,14 +149,36 @@ pub fn compile(
         &mut errors,
     );
 
-    // ---- Pass 2b: Function Bodies ----
+    // ---- Pass 2b: Function Bodies + Class/Assoc/Primitive bodies ----
     // Compile expression bodies using fully-resolved function signatures.
+    // Order within Pass 2b doesn't matter — every signature in the model
+    // (including all native function return types) is now hydrated, so any
+    // body-shape expression sees the real types when resolving overloads.
     pass_define_bodies(
         &sorted,
         source_files,
         &id_to_decl,
-        import_scope_cache,
-        resolve_caches,
+        &mut import_scope_cache,
+        &mut resolve_caches,
+        auto_imports,
+        &mut model,
+        &mut errors,
+    );
+
+    // ---- Pass 2b': Class / Association / Primitive bodies ----
+    // Constraint expressions, qualified-property bodies, and property
+    // default values are body-shape: they call functions whose return
+    // types must be known to dispatch operators correctly. They're
+    // lowered here, *after* every function/native signature is hydrated,
+    // so e.g. `'literal' + $x->toString()` inside a Primitive constraint
+    // narrows `+` to the String overload via toString's real `:String[1]`
+    // return type instead of the Pass 1 `Any` placeholder.
+    pass_define_class_bodies(
+        &sorted,
+        source_files,
+        &id_to_decl,
+        &mut import_scope_cache,
+        &mut resolve_caches,
         auto_imports,
         &mut model,
         &mut errors,
@@ -819,12 +841,16 @@ fn pass_define_signatures<'a>(
 ///
 /// At this point all function signatures (params, return types) are fully
 /// resolved, enabling type-based dispatch in `resolve_function_call`.
+///
+/// Takes `&mut` references to the per-section caches so the follow-up
+/// `pass_define_class_bodies` can reuse the populated import scopes and
+/// resolve memos.
 fn pass_define_bodies(
     sorted: &[ElementId],
     source_files: &[SourceFile],
     id_to_decl: &HashMap<ElementId, &Declaration>,
-    mut import_scope_cache: HashMap<(usize, usize), Vec<crate::resolve::ImportScope>>,
-    mut resolve_caches: HashMap<(usize, usize), HashMap<SmolStr, crate::resolve::ResolveResult>>,
+    import_scope_cache: &mut HashMap<(usize, usize), Vec<crate::resolve::ImportScope>>,
+    resolve_caches: &mut HashMap<(usize, usize), HashMap<SmolStr, crate::resolve::ResolveResult>>,
     auto_imports: &[SmolStr],
     model: &mut PureModel,
     errors: &mut Vec<CompilationError>,
@@ -893,6 +919,164 @@ fn pass_define_bodies(
         if let Element::Function(func) = chunk.elements.get_mut(local_idx) {
             func.body = body;
         }
+    }
+}
+
+/// Pass 2b' — compile body-shape expressions on Class / Association /
+/// Primitive elements: constraint functions and messages, qualified-property
+/// bodies, and property default values.
+///
+/// These were left as placeholders by Pass 2a (`vec![]` for QP bodies and
+/// constraint lists; `None` for default values) because their lowering
+/// drives `resolve_function_call`, which needs every native function's
+/// real return type to narrow operator overloads correctly. Lowering them
+/// here — after both Pass 2a (signatures) and Pass 2b (function bodies) —
+/// guarantees the model is fully populated before any class-side body
+/// expression resolves a call.
+///
+/// Skips elements whose AST has no body-shape items, so the cost is
+/// proportional to the number of constraints / QP bodies / default values
+/// in the program, not the total element count.
+fn pass_define_class_bodies(
+    sorted: &[ElementId],
+    source_files: &[SourceFile],
+    id_to_decl: &HashMap<ElementId, &Declaration>,
+    import_scope_cache: &mut HashMap<(usize, usize), Vec<crate::resolve::ImportScope>>,
+    resolve_caches: &mut HashMap<(usize, usize), HashMap<SmolStr, crate::resolve::ResolveResult>>,
+    auto_imports: &[SmolStr],
+    model: &mut PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    use crate::resolve::ImportScope;
+
+    for &id in sorted {
+        let Some(decl) = id_to_decl.get(&id) else {
+            continue;
+        };
+        let ast_element = get_ast_element(source_files, decl);
+
+        // Only Classes / Associations / Primitives carry deferred bodies.
+        if !matches!(
+            ast_element,
+            ast::Element::Class(_) | ast::Element::Association(_) | ast::Element::Primitive(_)
+        ) {
+            continue;
+        }
+
+        let scope_key = (decl.file_idx, decl.section_idx);
+        let import_scopes = import_scope_cache.entry(scope_key).or_insert_with(|| {
+            build_import_scope(source_files, decl.file_idx, decl.section_idx, auto_imports)
+        });
+        if let Some(pkg) = ast_element.package() {
+            let pkg_str = pkg.to_string();
+            if !import_scopes
+                .iter()
+                .any(|s| s.package.to_string() == pkg_str)
+            {
+                import_scopes.push(ImportScope::from_path_str(&pkg_str));
+            }
+        }
+        let resolve_cache = resolve_caches.entry(scope_key).or_default();
+
+        let type_params = ast_type_parameters(ast_element);
+
+        // Per-element variable scope: seeded with type-variable parameters
+        // from parametric Classes / Primitives so `$x` inside a constraint
+        // resolves against the class's declared `(x:Integer[1])`.
+        let mut variable_types = HashMap::new();
+        if let Element::Class(c) = model.get_element(id) {
+            for tvp in &c.type_variable_parameters {
+                variable_types.insert(
+                    tvp.name.clone(),
+                    (tvp.type_expr.clone(), tvp.multiplicity.clone()),
+                );
+            }
+        } else if let Element::PrimitiveType(p) = model.get_element(id) {
+            for tvp in &p.type_variable_parameters {
+                variable_types.insert(
+                    tvp.name.clone(),
+                    (tvp.type_expr.clone(), tvp.multiplicity.clone()),
+                );
+            }
+        }
+
+        // Lower body-shape items into owned locals. This temporarily
+        // borrows `model` mutably via `ctx`; we drop ctx before patching.
+        let (new_constraints, new_qp_bodies, new_default_values) = {
+            let mut ctx = ResolutionContext {
+                model,
+                import_scopes,
+                resolve_cache,
+                type_parameters: &type_params,
+                variable_types,
+            };
+            match ast_element {
+                ast::Element::Class(c) => (
+                    lower_constraints(&c.constraints, &mut ctx, errors),
+                    lower_qualified_property_bodies(&c.qualified_properties, &mut ctx, errors),
+                    lower_property_default_values(&c.properties, &mut ctx, errors),
+                ),
+                ast::Element::Association(a) => (
+                    Vec::new(),
+                    lower_qualified_property_bodies(&a.qualified_properties, &mut ctx, errors),
+                    lower_property_default_values(&a.properties, &mut ctx, errors),
+                ),
+                ast::Element::Primitive(p) => (
+                    lower_constraints(&p.constraints, &mut ctx, errors),
+                    Vec::new(),
+                    Vec::new(),
+                ),
+                _ => unreachable!(),
+            }
+        };
+
+        // Patch the lowered bodies into the model element.
+        let ElementId::InstanceId {
+            chunk_id,
+            local_idx,
+        } = id
+        else {
+            continue;
+        };
+        let chunk = &mut model.chunks[chunk_id as usize];
+        match chunk.elements.get_mut(local_idx) {
+            Element::Class(c) => {
+                c.constraints = new_constraints;
+                patch_qp_bodies(&mut c.qualified_properties, new_qp_bodies);
+                patch_property_default_values(&mut c.properties, new_default_values);
+            }
+            Element::Association(a) => {
+                patch_qp_bodies(&mut a.qualified_properties, new_qp_bodies);
+                patch_property_default_values(&mut a.properties, new_default_values);
+            }
+            Element::PrimitiveType(p) => {
+                p.constraints = new_constraints;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Patches lowered QP bodies into existing QualifiedProperty entries.
+/// AST QP count may exceed model QP count if signature lowering filtered
+/// some out (return_type didn't resolve), so we zip and drop any extras.
+fn patch_qp_bodies(
+    model_qps: &mut [class::QualifiedProperty],
+    new_bodies: Vec<Vec<crate::types::ValueSpec>>,
+) {
+    for (qp, body) in model_qps.iter_mut().zip(new_bodies.into_iter()) {
+        qp.body = body;
+    }
+}
+
+/// Patches lowered default values into existing Property entries. Same
+/// alignment caveat as `patch_qp_bodies`.
+fn patch_property_default_values(
+    model_props: &mut [class::Property],
+    new_defaults: Vec<Option<crate::types::ValueSpec>>,
+) {
+    for (p, dv) in model_props.iter_mut().zip(new_defaults.into_iter()) {
+        p.default_value = dv;
     }
 }
 
@@ -1057,15 +1241,22 @@ fn hydrate_element_signature(
                 .filter_map(|type_ref| resolve::resolve_type_ref(type_ref, ctx, errors))
                 .collect();
 
-            // Properties
-            let properties = lower_properties(&class_def.properties, ctx, errors);
+            // Properties — signatures only. Default-value bodies are lowered
+            // in Pass 2b (`pass_define_class_bodies`) once all function
+            // signatures are hydrated, so type-based dispatch in any
+            // operator/function call inside a default value sees real
+            // return types instead of Pass 1 placeholders.
+            let properties = lower_property_signatures(&class_def.properties, ctx, errors);
 
-            // Qualified properties
+            // Qualified properties — signatures only; bodies deferred to
+            // Pass 2b for the same reason.
             let qualified_properties =
-                lower_qualified_properties(&class_def.qualified_properties, ctx, errors);
+                lower_qualified_property_signatures(&class_def.qualified_properties, ctx, errors);
 
-            // Constraints
-            let constraints = lower_constraints(&class_def.constraints, ctx, errors);
+            // Constraints — fully deferred to Pass 2b. Constraint expressions
+            // are body-shape: they call functions that may not yet have
+            // hydrated signatures during Pass 2a topo-ordered hydration.
+            let constraints = Vec::new();
 
             // Annotations
             let stereotypes = resolve::resolve_stereotypes(&class_def.stereotypes, ctx, errors);
@@ -1142,9 +1333,11 @@ fn hydrate_element_signature(
             })
         }
         ast::Element::Association(assoc_def) => {
-            let properties = lower_properties(&assoc_def.properties, ctx, errors);
+            // Properties / QPs — signatures only; default values & QP bodies
+            // deferred to Pass 2b (see Class arm above for rationale).
+            let properties = lower_property_signatures(&assoc_def.properties, ctx, errors);
             let qualified_properties =
-                lower_qualified_properties(&assoc_def.qualified_properties, ctx, errors);
+                lower_qualified_property_signatures(&assoc_def.qualified_properties, ctx, errors);
             let stereotypes = resolve::resolve_stereotypes(&assoc_def.stereotypes, ctx, errors);
             let tagged_values =
                 resolve::resolve_tagged_values(&assoc_def.tagged_values, ctx, errors);
@@ -1200,12 +1393,12 @@ fn hydrate_element_signature(
             };
             let type_variable_parameters =
                 lower_type_variable_parameters(&prim_def.type_variable_parameters, ctx, errors);
-            let constraints = lower_constraints(&prim_def.constraints, ctx, errors);
+            // Constraints — fully deferred to Pass 2b (see Class arm).
             Element::PrimitiveType(PrimitiveType {
                 super_type,
                 super_type_value_arguments,
                 type_variable_parameters,
-                constraints,
+                constraints: Vec::new(),
             })
         }
     }
@@ -1215,8 +1408,14 @@ fn hydrate_element_signature(
 // Property Lowering Helpers
 // ---------------------------------------------------------------------------
 
-/// Lowers AST properties to Pure properties.
-fn lower_properties(
+/// Lowers AST properties to Pure properties — **signatures only**.
+///
+/// Default-value expressions are body-shape and need every native function
+/// signature to be hydrated before they can resolve operator overloads
+/// correctly, so they are deferred to Pass 2b
+/// (`pass_define_class_bodies`). The returned `Property.default_value` is
+/// always `None` from this function — Pass 2b patches the value in-place.
+fn lower_property_signatures(
     props: &[ast::Property],
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
@@ -1236,10 +1435,7 @@ fn lower_properties(
                 type_expr,
                 multiplicity,
                 aggregation,
-                default_value: p
-                    .default_value
-                    .as_ref()
-                    .and_then(|dv| crate::lower::lower_expression(dv, ctx, errors)),
+                default_value: None, // patched in Pass 2b
                 stereotypes,
                 tagged_values,
             })
@@ -1247,8 +1443,11 @@ fn lower_properties(
         .collect()
 }
 
-/// Lowers AST qualified properties to Pure qualified properties.
-fn lower_qualified_properties(
+/// Lowers AST qualified properties to Pure qualified properties —
+/// **signatures only**. Bodies are deferred to Pass 2b for the same
+/// reason as [`lower_property_signatures`]. Returned `body` is always
+/// `vec![]`; Pass 2b patches in the lowered body.
+fn lower_qualified_property_signatures(
     qprops: &[ast::QualifiedProperty],
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
@@ -1268,10 +1467,43 @@ fn lower_qualified_properties(
                 parameters,
                 return_type,
                 return_multiplicity,
-                body: crate::lower::lower_expression_body(&qp.body, ctx, errors),
+                body: vec![], // patched in Pass 2b
                 stereotypes,
                 tagged_values,
             })
+        })
+        .collect()
+}
+
+/// Lowers QP bodies for all qualified properties of the given AST list.
+/// Returns one `Vec<Expression>` per QP, in the same order; `vec![]` if
+/// the QP was filtered out of the signature pass (return_type couldn't
+/// resolve) so the index doesn't get out of sync with the model.
+fn lower_qualified_property_bodies(
+    qprops: &[ast::QualifiedProperty],
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Vec<Vec<crate::types::ValueSpec>> {
+    qprops
+        .iter()
+        .map(|qp| crate::lower::lower_expression_body(&qp.body, ctx, errors))
+        .collect()
+}
+
+/// Lowers default-value expressions for the given AST property list.
+/// Returns one `Option<Expression>` per AST property, in order — `None`
+/// when the property had no default or when lowering produced no value.
+fn lower_property_default_values(
+    props: &[ast::Property],
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Vec<Option<crate::types::ValueSpec>> {
+    props
+        .iter()
+        .map(|p| {
+            p.default_value
+                .as_ref()
+                .and_then(|dv| crate::lower::lower_expression(dv, ctx, errors))
         })
         .collect()
 }
