@@ -38,6 +38,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use im_rc::Vector as PVector;
+use legend_pure_parser_pure::ids::{ElementId, PackageId};
+use legend_pure_parser_pure::model::{Element, PureModel};
 use slotmap::{SlotMap, new_key_type};
 use smol_str::SmolStr;
 
@@ -177,6 +179,21 @@ pub enum HeapEntry {
 /// via `Arc`.
 pub struct RuntimeHeap {
     objects: SlotMap<ObjectId, HeapEntry>,
+    /// BiMap between compiled `ElementId`s and the heap rows that
+    /// represent them as M3 metamodel CoreInstances. Populated by
+    /// [`Self::bootstrap_metamodel`] at Evaluator construction;
+    /// drives the unified-reflection refactor where every metamodel
+    /// reference is reachable as both an `ElementId` (compiled-model
+    /// view) and an `ObjectId` (runtime heap view) — see plan
+    /// `the-project-has-a-buzzing-creek.md` step 1.
+    ///
+    /// Read direction (`element_to_object`) is the hot path —
+    /// `Value::Element(eid)` projects to its heap row in O(1) for
+    /// reflective property access. The reverse direction
+    /// (`object_to_element`) is rare; we synthesise it by walking
+    /// the forward map at access time rather than storing two
+    /// HashMaps.
+    element_to_object: HashMap<ElementId, ObjectId>,
 }
 
 impl RuntimeHeap {
@@ -185,6 +202,7 @@ impl RuntimeHeap {
     pub fn new() -> Self {
         Self {
             objects: SlotMap::with_key(),
+            element_to_object: HashMap::new(),
         }
     }
 
@@ -193,7 +211,30 @@ impl RuntimeHeap {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             objects: SlotMap::with_capacity_and_key(capacity),
+            element_to_object: HashMap::with_capacity(capacity),
         }
+    }
+
+    /// Look up the metamodel heap row for a compiled element. Returns
+    /// `None` when `bootstrap_metamodel` hasn't run for this
+    /// element's chunk (e.g. the bootstrap chunk loaded but a user
+    /// chunk hasn't), or when the element kind isn't materialised
+    /// (currently every kind is, but kept lenient for future
+    /// extensions like compile-only synthetic elements).
+    #[must_use]
+    pub fn object_for_element(&self, eid: ElementId) -> Option<ObjectId> {
+        self.element_to_object.get(&eid).copied()
+    }
+
+    /// Reverse lookup — find the `ElementId` whose metamodel row
+    /// is `oid`, or `None` if `oid` isn't a metamodel row. O(n) in
+    /// the bimap; reserved for diagnostic / consistency-check paths,
+    /// not hot evaluation.
+    #[must_use]
+    pub fn element_for_object(&self, oid: ObjectId) -> Option<ElementId> {
+        self.element_to_object
+            .iter()
+            .find_map(|(eid, &id)| (id == oid).then_some(*eid))
     }
 
     // -- Allocation --
@@ -419,6 +460,71 @@ impl RuntimeHeap {
                 expected: std::any::type_name::<T>(),
                 actual: obj.classifier.clone().into(),
             }),
+        }
+    }
+
+    /// Pre-populate the heap with one row per compiled `PureModel`
+    /// element, mirroring what Java Pure's M4 does — every metamodel
+    /// entity (Class, Function, Enum, Property, Package, …) is a
+    /// `CoreInstance` reachable through the same property-access
+    /// surface as a user-class instance. Stores the
+    /// `ElementId → ObjectId` mapping in [`Self::element_to_object`]
+    /// so subsequent lookups (`object_for_element`) flip between the
+    /// two views in O(1).
+    ///
+    /// Each row's classifier is the M3 metatype (`Class` element gets
+    /// classifier `meta::pure::metamodel::type::Class`, a Function
+    /// gets `ConcreteFunctionDefinition` or `NativeFunctionDefinition`,
+    /// etc. via `bootstrap::metatype_of`). Reflective slots are
+    /// **not** populated in this initial pass — that's deferred to
+    /// the per-step incremental fills (steps 3–5 of the
+    /// unified-reflection plan), so callers don't see partial state.
+    /// The empty rows still enable `Value::Element(eid)` ↔
+    /// `Value::Object(oid)` projection (step 2) and serve as the
+    /// destination for property writes in subsequent steps.
+    ///
+    /// Idempotent: re-running the bootstrap (e.g. across multiple
+    /// `Evaluator::new` calls) skips elements already mapped, so
+    /// model-extension flows (`pure --watch` future) remain safe.
+    pub fn bootstrap_metamodel(&mut self, model: &PureModel) {
+        // Walk every chunk's element table.
+        for chunk in &model.chunks {
+            for local_idx in 0..chunk.elements.len() {
+                let eid = ElementId::InstanceId {
+                    chunk_id: chunk.chunk_id,
+                    local_idx,
+                };
+                if self.element_to_object.contains_key(&eid) {
+                    continue;
+                }
+                let element = model.get_element(eid);
+                let classifier =
+                    match legend_pure_parser_pure::bootstrap::metatype_of(model, element) {
+                        Some(meta_id) => {
+                            crate::model_utils::build_element_path(model, meta_id, "::", false)
+                        }
+                        // Elements with no resolvable M3 metatype (e.g.
+                        // bootstrap-only sentinel slots before m3.pure
+                        // parses) classify as `Any` — generic enough to
+                        // still allow property reads to surface their
+                        // canonical `name`/`package` slots.
+                        None => "meta::pure::metamodel::type::Any".to_owned(),
+                    };
+                let obj_id = self.alloc_dynamic(classifier);
+                self.element_to_object.insert(eid, obj_id);
+            }
+        }
+        // Walk the package table separately — Packages live in
+        // `global_packages`, not in element chunks.
+        for raw_pkg_idx in 0..model.global_packages.len() {
+            #[allow(clippy::cast_possible_truncation)]
+            let pkg_id = PackageId(raw_pkg_idx as u32);
+            let eid = ElementId::Package(pkg_id);
+            if self.element_to_object.contains_key(&eid) {
+                continue;
+            }
+            let obj_id = self.alloc_dynamic("meta::pure::metamodel::type::Package");
+            self.element_to_object.insert(eid, obj_id);
         }
     }
 
