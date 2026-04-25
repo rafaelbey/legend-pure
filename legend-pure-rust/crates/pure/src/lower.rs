@@ -297,12 +297,16 @@ fn variadic_op(
 ) -> Option<ValueSpec> {
     let l = lower_expression(left, ctx, errors)?;
     let r = lower_expression(right, ctx, errors)?;
-    let resolved_name: SmolStr =
-        if name == "plus" && (is_string_typed_spec(&l.kind) || is_string_typed_spec(&r.kind)) {
-            SmolStr::new_static("plus_String_MANY__String_1_")
-        } else {
-            SmolStr::new(name)
-        };
+    let resolved_name: SmolStr = if name == "plus"
+        && (is_string_typed_spec(&l.kind)
+            || is_string_typed_spec(&r.kind)
+            || is_string_typed_var(&l.kind, ctx)
+            || is_string_typed_var(&r.kind, ctx))
+    {
+        SmolStr::new_static("plus_String_MANY__String_1_")
+    } else {
+        SmolStr::new(name)
+    };
     let collection = untyped(
         ExprKind::Collection {
             elements: vec![l, r],
@@ -331,6 +335,24 @@ fn is_string_typed_spec(kind: &ExprKind) -> bool {
         }
         _ => false,
     }
+}
+
+/// Static hint: is this `ExprKind` a `Variable` whose tracked type is
+/// String? Reads from `ctx.variable_types`, which is populated for
+/// function/lambda parameters and let bindings — including by Lane L6's
+/// lambda-parameter inference, so `{x, y | $x + $y}->eval('1', '2')`
+/// dispatches `+` to the String overload.
+fn is_string_typed_var(kind: &ExprKind, ctx: &ResolutionContext<'_>) -> bool {
+    let ExprKind::Variable { name } = kind else {
+        return false;
+    };
+    let Some((ty, _)) = ctx.variable_types.get(name) else {
+        return false;
+    };
+    matches!(
+        ty,
+        crate::types::TypeExpr::Named { element, .. } if *element == crate::bootstrap::STRING_ID
+    )
 }
 
 /// Lowers comparison: `a == b` → `FunctionCall("equal", [a, b])`.
@@ -448,18 +470,26 @@ fn lower_bitwise_not(
 /// Resolves the function name through import-aware resolution. If resolution
 /// fails, the call is still produced with `function: None` so downstream
 /// code can see the structure.
+///
+/// Two-phase argument lowering: when the call has lambda arguments, we
+/// pre-lower the non-lambda args first, then attempt to bind the call's
+/// generic type/multiplicity variables from those concrete args (see
+/// [`lower_args_with_lambda_inference`]). The lambda is then lowered with
+/// expected parameter types so its body's dispatch sees the right types.
 #[allow(clippy::unnecessary_wraps)] // consistent signature with other lower_* fns
 fn lower_function_application(
     e: &ast_expr::FunctionApplication,
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
-    // Lower arguments FIRST — their compiled types drive dispatch
-    let arguments: Vec<ValueSpec> = e
-        .arguments
-        .iter()
-        .filter_map(|a| lower_expression(a, ctx, errors))
-        .collect();
+    let arguments = lower_args_with_lambda_inference(
+        &e.function,
+        &e.arguments,
+        None,
+        e.arguments.len(),
+        ctx,
+        errors,
+    );
 
     let function_id = resolve::resolve_function_call(
         &e.function,
@@ -483,21 +513,31 @@ fn lower_function_application(
 /// Lowers `expr->func(args)` → `FunctionCall` with target prepended.
 ///
 /// `$x->filter(p)` becomes `FunctionCall("filter", [$x, p])`.
+///
+/// Like [`lower_function_application`], uses two-phase lowering to feed
+/// concrete call-site argument types into otherwise-untyped lambda params —
+/// including when the arrow target *itself* is a lambda
+/// (e.g. `{x, y | $x + $y}->eval('1', '2')`).
 fn lower_arrow_function(
     e: &ast_expr::ArrowFunction,
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
-    // Lower target and arguments FIRST — their compiled types drive dispatch
-    let target = lower_expression(&e.target, ctx, errors)?;
+    // Treat the target as the first argument so it participates in the
+    // same two-phase inference as the explicit args. If it's a lambda, it
+    // will be deferred until the explicit args have been lowered.
+    let mut all_args: Vec<ast_expr::Expression> = Vec::with_capacity(1 + e.arguments.len());
+    all_args.push(*e.target.clone());
+    all_args.extend(e.arguments.iter().cloned());
 
-    let mut arguments = Vec::with_capacity(1 + e.arguments.len());
-    arguments.push(target);
-    for arg in &e.arguments {
-        if let Some(lowered) = lower_expression(arg, ctx, errors) {
-            arguments.push(lowered);
-        }
-    }
+    let arguments = lower_args_with_lambda_inference(
+        &e.function,
+        &all_args,
+        None,
+        1 + e.arguments.len(),
+        ctx,
+        errors,
+    );
 
     // AST arg count = target + explicit args
     let function_id = resolve::resolve_function_call(
@@ -517,6 +557,214 @@ fn lower_arrow_function(
         },
         e.source_info.clone(),
     ))
+}
+
+/// Two-phase argument lowering with lambda-parameter type inference.
+///
+/// Phase 1: lower every non-lambda arg position (preserving slot indices via
+/// `Option`s).
+///
+/// Phase 2: try to resolve the callee by `name + arity` alone; if exactly one
+/// candidate matches, use its declared parameter list to infer the call's
+/// generic type/multiplicity variables from the lowered phase-1 args, then
+/// for each lambda slot extract the expected `FunctionType` (substituting the
+/// inferred bindings) and lower the lambda with those expected param types.
+/// If no unique candidate is found, lambdas fall back to the original
+/// (untyped → `Any`) lowering.
+///
+/// `prepended` is the arrow-function target: it occupies position 0 and is
+/// already lowered (or absent for plain function applications).
+fn lower_args_with_lambda_inference(
+    function_ptr: &legend_pure_parser_ast::annotation::PackageableElementPtr,
+    ast_args: &[ast_expr::Expression],
+    prepended: Option<ValueSpec>,
+    total_arity: usize,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Vec<ValueSpec> {
+    // Slot 0 is the prepended target (for arrow); explicit args follow.
+    let prepend_offset = usize::from(prepended.is_some());
+    let mut slots: Vec<Option<ValueSpec>> = Vec::with_capacity(total_arity);
+    if let Some(t) = prepended {
+        slots.push(Some(t));
+    }
+
+    // Phase 1: lower every non-lambda explicit arg, leaving lambda slots empty.
+    for ast_arg in ast_args {
+        let underlying = unwrap_group(ast_arg);
+        if matches!(underlying, ast_expr::Expression::Lambda(_)) {
+            slots.push(None);
+        } else {
+            slots.push(lower_expression(ast_arg, ctx, errors));
+        }
+    }
+
+    // Find a unique callable candidate by name + arity (no type narrowing —
+    // lambda slots are still empty). If 0 or >1 match, skip inference.
+    let candidate = unique_overload_by_arity(function_ptr, total_arity, ctx);
+
+    // Compute expected param types per lambda slot.
+    let lambda_expectations: Vec<
+        Option<Vec<Option<(crate::types::TypeExpr, crate::types::Multiplicity)>>>,
+    > = if let Some(fid) = candidate {
+        compute_lambda_param_expectations(fid, &slots, ctx)
+    } else {
+        (0..total_arity).map(|_| None).collect()
+    };
+
+    // Phase 2: lower the lambda slots with expected types where available.
+    for (slot_idx, ast_arg) in ast_args.iter().enumerate() {
+        let target_idx = slot_idx + prepend_offset;
+        if slots[target_idx].is_some() {
+            continue;
+        }
+        let underlying = unwrap_group(ast_arg);
+        if let ast_expr::Expression::Lambda(lam) = underlying {
+            let expected = lambda_expectations
+                .get(target_idx)
+                .and_then(|o| o.as_deref());
+            slots[target_idx] = lower_lambda_with_expected_types(lam, expected, ctx, errors);
+        } else {
+            // Defensive — shouldn't happen because phase 1 lowered everything
+            // that wasn't a Lambda — but stay tolerant.
+            slots[target_idx] = lower_expression(ast_arg, ctx, errors);
+        }
+    }
+
+    slots.into_iter().flatten().collect()
+}
+
+/// Strips outer `Group(..)` wrappers so lambda-classification sees through
+/// `({x | $x + 1})`. The lambda still lowers via `lower_expression`, which
+/// also unwraps groups.
+fn unwrap_group(expr: &ast_expr::Expression) -> &ast_expr::Expression {
+    let mut cur = expr;
+    while let ast_expr::Expression::Group(inner) = cur {
+        cur = inner;
+    }
+    cur
+}
+
+/// Returns the unique function `ElementId` matching `ptr.name()` with the
+/// given total arity, searching the same import scopes used by
+/// `resolve_function_call`. Returns `None` if 0 or >1 candidates match.
+fn unique_overload_by_arity(
+    ptr: &legend_pure_parser_ast::annotation::PackageableElementPtr,
+    arity: usize,
+    ctx: &ResolutionContext<'_>,
+) -> Option<crate::ids::ElementId> {
+    use crate::model::Element;
+    let name = &ptr.name;
+    let mut candidates: Vec<crate::ids::ElementId> = Vec::new();
+
+    let push_filtered = |found: Vec<crate::ids::ElementId>, out: &mut Vec<_>| {
+        for eid in found {
+            if let Element::Function(f) = ctx.model.get_element(eid) {
+                if f.parameters.len() == arity && !out.contains(&eid) {
+                    out.push(eid);
+                }
+            }
+        }
+    };
+
+    if let Some(pkg) = ptr.package.as_ref() {
+        if let Some(pkg_id) = ctx.model.resolve_package(pkg) {
+            let found = ctx.model.resolve_functions_by_name_in_package(pkg_id, name);
+            push_filtered(found, &mut candidates);
+        }
+    } else {
+        let root = ctx
+            .model
+            .resolve_functions_by_name_in_package(ctx.model.root_package, name);
+        push_filtered(root, &mut candidates);
+        for scope in ctx.import_scopes {
+            if let Some(pkg_id) = ctx.model.resolve_package(&scope.package) {
+                let found = ctx.model.resolve_functions_by_name_in_package(pkg_id, name);
+                push_filtered(found, &mut candidates);
+            }
+        }
+    }
+
+    if candidates.len() == 1 {
+        Some(candidates[0])
+    } else {
+        None
+    }
+}
+
+/// For each argument slot, computes the expected lambda parameter
+/// `(TypeExpr, Multiplicity)` list when the slot is a lambda whose matching
+/// callee parameter is `Function<{T[m]->U[n]}>` and the call's generic
+/// variables can be bound from the surrounding non-lambda args.
+///
+/// Slots that aren't lambdas, or whose matching param isn't a function type,
+/// or whose substituted parameter types remain non-concrete, return `None`.
+fn compute_lambda_param_expectations(
+    callee: crate::ids::ElementId,
+    slots: &[Option<ValueSpec>],
+    ctx: &ResolutionContext<'_>,
+) -> Vec<Option<Vec<Option<(crate::types::TypeExpr, crate::types::Multiplicity)>>>> {
+    use crate::model::Element;
+    use crate::types::TypeExpr;
+
+    let crate::model::Element::Function(callee_fn) = ctx.model.get_element(callee) else {
+        return (0..slots.len()).map(|_| None).collect();
+    };
+    let params = &callee_fn.parameters;
+    if params.len() != slots.len() {
+        return (0..slots.len()).map(|_| None).collect();
+    }
+
+    // Collect the (param, arg) pairs for non-lambda slots only — lambda
+    // positions are still empty and would just contribute nothing.
+    let mut pair_params: Vec<crate::types::Parameter> = Vec::new();
+    let mut pair_args: Vec<ValueSpec> = Vec::new();
+    for (param, slot) in params.iter().zip(slots.iter()) {
+        if let Some(arg) = slot {
+            pair_params.push(param.clone());
+            pair_args.push(arg.clone());
+        }
+    }
+    let bindings =
+        resolve::infer_generic_bindings(&pair_params, &pair_args, ctx.model, &ctx.variable_types);
+
+    // For each lambda slot, extract Function<{...}> and substitute bindings.
+    slots
+        .iter()
+        .enumerate()
+        .map(|(i, slot)| {
+            if slot.is_some() {
+                return None;
+            }
+            let param = params.get(i)?;
+            // The param type may be FunctionType directly, or
+            // Named<Function>[FunctionType] — same shapes handled by the
+            // existing inference pass in resolve.rs.
+            let function_type: Option<&TypeExpr> = match &param.type_expr {
+                TypeExpr::FunctionType { .. } => Some(&param.type_expr),
+                TypeExpr::Named { type_arguments, .. } => type_arguments
+                    .iter()
+                    .find(|ta| matches!(ta, TypeExpr::FunctionType { .. })),
+                _ => None,
+            };
+            let TypeExpr::FunctionType {
+                parameters: ft_params,
+                ..
+            } = function_type?
+            else {
+                return None;
+            };
+            let expected = ft_params
+                .iter()
+                .map(|(ft_ty, ft_mult)| {
+                    let ty = resolve::substitute_type(ft_ty, &bindings.ty);
+                    let mult = resolve::substitute_mult(ft_mult, &bindings.mult);
+                    Some((ty, mult))
+                })
+                .collect::<Vec<_>>();
+            Some(expected)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -606,7 +854,29 @@ fn lower_lambda(
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
-    let parameters = lower_lambda_parameters(&e.parameters, ctx, errors);
+    lower_lambda_with_expected_types(e, None, ctx, errors)
+}
+
+/// Lowers a lambda, optionally using `expected_types` to type the lambda's
+/// otherwise-untyped parameters before lowering its body.
+///
+/// `expected_types` is provided by the application-lowering paths
+/// (`lower_function_application` / `lower_arrow_function`) when the lambda
+/// occupies a `Function<{T[m]->U[n]}>`-typed slot whose type/multiplicity
+/// variables can be resolved from the surrounding call's other arguments.
+/// Each entry of the slice corresponds positionally to a lambda parameter;
+/// `None` means "no expectation for this slot" (keep current fallback).
+///
+/// Already-typed lambda parameters always take precedence over the
+/// expectation, so this never overrides an explicit declaration.
+#[allow(clippy::unnecessary_wraps)] // consistent signature with other lower_* fns
+pub(crate) fn lower_lambda_with_expected_types(
+    e: &ast_expr::Lambda,
+    expected_types: Option<&[Option<(crate::types::TypeExpr, crate::types::Multiplicity)>]>,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let parameters = lower_lambda_parameters(&e.parameters, expected_types, ctx, errors);
 
     // Save outer variable scope, register lambda params
     let outer_vars = ctx.variable_types.clone();
@@ -630,27 +900,49 @@ fn lower_lambda(
 
 /// Lower lambda parameters — same as function parameters but tolerates
 /// missing type/multiplicity (untyped lambda params need type inference).
+///
+/// When `expected_types` is provided, an untyped parameter (no `type_ref`)
+/// adopts the corresponding `Some((ty, mult))` entry — but only when the
+/// expected type is *concrete* (a `Named { .. }` other than `Any`, with no
+/// remaining `Generic(_)` substructure). This keeps dispatch precise without
+/// overcommitting on still-generic call sites.
 fn lower_lambda_parameters(
     params: &[legend_pure_parser_ast::annotation::Parameter],
+    expected_types: Option<&[Option<(crate::types::TypeExpr, crate::types::Multiplicity)>]>,
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Vec<crate::types::Parameter> {
     params
         .iter()
-        .map(|p| {
-            let type_expr = p
+        .enumerate()
+        .map(|(idx, p)| {
+            let declared_type = p
                 .type_ref
                 .as_ref()
-                .and_then(|tr| resolve::resolve_type_ref(tr, ctx, errors))
-                .unwrap_or(crate::types::TypeExpr::Named {
-                    element: crate::bootstrap::ANY_ID,
-                    type_arguments: vec![],
-                    value_arguments: vec![],
-                });
-            let multiplicity = p.multiplicity.as_ref().map_or(
-                crate::types::Multiplicity::PureOne,
-                resolve::lower_multiplicity,
-            );
+                .and_then(|tr| resolve::resolve_type_ref(tr, ctx, errors));
+            let declared_mult = p.multiplicity.as_ref().map(resolve::lower_multiplicity);
+            let expected = expected_types
+                .and_then(|s| s.get(idx))
+                .and_then(|o| o.as_ref());
+
+            // Type: declared > expected (when concrete) > Any.
+            let type_expr = declared_type.unwrap_or_else(|| {
+                expected
+                    .map(|(t, _)| t.clone())
+                    .filter(is_concrete_type)
+                    .unwrap_or(crate::types::TypeExpr::Named {
+                        element: crate::bootstrap::ANY_ID,
+                        type_arguments: vec![],
+                        value_arguments: vec![],
+                    })
+            });
+            // Multiplicity: declared > expected (when not Variable) > [1].
+            let multiplicity = declared_mult.unwrap_or_else(|| {
+                expected
+                    .map(|(_, m)| m.clone())
+                    .filter(|m| !matches!(m, crate::types::Multiplicity::Variable(_)))
+                    .unwrap_or(crate::types::Multiplicity::PureOne)
+            });
             crate::types::Parameter {
                 name: p.name.clone(),
                 type_expr,
@@ -659,6 +951,27 @@ fn lower_lambda_parameters(
             }
         })
         .collect()
+}
+
+/// True iff `ty` is a fully resolved, non-`Any` named type. Type-arguments
+/// must themselves be concrete; any `Generic(_)` lurking inside disqualifies
+/// the type as "concrete enough" to commit lambda-param dispatch on.
+fn is_concrete_type(ty: &crate::types::TypeExpr) -> bool {
+    use crate::types::TypeExpr;
+    match ty {
+        TypeExpr::Named {
+            element,
+            type_arguments,
+            ..
+        } => *element != crate::bootstrap::ANY_ID && type_arguments.iter().all(is_concrete_type),
+        TypeExpr::FunctionType {
+            parameters,
+            return_type,
+            ..
+        } => parameters.iter().all(|(t, _)| is_concrete_type(t)) && is_concrete_type(return_type),
+        TypeExpr::Relation(_) => true,
+        TypeExpr::Generic(_) | TypeExpr::AlgebraUnion(_, _) => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
