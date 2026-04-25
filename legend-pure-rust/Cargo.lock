@@ -908,6 +908,7 @@ dependencies = [
  "rust_decimal",
  "smol_str",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -938,6 +939,8 @@ dependencies = [
  "slotmap",
  "smol_str",
  "thiserror 2.0.18",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
