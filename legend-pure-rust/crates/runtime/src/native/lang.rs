@@ -453,23 +453,67 @@ impl NativeFunction for Copy {
         }
 
         let obj = ctx.heap_mut().alloc_dynamic(classifier.clone());
+        // Split the supplied kvs into plain (no `.`) and dotted-path
+        // (`address.name = 'X'`) groups. Plain kvs go through the normal
+        // mutate_set; path kvs need a per-first-segment deep-clone so
+        // `^$pierre(address.name='Somewhere')` lands on a fresh Address
+        // object instead of mutating the source's nested instance.
+        let (plain_kvs, path_kvs) = partition_path_kvs(&values[1..])?;
+
+        // Path-property updates rebind a top-level property (`firm`) to
+        // a fresh clone — the carried-over inverse population for that
+        // property would otherwise add the new copy to the *source's*
+        // nested-object inverse list (e.g. add `$bob` to the OLD
+        // `gsJC.employees`). Track the first-segment names to exclude
+        // them from carried inverse population.
+        let path_overrides: std::collections::HashSet<SmolStr> = {
+            let mut set = std::collections::HashSet::new();
+            let mut i = 0;
+            while i < path_kvs.len() {
+                if let Ok(k) = path_kvs[i].as_string()
+                    && let Some((head, _)) = k.split_once('.')
+                {
+                    set.insert(SmolStr::new(head));
+                }
+                i += 2;
+            }
+            set
+        };
+
         // Flatten carried-over properties into a `[key1, val1, key2, val2, …]`
         // slice compatible with `populate_association_inverses` — the copy
         // should appear in every association inverse its source belonged
         // to (e.g. a copied Person is appended to `firm.employees` so
         // `assertSameElements([$bob, $pierre], $firmX.employees)` holds).
+        // Skip any property the user is path-overriding; the inverse for
+        // those is established by the path-property handler against the
+        // freshly-cloned nested object.
         let mut carried_kvs: Vec<Value> = Vec::with_capacity(original_props.len() * 2);
         for (name, prop_values) in &original_props {
+            ctx.heap_mut().mutate_add(obj, name.as_str(), prop_values)?;
+            if path_overrides.contains(name) {
+                continue;
+            }
             carried_kvs.push(Value::String(name.clone()));
             carried_kvs.push(Value::from_vec(prop_values.clone()));
-            ctx.heap_mut().mutate_add(obj, name.as_str(), prop_values)?;
         }
 
-        apply_key_value_pairs(ctx, obj, &values[1..])?;
+        apply_key_value_pairs(ctx, obj, &plain_kvs)?;
+        apply_path_property_updates(ctx, source_id, obj, &path_kvs)?;
 
         if let Some(class_id) = crate::m3_paths::resolve(ctx.model(), &classifier) {
             populate_association_inverses(ctx, obj, class_id, &carried_kvs)?;
-            populate_association_inverses(ctx, obj, class_id, &values[1..])?;
+            populate_association_inverses(ctx, obj, class_id, &plain_kvs)?;
+            // Re-establish inverses for path-overridden top-level
+            // properties — read the freshly-set value off the new
+            // object and feed it through the same mechanism so the
+            // cloned nested object's inverse-side list is updated.
+            for head in &path_overrides {
+                let new_vals = ctx.heap().get_property_values(obj, head.as_str())?;
+                let assigned = Value::from_vec(new_vals.iter().cloned().collect());
+                let synthetic = vec![Value::String(head.clone()), assigned];
+                populate_association_inverses(ctx, obj, class_id, &synthetic)?;
+            }
         }
 
         Ok(Evaluated::new(Value::Object(obj)))
@@ -791,6 +835,142 @@ fn apply_key_value_pairs(
         i += 2;
     }
     Ok(())
+}
+
+/// Split a `[key1, val1, key2, val2, ...]` slice into two parallel
+/// flat-pair slices: the plain keys (no `.`) and the dotted-path
+/// keys (`address.name`, `firm.legalName`). Both keep the same flat
+/// shape so `apply_key_value_pairs` and `apply_path_property_updates`
+/// can consume them uniformly.
+#[allow(clippy::result_large_err)]
+fn partition_path_kvs(kvs: &[Value]) -> Result<(Vec<Value>, Vec<Value>), PureException> {
+    if kvs.len() % 2 != 0 {
+        return Err(PureRuntimeError::EvaluationError(format!(
+            "copy: expected key/value pairs, got {} extra arguments",
+            kvs.len()
+        ))
+        .into());
+    }
+    let mut plain: Vec<Value> = Vec::new();
+    let mut path: Vec<Value> = Vec::new();
+    let mut i = 0;
+    while i < kvs.len() {
+        let key = kvs[i].as_string()?;
+        let bucket = if key.contains('.') {
+            &mut path
+        } else {
+            &mut plain
+        };
+        bucket.push(kvs[i].clone());
+        bucket.push(kvs[i + 1].clone());
+        i += 2;
+    }
+    Ok((plain, path))
+}
+
+/// Apply dotted-path property updates (`address.name = 'Somewhere'`,
+/// `firm.legalName = 'FirmX'`) to the freshly-allocated copy.
+///
+/// For each unique first segment, deep-clone the source's nested object
+/// once and apply every update keyed under that segment to the clone.
+/// The new object's first-segment property is then set to the clone —
+/// this is what makes `assertIsNot($pierre.address, $pierre2.address)`
+/// hold even though only the leaf field was mentioned. Multi-level
+/// paths (`a.b.c`) recurse: the `b.c = v` update is applied as a
+/// path-property on the clone of `a`.
+#[allow(clippy::result_large_err)]
+fn apply_path_property_updates(
+    ctx: &mut dyn EvalContextTrait,
+    source_id: ObjectId,
+    target_id: ObjectId,
+    kvs: &[Value],
+) -> Result<(), PureException> {
+    use std::collections::BTreeMap;
+
+    // Group `(first_segment → [(rest_path, value), …])` so multiple
+    // updates against the same first segment share a single clone.
+    let mut groups: BTreeMap<SmolStr, Vec<(SmolStr, Value)>> = BTreeMap::new();
+    let mut i = 0;
+    while i < kvs.len() {
+        let key = kvs[i].as_string()?.clone();
+        let value = kvs[i + 1].clone();
+        let (head, tail) = match key.split_once('.') {
+            Some((h, t)) => (SmolStr::new(h), SmolStr::new(t)),
+            None => {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "copy: expected dotted-path key, got '{key}'"
+                ))
+                .into());
+            }
+        };
+        groups.entry(head).or_default().push((tail, value));
+        i += 2;
+    }
+
+    for (head, updates) in groups {
+        let nested = ctx.heap().get_property_values(source_id, head.as_str())?;
+        let mut cloned: Vec<Value> = Vec::with_capacity(nested.len());
+        for v in nested.iter() {
+            let Value::Object(inner_id) = v else {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "copy: cannot path-set '{head}.…' on a non-object property value"
+                ))
+                .into());
+            };
+            let clone_id = clone_heap_object(ctx, *inner_id)?;
+            // Group updates between leaf-set ('name = "X"') and
+            // further-nested path-set ('address.name = "X"' against this
+            // clone). Multi-level paths recurse via
+            // `apply_path_property_updates`.
+            let mut leaf_kvs: Vec<Value> = Vec::new();
+            let mut nested_path_kvs: Vec<Value> = Vec::new();
+            for (rest, val) in &updates {
+                let bucket = if rest.contains('.') {
+                    &mut nested_path_kvs
+                } else {
+                    &mut leaf_kvs
+                };
+                bucket.push(Value::String(rest.clone()));
+                bucket.push(val.clone());
+            }
+            apply_key_value_pairs(ctx, clone_id, &leaf_kvs)?;
+            if !nested_path_kvs.is_empty() {
+                apply_path_property_updates(ctx, *inner_id, clone_id, &nested_path_kvs)?;
+            }
+            cloned.push(Value::Object(clone_id));
+        }
+        ctx.heap_mut()
+            .mutate_set(target_id, head.as_str(), &cloned)?;
+    }
+    Ok(())
+}
+
+/// Allocate a fresh heap Object that mirrors `source_id` — same
+/// classifier and a copy of every property. Used by the path-property
+/// path so a `^$src(nested.field=val)` update lands on a new nested
+/// instance rather than mutating the source's.
+#[allow(clippy::result_large_err)]
+fn clone_heap_object(
+    ctx: &mut dyn EvalContextTrait,
+    source_id: ObjectId,
+) -> Result<ObjectId, PureException> {
+    let classifier = ctx.heap().classifier(source_id)?.to_owned();
+    let names = ctx.heap().property_names(source_id)?;
+    let mut snapshot: Vec<(SmolStr, Vec<Value>)> = Vec::with_capacity(names.len());
+    for name in names {
+        let prop_values: Vec<Value> = ctx
+            .heap()
+            .get_property_values(source_id, name.as_str())?
+            .iter()
+            .cloned()
+            .collect();
+        snapshot.push((name, prop_values));
+    }
+    let clone_id = ctx.heap_mut().alloc_dynamic(classifier);
+    for (name, vs) in snapshot {
+        ctx.heap_mut().mutate_set(clone_id, name.as_str(), &vs)?;
+    }
+    Ok(clone_id)
 }
 
 /// Compute the qualified path for a class element (used as heap classifier).
