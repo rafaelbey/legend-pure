@@ -1741,6 +1741,25 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     /// bridge, we bind each pre-forced value under a reserved synthetic name
     /// in a fresh scope and hand the native variable-reference specs — calling
     /// `ctx.evaluate` on them round-trips back to the bound value.
+    ///
+    /// Dispatch order mirrors `eval_function_call` (the entry point for
+    /// compiler-lowered `FunctionCall` specs):
+    /// 1. Exact native at `mangled`.
+    /// 2. Resolved user function with a non-empty body — execute it.
+    /// 3. Simple-name prefix fallback (`find_by_prefix(function_name)`).
+    /// 4. Function not found.
+    ///
+    /// Step 3 was previously `find_by_prefix(mangled.as_str())`, which never
+    /// matched anything `get(mangled)` hadn't already found. The right
+    /// fallback is the function's *simple* name — same as
+    /// `eval_function_call` step 2c — so a `Value::Element` callable for an
+    /// overload that has no native at its exact mangled key (e.g. the
+    /// 2-arg `new(Class, String):T[1]` declared in the platform but
+    /// served by the 3-arg `new_Class_1__String_1__KeyExpression_MANY__T_1_`
+    /// native) still routes to the registered native instead of evaluating
+    /// the empty native-declaration body and silently returning `Unit`.
+    /// This is the path `reactivate_function_expression` and
+    /// `executeTest`-style reflective dispatch take.
     #[allow(clippy::result_large_err)]
     fn dispatch_compiled_function(
         &mut self,
@@ -1748,16 +1767,31 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         mangled: &SmolStr,
         args: &[Value],
     ) -> Result<Value, PureException> {
-        // self.natives is &'model NativeRegistry, so the native ref has 'model lifetime —
-        // no conflict with the &mut self borrow used to construct EvalContext below.
-        let native = self
-            .natives
-            .get(mangled.as_str())
-            .or_else(|| self.natives.find_by_prefix(mangled.as_str()));
-        if let Some(native) = native {
+        // 1. Exact mangled-FQN native.
+        if let Some(native) = self.natives.get(mangled.as_str()) {
             return self.execute_native_with_values(native, args);
         }
-        self.call_user_function(id, args, mangled.as_str())
+        // 2. Non-native user function — evaluate its body. Native declarations
+        //    (is_native=true, body empty) fall through to step 3 so the
+        //    prefix fallback can still find the registered Rust impl.
+        let (is_native, simple_name) = match self.model.get_element(id) {
+            Element::Function(f) => (f.is_native, Some(f.function_name.clone())),
+            _ => (false, None),
+        };
+        if !is_native {
+            return self.call_user_function(id, args, mangled.as_str());
+        }
+        // 3. Simple-name prefix fallback against the native registry.
+        if let Some(simple) = simple_name.as_deref()
+            && let Some(native) = self.natives.find_by_prefix(simple)
+        {
+            return self.execute_native_with_values(native, args);
+        }
+        // 4. Surface as FunctionNotFound rather than silently calling an
+        //    empty body and returning Unit.
+        Err(PureException::from(PureRuntimeError::FunctionNotFound(
+            mangled.as_str().into(),
+        )))
     }
 
     /// Invoke a native with already-forced `&[Value]` arguments.

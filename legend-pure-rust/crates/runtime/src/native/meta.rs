@@ -2246,14 +2246,27 @@ impl NativeFunction for Reactivate {
 #[allow(clippy::result_large_err)]
 fn reactivate_value(value: &Value, ctx: &mut dyn EvalContextTrait) -> Result<Value, PureException> {
     let Value::Object(obj_id) = value else {
-        // Non-wrapper values (primitives, functions) reactivate to
-        // themselves — invoking a `Value::Function` used to live here;
-        // deactivate now always wraps it as `InstanceValue`, so the
-        // function arm would fire only when a raw function flows in
-        // without going through deactivate first. Preserve that
-        // invoke-on-raw-function shim.
-        if let Value::Function(_) = value {
-            tracing::debug!("reactivate: raw Function value → invoke with no args");
+        // 0-arg lambda thunks deactivated as the body of
+        // `{|expr}.expressionSequence->evaluateAndDeactivate()->at(0)`
+        // need to be *evaluated* on reactivate so the chain returns
+        // the value of `expr` (e.g. cast.pure's
+        // `assertEquals(1, ...->reactivate())`). Lambdas with declared
+        // parameters are runtime *values* — `map(p|$p.lastName)`'s
+        // deactivated lambda must pass through so the outer `map`
+        // invokes it per element with `p` bound; invoking it here
+        // would fail on `Variable 'p' not found`.
+        //
+        // This split mirrors what Java Pure achieves by having
+        // `LambdaFunction.expressionSequence` return body
+        // ValueSpecifications rather than the lambda value itself —
+        // our `.expressionSequence` shortcut returns the lambda for
+        // round-trip-cloning compatibility, so we reproduce the
+        // semantic distinction here at the reactivate boundary.
+        if let Value::Function(fv) = value
+            && let crate::value::FunctionValue::Lambda(closure) = fv.as_ref()
+            && closure.parameters.is_empty()
+        {
+            tracing::debug!("reactivate: 0-arg lambda thunk → invoke");
             return ctx.call_function(value, &[]);
         }
         tracing::trace!(
