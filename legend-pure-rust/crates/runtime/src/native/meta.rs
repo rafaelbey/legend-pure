@@ -812,11 +812,21 @@ fn build_multiplicity_wrapper(
         M::Variable(_) => (0, None),
     };
     let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::MULTIPLICITY);
+    let lower_value = ctx
+        .heap_mut()
+        .alloc_dynamic(crate::m3_paths::MULTIPLICITY_VALUE);
     ctx.heap_mut()
-        .mutate_add(obj, "lowerBound", &[Value::Integer(lower)])?;
+        .mutate_add(lower_value, "value", &[Value::Integer(lower)])?;
+    ctx.heap_mut()
+        .mutate_add(obj, "lowerBound", &[Value::Object(lower_value)])?;
     if let Some(u) = upper {
+        let upper_value = ctx
+            .heap_mut()
+            .alloc_dynamic(crate::m3_paths::MULTIPLICITY_VALUE);
         ctx.heap_mut()
-            .mutate_add(obj, "upperBound", &[Value::Integer(u)])?;
+            .mutate_add(upper_value, "value", &[Value::Integer(u)])?;
+        ctx.heap_mut()
+            .mutate_add(obj, "upperBound", &[Value::Object(upper_value)])?;
     }
     Ok(obj)
 }
