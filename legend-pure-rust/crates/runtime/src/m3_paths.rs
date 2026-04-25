@@ -92,6 +92,19 @@ pub const MAP_STATS: &classifier = "meta::pure::functions::collection::MapStats"
 pub const VARIABLE_EXPRESSION: &classifier =
     "meta::pure::metamodel::valuespecification::VariableExpression";
 
+/// `meta::pure::metamodel::type::FunctionType` — heap wrapper exposing
+/// a lambda's `parameters: VariableExpression[*]` + `returnType: GenericType[1]`
+/// + `returnMultiplicity: Multiplicity[1]`. Produced as
+/// `genericType($lambda).typeArguments[0].rawType` so reflective walks
+/// match Java Pure's m3 metamodel.
+pub const FUNCTION_TYPE: &classifier = "meta::pure::metamodel::type::FunctionType";
+
+/// `meta::pure::metamodel::multiplicity::Multiplicity` — heap wrapper for
+/// a `[m..n]` multiplicity declaration. Used by FunctionType /
+/// VariableExpression to expose lambda parameter and return-side
+/// cardinalities through the reflective metamodel.
+pub const MULTIPLICITY: &classifier = "meta::pure::metamodel::multiplicity::Multiplicity";
+
 /// `meta::pure::metamodel::valuespecification::InstanceValue` —
 /// AST-metamodel node for a literal / collection / pre-computed value.
 /// Produced by `deactivate(lit)` or `deactivate([collection])`.
