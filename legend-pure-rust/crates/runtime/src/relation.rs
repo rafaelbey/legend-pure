@@ -148,9 +148,8 @@ pub fn alloc_relation_type_with_columns(
     Ok(rt)
 }
 
-/// Allocate `RelationType` from the lowered triples — full pipeline used
-/// by both the `RelationLiteral` lowering path and the `addColumns`
-/// native's intermediate result.
+/// Allocate `RelationType` from the lowered triples — used by `addColumns`'s
+/// result (a bare RelationType heap object, no metadata wrapper).
 ///
 /// # Errors
 /// Returns `PureException` if any underlying heap allocation fails.
@@ -165,6 +164,44 @@ pub fn alloc_relation_literal(
         .map(|c| alloc_column(heap, model, c))
         .collect::<Result<_, _>>()?;
     alloc_relation_type_with_columns(heap, &column_ids)
+}
+
+/// Allocate `@(cols)` at expression position — mirrors Java's
+/// `AntlrContextToM3CoreInstance.atomicExpression` (`AT (type | multiplicity)`
+/// branch, line 1098-1099), where `@type` evaluates to an `InstanceValue`
+/// with empty `values` and `genericType = ^GT(rawType=<the relation type>)`.
+/// The empty-values + metadata-only shape is what makes
+/// `@(x:String)->genericType().rawType` return the relation type instance
+/// (via `genericType()`'s `valueCount==0` else branch reading the IV's
+/// pre-set `genericType` slot).
+#[allow(clippy::result_large_err)]
+pub fn alloc_relation_literal_at_expression_position(
+    heap: &mut RuntimeHeap,
+    model: &PureModel,
+    columns: &[RelationColumnLowered],
+) -> Result<ObjectId, PureException> {
+    let rt = alloc_relation_literal(heap, model, columns)?;
+    let gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
+    heap.mutate_add(gt, "rawType", &[Value::Object(rt)])
+        .map_err(PureException::from)?;
+    let iv = heap.alloc_dynamic(m3_paths::INSTANCE_VALUE);
+    heap.mutate_add(iv, "genericType", &[Value::Object(gt)])
+        .map_err(PureException::from)?;
+    // multiplicity = PureOne so consumers reading `iv.multiplicity` get the
+    // expected `[1]` shape (Java sets `getPureOne()` at line 1099). We rely
+    // on the bootstrap multiplicity element being present in the model;
+    // skip silently if it isn't (no test reads it today).
+    if let Some(pure_one_id) = model.resolve_by_path(&[
+        smol_str::SmolStr::new("meta"),
+        smol_str::SmolStr::new("pure"),
+        smol_str::SmolStr::new("metamodel"),
+        smol_str::SmolStr::new("multiplicity"),
+        smol_str::SmolStr::new("PureOne"),
+    ]) {
+        heap.mutate_add(iv, "multiplicity", &[Value::Element(pure_one_id)])
+            .map_err(PureException::from)?;
+    }
+    Ok(iv)
 }
 
 /// Allocate the `ColSpecArray` literal heap shape per Java's

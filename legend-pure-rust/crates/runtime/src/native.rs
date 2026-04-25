@@ -338,6 +338,7 @@ impl NativeRegistry {
         meta::register(&mut registry);
         math::register(&mut registry);
         datetime::register(&mut registry);
+        relation::register(&mut registry);
         registry
     }
 }
@@ -482,6 +483,10 @@ pub mod math;
 /// `hour`, `minute`, `second`, `datePart`, `dateDiff`, `adjust`, `hasX`
 /// predicates, `parseDate`, `date(...)` constructors.
 pub mod datetime;
+
+/// Relation natives: `addColumns` and (future) related operators on
+/// `RelationType` / `Column` / `ColSpecArray` heap shapes.
+pub mod relation;
 
 // ---------------------------------------------------------------------------
 // Test helpers — literal ValueSpec builders + MockCtx

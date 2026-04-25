@@ -274,8 +274,12 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             // the `.columns`/`.classifierGenericType.…` reflective walks
             // both consume these shapes.
             ExprKind::RelationLiteral { columns } => {
-                crate::relation::alloc_relation_literal(&mut self.heap, self.model, columns)
-                    .map(Value::Object)
+                crate::relation::alloc_relation_literal_at_expression_position(
+                    &mut self.heap,
+                    self.model,
+                    columns,
+                )
+                .map(Value::Object)
             }
             ExprKind::ColSpecArrayLiteral { columns } => {
                 crate::relation::alloc_col_spec_array_literal(&mut self.heap, self.model, columns)
