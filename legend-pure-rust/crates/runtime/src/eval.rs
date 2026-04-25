@@ -267,6 +267,21 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             },
             ExprKind::Column => Ok(Value::Unit),
 
+            // -- Relation literals -------------------------------------
+            // `@(cols)` and `~[cols]` materialise heap shapes whose
+            // structure mirrors Java's `_RelationType.build` /
+            // `_Column.getColumnInstance`. The `addColumns` native and
+            // the `.columns`/`.classifierGenericType.…` reflective walks
+            // both consume these shapes.
+            ExprKind::RelationLiteral { columns } => {
+                crate::relation::alloc_relation_literal(&mut self.heap, self.model, columns)
+                    .map(Value::Object)
+            }
+            ExprKind::ColSpecArrayLiteral { columns } => {
+                crate::relation::alloc_col_spec_array_literal(&mut self.heap, self.model, columns)
+                    .map(Value::Object)
+            }
+
             // -- Bare element reference -----------------------------------
             // Produce a first-class Element handle so meta-model natives
             // (pathToElement, elementToPath, match) can inspect it. Using
@@ -2008,7 +2023,9 @@ fn walk_free_variables(
         | ExprKind::EnumValue { .. }
         | ExprKind::TypeReference { .. }
         | ExprKind::PackageableElementRef { .. }
-        | ExprKind::Column => {}
+        | ExprKind::Column
+        | ExprKind::RelationLiteral { .. }
+        | ExprKind::ColSpecArrayLiteral { .. } => {}
     }
 }
 

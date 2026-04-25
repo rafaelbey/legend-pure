@@ -292,11 +292,27 @@ pub(crate) fn resolve_type_spec(
             }
         }
         ast_type::TypeSpec::Relation(_rt) => {
-            // TODO: Resolve each column type and intern the RelationType.
-            // For now, relation type resolution is deferred — the parser and
-            // composer handle relation types correctly; the compiler will be
-            // updated when the relation interning infrastructure is wired up.
-            None
+            // Treat `@(cols)` and `Relation<(cols)>` as `RelationType<Any>`
+            // for type-checking. Column metadata flows via the lowered
+            // `ExprKind::RelationLiteral` / `ColSpecArrayLiteral` variants
+            // (set on the ValueSpec at lowering), not through a populated
+            // `RelationId` in the type system. Concretely this lets
+            // `cast(@RelationType<Any>)` and addColumns's `RelationType[1]`
+            // signature line up without a relation interner.
+            let segments: [SmolStr; 5] = [
+                SmolStr::new("meta"),
+                SmolStr::new("pure"),
+                SmolStr::new("metamodel"),
+                SmolStr::new("relation"),
+                SmolStr::new("RelationType"),
+            ];
+            ctx.model
+                .resolve_by_path(&segments)
+                .map(|element| TypeExpr::Named {
+                    element,
+                    type_arguments: vec![],
+                    value_arguments: vec![],
+                })
         }
         ast_type::TypeSpec::Function(ft) => {
             // Function types are structural: {ParamType[mult] -> RetType[mult]}.
@@ -1392,8 +1408,7 @@ pub(crate) fn infer_generic_bindings(
         // T to the bare element rather than the parametric TypeExpr.
         // Now `$l1: List<String>` flows through as `Named{List, [String]}`
         // and the substituted return type comes out `Class<List<String>>`.
-        let arg_type_expr: Option<TypeExpr> =
-            infer_typeexpr_from_valuespec(arg, model, var_types);
+        let arg_type_expr: Option<TypeExpr> = infer_typeexpr_from_valuespec(arg, model, var_types);
         if let Some(arg_ty) = arg_type_expr {
             bind_type(&param.type_expr, &arg_ty, &mut bindings.ty, model);
         }

@@ -162,6 +162,27 @@ pub const SIMPLE_FUNCTION_EXPRESSION: &classifier =
 /// by the Pure-level test surveyor's per-test result builder.
 pub const TEST_RESULT: &classifier = "meta::pure::test::surveyor::TestResult";
 
+/// `meta::pure::metamodel::relation::RelationType` — heap classifier for
+/// an anonymous relation type (column bag). Allocated by the
+/// `RelationLiteral` lowering and by the `addColumns` native; navigated
+/// by the native via `obj._columns()`. Identified via M3 ElementId,
+/// never via classifier-string suffix.
+pub const RELATION_TYPE: &classifier = "meta::pure::metamodel::relation::RelationType";
+
+/// `meta::pure::metamodel::relation::Column` — heap classifier for a
+/// single relation column carrying `name`, `nameWildCard`, and the
+/// `classifierGenericType` chain (`typeArguments=[null, <typeGT>]`,
+/// `multiplicityArguments=[<mult>]`).
+pub const COLUMN: &classifier = "meta::pure::metamodel::relation::Column";
+
+/// `meta::pure::metamodel::relation::ColSpecArray` — heap classifier for
+/// the `~[col:Type[mult], …]` literal. Carries `names: String[*]` plus
+/// `classifierGenericType.typeArguments[0].rawType` pointing at a
+/// RelationType with the column metadata, mirroring Java's path through
+/// `ColSpecArrayInstance._classifierGenericType()._typeArguments()
+/// .getFirst()._rawType()._columns()`.
+pub const COL_SPEC_ARRAY: &classifier = "meta::pure::metamodel::relation::ColSpecArray";
+
 /// `meta::pure::profiles::equality` — Profile whose `Key` stereotype
 /// marks class properties as structural-equality keys. A `<<equality.Key>>`
 /// stereotype ref matches iff `profile` resolves to this FQN and

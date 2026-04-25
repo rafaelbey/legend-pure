@@ -1,0 +1,218 @@
+// Copyright 2026 Goldman Sachs
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Heap allocators for `RelationType`, `Column`, and `ColSpecArray`
+//! literals lowered from `@(cols)` and `~[cols]` Pure source.
+//!
+//! These shapes mirror the Java reference impl
+//! (`legend-pure-core/.../navigation/relation/_RelationType.java::build`,
+//! `_Column.java::getColumnInstance`):
+//!
+//! - **Column** — `name` (String), `nameWildCard` (Boolean = false),
+//!   `classifierGenericType` → GenericType{rawType=Column,
+//!   typeArguments=[null, GT(rawType=type_element)],
+//!   multiplicityArguments=[Multiplicity]}
+//! - **RelationType** — `columns` (Column[*])
+//! - **ColSpecArray** — `names` (String[*]) plus `classifierGenericType` →
+//!   GenericType{rawType=ColSpecArray,
+//!   typeArguments=[GT(rawType=<inner RelationType>)]}, so the addColumns
+//!   native can navigate
+//!   `csa.classifierGenericType.typeArguments[0].rawType.columns` per Java.
+
+use legend_pure_parser_pure::model::PureModel;
+use legend_pure_parser_pure::types::{Multiplicity, RelationColumnLowered};
+
+use crate::error::PureException;
+use crate::heap::{ObjectId, RuntimeHeap};
+use crate::m3_paths;
+use crate::value::Value;
+
+/// Allocate a `Multiplicity` heap object whose `lowerBound` /
+/// `upperBound` slots carry `MultiplicityValue` wrappers (mirrors the
+/// canonical `m3.pure:1400` shape — `lowerBound : MultiplicityValue[1]`
+/// where `MultiplicityValue.value : Integer[1]`). Identical semantics
+/// to `meta::build_multiplicity_wrapper`, but takes a raw heap so
+/// `Evaluator::eval` can drive it without an `EvalContextTrait` wrapper.
+///
+/// # Errors
+/// Returns `PureException` if heap mutation fails (only on a stale
+/// ObjectId, which the freshly-allocated objects below cannot produce).
+#[allow(clippy::result_large_err)]
+pub fn alloc_multiplicity(
+    heap: &mut RuntimeHeap,
+    m: &Multiplicity,
+) -> Result<ObjectId, PureException> {
+    let (lower, upper): (i64, Option<i64>) = match m {
+        Multiplicity::PureOne => (1, Some(1)),
+        Multiplicity::ZeroOrOne => (0, Some(1)),
+        Multiplicity::ZeroOrMany => (0, None),
+        Multiplicity::OneOrMany => (1, None),
+        Multiplicity::Range { lower, upper } => (i64::from(*lower), upper.map(i64::from)),
+        Multiplicity::Variable(_) => (0, None),
+    };
+    let mult = heap.alloc_dynamic(m3_paths::MULTIPLICITY);
+    let lower_value = heap.alloc_dynamic(m3_paths::MULTIPLICITY_VALUE);
+    heap.mutate_add(lower_value, "value", &[Value::Integer(lower)])
+        .map_err(PureException::from)?;
+    heap.mutate_add(mult, "lowerBound", &[Value::Object(lower_value)])
+        .map_err(PureException::from)?;
+    if let Some(u) = upper {
+        let upper_value = heap.alloc_dynamic(m3_paths::MULTIPLICITY_VALUE);
+        heap.mutate_add(upper_value, "value", &[Value::Integer(u)])
+            .map_err(PureException::from)?;
+        heap.mutate_add(mult, "upperBound", &[Value::Object(upper_value)])
+            .map_err(PureException::from)?;
+    }
+    Ok(mult)
+}
+
+/// Allocate the `Column` heap shape per the Java `_Column.getColumnInstance`
+/// algorithm: name slot, `nameWildCard=false`, and a chained
+/// `classifierGenericType` carrying `typeArguments=[null, <type GT>]`
+/// and `multiplicityArguments=[<Multiplicity>]`.
+///
+/// # Errors
+/// Returns `PureException` if heap mutation fails.
+#[allow(clippy::result_large_err)]
+pub fn alloc_column(
+    heap: &mut RuntimeHeap,
+    model: &PureModel,
+    col: &RelationColumnLowered,
+) -> Result<ObjectId, PureException> {
+    let mult_obj = alloc_multiplicity(heap, &col.multiplicity)?;
+
+    // Inner GenericType wrapping the column's type element.
+    let inner_gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
+    heap.mutate_add(inner_gt, "rawType", &[Value::Element(col.type_element)])
+        .map_err(PureException::from)?;
+
+    // Outer Column GenericType: typeArguments=[null, inner_gt],
+    // multiplicityArguments=[mult_obj].
+    let outer_gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
+    let column_raw_type =
+        m3_paths::resolve(model, m3_paths::COLUMN).map_or(Value::Unit, Value::Element);
+    heap.mutate_add(outer_gt, "rawType", &[column_raw_type])
+        .map_err(PureException::from)?;
+    // typeArguments[0] is the implicit "source" RelationType slot left
+    // null until `_Column.updateSource` runs (test surface doesn't need
+    // it). We populate slot[1] with the column's type GenericType.
+    heap.mutate_add(
+        outer_gt,
+        "typeArguments",
+        &[Value::Unit, Value::Object(inner_gt)],
+    )
+    .map_err(PureException::from)?;
+    heap.mutate_add(
+        outer_gt,
+        "multiplicityArguments",
+        &[Value::Object(mult_obj)],
+    )
+    .map_err(PureException::from)?;
+
+    let column = heap.alloc_dynamic(m3_paths::COLUMN);
+    heap.mutate_add(column, "name", &[Value::String(col.name.clone())])
+        .map_err(PureException::from)?;
+    heap.mutate_add(column, "nameWildCard", &[Value::Boolean(false)])
+        .map_err(PureException::from)?;
+    heap.mutate_add(column, "classifierGenericType", &[Value::Object(outer_gt)])
+        .map_err(PureException::from)?;
+    Ok(column)
+}
+
+/// Allocate a `RelationType` heap object containing the supplied columns.
+///
+/// # Errors
+/// Returns `PureException` if heap mutation fails.
+#[allow(clippy::result_large_err)]
+pub fn alloc_relation_type_with_columns(
+    heap: &mut RuntimeHeap,
+    columns: &[ObjectId],
+) -> Result<ObjectId, PureException> {
+    let rt = heap.alloc_dynamic(m3_paths::RELATION_TYPE);
+    if !columns.is_empty() {
+        let payload: Vec<Value> = columns.iter().map(|c| Value::Object(*c)).collect();
+        heap.mutate_add(rt, "columns", &payload)
+            .map_err(PureException::from)?;
+    }
+    Ok(rt)
+}
+
+/// Allocate `RelationType` from the lowered triples — full pipeline used
+/// by both the `RelationLiteral` lowering path and the `addColumns`
+/// native's intermediate result.
+///
+/// # Errors
+/// Returns `PureException` if any underlying heap allocation fails.
+#[allow(clippy::result_large_err)]
+pub fn alloc_relation_literal(
+    heap: &mut RuntimeHeap,
+    model: &PureModel,
+    columns: &[RelationColumnLowered],
+) -> Result<ObjectId, PureException> {
+    let column_ids: Vec<ObjectId> = columns
+        .iter()
+        .map(|c| alloc_column(heap, model, c))
+        .collect::<Result<_, _>>()?;
+    alloc_relation_type_with_columns(heap, &column_ids)
+}
+
+/// Allocate the `ColSpecArray` literal heap shape per Java's
+/// AddColumns navigation chain
+/// (`csa.classifierGenericType.typeArguments[0].rawType._columns()`).
+///
+/// # Errors
+/// Returns `PureException` if any underlying heap allocation fails.
+#[allow(clippy::result_large_err)]
+pub fn alloc_col_spec_array_literal(
+    heap: &mut RuntimeHeap,
+    model: &PureModel,
+    columns: &[RelationColumnLowered],
+) -> Result<ObjectId, PureException> {
+    let inner_relation = alloc_relation_literal(heap, model, columns)?;
+
+    // Wrap the inner RelationType in a GenericType so the native can
+    // navigate `csa.classifierGenericType.typeArguments[0].rawType._columns()`.
+    let inner_relation_gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
+    heap.mutate_add(
+        inner_relation_gt,
+        "rawType",
+        &[Value::Object(inner_relation)],
+    )
+    .map_err(PureException::from)?;
+
+    let outer_gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
+    let csa_raw_type =
+        m3_paths::resolve(model, m3_paths::COL_SPEC_ARRAY).map_or(Value::Unit, Value::Element);
+    heap.mutate_add(outer_gt, "rawType", &[csa_raw_type])
+        .map_err(PureException::from)?;
+    heap.mutate_add(
+        outer_gt,
+        "typeArguments",
+        &[Value::Object(inner_relation_gt)],
+    )
+    .map_err(PureException::from)?;
+
+    let csa = heap.alloc_dynamic(m3_paths::COL_SPEC_ARRAY);
+    let names: Vec<Value> = columns
+        .iter()
+        .map(|c| Value::String(c.name.clone()))
+        .collect();
+    if !names.is_empty() {
+        heap.mutate_add(csa, "names", &names)
+            .map_err(PureException::from)?;
+    }
+    heap.mutate_add(csa, "classifierGenericType", &[Value::Object(outer_gt)])
+        .map_err(PureException::from)?;
+    Ok(csa)
+}

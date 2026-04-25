@@ -186,8 +186,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                 None
             };
 
-            let result =
-                infer_function_call(ctx, *function, function_name, let_name, &arg_types);
+            let result = infer_function_call(ctx, *function, function_name, let_name, &arg_types);
             return set_and_return(expr, result);
         }
 
@@ -310,6 +309,45 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
 
         // -- Column (TDS — deferred) ----------------------------------------
         ExprKind::Column => None,
+
+        // -- Relation literals ----------------------------------------------
+        // Mirror the lowering-time `type_info` so dispatch builds the right
+        // mangled FQN regardless of whether the literal is consumed before
+        // or after Pass 2.5.
+        ExprKind::RelationLiteral { .. } => ctx
+            .model
+            .resolve_by_path(&[
+                smol_str::SmolStr::new("meta"),
+                smol_str::SmolStr::new("pure"),
+                smol_str::SmolStr::new("metamodel"),
+                smol_str::SmolStr::new("relation"),
+                smol_str::SmolStr::new("RelationType"),
+            ])
+            .map(|element| ResolvedType {
+                type_expr: TypeExpr::Named {
+                    element,
+                    type_arguments: Vec::new(),
+                    value_arguments: Vec::new(),
+                },
+                multiplicity: Multiplicity::PureOne,
+            }),
+        ExprKind::ColSpecArrayLiteral { .. } => ctx
+            .model
+            .resolve_by_path(&[
+                smol_str::SmolStr::new("meta"),
+                smol_str::SmolStr::new("pure"),
+                smol_str::SmolStr::new("metamodel"),
+                smol_str::SmolStr::new("relation"),
+                smol_str::SmolStr::new("ColSpecArray"),
+            ])
+            .map(|element| ResolvedType {
+                type_expr: TypeExpr::Named {
+                    element,
+                    type_arguments: Vec::new(),
+                    value_arguments: Vec::new(),
+                },
+                multiplicity: Multiplicity::PureOne,
+            }),
     };
 
     set_and_return(expr, result)

@@ -379,6 +379,42 @@ pub enum ExprKind {
     // -- Column (TDS — placeholder) ----------------------------------------
     /// Column expression (TDS — full lowering deferred).
     Column,
+
+    // -- Relation type literals -------------------------------------------
+    /// `@(name:Type[mult], …)` — anonymous relation type at expression
+    /// position. Materialises a `meta::pure::metamodel::relation::RelationType`
+    /// heap object whose `columns` slot carries one `Column` per spec.
+    RelationLiteral {
+        /// Column triples in source order.
+        columns: Vec<RelationColumnLowered>,
+    },
+    /// `~[name:Type[mult], …]` — `ColSpecArray` literal. Materialises a
+    /// `meta::pure::metamodel::relation::ColSpecArray` heap object whose
+    /// `names` slot lists the column names and whose `classifierGenericType`
+    /// chains down to a `RelationType` carrying full `Column` metadata
+    /// (per Java `ColSpecArrayInstance.classifierGenericType
+    /// .typeArguments[0].rawType._columns()`).
+    ColSpecArrayLiteral {
+        /// Column triples in source order.
+        columns: Vec<RelationColumnLowered>,
+    },
+}
+
+/// One column in a `RelationLiteral` / `ColSpecArrayLiteral`.
+///
+/// Captured at lowering so the runtime allocator can materialise the
+/// `Column` heap shape (`name`, `nameWildCard=false`,
+/// `classifierGenericType` chaining down to `type_element` with
+/// `multiplicity`) without re-resolving names.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelationColumnLowered {
+    /// Column name (e.g. `"x"` in `~[x:String[1]]`).
+    pub name: SmolStr,
+    /// Resolved type element (e.g. `String`'s ElementId).
+    pub type_element: ElementId,
+    /// Column multiplicity. Defaults to `ZeroOrOne` when the source omits
+    /// `[mult]` (matches the platform's expected `'x:String[0..1]'` form).
+    pub multiplicity: Multiplicity,
 }
 
 /// Backward-compatible alias: existing code uses `Expression` throughout
