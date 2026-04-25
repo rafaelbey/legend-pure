@@ -1096,7 +1096,14 @@ fn constraint_expression_compiled() {
 
 #[test]
 fn expression_arithmetic_desugars_to_function_call() {
-    let source = "function test::f(): Integer[1] { 1 + 2 }";
+    // Declare a minimal `plus` so the resolver can pick an overload.
+    // Operator lowering routes through `resolve_function_call` (same as
+    // user `plus(x, y)` calls), so the test must provide a plus to
+    // resolve to. Production tests run against the full platform where
+    // every overload exists.
+    let source = "\
+        native function plus(ints: Integer[*]): Integer[1];\n\
+        function test::f(): Integer[1] { 1 + 2 }";
     let model = compile_one(source).expect("should compile");
     let id = model
         .resolve_function_by_path(&["test".into(), "f".into()])
@@ -1114,7 +1121,10 @@ fn expression_arithmetic_desugars_to_function_call() {
                     function_name,
                     arguments,
                 } => {
-                    assert!(function.is_none(), "built-in operator has no element ID");
+                    assert!(
+                        function.is_some(),
+                        "operator should resolve to a model element via resolve_function_call"
+                    );
                     assert_eq!(function_name.as_str(), "plus");
                     assert_eq!(arguments.len(), 1, "plus takes a single collection arg");
                     match &*arguments[0].kind {
@@ -1524,8 +1534,11 @@ fn compile_multiple_let_same_variable() {
 #[test]
 
 fn compile_lambda_let_shadows_outer_let() {
+    // Operator lowering needs `plus` in scope (variadic_op routes through
+    // resolve_function_call); declare both natives the source uses.
     let source = r"
         native function map(col: Any[*], fn: Any[1]): Any[*];
+        native function plus(ints: Integer[*]): Integer[1];
         function test::f(): Integer[*] { let x = 42; [1, 2]->map(y | let x = 43; $x + $y); }
     ";
     let Ok(_) = compile_one(source) else {
