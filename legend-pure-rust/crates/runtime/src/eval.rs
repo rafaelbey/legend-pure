@@ -116,9 +116,17 @@ impl<'model> Evaluator<'model, NoOpHooks> {
     /// The evaluator starts with an empty heap and variable context.
     #[must_use]
     pub fn new(model: &'model PureModel, natives: &'model NativeRegistry) -> Self {
+        let mut heap = RuntimeHeap::new();
+        // Pre-populate the heap with one row per metamodel element so
+        // `Value::Element(eid)` can project to `Value::Object(oid)` for
+        // uniform reflective property access — see plan
+        // `the-project-has-a-buzzing-creek.md` step 1. Cheap one-time
+        // walk; ~1338 elements on the platform model produces ~1k
+        // heap rows up front.
+        heap.bootstrap_metamodel(model);
         Self {
             model,
-            heap: RuntimeHeap::new(),
+            heap,
             context: VariableContext::new(),
             natives,
             member_wrapper_cache: HashMap::new(),
@@ -134,9 +142,11 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     /// prefer [`Evaluator::new`] which uses zero-cost [`NoOpHooks`].
     #[must_use]
     pub fn with_hooks(model: &'model PureModel, natives: &'model NativeRegistry, hooks: H) -> Self {
+        let mut heap = RuntimeHeap::new();
+        heap.bootstrap_metamodel(model);
         Self {
             model,
-            heap: RuntimeHeap::new(),
+            heap,
             context: VariableContext::new(),
             natives,
             member_wrapper_cache: HashMap::new(),
