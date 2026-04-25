@@ -621,6 +621,28 @@ impl NativeFunction for GenericTypeOf {
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
         expect_args("genericType", &values, 1)?;
+
+        // Empty-values InstanceValue (Java parity: `@type` at expression
+        // position evaluates to `InstanceValue { genericType: <metadata>,
+        // values: [] }` — see AntlrContextToM3CoreInstance line 1098-1099).
+        // For these, return the IV's pre-set `genericType` slot directly
+        // — Java's GenericType native takes the same path when
+        // `valueCount == 0` (else branch). Identification is by M3
+        // ElementId of the InstanceValue classifier, never by string.
+        if let Value::Object(obj_id) = &values[0] {
+            let classifier = ctx.heap().classifier(*obj_id)?.to_owned();
+            let iv_id = crate::m3_paths::resolve(ctx.model(), crate::m3_paths::INSTANCE_VALUE);
+            if iv_id.is_some() && crate::m3_paths::resolve(ctx.model(), &classifier) == iv_id {
+                let inner_values = ctx.heap().get_property_values(*obj_id, "values")?;
+                if inner_values.is_empty() {
+                    let gt_values = ctx.heap().get_property_values(*obj_id, "genericType")?;
+                    if let Some(Value::Object(gt_id)) = gt_values.iter().next() {
+                        return Ok(Evaluated::new(Value::Object(*gt_id)));
+                    }
+                }
+            }
+        }
+
         let type_id = resolve_value_type(&values[0], ctx.model(), ctx.heap())?;
         // Heap-instance values created with `^Class<T1, T2>(…)` carry a
         // `__typeArguments` reserved slot — pull it before allocating the

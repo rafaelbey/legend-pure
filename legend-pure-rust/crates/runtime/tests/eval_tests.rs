@@ -1209,6 +1209,81 @@ fn eval_surveyor_meta_tests_error_histogram() {
 }
 
 #[test]
+fn eval_relation_at_chain_returns_relation_type() {
+    // Locks in the `@(x:String)->genericType().rawType->cast(@RelationType<Any>)`
+    // chain that `meta::pure::functions::meta::tests::addColumns` needs as
+    // its source argument. Returns the column's element name reached via
+    // `.columns->at(0).classifierGenericType.typeArguments[1].rawType.name`.
+    let result = eval_pure(
+        r#"
+        function test::f(): String[1]
+        {
+            let rt = @(x:String)->genericType().rawType->cast(@RelationType<Any>)->toOne();
+            let col = $rt.columns->at(0);
+            $col.classifierGenericType->toOne().typeArguments->at(1).rawType.name->toOne()
+        }
+        "#,
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("String".into()));
+}
+
+#[test]
+fn eval_relation_add_columns_against_at_chain_source() {
+    // End-to-end: `@(x:String)->genericType().rawType->cast(@RelationType<Any>)
+    // ->toOne()->addColumns(~[ab:String[1], z:Integer])` materialises a
+    // RelationType whose merged columns are reachable through the
+    // `.classifierGenericType.multiplicityArguments[0].lowerBound.value`
+    // chain (P0's MultiplicityValue shape fix).
+    let result = eval_pure(
+        r#"
+        function test::f(): String[1]
+        {
+            let rt = addColumns(
+                @(x:String)->genericType().rawType->cast(@RelationType<Any>)->toOne(),
+                ~[ab:String[1], z:Integer]);
+            let col = $rt.columns->at(2);
+            let mult = $col.classifierGenericType.multiplicityArguments->at(0);
+            $col.name->toOne()
+                + ':'
+                + $col.classifierGenericType->toOne().typeArguments->at(1).rawType.name->toOne()
+                + '['
+                + $mult.lowerBound.value->toOne()->toString()
+                + '..'
+                + $mult.upperBound.value->toOne()->toString()
+                + ']'
+        }
+        "#,
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("z:Integer[0..1]".into()));
+}
+
+#[test]
+fn eval_relation_add_columns_after_evaluate_and_deactivate() {
+    // Drives the platform-defined
+    // `meta::pure::functions::relation::tests::testAddColumnsAfterEvaluateAndDeactivate`
+    // in isolation. Source is `^RelationType<Any>()->evaluateAndDeactivate()`,
+    // so this test exercises the addColumns native end-to-end without
+    // depending on the `@(x:String)->genericType().rawType->cast(...)` chain
+    // that the sister test `testAddColumns` requires.
+    use legend_pure_runtime::eval::Evaluator;
+
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    let mut evaluator = Evaluator::new(&model, &registry);
+
+    let result = evaluator
+        .call(
+            "meta::pure::functions::relation::tests::testAddColumnsAfterEvaluateAndDeactivate",
+            &[],
+        )
+        .expect("test should evaluate without error");
+
+    assert_eq!(result, Value::Boolean(true));
+}
+
+#[test]
 #[ignore = "diagnostic: bucket lang::tests errors by first line of message"]
 fn eval_surveyor_lang_tests_error_histogram() {
     surveyor_error_histogram("meta::pure::functions::lang::tests");
