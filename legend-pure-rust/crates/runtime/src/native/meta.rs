@@ -1429,11 +1429,34 @@ fn resolve_value_type(
         // element, so `instanceOf(5 RomanLength~Pes, RomanLength~Pes)`
         // resolves via the normal subtype walk.
         Value::UnitInstance { unit_id, .. } => Ok(*unit_id),
-        // Collections / maps / functions / unit — no reified runtime type,
+        // Lambda / compiled-function values resolve through the M3
+        // metatype hierarchy: `LambdaFunction` for anonymous lambdas
+        // (Pure literal `{|true}`), and the compiled element's own
+        // metatype (`ConcreteFunctionDefinition` for user functions,
+        // `NativeFunctionDefinition` for native registrations) for
+        // compiled refs. This is what makes `$f->type()->toOne()->id()`
+        // return `'LambdaFunction'` for `$lambda->reactivate()` —
+        // testInstanceValueReactivation's second assertion.
+        Value::Function(fv) => match fv.as_ref() {
+            crate::value::FunctionValue::Lambda(_) => {
+                crate::m3_paths::resolve(model, crate::m3_paths::LAMBDA_FUNCTION).ok_or_else(|| {
+                    PureRuntimeError::EvaluationError(
+                        "type: meta::pure::metamodel::function::LambdaFunction not in model".into(),
+                    )
+                    .into()
+                })
+            }
+            crate::value::FunctionValue::Compiled(eid) => {
+                let element = model.get_element(*eid);
+                Ok(
+                    legend_pure_parser_pure::bootstrap::metatype_of(model, element)
+                        .unwrap_or(bootstrap::ANY_ID),
+                )
+            }
+        },
+        // Collections / maps / unit — no reified runtime type,
         // classify as `Any`.
-        Value::Collection(_) | Value::Map(_) | Value::Function(_) | Value::Unit => {
-            Ok(bootstrap::ANY_ID)
-        }
+        Value::Collection(_) | Value::Map(_) | Value::Unit => Ok(bootstrap::ANY_ID),
     }
 }
 
