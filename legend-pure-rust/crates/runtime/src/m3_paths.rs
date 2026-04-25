@@ -86,6 +86,14 @@ pub const PAIR: &classifier = "meta::pure::functions::collection::Pair";
 /// through `MapCoreInstance.getStats()`.
 pub const MAP_STATS: &classifier = "meta::pure::functions::collection::MapStats";
 
+/// `meta::pure::metamodel::type::GetterOverride` — heap wrapper carrying
+/// the four override lambdas (`getterOverrideToOne`,
+/// `getterOverrideToMany`, `propertyOverride`, `defaultOverride`) plus
+/// the `hiddenPayload` slot. Bound to `instance.elementOverride` by
+/// `dynamicNew`'s hook-bearing overloads so absent property reads can
+/// dispatch through the appropriate lambda.
+pub const GETTER_OVERRIDE: &classifier = "meta::pure::metamodel::type::GetterOverride";
+
 /// `meta::pure::metamodel::valuespecification::VariableExpression` —
 /// AST-metamodel node for a `$name` variable reference. Produced by
 /// `deactivate(varRef)` so the AST can be introspected.

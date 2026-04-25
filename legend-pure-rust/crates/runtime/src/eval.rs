@@ -59,7 +59,7 @@ use smol_str::SmolStr;
 use crate::context::VariableContext;
 use crate::date::PureDate;
 use crate::error::{PureException, PureRuntimeError, StackFrame};
-use crate::heap::RuntimeHeap;
+use crate::heap::{ObjectId, RuntimeHeap};
 use crate::hooks::{EvalHooks, NoOpHooks};
 use crate::native::{Evaluated, NativeFunction, NativeRegistry};
 use crate::value::{FunctionValue, LambdaClosure, Value};
@@ -616,7 +616,23 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                     .get_property_values(*id, property)
                     .map_err(PureException::from)?;
                 let collected: Vec<Value> = values.iter().cloned().collect();
-                Ok(Value::from_vec(collected))
+                if !collected.is_empty() {
+                    return Ok(Value::from_vec(collected));
+                }
+                // Slot empty — when the instance has a GetterOverride
+                // (`elementOverride` non-empty, set by `dynamicNew`'s
+                // hook-bearing overloads), dispatch through the
+                // appropriate override lambda. Skip `elementOverride`
+                // itself and the override wrapper's own slots to
+                // avoid infinite recursion.
+                if property == "elementOverride"
+                    || property == "getterOverrideToOne"
+                    || property == "getterOverrideToMany"
+                    || property == "hiddenPayload"
+                {
+                    return Ok(Value::Unit);
+                }
+                self.try_getter_override(*id, property)
             }
             Value::Element(id) => {
                 let id = *id;
@@ -679,6 +695,116 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 ),
             ))),
         }
+    }
+
+    /// Dispatch an unset property read through the instance's
+    /// `GetterOverride` lambda when one is bound, returning the
+    /// lambda's result. Returns `Value::Unit` when the instance has
+    /// no `elementOverride`, no lambda matching the property's
+    /// declared multiplicity, or the override property reference
+    /// can't be resolved.
+    ///
+    /// Mirrors Java Pure's `GetterOverride` dispatch: when
+    /// `dynamicNew(class, kvs, getterToOne, getterToMany,
+    /// hiddenPayload)` constructs an instance, absent property reads
+    /// invoke the appropriate lambda with `(receiver, propertyRef)`.
+    /// `propertyRef` is a `Property` heap wrapper synthesised on
+    /// demand here — same shape `eval_class_member_collection`
+    /// produces for `.properties` reads.
+    #[allow(clippy::result_large_err)]
+    fn try_getter_override(
+        &mut self,
+        instance_id: ObjectId,
+        property: &str,
+    ) -> Result<Value, PureException> {
+        let override_vals = self
+            .heap
+            .get_property_values(instance_id, "elementOverride")
+            .map_err(PureException::from)?;
+        let Some(Value::Object(override_id)) = override_vals.iter().next().cloned() else {
+            return Ok(Value::Unit);
+        };
+        // Locate the property's declared multiplicity on the
+        // instance's classifier so we know which override to call.
+        let classifier = self
+            .heap
+            .classifier(instance_id)
+            .map_err(PureException::from)?
+            .to_owned();
+        let class_id = match crate::m3_paths::resolve(self.model, &classifier) {
+            Some(id) => id,
+            None => return Ok(Value::Unit),
+        };
+        let prop_mult: Option<&legend_pure_parser_pure::types::Multiplicity> = {
+            let mut found: Option<&legend_pure_parser_pure::types::Multiplicity> = None;
+            let mut visited: std::collections::HashSet<ElementId> =
+                std::collections::HashSet::new();
+            let mut stack: Vec<ElementId> = vec![class_id];
+            while let Some(cid) = stack.pop() {
+                if !visited.insert(cid) {
+                    continue;
+                }
+                let Element::Class(c) = self.model.get_element(cid) else {
+                    continue;
+                };
+                if let Some(p) = c.properties.iter().find(|p| p.name == property) {
+                    found = Some(&p.multiplicity);
+                    break;
+                }
+                for st in &c.super_types {
+                    if let TypeExpr::Named { element, .. } = st {
+                        stack.push(*element);
+                    }
+                }
+            }
+            found
+        };
+        let is_to_one = matches!(
+            prop_mult,
+            Some(legend_pure_parser_pure::types::Multiplicity::PureOne)
+                | Some(legend_pure_parser_pure::types::Multiplicity::ZeroOrOne)
+        );
+        let lambda_slot = if is_to_one {
+            "getterOverrideToOne"
+        } else {
+            "getterOverrideToMany"
+        };
+        let lambda_vals = self
+            .heap
+            .get_property_values(override_id, lambda_slot)
+            .map_err(PureException::from)?;
+        let Some(lambda) = lambda_vals.iter().next().cloned() else {
+            return Ok(Value::Unit);
+        };
+        // Synthesise a Property wrapper for the receiver — the lambda
+        // is typed `(Any[1], Property<Nil,…>[1]) -> …` and reads the
+        // property's `name` to decide what to compute.
+        let prop_wrapper = self.alloc_property_wrapper(class_id, property)?;
+        let receiver = Value::Object(instance_id);
+        self.apply_callable(&lambda, &[receiver, Value::Object(prop_wrapper)])
+    }
+
+    /// Allocate a one-off `Property` heap wrapper carrying `_owner`
+    /// (the owning Class element id) and `name` (the property's
+    /// simple name). Mirrors what
+    /// `eval_class_member_collection` builds for the
+    /// `.properties` collection but for a single ad-hoc lookup —
+    /// used by `try_getter_override` to pass the override lambda a
+    /// `Property[1]` second argument.
+    #[allow(clippy::result_large_err)]
+    fn alloc_property_wrapper(
+        &mut self,
+        owner_class_id: ElementId,
+        property: &str,
+    ) -> Result<ObjectId, PureException> {
+        let obj = self.heap.alloc_dynamic(crate::m3_paths::PROPERTY);
+        self.heap
+            .mutate_add(obj, "_owner", &[Value::Element(owner_class_id)])
+            .map_err(PureException::from)?;
+        self.heap
+            .mutate_add(obj, "name", &[Value::String(SmolStr::new(property))])
+            .map_err(PureException::from)?;
+        Ok(obj)
     }
 
     /// Read `property` off a pre-evaluated [`Value`] — used by the

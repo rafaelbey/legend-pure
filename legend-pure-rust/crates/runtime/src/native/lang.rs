@@ -715,6 +715,55 @@ impl NativeFunction for DynamicNew {
         }
         populate_association_inverses(ctx, obj, class_id, &assoc_kvs)?;
 
+        // Override-bearing overloads land here as
+        // `dynamicNew(class|gt, kvs, getterToOne, getterToMany,
+        // hiddenPayload [, constraintsManager])`. Allocate a
+        // `GetterOverride` heap wrapper carrying every non-empty
+        // hook + payload, then bind it to the new instance's
+        // `elementOverride` slot so `eval_property_access` can
+        // intercept absent property reads via the lambdas. Mirrors
+        // Java Pure's `GetterOverride` metamodel object (m3.pure
+        // `meta::pure::metamodel::type::GetterOverride`).
+        if values.len() >= 5 {
+            let getter_to_one = &values[2];
+            let getter_to_many = &values[3];
+            let hidden_payload = &values[4];
+            let any_set = !matches!(getter_to_one, Value::Unit)
+                || !matches!(getter_to_many, Value::Unit)
+                || !matches!(hidden_payload, Value::Unit);
+            if any_set {
+                let override_obj = ctx
+                    .heap_mut()
+                    .alloc_dynamic(crate::m3_paths::GETTER_OVERRIDE);
+                if !matches!(getter_to_one, Value::Unit) {
+                    ctx.heap_mut().mutate_add(
+                        override_obj,
+                        "getterOverrideToOne",
+                        &[getter_to_one.clone()],
+                    )?;
+                }
+                if !matches!(getter_to_many, Value::Unit) {
+                    ctx.heap_mut().mutate_add(
+                        override_obj,
+                        "getterOverrideToMany",
+                        &[getter_to_many.clone()],
+                    )?;
+                }
+                if !matches!(hidden_payload, Value::Unit) {
+                    ctx.heap_mut().mutate_add(
+                        override_obj,
+                        "hiddenPayload",
+                        &[hidden_payload.clone()],
+                    )?;
+                }
+                ctx.heap_mut().mutate_add(
+                    obj,
+                    "elementOverride",
+                    &[Value::Object(override_obj)],
+                )?;
+            }
+        }
+
         Ok(Evaluated::new(Value::Object(obj)))
     }
 
@@ -1241,6 +1290,49 @@ fn class_fqn(model: &PureModel, id: ElementId) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// getHiddenPayload — read the GetterOverride wrapper's payload slot
+// ---------------------------------------------------------------------------
+
+/// Pure `getHiddenPayload(o:Any[1]):Any[0..1]`
+///
+/// Reads `o.elementOverride.hiddenPayload` — the opaque slot
+/// `dynamicNew(…, hiddenPayload)` parks for the override lambdas to
+/// pull during property dispatch (test pattern:
+/// `^D_D(name = $o->cast(@D_A).a + $o->getHiddenPayload()->cast(@String)->toOne())`).
+/// Returns `Value::Unit` when the receiver has no `elementOverride`
+/// (i.e., wasn't constructed via the hook-bearing `dynamicNew`
+/// overloads) or the payload is unset.
+#[derive(Debug)]
+pub struct GetHiddenPayload;
+
+impl NativeFunction for GetHiddenPayload {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("getHiddenPayload", &values, 1)?;
+        let Value::Object(obj_id) = &values[0] else {
+            return Ok(Evaluated::new(Value::Unit));
+        };
+        let override_vals = ctx.heap().get_property_values(*obj_id, "elementOverride")?;
+        let Some(Value::Object(override_id)) = override_vals.iter().next().cloned() else {
+            return Ok(Evaluated::new(Value::Unit));
+        };
+        let payload = ctx
+            .heap()
+            .get_property_values(override_id, "hiddenPayload")?;
+        let collected: Vec<Value> = payload.iter().cloned().collect();
+        Ok(Evaluated::new(Value::from_vec(collected)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "getHiddenPayload(o:Any[1]):Any[0..1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -1260,6 +1352,7 @@ pub fn register(registry: &mut NativeRegistry) {
     // share the same mangled `dynamicNew_*` family and are registered
     // against the same native; unused hook args are silently discarded
     // because the basic construction path doesn't invoke them.
+    registry.register("getHiddenPayload_Any_1__Any_1_", GetHiddenPayload);
     registry.register("dynamicNew_Class_1__KeyValue_MANY__Any_1_", DynamicNew);
     registry.register(
         "dynamicNew_GenericType_1__KeyValue_MANY__Any_1_",
