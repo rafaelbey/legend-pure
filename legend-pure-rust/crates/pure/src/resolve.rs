@@ -592,6 +592,17 @@ pub(crate) fn resolve_element_ptr(
 /// `arg_count` is the number of arguments at the call site (from the AST).
 /// `lowered_args` are the already-compiled argument expressions, used for
 /// type-based narrowing when multiple overloads share the same param count.
+#[tracing::instrument(
+    name = "resolve_function_call",
+    level = "debug",
+    skip(lowered_args, ctx, errors),
+    fields(
+        name = %ptr.name(),
+        package = ?ptr.package().map(|p| p.to_string()),
+        arg_count,
+        n_imports = ctx.import_scopes.len(),
+    ),
+)]
 pub(crate) fn resolve_function_call(
     ptr: &ast_ann::PackageableElementPtr,
     arg_count: usize,
@@ -650,7 +661,12 @@ pub(crate) fn resolve_function_call(
                 }
             })
             .collect();
+        tracing::debug!(
+            n_root_filtered = root_filtered.len(),
+            "step 1: root-package lookup"
+        );
         if root_filtered.len() == 1 {
+            tracing::debug!(eid = ?root_filtered[0], "step 1 short-circuit: single root match");
             return Some(root_filtered[0]);
         }
 
@@ -680,8 +696,14 @@ pub(crate) fn resolve_function_call(
                 }
             }
         }
+        tracing::debug!(
+            n_candidates = all_candidates.len(),
+            packages = ?contributing_packages,
+            "step 2: import-scope lookup"
+        );
 
         if all_candidates.is_empty() {
+            tracing::warn!("no candidates — UnresolvedElement");
             // No function with this simple name and arg count in any import scope
             errors.push(CompilationError {
                 message: format!("Cannot resolve function '{name}'"),
@@ -690,6 +712,7 @@ pub(crate) fn resolve_function_call(
             });
             None
         } else if all_candidates.len() == 1 {
+            tracing::debug!(eid = ?all_candidates[0], "single candidate from imports");
             Some(all_candidates[0])
         } else {
             // Multiple overloads with same param count — narrow by type
@@ -699,9 +722,19 @@ pub(crate) fn resolve_function_call(
                 ctx.model,
                 &ctx.variable_types,
             );
+            tracing::debug!(
+                n_narrowed = narrowed.len(),
+                from = all_candidates.len(),
+                "narrowed by type"
+            );
             if narrowed.len() == 1 {
                 return Some(narrowed[0]);
             }
+            tracing::warn!(
+                n_narrowed = narrowed.len(),
+                from = all_candidates.len(),
+                "AmbiguousImport — narrowing did not yield single candidate"
+            );
             errors.push(CompilationError {
                 message: format!(
                     "Ambiguous function call '{name}': found {} overloads with {} args \
@@ -1648,6 +1681,12 @@ fn is_lambda_compatible(
 ///
 /// If all candidates are eliminated by filtering, returns the original set
 /// (lets the ambiguity error surface with all candidates listed).
+#[tracing::instrument(
+    name = "narrow_candidates_by_type",
+    level = "debug",
+    skip(candidates, lowered_args, model, var_types),
+    fields(n_candidates = candidates.len(), n_args = lowered_args.len()),
+)]
 fn narrow_candidates_by_type(
     candidates: &[ElementId],
     lowered_args: &[crate::types::ValueSpec],
@@ -1668,6 +1707,15 @@ fn narrow_candidates_by_type(
         .iter()
         .map(|vs| infer_multiplicity_from_valuespec(vs, model, var_types))
         .collect();
+
+    tracing::debug!(
+        arg_types = ?arg_types
+            .iter()
+            .map(|t| t.map(|e| model.element_name(e).to_string()))
+            .collect::<Vec<_>>(),
+        arg_mults = ?arg_mults,
+        "inferred operand types/multiplicities"
+    );
 
     // === Phase 1: Filter — keep only compatible candidates ===
     let compatible: Vec<ElementId> = candidates

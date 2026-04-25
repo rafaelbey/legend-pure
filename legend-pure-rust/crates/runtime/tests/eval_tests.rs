@@ -38,12 +38,33 @@ use legend_pure_runtime::native::NativeRegistry;
 use legend_pure_runtime::value::Value;
 use smol_str::SmolStr;
 
+/// Initialise `tracing-subscriber` once per test process so the
+/// `tracing::debug!` / `tracing::warn!` events emitted by the
+/// compiler (`resolve_function_call`, `narrow_candidates_by_type`,
+/// `reactivate_value`, etc.) surface in test output when the user
+/// sets `RUST_LOG`. Default filter is `error` (silent); override
+/// with e.g.
+///     RUST_LOG=legend_pure_parser_pure::resolve=debug cargo test ...
+/// to trace overload resolution for a specific failing test.
+fn init_test_tracing() {
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("error"));
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_test_writer()
+            .try_init();
+    });
+}
+
 /// Cached pre-parsed platform ASTs + auto-imports.
 ///
 /// Compiling platform sources is expensive (~200 Pure files), so we parse
 /// them once and cache the ASTs. Each test then clones the ASTs and combines
 /// them with user code for a fresh compilation.
 fn platform_model() -> &'static PlatformFixture {
+    init_test_tracing();
     static FIXTURE: OnceLock<PlatformFixture> = OnceLock::new();
     FIXTURE.get_or_init(|| {
         let raw = legend_pure_core_platform::sources::platform_sources();
