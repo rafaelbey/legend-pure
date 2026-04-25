@@ -1109,10 +1109,30 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 && let Some(qp) = class
                     .qualified_properties
                     .iter()
-                    .find(|q| q.name == property)
+                    // Match by name *and* arity — `res()` and
+                    // `res(z:String[1])` are distinct overloads.
+                    .find(|q| q.name == property && q.parameters.len() == arguments.len())
             {
                 let params = qp.parameters.clone();
                 let body = qp.body.clone();
+                // Capture type-variable parameter names + their bound
+                // values from the receiver instance — `Class C(x:Integer[1])`
+                // declared on the receiver gets `x` bound from the
+                // construction site's `^C(10)(props)` value before the
+                // qualified-property body runs.
+                let type_var_param_names: Vec<SmolStr> = class
+                    .type_variable_parameters
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect();
+                let type_var_values: Vec<Value> = if type_var_param_names.is_empty() {
+                    Vec::new()
+                } else {
+                    self.heap
+                        .get_property_values(obj_id, "__typeVariableValues")
+                        .map(|v| v.iter().cloned().collect())
+                        .unwrap_or_default()
+                };
                 let mut args_v: Vec<Value> = Vec::with_capacity(arguments.len());
                 for arg in arguments {
                     args_v.push(self.eval(arg)?);
@@ -1120,6 +1140,9 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 self.context.push_scope();
                 self.context
                     .set(SmolStr::new("this"), Value::Object(obj_id));
+                for (name, value) in type_var_param_names.iter().zip(type_var_values.iter()) {
+                    self.context.set(name.clone(), value.clone());
+                }
                 for (param, arg) in params.iter().zip(args_v.iter()) {
                     self.context.set(param.name.clone(), arg.clone());
                 }
@@ -1362,9 +1385,34 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         let params = qp.parameters.clone();
         let body = qp.body.clone();
 
+        // Capture the class's type-variable parameter names before
+        // entering the scope so they can be bound from the receiver
+        // instance's `__typeVariableValues` heap slot. Pure declares
+        // `Class C(x:Integer[1])` — instances `^C(10)(props)` carry
+        // `x = 10`, and qualified properties on `C` reference `$x`.
+        let type_var_param_names: Vec<SmolStr> = class
+            .type_variable_parameters
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+        let type_var_values: Vec<Value> = match &args[0] {
+            Value::Object(obj_id) if !type_var_param_names.is_empty() => self
+                .heap
+                .get_property_values(*obj_id, "__typeVariableValues")
+                .map(|v| v.iter().cloned().collect())
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+
         self.context.push_scope();
         // `this` — the receiver instance.
         self.context.set(SmolStr::new("this"), args[0].clone());
+        // Type-variable values bound positionally before declared params
+        // so a qualified-property body like `'1' + $x->toString()` can
+        // resolve `$x` against the construction-site binding.
+        for (name, value) in type_var_param_names.iter().zip(type_var_values.iter()) {
+            self.context.set(name.clone(), value.clone());
+        }
         // Declared parameters bound positionally from args[1..].
         for (param, arg) in params.iter().zip(args.iter().skip(1)) {
             self.context.set(param.name.clone(), arg.clone());

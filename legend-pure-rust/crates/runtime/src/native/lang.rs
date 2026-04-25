@@ -312,41 +312,53 @@ impl NativeFunction for New {
         //     `KeyExpression` heap objects per the M3 signature. Full
         //     KeyExpression decoding isn't implemented yet — surface the
         //     shape and skip property hydration.
+        // Compiler-emitted `^Class<TArgs>(typeVars)(props)` flows through
+        // here as: [class, name, type_args_coll, type_var_values_coll,
+        // key1, val1, …]. Pure-source `new(class, id)` /
+        // `new(class, id, [keyExprs])` direct calls lack the metadata
+        // slots and surface as 2- or 3-arg calls — detect via the shape
+        // of position 2.
         let mut type_args: Vec<Value> = Vec::new();
+        let mut type_var_values: Vec<Value> = Vec::new();
         let mut kvs_offset = values.len(); // default: no kvs
         if values.len() >= 3 {
-            match &values[2] {
-                // Empty `^Class()` constructions lower the position-2 type-arg
-                // Collection to `Value::Unit` (zero-element from_vec).
-                // Treat as the compiler-emitted shape with no type args.
-                Value::Unit => {
-                    kvs_offset = 3;
+            // Probe whether position 2 looks like the compiler-emitted
+            // type-args slot (Unit, single Element, or Collection of
+            // Elements only) — anything else is a Pure-source call shape
+            // and the metadata slots aren't there.
+            let pos2_is_type_args = match &values[2] {
+                Value::Unit | Value::Element(_) => true,
+                Value::Collection(coll) => coll.iter().all(|v| matches!(v, Value::Element(_))),
+                _ => false,
+            };
+            if pos2_is_type_args {
+                match &values[2] {
+                    Value::Collection(coll) => type_args = coll.iter().cloned().collect(),
+                    Value::Element(_) => type_args = vec![values[2].clone()],
+                    _ => {}
                 }
-                Value::Collection(coll) => {
-                    let all_elements = coll.iter().all(|v| matches!(v, Value::Element(_)));
-                    if all_elements {
-                        type_args = coll.iter().cloned().collect();
-                        kvs_offset = 3;
-                    } else {
-                        // Pure-source `new(class, id, [keyExprs])` — leave kvs
-                        // untouched; KeyExpression hydration is a separate
-                        // backlog item.
-                        kvs_offset = values.len();
+                if values.len() >= 4 {
+                    match &values[3] {
+                        Value::Unit => {}
+                        Value::Collection(coll) => {
+                            type_var_values = coll.iter().cloned().collect();
+                        }
+                        other => {
+                            type_var_values = vec![other.clone()];
+                        }
                     }
-                }
-                // Single Element at position 2 — compiler-emitted shape
-                // where exactly one type arg was provided (`from_vec` collapses
-                // a one-element vector to its scalar).
-                Value::Element(_) => {
-                    type_args = vec![values[2].clone()];
+                    kvs_offset = 4;
+                } else {
                     kvs_offset = 3;
                 }
-                _ => {
-                    // Old-style flat key/value pairs starting at position 2 —
-                    // compiler no longer emits this shape, but tolerate it
-                    // for any direct callers.
-                    kvs_offset = 2;
-                }
+            } else if matches!(&values[2], Value::Collection(_)) {
+                // Pure-source `new(class, id, [keyExprs])` — KeyExpression
+                // hydration is a separate backlog item. Skip the slot.
+                kvs_offset = values.len();
+            } else {
+                // Old-style flat key/value pairs starting at position 2 —
+                // compiler no longer emits this shape, but tolerate it.
+                kvs_offset = 2;
             }
         }
         let classifier = class_fqn(ctx.model(), class_id);
@@ -371,8 +383,13 @@ impl NativeFunction for New {
             ctx.heap_mut()
                 .mutate_set(obj, "__typeArguments", &type_args)?;
         }
+        if !type_var_values.is_empty() {
+            ctx.heap_mut()
+                .mutate_set(obj, "__typeVariableValues", &type_var_values)?;
+        }
         apply_key_value_pairs(ctx, obj, &values[kvs_offset..])?;
         populate_association_inverses(ctx, obj, class_id, &values[kvs_offset..])?;
+        evaluate_class_constraints(ctx, class_id, obj, &type_var_values)?;
         Ok(Evaluated::new(Value::Object(obj)))
     }
 
@@ -971,6 +988,91 @@ fn clone_heap_object(
         ctx.heap_mut().mutate_set(clone_id, name.as_str(), &vs)?;
     }
     Ok(clone_id)
+}
+
+/// Run every constraint declared on the given Class against the
+/// freshly-constructed instance. Mirrors `Cast`'s primitive-constraint
+/// path: bind `$this` to the instance and each
+/// `type_variable_parameter` to its `^Class(value)(props)` argument,
+/// evaluate the constraint body, raise `ConstraintViolation` on the
+/// first failure with the canonical message shape.
+///
+/// Inheritance walking is intentionally *not* threaded through —
+/// constraints declared on parent classes are not yet evaluated. The
+/// remaining failing platform tests (testNewWithConstraintExtended /
+/// similar) require the same chain logic the primitive path has;
+/// tracked under the constraint-runtime backlog item.
+#[allow(clippy::result_large_err)]
+fn evaluate_class_constraints(
+    ctx: &mut dyn EvalContextTrait,
+    class_id: ElementId,
+    obj: ObjectId,
+    type_var_values: &[Value],
+) -> Result<(), PureException> {
+    let (constraints, param_names, class_name) = match ctx.model().get_element(class_id) {
+        Element::Class(class) if !class.constraints.is_empty() => {
+            let names: Vec<SmolStr> = class
+                .type_variable_parameters
+                .iter()
+                .map(|p| p.name.clone())
+                .collect();
+            (
+                class.constraints.clone(),
+                names,
+                ctx.model().element_name(class_id).clone(),
+            )
+        }
+        _ => return Ok(()),
+    };
+    ctx.context_mut().push_scope();
+    ctx.context_mut()
+        .set(SmolStr::new_static("this"), Value::Object(obj));
+    for (name, value) in param_names.iter().zip(type_var_values.iter()) {
+        ctx.context_mut().set(name.clone(), value.clone());
+    }
+    let mut first_failure: Option<PureException> = None;
+    for (idx, constraint) in constraints.iter().enumerate() {
+        match ctx.evaluate(&constraint.function) {
+            Ok(eval) => {
+                if matches!(eval.into_value(), Value::Boolean(true)) {
+                    continue;
+                }
+            }
+            Err(e) => {
+                first_failure = Some(e);
+                break;
+            }
+        }
+        let message = match constraint.message.as_ref().map(|m| ctx.evaluate(m)) {
+            Some(Ok(eval)) => match eval.into_value() {
+                Value::String(s) => Some(s.to_string()),
+                _ => None,
+            },
+            Some(Err(e)) => {
+                first_failure = Some(e);
+                break;
+            }
+            None => None,
+        };
+        let constraint_id = constraint
+            .name
+            .clone()
+            .unwrap_or_else(|| SmolStr::new(idx.to_string()));
+        first_failure = Some(PureException::constraint(
+            constraint_id,
+            crate::error::ConstraintKind::Class,
+            class_name.clone(),
+            message,
+            constraint.source_info.clone(),
+            Vec::new(),
+        ));
+        break;
+    }
+    ctx.context_mut().pop_scope();
+    match first_failure {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// Compute the qualified path for a class element (used as heap classifier).

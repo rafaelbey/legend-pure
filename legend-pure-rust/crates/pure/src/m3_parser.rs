@@ -498,6 +498,7 @@ impl<'a> M3Parser<'a> {
                 package_segments,
                 Element::Class(Class {
                     type_parameters: vec![],
+                    type_variable_parameters: vec![],
                     super_types: vec![],
                     properties: vec![],
                     qualified_properties: vec![],
@@ -566,6 +567,7 @@ impl<'a> M3Parser<'a> {
             package_segments,
             Element::Class(Class {
                 type_parameters,
+                type_variable_parameters: vec![],
                 super_types,
                 properties,
                 qualified_properties: vec![],

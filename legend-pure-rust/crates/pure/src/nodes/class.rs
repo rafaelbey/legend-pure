@@ -38,6 +38,12 @@ use crate::types::{Expression, Multiplicity, Parameter, TypeExpr};
 pub struct Class {
     /// Type parameters (e.g., `["T", "U"]`).
     pub type_parameters: Vec<SmolStr>,
+    /// Type-variable VALUE parameters declared on a parametric class —
+    /// `Class C(x:Integer[1]) [...]` carries one parameter named `x`.
+    /// Bound at construction time from `^C(10)(props)` and threaded
+    /// through to constraints / qualified properties so `$x` resolves
+    /// against the receiver instance.
+    pub type_variable_parameters: Vec<crate::types::Parameter>,
     /// Generalizations only (upward). Never stores specializations.
     /// Uses `TypeExpr` (not plain `ElementId`) because a class can
     /// extend a parameterized type: `extends List<String>`.
