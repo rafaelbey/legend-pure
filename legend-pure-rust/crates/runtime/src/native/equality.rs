@@ -104,6 +104,28 @@ pub fn values_equal(ctx: &dyn EvalContextTrait, a: &Value, b: &Value) -> bool {
                     .all(|(x, y)| values_equal(ctx, x, y))
         }
         (Value::Object(oa), Value::Object(ob)) => objects_equal(ctx, *oa, *ob),
+        // Cross-variant equality for metamodel references — when one
+        // side is `Element(eid)` / `Function(Compiled(eid))` and the
+        // other is the heap row produced by `bootstrap_metamodel`,
+        // both views point at the same `ObjectId`. Without this
+        // bridge `assertIs($cls, ^Class<…>(...)->class())` fails
+        // because the bare `Element` and the materialised `Object`
+        // wouldn't compare equal even though Java treats them as
+        // the same `CoreInstance`. Bridges `Element ↔ Object`,
+        // `Function(Compiled) ↔ Object`, and the symmetric
+        // `Element ↔ Function(Compiled)` (same compiled-element id).
+        (
+            Value::Element(_) | Value::Function(_) | Value::Object(_),
+            Value::Element(_) | Value::Function(_) | Value::Object(_),
+        ) => {
+            let oa = a.as_object_id(ctx.heap());
+            let ob = b.as_object_id(ctx.heap());
+            match (oa, ob) {
+                (Some(la), Some(lb)) if la == lb => true,
+                (Some(la), Some(lb)) => objects_equal(ctx, la, lb),
+                _ => a == b,
+            }
+        }
         // Pure multiplicity coercion: a single-element collection equals
         // its scalar (`[x] == x` holds, `[x, y] == x` does not). The
         // heap's `apply_property_to_instance` returns `Value::from_vec`'d

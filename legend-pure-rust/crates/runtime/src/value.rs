@@ -585,6 +585,60 @@ impl Value {
             _ => Value::Collection(Box::new(PVector::from_iter(values))),
         }
     }
+
+    /// Project this value to its `ObjectId` view, if any.
+    ///
+    /// Bridges the `Element` / `Object` / `Function(Compiled)` split
+    /// onto the unified metamodel-heap addressing introduced by
+    /// [`crate::heap::RuntimeHeap::bootstrap_metamodel`]. Returns:
+    /// - `Value::Object(oid)` → `Some(oid)`
+    /// - `Value::Element(eid)` → the bootstrapped metamodel row, or `None`
+    ///   when no row exists (pre-bootstrap state in tests, primitives
+    ///   without an M3 metatype, etc.)
+    /// - `Value::Function(Compiled(eid))` → same projection as `Element`
+    /// - everything else → `None`
+    ///
+    /// Used by `values_equal` to make `Element(eid) == Object(oid)` hold
+    /// when both refer to the same metamodel entity, by `eval_property_access`
+    /// to route every reflection through the same heap accessor (step 3),
+    /// and by `assertIs` to compare metamodel references uniformly.
+    #[must_use]
+    pub fn as_object_id(&self, heap: &crate::heap::RuntimeHeap) -> Option<crate::heap::ObjectId> {
+        match self {
+            Self::Object(oid) => Some(*oid),
+            Self::Element(eid) => heap.object_for_element(*eid),
+            Self::Function(fv) => match fv.as_ref() {
+                FunctionValue::Compiled(eid) => heap.object_for_element(*eid),
+                FunctionValue::Lambda(_) => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Project this value to its `ElementId` view, if any.
+    ///
+    /// Inverse of [`Self::as_object_id`]. Returns:
+    /// - `Value::Element(eid)` → `Some(eid)`
+    /// - `Value::Function(Compiled(eid))` → `Some(eid)`
+    /// - `Value::Object(oid)` → reverse-lookup via the BiMap when the
+    ///   row was created by `bootstrap_metamodel` (rare; reserved for
+    ///   diagnostics)
+    /// - everything else → `None`
+    #[must_use]
+    pub fn as_element_id(
+        &self,
+        heap: &crate::heap::RuntimeHeap,
+    ) -> Option<legend_pure_parser_pure::ids::ElementId> {
+        match self {
+            Self::Element(eid) => Some(*eid),
+            Self::Function(fv) => match fv.as_ref() {
+                FunctionValue::Compiled(eid) => Some(*eid),
+                FunctionValue::Lambda(_) => None,
+            },
+            Self::Object(oid) => heap.element_for_object(*oid),
+            _ => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
