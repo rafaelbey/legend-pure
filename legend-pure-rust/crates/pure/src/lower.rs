@@ -808,14 +808,17 @@ fn infer_let_type(
 // New instance
 // ---------------------------------------------------------------------------
 
-/// Lowers `^MyClass<TypeArg, …>(prop='val')` →
-/// `FunctionCall("new", [class, name, [type_arg_refs], kvs...])`.
+/// Lowers `^MyClass<TypeArg, …>(prop='val', other += $vals)` →
+/// `FunctionCall("new", [class, name, [type_arg_refs], [type_var_vals], kvts...])`.
 ///
 /// Position 2 is the (possibly empty) collection of resolved type-argument
 /// elements — `^List<String>(values=…)` puts `[String]` there so the
 /// runtime can hang the bindings off the new instance and `genericType()`
 /// surface them via `typeArguments`. Position 0/1 stay as the class element
-/// + simple name, position 3.. carries flat key/value pairs as before.
+/// + simple name. Position 4.. carries `(key, value, augmented_bool)`
+/// triples — the augmented flag distinguishes `=` (replace, `mutate_set`)
+/// from `+=` (append, `mutate_add`). Java threads this as the `KeyValue.add`
+/// slot; we encode it inline so the runtime needs no schema lookup.
 fn lower_new_instance(
     e: &ast_expr::NewInstanceExpr,
     ctx: &mut ResolutionContext<'_>,
@@ -823,7 +826,7 @@ fn lower_new_instance(
 ) -> Option<ValueSpec> {
     let class_id = resolve::resolve_element_ptr(&e.class, &e.source_info, ctx, errors)?;
 
-    let mut arguments = Vec::with_capacity(3 + e.assignments.len() * 2);
+    let mut arguments = Vec::with_capacity(4 + e.assignments.len() * 3);
     arguments.push(untyped(
         ExprKind::PackageableElementRef { element: class_id },
         e.source_info.clone(),
@@ -883,13 +886,22 @@ fn lower_new_instance(
         e.source_info.clone(),
     ));
     for kv in &e.assignments {
+        // Drop the whole triple if value lowering failed — emitting a
+        // dangling key would desynchronise the (key, value, augmented)
+        // stride the runtime walks. The error has already been recorded
+        // by `lower_expression`.
+        let Some(val) = lower_expression(&kv.value, ctx, errors) else {
+            continue;
+        };
         arguments.push(untyped(
             ExprKind::StringLiteral(SmolStr::new(kv.key.as_str())),
             kv.source_info.clone(),
         ));
-        if let Some(val) = lower_expression(&kv.value, ctx, errors) {
-            arguments.push(val);
-        }
+        arguments.push(val);
+        arguments.push(untyped(
+            ExprKind::BooleanLiteral(kv.augmented),
+            kv.source_info.clone(),
+        ));
     }
 
     Some(untyped(
@@ -906,11 +918,15 @@ fn lower_new_instance(
 // Copy expression
 // ---------------------------------------------------------------------------
 
-/// Lowers `^$source(prop='val')` → `FunctionCall("copy", [$source, key1, val1, ...])`.
+/// Lowers `^$source(prop='val', other += $vals)` →
+/// `FunctionCall("copy", [$source, key1, val1, augmented1, ...])`.
 ///
 /// Matches the Java M3 desugaring: the source variable becomes the first
-/// argument, followed by alternating string-name/value pairs for each
-/// property override.
+/// argument, followed by `(key, value, augmented_bool)` triples for each
+/// property override. The augmented flag distinguishes `=` (replace,
+/// `mutate_set`) from `+=` (append, `mutate_add`) — Java carries this as
+/// the `KeyValue.add` slot; we encode it inline so the runtime needs no
+/// schema lookup.
 fn lower_copy(
     e: &ast_expr::CopyExpr,
     ctx: &mut ResolutionContext<'_>,
@@ -923,17 +939,24 @@ fn lower_copy(
         e.source_info.clone(),
     );
 
-    let mut arguments = Vec::with_capacity(1 + e.assignments.len() * 2);
+    let mut arguments = Vec::with_capacity(1 + e.assignments.len() * 3);
     arguments.push(source_var);
 
     for kv in &e.assignments {
+        // Drop the whole triple if value lowering failed — see the matching
+        // comment in `lower_new_instance` for the stride-preservation rationale.
+        let Some(val) = lower_expression(&kv.value, ctx, errors) else {
+            continue;
+        };
         arguments.push(untyped(
             ExprKind::StringLiteral(SmolStr::new(kv.key.as_str())),
             kv.source_info.clone(),
         ));
-        if let Some(val) = lower_expression(&kv.value, ctx, errors) {
-            arguments.push(val);
-        }
+        arguments.push(val);
+        arguments.push(untyped(
+            ExprKind::BooleanLiteral(kv.augmented),
+            kv.source_info.clone(),
+        ));
     }
 
     Some(untyped(

@@ -620,6 +620,23 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             }
             Value::Element(id) => {
                 let id = *id;
+                // Function elements expose Function-value-shaped reads
+                // (`expressionSequence`, `functionName`) through the
+                // same `eval_function_property` path the
+                // `Value::Function` arm uses below — without this both
+                // `$f.expressionSequence` and `$p->eval($f)` (which
+                // routes through `apply_property_to_instance`) need
+                // to call into the Function dispatch, but only the
+                // latter does. Mirror it here so direct property
+                // access on a Function Element gets the same shape
+                // that the Property-wrapper path produces.
+                if matches!(self.model.get_element(id), Element::Function(_)) {
+                    let fv = FunctionValue::Compiled(id);
+                    let fn_val = Value::Function(Box::new(fv.clone()));
+                    if let Ok(v) = self.eval_function_property(&fv, property, &fn_val) {
+                        return Ok(v);
+                    }
+                }
                 self.eval_element_property(id, property)
                     .map_err(PureException::from)
             }
@@ -832,13 +849,17 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 ))),
             },
             "stereotypes" => {
-                // Clone into an owned Vec so we can release the immutable borrow
-                // of self.model before we mutate self.heap.
-                //
-                // Each access allocates fresh heap objects — identity is not preserved
-                // across calls (`$f.stereotypes == $f.stereotypes` is false). Surveyor
-                // only inspects `.value`/`.profile`, so this is fine. If callers start
-                // caring about identity, cache per-(element, property) on first read.
+                // Memoised per (`element`, `"stereotypes"`) so repeated
+                // calls return the same heap-object identity — required
+                // for `$f.stereotypes == $f.stereotypes` and (after
+                // `Copy`'s eager hydration) for `$f1.stereotypes ==
+                // $f2.stereotypes`. Without the cache each access
+                // allocates fresh wrappers and identity-based equality
+                // (Stereotype declares no `<<equality.Key>>`) flips the
+                // comparison to false.
+                if let Some(cached) = self.member_wrapper_cache.get(&(id, "stereotypes")) {
+                    return Ok(Value::from_vec(cached.clone()));
+                }
                 let stereos: Vec<(ElementId, SmolStr)> = match self.model.get_element(id) {
                     Element::Function(f) => f
                         .stereotypes
@@ -861,9 +882,17 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                         .mutate_add(obj, "profile", &[Value::Element(profile)])?;
                     items.push(Value::Object(obj));
                 }
+                self.member_wrapper_cache
+                    .insert((id, "stereotypes"), items.clone());
                 Ok(Value::from_vec(items))
             }
             "taggedValues" => {
+                // See `stereotypes` — same memoisation rationale (stable
+                // identity across calls so `^$f1()` carries shared
+                // references to the same TaggedValue wrappers).
+                if let Some(cached) = self.member_wrapper_cache.get(&(id, "taggedValues")) {
+                    return Ok(Value::from_vec(cached.clone()));
+                }
                 let tags: Vec<(ElementId, SmolStr, String)> = match self.model.get_element(id) {
                     Element::Function(f) => f
                         .tagged_values
@@ -887,6 +916,8 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                         .mutate_add(obj, "value", &[Value::String(SmolStr::new(value))])?;
                     items.push(Value::Object(obj));
                 }
+                self.member_wrapper_cache
+                    .insert((id, "taggedValues"), items.clone());
                 Ok(Value::from_vec(items))
             }
             "properties" | "qualifiedProperties" | "propertiesFromAssociations" => {
@@ -981,6 +1012,19 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                         }
                         _ => {}
                     }
+                }
+                // Fallback for properties that exist on the element's M3
+                // metatype (e.g. `applications`, `referenceUsages`,
+                // `parameters` on `ConcreteFunctionDefinition`) but whose
+                // values aren't computed by this runtime — we don't yet
+                // track the cross-reference graph or expose every
+                // reflective slot. Return empty so equality comparisons
+                // hold against a heap copy whose slot is also empty
+                // (Java parity for `^$f1()` then `$f1.<prop> ==
+                // $f2.<prop>`); reserve the explicit error for genuinely
+                // unknown property names.
+                if metatype_property_exists(self.model, id, property) {
+                    return Ok(Value::Unit);
                 }
                 Err(PureRuntimeError::EvaluationError(format!(
                     "Property '{property}' not supported on model element references"
@@ -1742,6 +1786,47 @@ pub(crate) fn callable_wrapper_kind(model: &PureModel, classifier: &str) -> Opti
     } else {
         None
     }
+}
+
+/// True when `property` is declared on the M3 metatype that classifies
+/// `id` (or any of its supertypes). Drives the "return empty for known
+/// reflective slot we don't compute" fallback in
+/// [`Evaluator::eval_element_property`] — `$f.applications` on a Function
+/// Element resolves through this when the runtime doesn't track the
+/// cross-reference graph, so the value comes back as `Value::Unit`
+/// instead of erroring. Mirrors Java Pure's behaviour where unset
+/// slots are observably empty rather than throwing.
+pub(crate) fn metatype_property_exists(model: &PureModel, id: ElementId, property: &str) -> bool {
+    let element = model.get_element(id);
+    let Some(meta_id) = legend_pure_parser_pure::bootstrap::metatype_of(model, element) else {
+        return false;
+    };
+    let mut visited: std::collections::HashSet<ElementId> = std::collections::HashSet::new();
+    let mut stack: Vec<ElementId> = vec![meta_id];
+    while let Some(cid) = stack.pop() {
+        if !visited.insert(cid) {
+            continue;
+        }
+        let Element::Class(c) = model.get_element(cid) else {
+            continue;
+        };
+        for p in &c.properties {
+            if p.name.as_str() == property {
+                return true;
+            }
+        }
+        for p in &c.qualified_properties {
+            if p.name.as_str() == property {
+                return true;
+            }
+        }
+        for st in &c.super_types {
+            if let TypeExpr::Named { element, .. } = st {
+                stack.push(*element);
+            }
+        }
+    }
+    false
 }
 
 /// Callable wrapper classification — see [`callable_wrapper_kind`].

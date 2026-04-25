@@ -19,9 +19,10 @@
 //! provides short-circuiting conditionals; `new` constructs class instances
 //! from the `^Class(prop=val)` syntax; `copy` produces a modified clone.
 
+use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
-use legend_pure_parser_pure::types::ValueSpec;
+use legend_pure_parser_pure::types::{ExprKind, TypeExpr, ValueSpec};
 use smol_str::SmolStr;
 
 use crate::error::{PureException, PureRuntimeError};
@@ -387,7 +388,7 @@ impl NativeFunction for New {
             ctx.heap_mut()
                 .mutate_set(obj, "__typeVariableValues", &type_var_values)?;
         }
-        apply_key_value_pairs(ctx, obj, &values[kvs_offset..])?;
+        apply_key_value_triples(ctx, obj, &values[kvs_offset..])?;
         populate_association_inverses(ctx, obj, class_id, &values[kvs_offset..])?;
         evaluate_class_constraints(ctx, class_id, obj, &type_var_values)?;
         Ok(Evaluated::new(Value::Object(obj)))
@@ -436,6 +437,18 @@ impl NativeFunction for Copy {
         // `Class`, etc. via `bootstrap::metatype_of`). Subsequent introspection
         // (`$copy->genericType().rawType`) then resolves to the same metatype
         // the original's element reflection would produce.
+        //
+        // Java parity: per `legend-pure-runtime-java-engine-interpreted/.../
+        // natives/grammar/lang/creation/Copy.java:196-237`, the Java Copy
+        // walks `class_getSimplePropertiesByName(classifier)` and for every
+        // property NOT being overridden by the caller, copies the source's
+        // values onto the new instance via `addValueToProperty(...)` —
+        // shallow (shared inner references), eager (no lazy delegation).
+        // The literal Java comment is `// The new instance doesn't have
+        // the value ... Add (not deep!)`. We mirror that here by walking
+        // the metatype + supertypes' property lists, evaluating each
+        // against the source via the same property-access path the user
+        // would hit via `$f1.<prop>`, and storing the result on the heap.
         if let Value::Element(elem_id) = &values[0] {
             let element = ctx.model().get_element(*elem_id);
             let Some(meta_id) =
@@ -449,7 +462,8 @@ impl NativeFunction for Copy {
             let classifier =
                 crate::model_utils::build_element_path(ctx.model(), meta_id, "::", false);
             let obj = ctx.heap_mut().alloc_dynamic(classifier);
-            apply_key_value_pairs(ctx, obj, &values[1..])?;
+            hydrate_element_to_heap(ctx, *elem_id, meta_id, obj)?;
+            apply_key_value_triples(ctx, obj, &values[1..])?;
             return Ok(Evaluated::new(Value::Object(obj)));
         }
 
@@ -492,20 +506,24 @@ impl NativeFunction for Copy {
                 {
                     set.insert(SmolStr::new(head));
                 }
-                i += 2;
+                i += 3;
             }
             set
         };
 
-        // Flatten carried-over properties into a `[key1, val1, key2, val2, …]`
+        // Flatten carried-over properties into a
+        // `[key1, val1, augmented1=false, key2, val2, augmented2=false, …]`
         // slice compatible with `populate_association_inverses` — the copy
         // should appear in every association inverse its source belonged
         // to (e.g. a copied Person is appended to `firm.employees` so
         // `assertSameElements([$bob, $pierre], $firmX.employees)` holds).
+        // Carried values are unconditionally `=` semantics (we already used
+        // `mutate_add` above to seed the slot from the source); the false
+        // flag here only matters for the inverse walk's stride.
         // Skip any property the user is path-overriding; the inverse for
         // those is established by the path-property handler against the
         // freshly-cloned nested object.
-        let mut carried_kvs: Vec<Value> = Vec::with_capacity(original_props.len() * 2);
+        let mut carried_kvs: Vec<Value> = Vec::with_capacity(original_props.len() * 3);
         for (name, prop_values) in &original_props {
             ctx.heap_mut().mutate_add(obj, name.as_str(), prop_values)?;
             if path_overrides.contains(name) {
@@ -513,9 +531,10 @@ impl NativeFunction for Copy {
             }
             carried_kvs.push(Value::String(name.clone()));
             carried_kvs.push(Value::from_vec(prop_values.clone()));
+            carried_kvs.push(Value::Boolean(false));
         }
 
-        apply_key_value_pairs(ctx, obj, &plain_kvs)?;
+        apply_key_value_triples(ctx, obj, &plain_kvs)?;
         apply_path_property_updates(ctx, source_id, obj, &path_kvs)?;
 
         if let Some(class_id) = crate::m3_paths::resolve(ctx.model(), &classifier) {
@@ -528,7 +547,7 @@ impl NativeFunction for Copy {
             for head in &path_overrides {
                 let new_vals = ctx.heap().get_property_values(obj, head.as_str())?;
                 let assigned = Value::from_vec(new_vals.iter().cloned().collect());
-                let synthetic = vec![Value::String(head.clone()), assigned];
+                let synthetic = vec![Value::String(head.clone()), assigned, Value::Boolean(false)];
                 populate_association_inverses(ctx, obj, class_id, &synthetic)?;
             }
         }
@@ -681,14 +700,18 @@ impl NativeFunction for DynamicNew {
             ctx.heap_mut().mutate_set(obj, name.as_str(), &flat)?;
         }
 
-        // Overlay caller-supplied bindings. Build a flat [k, v, k, v]
-        // slice so we can reuse `populate_association_inverses` for
-        // bidirectional-association maintenance.
-        let mut assoc_kvs: Vec<Value> = Vec::with_capacity(supplied.len() * 2);
+        // Overlay caller-supplied bindings. Build a flat
+        // `[k, v, augmented=false, …]` triple slice so we can reuse
+        // `populate_association_inverses` for bidirectional-association
+        // maintenance. The augmented flag is `false` because Java's
+        // `KeyValue` shape used by `dynamicNew` doesn't expose `add` to
+        // the caller — every overlay is replace-semantics here.
+        let mut assoc_kvs: Vec<Value> = Vec::with_capacity(supplied.len() * 3);
         for (key, flat) in supplied {
             ctx.heap_mut().mutate_set(obj, key.as_str(), &flat)?;
             assoc_kvs.push(Value::String(key));
             assoc_kvs.push(Value::from_vec(flat));
+            assoc_kvs.push(Value::Boolean(false));
         }
         populate_association_inverses(ctx, obj, class_id, &assoc_kvs)?;
 
@@ -715,13 +738,16 @@ fn is_lambda_function_class(
         || crate::m3_paths::resolve(model, crate::m3_paths::FUNCTION) == Some(class_id)
 }
 
-/// Detect the `(expressionSequence, <single Function>)` key/value pair
+/// Detect the `(expressionSequence, <single Function>, augmented)` triple
 /// emitted by `^LambdaFunction(expressionSequence = $fn.expressionSequence)`.
 ///
 /// Returns the underlying `Value::Function` when the shortcut applies,
 /// so `New` can return it directly instead of allocating a heap object.
+/// The augmented flag is ignored — the shortcut applies only when the
+/// triple list has exactly one entry, so there is no carried value to
+/// distinguish `=` from `+=` against.
 fn try_lambda_shortcut(kvs: &[Value]) -> Option<Value> {
-    if kvs.len() != 2 {
+    if kvs.len() != 3 {
         return None;
     }
     let Value::String(key) = &kvs[0] else {
@@ -764,8 +790,8 @@ fn populate_association_inverses(
     class_id: ElementId,
     kvs: &[Value],
 ) -> Result<(), PureException> {
-    if kvs.len() % 2 != 0 {
-        return Ok(()); // Arity already validated by apply_key_value_pairs
+    if kvs.len() % 3 != 0 {
+        return Ok(()); // Arity already validated by apply_key_value_triples
     }
 
     // Snapshot the association entries once — cheap O(n) per property but we
@@ -776,11 +802,14 @@ fn populate_association_inverses(
     }
 
     // For each forward assignment key, find the matching injected property
-    // and its inverse, then mutate the target object's inverse slot.
+    // and its inverse, then mutate the target object's inverse slot. The
+    // augmented flag at slot `i+2` is irrelevant to inverse semantics —
+    // whether the user wrote `firm = $f` or `firm += $f`, the same
+    // reverse-link must be established.
     let mut i = 0;
     while i < kvs.len() {
         let Value::String(key) = &kvs[i] else {
-            i += 2;
+            i += 3;
             continue;
         };
         let assigned = kvs[i + 1].clone();
@@ -814,27 +843,121 @@ fn populate_association_inverses(
                     .mutate_add(target, inverse_name.as_str(), &[Value::Object(obj)])?;
             }
         }
-        i += 2;
+        i += 3;
     }
     Ok(())
 }
 
-/// Walk a flat `[key1, val1, key2, val2, ...]` slice and `mutate_set` each
-/// pair onto `obj`. Collections are expanded so property storage stays flat.
+/// Eager shallow hydration of every M3 reflective property of `meta_id`
+/// (and its supertypes) onto the heap object `obj` from the source
+/// `Value::Element(elem_id)`.
 ///
-/// Uses set (replace) rather than add (append) semantics: `^$src(prop='new')`
-/// in Pure replaces `prop`'s value with `'new'`, it does not append. `New`
-/// constructs fresh empty objects where this distinction is moot, but
-/// `Copy` pre-populates from the source and relies on the reset behaviour
-/// so the override doesn't leak the original value into the slot.
-fn apply_key_value_pairs(
+/// Mirrors Java Pure's `Copy.copy(...)` behaviour for Element-source
+/// constructions (`^$f1()`): walk every property declared on the
+/// classifier's M3 metatype and any ancestor up to `Any`, evaluate the
+/// property against the source element via the same property-access
+/// path the user would hit (`$f1.<prop>`), and store the resulting
+/// values on the new heap object. Empty results (`Value::Unit`) are
+/// skipped — the heap returns empty for unset slots anyway, so storing
+/// `Unit` is a no-op while still leaving room for the user's
+/// subsequent `apply_key_value_triples` overrides to set a real value.
+///
+/// This delegation through `ctx.evaluate` (rather than re-implementing
+/// `eval_element_property` here) means any future Element-side property
+/// the runtime learns to compute (e.g. `parameters` once we wire it up
+/// from `Function.parameters`) automatically flows into the copy
+/// without further changes to this helper.
+#[allow(clippy::result_large_err)]
+fn hydrate_element_to_heap(
+    ctx: &mut dyn EvalContextTrait,
+    elem_id: ElementId,
+    meta_id: ElementId,
+    obj: ObjectId,
+) -> Result<(), PureException> {
+    // Collect every (de-duplicated, declaration-order) property name
+    // declared on the metatype Class or any of its supertypes. Walks
+    // the supertype chain breadth-first so subclass redeclarations
+    // shadow parent ones at the same name.
+    let mut prop_names: Vec<SmolStr> = Vec::new();
+    let mut seen: std::collections::HashSet<SmolStr> = std::collections::HashSet::new();
+    let mut visited: std::collections::HashSet<ElementId> = std::collections::HashSet::new();
+    let mut stack: Vec<ElementId> = vec![meta_id];
+    while let Some(cid) = stack.pop() {
+        if !visited.insert(cid) {
+            continue;
+        }
+        let Element::Class(c) = ctx.model().get_element(cid) else {
+            continue;
+        };
+        for p in &c.properties {
+            if seen.insert(p.name.clone()) {
+                prop_names.push(p.name.clone());
+            }
+        }
+        for st in &c.super_types {
+            if let TypeExpr::Named { element, .. } = st {
+                stack.push(*element);
+            }
+        }
+    }
+
+    // For each property, build a synthetic `<elem>.<prop>` access spec
+    // and evaluate it under the current scope. This routes through the
+    // evaluator's `eval_element_property` / `eval_function_property` so
+    // we don't duplicate that dispatch table here.
+    for prop in prop_names {
+        let target_spec = ValueSpec {
+            kind: Box::new(ExprKind::PackageableElementRef { element: elem_id }),
+            source_info: SourceInfo::new("<copy-hydrate>", 0, 0, 0, 0),
+            type_info: None,
+        };
+        let access_spec = ValueSpec {
+            kind: Box::new(ExprKind::PropertyAccess {
+                target: Box::new(target_spec),
+                property: prop.clone(),
+            }),
+            source_info: SourceInfo::new("<copy-hydrate>", 0, 0, 0, 0),
+            type_info: None,
+        };
+        // Tolerate per-property errors — if the runtime can't compute
+        // a particular slot on this element kind, treat it as empty
+        // (the heap default) rather than failing the whole copy.
+        let value = match ctx.evaluate(&access_spec) {
+            Ok(v) => v.into_value(),
+            Err(_) => continue,
+        };
+        let values: Vec<Value> = match value {
+            Value::Unit => continue,
+            Value::Collection(coll) => coll.iter().cloned().collect(),
+            other => vec![other],
+        };
+        if values.is_empty() {
+            continue;
+        }
+        ctx.heap_mut().mutate_set(obj, prop.as_str(), &values)?;
+    }
+    Ok(())
+}
+
+/// Walk a `[key1, val1, augmented1, key2, val2, augmented2, ...]` slice
+/// and apply each triple to `obj`.
+///
+/// On `augmented == false` (the `=` form) uses `mutate_set` (replace);
+/// on `augmented == true` (the `+=` form) uses `mutate_add` (append to
+/// any carried-over values). `Copy` pre-populates from the source and
+/// relies on `=` to reset the slot so the override doesn't leak the
+/// original value, while `+=` is the only way to extend a carried list
+/// without restating its prior contents. `New` always allocates a fresh
+/// slot, so the distinction is moot at construction time but the
+/// compiler still threads the flag through for symmetry.
+fn apply_key_value_triples(
     ctx: &mut dyn EvalContextTrait,
     obj: ObjectId,
     kvs: &[Value],
 ) -> Result<(), PureException> {
-    if kvs.len() % 2 != 0 {
+    if kvs.len() % 3 != 0 {
         return Err(PureRuntimeError::EvaluationError(format!(
-            "object construction: expected key/value pairs, got {} extra arguments",
+            "object construction: expected (key, value, augmented) triples, got {} extra arguments",
             kvs.len()
         ))
         .into());
@@ -843,27 +966,32 @@ fn apply_key_value_pairs(
     while i < kvs.len() {
         let key = kvs[i].as_string()?.clone();
         let value = kvs[i + 1].clone();
+        let augmented = matches!(&kvs[i + 2], Value::Boolean(true));
         let values: Vec<Value> = match value {
             Value::Collection(coll) => coll.iter().cloned().collect(),
             Value::Unit => Vec::new(),
             other => vec![other],
         };
-        ctx.heap_mut().mutate_set(obj, key.as_str(), &values)?;
-        i += 2;
+        if augmented {
+            ctx.heap_mut().mutate_add(obj, key.as_str(), &values)?;
+        } else {
+            ctx.heap_mut().mutate_set(obj, key.as_str(), &values)?;
+        }
+        i += 3;
     }
     Ok(())
 }
 
-/// Split a `[key1, val1, key2, val2, ...]` slice into two parallel
-/// flat-pair slices: the plain keys (no `.`) and the dotted-path
-/// keys (`address.name`, `firm.legalName`). Both keep the same flat
-/// shape so `apply_key_value_pairs` and `apply_path_property_updates`
-/// can consume them uniformly.
+/// Split a `[key1, val1, augmented1, key2, val2, augmented2, ...]` slice
+/// into two parallel triple slices: the plain keys (no `.`) and the
+/// dotted-path keys (`address.name`, `firm.legalName`). Both keep the
+/// same triple shape so `apply_key_value_triples` and
+/// `apply_path_property_updates` can consume them uniformly.
 #[allow(clippy::result_large_err)]
 fn partition_path_kvs(kvs: &[Value]) -> Result<(Vec<Value>, Vec<Value>), PureException> {
-    if kvs.len() % 2 != 0 {
+    if kvs.len() % 3 != 0 {
         return Err(PureRuntimeError::EvaluationError(format!(
-            "copy: expected key/value pairs, got {} extra arguments",
+            "copy: expected (key, value, augmented) triples, got {} extra arguments",
             kvs.len()
         ))
         .into());
@@ -880,7 +1008,8 @@ fn partition_path_kvs(kvs: &[Value]) -> Result<(Vec<Value>, Vec<Value>), PureExc
         };
         bucket.push(kvs[i].clone());
         bucket.push(kvs[i + 1].clone());
-        i += 2;
+        bucket.push(kvs[i + 2].clone());
+        i += 3;
     }
     Ok((plain, path))
 }
@@ -904,13 +1033,17 @@ fn apply_path_property_updates(
 ) -> Result<(), PureException> {
     use std::collections::BTreeMap;
 
-    // Group `(first_segment → [(rest_path, value), …])` so multiple
-    // updates against the same first segment share a single clone.
-    let mut groups: BTreeMap<SmolStr, Vec<(SmolStr, Value)>> = BTreeMap::new();
+    // Group `(first_segment → [(rest_path, value, augmented), …])` so
+    // multiple updates against the same first segment share a single
+    // clone. The augmented flag flows through to whichever bucket the
+    // leaf eventually lands in (`mutate_add` for `+=`, `mutate_set` for
+    // `=`).
+    let mut groups: BTreeMap<SmolStr, Vec<(SmolStr, Value, bool)>> = BTreeMap::new();
     let mut i = 0;
     while i < kvs.len() {
         let key = kvs[i].as_string()?.clone();
         let value = kvs[i + 1].clone();
+        let augmented = matches!(&kvs[i + 2], Value::Boolean(true));
         let (head, tail) = match key.split_once('.') {
             Some((h, t)) => (SmolStr::new(h), SmolStr::new(t)),
             None => {
@@ -920,8 +1053,11 @@ fn apply_path_property_updates(
                 .into());
             }
         };
-        groups.entry(head).or_default().push((tail, value));
-        i += 2;
+        groups
+            .entry(head)
+            .or_default()
+            .push((tail, value, augmented));
+        i += 3;
     }
 
     for (head, updates) in groups {
@@ -941,7 +1077,7 @@ fn apply_path_property_updates(
             // `apply_path_property_updates`.
             let mut leaf_kvs: Vec<Value> = Vec::new();
             let mut nested_path_kvs: Vec<Value> = Vec::new();
-            for (rest, val) in &updates {
+            for (rest, val, augmented) in &updates {
                 let bucket = if rest.contains('.') {
                     &mut nested_path_kvs
                 } else {
@@ -949,8 +1085,9 @@ fn apply_path_property_updates(
                 };
                 bucket.push(Value::String(rest.clone()));
                 bucket.push(val.clone());
+                bucket.push(Value::Boolean(*augmented));
             }
-            apply_key_value_pairs(ctx, clone_id, &leaf_kvs)?;
+            apply_key_value_triples(ctx, clone_id, &leaf_kvs)?;
             if !nested_path_kvs.is_empty() {
                 apply_path_property_updates(ctx, *inner_id, clone_id, &nested_path_kvs)?;
             }

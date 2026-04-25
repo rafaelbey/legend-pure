@@ -52,6 +52,27 @@ pub fn values_equal(ctx: &dyn EvalContextTrait, a: &Value, b: &Value) -> bool {
                     .all(|(x, y)| values_equal(ctx, x, y))
         }
         (Value::Object(oa), Value::Object(ob)) => objects_equal(ctx, *oa, *ob),
+        // Pure multiplicity coercion: a single-element collection equals
+        // its scalar (`[x] == x` holds, `[x, y] == x` does not). The
+        // heap's `apply_property_to_instance` returns `Value::from_vec`'d
+        // results which collapse 1-element lists to the bare element,
+        // while Element-side property access (`eval_function_property`'s
+        // `expressionSequence`) explicitly wraps as `Value::Collection`.
+        // Without this branch, `$f1.expressionSequence` (Collection) and
+        // `$f2.expressionSequence` (bare Function) would compare unequal
+        // even though Pure considers them the same value.
+        (Value::Collection(xs), other) | (other, Value::Collection(xs)) if xs.len() == 1 => {
+            values_equal(ctx, &xs[0], other)
+        }
+        // Empty collection equals `Unit` — same multiplicity coercion
+        // applied at the zero end. `from_vec(Vec::new())` produces
+        // `Value::Unit`, so a heap slot with no values vs an explicit
+        // empty Collection should still compare equal.
+        (Value::Collection(xs), Value::Unit) | (Value::Unit, Value::Collection(xs))
+            if xs.is_empty() =>
+        {
+            true
+        }
         _ => a == b,
     }
 }
