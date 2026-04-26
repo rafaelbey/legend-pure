@@ -1868,6 +1868,22 @@ impl NativeFunction for EvaluateAndDeactivate {
                 .alloc_dynamic(crate::m3_paths::LAMBDA_FUNCTION);
             ctx.heap_mut()
                 .mutate_add(obj, "expressionSequence", &deactivated_body)?;
+            // Populate `.multiplicity` on the deactivated lambda from
+            // its body's declared return multiplicity. Pure semantics:
+            // a lambda's return multiplicity is the multiplicity of its
+            // *last* body expression. The platform tests
+            // testToOne[Many]Multiplicity assert
+            // `{|toOne('a')}->...->evaluateAndDeactivate().multiplicity
+            //   == PureOne` (or OneMany for toOneMany) — they read this
+            // slot off the LambdaFunction wrapper, expecting Java Pure's
+            // compile-time multiplicity reflection.
+            if let Some(last_spec) = body_specs.last()
+                && let Some(name) = spec_declared_multiplicity_name(last_spec, ctx)
+                && let Some(mult_id) = resolve_multiplicity_constant(ctx.model(), name)
+            {
+                ctx.heap_mut()
+                    .mutate_add(obj, "multiplicity", &[Value::Element(mult_id)])?;
+            }
             return Ok(Evaluated::new(Value::Object(obj)));
         }
 
@@ -1964,6 +1980,29 @@ fn instance_value_wrap(v: Value, ctx: &mut dyn EvalContextTrait) -> Result<Value
     }
     ctx.heap_mut().mutate_add(obj, "values", &values)?;
     Ok(Value::Object(obj))
+}
+
+/// Derive a Multiplicity-constant name from a spec's static type info.
+/// Currently handles only resolved `FunctionCall`s — reads the called
+/// function's declared `return_multiplicity` and maps it to a constant
+/// name. Returns `None` for any other spec shape (variables, literals,
+/// lambdas, …) so the caller falls back appropriately. Used by
+/// `EvaluateAndDeactivate`'s lambda branch to populate the deactivated
+/// lambda's `.multiplicity` from its last body expression.
+fn spec_declared_multiplicity_name(
+    spec: &ValueSpec,
+    ctx: &dyn EvalContextTrait,
+) -> Option<&'static str> {
+    use legend_pure_parser_pure::types::ExprKind;
+    if let ExprKind::FunctionCall {
+        function: Some(fn_id),
+        ..
+    } = spec.kind.as_ref()
+        && let Element::Function(f) = ctx.model().get_element(*fn_id)
+    {
+        return multiplicity_constant_name(&f.return_multiplicity);
+    }
+    None
 }
 
 /// Map a compiler-side [`Multiplicity`] enum to the canonical platform

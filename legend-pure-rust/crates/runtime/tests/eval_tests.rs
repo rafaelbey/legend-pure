@@ -2359,13 +2359,15 @@ const PCT_PASS_BASELINE: i64 = 398;
 ///   (synthesises GenericType→FunctionType chain so `someFn->functionType()`
 ///   reflection works) + multiplicity slot populated on deactivated
 ///   FunctionCall AST nodes from declared return_multiplicity. Cleared
-///   testHasUpperBoundNonConcrete. Two tests remain
-///   (testToOne/testToOneMany Multiplicity) — they need a deeper
-///   `lambda.expressionSequence` semantic change that conflicts with
-///   the existing `^Lambda(expressionSequence = $fn.expressionSequence)`
-///   cloning idiom in 4+ platform files; deferred to a Phase 5d-3
-///   follow-up that also reworks `try_lambda_shortcut`.
-const SURVEYOR_PASS_BASELINE: i64 = 244;
+///   testHasUpperBoundNonConcrete.
+/// - 246 — Phase 5d-3: `evaluateAndDeactivate` populates `.multiplicity`
+///   on the deactivated LambdaFunction wrapper from the last body
+///   expression's declared return_multiplicity (Pure semantics: a
+///   lambda's return mult is the last expression's mult). Cleared
+///   testToOneMultiplicity + testToOneManyMultiplicity. Surveyor is
+///   now 246/0/0 — 100% pass on `<<test.Test>>` across every
+///   `meta::pure::functions::*` package the CLI walks.
+const SURVEYOR_PASS_BASELINE: i64 = 246;
 
 #[test]
 fn eval_pct_baseline_lock() {
