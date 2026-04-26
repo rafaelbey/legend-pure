@@ -12,7 +12,7 @@ in its crate directory; this file provides the high-level view.
 | Component | Status | Platform Errors | Test Count | Key Milestone |
 |-----------|--------|----------------|------------|---------------|
 | Parser | ✅ Complete | 0 | ~400+ | Full grammar coverage |
-| Compiler | ✅ Platform clean | 0 | ~50+ | 236 files / 1338 elements |
+| Compiler | ✅ Platform clean | **0** | ~50+ | 236 files / 1338 elements; `load_platform()` compiles with **zero errors** |
 | Runtime | ✅ Surveyor 100% | N/A | 357+ lib + 71 eval + 211 surveyor | RelationType/addColumns landed; lambda-param narrowing; eval benchmarks |
 | CLI | 🚧 Partial | N/A | ~20+ | 8/11 commands (`legend test` renders TestReport end-to-end) |
 | **Total** | | **0** | **739+** | |
