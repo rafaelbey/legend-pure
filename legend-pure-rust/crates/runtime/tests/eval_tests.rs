@@ -3047,7 +3047,18 @@ fn eval_pct_date_error_histogram() {
 ///   (pre-manifest) + 3 (testLarge{Times,Minus,Plus} exclusions
 ///   loaded from `crates/runtime/tests/pct_rust_port.json`) = 448.
 ///   Future phases ratchet this baseline up against this new total.
-const PCT_PASS_BASELINE: i64 = 448;
+/// - 2026-04-26 → 453: date assertError text-pinning (Phase 8).
+///   `dayOfMonth`/`hour`/`minute`/`second` natives now throw
+///   "Cannot get X for <date>" (mirroring the Java natives) when
+///   the receiver lacks the requested component.
+///   `DateConstruct` (the `date(...)` overloaded native) now
+///   pre-validates `month` (1..=12), `day` (calendar-aware via
+///   new `day_in_month` helper, leap-year aware), `hour` (0..=23),
+///   `minute` (0..=59), `second` (0..=59) and throws the Java
+///   format "Invalid X: Y" before constructor narrowing. Resolves
+///   testHourError, testMinuteError, testSecondError,
+///   testDayOfMonthError, testNewDateError. Net +5 PASS.
+const PCT_PASS_BASELINE: i64 = 453;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in

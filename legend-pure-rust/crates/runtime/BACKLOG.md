@@ -121,12 +121,7 @@ these to FAIL with "PCT exclusion needs rebase".
 Grouped by likely fix shape. Each bullet has the test FQN, the failure type
 (FAIL = wrong answer; ERROR = exception), and one sentence on what's needed.
 
-#### Date (2 ERROR)
-- `date::tests::testDateDiffWithDifferentTimeZones` (ERROR) — TZ
-  arithmetic on `dateDiff` between dates carrying explicit offset literals.
-  PureDate normalises to UTC at construction; the test expects per-TZ
-  comparison semantics. Needs offset-preserving date model OR a
-  TZ-aware path in `dateDiff`.
+#### Date (1 ERROR)
 - `date::tests::testDateFromSubSecond` (ERROR) — sub-second datetime
   literal parsing edge (`%2014-01-01T00:00:00.123456789` etc). The
   parser may be truncating fractional digits beyond 9 (jiff nanos

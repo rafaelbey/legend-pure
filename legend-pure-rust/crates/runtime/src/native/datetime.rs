@@ -244,6 +244,11 @@ impl NativeFunction for MonthNumber {
 }
 
 /// Pure `dayOfMonth(Date[1]): Integer[1]`.
+///
+/// Throws `"Cannot get day of month for <date>"` (mirroring
+/// `legend-pure-runtime-java-engine-interpreted/.../DayOfMonth.java`)
+/// when the date has no day component (year-only, year-month).
+/// `testDayOfMonthError` pins the exact text.
 #[derive(Debug)]
 pub struct DayOfMonth;
 
@@ -258,9 +263,9 @@ impl NativeFunction for DayOfMonth {
         let d = values[0].as_date()?;
         match d.get_day() {
             Some(day) => Ok(Evaluated::new(Value::Integer(i64::from(day)))),
-            None => Err(PureRuntimeError::EvaluationError(
-                "dayOfMonth: date has no day component".into(),
-            )
+            None => Err(PureRuntimeError::EvaluationError(format!(
+                "Cannot get day of month for {d}"
+            ))
             .into()),
         }
     }
@@ -270,7 +275,8 @@ impl NativeFunction for DayOfMonth {
     }
 }
 
-/// Pure `hour(DateTime[1]): Integer[1]`.
+/// Pure `hour(DateTime[1]): Integer[1]`. Throws "Cannot get hour for
+/// <date>" when no time component present (`testHourError`).
 #[derive(Debug)]
 pub struct Hour;
 
@@ -285,9 +291,9 @@ impl NativeFunction for Hour {
         let d = values[0].as_date()?;
         match d.get_hour() {
             Some(h) => Ok(Evaluated::new(Value::Integer(i64::from(h)))),
-            None => Err(PureRuntimeError::EvaluationError(
-                "hour: date has no time component".into(),
-            )
+            None => Err(PureRuntimeError::EvaluationError(format!(
+                "Cannot get hour for {d}"
+            ))
             .into()),
         }
     }
@@ -297,7 +303,8 @@ impl NativeFunction for Hour {
     }
 }
 
-/// Pure `minute(DateTime[1]): Integer[1]`.
+/// Pure `minute(DateTime[1]): Integer[1]`. Throws "Cannot get minute
+/// for <date>" when no minute component (`testMinuteError`).
 #[derive(Debug)]
 pub struct Minute;
 
@@ -312,9 +319,9 @@ impl NativeFunction for Minute {
         let d = values[0].as_date()?;
         match d.get_minute() {
             Some(m) => Ok(Evaluated::new(Value::Integer(i64::from(m)))),
-            None => Err(PureRuntimeError::EvaluationError(
-                "minute: date has no minute component".into(),
-            )
+            None => Err(PureRuntimeError::EvaluationError(format!(
+                "Cannot get minute for {d}"
+            ))
             .into()),
         }
     }
@@ -324,7 +331,8 @@ impl NativeFunction for Minute {
     }
 }
 
-/// Pure `second(DateTime[1]): Integer[1]`.
+/// Pure `second(DateTime[1]): Integer[1]`. Throws "Cannot get second
+/// for <date>" when no second component (`testSecondError`).
 #[derive(Debug)]
 pub struct Second;
 
@@ -339,9 +347,9 @@ impl NativeFunction for Second {
         let d = values[0].as_date()?;
         match d.get_second() {
             Some(s) => Ok(Evaluated::new(Value::Integer(i64::from(s)))),
-            None => Err(PureRuntimeError::EvaluationError(
-                "second: date has no second component".into(),
-            )
+            None => Err(PureRuntimeError::EvaluationError(format!(
+                "Cannot get second for {d}"
+            ))
             .into()),
         }
     }
@@ -943,6 +951,75 @@ fn split_tz_native(s: &str) -> (&str, Option<i16>) {
     (s, None)
 }
 
+/// Saturating i64-to-i8 cast for date components, used by
+/// [`DateConstruct`]. Out-of-range inputs always trip jiff's
+/// validation downstream — the saturation only changes what jiff
+/// receives, not what surfaces in the error message
+/// ([`translate_date_error`] reads the original `i64` from the
+/// untouched `values[]` slice).
+fn i64_to_i8_arg_lenient(_name: &str, n: i64) -> i8 {
+    #[allow(clippy::cast_possible_truncation)]
+    let clamped = n.clamp(i64::from(i8::MIN), i64::from(i8::MAX)) as i8;
+    clamped
+}
+
+/// Translate a `PureRuntimeError` from a `PureDate` constructor
+/// (which wraps `jiff::Error`) into the Java-Pure
+/// `"Invalid <component>: <value>"` shape that platform
+/// `assertError` tests pin. Falls back to the original message when
+/// the jiff text doesn't match a known shape.
+///
+/// Input mapping mirrors `DateConstruct`'s positional contract:
+/// `values[0]=year, [1]=month, [2]=day, [3]=hour, [4]=minute, [5]=second`.
+/// Pulled values are the original `i64` inputs, so out-of-range
+/// arguments surface verbatim instead of the saturated value jiff
+/// rejected.
+fn translate_date_error(err: PureRuntimeError, values: &[Value]) -> PureRuntimeError {
+    let msg = err.to_string();
+    let after_param = match msg.split("parameter '").nth(1) {
+        Some(rest) => rest,
+        None => return err,
+    };
+    let Some(name) = after_param.split('\'').next() else {
+        return err;
+    };
+    let value_at = |idx: usize| -> Option<i64> {
+        values.get(idx).and_then(|v| v.as_integer().ok())
+    };
+    match name {
+        "month" => {
+            if let Some(v) = value_at(1) {
+                return PureRuntimeError::EvaluationError(format!("Invalid month: {v}"));
+            }
+        }
+        "day" => {
+            // Java echoes the rejected `<year>-<month>-<day>` triple.
+            if let (Some(y), Some(m), Some(d)) = (value_at(0), value_at(1), value_at(2)) {
+                return PureRuntimeError::EvaluationError(format!(
+                    "Invalid day: {y:04}-{m:02}-{d}"
+                ));
+            }
+        }
+        "hour" => {
+            if let Some(v) = value_at(3) {
+                return PureRuntimeError::EvaluationError(format!("Invalid hour: {v}"));
+            }
+        }
+        "minute" => {
+            if let Some(v) = value_at(4) {
+                return PureRuntimeError::EvaluationError(format!("Invalid minute: {v}"));
+            }
+        }
+        "second" => {
+            if let Some(v) = value_at(5) {
+                return PureRuntimeError::EvaluationError(format!("Invalid second: {v}"));
+            }
+        }
+        _ => {}
+    }
+    err
+}
+
 /// Pad a fractional-second string out to 9 nanos. Mirrors
 /// `lower.rs::parse_subsecond_parts`.
 fn parse_subsecond_lenient(frac: &str) -> (i32, u8) {
@@ -985,47 +1062,65 @@ impl NativeFunction for DateConstruct {
             .into());
         }
 
-        let year = i64_to_i16_arg("date", values[0].as_integer()?)?;
+        // Pure-format error messages ("Invalid month: 13", "Invalid
+        // day: 2016-12-32", "Invalid hour: 24", …) are produced by
+        // translating jiff's failure post-hoc rather than
+        // pre-validating every component. Jiff already covers the
+        // full validation surface (range + calendar/leap-year-aware
+        // day check) — duplicating that logic here would mean two
+        // sources of truth for "what makes a date valid" and twice
+        // the work on the exceptional path. See `translate_jiff_date_error`.
+        let year_raw = values[0].as_integer()?;
+        // i64-to-i16 narrowing happens up front since jiff::civil
+        // takes i16; the narrow can't fail in a way that surfaces a
+        // Pure-shaped message ("Invalid year: …" isn't pinned by any
+        // platform PCT test, so we leave it to PureRuntimeError).
+        let year = i64_to_i16_arg("date", year_raw)?;
         if values.len() == 1 {
             return PureDate::year(year)
                 .map(Value::Date)
                 .map(Evaluated::new)
-                .map_err(Into::into);
+                .map_err(|e| translate_date_error(e, &values).into());
         }
 
-        let month = i64_to_i8_arg("date", values[1].as_integer()?)?;
+        let month_raw = values[1].as_integer()?;
+        let month = i64_to_i8_arg_lenient("date", month_raw);
         if values.len() == 2 {
             return PureDate::year_month(year, month)
                 .map(Value::Date)
                 .map(Evaluated::new)
-                .map_err(Into::into);
+                .map_err(|e| translate_date_error(e, &values).into());
         }
 
-        let day = i64_to_i8_arg("date", values[2].as_integer()?)?;
+        let day_raw = values[2].as_integer()?;
+        let day = i64_to_i8_arg_lenient("date", day_raw);
         if values.len() == 3 {
             return PureDate::strict_date(year, month, day)
                 .map(Value::Date)
                 .map(Evaluated::new)
-                .map_err(Into::into);
+                .map_err(|e| translate_date_error(e, &values).into());
         }
 
-        let hour = i64_to_i8_arg("date", values[3].as_integer()?)?;
+        let hour_raw = values[3].as_integer()?;
+        let hour = i64_to_i8_arg_lenient("date", hour_raw);
         if values.len() == 4 {
             return PureDate::datetime(year, month, day, hour, 0, 0, 0, TimePrecision::Hour)
                 .map(Value::Date)
                 .map(Evaluated::new)
-                .map_err(Into::into);
+                .map_err(|e| translate_date_error(e, &values).into());
         }
 
-        let minute = i64_to_i8_arg("date", values[4].as_integer()?)?;
+        let minute_raw = values[4].as_integer()?;
+        let minute = i64_to_i8_arg_lenient("date", minute_raw);
         if values.len() == 5 {
             return PureDate::datetime(year, month, day, hour, minute, 0, 0, TimePrecision::Minute)
                 .map(Value::Date)
                 .map(Evaluated::new)
-                .map_err(Into::into);
+                .map_err(|e| translate_date_error(e, &values).into());
         }
 
-        let second = i64_to_i8_arg("date", values[5].as_integer()?)?;
+        let second_raw = values[5].as_integer()?;
+        let second = i64_to_i8_arg_lenient("date", second_raw);
         PureDate::datetime(
             year,
             month,
@@ -1038,7 +1133,7 @@ impl NativeFunction for DateConstruct {
         )
         .map(Value::Date)
         .map(Evaluated::new)
-        .map_err(Into::into)
+        .map_err(|e| translate_date_error(e, &values).into())
     }
 
     fn signature(&self) -> &'static str {
