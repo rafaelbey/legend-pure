@@ -3094,7 +3094,18 @@ fn eval_pct_date_error_histogram() {
 ///   trailing-zero heuristic (3/6/9, 1 when nanos==0); Decimal
 ///   uses `scale()` directly so `59.999D` → 3 digits and `11.0D`
 ///   → 1. Resolves `testDateFromSubSecond`.
-const PCT_PASS_BASELINE: i64 = 460;
+/// - 2026-04-26 → 462: `pure_to_string` for `Value::Float` now
+///   routes through `java_number_string` (already in
+///   `native::math` for the trig/sqrt error messages) so
+///   integer-valued doubles render with the trailing `.0`
+///   platform tests pin. `17.0->toString() == '17.0'` (was
+///   `'17'`); `134210000.0->toString() == '134210000.0'`. Resolves
+///   testFloatToStringWithExcessTrailingZeros and
+///   testFloatToStringWithPositiveExponent. Rust's native
+///   `{f64}` Display already handles avoidance of E-notation
+///   and expanded `0.000000013421` form correctly — only the
+///   `.0` suffix needed adding.
+const PCT_PASS_BASELINE: i64 = 462;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in
