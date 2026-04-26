@@ -1,0 +1,14 @@
+{
+  "_comment": "PCT manifest for the Rust port. Mirrors the Java pct_*_native.json shape (adapter + exclusions). Each exclusion entry maps a test FQN to a substring of the failure message that confirms the test is failing for the documented reason. apply_exclusion (crates/runtime/src/native/testing.rs) flips matching FAIL/ERROR results to PASS, and flips PASS results back to FAIL with 'PCT exclusion needs rebase' so stale exclusions can't go quiet.",
+  "adapter": "meta::pure::test::pct::testAdapterForInMemoryExecution_Function_1__X_o_",
+  "exclusions": {
+    "meta::pure::functions::date::tests::testAdjustByMonthsBigNumber": "Date overflow: parameter 'months' is not in the required range of -239976..=239976",
+    "meta::pure::functions::date::tests::testAdjustByWeeksBigNumber": "Date overflow: parameter 'days' is not in the required range of -7304484..=7304484",
+    "meta::pure::functions::date::tests::testAdjustByDaysBigNumber": "Date overflow: parameter 'days' is not in the required range of -7304484..=7304484",
+    "meta::pure::functions::date::tests::testAdjustByHoursBigNumber": "Date overflow: parameter 'hours' is not in the required range of -175307616..=175307616",
+    "meta::pure::functions::date::tests::testAdjustByMinutesBigNumber": "Invalid datetime literal: parameter 'year' is not in the required range of -9999..=9999",
+    "meta::pure::functions::math::tests::times::testLargeTimes": "Assert failure",
+    "meta::pure::functions::math::tests::minus::testLargeMinus": "Assert failure",
+    "meta::pure::functions::math::tests::plus::testLargePlus": "Assert failure"
+  }
+}
