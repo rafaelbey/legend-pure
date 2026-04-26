@@ -937,6 +937,8 @@ dependencies = [
  "legend-pure-parser-parser",
  "legend-pure-parser-pure",
  "rust_decimal",
+ "serde",
+ "serde_json",
  "slotmap",
  "smol_str",
  "thiserror 2.0.18",

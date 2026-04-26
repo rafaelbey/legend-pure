@@ -19,6 +19,11 @@
 //! with per-test status, summary counters, and (optionally) detailed
 //! pass/skip lines.
 //!
+//! With `--pct`, switches to the PCT (Pure Compatibility Tests) surveyor
+//! which discovers `<<PCT.test>>`-stereotyped functions and injects an
+//! adapter Function loaded from a JSON manifest (`pct_essential_native.json`
+//! by default — the embedded in-memory adapter manifest).
+//!
 //! # Usage
 //!
 //! ```bash
@@ -26,17 +31,24 @@
 //! legend test --package meta::pure::functions::collection::tests
 //! legend test --filter testCollect         # Substring filter on test FQN
 //! legend test --show-detail                # Also print PASS/SKIP lines
+//! legend test --pct --package meta::pure::functions::boolean
+//! legend test --pct --manifest pct_grammar_native.json
 //! ```
 
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use owo_colors::OwoColorize;
 
 use legend_pure_core_platform::platform::load_platform;
+use legend_pure_parser_pure::model::PureModel;
+use legend_pure_runtime::error::PureException;
 use legend_pure_runtime::eval::Evaluator;
 use legend_pure_runtime::heap::{ObjectId, RuntimeHeap};
 use legend_pure_runtime::native::NativeRegistry;
-use legend_pure_runtime::value::Value;
+use legend_pure_runtime::native::testing::find_pct_adapter;
+use legend_pure_runtime::value::{MapState, Value};
 
 use crate::diagnostics::CliError;
 
@@ -58,19 +70,51 @@ pub struct TestArgs {
     /// Print every PASS / SKIP line, not just FAIL / ERROR.
     #[arg(long = "show-detail")]
     pub show_detail: bool,
+
+    /// Run PCT tests (`<<PCT.test>>`-stereotyped) instead of the default
+    /// `<<test.Test>>` surveyor. The adapter is selected via `--adapter`
+    /// (default `"In-Memory"`); a `--manifest <path>` overrides that and
+    /// loads adapter + exclusions from a JSON manifest.
+    #[arg(long)]
+    pub pct: bool,
+
+    /// PCT adapter name — matched against the `PCT.adapterName` tag of
+    /// `<<PCT.adapter>>`-stereotyped functions in the model. Default is
+    /// `"In-Memory"` (the shipped `testAdapterForInMemoryExecution`).
+    /// Ignored when `--manifest` is set.
+    #[arg(long, default_value = "In-Memory")]
+    pub adapter: String,
+
+    /// PCT manifest path (matched against embedded platform manifests by
+    /// suffix; e.g. `pct_essential_native.json`). When set, overrides
+    /// `--adapter` and loads adapter + exclusions from JSON. Only
+    /// meaningful with `--pct`.
+    #[arg(long)]
+    pub manifest: Option<String>,
 }
 
 /// Execute the `legend test` command.
 #[allow(clippy::needless_pass_by_value)] // clap convention
 pub fn run(args: TestArgs) -> Result<(), CliError> {
+    let mode_label = if args.pct { "PCT tests" } else { "tests" };
+    let pct_via = if args.pct {
+        match &args.manifest {
+            Some(m) => format!(" (manifest: {m})"),
+            None => format!(" (adapter: {})", args.adapter),
+        }
+    } else {
+        String::new()
+    };
     eprintln!(
-        "{} {}{}",
-        "Running tests in".cyan().bold(),
+        "{} {} in {}{}{}",
+        "Running".cyan().bold(),
+        mode_label,
         args.package,
         args.filter
             .as_deref()
             .map(|f| format!(" (filter: {f})"))
             .unwrap_or_default(),
+        pct_via,
     );
 
     // 1. Load platform model — accept partial models so a partially-broken
@@ -87,19 +131,22 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
         }
     };
 
-    // 2. Drive the Pure surveyor.
+    // 2. Drive the Pure surveyor — pick the entry point per mode.
     let registry = NativeRegistry::standard();
     let mut evaluator = Evaluator::new(&model, &registry);
 
-    let result = evaluator
-        .call(
+    let result = if args.pct {
+        run_pct(&model, &mut evaluator, &args)
+    } else {
+        evaluator.call(
             "meta::pure::test::surveyor::runTestsFromPath",
             &[
                 Value::String(args.package.clone().into()),
                 Value::String(args.filter.clone().unwrap_or_default().into()),
             ],
         )
-        .map_err(|e| CliError::Custom(format!("Test execution failed: {e}")))?;
+    }
+    .map_err(|e| CliError::Custom(format!("Test execution failed: {e}")))?;
 
     // 3. Render the TestReport.
     let Value::Object(report_id) = result else {
@@ -118,6 +165,60 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
     } else {
         Ok(())
     }
+}
+
+/// Drive the PCT surveyor — either via adapter discovery (default) or via
+/// a JSON manifest path (`--manifest`). Both paths return a `TestReport`
+/// heap object identical in shape to `runTestsFromPath`.
+fn run_pct(
+    model: &PureModel,
+    evaluator: &mut Evaluator<'_>,
+    args: &TestArgs,
+) -> Result<Value, PureException> {
+    if let Some(manifest_path) = &args.manifest {
+        return evaluator.call(
+            "meta::pure::test::surveyor::runPCTTestsFromPath",
+            &[
+                Value::String(args.package.clone().into()),
+                Value::String(args.filter.clone().unwrap_or_default().into()),
+                Value::String(manifest_path.clone().into()),
+            ],
+        );
+    }
+
+    // Adapter-name path: discover the function via PCT.adapterName, build
+    // an empty exclusions Map, and call `runPCTTests` directly. This sidesteps
+    // the JSON manifest entirely — adapters self-register in Pure code via
+    // the `<<PCT.adapter>>` stereotype + `PCT.adapterName='<name>'` tag.
+    let adapter_id = find_pct_adapter(model, &args.adapter).ok_or_else(|| {
+        legend_pure_runtime::error::PureRuntimeError::EvaluationError(format!(
+            "no PCT adapter found with PCT.adapterName='{}' — \
+             check that a function carrying <<PCT.adapter>> + that tag exists in the model",
+            args.adapter
+        ))
+    })?;
+    let adapter_value = Value::Element(adapter_id);
+    let exclusions = Value::Map(Rc::new(RefCell::new(MapState::default())));
+
+    // `runPCTTests` takes an already-resolved package, so call `pathToElement`
+    // first. Both calls share the same evaluator scope so the package value
+    // doesn't escape its model lifetime.
+    let pkg = evaluator.call(
+        "meta::pure::functions::meta::pathToElement",
+        &[
+            Value::String(args.package.clone().into()),
+            Value::String("::".into()),
+        ],
+    )?;
+    evaluator.call(
+        "meta::pure::test::surveyor::runPCTTests",
+        &[
+            pkg,
+            Value::String(args.filter.clone().unwrap_or_default().into()),
+            adapter_value,
+            exclusions,
+        ],
+    )
 }
 
 /// Decoded view of the platform `TestReport` heap object —

@@ -37,53 +37,73 @@ fn generate() -> Result<(), Box<dyn std::error::Error>> {
     generated_code.push_str("/// Array containing all embedded platform Pure files\n");
     generated_code.push_str("pub const PLATFORM_FILES: &[PureSourceFile] = &[\n");
 
+    let mut manifest_entries = String::new();
+
     if platform_dir.exists() {
         for entry in WalkDir::new(&platform_dir) {
             let entry = entry?;
             let path = entry.path();
-            if path.is_file() && path.extension().is_some_and(|e| e == "pure") {
-                let relative_path = path
-                    .strip_prefix(&platform_dir)
-                    .map_err(|e| format!("strip_prefix failed for {}: {e}", path.display()))?;
-                let relative_path_str = relative_path
-                    .to_str()
-                    .ok_or_else(|| format!("non-UTF-8 path: {}", relative_path.display()))?
-                    .replace('\\', "/");
+            if !path.is_file() {
+                continue;
+            }
+            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+                continue;
+            };
+            if ext != "pure" && ext != "json" {
+                continue;
+            }
+            let relative_path = path
+                .strip_prefix(&platform_dir)
+                .map_err(|e| format!("strip_prefix failed for {}: {e}", path.display()))?;
+            let relative_path_str = relative_path
+                .to_str()
+                .ok_or_else(|| format!("non-UTF-8 path: {}", relative_path.display()))?
+                .replace('\\', "/");
 
-                // Exclusions
-                if relative_path_str == "grammar/m3.pure" {
-                    continue;
-                }
+            if ext == "pure" && relative_path_str == "grammar/m3.pure" {
+                continue;
+            }
 
-                // Embed paths in the Java Pure "resource URL" form —
-                // `/platform/pure/<relative>`. That matches the upstream
-                // convention platform tests assert against (e.g.
-                // `Class.sourceInformation.source ==
-                // '/platform/pure/essential/meta/source/sourceInformation.pure'`)
-                // and gives every downstream consumer (parser, error
-                // display, SourceInformation native) a single source of
-                // truth rather than reconstructing the prefix ad-hoc.
-                let canonical_path_str = format!("/platform/pure/{relative_path_str}");
+            // Embed paths in the Java Pure "resource URL" form —
+            // `/platform/pure/<relative>`. That matches the upstream
+            // convention platform tests assert against (e.g.
+            // `Class.sourceInformation.source ==
+            // '/platform/pure/essential/meta/source/sourceInformation.pure'`)
+            // and gives every downstream consumer (parser, error
+            // display, SourceInformation native) a single source of
+            // truth rather than reconstructing the prefix ad-hoc.
+            let canonical_path_str = format!("/platform/pure/{relative_path_str}");
 
-                let absolute_path = fs::canonicalize(path)
-                    .map_err(|e| format!("canonicalize failed for {}: {e}", path.display()))?;
-                let abs_path_str = absolute_path
-                    .to_str()
-                    .ok_or_else(|| format!("non-UTF-8 path: {}", absolute_path.display()))?
-                    .replace('\\', "/");
+            let absolute_path = fs::canonicalize(path)
+                .map_err(|e| format!("canonicalize failed for {}: {e}", path.display()))?;
+            let abs_path_str = absolute_path
+                .to_str()
+                .ok_or_else(|| format!("non-UTF-8 path: {}", absolute_path.display()))?
+                .replace('\\', "/");
 
+            if ext == "pure" {
                 let _ = write!(
                     generated_code,
                     "    PureSourceFile {{\n        path: \"{canonical_path_str}\",\n        content: include_str!(\"{abs_path_str}\"),\n    }},\n"
                 );
-
-                println!("cargo:rerun-if-changed={abs_path_str}");
+            } else {
+                let _ = write!(
+                    manifest_entries,
+                    "    PureSourceFile {{\n        path: \"{canonical_path_str}\",\n        content: include_str!(\"{abs_path_str}\"),\n    }},\n"
+                );
             }
+
+            println!("cargo:rerun-if-changed={abs_path_str}");
         }
     }
 
     println!("cargo:rerun-if-changed={}", platform_dir.display());
 
+    generated_code.push_str("];\n\n");
+    generated_code
+        .push_str("/// Array containing all embedded platform JSON manifests (PCT, etc.).\n");
+    generated_code.push_str("pub const PLATFORM_MANIFESTS: &[PureSourceFile] = &[\n");
+    generated_code.push_str(&manifest_entries);
     generated_code.push_str("];\n");
 
     fs::write(&dest_path, generated_code)
