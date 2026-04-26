@@ -152,11 +152,7 @@ Grouped by likely fix shape. Each bullet has the test FQN, the failure type
   (FAIL) — each needs targeted investigation; likely small per-test
   fixes in the relevant native.
 
-#### Math (1 ERROR + 1 FAIL)
-- `math::tests::divide::testDecimalDivide` (ERROR) — divide called
-  with 3 arguments; needs 3-arg overload (likely
-  `divide(Decimal, Decimal, Integer):Decimal` for scale-preserving
-  division).
+#### Math (1 FAIL)
 - `math::tests::toDecimal::testDoubleToDecimal` (FAIL) — Float→Decimal
   conversion precision; revisit the conversion path.
 

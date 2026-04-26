@@ -283,9 +283,18 @@ fn times_fold(values: Vec<Value>) -> Result<Value, PureRuntimeError> {
 // divide
 // ---------------------------------------------------------------------------
 
-/// Pure `divide(Number[1], Number[1]): Float[1]` — division.
+/// Pure `divide(Number[1], Number[1]): Float[1]` and
+/// `divide(Decimal[1], Decimal[1], scale:Integer[1]): Decimal[1]` —
+/// numeric division with two overloads sharing this struct.
 ///
-/// Pure division always returns Float (even for Integer / Integer), matching Java.
+/// 2-arg: Integer/Integer and Decimal/Decimal both return `Float`,
+/// matching Java's `divide(left, right): Float`.
+///
+/// 3-arg: Decimal/Decimal returns `Decimal` rounded to `scale`
+/// fractional digits via banker's rounding (rust_decimal's
+/// `round_dp` default; matches Java BigDecimal `setScale(scale,
+/// HALF_EVEN)`). `testDecimalDivide` exercises this with
+/// `-3.1415d->divide(0.1d, 2) == -31.42d`.
 #[derive(Debug)]
 pub struct Divide;
 
@@ -297,41 +306,72 @@ impl NativeFunction for Divide {
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
-        expect_args("divide", &values, 2)?;
-        let promoted = promote_pair(&values[0], &values[1]).ok_or_else(|| {
-            PureRuntimeError::EvaluationError(format!(
-                "divide: unsupported types {} and {}",
-                values[0].type_name(),
-                values[1].type_name()
-            ))
-        })?;
-        let v = match promoted {
-            (Value::Integer(a), Value::Integer(b)) => {
-                if b == 0 {
-                    return Err(PureRuntimeError::DivisionByZero.into());
-                }
-                Value::Float(a as f64 / b as f64)
+        match values.len() {
+            2 => {
+                let promoted = promote_pair(&values[0], &values[1]).ok_or_else(|| {
+                    PureRuntimeError::EvaluationError(format!(
+                        "divide: unsupported types {} and {}",
+                        values[0].type_name(),
+                        values[1].type_name()
+                    ))
+                })?;
+                let v = match promoted {
+                    (Value::Integer(a), Value::Integer(b)) => {
+                        if b == 0 {
+                            return Err(PureRuntimeError::DivisionByZero.into());
+                        }
+                        Value::Float(a as f64 / b as f64)
+                    }
+                    (Value::Float(a), Value::Float(b)) => {
+                        if b == 0.0 {
+                            return Err(PureRuntimeError::DivisionByZero.into());
+                        }
+                        Value::Float(a / b)
+                    }
+                    (Value::Decimal(a), Value::Decimal(b)) => {
+                        if b.is_zero() {
+                            return Err(PureRuntimeError::DivisionByZero.into());
+                        }
+                        // Pure spec says Decimal/Decimal → Float; preserve that.
+                        Value::Float(
+                            a.to_f64().unwrap_or(f64::NAN) / b.to_f64().unwrap_or(f64::NAN),
+                        )
+                    }
+                    _ => unreachable!("promote_pair returns matched types"),
+                };
+                Ok(Evaluated::new(v))
             }
-            (Value::Float(a), Value::Float(b)) => {
-                if b == 0.0 {
-                    return Err(PureRuntimeError::DivisionByZero.into());
+            3 => {
+                let a = values[0].as_decimal()?;
+                let b = values[1].as_decimal()?;
+                let scale = values[2].as_integer()?;
+                if !(0..=28).contains(&scale) {
+                    return Err(PureRuntimeError::EvaluationError(format!(
+                        "divide: scale must be in 0..=28, got {scale}"
+                    ))
+                    .into());
                 }
-                Value::Float(a / b)
-            }
-            (Value::Decimal(a), Value::Decimal(b)) => {
                 if b.is_zero() {
                     return Err(PureRuntimeError::DivisionByZero.into());
                 }
-                // Pure spec says Decimal/Decimal → Float; preserve that.
-                Value::Float(a.to_f64().unwrap_or(f64::NAN) / b.to_f64().unwrap_or(f64::NAN))
+                let q = a.checked_div(b).ok_or_else(|| {
+                    PureRuntimeError::EvaluationError(
+                        "divide: Decimal division overflow".into(),
+                    )
+                })?;
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let rounded = q.round_dp(scale as u32);
+                Ok(Evaluated::new(Value::Decimal(rounded)))
             }
-            _ => unreachable!("promote_pair returns matched types"),
-        };
-        Ok(Evaluated::new(v))
+            n => Err(PureRuntimeError::EvaluationError(format!(
+                "divide: expected 2 or 3 argument(s), got {n}"
+            ))
+            .into()),
+        }
     }
 
     fn signature(&self) -> &'static str {
-        "divide(Number[1], Number[1]): Float[1]"
+        "divide(Number[1], Number[1]): Float[1] | divide(Decimal[1], Decimal[1], Integer[1]): Decimal[1]"
     }
 }
 

@@ -3051,14 +3051,19 @@ fn eval_pct_date_error_histogram() {
 ///   `dayOfMonth`/`hour`/`minute`/`second` natives now throw
 ///   "Cannot get X for <date>" (mirroring the Java natives) when
 ///   the receiver lacks the requested component.
-///   `DateConstruct` (the `date(...)` overloaded native) now
-///   pre-validates `month` (1..=12), `day` (calendar-aware via
-///   new `day_in_month` helper, leap-year aware), `hour` (0..=23),
-///   `minute` (0..=59), `second` (0..=59) and throws the Java
-///   format "Invalid X: Y" before constructor narrowing. Resolves
+///   `DateConstruct` (the `date(...)` overloaded native) translates
+///   jiff's `"parameter 'X' is not in the required range of …"`
+///   into Java-Pure's `"Invalid X: Y"` post-hoc — see
+///   `translate_date_error` in `native/datetime.rs`. Single source
+///   of truth for date validity stays with jiff. Resolves
 ///   testHourError, testMinuteError, testSecondError,
 ///   testDayOfMonthError, testNewDateError. Net +5 PASS.
-const PCT_PASS_BASELINE: i64 = 453;
+/// - 2026-04-26 → 454: 3-arg `divide(Decimal, Decimal, Integer)`
+///   overload added — divides two Decimals and rounds to the given
+///   scale using banker's rounding (mirrors Java's BigDecimal
+///   `setScale(scale, HALF_EVEN)`). Same dispatch shape as
+///   `parseDecimal`'s 2/3-arg branch. Resolves testDecimalDivide.
+const PCT_PASS_BASELINE: i64 = 454;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in
