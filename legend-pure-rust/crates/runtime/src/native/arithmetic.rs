@@ -418,22 +418,31 @@ impl NativeFunction for Rem {
                 values[1].type_name()
             ))
         })?;
+        // Java Pure's `Rem.execute` throws "Cannot divide <dividend> by zero"
+        // (Rem.java:?), parametric on the dividend's display value. Build the
+        // dividend representation once before promotion-loss can change its
+        // shape, then reuse for any zero-divisor branch.
+        let dividend_str = crate::native::math::java_number_string(&values[0]);
+        let div_zero_err = || -> PureException {
+            PureRuntimeError::EvaluationError(format!("Cannot divide {dividend_str} by zero"))
+                .into()
+        };
         let v = match promoted {
             (Value::Integer(a), Value::Integer(b)) => {
                 if b == 0 {
-                    return Err(PureRuntimeError::DivisionByZero.into());
+                    return Err(div_zero_err());
                 }
                 Value::Integer(a % b)
             }
             (Value::Float(a), Value::Float(b)) => {
                 if b == 0.0 {
-                    return Err(PureRuntimeError::DivisionByZero.into());
+                    return Err(div_zero_err());
                 }
                 Value::Float(a % b)
             }
             (Value::Decimal(a), Value::Decimal(b)) => {
                 if b.is_zero() {
-                    return Err(PureRuntimeError::DivisionByZero.into());
+                    return Err(div_zero_err());
                 }
                 Value::Decimal(a % b)
             }
