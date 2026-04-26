@@ -233,6 +233,36 @@ pub fn compare_values(a: &Value, b: &Value) -> i64 {
         (Value::String(a), Value::String(b)) => a.cmp(b),
         (Value::Date(a), Value::Date(b)) => a.cmp(b),
         (Value::StrictTime(a), Value::StrictTime(b)) => a.cmp(b),
+        // Heap objects: compare by allocation order. Stable but
+        // semantically arbitrary — the only meaningful contract is
+        // "two distinct ObjectIds compare consistently in some order".
+        // sort() leans on this for determinism on object collections;
+        // reverting to type-ordinal collapsing all Objects to Equal
+        // would break sort stability (Phase 5b regression).
+        (Value::Object(a), Value::Object(b)) => {
+            let av = slotmap::Key::data(a).as_ffi();
+            let bv = slotmap::Key::data(b).as_ffi();
+            av.cmp(&bv)
+        }
+        // Element refs: compare by their rendered ElementId string. Same
+        // "stable but arbitrary" intent as Object.
+        (Value::Element(a), Value::Element(b)) => format!("{a}").cmp(&format!("{b}")),
+        // Enum values from the same enumeration: compare by member name.
+        // From different enumerations: fall through to type-ordinal
+        // (both EnumValue → Equal) — treat as unordered, mirror of the
+        // Sort native's pre-routing behavior.
+        (
+            Value::EnumValue {
+                enum_id: e1,
+                member: m1,
+                ..
+            },
+            Value::EnumValue {
+                enum_id: e2,
+                member: m2,
+                ..
+            },
+        ) if e1 == e2 => m1.cmp(m2),
         // Cross-type: stable ordinal so comparison stays total + symmetric.
         _ => type_ordinal(a).cmp(&type_ordinal(b)),
     };
