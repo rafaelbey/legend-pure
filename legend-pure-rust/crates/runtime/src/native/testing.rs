@@ -199,9 +199,16 @@ fn apply_exclusion(
             )),
         ),
         // Test failed and the manifest expected exactly this failure → PASS.
+        // Match policy: exact equality OR substring containment, so an
+        // exclusion entry can pin just the core PureRuntimeError text
+        // without having to reproduce the full multi-line "Execution
+        // error\n\"...\"\nFull Stack: ..." Display shape. Substring
+        // match is meaningful because the runtime error message comes
+        // first in every PureException Display — there's no false-
+        // positive risk from an unrelated message also appearing later.
         (STATUS_FAIL | STATUS_ERROR, Some(expected_msg)) => {
             let actual = message.as_deref().unwrap_or("");
-            if actual == expected_msg {
+            if actual == expected_msg || actual.contains(expected_msg.as_str()) {
                 (STATUS_PASS, None)
             } else {
                 // Keep the original bucket but make the divergence loud.
@@ -742,6 +749,28 @@ mod tests {
             STATUS_ERROR,
             Some("missing native: foo_X_Y_".into()),
             &excl(&[("pkg::testFoo", "missing native: foo_X_Y_")]),
+        );
+        assert_eq!(s, STATUS_PASS);
+        assert!(m.is_none());
+    }
+
+    #[test]
+    fn apply_exclusion_substring_match_flips_to_pass() {
+        // Phase 6 part 2: exclusion messages can be a substring of the
+        // actual error so callers don't have to reproduce the full
+        // PureException Display shape (which prepends "Execution
+        // error\n" and appends "\nFull Stack: …").
+        let actual = "Execution error\n\
+                      \"Date overflow: parameter 'years' is not in the required range of -19998..=19998\"\n\
+                      Full Stack:\n  testAdjustByMonths_… <- adjust.pure line:38";
+        let (s, m) = apply_exclusion(
+            "pkg::testFoo",
+            STATUS_ERROR,
+            Some(actual.into()),
+            &excl(&[(
+                "pkg::testFoo",
+                "Date overflow: parameter 'years' is not in the required range of -19998..=19998",
+            )]),
         );
         assert_eq!(s, STATUS_PASS);
         assert!(m.is_none());

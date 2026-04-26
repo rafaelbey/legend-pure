@@ -1810,6 +1810,100 @@ fn pct_canary_args(model: &PureModel) -> (Value, Value) {
     (adapter, exclusions)
 }
 
+/// Rust-port-specific PCT exclusions — tests we *intentionally* don't
+/// chase because their expected output exceeds a representational
+/// limit of our runtime, not because of a fixable bug.
+///
+/// Each entry is `(test_fqn, expected_error_message)`. When the test
+/// runs and produces matching error text, [`apply_exclusion`] flips
+/// the bucket from ERROR to PASS. If the test ever runs cleanly, the
+/// exclusion will flip the bucket back to FAIL (forcing a rebase) so
+/// outdated exclusions can't stay quietly.
+///
+/// Exclusion list (review every quarter):
+///
+/// **`testAdjust*BigNumber` (5 tests)** — these assert the result of
+/// adding extreme spans (`9_600_000_000` months, `12_345_678_912`
+/// hours, …) to dates and expect years like `800002016` or
+/// `-1406373`. Our `PureDate` carries the year as `i16` (the
+/// `jiff::civil::DateTime` field), so any year outside `[-32768,
+/// 32767]` overflows. Java Pure carries year as `int`, giving it
+/// roughly `[-2_147_483_648, 2_147_483_647]` — wider but still
+/// finite. The Rust-port runtime makes a smaller-but-correct trade:
+/// reject extreme years instead of silently truncating. The
+/// `Smaller-Number` tests in the same packages (e.g. `testAdjustByMonths`,
+/// `testAdjustByMonths` without `BigNumber` suffix) cover the same
+/// arithmetic for in-range inputs, so the contract is still tested.
+///
+/// To remove an exclusion: widen `PureDate`'s year field to `i32`.
+/// Then `cargo test eval_pct_broad_canary` will surface the test as
+/// FAIL with "PCT exclusion needs rebase" — drop the line here.
+const PCT_RUST_PORT_EXCLUSIONS: &[(&str, &str)] = &[
+    (
+        "meta::pure::functions::date::tests::testAdjustByMonthsBigNumber",
+        "Date overflow: parameter 'months' is not in the required range of -239976..=239976",
+    ),
+    (
+        "meta::pure::functions::date::tests::testAdjustByWeeksBigNumber",
+        "Date overflow: parameter 'days' is not in the required range of -7304484..=7304484",
+    ),
+    (
+        "meta::pure::functions::date::tests::testAdjustByDaysBigNumber",
+        "Date overflow: parameter 'days' is not in the required range of -7304484..=7304484",
+    ),
+    (
+        "meta::pure::functions::date::tests::testAdjustByHoursBigNumber",
+        "Date overflow: parameter 'hours' is not in the required range of -175307616..=175307616",
+    ),
+    (
+        // testAdjustByMinutesBigNumber expects a result year of -21457
+        // (outside jiff's civil::DateTime year range -9999..=9999), so
+        // the *expected-value parse* fails, not the adjust itself. The
+        // error surfaces from the platform-test compile pass.
+        "meta::pure::functions::date::tests::testAdjustByMinutesBigNumber",
+        "Invalid datetime literal: parameter 'year' is not in the required range of -9999..=9999",
+    ),
+];
+
+/// Build a Rust-port-specific exclusions Map for PCT runs.
+///
+/// Mirrors what [`pct_canary_args`] builds for adapter, but populates
+/// the Map with the entries from [`PCT_RUST_PORT_EXCLUSIONS`]. Each
+/// excluded test resolves through the model so a typo here errors at
+/// canary load time, not silently as a never-matching exclusion.
+///
+/// Use from canary diagnostics where we want the broad pass-count to
+/// reflect runtime gaps (yes/no), not representational bounds the
+/// platform tests pin extra-aggressively.
+fn pct_canary_args_with_rust_exclusions(model: &PureModel) -> (Value, Value) {
+    use legend_pure_runtime::value::{MapState, ValueKey};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let adapter_path: [SmolStr; 5] = [
+        "meta".into(),
+        "pure".into(),
+        "test".into(),
+        "pct".into(),
+        "testAdapterForInMemoryExecution_Function_1__X_o_".into(),
+    ];
+    let adapter = Value::Element(
+        model
+            .resolve_by_path(&adapter_path)
+            .expect("in-memory adapter must resolve"),
+    );
+
+    let mut state = MapState::default();
+    for (fqn, msg) in PCT_RUST_PORT_EXCLUSIONS {
+        state.entries.insert(
+            ValueKey::String(SmolStr::new(*fqn)),
+            Value::String(SmolStr::new(*msg)),
+        );
+    }
+    let exclusions = Value::Map(Rc::new(RefCell::new(state)));
+    (adapter, exclusions)
+}
+
 /// Read a non-negative integer counter from a heap-allocated `TestReport`.
 fn read_report_counter(
     evaluator: &Evaluator,
@@ -1925,7 +2019,7 @@ fn eval_pct_broad_canary() {
                 continue;
             }
         };
-        let (adapter, exclusions) = pct_canary_args(&model);
+        let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
         let report_result = evaluator.call(
             "meta::pure::test::surveyor::runPCTTests",
             &[pkg_val, Value::String("".into()), adapter, exclusions],
@@ -1976,7 +2070,7 @@ fn eval_pct_missing_natives_harvest() {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let (adapter, exclusions) = pct_canary_args(&model);
+        let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
         let Ok(Value::Object(report_id)) = evaluator.call(
             "meta::pure::test::surveyor::runPCTTests",
             &[pkg_val, Value::String("".into()), adapter, exclusions],
@@ -2285,6 +2379,251 @@ fn eval_year_minute_precision_date_isolated() {
 }
 
 #[test]
+fn eval_year_three_precisions() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(2015, $adapter->eval(|%2015->year()));
+            assertEquals(2015, $adapter->eval(|%2015-04->year()));
+            assertEquals(2015, $adapter->eval(|%2015-04-15->year()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_year_four_precisions() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(2015, $adapter->eval(|%2015->year()));
+            assertEquals(2015, $adapter->eval(|%2015-04->year()));
+            assertEquals(2015, $adapter->eval(|%2015-04-15->year()));
+            assertEquals(2015, $adapter->eval(|%2015-04-15T17->year()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+#[ignore = "diagnostic: print exact error messages for the BigNumber adjust tests"]
+fn eval_pct_bignumber_messages() {
+    // Run each BigNumber adjust test and print its error message so we
+    // can pin the exclusion-list strings.
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    let testnames = [
+        "testAdjustByMonthsBigNumber",
+        "testAdjustByWeeksBigNumber",
+        "testAdjustByDaysBigNumber",
+        "testAdjustByHoursBigNumber",
+        "testAdjustByMinutesBigNumber",
+    ];
+    for tn in &testnames {
+        let mut evaluator = Evaluator::new(&model, &registry);
+        let pkg = match evaluator.call(
+            "meta::pure::functions::meta::pathToElement",
+            &[
+                Value::String("meta::pure::functions::date::tests".into()),
+                Value::String("::".into()),
+            ],
+        ) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let (adapter, exclusions) = pct_canary_args(&model);
+        let report = match evaluator.call(
+            "meta::pure::test::surveyor::runPCTTests",
+            &[pkg, Value::String("".into()), adapter, exclusions],
+        ) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let Value::Object(report_id) = report else { continue };
+        let results = evaluator
+            .heap()
+            .get_property_values(report_id, "results")
+            .unwrap_or_else(|_| im_rc::Vector::new());
+        for v in results.iter() {
+            let Value::Object(rid) = v else { continue };
+            let fqn = evaluator
+                .heap()
+                .get_property_values(*rid, "fqn")
+                .ok()
+                .and_then(|v| v.iter().next().cloned())
+                .and_then(|v| match v {
+                    Value::String(s) => Some(s.to_string()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            if !fqn.contains(tn) {
+                continue;
+            }
+            let msg = evaluator
+                .heap()
+                .get_property_values(*rid, "message")
+                .ok()
+                .and_then(|v| v.iter().next().cloned())
+                .and_then(|v| match v {
+                    Value::String(s) => Some(s.to_string()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            // Strip the source-location prefix "Execution error\n" and
+            // the trailing "\nFull Stack: …" — leaves just the inner
+            // PureRuntimeError::Display payload that exclusion-message
+            // matching compares against.
+            let core = msg
+                .lines()
+                .nth(1)
+                .map(|l| l.trim_matches('"').to_string())
+                .unwrap_or_default();
+            eprintln!("\n=== {fqn} ===\nFULL: {msg}\nCORE: {core}");
+        }
+    }
+}
+
+#[test]
+fn eval_year_hour_precision_no_let() {
+    // T17 hour-precision but no `let adapter` binding — call the adapter
+    // by FQN inline.
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Integer[1] {
+            testAdapterForInMemoryExecution_Function_1__X_o_->eval(|%2015-04-15T17->year());
+        }
+        ",
+        "f__Integer_1_",
+    );
+    assert_eq!(r, Value::Integer(2015));
+}
+
+#[test]
+fn eval_year_hour_precision_direct() {
+    // Just `year(T17 date)` — no eval/lambda/adapter at all.
+    let r = eval_pure(
+        "function test::f(): Integer[1] { %2015-04-15T17->year(); }",
+        "f__Integer_1_",
+    );
+    assert_eq!(r, Value::Integer(2015));
+}
+
+#[test]
+fn eval_year_hour_precision_no_assert() {
+    // Hour-only T17 precision, but no assertEquals wrapper. If this
+    // passes, the issue is the assertEquals + T17 combo. If it fails,
+    // the issue is the T17 literal itself in a let-bound context.
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Integer[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            $adapter->eval(|%2015-04-15T17->year());
+        }
+        ",
+        "f__Integer_1_",
+    );
+    assert_eq!(r, Value::Integer(2015));
+}
+
+#[test]
+fn eval_year_minute_precision_with_assert() {
+    // Same minute-precision date but wrapped in assertEquals. Tests if
+    // it's the assertEquals wrapper or the hour-only precision.
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(2015, $adapter->eval(|%2015-04-15T17:09->year()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_year_hour_precision_with_let_only() {
+    // Just the let + hour-precision year call. No subsequent statements.
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(2015, $adapter->eval(|%2015-04-15T17->year()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_year_hour_precision_first() {
+    // Reorder to put hour-precision FIRST. If the issue is sequence-
+    // dependent compiler inference, this would isolate it.
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(2015, $adapter->eval(|%2015-04-15T17->year()));
+            assertEquals(2015, $adapter->eval(|%2015->year()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_year_five_precisions() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(2015, $adapter->eval(|%2015->year()));
+            assertEquals(2015, $adapter->eval(|%2015-04->year()));
+            assertEquals(2015, $adapter->eval(|%2015-04-15->year()));
+            assertEquals(2015, $adapter->eval(|%2015-04-15T17->year()));
+            assertEquals(2015, $adapter->eval(|%2015-04-15T17:09->year()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_year_pair_two_precisions() {
+    // Try just two consecutive assertEquals — see if state pollution
+    // appears already at this size.
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(2015, $adapter->eval(|%2015->year()));
+            assertEquals(2015, $adapter->eval(|%2015-04->year()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
 #[ignore = "diagnostic: testYear's full body fails on a multi-precision date — Phase 6 follow-up"]
 fn eval_year_full_test_body() {
     // Inline the full testYear body (sans the PCT.test annotation
@@ -2348,7 +2687,7 @@ fn eval_pct_date_probe() {
                 ],
             );
         let pkg = match pkg { Ok(v) => v, Err(_) => { eprintln!("not found: {testname}"); continue; } };
-        let (adapter, exclusions) = pct_canary_args(&model);
+        let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
         // testname is the test fn itself, not a package; use it as adapter input
         let _ = pkg;
         let _ = adapter;
@@ -2365,7 +2704,7 @@ fn eval_pct_date_probe() {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let (adapter, exclusions) = pct_canary_args(&model);
+        let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
         let report = match evaluator.call(
             "meta::pure::test::surveyor::runPCTTests",
             &[pkg2, Value::String("".into()), adapter, exclusions],
@@ -2463,7 +2802,15 @@ fn eval_pct_date_error_histogram() {
 ///   `PureDate::add_*` methods, and routes through jiff's `try_*`
 ///   span builders to error gracefully on out-of-range adjustments
 ///   instead of panicking. Cleared 19 date PCT tests.
-const PCT_PASS_BASELINE: i64 = 417;
+/// - 434 — Phase 6 (part 2): hour-only datetime literals (`%2015-04-15T17`)
+///   now parse + carry `TimePrecision::Hour` (was rejected by
+///   `parse_datetime`'s `time_parts.len() < 2` gate), Rust-port
+///   exclusion list seeded for the 5 BigNumber adjust tests that
+///   expect years outside i16 range, and `apply_exclusion` matches
+///   exclusion messages by substring (so entries can pin just the
+///   PureRuntimeError text without the full Display wrapper).
+///   Cleared 17 date PCT tests; date package now 47/1/5.
+const PCT_PASS_BASELINE: i64 = 434;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in
@@ -2529,7 +2876,7 @@ fn eval_pct_baseline_lock() {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let (adapter, exclusions) = pct_canary_args(&model);
+        let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
         let Ok(Value::Object(report_id)) = evaluator.call(
             "meta::pure::test::surveyor::runPCTTests",
             &[pkg_val, Value::String("".into()), adapter, exclusions],

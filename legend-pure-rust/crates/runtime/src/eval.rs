@@ -188,6 +188,15 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         self.natives
     }
 
+    /// Consume the evaluator and return the hooks instance.
+    ///
+    /// Used to extract collected data (e.g., coverage maps) after
+    /// evaluation completes.
+    #[must_use]
+    pub fn into_hooks(self) -> H {
+        self.hooks
+    }
+
     // -----------------------------------------------------------------------
     // Core evaluation
     // -----------------------------------------------------------------------
@@ -393,6 +402,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 second,
                 subsecond_nanos,
                 subsecond_digits,
+                has_minutes,
                 has_seconds,
                 tz_offset_minutes,
             } => {
@@ -430,8 +440,10 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                     crate::date::TimePrecision::Subsecond(*subsecond_digits)
                 } else if *has_seconds {
                     crate::date::TimePrecision::Second
-                } else {
+                } else if *has_minutes {
                     crate::date::TimePrecision::Minute
+                } else {
+                    crate::date::TimePrecision::Hour
                 };
                 let date = PureDate::datetime(
                     shifted.year(),
