@@ -47,9 +47,9 @@ use std::rc::Rc;
 
 use owo_colors::OwoColorize;
 
+use super::coverage::{CoverageHooks, CoverageMap};
 use legend_pure_core_platform::platform::load_platform;
 use legend_pure_parser_pure::model::PureModel;
-use super::coverage::{CoverageHooks, CoverageMap};
 use legend_pure_runtime::error::PureException;
 use legend_pure_runtime::eval::Evaluator;
 use legend_pure_runtime::heap::{ObjectId, RuntimeHeap};
@@ -199,11 +199,7 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
         let map = evaluator.into_hooks().into_map();
         print_coverage_summary(&map);
 
-        super::coverage_report::write_lcov(
-            &map,
-            &args.coverage_output,
-            &args.coverage_source_root,
-        )
+        super::coverage_report::write_lcov(&map, &args.coverage_output, &args.coverage_source_root)
             .map_err(|e| CliError::Custom(format!("Failed to write LCOV: {e}")))?;
         eprintln!(
             "  {} LCOV tracefile written to {}",
@@ -218,11 +214,7 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
                     "✓".green().bold(),
                     html_dir.display(),
                 ),
-                Err(e) => eprintln!(
-                    "  {} HTML report: {}",
-                    "warning:".yellow().bold(),
-                    e,
-                ),
+                Err(e) => eprintln!("  {} HTML report: {}", "warning:".yellow().bold(), e,),
             }
         }
 
@@ -527,9 +519,7 @@ fn print_coverage_summary(map: &CoverageMap) {
         "│ {}                                                    │",
         "Pure Coverage Summary".bold()
     );
-    eprintln!(
-        "├──────────────────────────────────┬────────┬───────┬───────┬───────┬──────┤"
-    );
+    eprintln!("├──────────────────────────────────┬────────┬───────┬───────┬───────┬──────┤");
     eprintln!(
         "│ {:<32} │ {:>6} │ {:>5} │ {:>5} │ {:>5} │ {:>4} │",
         "File".bold(),
@@ -539,9 +529,7 @@ fn print_coverage_summary(map: &CoverageMap) {
         "Br".bold(),
         "F%".bold(),
     );
-    eprintln!(
-        "├──────────────────────────────────┼────────┼───────┼───────┼───────┼──────┤"
-    );
+    eprintln!("├──────────────────────────────────┼────────┼───────┼───────┼───────┼──────┤");
 
     for (source, file_cov) in map.files() {
         let lf = file_cov.lines_found();
@@ -589,9 +577,7 @@ fn print_coverage_summary(map: &CoverageMap) {
         );
     }
 
-    eprintln!(
-        "├──────────────────────────────────┼────────┼───────┼───────┼───────┼──────┤"
-    );
+    eprintln!("├──────────────────────────────────┼────────┼───────┼───────┼───────┼──────┤");
 
     let lp_str = format!("{:.1}%", summary.line_percentage);
     let br_str = format!("{}/{}", summary.branches_hit, summary.branches_found);
@@ -606,9 +592,7 @@ fn print_coverage_summary(map: &CoverageMap) {
         br_str,
         fp_str,
     );
-    eprintln!(
-        "└──────────────────────────────────┴────────┴───────┴───────┴───────┴──────┘"
-    );
+    eprintln!("└──────────────────────────────────┴────────┴───────┴───────┴───────┴──────┘");
     eprintln!();
     eprintln!(
         " {} = line coverage   {} = branches hit/total   {} = function coverage",
@@ -617,4 +601,3 @@ fn print_coverage_summary(map: &CoverageMap) {
         "F%".dimmed(),
     );
 }
-

@@ -72,7 +72,11 @@ pub(crate) fn java_number_string(v: &Value) -> String {
             if f.is_nan() {
                 "NaN".to_string()
             } else if f.is_infinite() {
-                if *f > 0.0 { "Infinity".into() } else { "-Infinity".into() }
+                if *f > 0.0 {
+                    "Infinity".into()
+                } else {
+                    "-Infinity".into()
+                }
             } else if *f == f.trunc() && f.is_finite() {
                 format!("{f:.1}")
             } else {
@@ -176,9 +180,7 @@ impl NativeFunction for Round {
             2 => {
                 let scale = scale_arg(&values[1])?;
                 match &values[0] {
-                    Value::Decimal(d) => {
-                        Ok(Evaluated::new(Value::Decimal(d.round_dp(scale))))
-                    }
+                    Value::Decimal(d) => Ok(Evaluated::new(Value::Decimal(d.round_dp(scale)))),
                     Value::Float(f) => {
                         let factor = 10f64.powi(i32::try_from(scale).map_err(|_| {
                             PureRuntimeError::EvaluationError(format!(
@@ -1662,13 +1664,21 @@ mod tests {
             let r = ParseBoolean
                 .execute(&[lit_str(variant)], &mut MockCtx)
                 .unwrap();
-            assert_eq!(r.into_value(), Value::Boolean(true), "expected true for {variant}");
+            assert_eq!(
+                r.into_value(),
+                Value::Boolean(true),
+                "expected true for {variant}"
+            );
         }
         for variant in ["False", "FALSE", "fAlse", "faLse", "falSe", "falsE"] {
             let r = ParseBoolean
                 .execute(&[lit_str(variant)], &mut MockCtx)
                 .unwrap();
-            assert_eq!(r.into_value(), Value::Boolean(false), "expected false for {variant}");
+            assert_eq!(
+                r.into_value(),
+                Value::Boolean(false),
+                "expected false for {variant}"
+            );
         }
     }
 

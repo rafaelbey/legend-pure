@@ -355,9 +355,7 @@ impl NativeFunction for Divide {
                     return Err(PureRuntimeError::DivisionByZero.into());
                 }
                 let q = a.checked_div(b).ok_or_else(|| {
-                    PureRuntimeError::EvaluationError(
-                        "divide: Decimal division overflow".into(),
-                    )
+                    PureRuntimeError::EvaluationError("divide: Decimal division overflow".into())
                 })?;
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let rounded = q.round_dp(scale as u32);

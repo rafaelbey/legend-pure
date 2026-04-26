@@ -163,9 +163,8 @@ impl Tokenizer {
     fn next_token(&mut self) -> Token {
         self.skip_whitespace_and_comments();
 
-        let ch = match self.advance_char() {
-            Some(c) => c,
-            None => return Token::Eof,
+        let Some(ch) = self.advance_char() else {
+            return Token::Eof;
         };
 
         match ch {
@@ -183,9 +182,8 @@ impl Tokenizer {
                 let mut s = String::new();
                 loop {
                     match self.advance_char() {
-                        Some('\'') => break,
+                        Some('\'') | None => break,
                         Some(c) => s.push(c),
-                        None => break,
                     }
                 }
                 Token::StringLit(SmolStr::new(&s))
@@ -312,13 +310,12 @@ impl<'a> M3Parser<'a> {
     }
 
     fn expect(&mut self, expected: &Token) {
-        if !self.eat(expected) {
-            panic!(
-                "m3_parser: expected {expected:?}, got {:?} at pos {}",
-                self.peek(),
-                self.pos
-            );
-        }
+        assert!(
+            self.eat(expected),
+            "m3_parser: expected {expected:?}, got {:?} at pos {}",
+            self.peek(),
+            self.pos
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -542,7 +539,7 @@ impl<'a> M3Parser<'a> {
                             // In m3.pure, generalizations stored on a type include entries
                             // for ALL subclasses, not just this class itself. We filter by
                             // `specific` to only keep entries for the current class.
-                            super_types = self.parse_generalizations(&name);
+                            super_types = self.parse_generalizations(name);
                         }
                         "typeParameters" => {
                             // Class.properties[typeParameters] : [...]
@@ -645,9 +642,7 @@ impl<'a> M3Parser<'a> {
                 match self.peek() {
                     Token::RBrack | Token::Eof => break,
                     Token::Caret => {
-                        if let Some(p) = self.parse_property_instance() {
-                            props.push(p);
-                        }
+                        props.push(self.parse_property_instance());
                     }
                     _ => {
                         self.advance();
@@ -658,9 +653,7 @@ impl<'a> M3Parser<'a> {
             self.eat(&Token::RBrack);
         } else if self.at(&Token::Caret) {
             // Single property (not in array)
-            if let Some(p) = self.parse_property_instance() {
-                props.push(p);
-            }
+            props.push(self.parse_property_instance());
         } else {
             self.skip_value();
         }
@@ -669,7 +662,7 @@ impl<'a> M3Parser<'a> {
     }
 
     /// Parses a single `^...Property name { ... }` instance.
-    fn parse_property_instance(&mut self) -> Option<Property> {
+    fn parse_property_instance(&mut self) -> Property {
         self.expect(&Token::Caret);
         let _classifier = self.parse_classifier_path();
         let prop_name = self.expect_ident();
@@ -717,7 +710,7 @@ impl<'a> M3Parser<'a> {
             self.eat(&Token::RBrace);
         }
 
-        Some(Property {
+        Property {
             name: SmolStr::new(&prop_name),
             source_info: synthetic_source(),
             type_expr: crate::types::TypeExpr::Generic(type_name),
@@ -726,13 +719,13 @@ impl<'a> M3Parser<'a> {
             default_value: None,
             stereotypes: vec![],
             tagged_values: vec![],
-        })
+        }
     }
 
     /// Parses the generalizations list and extracts super-type names.
     ///
     /// In m3.pure, `Type.properties[generalizations]` stores Generalization
-    /// instances for ALL subclasses (e.g., Class, PrimitiveType), not just
+    /// instances for ALL subclasses (e.g., Class, `PrimitiveType`), not just
     /// the current class. Each Generalization has:
     /// - `general.rawType` — the supertype
     /// - `specific` — the actual subtype this applies to
@@ -765,10 +758,10 @@ impl<'a> M3Parser<'a> {
             self.eat(&Token::RBrack);
         } else if self.at(&Token::Caret) {
             // Single generalization (not in array)
-            if let Some((general, specific)) = self.parse_generalization_instance() {
-                if specific.as_deref() == Some(class_name) || specific.is_none() {
-                    supers.push(crate::types::TypeExpr::Generic(general));
-                }
+            if let Some((general, specific)) = self.parse_generalization_instance()
+                && (specific.as_deref() == Some(class_name) || specific.is_none())
+            {
+                supers.push(crate::types::TypeExpr::Generic(general));
             }
         } else {
             self.skip_value();
@@ -787,14 +780,13 @@ impl<'a> M3Parser<'a> {
         let _classifier = self.parse_classifier_path();
 
         // May or may not have a name
-        if self.at(&Token::Ident(SmolStr::default())) && !self.at(&Token::LBrace) {
-            // Has a name — skip it
-            if let Token::Ident(_) = self.peek() {
-                if !self.at(&Token::LBrace) {
-                    // Check if next token after ident is { — if so, it's a body
-                    // Otherwise it might be something else
-                }
-            }
+        if self.at(&Token::Ident(SmolStr::default()))
+            && !self.at(&Token::LBrace)
+            && let Token::Ident(_) = self.peek()
+            && !self.at(&Token::LBrace)
+        {
+            // Check if next token after ident is { — if so, it's a body
+            // Otherwise it might be something else
         }
 
         let mut general_type = None;
@@ -957,7 +949,6 @@ impl<'a> M3Parser<'a> {
 
         let name = self.parse_element_ref_tail();
         match name.as_str() {
-            "PureOne" => Multiplicity::PureOne,
             "ZeroOne" => Multiplicity::ZeroOrOne,
             "ZeroMany" => Multiplicity::ZeroOrMany,
             "OneMany" => Multiplicity::OneOrMany,
@@ -1157,7 +1148,6 @@ impl<'a> M3Parser<'a> {
     fn parse_multiplicity_body(&mut self, name: &SmolStr, package_segments: &[SmolStr]) {
         // Map well-known multiplicity names to Multiplicity variants
         let mult = match name.as_str() {
-            "PureOne" => Multiplicity::PureOne,
             "PureZero" => Multiplicity::Range {
                 lower: 0,
                 upper: Some(0),
@@ -1272,9 +1262,6 @@ impl<'a> M3Parser<'a> {
             Token::Caret => {
                 self.skip_inline_instance();
             }
-            Token::StringLit(_) | Token::IntLit(_) => {
-                self.advance();
-            }
             Token::Ident(_) => {
                 // Element reference — consume path
                 let _ = self.parse_element_ref_tail();
@@ -1314,21 +1301,12 @@ impl<'a> M3Parser<'a> {
         loop {
             match self.peek() {
                 Token::Eof => return,
-                Token::Comma if depth == 0 => return,
-                Token::RBrace if depth == 0 => return,
-                Token::LBrace => {
+                Token::Comma | Token::RBrace if depth == 0 => return,
+                Token::LBrace | Token::LBrack => {
                     depth += 1;
                     self.advance();
                 }
-                Token::RBrace => {
-                    depth -= 1;
-                    self.advance();
-                }
-                Token::LBrack => {
-                    depth += 1;
-                    self.advance();
-                }
-                Token::RBrack => {
+                Token::RBrace | Token::RBrack => {
                     depth = depth.saturating_sub(1);
                     self.advance();
                 }

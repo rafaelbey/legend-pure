@@ -198,10 +198,7 @@ impl FunctionTracker {
     /// Number of functions that were called at least once.
     #[must_use]
     pub fn functions_hit(&self) -> u32 {
-        self.functions
-            .values()
-            .filter(|e| e.hit_count > 0)
-            .count() as u32
+        self.functions.values().filter(|e| e.hit_count > 0).count() as u32
     }
 
     /// Functions belonging to a specific source file.
@@ -378,12 +375,8 @@ impl CoverageMap {
                         // Walk qualified property bodies.
                         for qp in &class.qualified_properties {
                             // Register QP as a function for function-level coverage.
-                            let qp_fqn = SmolStr::new(format!(
-                                "{}.{}",
-                                node.name, qp.name
-                            ));
-                            self.functions
-                                .register(qp_fqn, qp.source_info.clone());
+                            let qp_fqn = SmolStr::new(format!("{}.{}", node.name, qp.name));
+                            self.functions.register(qp_fqn, qp.source_info.clone());
 
                             for expr in &qp.body {
                                 self.walk_expr_coverable(expr);
@@ -413,11 +406,7 @@ impl CoverageMap {
             } => {
                 // Register branch points for `if` and `match`.
                 if function_name == "if" || function_name == "match" {
-                    self.register_branches(
-                        &expr.source_info,
-                        function_name.as_str(),
-                        arguments,
-                    );
+                    self.register_branches(&expr.source_info, function_name.as_str(), arguments);
                 }
                 for arg in arguments {
                     self.walk_expr_coverable(arg);
@@ -611,11 +600,7 @@ impl EvalHooks for CoverageHooks {
 
     fn leave_function(&mut self, name: &str) {
         // Clear current test when the test function returns.
-        if self
-            .current_test
-            .as_deref()
-            .is_some_and(|t| t == name)
-        {
+        if self.current_test.as_deref().is_some_and(|t| t == name) {
             self.current_test = None;
         }
     }
@@ -698,12 +683,8 @@ mod tests {
                 },
             ],
         });
-        tracker
-            .lambda_to_branch
-            .insert(src_true, (0, 0));
-        tracker
-            .lambda_to_branch
-            .insert(src_false, (0, 1));
+        tracker.lambda_to_branch.insert(src_true, (0, 0));
+        tracker.lambda_to_branch.insert(src_false, (0, 1));
 
         assert_eq!(tracker.branches_found(), 2);
         assert_eq!(tracker.branches_hit(), 0);

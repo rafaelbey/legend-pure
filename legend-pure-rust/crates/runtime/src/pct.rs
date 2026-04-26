@@ -76,9 +76,7 @@ pub fn rust_native_exclusions() -> Value {
     let mut state = MapState::default();
     for (fqn, msg) in exclusions_obj {
         let msg = msg.as_str().unwrap_or_else(|| {
-            panic!(
-                "pct_grammar_rust_native.json: exclusion value for {fqn} must be a string"
-            )
+            panic!("pct_grammar_rust_native.json: exclusion value for {fqn} must be a string")
         });
         state.entries.insert(
             ValueKey::String(SmolStr::new(fqn)),

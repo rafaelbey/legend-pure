@@ -286,8 +286,7 @@ impl NativeFunction for Zip {
         for i in 0..n {
             let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::PAIR);
             ctx.heap_mut().mutate_add(obj, "first", &[xs[i].clone()])?;
-            ctx.heap_mut()
-                .mutate_add(obj, "second", &[ys[i].clone()])?;
+            ctx.heap_mut().mutate_add(obj, "second", &[ys[i].clone()])?;
             out.push(Value::Object(obj));
         }
         Ok(Evaluated::new(Value::from_vec(out)))
@@ -713,14 +712,8 @@ impl NativeFunction for RemoveDuplicates {
             .into());
         }
         let source = values[0].to_collection();
-        let key_fn: Option<Value> = values
-            .get(1)
-            .filter(|v| !is_empty_optional(v))
-            .cloned();
-        let eql_fn: Option<Value> = values
-            .get(2)
-            .filter(|v| !is_empty_optional(v))
-            .cloned();
+        let key_fn: Option<Value> = values.get(1).filter(|v| !is_empty_optional(v)).cloned();
+        let eql_fn: Option<Value> = values.get(2).filter(|v| !is_empty_optional(v)).cloned();
 
         // Pre-compute the comparison key for each input element.
         // When no `key` is provided the element itself is its key.
@@ -742,8 +735,7 @@ impl NativeFunction for RemoveDuplicates {
             for &j in &kept {
                 let eq = match &eql_fn {
                     Some(ef) => {
-                        let result =
-                            ctx.call_function(ef, &[keys[j].clone(), keys[i].clone()])?;
+                        let result = ctx.call_function(ef, &[keys[j].clone(), keys[i].clone()])?;
                         result.as_boolean()?
                     }
                     None => keys[j] == keys[i],

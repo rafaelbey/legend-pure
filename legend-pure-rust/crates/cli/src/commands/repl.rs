@@ -51,7 +51,7 @@ use rustyline::validate::Validator;
 use rustyline::{Context, Editor, Helper};
 use smol_str::SmolStr;
 
-use legend_pure_core_platform::platform::{parse_and_compile, PLATFORM_AUTO_IMPORTS};
+use legend_pure_core_platform::platform::{PLATFORM_AUTO_IMPORTS, parse_and_compile};
 use legend_pure_core_platform::sources;
 use legend_pure_runtime::eval::Evaluator;
 use legend_pure_runtime::native::NativeRegistry;
@@ -86,10 +86,7 @@ pub fn run(_args: ReplArgs) -> Result<(), CliError> {
 
     // Collect the platform source pairs for re-use in every compile cycle.
     let platform = sources::platform_sources();
-    let platform_pairs: Vec<(&str, &str)> = platform
-        .iter()
-        .map(|s| (s.content, s.path))
-        .collect();
+    let platform_pairs: Vec<(&str, &str)> = platform.iter().map(|s| (s.content, s.path)).collect();
 
     print_banner();
 
@@ -209,11 +206,7 @@ pub fn run(_args: ReplArgs) -> Result<(), CliError> {
                     partial.model
                 } else {
                     for e in &repl_errors {
-                        eprintln!(
-                            "  {} {}",
-                            "error:".red().bold(),
-                            e.message,
-                        );
+                        eprintln!("  {} {}", "error:".red().bold(), e.message,);
                     }
                     continue;
                 }
@@ -240,17 +233,10 @@ pub fn run(_args: ReplArgs) -> Result<(), CliError> {
                         }
                     }
                 }
-                eprintln!(
-                    "{}",
-                    format!("  ({compile_ms}ms)").dimmed(),
-                );
+                eprintln!("{}", format!("  ({compile_ms}ms)").dimmed(),);
             }
             Err(e) => {
-                eprintln!(
-                    "  {} {}",
-                    "error:".red().bold(),
-                    e,
-                );
+                eprintln!("  {} {}", "error:".red().bold(), e,);
             }
         }
     }
@@ -306,25 +292,13 @@ fn print_value(value: &Value) {
             eprintln!("  {}", "=> ()".dimmed());
         }
         Value::String(s) => {
-            eprintln!(
-                "  {} {}",
-                "=>".green().bold(),
-                format!("'{s}'").green(),
-            );
+            eprintln!("  {} {}", "=>".green().bold(), format!("'{s}'").green(),);
         }
         Value::Integer(n) => {
-            eprintln!(
-                "  {} {}",
-                "=>".green().bold(),
-                n.to_string().yellow(),
-            );
+            eprintln!("  {} {}", "=>".green().bold(), n.to_string().yellow(),);
         }
         Value::Float(n) => {
-            eprintln!(
-                "  {} {}",
-                "=>".green().bold(),
-                n.to_string().yellow(),
-            );
+            eprintln!("  {} {}", "=>".green().bold(), n.to_string().yellow(),);
         }
         Value::Decimal(d) => {
             eprintln!(
@@ -335,62 +309,33 @@ fn print_value(value: &Value) {
             );
         }
         Value::Boolean(b) => {
-            eprintln!(
-                "  {} {}",
-                "=>".green().bold(),
-                b.to_string().magenta(),
-            );
+            eprintln!("  {} {}", "=>".green().bold(), b.to_string().magenta(),);
         }
         Value::Date(d) => {
-            eprintln!(
-                "  {} {}",
-                "=>".green().bold(),
-                format!("%{d}").cyan(),
-            );
+            eprintln!("  {} {}", "=>".green().bold(), format!("%{d}").cyan(),);
         }
         Value::StrictTime(t) => {
-            eprintln!(
-                "  {} {}",
-                "=>".green().bold(),
-                format!("%{t}").cyan(),
-            );
+            eprintln!("  {} {}", "=>".green().bold(), format!("%{t}").cyan(),);
         }
         Value::Collection(items) => {
             if items.is_empty() {
                 eprintln!("  {} {}", "=>".green().bold(), "[]".dimmed());
             } else {
-                let parts: Vec<String> = items
-                    .iter()
-                    .take(20)
-                    .map(|v| format!("{v}"))
-                    .collect();
+                let parts: Vec<String> = items.iter().take(20).map(|v| format!("{v}")).collect();
                 let suffix = if items.len() > 20 {
                     format!(", ... ({} more)", items.len() - 20)
                 } else {
                     String::new()
                 };
-                eprintln!(
-                    "  {} [{}{}]",
-                    "=>".green().bold(),
-                    parts.join(", "),
-                    suffix,
-                );
+                eprintln!("  {} [{}{}]", "=>".green().bold(), parts.join(", "), suffix,);
             }
         }
         Value::EnumValue { member, .. } => {
-            eprintln!(
-                "  {} {}",
-                "=>".green().bold(),
-                member.cyan(),
-            );
+            eprintln!("  {} {}", "=>".green().bold(), member.cyan(),);
         }
         // Fallback: use Display for Objects, Maps, Functions, Elements, etc.
         other => {
-            eprintln!(
-                "  {} {}",
-                "=>".green().bold(),
-                other,
-            );
+            eprintln!("  {} {}", "=>".green().bold(), other,);
         }
     }
 }
@@ -538,7 +483,15 @@ fn extract_lambda_vars(line: &str) -> Vec<String> {
                 // Stop going backwards if we hit an operator or structural character
                 // that clearly bounds the lambda parameter list. We do NOT break on
                 // '[' or '{' because of typed variables like `a:Integer[1]`.
-                if c == '(' || c == '>' || c == '<' || c == '=' || c == '+' || c == '-' || c == '*' || c == '/' {
+                if c == '('
+                    || c == '>'
+                    || c == '<'
+                    || c == '='
+                    || c == '+'
+                    || c == '-'
+                    || c == '*'
+                    || c == '/'
+                {
                     break;
                 }
             }
