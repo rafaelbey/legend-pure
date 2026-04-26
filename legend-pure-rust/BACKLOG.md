@@ -13,8 +13,8 @@ in its crate directory; this file provides the high-level view.
 |-----------|--------|----------------|------------|---------------|
 | Parser | ✅ Complete | 0 | ~400+ | Full grammar coverage |
 | Compiler | ✅ Platform clean | **0** | ~50+ | 236 files / 1338 elements; `load_platform()` compiles with **zero errors** |
-| Runtime | ✅ Surveyor 100% | N/A | 357+ lib + 71 eval + 211 surveyor | RelationType/addColumns landed; lambda-param narrowing; eval benchmarks |
-| CLI | 🚧 Partial | N/A | ~20+ | 8/11 commands (`legend test` renders TestReport end-to-end) |
+| Runtime | ✅ Surveyor 246/0/0; PCT 465/465 | N/A | 357+ lib + 71 eval + 246 surveyor | PCT broad-canary at 100% with 9 manifest exclusions |
+| CLI | 🚧 Partial | N/A | ~20+ | 8/11 commands; `legend test --pct` defaults to bundled `pct_grammar_rust_native.json` exclusions |
 | **Total** | | **0** | **739+** | |
 
 ---
@@ -126,14 +126,19 @@ checks; drop the flag for full statistical-strength baselines (~5min).
 ## CLI (`crates/cli`)
 
 ### Implemented ✅
-`parse`, `check`, `init`, `version`, `completions`, `emit`
+`parse`, `check`, `init`, `version`, `completions`, `emit`, `test`
+
+`legend test --pct` runs the platform PCT suite. By default it loads
+`crates/runtime/resources/pct_grammar_rust_native.json` and applies the
+9 documented exclusions (i16-year overflow + i64-Integer overflow
+tests). `--no-default-exclusions` disables that; `--manifest <path>`
+substitutes another manifest.
 
 ### Stubs 🚧
 
 | Command | Priority | Blocked On |
 |---------|----------|------------|
 | `compile` | P1 | Compiler crate stabilization |
-| `test` | P1 | Runtime PCT coverage |
 | `plan` | P2 | Execution plan generation |
 | `package` | P2 | Compilation + artifact packaging |
 | `publish` | P3 | Package + registry upload |

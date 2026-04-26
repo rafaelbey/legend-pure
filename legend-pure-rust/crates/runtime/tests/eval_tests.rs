@@ -1850,66 +1850,14 @@ fn pct_canary_args(model: &PureModel) -> (Value, Value) {
 /// limit (widen year to i32, promote to Decimal on i64 overflow,
 /// …). The next canary run will report "PCT exclusion needs
 /// rebase" — drop the entry from the JSON.
-const PCT_RUST_PORT_MANIFEST_JSON: &str =
-    include_str!("pct_rust_port.json");
-
-/// Lazy view onto the parsed Rust-port PCT manifest.
-fn rust_port_manifest() -> &'static serde_json::Value {
-    use std::sync::OnceLock;
-    static CELL: OnceLock<serde_json::Value> = OnceLock::new();
-    CELL.get_or_init(|| {
-        serde_json::from_str(PCT_RUST_PORT_MANIFEST_JSON)
-            .expect("pct_rust_port.json: invalid JSON")
-    })
-}
-
 /// Build a Rust-port-specific exclusions Map for PCT runs.
 ///
-/// Reads the manifest at `crates/runtime/tests/pct_rust_port.json` —
-/// the manifest's `adapter` field is the same value `pct_canary_args`
-/// resolves, so we don't override it here; we only build the
-/// `Map<Function<Any>, String>` exclusions argument from the
-/// manifest's `exclusions` object.
-///
-/// Use from canary diagnostics where we want the broad pass-count
-/// to reflect runtime gaps (yes/no), not representational bounds
-/// the platform tests pin extra-aggressively.
+/// Delegates to [`legend_pure_runtime::pct::rust_native_pct_args`] —
+/// the canonical loader of `crates/runtime/resources/pct_grammar_rust_native.json`,
+/// also consumed by `legend test --pct` so the CLI and tests stay in
+/// lockstep on which platform tests are intentionally skipped.
 fn pct_canary_args_with_rust_exclusions(model: &PureModel) -> (Value, Value) {
-    use legend_pure_runtime::value::{MapState, ValueKey};
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
-    let adapter_path: [SmolStr; 5] = [
-        "meta".into(),
-        "pure".into(),
-        "test".into(),
-        "pct".into(),
-        "testAdapterForInMemoryExecution_Function_1__X_o_".into(),
-    ];
-    let adapter = Value::Element(
-        model
-            .resolve_by_path(&adapter_path)
-            .expect("in-memory adapter must resolve"),
-    );
-
-    let manifest = rust_port_manifest();
-    let exclusions_obj = manifest
-        .get("exclusions")
-        .and_then(|v| v.as_object())
-        .expect("pct_rust_port.json: missing or non-object 'exclusions'");
-
-    let mut state = MapState::default();
-    for (fqn, msg) in exclusions_obj {
-        let msg = msg.as_str().unwrap_or_else(|| {
-            panic!("pct_rust_port.json: exclusion value for {fqn} must be a string")
-        });
-        state.entries.insert(
-            ValueKey::String(SmolStr::new(fqn)),
-            Value::String(SmolStr::new(msg)),
-        );
-    }
-    let exclusions = Value::Map(Rc::new(RefCell::new(state)));
-    (adapter, exclusions)
+    legend_pure_runtime::pct::rust_native_pct_args(model)
 }
 
 /// Read a non-negative integer counter from a heap-allocated `TestReport`.
@@ -3047,7 +2995,8 @@ fn eval_pct_date_error_histogram() {
 ///   numbers above describe deltas against a no-longer-current
 ///   discovery set. Re-anchored at the current pass count of 445
 ///   (pre-manifest) + 3 (testLarge{Times,Minus,Plus} exclusions
-///   loaded from `crates/runtime/tests/pct_rust_port.json`) = 448.
+///   loaded from `crates/runtime/resources/pct_grammar_rust_native.json`)
+///   = 448.
 ///   Future phases ratchet this baseline up against this new total.
 /// - 2026-04-26 → 453: date assertError text-pinning (Phase 8).
 ///   `dayOfMonth`/`hour`/`minute`/`second` natives now throw

@@ -20,9 +20,14 @@
 //! pass/skip lines.
 //!
 //! With `--pct`, switches to the PCT (Pure Compatibility Tests) surveyor
-//! which discovers `<<PCT.test>>`-stereotyped functions and injects an
-//! adapter Function loaded from a JSON manifest (`pct_essential_native.json`
-//! by default — the embedded in-memory adapter manifest).
+//! which discovers `<<PCT.test>>`-stereotyped functions and runs them
+//! against the in-memory adapter. Exclusions for the Rust port are loaded
+//! by default from the bundled
+//! [`pct_grammar_rust_native.json`](legend_pure_runtime::pct) manifest —
+//! tests pinned by representational limits (i16 year, i64 Integer
+//! arithmetic) report PASS, and stale entries flip back to FAIL with
+//! `"PCT exclusion needs rebase"`. Pass `--no-default-exclusions` to
+//! disable, or `--manifest <path>` to load a different manifest.
 //!
 //! # Usage
 //!
@@ -33,6 +38,7 @@
 //! legend test --show-detail                # Also print PASS/SKIP lines
 //! legend test --pct --package meta::pure::functions::boolean
 //! legend test --pct --manifest pct_grammar_native.json
+//! legend test --pct --no-default-exclusions   # Run PCT raw, no exclusions
 //! ```
 
 use std::cell::RefCell;
@@ -94,6 +100,17 @@ pub struct TestArgs {
     #[arg(long)]
     pub manifest: Option<String>,
 
+    /// Skip the bundled `pct_grammar_rust_native.json` exclusions when
+    /// running PCT. By default the CLI loads them so tests known to
+    /// fail for representational reasons (i16 year, i64-overflowing
+    /// Integer literals) report PASS. Disable when validating those
+    /// underlying limits or chasing regressions in the exclusion
+    /// mechanism itself. Ignored unless `--pct` is set; ignored when
+    /// `--manifest` is set (the manifest path supplies its own
+    /// exclusions).
+    #[arg(long = "no-default-exclusions")]
+    pub no_default_exclusions: bool,
+
     /// Collect Pure code coverage during test execution.
     #[arg(long)]
     pub coverage: bool,
@@ -129,7 +146,14 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
     let pct_via = if args.pct {
         match &args.manifest {
             Some(m) => format!(" (manifest: {m})"),
-            None => format!(" (adapter: {})", args.adapter),
+            None => {
+                let suffix = if args.no_default_exclusions {
+                    ", no default exclusions"
+                } else {
+                    ", default exclusions: pct_grammar_rust_native.json"
+                };
+                format!(" (adapter: {}{})", args.adapter, suffix)
+            }
         }
     } else {
         String::new()
@@ -288,7 +312,11 @@ fn run_pct<H: EvalHooks>(
         ))
     })?;
     let adapter_value = Value::Element(adapter_id);
-    let exclusions = Value::Map(Rc::new(RefCell::new(MapState::default())));
+    let exclusions = if args.no_default_exclusions {
+        Value::Map(Rc::new(RefCell::new(MapState::default())))
+    } else {
+        legend_pure_runtime::pct::rust_native_exclusions()
+    };
 
     // `runPCTTests` takes an already-resolved package, so call `pathToElement`
     // first. Both calls share the same evaluator scope so the package value
