@@ -2678,6 +2678,107 @@ fn eval_year_via_pct_adapter_lambda() {
     assert_eq!(r, Value::Integer(2015));
 }
 
+/// Dump every non-PASS test in `package` with its FQN + first line of
+/// its message. Reads through `pct_canary_args_with_rust_exclusions`
+/// so excluded tests show as PASS (i.e., excluded from the dump). Used
+/// by Phase 7+ to triage FAIL/ERROR clusters package-by-package.
+fn pct_status_dump(package: &str) {
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    let mut evaluator = Evaluator::new(&model, &registry);
+    let pkg = evaluator
+        .call(
+            "meta::pure::functions::meta::pathToElement",
+            &[
+                Value::String(SmolStr::new(package)),
+                Value::String("::".into()),
+            ],
+        )
+        .expect("pathToElement");
+    let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
+    let Ok(Value::Object(report_id)) = evaluator.call(
+        "meta::pure::test::surveyor::runPCTTests",
+        &[pkg, Value::String("".into()), adapter, exclusions],
+    ) else {
+        eprintln!("[{package}] runPCTTests failed");
+        return;
+    };
+    let results = evaluator
+        .heap()
+        .get_property_values(report_id, "results")
+        .unwrap_or_else(|_| im_rc::Vector::new());
+    eprintln!("\n=== {package} non-PASS dump ===");
+    for v in results.iter() {
+        let Value::Object(rid) = v else { continue };
+        let status = evaluator
+            .heap()
+            .get_property_values(*rid, "status")
+            .ok()
+            .and_then(|v| v.iter().next().cloned());
+        let bucket = match &status {
+            Some(Value::EnumValue { member, .. }) if member.as_str() == "PASS" => continue,
+            Some(Value::EnumValue { member, .. }) => member.to_string(),
+            _ => "?".into(),
+        };
+        let fqn = evaluator
+            .heap()
+            .get_property_values(*rid, "fqn")
+            .ok()
+            .and_then(|v| v.iter().next().cloned())
+            .and_then(|v| match v {
+                Value::String(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let msg = evaluator
+            .heap()
+            .get_property_values(*rid, "message")
+            .ok()
+            .and_then(|v| v.iter().next().cloned())
+            .and_then(|v| match v {
+                Value::String(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let summary = msg
+            .lines()
+            .nth(1)
+            .map(|l| l.trim_matches('"').to_string())
+            .unwrap_or_else(|| msg.lines().next().unwrap_or("").to_string());
+        eprintln!("[{bucket}] {fqn}\n  {summary}");
+    }
+}
+
+#[test]
+#[ignore = "diagnostic: PCT non-PASS dump for string package"]
+fn eval_pct_string_status_dump() {
+    pct_status_dump("meta::pure::functions::string");
+}
+
+#[test]
+#[ignore = "diagnostic: PCT non-PASS dump for math package"]
+fn eval_pct_math_status_dump() {
+    pct_status_dump("meta::pure::functions::math");
+}
+
+#[test]
+#[ignore = "diagnostic: PCT non-PASS dump for boolean package"]
+fn eval_pct_boolean_status_dump() {
+    pct_status_dump("meta::pure::functions::boolean");
+}
+
+#[test]
+#[ignore = "diagnostic: PCT non-PASS dump for collection package"]
+fn eval_pct_collection_status_dump() {
+    pct_status_dump("meta::pure::functions::collection");
+}
+
+#[test]
+#[ignore = "diagnostic: PCT non-PASS dump for lang package"]
+fn eval_pct_lang_status_dump() {
+    pct_status_dump("meta::pure::functions::lang");
+}
+
 #[test]
 #[ignore = "diagnostic: list all date tests' status + message"]
 fn eval_pct_date_status_dump() {
@@ -2870,7 +2971,19 @@ fn eval_pct_date_error_histogram() {
 ///   month=1/day=1, well-formed for week/year arithmetic). date
 ///   package now 51/0/2 — only TZ + sub-second datetime literal
 ///   parsing edge cases remain.
-const PCT_PASS_BASELINE: i64 = 438;
+/// - 460 — Phase 7 (part 1): string subsystem.
+///   parseBoolean is now case-insensitive ("True", "TRUE", … all
+///   accepted, Java parity). toString routes through a dedicated
+///   `pure_to_string` renderer instead of `Value::Display`: strings
+///   unquoted, dates without leading `%`, Pair → `<a, b>`, List →
+///   `[values…]` (recursive), Class/Element → simple-leaf name, enum
+///   value → bare member. format gains zero-pad width (`%05d`),
+///   precision (`%.4f` rounds half-to-even), date specifier (`%t`),
+///   date-with-pattern (`%t{yyyy-MM-dd HH:mm:ss}` covering
+///   yyyy/MM/dd/HH/hh/h/mm/ss/SSS/a/Z/X plus quoted literals and
+///   [TZ] prefix), and `%r` repr now escapes backslash + single
+///   quote per Pure source rules. Cleared 23 string PCT tests.
+const PCT_PASS_BASELINE: i64 = 460;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in
