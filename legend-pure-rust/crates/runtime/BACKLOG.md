@@ -159,12 +159,13 @@ its optional key/eql Function args, and `Value::Collection.type()`
 folds element types through `least_upper_bound_ids` instead of
 returning `Any`.)
 
-#### Math (1 FAIL)
-- `math::tests::toDecimal::testDoubleToDecimal` (FAIL) — Float→Decimal
-  conversion precision; revisit the conversion path.
+#### Math — empty
 
-`testLarge{Times,Minus,Plus}` moved to **Excluded — intentional** above —
-same divergence Java compiled excludes.
+(Phase 8 closed the math cluster: `toDecimal(Float)` uses
+`Decimal::from_f64` instead of `_retain` so `3.8_f64 → 3.8D`
+canonical, matching Java's `BigDecimal.valueOf(double)`.
+`testLarge{Times,Minus,Plus}` are in **Excluded — intentional**
+above — same divergence Java compiled excludes.)
 
 #### String — empty
 
