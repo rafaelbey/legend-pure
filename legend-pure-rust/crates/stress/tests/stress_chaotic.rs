@@ -17,7 +17,7 @@
 #[cfg(feature = "heavy")]
 use legend_pure_parser_stress::generate::chaotic::{self, ChaoticConfig};
 #[cfg(feature = "heavy")]
-use legend_pure_parser_stress::generate::common::PhaseTimer;
+use legend_pure_parser_stress::generate::common::{PhaseTimer, platform_fixture};
 
 #[cfg(feature = "heavy")]
 use legend_pure_parser_pure::model::Element;
@@ -48,9 +48,34 @@ fn stress_100k_chaotic() {
     let element_count = source_file.element_count();
     println!("  AST elements: {element_count}");
 
-    // Phase 2: Compile → PureModel
+    // Phase 2: Compile → PureModel (with platform — generated functions
+    // use `+` which lowers to a platform `plus` resolution).
     let t2 = PhaseTimer::start("Phase 2 (compile → model)");
-    let model = legend_pure_parser_pure::compile!(&[source_file]).expect("compilation failed");
+    let fixture = platform_fixture();
+    let mut all_files = fixture.parsed_files.clone();
+    all_files.push(source_file);
+    let model = match legend_pure_parser_pure::pipeline::compile(&all_files, &fixture.auto_imports)
+    {
+        Ok(m) => m,
+        Err(partial) => {
+            let user_errs: Vec<_> = partial
+                .errors
+                .iter()
+                .filter(|e| e.source_info.source == "stress_chaotic.pure")
+                .collect();
+            assert!(
+                user_errs.is_empty(),
+                "{} compilation errors in stress_chaotic.pure (first: {:?})",
+                user_errs.len(),
+                user_errs.first().map(|e| (
+                    e.source_info.start_line,
+                    e.source_info.start_column,
+                    &e.message,
+                ))
+            );
+            partial.model
+        }
+    };
     t2.stop();
 
     // Phase 3: Compose roundtrip (sample — full 100K roundtrip may be slow)
@@ -65,10 +90,21 @@ fn stress_100k_chaotic() {
     // Phase 4: Model assertions
     let t4 = PhaseTimer::start("Phase 4 (model assertions)");
 
-    // Count elements (skip chunk 0 = bootstrap)
+    // Count elements under the user's `test::` package — the model also
+    // contains every platform element loaded above.
+    let root = model.get_package(model.root_package);
+    let test_pkg_id = root
+        .children_packages
+        .iter()
+        .find(|&&pid| model.get_package(pid).name == "test")
+        .copied()
+        .expect("test package not found in model");
     let (mut classes, mut enums, mut assocs, mut functions, mut profiles) = (0, 0, 0, 0, 0);
     for chunk in model.chunks.iter().skip(1) {
-        for (_, element) in chunk.elements.iter() {
+        for ((_, element), (_, node)) in chunk.elements.iter().zip(chunk.nodes.iter()) {
+            if node.parent_package != test_pkg_id {
+                continue;
+            }
             match element {
                 Element::Class(_) => classes += 1,
                 Element::Enumeration(_) => enums += 1,
