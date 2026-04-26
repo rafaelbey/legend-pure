@@ -2355,7 +2355,17 @@ const PCT_PASS_BASELINE: i64 = 398;
 ///   `lowerBound` slots as `MultiplicityValue` heap objects with
 ///   `.value` populated) + `toOneMany` native + 2-arg toOne overload.
 ///   multiplicity package went 1/2/6 → 6/0/3.
-const SURVEYOR_PASS_BASELINE: i64 = 243;
+/// - 244 — Phase 5d: classifierGenericType shim on Function elements
+///   (synthesises GenericType→FunctionType chain so `someFn->functionType()`
+///   reflection works) + multiplicity slot populated on deactivated
+///   FunctionCall AST nodes from declared return_multiplicity. Cleared
+///   testHasUpperBoundNonConcrete. Two tests remain
+///   (testToOne/testToOneMany Multiplicity) — they need a deeper
+///   `lambda.expressionSequence` semantic change that conflicts with
+///   the existing `^Lambda(expressionSequence = $fn.expressionSequence)`
+///   cloning idiom in 4+ platform files; deferred to a Phase 5d-3
+///   follow-up that also reworks `try_lambda_shortcut`.
+const SURVEYOR_PASS_BASELINE: i64 = 244;
 
 #[test]
 fn eval_pct_baseline_lock() {

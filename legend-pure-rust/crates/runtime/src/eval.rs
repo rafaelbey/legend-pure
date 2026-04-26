@@ -58,7 +58,7 @@ use smol_str::SmolStr;
 
 use crate::context::VariableContext;
 use crate::date::PureDate;
-use crate::error::{PureException, PureRuntimeError, StackFrame};
+use crate::error::{PureException, PureExceptionKind, PureRuntimeError, StackFrame};
 use crate::heap::{ObjectId, RuntimeHeap};
 use crate::hooks::{EvalHooks, NoOpHooks};
 use crate::native::{Evaluated, NativeFunction, NativeRegistry};
@@ -997,6 +997,60 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 None => Vec::new(),
             };
             self.member_wrapper_cache.insert(cache_key, result.clone());
+            return Ok(Value::from_vec(result));
+        }
+
+        // classifierGenericType shim for Function elements: Java Pure
+        // populates this slot at compile time as
+        // `GenericType{rawType=Function, typeArguments=[GenericType{rawType=
+        // FunctionType{parameters, returnType, returnMultiplicity}}]}` so
+        // reflection like `someFn->classifierGenericType.typeArguments
+        // ->at(0).rawType->cast(@FunctionType).returnMultiplicity` works.
+        // Our compiled model doesn't carry the slot — synthesize it here on
+        // demand via the existing `build_function_type_wrapper` helper,
+        // cached for identity stability across reads. Same pattern as the
+        // multiplicity-bounds shim above. Used by `functionType()` (in
+        // `essential/meta/type/function/functionType.pure`) and any
+        // reflective code that needs the function's signature shape.
+        if property == "classifierGenericType"
+            && matches!(self.model.get_element(id), Element::Function(_))
+        {
+            let cache_key = (id, "_func_classifierGenericType");
+            if let Some(cached) = self.member_wrapper_cache.get(&cache_key) {
+                return Ok(Value::from_vec(cached.clone()));
+            }
+            let fv = FunctionValue::Compiled(id);
+            let inner_ft_obj = {
+                let mut ctx = EvalContext { evaluator: self };
+                crate::native::meta::build_function_type_wrapper(&mut ctx, &fv)
+                    .map_err(|e| match e.kind {
+                        PureExceptionKind::ExecutionError(err) => err,
+                        other => PureRuntimeError::EvaluationError(format!("{other:?}")),
+                    })?
+            };
+            let inner_gt = self.heap.alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
+            self.heap
+                .mutate_add(inner_gt, "rawType", &[Value::Object(inner_ft_obj)])?;
+            let outer_gt = self.heap.alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
+            // Outer rawType points to the FunctionType class meta-instance
+            // (`meta::pure::metamodel::type::FunctionType`) so cast and
+            // instanceOf work — `functionType()` reads
+            // `.classifierGenericType.typeArguments->at(0).rawType
+            //   ->cast(@FunctionType)`. Resolved once via path lookup;
+            // bootstrapped by m3.pure so the lookup always succeeds in a
+            // valid model.
+            if let Some(ft_class_id) = crate::m3_paths::resolve(
+                &self.model,
+                "meta::pure::metamodel::type::FunctionType",
+            ) {
+                self.heap
+                    .mutate_add(outer_gt, "rawType", &[Value::Element(ft_class_id)])?;
+            }
+            self.heap
+                .mutate_add(outer_gt, "typeArguments", &[Value::Object(inner_gt)])?;
+            let result = vec![Value::Object(outer_gt)];
+            self.member_wrapper_cache
+                .insert(cache_key, result.clone());
             return Ok(Value::from_vec(result));
         }
 

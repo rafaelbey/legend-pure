@@ -794,7 +794,7 @@ impl NativeFunction for GenericTypeOf {
 /// — these are exactly what the Java `Function.parameters`/`returnType`
 /// reflective slots return.
 #[allow(clippy::result_large_err)]
-fn build_function_type_wrapper(
+pub(crate) fn build_function_type_wrapper(
     ctx: &mut dyn EvalContextTrait,
     fv: &crate::value::FunctionValue,
 ) -> Result<crate::heap::ObjectId, PureException> {
@@ -1945,8 +1945,72 @@ fn instance_value_wrap(v: Value, ctx: &mut dyn EvalContextTrait) -> Result<Value
         Value::Unit => Vec::new(),
         other => vec![other],
     };
+    // Populate `.multiplicity` from the value's runtime cardinality.
+    // This is correct for InstanceValues created from already-evaluated
+    // values (literals, lambda body results, etc.). For deactivated
+    // FunctionCall expressions, [`deactivate_spec`]'s `FunctionCall`
+    // branch populates `multiplicity` from the *declared* return
+    // multiplicity instead — Java Pure semantics. The two paths diverge
+    // because Pure's deactivate preserves AST type info while
+    // evaluateAndDeactivate loses it after evaluation.
+    let multiplicity_name = match values.len() {
+        0 => "PureZero",
+        1 => "PureOne",
+        _ => "OneMany",
+    };
+    if let Some(mult_id) = resolve_multiplicity_constant(ctx.model(), multiplicity_name) {
+        ctx.heap_mut()
+            .mutate_add(obj, "multiplicity", &[Value::Element(mult_id)])?;
+    }
     ctx.heap_mut().mutate_add(obj, "values", &values)?;
     Ok(Value::Object(obj))
+}
+
+/// Map a compiler-side [`Multiplicity`] enum to the canonical platform
+/// constant name (`PureZero` / `PureOne` / `ZeroOne` / `ZeroMany` /
+/// `OneMany`). Returns `None` for arbitrary `Range` or `Variable`
+/// multiplicities that don't have a named constant.
+fn multiplicity_constant_name(
+    m: &legend_pure_parser_pure::types::Multiplicity,
+) -> Option<&'static str> {
+    use legend_pure_parser_pure::types::Multiplicity as M;
+    match m {
+        M::PureOne => Some("PureOne"),
+        M::ZeroOrOne => Some("ZeroOne"),
+        M::ZeroOrMany => Some("ZeroMany"),
+        M::OneOrMany => Some("OneMany"),
+        M::Range {
+            lower: 0,
+            upper: Some(0),
+        } => Some("PureZero"),
+        M::Range { .. } | M::Variable(_) => None,
+    }
+}
+
+/// Resolve one of the canonical Multiplicity constants by simple name.
+/// `PureZero` / `PureOne` / `ZeroOne` / `ZeroMany` / `OneMany` are
+/// bootstrapped into chunk 0 (currently in the root package, not their
+/// canonical `meta::pure::metamodel::multiplicity::*` location — same
+/// quirk as the multiplicity-bounds shim in eval.rs). The names are
+/// unique platform-wide so a bare-name match is sufficient and stable
+/// across any future bootstrap re-organization.
+fn resolve_multiplicity_constant(
+    model: &legend_pure_parser_pure::model::PureModel,
+    name: &str,
+) -> Option<legend_pure_parser_pure::ids::ElementId> {
+    use legend_pure_parser_pure::ids::ElementId;
+    for chunk in &model.chunks {
+        for (local_idx, _element) in chunk.elements.iter() {
+            let id = ElementId::InstanceId {
+                chunk_id: chunk.chunk_id,
+                local_idx,
+            };
+            if model.get_node(id).name == name {
+                return Some(id);
+            }
+        }
+    }
+    None
 }
 
 /// Pure `deactivate(var:Any[*]):ValueSpecification[1]`
@@ -2039,6 +2103,26 @@ fn deactivate_spec(
             if let Some(fn_id) = function {
                 ctx.heap_mut()
                     .mutate_add(obj, "func", &[Value::Element(*fn_id)])?;
+                // Populate `multiplicity` from the resolved function's
+                // declared return multiplicity. The platform tests
+                // (testToOneMultiplicity / testToOneManyMultiplicity) read
+                // `evaluateAndDeactivate(SFE).multiplicity` and expect the
+                // *declared* return multiplicity (PureOne for `toOne`,
+                // OneMany for `toOneMany`), not the runtime cardinality of
+                // the result. Java Pure populates this slot from the
+                // function's GenericType.multiplicityArguments at compile
+                // time; we mirror it by reading return_multiplicity off
+                // the resolved Function element here.
+                let mult_name = match ctx.model().get_element(*fn_id) {
+                    Element::Function(f) => multiplicity_constant_name(&f.return_multiplicity),
+                    _ => None,
+                };
+                if let Some(name) = mult_name
+                    && let Some(mult_id) = resolve_multiplicity_constant(ctx.model(), name)
+                {
+                    ctx.heap_mut()
+                        .mutate_add(obj, "multiplicity", &[Value::Element(mult_id)])?;
+                }
             }
             ctx.heap_mut()
                 .mutate_add(obj, "parametersValues", &deactivated_args)?;
