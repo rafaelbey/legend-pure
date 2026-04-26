@@ -214,6 +214,132 @@ impl NativeFunction for Init {
 }
 
 // ---------------------------------------------------------------------------
+// tail
+// ---------------------------------------------------------------------------
+
+/// Pure `tail<T>(set:T[*]):T[*]`
+///
+/// Returns everything but the first element. Mirror of [`Init`] (which
+/// drops the last). Empty for `[]` or single-element collections.
+#[derive(Debug)]
+pub struct Tail;
+
+impl NativeFunction for Tail {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("tail", &values, 1)?;
+        let result = match &values[0] {
+            Value::Collection(v) => {
+                if v.is_empty() {
+                    Value::Unit
+                } else {
+                    let mut trimmed = (**v).clone();
+                    trimmed.pop_front();
+                    let as_vec: Vec<Value> = trimmed.iter().cloned().collect();
+                    Value::from_vec(as_vec)
+                }
+            }
+            // Single scalar / Unit: nothing-after-the-first → empty.
+            _ => Value::Unit,
+        };
+        Ok(Evaluated::new(result))
+    }
+
+    fn signature(&self) -> &'static str {
+        "tail<T>(set:T[*]):T[*]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// zip
+// ---------------------------------------------------------------------------
+
+/// Pure `zip<T,U>(set1:T[*], set2:U[*]):Pair<T,U>[*]`
+///
+/// Pairwise combines two collections, truncating to the shorter length.
+/// Each pair allocates a heap `Pair` object with `first` / `second`
+/// slots, mirroring the shape produced by [`KeyValues`] and consumed by
+/// `pair()` / Map iteration.
+#[derive(Debug)]
+pub struct Zip;
+
+impl NativeFunction for Zip {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("zip", &values, 2)?;
+        let xs = collection_as_vec(&values[0]);
+        let ys = collection_as_vec(&values[1]);
+        let n = xs.len().min(ys.len());
+        let mut out: Vec<Value> = Vec::with_capacity(n);
+        for i in 0..n {
+            let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::PAIR);
+            ctx.heap_mut().mutate_add(obj, "first", &[xs[i].clone()])?;
+            ctx.heap_mut()
+                .mutate_add(obj, "second", &[ys[i].clone()])?;
+            out.push(Value::Object(obj));
+        }
+        Ok(Evaluated::new(Value::from_vec(out)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "zip<T,U>(set1:T[*], set2:U[*]):Pair<T,U>[*]"
+    }
+}
+
+/// View any value as a `Vec<Value>` — `Collection` flattens to its
+/// elements; `Unit` is empty; a scalar is wrapped in a singleton.
+fn collection_as_vec(v: &Value) -> Vec<Value> {
+    match v {
+        Value::Collection(c) => c.iter().cloned().collect(),
+        Value::Unit => Vec::new(),
+        other => vec![other.clone()],
+    }
+}
+
+// ---------------------------------------------------------------------------
+// values (Map)
+// ---------------------------------------------------------------------------
+
+/// Pure `values<U,V>(m:Map<U,V>[1]):V[*]`
+///
+/// Returns the values stored in the map as a flat collection. Iteration
+/// order follows the HAMT — deterministic per run, not insertion-ordered.
+/// Mirror of [`Keys`].
+#[derive(Debug)]
+pub struct Values;
+
+impl NativeFunction for Values {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("values", &values, 1)?;
+        let Value::Map(m) = &values[0] else {
+            return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
+        };
+        let snapshot: Vec<Value> = {
+            let state = m.borrow();
+            state.entries.values().cloned().collect()
+        };
+        Ok(Evaluated::new(Value::from_vec(snapshot)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "values<U,V>(m:Map<U,V>[1]):V[*]"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // range
 // ---------------------------------------------------------------------------
 
@@ -1684,6 +1810,9 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("first_T_MANY__T_$0_1$_", First);
     registry.register("last_T_MANY__T_$0_1$_", Last);
     registry.register("init_T_MANY__T_MANY_", Init);
+    registry.register("tail_T_MANY__T_MANY_", Tail);
+    registry.register("zip_T_MANY__U_MANY__Pair_MANY_", Zip);
+    registry.register("values_Map_1__V_MANY_", Values);
     registry.register(
         "range_Integer_1__Integer_1__Integer_1__Integer_MANY_",
         Range,

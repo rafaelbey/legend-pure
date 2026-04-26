@@ -2309,7 +2309,9 @@ fn eval_pct_date_error_histogram() {
 /// - 333 — initial baseline at PCT harness shipping (commit f8ebca6263c)
 /// - 348 — Phase 1: generic `compare` native cleared 15 tests across
 ///   boolean (+4), collection (+4), lang (+7)
-const PCT_PASS_BASELINE: i64 = 348;
+/// - 368 — Phase 2: tail / zip / values / split / parseDecimal natives
+///   cleared 20 tests across collection (+15) and string (+5)
+const PCT_PASS_BASELINE: i64 = 368;
 
 #[test]
 fn eval_pct_baseline_lock() {
