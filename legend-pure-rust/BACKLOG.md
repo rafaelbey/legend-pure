@@ -64,6 +64,26 @@ in its crate directory; this file provides the high-level view.
 - ~50 native functions (arithmetic, string, collection, comparison, lang)
 - Persistent collections (`im-rc`), `rust_decimal` for Decimal, `jiff` for dates
 
+### Performance Baselines
+
+Captured 2026-04-26 from `cargo bench --bench runtime_eval -- --quick` on
+M-series macOS, debug+release. Track regressions >20% from these:
+
+| Benchmark | Time | Notes |
+|---|---|---|
+| `eval_function_call/trivial_return_literal` | ~17 µs | Smallest possible call — `function(): Integer[1] { 42 }` |
+| `eval_function_call/call_with_one_int_arg` | ~18 µs | `add_one(x:Integer[1]):Integer[1] { $x + 1 }` |
+| `eval_function_call/evaluator_setup_only` | **~285 µs** | `Evaluator::new(&model, &registry)` — heap + bootstrap_metamodel walk over 1300+ M3 elements. Dominates every other measurement when calls reuse a model; **the hot fix target** if call-throughput becomes a goal |
+| `eval_property_access/read_property_inline_construct` | ~20 µs | `^Person(...)..firstName` |
+| `eval_property_access/read_via_let_binding` | ~21 µs | `let p = ^Person(...); $p.age` |
+| `eval_lambda/map_double_5` | ~20 µs | `[1..5]->map(x \| $x * 2)` |
+| `eval_lambda/map_concat_typed_lambda_param` | ~20 µs | `['a','b','c']->map(s \| $s + 'X')->joinStrings(',')` — locks lambda-param narrowing fix from b4ff09432a5 |
+| `eval_lambda/filter_then_map` | ~30 µs | 10-element filter+map chain |
+| `eval_relation/addColumns_2cols_to_1col_source` | ~28 µs | The full `@(x:String)->genericType().rawType->cast(@RelationType<Any>)->toOne()->addColumns(~[ab,z])` chain — locks the surveyor-211/0/0 path |
+
+Run with `--quick` (lower variance bound, ~2-3s total) for change-time
+checks; drop the flag for full statistical-strength baselines (~5min).
+
 ### Open Work
 
 | Item | Priority | Notes |

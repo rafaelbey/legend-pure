@@ -41,3 +41,7 @@ tracing-subscriber = { workspace = true }
 [[bench]]
 name = "runtime_micro"
 harness = false
+
+[[bench]]
+name = "runtime_eval"
+harness = false
