@@ -963,6 +963,71 @@ fn i64_to_i8_arg_lenient(_name: &str, n: i64) -> i8 {
     clamped
 }
 
+/// Split the `second:Number[1]` argument of the 6-arg `date(...)`
+/// constructor into integer seconds, subsecond nanoseconds, and
+/// (when applicable) the source's subsecond-digit count.
+///
+/// Returns `(seconds, nanos, subsec_digits)`:
+/// - `Integer` → `(n, 0, None)` (no subsecond precision)
+/// - `Float`   → split via trunc/fract; digit count derived from
+///   nanos (3/6/9, like `PureDate::from_civil_datetime`). When the
+///   fractional part is exactly zero the user still wrote a Float
+///   literal (`11.0`) and expects 1-digit subsecond rendering, so
+///   `subsec_digits` is `Some(1)`.
+/// - `Decimal` → split via `trunc()`/scale-aware extraction; the
+///   `Decimal::scale()` method gives the original literal's exact
+///   trailing-digit count, so `59.999D` → `Some(3)` and `11.0D` →
+///   `Some(1)`.
+///
+/// Mirrors Java Pure's `date(.., Number)` overload at
+/// `legend-pure-core/.../platform/pure/essential/date/creation/date.pure:21`.
+fn decompose_second(v: &Value) -> Result<(i64, i32, Option<u8>), PureException> {
+    use rust_decimal::Decimal;
+    use rust_decimal::prelude::ToPrimitive;
+    match v {
+        Value::Integer(n) => Ok((*n, 0, None)),
+        Value::Float(f) => {
+            let trunc = f.trunc();
+            let frac = f - trunc;
+            #[allow(clippy::cast_possible_truncation)]
+            let nanos = (frac * 1_000_000_000.0).round() as i32;
+            // Float literals always opt in to subsecond rendering;
+            // pick digit count from trailing zero analysis (3/6/9),
+            // falling back to 1 when nanos is exactly zero.
+            let digits = if nanos == 0 {
+                1
+            } else if nanos % 1_000_000 == 0 {
+                3
+            } else if nanos % 1_000 == 0 {
+                6
+            } else {
+                9
+            };
+            #[allow(clippy::cast_possible_truncation)]
+            let s = trunc as i64;
+            Ok((s, nanos, Some(digits)))
+        }
+        Value::Decimal(d) => {
+            let int_part = d.trunc();
+            let frac_part = (*d) - int_part;
+            // scale() is the literal's trailing-digit count — exact
+            // (Decimal preserves it through arithmetic).
+            #[allow(clippy::cast_possible_truncation)]
+            let scale = d.scale().min(9) as u8;
+            let nanos_dec = frac_part * Decimal::from(1_000_000_000_i64);
+            let nanos = nanos_dec.round().to_i32().unwrap_or(0);
+            let s = int_part.to_i64().unwrap_or(0);
+            // Even Decimal literals with scale=0 (e.g. `11D`) signal
+            // "Number" — but the platform 6-arg overload's expected
+            // shape includes subsecond precision when the input is
+            // not Integer. Match Float's "always subsecond" rule.
+            let digits = if scale == 0 { 1 } else { scale };
+            Ok((s, nanos, Some(digits)))
+        }
+        other => Err(PureRuntimeError::type_mismatch("Number", other).into()),
+    }
+}
+
 /// Translate a `PureRuntimeError` from a `PureDate` constructor
 /// (which wraps `jiff::Error`) into the Java-Pure
 /// `"Invalid <component>: <value>"` shape that platform
@@ -1119,8 +1184,17 @@ impl NativeFunction for DateConstruct {
                 .map_err(|e| translate_date_error(e, &values).into());
         }
 
-        let second_raw = values[5].as_integer()?;
-        let second = i64_to_i8_arg_lenient("date", second_raw);
+        // Platform signature: `date(.., second:Number[1])`. The second
+        // arg is a `Number`, not `Integer` — Float `59.999` and Decimal
+        // `59.999D` both decompose into 59 seconds + 999_000_000 nanos.
+        // `testDateFromSubSecond` exercises this path.
+        let (second_int, subsec_nanos, sub_digits) = decompose_second(&values[5])?;
+        let second = i64_to_i8_arg_lenient("date", second_int);
+        let precision = if let Some(d) = sub_digits {
+            TimePrecision::Subsecond(d)
+        } else {
+            TimePrecision::Second
+        };
         PureDate::datetime(
             year,
             month,
@@ -1128,8 +1202,8 @@ impl NativeFunction for DateConstruct {
             hour,
             minute,
             second,
-            0,
-            TimePrecision::Second,
+            subsec_nanos,
+            precision,
         )
         .map(Value::Date)
         .map(Evaluated::new)
