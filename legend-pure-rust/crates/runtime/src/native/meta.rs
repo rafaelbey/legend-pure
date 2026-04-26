@@ -2117,6 +2117,93 @@ impl NativeFunction for Deactivate {
     }
 }
 
+/// Static return-type inference for a `FunctionCall` spec, used to
+/// populate the `genericType` slot during deactivation. Returns the
+/// `ElementId` of the call's declared return type when known.
+///
+/// Special-cases `match([lambda…])`: the static return type is the
+/// least-upper-bound of every lambda body's return type. Without this,
+/// `match` falls back to its declared `T[m]` generic which substitutes
+/// to whatever the runtime branch selected — the test
+/// `testMatchWithMixedReturnType` pins the *static* (compile-time)
+/// LUB, not the runtime branch type. Other named functions use their
+/// resolved `Function::return_type` directly.
+fn infer_function_call_static_type(
+    function: Option<ElementId>,
+    function_name: &str,
+    arguments: &[ValueSpec],
+    ctx: &dyn EvalContextTrait,
+) -> Option<ElementId> {
+    use legend_pure_parser_pure::types::{ExprKind, TypeExpr};
+    if function_name == "match" {
+        // `match(receiver, [lambda₁, lambda₂, …])` — fold the bodies'
+        // return types through `least_upper_bound_ids`. The lambda
+        // collection is `arguments[1]` after the receiver.
+        if let Some(coll_spec) = arguments.get(1)
+            && let ExprKind::Collection { elements } = &*coll_spec.kind
+        {
+            let mut acc: Option<ElementId> = None;
+            for lam in elements {
+                let lam_type = match &*lam.kind {
+                    ExprKind::Lambda { body, .. } => body
+                        .last()
+                        .and_then(|tail| infer_spec_static_type(tail, ctx)),
+                    _ => infer_spec_static_type(lam, ctx),
+                };
+                if let Some(t) = lam_type {
+                    acc = Some(match acc {
+                        Some(prev) => legend_pure_parser_pure::resolve::least_upper_bound_ids(
+                            prev,
+                            t,
+                            ctx.model(),
+                        ),
+                        None => t,
+                    });
+                }
+            }
+            if acc.is_some() {
+                return acc;
+            }
+        }
+    }
+    if let Some(fn_id) = function
+        && let Element::Function(f) = ctx.model().get_element(fn_id)
+        && let TypeExpr::Named { element, .. } = &f.return_type
+    {
+        return Some(*element);
+    }
+    None
+}
+
+/// Best-effort static type for a single spec node — used by
+/// [`infer_function_call_static_type`] to walk lambda bodies. Mirrors
+/// the small subset of `pure::resolve::infer_type_from_valuespec`
+/// that the deactivation path needs without exposing the full
+/// resolver to the runtime.
+fn infer_spec_static_type(
+    vs: &ValueSpec,
+    ctx: &dyn EvalContextTrait,
+) -> Option<ElementId> {
+    use legend_pure_parser_pure::types::{ExprKind, TypeExpr};
+    match &*vs.kind {
+        ExprKind::IntegerLiteral(_) => Some(bootstrap::INTEGER_ID),
+        ExprKind::FloatLiteral(_) => Some(bootstrap::FLOAT_ID),
+        ExprKind::DecimalLiteral(_) => Some(bootstrap::DECIMAL_ID),
+        ExprKind::StringLiteral(_) => Some(bootstrap::STRING_ID),
+        ExprKind::BooleanLiteral(_) => Some(bootstrap::BOOLEAN_ID),
+        ExprKind::FunctionCall {
+            function,
+            function_name,
+            arguments,
+        } => infer_function_call_static_type(*function, function_name, arguments, ctx),
+        ExprKind::TypeReference { type_expr } => match type_expr {
+            TypeExpr::Named { element, .. } => Some(*element),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Recursively reify a `ValueSpec` into an AST-metamodel heap object. See
 /// [`Deactivate`] for the mapping from `ExprKind` to M3 classifier.
 #[allow(clippy::result_large_err)]
@@ -2154,6 +2241,23 @@ fn deactivate_spec(
             for arg in arguments {
                 deactivated_args.push(deactivate_spec(arg, ctx)?);
             }
+            // Populate `genericType` from the call's *static* return
+            // type. For `match([lambda…])` the static type is the
+            // least-upper-bound of every lambda body's return type —
+            // even if the runtime branch that fires has a more
+            // specific type. `testMatchWithMixedReturnType` pins this:
+            // `$f->eval(|^LA_Location(…)->match([… → 'address',
+            // … → 1, … → 'Any1']))` selects the LA_Location branch at
+            // runtime (returning Integer), but the static LUB is Any
+            // (mixing String + Integer), and that's what
+            // `$z.genericType.rawType->toOne()` reads. See
+            // `infer_function_call_static_type`.
+            let static_type = infer_function_call_static_type(
+                function.as_ref().copied(),
+                function_name,
+                arguments,
+                ctx,
+            );
             let obj = ctx
                 .heap_mut()
                 .alloc_dynamic(crate::m3_paths::SIMPLE_FUNCTION_EXPRESSION);
@@ -2188,6 +2292,15 @@ fn deactivate_spec(
             }
             ctx.heap_mut()
                 .mutate_add(obj, "parametersValues", &deactivated_args)?;
+            if let Some(type_id) = static_type {
+                let gt = ctx
+                    .heap_mut()
+                    .alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
+                ctx.heap_mut()
+                    .mutate_add(gt, "rawType", &[Value::Element(type_id)])?;
+                ctx.heap_mut()
+                    .mutate_add(obj, "genericType", &[Value::Object(gt)])?;
+            }
             Ok(Value::Object(obj))
         }
         // All other kinds (literals, lambda, property access, etc.) — wrap
@@ -2196,8 +2309,18 @@ fn deactivate_spec(
         // tests only assert on variable / collection / function-call
         // shapes; anything else flows through the `InstanceValue.values`
         // slot unchanged.
+        //
+        // Populate the InstanceValue's `genericType` slot with a
+        // `GenericType{rawType=<runtime type>}` heap wrapper. The runtime
+        // type comes from `resolve_value_type`, which folds collection
+        // elements through `least_upper_bound_ids` — so a match
+        // expression returning mixed branch types (`String` + `Integer`
+        // + `String`) writes `Any` here, which is what
+        // `testMatchWithMixedReturnType` reads back via
+        // `$z.genericType.rawType->toOne()`.
         _ => {
             let v = ctx.evaluate(spec)?.into_value();
+            let runtime_type = resolve_value_type(&v, ctx.model(), ctx.heap()).ok();
             let obj = ctx
                 .heap_mut()
                 .alloc_dynamic(crate::m3_paths::INSTANCE_VALUE);
@@ -2207,6 +2330,15 @@ fn deactivate_spec(
                 other => vec![other],
             };
             ctx.heap_mut().mutate_add(obj, "values", &values)?;
+            if let Some(type_id) = runtime_type {
+                let gt = ctx
+                    .heap_mut()
+                    .alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
+                ctx.heap_mut()
+                    .mutate_add(gt, "rawType", &[Value::Element(type_id)])?;
+                ctx.heap_mut()
+                    .mutate_add(obj, "genericType", &[Value::Object(gt)])?;
+            }
             Ok(Value::Object(obj))
         }
     }

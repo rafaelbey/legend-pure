@@ -136,17 +136,14 @@ Grouped by likely fix shape. Each bullet has the test FQN, the failure type
 `DateConstruct` handles Float/Decimal second args with subsecond
 precision derived from value or `Decimal::scale()`.)
 
-#### Lang (1 ERROR)
-- `lang::tests::match::testMatchWithMixedReturnType` (ERROR) — `match`
-  with branches returning different types, then `->deactivate()` and
-  reflect on `$z.genericType.rawType`. Error: "Multiplicity violation:
-  expected [1], got 0 values" — the deactivated InstanceValue's
-  `genericType` slot isn't populated when match branches return
-  diverging types. Needs structural work in match's deactivate path
-  to compute the LUB and write it as the genericType.
+#### Lang — empty
 
-`testDateCompare` moved to **Excluded — intentional** above (year
-10999 outside jiff's `-9999..=9999`).
+(Phase 8 closed the lang cluster: `deactivate_spec` populates
+`genericType` on SimpleFunctionExpression heap nodes via
+`infer_function_call_static_type`, with `match([lambda…])`
+special-cased to return the LUB of branch return types.
+`testDateCompare` is in **Excluded — intentional** above — year
+10999 outside jiff's `-9999..=9999`.)
 
 #### Boolean — empty
 

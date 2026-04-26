@@ -2788,6 +2788,7 @@ fn eval_pct_lang_status_dump() {
 }
 
 
+
 #[test]
 #[ignore = "diagnostic: list all date tests' status + message"]
 fn eval_pct_date_status_dump() {
@@ -3125,7 +3126,24 @@ fn eval_pct_date_error_histogram() {
 ///   equality keys for OtherBottomClass instances. Tracking
 ///   *all* seen names (not just keys) enforces this. Resolves
 ///   testEqualNonPrimitive (last FAIL).
-const PCT_PASS_BASELINE: i64 = 464;
+/// - 2026-04-26 → 465: `deactivate_spec`'s FunctionCall branch
+///   now populates the SimpleFunctionExpression's `genericType`
+///   slot with a `GenericType{rawType=…}` heap wrapper. The
+///   raw type is computed by `infer_function_call_static_type`,
+///   which special-cases `match([lambda…])` to return the LUB
+///   of every lambda body's return type (`String + Integer +
+///   String → Any` via `least_upper_bound_ids`); other
+///   functions use their resolved `Function::return_type`.
+///   `infer_spec_static_type` walks the small subset of
+///   ExprKinds the deactivation path needs without exposing
+///   the full compile-time resolver to the runtime.
+///   The Catch-all branch (literals, lambdas, etc.) populates
+///   `genericType` from the *runtime* type via
+///   `resolve_value_type` — which already folds collection
+///   elements through `least_upper_bound_ids` (the Phase 8
+///   collection commit). Resolves testMatchWithMixedReturnType
+///   (last ERROR). 🎉 PCT 465/465 = 100%.
+const PCT_PASS_BASELINE: i64 = 465;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in
