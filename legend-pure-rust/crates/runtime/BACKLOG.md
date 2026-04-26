@@ -110,6 +110,15 @@ hits the same wrap-around — same divergence root cause as our Rust port.
 | `math::tests::minus::testLargeMinus` | dividend literal exceeds i64; same parity gap |
 | `math::tests::plus::testLargePlus`   | sum exceeds i64; same parity gap |
 
+`testDateCompare` (1 test) — asserts on `%10999` (year 10999), outside
+jiff's civil::Date `i16` clamp of `-9999..=9999`. Same root cause
+category as the BigNumber exclusions: a representational limit, not a
+behavioral gap.
+
+| Test | Reason |
+|------|--------|
+| `lang::tests::compare::testDateCompare` | year `10999` exceeds jiff's `-9999..=9999` |
+
 **Unblocks if** the runtime promotes to a wider type on i64-overflow.
 Removing requires either: (a) widening Integer to BigInt, or (b) auto-promoting
 to Decimal on detected overflow in `promote_pair`. Both touch the Phase 4
@@ -127,14 +136,17 @@ Grouped by likely fix shape. Each bullet has the test FQN, the failure type
   parser may be truncating fractional digits beyond 9 (jiff nanos
   range). Investigate `parse_subsecond_parts` in `lower.rs`.
 
-#### Lang (2 ERROR)
-- `lang::tests::compare::testDateCompare` (ERROR) — generic `compare`
-  on Date with sub-second precision. The Phase 1 compare native handles
-  Date but may not respect sub-second comparison. Cross-check against
-  `PureDate::cmp`.
+#### Lang (1 ERROR)
 - `lang::tests::match::testMatchWithMixedReturnType` (ERROR) — `match`
-  with branches returning different types. The multiplicity-aware
-  Match in Phase 5 doesn't yet validate / unify branch return types.
+  with branches returning different types, then `->deactivate()` and
+  reflect on `$z.genericType.rawType`. Error: "Multiplicity violation:
+  expected [1], got 0 values" — the deactivated InstanceValue's
+  `genericType` slot isn't populated when match branches return
+  diverging types. Needs structural work in match's deactivate path
+  to compute the LUB and write it as the genericType.
+
+`testDateCompare` moved to **Excluded — intentional** above (year
+10999 outside jiff's `-9999..=9999`).
 
 #### Boolean (1 FAIL)
 - `boolean::tests::equality::equal::testEqualNonPrimitive` (FAIL) —
