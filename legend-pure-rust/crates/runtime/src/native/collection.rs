@@ -740,12 +740,67 @@ impl NativeFunction for ToOne {
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
-        expect_args("toOne", &values, 1)?;
+        // 1-arg form: cast to [1]; 2-arg form: same with custom error message.
+        // The platform declaration in toOne.pure has both shapes; the message
+        // arg is informational only — we don't currently surface it.
+        if values.is_empty() || values.len() > 2 {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "toOne: expected 1 or 2 argument(s), got {}",
+                values.len()
+            ))
+            .into());
+        }
         Ok(Evaluated::new(values[0].to_one()?.clone()))
     }
 
     fn signature(&self) -> &'static str {
         "toOne(T[*]): T[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// toOneMany
+// ---------------------------------------------------------------------------
+
+/// Pure `toOneMany<T>(values:T[*]):T[1..*]` /
+/// `toOneMany<T>(values:T[*], message:String[1]):T[1..*]`
+///
+/// Casts the collection to `[1..*]` — passes through any non-empty
+/// collection (or scalar wrapped as a singleton); errors on empty.
+/// Mirror of [`ToOne`] but with the upper bound relaxed to `*`.
+#[derive(Debug)]
+pub struct ToOneMany;
+
+impl NativeFunction for ToOneMany {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        if values.is_empty() || values.len() > 2 {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "toOneMany: expected 1 or 2 argument(s), got {}",
+                values.len()
+            ))
+            .into());
+        }
+        let coll = values[0].to_collection();
+        if coll.is_empty() {
+            return Err(PureRuntimeError::MultiplicityViolation {
+                expected: "[1..*]".into(),
+                actual: 0,
+            }
+            .into());
+        }
+        // Pass through unchanged — the input is already a valid collection
+        // / scalar / single-element wrapper. The cast to [1..*] is purely a
+        // multiplicity-typing assertion; the value shape doesn't change.
+        Ok(Evaluated::new(values[0].clone()))
+    }
+
+    fn signature(&self) -> &'static str {
+        "toOneMany(T[*]): T[1..*]"
     }
 }
 
@@ -1821,6 +1876,9 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("forAll_T_MANY__Function_1__Boolean_1_", ForAll);
     registry.register("toOne_T_MANY__T_1_", ToOne);
     registry.register("toOne_T_$0_1$__T_1_", ToOne);
+    registry.register("toOne_T_MANY__String_1__T_1_", ToOne);
+    registry.register("toOneMany_T_MANY__T_$1_MANY$_", ToOneMany);
+    registry.register("toOneMany_T_MANY__String_1__T_$1_MANY$_", ToOneMany);
     registry.register("removeDuplicates_T_MANY__T_MANY_", RemoveDuplicates);
     registry.register(
         "removeDuplicates_T_MANY__Function_$0_1$__Function_$0_1$__T_MANY_",

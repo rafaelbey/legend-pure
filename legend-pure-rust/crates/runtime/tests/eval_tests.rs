@@ -2350,7 +2350,12 @@ const PCT_PASS_BASELINE: i64 = 398;
 /// - 238 — Phase 5b complete: asserts cleared via Java-parity `at`
 ///   error message + Sort routing through compare_values. asserts
 ///   package went 20/4/1 → 25/0/0; no regressions elsewhere.
-const SURVEYOR_PASS_BASELINE: i64 = 238;
+/// - 243 — Phase 5c: Multiplicity-constant property shim (PureZero /
+///   PureOne / ZeroOne / ZeroMany / OneMany expose `upperBound` /
+///   `lowerBound` slots as `MultiplicityValue` heap objects with
+///   `.value` populated) + `toOneMany` native + 2-arg toOne overload.
+///   multiplicity package went 1/2/6 → 6/0/3.
+const SURVEYOR_PASS_BASELINE: i64 = 243;
 
 #[test]
 fn eval_pct_baseline_lock() {
@@ -2403,10 +2408,12 @@ fn eval_pct_baseline_lock() {
 /// CLI default) walks via `--package Root`, so the lock catches any
 /// regression a user would see at the CLI.
 ///
-/// Note these are rooted at `::tests` (PCT tests live alongside their
-/// function impls; surveyor tests live in dedicated `tests` subdirs).
-/// The asserts / multiplicity / relation packages were originally left
-/// out of the canary; Phase 5b added them.
+/// The seven core packages are rooted at `::tests` (where their
+/// `<<test.Test>>` functions live). `asserts` is the exception: some
+/// of its tests are declared directly under `asserts::*` (alongside
+/// the assertion natives they test) rather than `asserts::tests::*`,
+/// so the lock targets the parent package to catch all of them. The
+/// CLI's `--package Root` walk picks them all up uniformly.
 const SURVEYOR_BROAD_CANARY_PACKAGES: &[&str] = &[
     "meta::pure::functions::meta::tests",
     "meta::pure::functions::collection::tests",
@@ -2415,9 +2422,9 @@ const SURVEYOR_BROAD_CANARY_PACKAGES: &[&str] = &[
     "meta::pure::functions::date::tests",
     "meta::pure::functions::boolean::tests",
     "meta::pure::functions::lang::tests",
-    "meta::pure::functions::asserts::tests",
-    "meta::pure::functions::multiplicity::tests",
-    "meta::pure::functions::relation::tests",
+    "meta::pure::functions::asserts",
+    "meta::pure::functions::multiplicity",
+    "meta::pure::functions::relation",
 ];
 
 #[test]

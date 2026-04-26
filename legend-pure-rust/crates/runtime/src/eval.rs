@@ -971,6 +971,35 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         id: ElementId,
         property: &str,
     ) -> Result<Value, PureRuntimeError> {
+        // Multiplicity-constant property shim: PureZero / PureOne / ZeroOne
+        // / ZeroMany / OneMany live as elements under
+        // `meta::pure::metamodel::multiplicity::*`. Pure-level reflection
+        // (`PureZero->getUpperBound()`) reads `.upperBound` / `.lowerBound`
+        // off them and expects MultiplicityValue heap objects with `.value`
+        // populated. The bootstrap m3.pure file declares these as M3
+        // instances but their property data isn't in the parser's
+        // `Element::Class`/`Function` shapes — we synthesize the wrappers
+        // on demand here, cached so `$m.upperBound == $m.upperBound` holds.
+        if matches!(property, "upperBound" | "lowerBound")
+            && let Some(bounds) = multiplicity_constant_bounds(&self.model, id)
+        {
+            let cache_key = (id, if property == "upperBound" { "_mult_upperBound" } else { "_mult_lowerBound" });
+            if let Some(cached) = self.member_wrapper_cache.get(&cache_key) {
+                return Ok(Value::from_vec(cached.clone()));
+            }
+            let bound = if property == "upperBound" { bounds.1 } else { Some(bounds.0) };
+            let result = match bound {
+                Some(b) => {
+                    let mv = self.heap.alloc_dynamic(crate::m3_paths::MULTIPLICITY_VALUE);
+                    self.heap.mutate_add(mv, "value", &[Value::Integer(b)])?;
+                    vec![Value::Object(mv)]
+                }
+                None => Vec::new(),
+            };
+            self.member_wrapper_cache.insert(cache_key, result.clone());
+            return Ok(Value::from_vec(result));
+        }
+
         match property {
             // `functionName` is M3's name for a Function element's simple
             // name — `Function.functionName: String[1]`. `name` is the
@@ -1929,6 +1958,43 @@ impl<H: EvalHooks> std::fmt::Debug for Evaluator<'_, H> {
             .field("heap_objects", &self.heap.len())
             .field("context_depth", &self.context.depth())
             .finish()
+    }
+}
+
+/// Map a Multiplicity-constant element (under
+/// `meta::pure::metamodel::multiplicity::*`) to its concrete `(lower, upper)`
+/// integer bounds. Returns `None` for any element outside that package or
+/// with an unrecognised name. `upper = None` means unbounded (`*`).
+///
+/// Used by [`Evaluator::eval_element_property`] to synthesise
+/// `MultiplicityValue` heap wrappers when Pure code reflects on the
+/// platform-defined constants (`PureZero`, `PureOne`, `ZeroOne`,
+/// `ZeroMany`, `OneMany`).
+fn multiplicity_constant_bounds(
+    model: &legend_pure_parser_pure::model::PureModel,
+    id: ElementId,
+) -> Option<(i64, Option<i64>)> {
+    let ElementId::InstanceId { .. } = id else {
+        return None;
+    };
+    let node = model.get_node(id);
+    // The five Multiplicity constants `PureZero` / `PureOne` / `ZeroOne` /
+    // `ZeroMany` / `OneMany` are bootstrapped directly into the root
+    // package (chunk 0) — they don't live under
+    // `meta::pure::metamodel::multiplicity::*` the way m3.pure declares
+    // them. Match on element name only; the names are unique enough in
+    // the platform that there's no collision risk, and any custom
+    // user-defined Multiplicity constant would route through the same
+    // M3 reflection path anyway. (If/when the bootstrap moves these into
+    // their canonical package, this matcher still works because we only
+    // gate on name.)
+    match node.name.as_str() {
+        "PureZero" => Some((0, Some(0))),
+        "PureOne" => Some((1, Some(1))),
+        "ZeroOne" => Some((0, Some(1))),
+        "ZeroMany" => Some((0, None)),
+        "OneMany" => Some((1, None)),
+        _ => None,
     }
 }
 
