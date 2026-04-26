@@ -3086,7 +3086,15 @@ fn eval_pct_date_error_histogram() {
 ///   behavior. Java Pure stores year as `int`. Removing the
 ///   exclusion requires swapping jiff::civil for a wider date
 ///   representation.
-const PCT_PASS_BASELINE: i64 = 459;
+/// - 2026-04-26 → 460: 6-arg `date(year, month, day, hour, minute,
+///   second:Number[1])` now accepts Float and Decimal for the
+///   second argument (was Integer-only). New `decompose_second`
+///   helper splits the value into integer seconds + subsecond
+///   nanos and picks the subsecond-digit count: Float uses the
+///   trailing-zero heuristic (3/6/9, 1 when nanos==0); Decimal
+///   uses `scale()` directly so `59.999D` → 3 digits and `11.0D`
+///   → 1. Resolves `testDateFromSubSecond`.
+const PCT_PASS_BASELINE: i64 = 460;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in

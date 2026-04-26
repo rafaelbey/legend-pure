@@ -130,11 +130,11 @@ these to FAIL with "PCT exclusion needs rebase".
 Grouped by likely fix shape. Each bullet has the test FQN, the failure type
 (FAIL = wrong answer; ERROR = exception), and one sentence on what's needed.
 
-#### Date (1 ERROR)
-- `date::tests::testDateFromSubSecond` (ERROR) — sub-second datetime
-  literal parsing edge (`%2014-01-01T00:00:00.123456789` etc). The
-  parser may be truncating fractional digits beyond 9 (jiff nanos
-  range). Investigate `parse_subsecond_parts` in `lower.rs`.
+#### Date — empty
+
+(Phase 8 closed the date cluster: `decompose_second` in
+`DateConstruct` handles Float/Decimal second args with subsecond
+precision derived from value or `Decimal::scale()`.)
 
 #### Lang (1 ERROR)
 - `lang::tests::match::testMatchWithMixedReturnType` (ERROR) — `match`
