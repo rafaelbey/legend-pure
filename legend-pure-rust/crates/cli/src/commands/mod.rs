@@ -30,4 +30,5 @@ pub mod package;
 pub mod parse;
 pub mod plan;
 pub mod publish;
+pub mod repl;
 pub mod test;
