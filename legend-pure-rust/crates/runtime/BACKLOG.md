@@ -72,16 +72,31 @@ complete list of natives without manually enumerating them.
 
 ---
 
-## PCT — deferred failures (Phase 9)
+## PCT — exclusions & status
 
-Tracking the long tail of platform PCT tests that don't pass yet, with the
-structural reason and what would unblock each. PCT broad-canary baseline:
-**448 PASS of 465 discovered (96.3% pass)**, surveyor at **246/0/0**. Update
-this list when items land.
+PCT broad-canary baseline: **465 PASS of 465 discovered (100%)** across the
+ten `meta::pure::functions::*` packages tracked by `eval_pct_broad_canary`.
+`legend test --pct --package Root` discovers **471 PCT tests** (the 6 extras
+live outside those tracked sub-packages and pass cleanly). Surveyor at
+**246/0/0**. Update the baselines if either count moves.
 
-Two buckets: **Excluded** (in `crates/runtime/tests/pct_rust_port.json`,
-count as PASS via the exclusion mechanism) and **Tracked** (still FAIL/ERROR
-— fix or accept).
+The bundled exclusions list lives at
+`crates/runtime/resources/pct_grammar_rust_native.json`. Both consumers read
+through `legend_pure_runtime::pct::rust_native_*`:
+
+- `eval_tests.rs` via `pct_canary_args_with_rust_exclusions` — every
+  PCT canary test in the runtime crate.
+- `legend test --pct` — applied by default. Pass `--no-default-exclusions`
+  to run raw (the 9 entries below report as FAIL/ERROR).
+
+The shape mirrors Java's `pct_*_native.json` (`adapter` + `exclusions`
+map). `apply_exclusion` (`crates/runtime/src/native/testing.rs`) flips
+matching FAIL/ERROR results to PASS by exact substring match against the
+error message, and flips PASS results back to FAIL with
+`"PCT exclusion needs rebase"` when an entry goes stale.
+
+Two buckets: **Excluded** (the 9 entries in the manifest, count as PASS)
+and **Tracked** (currently empty — Phase 8 closed every cluster).
 
 ### Excluded — intentional
 
