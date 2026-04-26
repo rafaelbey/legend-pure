@@ -26,7 +26,7 @@
 
 use legend_pure_parser_pure::types::ValueSpec;
 use rust_decimal::Decimal;
-use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 
 use crate::error::{PureException, PureRuntimeError};
 use crate::native::{
@@ -652,10 +652,15 @@ impl NativeFunction for ToFloat {
 
 /// Pure `toDecimal(Number[1]):Decimal[1]` — numeric → Decimal coercion.
 ///
-/// `Decimal` inputs pass through unchanged. `Integer` / `Float` inputs are
-/// first promoted to `f64` and then routed through
-/// [`Decimal::from_f64_retain`], which can fail for `NaN` / infinity —
-/// in that case an `EvaluationError` is returned.
+/// `Decimal` inputs pass through unchanged. `Integer` is exact via
+/// [`Decimal::from`]. `Float` routes through [`Decimal::from_f64`]
+/// (note: NOT `_retain`) — `_retain` preserves f64's full binary
+/// expansion (`3.8_f64 → 3.7999999999999998…`), but Java Pure's
+/// `BigDecimal.valueOf(double)` rounds to the round-trip canonical
+/// form (`3.8`). `from_f64` matches that contract — same shape as
+/// `Decimal::from_str(&f.to_string())` but without the string
+/// round-trip. NaN / infinity return `None` and surface as an
+/// `EvaluationError`.
 #[derive(Debug)]
 pub struct ToDecimal;
 
@@ -670,7 +675,7 @@ impl NativeFunction for ToDecimal {
         let v = match &values[0] {
             Value::Decimal(d) => Ok(Value::Decimal(*d)),
             Value::Integer(i) => Ok(Value::Decimal(Decimal::from(*i))),
-            Value::Float(f) => Decimal::from_f64_retain(*f)
+            Value::Float(f) => Decimal::from_f64(*f)
                 .map(Value::Decimal)
                 .ok_or_else(|| {
                     PureRuntimeError::EvaluationError(format!(

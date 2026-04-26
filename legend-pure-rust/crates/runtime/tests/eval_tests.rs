@@ -3105,7 +3105,13 @@ fn eval_pct_date_error_histogram() {
 ///   `{f64}` Display already handles avoidance of E-notation
 ///   and expanded `0.000000013421` form correctly — only the
 ///   `.0` suffix needed adding.
-const PCT_PASS_BASELINE: i64 = 462;
+/// - 2026-04-26 → 463: `toDecimal(Float)` switched from
+///   `Decimal::from_f64_retain` (preserves f64's full binary
+///   expansion: `3.8_f64 → 3.7999999999999998…`) to
+///   `Decimal::from_f64` (rounds to canonical round-trip form:
+///   `3.8`). Matches Java Pure's `BigDecimal.valueOf(double)`
+///   contract. Resolves testDoubleToDecimal.
+const PCT_PASS_BASELINE: i64 = 463;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in
