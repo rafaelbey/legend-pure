@@ -105,10 +105,27 @@ impl NativeFunction for Substring {
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
-        expect_args("substring", &values, 3)?;
         let s = values[0].as_string()?;
-        let start_i = values[1].as_integer()?.max(0);
-        let end_i = values[2].as_integer()?.max(0);
+        let (start_i, end_i) = match values.len() {
+            2 => {
+                // 2-arg form: start through end of string. Java Pure
+                // mirrors String.substring(int) with no terminator.
+                let start = values[1].as_integer()?.max(0);
+                #[allow(clippy::cast_possible_wrap)]
+                let end = s.len() as i64;
+                (start, end)
+            }
+            3 => (
+                values[1].as_integer()?.max(0),
+                values[2].as_integer()?.max(0),
+            ),
+            n => {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "substring: expected 2 or 3 argument(s), got {n}"
+                ))
+                .into());
+            }
+        };
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let start = (start_i as usize).min(s.len());
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -118,7 +135,7 @@ impl NativeFunction for Substring {
     }
 
     fn signature(&self) -> &'static str {
-        "substring(String[1], Integer[1], Integer[1]): String[1]"
+        "substring(String[1], Integer[1] [, Integer[1]]): String[1]"
     }
 }
 
@@ -195,8 +212,12 @@ impl NativeFunction for EndsWith {
 }
 
 /// Pure `indexOf(String[1], String[1]): Integer[1]`
+/// Pure `indexOf(String[1], String[1], Integer[1]): Integer[1]` — search
+/// from a non-zero start index.
 ///
-/// Returns -1 if not found (matching Java behavior).
+/// Returns -1 if not found (matching Java behavior). The 3-arg form's
+/// returned index is absolute (not relative to the start), matching
+/// `String.indexOf(String, int)` in Java.
 #[derive(Debug)]
 pub struct IndexOf;
 
@@ -207,16 +228,32 @@ impl NativeFunction for IndexOf {
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
-        expect_args("indexOf", &values, 2)?;
         let s = values[0].as_string()?;
         let sub = values[1].as_string()?;
+        let from = match values.len() {
+            2 => 0usize,
+            3 => {
+                let raw = values[2].as_integer()?.max(0);
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let from = (raw as usize).min(s.len());
+                from
+            }
+            n => {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "indexOf: expected 2 or 3 argument(s), got {n}"
+                ))
+                .into());
+            }
+        };
         #[allow(clippy::cast_possible_wrap)]
-        let idx = s.find(sub.as_str()).map_or(-1, |i| i as i64);
+        let idx = s[from..]
+            .find(sub.as_str())
+            .map_or(-1, |i| (i + from) as i64);
         Ok(Evaluated::new(Value::Integer(idx)))
     }
 
     fn signature(&self) -> &'static str {
-        "indexOf(String[1], String[1]): Integer[1]"
+        "indexOf(String[1], String[1] [, Integer[1]]): Integer[1]"
     }
 }
 
