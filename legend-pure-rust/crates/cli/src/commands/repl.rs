@@ -43,8 +43,12 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use owo_colors::OwoColorize;
+use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
-use rustyline::DefaultEditor;
+use rustyline::highlight::Highlighter;
+use rustyline::hint::Hinter;
+use rustyline::validate::Validator;
+use rustyline::{Context, Editor, Helper};
 use smol_str::SmolStr;
 
 use legend_pure_core_platform::platform::{parse_and_compile, PLATFORM_AUTO_IMPORTS};
@@ -89,12 +93,44 @@ pub fn run(_args: ReplArgs) -> Result<(), CliError> {
 
     print_banner();
 
+    // Compile platform sources once to extract model elements for autocomplete
+    let t0 = Instant::now();
+    let initial_model = match parse_and_compile(platform_pairs.clone().into_iter(), &auto_imports) {
+        Ok(m) => m,
+        Err(partial) => partial.model, // Platform warnings are ignored here
+    };
+
+    let mut model_elements = Vec::new();
+    for chunk in &initial_model.chunks {
+        for node in chunk.nodes.values() {
+            let name = node.name.as_str();
+            if let Some(idx) = name.find('_') {
+                model_elements.push(name[..idx].to_string());
+            } else {
+                model_elements.push(name.to_string());
+            }
+        }
+    }
+    model_elements.sort();
+    model_elements.dedup();
+    eprintln!(
+        "  {}",
+        format!("(Loaded platform in {}ms)", t0.elapsed().as_millis()).dimmed()
+    );
+
+    let completer = ReplCompleter {
+        commands: vec![":quit", ":q", ":reset", ":lets", ":help", ":h"],
+        model_elements,
+        variables: Vec::new(),
+    };
+
     // State: accumulated let bindings (source lines) and a sequence counter.
     let mut let_bindings: Vec<String> = Vec::new();
     let mut seq: u64 = 0;
 
-    let mut rl = DefaultEditor::new()
+    let mut rl = Editor::<ReplCompleter, rustyline::history::DefaultHistory>::new()
         .map_err(|e| CliError::Custom(format!("Failed to initialise readline: {e}")))?;
+    rl.set_helper(Some(completer));
 
     // Try to load history (ignore errors — file may not exist yet).
     let history_path = dirs_history_path();
@@ -122,6 +158,9 @@ pub fn run(_args: ReplArgs) -> Result<(), CliError> {
             ":quit" | ":q" => break,
             ":reset" => {
                 let_bindings.clear();
+                if let Some(helper) = rl.helper_mut() {
+                    helper.variables.clear();
+                }
                 seq = 0;
                 eprintln!("{}", "  State reset.".dimmed());
                 continue;
@@ -192,6 +231,14 @@ pub fn run(_args: ReplArgs) -> Result<(), CliError> {
                 // If the input was a `let`, persist it.
                 if is_let {
                     let_bindings.push(trimmed.to_string());
+                    if let Some(helper) = rl.helper_mut() {
+                        if let Some(var_name) = extract_let_var(trimmed) {
+                            let var_str = format!("${var_name}");
+                            if !helper.variables.contains(&var_str) {
+                                helper.variables.push(var_str);
+                            }
+                        }
+                    }
                 }
                 eprintln!(
                     "{}",
@@ -223,6 +270,17 @@ pub fn run(_args: ReplArgs) -> Result<(), CliError> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Extract the variable name from a let binding expression.
+fn extract_let_var(line: &str) -> Option<&str> {
+    let line = line.strip_prefix("let ")?;
+    let var_name = line.split('=').next()?.trim();
+    if !var_name.is_empty() {
+        Some(var_name)
+    } else {
+        None
+    }
+}
 
 /// Build the function body from accumulated lets + current expression.
 fn build_body(let_bindings: &[String], current: &str) -> String {
@@ -371,4 +429,76 @@ fn dirs_history_path() -> Option<String> {
     std::env::var("HOME")
         .ok()
         .map(|home| format!("{home}/.legend/repl_history"))
+}
+
+// ---------------------------------------------------------------------------
+// Completer
+// ---------------------------------------------------------------------------
+
+struct ReplCompleter {
+    commands: Vec<&'static str>,
+    model_elements: Vec<String>,
+    variables: Vec<String>,
+}
+
+impl Hinter for ReplCompleter {
+    type Hint = String;
+}
+
+impl Highlighter for ReplCompleter {}
+impl Validator for ReplCompleter {}
+impl Helper for ReplCompleter {}
+
+impl Completer for ReplCompleter {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        let line_to_pos = &line[..pos];
+        let start = line_to_pos
+            .rfind(|c: char| !c.is_alphanumeric() && c != '$' && c != ':')
+            .map_or(0, |idx| idx + 1);
+        let word = &line_to_pos[start..];
+
+        if word.is_empty() {
+            return Ok((pos, Vec::new()));
+        }
+
+        let mut candidates = Vec::new();
+
+        if word.starts_with(':') {
+            for &cmd in &self.commands {
+                if cmd.starts_with(word) {
+                    candidates.push(Pair {
+                        display: cmd.to_string(),
+                        replacement: cmd.to_string(),
+                    });
+                }
+            }
+        } else if word.starts_with('$') {
+            for var in &self.variables {
+                if var.starts_with(word) {
+                    candidates.push(Pair {
+                        display: var.clone(),
+                        replacement: var.clone(),
+                    });
+                }
+            }
+        } else {
+            for el in &self.model_elements {
+                if el.starts_with(word) {
+                    candidates.push(Pair {
+                        display: el.clone(),
+                        replacement: el.clone(),
+                    });
+                }
+            }
+        }
+
+        Ok((start, candidates))
+    }
 }
