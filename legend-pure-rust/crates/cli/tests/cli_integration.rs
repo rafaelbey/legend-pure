@@ -180,16 +180,17 @@ fn test_completions() {
 // Stubs coverage
 #[test]
 fn test_test_command_runs_surveyor() {
-    // `legend test .` wires up the Pure-native surveyor. Once natives
-    // caught up enough to run tests end-to-end on the root package,
-    // this stops being a stub and starts emitting a real test report.
+    // `legend test --package <known-clean-package>` wires up the
+    // Pure-native surveyor end-to-end and renders a TestReport. Scoped
+    // to a package whose tests are 100% green so the command exits 0.
     let mut cmd = Command::cargo_bin("legend").unwrap();
     cmd.env("NO_COLOR", "1");
     cmd.arg("test")
-        .arg(".")
+        .arg("--package")
+        .arg("meta::pure::functions::math::tests")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Discovered"));
+        .stderr(predicate::str::contains("Test Suite completed"));
 }
 
 #[test]
