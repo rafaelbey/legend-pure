@@ -1640,7 +1640,7 @@ fn parse_datetime(s: &str) -> Option<DateValue> {
         return None;
     }
 
-    // Split the time component into `main_HH:MM[:SS]`, optional `.frac`,
+    // Split the time component into `main_HH[:MM[:SS]]`, optional `.frac`,
     // and optional `±HHMM` TZ marker — each may be present or absent.
     let (time_body, tz_offset_minutes) = split_tz(time_part);
     let (time_main, subsec_str) = match time_body.split_once('.') {
@@ -1649,11 +1649,18 @@ fn parse_datetime(s: &str) -> Option<DateValue> {
     };
 
     let time_parts: Vec<&str> = time_main.split(':').collect();
-    if time_parts.len() < 2 {
+    // Pure accepts hour-only datetimes — `%2015-04-15T17` parses to a
+    // datetime with hour-only precision, missing minute/second slots.
+    // Java Pure platform tests in essential/date/extract/year.pure rely
+    // on this. Earlier our parser required MM:SS minimum and rejected
+    // `T17` (length 1), so testYear et al hit "year: expected 1
+    // argument(s), got 0" downstream.
+    if time_parts.is_empty() {
         return None;
     }
 
     let (nanos, digits) = parse_subsecond_parts(subsec_str);
+    let has_minutes = time_parts.len() >= 2;
     let has_seconds = time_parts.len() >= 3;
 
     Some(DateValue::DateTime {
@@ -1661,10 +1668,11 @@ fn parse_datetime(s: &str) -> Option<DateValue> {
         month: date_parts[1].parse().ok()?,
         day: date_parts[2].parse().ok()?,
         hour: time_parts[0].parse().ok()?,
-        minute: time_parts[1].parse().ok()?,
+        minute: time_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0),
         second: time_parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0),
         subsecond_nanos: nanos,
         subsecond_digits: digits,
+        has_minutes,
         has_seconds,
         tz_offset_minutes,
     })

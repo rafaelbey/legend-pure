@@ -195,6 +195,13 @@ pub enum DateValue {
         /// `toRepresentation` can round-trip the exact source form:
         /// `%…T00:00:00.000` → `.000` (3 digits), `%…T00:00:00.0000` → `.0000`.
         subsecond_digits: u8,
+        /// `true` if the literal included `:mm` minutes (or finer).
+        /// `false` for `%…T00` hour-only literals. Phase 6 part 2:
+        /// distinguishes `T17` from `T17:00` so `year(%…T17)` and
+        /// `hasMinute(%…T17) == false` work — these are platform tests
+        /// in `essential/date/has/hasMinute.pure` and
+        /// `essential/date/extract/year.pure`.
+        has_minutes: bool,
         /// `true` if the literal included `:ss` seconds (or finer). `false`
         /// for `%…T00:00` minute-only literals. Needed so `toRepresentation`
         /// can round-trip `%2014-01-01T00:00+0000` without promoting to
