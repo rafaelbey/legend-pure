@@ -2273,3 +2273,86 @@ fn eval_pct_string_error_histogram() {
 fn eval_pct_collection_error_histogram() {
     pct_error_histogram("meta::pure::functions::collection");
 }
+
+#[test]
+#[ignore = "diagnostic: PCT ERROR histogram for lang package"]
+fn eval_pct_lang_error_histogram() {
+    pct_error_histogram("meta::pure::functions::lang");
+}
+
+#[test]
+#[ignore = "diagnostic: PCT ERROR histogram for date package"]
+fn eval_pct_date_error_histogram() {
+    pct_error_histogram("meta::pure::functions::date");
+}
+
+// ===========================================================================
+// PCT monotonic baseline lock
+// ===========================================================================
+
+/// Minimum PCT pass count across `PCT_BROAD_CANARY_PACKAGES`. Bump this
+/// after each phase commit confirms a higher pass count via
+/// `eval_pct_broad_canary`. A tactical fix that flips one new test PASS
+/// while breaking three previously-passing tests fails this lock —
+/// cheapest possible defense against silent regressions in a 1000+ line
+/// diff. The "no tactical test-pass hacks" policy in CLAUDE.md is the
+/// principle; this is the enforcement.
+///
+/// Update protocol:
+/// 1. Land the fix.
+/// 2. Run `cargo test --test eval_tests eval_pct_broad_canary -- --ignored
+///    --nocapture` and read the new GRAND TOTAL pass count.
+/// 3. Bump this constant to the new value (or floor of it if the fix is
+///    expected to gain over time).
+///
+/// History (oldest first):
+/// - 333 — initial baseline at PCT harness shipping (commit f8ebca6263c)
+/// - 348 — Phase 1: generic `compare` native cleared 15 tests across
+///   boolean (+4), collection (+4), lang (+7)
+const PCT_PASS_BASELINE: i64 = 348;
+
+#[test]
+fn eval_pct_baseline_lock() {
+    // Active regression lock — runs as part of the default `cargo test`
+    // sweep, no `#[ignore]`. Walks the same package list as
+    // `eval_pct_broad_canary` and asserts the cumulative pass count is
+    // at least PCT_PASS_BASELINE.
+    //
+    // Cost: ~5–10 seconds because it executes every PCT test in every
+    // package on every CI run. That's the price of preventing silent
+    // pass-count regressions; the alternative is a tactical hack that
+    // games one test and goes unnoticed for weeks.
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+
+    let mut grand_pass = 0i64;
+    let mut per_pkg = Vec::new();
+    for pkg in PCT_BROAD_CANARY_PACKAGES {
+        let mut evaluator = Evaluator::new(&model, &registry);
+        let pkg_val = match evaluator.call(
+            "meta::pure::functions::meta::pathToElement",
+            &[Value::String(SmolStr::new(pkg)), Value::String("::".into())],
+        ) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let (adapter, exclusions) = pct_canary_args(&model);
+        let Ok(Value::Object(report_id)) = evaluator.call(
+            "meta::pure::test::surveyor::runPCTTests",
+            &[pkg_val, Value::String("".into()), adapter, exclusions],
+        ) else {
+            continue;
+        };
+        let pass = read_report_counter(&evaluator, report_id, "passCount");
+        grand_pass += pass;
+        per_pkg.push((*pkg, pass));
+    }
+
+    assert!(
+        grand_pass >= PCT_PASS_BASELINE,
+        "PCT pass count regressed: got {grand_pass}, baseline is {PCT_PASS_BASELINE}.\n\
+         Per-package: {per_pkg:#?}\n\
+         Either you regressed a previously-passing test (fix it) or you legitimately \
+         dropped support (lower the baseline with a comment explaining why)."
+    );
+}
