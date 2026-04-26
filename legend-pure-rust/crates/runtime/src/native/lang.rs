@@ -242,17 +242,28 @@ impl NativeFunction for Print {
         match &values[0] {
             Value::Collection(v) => {
                 for item in v.iter() {
-                    ctx.console_output(&format!("{item}"));
+                    ctx.console_output(&render_for_print(item));
                 }
             }
             Value::Unit => {}
-            other => ctx.console_output(&format!("{other}")),
+            other => ctx.console_output(&render_for_print(other)),
         }
         Ok(Evaluated::new(Value::Unit))
     }
 
     fn signature(&self) -> &'static str {
         "print(param:Any[*], max:Integer[1]):Nil[0]"
+    }
+}
+
+/// Render a value the way Java Pure's `println` does — strings without
+/// the source-representation quotes, everything else via `Display`.
+/// Mirrors the Java `Print.execute`'s `valueToOutputString` behaviour
+/// where `String` values lose their quotes for end-user output.
+fn render_for_print(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.to_string(),
+        other => format!("{other}"),
     }
 }
 

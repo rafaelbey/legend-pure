@@ -142,6 +142,7 @@ fn print_version() {
     println!("  {} Pure grammar parser", "✓".green());
     println!("  {} Protocol JSON ↔ Grammar conversion", "✓".green());
     println!("  {} Compile Pure models", "✓".green());
+    println!("  {} Run Pure tests", "✓".green());
     println!(
         "  {} Package artifacts    {}",
         "◌".yellow(),
@@ -153,11 +154,6 @@ fn print_version() {
         "(coming soon)".dimmed()
     );
     println!(
-        "  {} Run Pure tests       {}",
-        "◌".yellow(),
-        "(coming soon)".dimmed()
-    );
-    println!(
         "  {} SDLC integration     {}",
         "◌".yellow(),
         "(coming soon)".dimmed()
@@ -165,13 +161,19 @@ fn print_version() {
 }
 
 /// Initializes the tracing subscriber based on verbosity level.
+///
+/// Default (`verbosity == 0`) is `error` so routine compile-time
+/// warnings (e.g. the platform's pre-existing `AmbiguousImport`
+/// diagnostics in `fold.pure` / `plus.pure`) don't leak into normal
+/// CLI output. Pass `-v` for warnings, `-vv` for info, etc.
 fn init_tracing(verbosity: u8) {
     use tracing_subscriber::EnvFilter;
 
     let default_level = match verbosity {
-        0 => "warn",
-        1 => "info",
-        2 => "debug",
+        0 => "error",
+        1 => "warn",
+        2 => "info",
+        3 => "debug",
         _ => "trace",
     };
 
