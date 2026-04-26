@@ -162,6 +162,13 @@ pub const SIMPLE_FUNCTION_EXPRESSION: &classifier =
 /// by the Pure-level test surveyor's per-test result builder.
 pub const TEST_RESULT: &classifier = "meta::pure::test::surveyor::TestResult";
 
+/// `meta::pure::test::pct::PCTManifest` — heap-object shape returned by the
+/// `loadPCTManifest` native; carries the resolved `adapter:Function<Any>[1]`
+/// and the `exclusions:Map<Function<Any>,String>[1]` of expected-failure
+/// (test FQN → expected error message) pairs that drive PCT bucket flipping
+/// in `executePCTTest`.
+pub const PCT_MANIFEST: &classifier = "meta::pure::test::pct::PCTManifest";
+
 /// `meta::pure::metamodel::relation::RelationType` — heap classifier for
 /// an anonymous relation type (column bag). Allocated by the
 /// `RelationLiteral` lowering and by the `addColumns` native; navigated

@@ -115,12 +115,27 @@ impl NativeFunction for ExecuteTest {
 /// Pure `executePCTTest(testFn:Function<Any>[1], adapter:Function<Any>[1], exclusions:Map<Function<Any>,String>[1]): TestResult[1]`
 ///
 /// Executes a PCT test function, injecting `adapter` as its sole argument.
-/// Handles the exclusion map:
-/// - Test fails but is in exclusions → PASS (expected failure)
-/// - Test passes but is in exclusions → FAIL (exclusion needs rebase)
 ///
-/// Note: exclusion map lookup by Function key is not yet supported; the
-/// `exclusions` argument is accepted but ignored for now.
+/// # Exclusion-map semantics
+///
+/// The Pure-level type is `Map<Function<Any>, String>` — keyed by the
+/// failing test function, valued by the *expected* error message. Java
+/// Pure keys by Function identity; here we key by rendered FQN ([`function_fqn`])
+/// since [`crate::value::ValueKey`] has no `Function` variant. Manifests
+/// loaded via [`LoadPCTManifest`] use the same FQN-keyed shape, so the
+/// two sides agree.
+///
+/// - Test fails (FAIL or ERROR) AND its FQN is in `exclusions` AND the
+///   actual error message equals the expected one → flip to **PASS**
+///   (expected failure tolerated).
+/// - Test fails AND its FQN is in `exclusions` but the messages diverge
+///   → keep the original FAIL/ERROR but rewrite the message to "PCT
+///   exclusion mismatch: expected '<expected>' got '<actual>'" so a
+///   stale exclusion shows up as a real failure rather than silently
+///   absorbing a different bug.
+/// - Test passes AND its FQN is in `exclusions` → flip to **FAIL** with
+///   "PCT exclusion needs rebase: test now passes" — the exclusion is
+///   stale and should be removed from the manifest.
 #[derive(Debug)]
 pub struct ExecutePCTTest;
 
@@ -131,10 +146,9 @@ impl NativeFunction for ExecutePCTTest {
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
         expect_args("executePCTTest", args, 3)?;
-        // Force testFn and adapter; leave exclusions (args[2]) unevaluated — it's ignored.
         let test_fn_val = ctx.evaluate(&args[0])?.into_value();
         let adapter = ctx.evaluate(&args[1])?.into_value();
-        // args[2] is the exclusions Map — ignored for now
+        let exclusions_val = ctx.evaluate(&args[2])?.into_value();
 
         let fqn = function_fqn(&test_fn_val, ctx);
         let start = Instant::now();
@@ -142,11 +156,66 @@ impl NativeFunction for ExecutePCTTest {
         let elapsed = start.elapsed().as_millis() as i64;
 
         let (status, message) = classify_outcome(result);
-        build_test_result(ctx, fqn, status, elapsed, message)
+        let (final_status, final_message) = apply_exclusion(&fqn, status, message, &exclusions_val);
+        build_test_result(ctx, fqn, final_status, elapsed, final_message)
     }
 
     fn signature(&self) -> &'static str {
         "executePCTTest(testFn:Function<Any>[1], adapter:Function<Any>[1], exclusions:Map<Function<Any>,String>[1]): TestResult[1]"
+    }
+}
+
+/// Apply the PCT exclusion contract documented on [`ExecutePCTTest`].
+///
+/// `exclusions` is the Pure-level `Map<Function<Any>, String>` argument as
+/// received by `executePCTTest`. Non-Map shapes are treated as "no
+/// exclusions" rather than erroring — the surveyor passes whatever the
+/// manifest produced, and a missing/empty map should not break dispatch.
+fn apply_exclusion(
+    fqn: &str,
+    status: &'static str,
+    message: Option<String>,
+    exclusions: &Value,
+) -> (&'static str, Option<String>) {
+    use crate::value::ValueKey;
+
+    let Value::Map(state) = exclusions else {
+        return (status, message);
+    };
+    let entries = &state.borrow().entries;
+    let expected = entries
+        .get(&ValueKey::String(SmolStr::new(fqn)))
+        .and_then(|v| match v {
+            Value::String(s) => Some(s.to_string()),
+            _ => None,
+        });
+    match (status, expected) {
+        // Test passed but the manifest expected it to fail — the exclusion
+        // is stale.
+        (STATUS_PASS, Some(_)) => (
+            STATUS_FAIL,
+            Some(format!(
+                "PCT exclusion needs rebase: test now passes ({fqn})"
+            )),
+        ),
+        // Test failed and the manifest expected exactly this failure → PASS.
+        (STATUS_FAIL | STATUS_ERROR, Some(expected_msg)) => {
+            let actual = message.as_deref().unwrap_or("");
+            if actual == expected_msg {
+                (STATUS_PASS, None)
+            } else {
+                // Keep the original bucket but make the divergence loud.
+                (
+                    status,
+                    Some(format!(
+                        "PCT exclusion mismatch: expected '{expected_msg}' got '{actual}'"
+                    )),
+                )
+            }
+        }
+        // No exclusion entry, or test passed and not in exclusions — keep
+        // the original classification.
+        _ => (status, message),
     }
 }
 
@@ -375,6 +444,209 @@ impl NativeFunction for AssertError {
 }
 
 // ---------------------------------------------------------------------------
+// PCT adapter discovery
+// ---------------------------------------------------------------------------
+
+/// Find a PCT adapter Function by its `PCT.adapterName` tag.
+///
+/// An adapter is any Function carrying:
+/// 1. The `<<PCT.adapter>>` stereotype — `profile == meta::pure::test::pct::PCT`
+///    and `value == "adapter"`.
+/// 2. A `PCT.adapterName='<name>'` tagged value — same profile, `tag ==
+///    "adapterName"`, `value == name`.
+///
+/// The shipped in-memory adapter
+/// `meta::pure::test::pct::testAdapterForInMemoryExecution` carries
+/// `PCT.adapterName='In-Memory'`. New adapters can register themselves
+/// purely in Pure code by adding the same stereotype + tag — no Rust
+/// changes required.
+///
+/// Returns `None` if the PCT profile itself doesn't resolve, or if no
+/// Function in the model matches both the stereotype and the tag value.
+#[must_use]
+pub fn find_pct_adapter(
+    model: &legend_pure_parser_pure::model::PureModel,
+    adapter_name: &str,
+) -> Option<legend_pure_parser_pure::ids::ElementId> {
+    use legend_pure_parser_pure::ids::ElementId;
+    use legend_pure_parser_pure::model::Element;
+
+    let pct_profile = crate::m3_paths::resolve(model, "meta::pure::test::pct::PCT")?;
+
+    for chunk in &model.chunks {
+        for (local_idx, element) in chunk.elements.iter() {
+            let Element::Function(func) = element else {
+                continue;
+            };
+            let has_adapter_stereotype = func
+                .stereotypes
+                .iter()
+                .any(|s| s.profile == pct_profile && s.value == "adapter");
+            if !has_adapter_stereotype {
+                continue;
+            }
+            let name_match = func.tagged_values.iter().any(|t| {
+                t.profile == pct_profile && t.tag == "adapterName" && t.value == adapter_name
+            });
+            if name_match {
+                return Some(ElementId::InstanceId {
+                    chunk_id: chunk.chunk_id,
+                    local_idx,
+                });
+            }
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// loadPCTManifest
+// ---------------------------------------------------------------------------
+
+/// Pure `loadPCTManifest(manifestPath:String[1]):PCTManifest[1]`
+///
+/// Reads a PCT manifest JSON file, resolves the adapter FQN to a Function
+/// element, and builds a heap `PCTManifest` object carrying the adapter
+/// plus the `exclusions` map (test-FQN → expected-error-message).
+///
+/// # Lookup order
+///
+/// 1. **Embedded platform manifests** via [`legend_pure_core_platform::sources::find_manifest`].
+///    Both shipped platform manifests
+///    (`pct_essential_native.json`, `pct_grammar_native.json`) ship inside
+///    the binary and resolve by suffix match against the canonical
+///    `/platform/pure/...` resource URL.
+/// 2. **Filesystem fallback** for user-supplied paths.
+///
+/// # Manifest shape
+///
+/// ```json
+/// {
+///   "adapter": "meta::pure::test::pct::testAdapterForInMemoryExecution_Function_1__X_o_",
+///   "exclusions": [
+///     { "test": "meta::pure::functions::math::tests::operation::testFoo<Z|y>_Function_1__Boolean_1_",
+///       "message": "expected error string" }
+///   ]
+/// }
+/// ```
+///
+/// # Map representation
+///
+/// The Pure-level type is `Map<Function<Any>, String>` but [`ValueKey`] has
+/// no `Function` variant — `executePCTTest` looks up exclusions by the
+/// rendered FQN of the test function, so the map keys are
+/// [`ValueKey::String`]`(test_fqn)` and values are [`Value::String`]`(expected_message)`.
+/// Each exclusion's `test` field is also resolved against the model so a
+/// typo in the manifest fails fast at load time rather than silently
+/// missing every lookup later.
+#[derive(Debug)]
+pub struct LoadPCTManifest;
+
+impl NativeFunction for LoadPCTManifest {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        expect_args("loadPCTManifest", args, 1)?;
+        let path_val = ctx.evaluate(&args[0])?.into_value();
+        let path = match path_val {
+            Value::String(s) => s.to_string(),
+            other => {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "loadPCTManifest: expected String path, got {}",
+                    other.type_name()
+                ))
+                .into());
+            }
+        };
+        let raw = read_manifest_text(&path)?;
+        let parsed: ManifestJson = serde_json::from_str(&raw).map_err(|e| {
+            PureRuntimeError::EvaluationError(format!(
+                "loadPCTManifest: malformed JSON in '{path}': {e}"
+            ))
+        })?;
+        build_pct_manifest(ctx, &path, parsed)
+    }
+
+    fn signature(&self) -> &'static str {
+        "loadPCTManifest(manifestPath:String[1]):PCTManifest[1]"
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ManifestJson {
+    adapter: String,
+    #[serde(default)]
+    exclusions: Vec<ManifestExclusion>,
+}
+
+#[derive(serde::Deserialize)]
+struct ManifestExclusion {
+    test: String,
+    message: String,
+}
+
+fn read_manifest_text(path: &str) -> Result<String, PureException> {
+    if let Some(content) = legend_pure_core_platform::sources::find_manifest(path) {
+        return Ok(content.to_string());
+    }
+    std::fs::read_to_string(path).map_err(|e| {
+        PureRuntimeError::EvaluationError(format!(
+            "loadPCTManifest: cannot read '{path}': {e} (not embedded in platform; \
+             supply a real path or use one of the embedded names like 'pct_essential_native.json')"
+        ))
+        .into()
+    })
+}
+
+fn resolve_function_fqn(
+    ctx: &dyn EvalContextTrait,
+    fqn: &str,
+    role: &str,
+    manifest_path: &str,
+) -> Result<legend_pure_parser_pure::ids::ElementId, PureException> {
+    let segments: Vec<SmolStr> = fqn.split("::").map(SmolStr::new).collect();
+    ctx.model().resolve_by_path(&segments).ok_or_else(|| {
+        PureRuntimeError::EvaluationError(format!(
+            "loadPCTManifest: {role} '{fqn}' from '{manifest_path}' did not resolve in the model"
+        ))
+        .into()
+    })
+}
+
+fn build_pct_manifest(
+    ctx: &mut dyn EvalContextTrait,
+    manifest_path: &str,
+    parsed: ManifestJson,
+) -> Result<Evaluated, PureException> {
+    use crate::value::{MapState, ValueKey};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let adapter_id = resolve_function_fqn(ctx, &parsed.adapter, "adapter", manifest_path)?;
+    let adapter_value = Value::Element(adapter_id);
+
+    let mut state = MapState::default();
+    for ex in &parsed.exclusions {
+        // Validate the test FQN resolves so manifest typos fail loudly at
+        // load time, not silently as a never-matching exclusion at lookup.
+        let _ = resolve_function_fqn(ctx, &ex.test, "exclusion test", manifest_path)?;
+        state.entries.insert(
+            ValueKey::String(SmolStr::new(&ex.test)),
+            Value::String(SmolStr::new(&ex.message)),
+        );
+    }
+    let exclusions_value = Value::Map(Rc::new(RefCell::new(state)));
+
+    let heap = ctx.heap_mut();
+    let id = heap.alloc_dynamic(crate::m3_paths::PCT_MANIFEST);
+    heap.mutate_add(id, "adapter", &[adapter_value])?;
+    heap.mutate_add(id, "exclusions", &[exclusions_value])?;
+    Ok(Evaluated::new(Value::Object(id)))
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -390,6 +662,7 @@ pub fn register(registry: &mut NativeRegistry) {
         "executePCTTest_Function_1__Function_1__Map_1__TestResult_1_",
         ExecutePCTTest,
     );
+    registry.register("loadPCTManifest_String_1__PCTManifest_1_", LoadPCTManifest);
 }
 
 // ---------------------------------------------------------------------------
@@ -422,5 +695,96 @@ mod tests {
     fn assert_wrong_arg_count_errors() {
         assert!(Assert.execute(&[lit_bool(true)], &mut MockCtx).is_err());
         assert!(Assert.execute(&[], &mut MockCtx).is_err());
+    }
+
+    // ----------------------------------------------------------------------
+    // apply_exclusion — Phase 3 contract tests
+    // ----------------------------------------------------------------------
+
+    use crate::value::{MapState, ValueKey};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn excl(entries: &[(&str, &str)]) -> Value {
+        let mut state = MapState::default();
+        for (k, v) in entries {
+            state.entries.insert(
+                ValueKey::String(SmolStr::new(*k)),
+                Value::String(SmolStr::new(*v)),
+            );
+        }
+        Value::Map(Rc::new(RefCell::new(state)))
+    }
+
+    #[test]
+    fn apply_exclusion_no_entry_keeps_classification() {
+        let (s, m) = apply_exclusion("pkg::testFoo", STATUS_FAIL, Some("oops".into()), &excl(&[]));
+        assert_eq!(s, STATUS_FAIL);
+        assert_eq!(m.as_deref(), Some("oops"));
+    }
+
+    #[test]
+    fn apply_exclusion_match_flips_fail_to_pass() {
+        let (s, m) = apply_exclusion(
+            "pkg::testFoo",
+            STATUS_FAIL,
+            Some("expected".into()),
+            &excl(&[("pkg::testFoo", "expected")]),
+        );
+        assert_eq!(s, STATUS_PASS);
+        assert!(m.is_none(), "PASS carries no message: got {m:?}");
+    }
+
+    #[test]
+    fn apply_exclusion_match_flips_error_to_pass() {
+        let (s, m) = apply_exclusion(
+            "pkg::testFoo",
+            STATUS_ERROR,
+            Some("missing native: foo_X_Y_".into()),
+            &excl(&[("pkg::testFoo", "missing native: foo_X_Y_")]),
+        );
+        assert_eq!(s, STATUS_PASS);
+        assert!(m.is_none());
+    }
+
+    #[test]
+    fn apply_exclusion_message_mismatch_keeps_bucket_marks_divergence() {
+        let (s, m) = apply_exclusion(
+            "pkg::testFoo",
+            STATUS_FAIL,
+            Some("actual".into()),
+            &excl(&[("pkg::testFoo", "expected")]),
+        );
+        assert_eq!(s, STATUS_FAIL);
+        let msg = m.expect("mismatch message present");
+        assert!(msg.contains("PCT exclusion mismatch"), "msg={msg}");
+        assert!(msg.contains("expected"), "msg={msg}");
+        assert!(msg.contains("actual"), "msg={msg}");
+    }
+
+    #[test]
+    fn apply_exclusion_pass_in_exclusions_flips_to_fail_with_rebase_msg() {
+        let (s, m) = apply_exclusion(
+            "pkg::testFoo",
+            STATUS_PASS,
+            None,
+            &excl(&[("pkg::testFoo", "expected")]),
+        );
+        assert_eq!(s, STATUS_FAIL);
+        let msg = m.expect("rebase message present");
+        assert!(msg.contains("PCT exclusion needs rebase"), "msg={msg}");
+        assert!(msg.contains("pkg::testFoo"), "msg={msg}");
+    }
+
+    #[test]
+    fn apply_exclusion_non_map_arg_is_treated_as_empty() {
+        let (s, m) = apply_exclusion(
+            "pkg::testFoo",
+            STATUS_FAIL,
+            Some("oops".into()),
+            &Value::Unit,
+        );
+        assert_eq!(s, STATUS_FAIL);
+        assert_eq!(m.as_deref(), Some("oops"));
     }
 }

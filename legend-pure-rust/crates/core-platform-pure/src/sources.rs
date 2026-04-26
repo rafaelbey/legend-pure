@@ -30,3 +30,42 @@ include!(concat!(env!("OUT_DIR"), "/generated_sources.rs"));
 pub fn platform_sources() -> &'static [PureSourceFile] {
     PLATFORM_FILES
 }
+
+/// Returns all embedded platform JSON manifests (PCT manifests, etc.).
+///
+/// Path field uses the same `/platform/pure/<relative>` resource-URL form
+/// as [`platform_sources`] — `loadPCTManifest` matches by suffix so callers
+/// can supply either the bare filename (`pct_essential_native.json`) or
+/// the full canonical path.
+#[must_use]
+pub fn platform_manifests() -> &'static [PureSourceFile] {
+    PLATFORM_MANIFESTS
+}
+
+/// Look up an embedded platform manifest by suffix match against its
+/// canonical `/platform/pure/...` path. Returns the file content if any
+/// manifest's path ends with `suffix`, otherwise `None`.
+///
+/// Matches whole path segments — `"essential.json"` doesn't match
+/// `"pct_essential_native.json"` because the character preceding the
+/// match must be a path separator (or the start of the string).
+#[must_use]
+pub fn find_manifest(suffix: &str) -> Option<&'static str> {
+    PLATFORM_MANIFESTS
+        .iter()
+        .find(|f| {
+            if f.path == suffix {
+                return true;
+            }
+            if !f.path.ends_with(suffix) {
+                return false;
+            }
+            let prefix_len = f.path.len() - suffix.len();
+            prefix_len == 0
+                || f.path[..prefix_len]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c == '/' || c == '\\')
+        })
+        .map(|f| f.content)
+}

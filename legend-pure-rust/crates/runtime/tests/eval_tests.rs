@@ -1761,3 +1761,515 @@ fn eval_surveyor_on_element_to_path_tests_has_nonzero_runs() {
         "expected at least one non-error outcome after native rollout (pass={pass}, fail={fail}, error={error}, skip={skip})"
     );
 }
+
+// ===========================================================================
+// PCT (Pure Compatibility Tests) — adapter-driven test execution
+// ===========================================================================
+//
+// PCT tests differ from `<<test.Test>>` tests in two ways:
+// 1. They are annotated `<<PCT.test>>` and live alongside the function they
+//    exercise (e.g. `boolean/operation/not.pure` defines both `not` and the
+//    8 `<<PCT.test>>` functions for it).
+// 2. They take an *adapter* as their sole parameter — a function-of-function
+//    that the runtime injects so the same test body can run against multiple
+//    execution back-ends. The in-memory adapter
+//    `meta::pure::test::pct::testAdapterForInMemoryExecution<X|o>` is
+//    just `$f->eval()`.
+//
+// The Pure-side surveyor (`meta::pure::test::surveyor::runPCTTests`) walks
+// a package, filters `<<PCT.test>>` functions, and invokes each via
+// `executePCTTest($t, $adapter, $exclusions)`.
+//
+// These canaries de-risk that pipeline end-to-end *before* the
+// `loadPCTManifest` native lands — they pass the adapter and an empty
+// exclusion map directly so the test exercises only discovery → adapter
+// dispatch → classify, not JSON manifest parsing.
+
+/// Build the in-memory adapter `Value::Element` and an empty exclusions
+/// `Value::Map` for direct `runPCTTests` invocation.
+fn pct_canary_args(model: &PureModel) -> (Value, Value) {
+    use legend_pure_runtime::value::MapState;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    // The adapter's mangled FQN as it appears in the shipped manifest
+    // `pct_essential_native.json`. Resolves against the platform model.
+    let adapter_path: [SmolStr; 5] = [
+        "meta".into(),
+        "pure".into(),
+        "test".into(),
+        "pct".into(),
+        "testAdapterForInMemoryExecution_Function_1__X_o_".into(),
+    ];
+    let adapter_id = model
+        .resolve_by_path(&adapter_path)
+        .expect("in-memory adapter must resolve in the platform model");
+    let adapter = Value::Element(adapter_id);
+
+    let exclusions = Value::Map(Rc::new(RefCell::new(MapState::default())));
+    (adapter, exclusions)
+}
+
+/// Read a non-negative integer counter from a heap-allocated `TestReport`.
+fn read_report_counter(
+    evaluator: &Evaluator,
+    report_id: legend_pure_runtime::heap::ObjectId,
+    name: &str,
+) -> i64 {
+    let values = evaluator
+        .heap()
+        .get_property_values(report_id, name)
+        .unwrap_or_else(|e| panic!("get {name}: {e}"));
+    match values.iter().next() {
+        Some(Value::Integer(n)) => *n,
+        _ => -1,
+    }
+}
+
+#[test]
+fn eval_pct_canary_boolean_not_runs() {
+    // Phase 1 de-risk: PCT tests have generic signatures
+    // (`testNotTrue<Z|y>(f:Function<{Function<{->Z[y]}>[1]->Z[y]}>[1])`).
+    // The adapter is bound to `$f`, then `$f->eval(|true->not())` must
+    // dispatch correctly with `Z=Boolean, y=1` inferred at the call site.
+    //
+    // We don't assert PASS counts — the goal is that *at least one* test
+    // in the package flips out of ERROR, proving discovery + adapter
+    // dispatch + classify all work end-to-end. Specific counts are
+    // measured by `eval_pct_broad_canary` (Phase 4).
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    let mut evaluator = Evaluator::new(&model, &registry);
+
+    let pkg = evaluator
+        .call(
+            "meta::pure::functions::meta::pathToElement",
+            &[
+                Value::String("meta::pure::functions::boolean::tests::conjunctions::not".into()),
+                Value::String("::".into()),
+            ],
+        )
+        .expect("pathToElement must resolve the not-tests package");
+
+    let (adapter, exclusions) = pct_canary_args(&model);
+
+    let report = evaluator
+        .call(
+            "meta::pure::test::surveyor::runPCTTests",
+            &[pkg, Value::String("".into()), adapter, exclusions],
+        )
+        .expect("runPCTTests must return a TestReport");
+
+    let Value::Object(report_id) = report else {
+        panic!("runPCTTests returned non-object: {report:?}");
+    };
+
+    let pass = read_report_counter(&evaluator, report_id, "passCount");
+    let fail = read_report_counter(&evaluator, report_id, "failCount");
+    let error = read_report_counter(&evaluator, report_id, "errorCount");
+    let skip = read_report_counter(&evaluator, report_id, "skipCount");
+    let total = pass + fail + error + skip;
+
+    assert!(
+        total > 0,
+        "expected at least one PCT test discovered, got 0"
+    );
+    assert!(
+        pass + fail + skip > 0,
+        "expected at least one non-ERROR PCT outcome (pass={pass}, fail={fail}, error={error}, skip={skip}); \
+         all-ERROR usually means generic adapter dispatch is broken — start there"
+    );
+}
+
+/// Packages we know contain `<<PCT.test>>` functions in the platform tree.
+/// Mirrors the surveyor's `eval_surveyor_broad_canary` package list, but
+/// PCT discovery walks broader sub-trees (PCT tests live alongside their
+/// `<<PCT.function>>` declarations rather than in a `tests/` subdir, so
+/// rooting at the function package picks them up too).
+const PCT_BROAD_CANARY_PACKAGES: &[&str] = &[
+    "meta::pure::functions::boolean",
+    "meta::pure::functions::collection",
+    "meta::pure::functions::lang",
+    "meta::pure::functions::math",
+    "meta::pure::functions::string",
+    "meta::pure::functions::date",
+    "meta::pure::functions::meta",
+    "meta::pure::functions::multiplicity",
+    "meta::pure::functions::asserts",
+    "meta::pure::functions::relation",
+];
+
+#[test]
+#[ignore = "broad PCT canary across meta::pure::functions::* — prints full bucket breakdown"]
+fn eval_pct_broad_canary() {
+    // The Phase 4 deliverable: how strong is the Rust runtime against the
+    // 501-function PCT contract Java enforces on every build? Per-package
+    // bucket counts are the signal.
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+
+    let mut grand_pass = 0i64;
+    let mut grand_fail = 0i64;
+    let mut grand_error = 0i64;
+    let mut grand_skip = 0i64;
+
+    for pkg in PCT_BROAD_CANARY_PACKAGES {
+        let mut evaluator = Evaluator::new(&model, &registry);
+        let pkg_val = match evaluator.call(
+            "meta::pure::functions::meta::pathToElement",
+            &[Value::String(SmolStr::new(pkg)), Value::String("::".into())],
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("[{pkg}] pathToElement failed: {e}");
+                continue;
+            }
+        };
+        let (adapter, exclusions) = pct_canary_args(&model);
+        let report_result = evaluator.call(
+            "meta::pure::test::surveyor::runPCTTests",
+            &[pkg_val, Value::String("".into()), adapter, exclusions],
+        );
+        let Ok(Value::Object(report_id)) = report_result else {
+            eprintln!("[{pkg}] runPCTTests failed: {report_result:?}");
+            continue;
+        };
+        let pass = read_report_counter(&evaluator, report_id, "passCount");
+        let fail = read_report_counter(&evaluator, report_id, "failCount");
+        let error = read_report_counter(&evaluator, report_id, "errorCount");
+        let skip = read_report_counter(&evaluator, report_id, "skipCount");
+        grand_pass += pass;
+        grand_fail += fail;
+        grand_error += error;
+        grand_skip += skip;
+        eprintln!(
+            "[{pkg}] pass={pass} fail={fail} error={error} skip={skip} total={}",
+            pass + fail + error + skip
+        );
+    }
+    eprintln!(
+        "\n=== PCT GRAND TOTAL ===\n  pass={grand_pass} fail={grand_fail} error={grand_error} skip={grand_skip} total={}",
+        grand_pass + grand_fail + grand_error + grand_skip
+    );
+}
+
+/// Harvest every distinct `Function not found: FQN` signalled by an
+/// ERROR-bucket result across all PCT packages. Mirrors
+/// `eval_surveyor_missing_natives_harvest` but rooted on the broader PCT
+/// tree — surfaces gaps the `<<test.Test>>` surveyor can't reveal because
+/// PCT tests exercise function *implementations* directly.
+#[test]
+#[ignore = "diagnostic: list missing-native FQNs across all PCT packages"]
+fn eval_pct_missing_natives_harvest() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    let mut by_simple: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+    for pkg in PCT_BROAD_CANARY_PACKAGES {
+        let mut evaluator = Evaluator::new(&model, &registry);
+        let pkg_val = match evaluator.call(
+            "meta::pure::functions::meta::pathToElement",
+            &[Value::String(SmolStr::new(pkg)), Value::String("::".into())],
+        ) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let (adapter, exclusions) = pct_canary_args(&model);
+        let Ok(Value::Object(report_id)) = evaluator.call(
+            "meta::pure::test::surveyor::runPCTTests",
+            &[pkg_val, Value::String("".into()), adapter, exclusions],
+        ) else {
+            continue;
+        };
+        let results = evaluator
+            .heap()
+            .get_property_values(report_id, "results")
+            .unwrap_or_else(|_| im_rc::Vector::new());
+        for val in results.iter() {
+            let Value::Object(res_id) = val else {
+                continue;
+            };
+            let status = evaluator
+                .heap()
+                .get_property_values(*res_id, "status")
+                .ok()
+                .and_then(|v| v.iter().next().cloned());
+            if !matches!(&status, Some(Value::EnumValue { member, .. }) if member.as_str() == "ERROR")
+            {
+                continue;
+            }
+            let msg = evaluator
+                .heap()
+                .get_property_values(*res_id, "message")
+                .ok()
+                .and_then(|v| v.iter().next().cloned())
+                .and_then(|v| match v {
+                    Value::String(s) => Some(s.to_string()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            for line in msg.lines() {
+                let trimmed = line.trim_matches('"').trim();
+                if let Some(rest) = trimmed.strip_prefix("Function not found: ") {
+                    let fqn = rest.trim().trim_end_matches('"').to_string();
+                    let simple = fqn.split('_').next().unwrap_or(&fqn).to_string();
+                    by_simple.entry(simple).or_default().insert(fqn);
+                }
+            }
+        }
+    }
+
+    eprintln!(
+        "\n=== PCT missing-native harvest: {} distinct simple names, {} distinct mangled FQNs ===",
+        by_simple.len(),
+        by_simple.values().map(BTreeSet::len).sum::<usize>()
+    );
+    for (simple, fqns) in &by_simple {
+        eprintln!("\n[{}] {} ({} variants)", fqns.len(), simple, fqns.len());
+        for fqn in fqns {
+            eprintln!("    {fqn}");
+        }
+    }
+}
+
+#[test]
+fn find_pct_adapter_resolves_in_memory() {
+    // Phase 6 contract: `find_pct_adapter(model, "In-Memory")` discovers the
+    // shipped `meta::pure::test::pct::testAdapterForInMemoryExecution`
+    // function by walking the model for `<<PCT.adapter>>`-stereotyped
+    // functions whose `PCT.adapterName` tag matches.
+    use legend_pure_runtime::native::testing::find_pct_adapter;
+
+    let model = compile_with_platform("");
+    let id = find_pct_adapter(&model, "In-Memory").expect("In-Memory adapter must resolve");
+    let node = model.get_node(id);
+    assert_eq!(
+        node.name.as_str(),
+        "testAdapterForInMemoryExecution_Function_1__X_o_",
+    );
+}
+
+#[test]
+fn find_pct_adapter_unknown_name_returns_none() {
+    use legend_pure_runtime::native::testing::find_pct_adapter;
+    let model = compile_with_platform("");
+    assert!(find_pct_adapter(&model, "DefinitelyNotARealAdapterName").is_none());
+}
+
+#[test]
+fn eval_pct_load_manifest_essential_resolves() {
+    // Phase 2 contract: `loadPCTManifest('pct_essential_native.json')` must
+    // resolve the embedded platform manifest, parse it, and build a
+    // PCTManifest heap object carrying the resolved adapter Function and an
+    // empty exclusions Map. Invoke via a thin Pure wrapper because
+    // `Evaluator::call` routes through `call_user_function`, which evaluates
+    // the (empty) body of `native function` declarations and silently
+    // returns `Unit`. A Pure-level call site lets Pass 2.1's name mangling
+    // reach the registered native via the eval_function_call dispatch chain.
+    let model = compile_with_platform(
+        r"
+        import meta::pure::test::pct::*;
+
+        function test::loadEssential(): PCTManifest[1] {
+            loadPCTManifest('pct_essential_native.json');
+        }
+        ",
+    );
+    let registry = NativeRegistry::standard();
+    let mut evaluator = Evaluator::new(&model, &registry);
+    let fn_id = model
+        .resolve_by_fqn(&["test".into(), "loadEssential__PCTManifest_1_".into()])
+        .expect("test::loadEssential resolves");
+    let report = evaluator
+        .call_user_function_by_id(fn_id)
+        .expect("loadEssential must succeed");
+    let Value::Object(manifest_id) = report else {
+        panic!("loadPCTManifest wrapper returned non-object: {report:?}");
+    };
+
+    let heap = evaluator.heap();
+    assert_eq!(
+        heap.classifier(manifest_id).unwrap(),
+        "meta::pure::test::pct::PCTManifest"
+    );
+
+    let adapter = heap
+        .get_property_values(manifest_id, "adapter")
+        .expect("adapter slot")
+        .iter()
+        .next()
+        .cloned()
+        .expect("adapter populated");
+    let Value::Element(adapter_id) = adapter else {
+        panic!("adapter slot not Element: {adapter:?}");
+    };
+    let adapter_node = model.get_node(adapter_id);
+    assert_eq!(
+        adapter_node.name.as_str(),
+        "testAdapterForInMemoryExecution_Function_1__X_o_",
+        "adapter resolves to in-memory adapter"
+    );
+
+    let exclusions = heap
+        .get_property_values(manifest_id, "exclusions")
+        .expect("exclusions slot")
+        .iter()
+        .next()
+        .cloned()
+        .expect("exclusions populated");
+    let Value::Map(state) = exclusions else {
+        panic!("exclusions slot not Map: {exclusions:?}");
+    };
+    assert!(
+        state.borrow().entries.is_empty(),
+        "shipped pct_essential_native.json has empty exclusions"
+    );
+}
+
+#[test]
+fn eval_pct_run_from_path_essential_manifest() {
+    // End-to-end: the developer-facing entry point. Mirrors what
+    // `legend test --pct` will invoke.
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    let mut evaluator = Evaluator::new(&model, &registry);
+
+    let report = evaluator
+        .call(
+            "meta::pure::test::surveyor::runPCTTestsFromPath",
+            &[
+                Value::String("meta::pure::functions::boolean::tests::conjunctions::not".into()),
+                Value::String("".into()),
+                Value::String("pct_essential_native.json".into()),
+            ],
+        )
+        .expect("runPCTTestsFromPath must succeed");
+
+    let Value::Object(report_id) = report else {
+        panic!("runPCTTestsFromPath returned non-object: {report:?}");
+    };
+    let pass = read_report_counter(&evaluator, report_id, "passCount");
+    let total = pass
+        + read_report_counter(&evaluator, report_id, "failCount")
+        + read_report_counter(&evaluator, report_id, "errorCount")
+        + read_report_counter(&evaluator, report_id, "skipCount");
+    assert!(total > 0, "expected at least one PCT test discovered");
+    assert!(pass > 0, "expected at least one PASS via the manifest path");
+}
+
+/// Per-package PCT ERROR histogram — clusters error messages by their
+/// first useful line so a long tail of similar failures collapses to one
+/// bucket. Mirrors the `eval_surveyor_*_error_histogram` shape.
+fn pct_error_histogram(package: &str) {
+    use std::collections::BTreeMap;
+
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    let mut evaluator = Evaluator::new(&model, &registry);
+
+    let pkg_val = evaluator
+        .call(
+            "meta::pure::functions::meta::pathToElement",
+            &[
+                Value::String(SmolStr::new(package)),
+                Value::String("::".into()),
+            ],
+        )
+        .expect("pathToElement");
+    let (adapter, exclusions) = pct_canary_args(&model);
+    let Ok(Value::Object(report_id)) = evaluator.call(
+        "meta::pure::test::surveyor::runPCTTests",
+        &[pkg_val, Value::String("".into()), adapter, exclusions],
+    ) else {
+        eprintln!("[{package}] runPCTTests failed");
+        return;
+    };
+
+    let results = evaluator
+        .heap()
+        .get_property_values(report_id, "results")
+        .unwrap_or_else(|_| im_rc::Vector::new());
+    let mut histogram: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut outcome_count = 0usize;
+    for val in results.iter() {
+        let Value::Object(res_id) = val else { continue };
+        let status = evaluator
+            .heap()
+            .get_property_values(*res_id, "status")
+            .ok()
+            .and_then(|v| v.iter().next().cloned());
+        if !matches!(&status, Some(Value::EnumValue { member, .. }) if member.as_str() == "ERROR") {
+            continue;
+        }
+        outcome_count += 1;
+        let fqn = evaluator
+            .heap()
+            .get_property_values(*res_id, "fqn")
+            .ok()
+            .and_then(|v| v.iter().next().cloned())
+            .and_then(|v| match v {
+                Value::String(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let msg = evaluator
+            .heap()
+            .get_property_values(*res_id, "message")
+            .ok()
+            .and_then(|v| v.iter().next().cloned())
+            .and_then(|v| match v {
+                Value::String(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let bucket = msg
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("<empty error message>")
+            .trim()
+            .to_string();
+        histogram
+            .entry(bucket)
+            .or_default()
+            .push(format!("{fqn} || {msg}"));
+    }
+
+    eprintln!("\n=== {package} PCT ERROR histogram ({outcome_count} results) ===");
+    let mut rows: Vec<_> = histogram.iter().collect();
+    rows.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    for (bucket, tests) in rows {
+        eprintln!("\n[{}] {}", tests.len(), bucket);
+        for (i, t) in tests.iter().enumerate().take(20) {
+            eprintln!("    {}. {}", i + 1, t);
+        }
+        if tests.len() > 20 {
+            eprintln!("    ... and {} more", tests.len() - 20);
+        }
+    }
+}
+
+#[test]
+#[ignore = "diagnostic: PCT ERROR histogram for boolean package"]
+fn eval_pct_boolean_error_histogram() {
+    pct_error_histogram("meta::pure::functions::boolean");
+}
+
+#[test]
+#[ignore = "diagnostic: PCT ERROR histogram for math package"]
+fn eval_pct_math_error_histogram() {
+    pct_error_histogram("meta::pure::functions::math");
+}
+
+#[test]
+#[ignore = "diagnostic: PCT ERROR histogram for string package"]
+fn eval_pct_string_error_histogram() {
+    pct_error_histogram("meta::pure::functions::string");
+}
+
+#[test]
+#[ignore = "diagnostic: PCT ERROR histogram for collection package"]
+fn eval_pct_collection_error_histogram() {
+    pct_error_histogram("meta::pure::functions::collection");
+}

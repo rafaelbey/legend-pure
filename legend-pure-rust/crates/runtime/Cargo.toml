@@ -31,6 +31,8 @@ slotmap = { workspace = true }
 rust_decimal = { workspace = true }
 jiff = { workspace = true }
 tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 legend-pure-parser-parser = { path = "../parser" }
