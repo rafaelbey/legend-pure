@@ -536,8 +536,9 @@ fn extract_lambda_vars(line: &str) -> Vec<String> {
                     current_word.clear();
                 }
                 // Stop going backwards if we hit an operator or structural character
-                // that clearly bounds the lambda parameter list
-                if c == '(' || c == '>' || c == '=' || c == '+' || c == '-' || c == '*' || c == '/' || c == '[' || c == '{' {
+                // that clearly bounds the lambda parameter list. We do NOT break on
+                // '[' or '{' because of typed variables like `a:Integer[1]`.
+                if c == '(' || c == '>' || c == '<' || c == '=' || c == '+' || c == '-' || c == '*' || c == '/' {
                     break;
                 }
             }

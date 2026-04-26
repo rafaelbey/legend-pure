@@ -166,9 +166,9 @@ returning `Any`.)
 `testLarge{Times,Minus,Plus}` moved to **Excluded — intentional** above —
 same divergence Java compiled excludes.
 
-#### String (2 FAIL)
-- `string::tests::toString::testFloatToStringWithExcessTrailingZeros`,
-  `toString::testFloatToStringWithPositiveExponent` (2 FAIL) — Float
-  Display. Java's `Float.toString` uses specific rules around
-  trailing zeros and `E`-notation; Rust's `{f64}` differs.
+#### String — empty
+
+(Phase 8 closed the string cluster: `pure_to_string` for `Value::Float`
+routes through `java_number_string` so integer-valued doubles get the
+trailing `.0`.)
 
