@@ -339,14 +339,13 @@ impl NativeFunction for Trim {
 /// Pure's `toString` shape, which is what platform tests pin in
 /// `essential/string/toString/toString.pure`.
 ///
-/// Heap-object dispatch:
-/// - `Pair` → `<first.toString(), second.toString()>`
-/// - `List` → `[values.map(toString)->joinStrings(', ')]` (recursive)
-/// - Other heap objects → `Anonymous_<obj_id>` (matches Java's
-///   anonymous-instance default; `testPersonToString` checks the
-///   `Anonymous_` prefix). Class-defined `toString` qualified
-///   properties (`testComplexClassToString`) need lookup that's not
-///   yet wired — those tests stay failing as a known gap.
+/// Heap-object dispatch is delegated to whatever `toString()` qualified
+/// property the receiver's class (or any of its generalizations) defines
+/// — `Pair`, `List`, and any user class with a `toString()` qualifier
+/// flow through the same path. When no such QP exists, the runtime
+/// falls back to `Anonymous_<obj_id>`, matching Java
+/// `ToString.execute`'s `value.getName()` branch. See
+/// `legend-pure-runtime-java-engine-interpreted/.../ToString.java:50-70`.
 #[derive(Debug)]
 pub struct ToString;
 
@@ -358,7 +357,7 @@ impl NativeFunction for ToString {
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
         expect_args("toString", &values, 1)?;
-        let s = pure_to_string(&values[0], ctx);
+        let s = pure_to_string(&values[0], ctx)?;
         Ok(Evaluated::new(Value::String(SmolStr::new(s))))
     }
 
@@ -367,86 +366,78 @@ impl NativeFunction for ToString {
     }
 }
 
-/// Render a value to its Pure-toString form. See [`ToString`]'s doc for
-/// the per-variant contract. Recursive for collections + heap objects.
-pub(crate) fn pure_to_string(value: &Value, ctx: &dyn EvalContextTrait) -> String {
+/// Render a value to its Pure-toString form.
+///
+/// For primitives, this returns the literal source form (mirrors Java
+/// Pure's `value.getName()` for primitive types). For heap objects this
+/// invokes any `toString()` qualified property visible on the receiver's
+/// class (with generalization walk) via
+/// [`EvalContextTrait::invoke_qualified_property`]; if no such QP
+/// exists, the value formats as `Anonymous_<id>` — exactly how Java's
+/// `ToString.execute` falls back when `findBestToStringFunction`
+/// returns null.
+///
+/// # Errors
+/// Propagates any [`PureException`] raised while evaluating a class's
+/// `toString` body.
+pub(crate) fn pure_to_string(
+    value: &Value,
+    ctx: &mut dyn EvalContextTrait,
+) -> Result<String, PureException> {
     use crate::value::FunctionValue;
     match value {
-        Value::String(s) => s.to_string(),
-        Value::Boolean(b) => b.to_string(),
-        Value::Integer(i) => i.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::Decimal(d) => d.to_string(),
+        Value::String(s) => Ok(s.to_string()),
+        Value::Boolean(b) => Ok(b.to_string()),
+        Value::Integer(i) => Ok(i.to_string()),
+        Value::Float(f) => Ok(f.to_string()),
+        Value::Decimal(d) => Ok(d.to_string()),
         // Date/DateTime: no `%` prefix (PureDate's Display already
         // formats with TZ for time-precision dates).
-        Value::Date(d) => d.to_string(),
-        Value::StrictTime(t) => t.to_string(),
-        Value::Unit => String::new(),
+        Value::Date(d) => Ok(d.to_string()),
+        Value::StrictTime(t) => Ok(t.to_string()),
+        Value::Unit => Ok(String::new()),
         Value::Collection(items) => {
-            let parts: Vec<String> = items.iter().map(|v| pure_to_string(v, ctx)).collect();
-            format!("[{}]", parts.join(", "))
+            let mut parts = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                parts.push(pure_to_string(item, ctx)?);
+            }
+            Ok(format!("[{}]", parts.join(", ")))
         }
-        // Heap object: classifier-based dispatch for known shapes (Pair,
-        // List), default to `Anonymous_<id>` for everything else.
+        // Heap object: dispatch through the receiver's `toString()`
+        // qualified property if one is defined on the class hierarchy.
+        // Pair / List / user classes all flow through this path —
+        // their `toString()` lives in platform `.pure` source, so the
+        // runtime never needs to hardcode classifier names.
         Value::Object(obj_id) => {
-            let classifier = ctx
-                .heap()
-                .classifier(*obj_id)
-                .map(str::to_owned)
-                .unwrap_or_default();
-            let leaf = classifier.rsplit("::").next().unwrap_or("");
-            match leaf {
-                "Pair" => {
-                    let first = ctx
-                        .heap()
-                        .get_property_values(*obj_id, "first")
-                        .ok()
-                        .and_then(|v| v.iter().next().cloned())
-                        .map(|v| pure_to_string(&v, ctx))
-                        .unwrap_or_default();
-                    let second = ctx
-                        .heap()
-                        .get_property_values(*obj_id, "second")
-                        .ok()
-                        .and_then(|v| v.iter().next().cloned())
-                        .map(|v| pure_to_string(&v, ctx))
-                        .unwrap_or_default();
-                    format!("<{first}, {second}>")
-                }
-                "List" => {
-                    let values = ctx
-                        .heap()
-                        .get_property_values(*obj_id, "values")
-                        .unwrap_or_else(|_| im_rc::Vector::new());
-                    let parts: Vec<String> =
-                        values.iter().map(|v| pure_to_string(v, ctx)).collect();
-                    format!("[{}]", parts.join(", "))
-                }
-                _ => format!("Anonymous_{obj_id}"),
+            match ctx.invoke_qualified_property(value, "toString", &[])? {
+                Some(Value::String(s)) => Ok(s.to_string()),
+                Some(other) => pure_to_string(&other, ctx),
+                None => Ok(format!("Anonymous_{obj_id}")),
             }
         }
         // Element ref (Class, Function, Enumeration, …): simple-leaf
         // name. testClassToString and testEnumerationToString assert
         // `STR_Person->toString() == 'STR_Person'`.
         Value::Element(id) => {
-            crate::model_utils::element_simple_name(ctx.model(), *id).to_string()
+            Ok(crate::model_utils::element_simple_name(ctx.model(), *id).to_string())
         }
         // Enum value: just the member (Java parity — `CITY` not
         // `STR_GeographicEntityType.CITY`).
-        Value::EnumValue { member, .. } => member.to_string(),
+        Value::EnumValue { member, .. } => Ok(member.to_string()),
         Value::Function(fv) => match fv.as_ref() {
-            FunctionValue::Lambda(_) => "<Lambda>".to_string(),
+            FunctionValue::Lambda(_) => Ok("<Lambda>".to_string()),
             FunctionValue::Compiled(id) => {
-                crate::model_utils::element_simple_name(ctx.model(), *id).to_string()
+                Ok(crate::model_utils::element_simple_name(ctx.model(), *id).to_string())
             }
         },
-        Value::Map(m) => format!("<Map size={}>", m.borrow().entries.len()),
+        Value::Map(m) => Ok(format!("<Map size={}>", m.borrow().entries.len())),
         Value::UnitInstance { unit_id, inner } => {
             // Pure source form is "{n} {Measure}~{Unit}"; toString-
             // friendly subset just reuses the inner-value string with
             // the local unit name appended.
-            let unit_name = ctx.model().element_name(*unit_id);
-            format!("{} {unit_name}", pure_to_string(inner, ctx))
+            let unit_name = ctx.model().element_name(*unit_id).to_string();
+            let inner_s = pure_to_string(inner, ctx)?;
+            Ok(format!("{inner_s} {unit_name}"))
         }
     }
 }
@@ -590,7 +581,7 @@ impl NativeFunction for Format {
             sub_idx += 1;
             match spec {
                 b'r' => result.push_str(&repr_value(&v)),
-                b's' => result.push_str(&pure_to_string(&v, ctx)),
+                b's' => result.push_str(&pure_to_string(&v, ctx)?),
                 b'd' => {
                     let n = v.as_integer().unwrap_or(0);
                     let body = if let Some(w) = width {
@@ -633,7 +624,7 @@ impl NativeFunction for Format {
                     if let (Some(pat), Value::Date(d)) = (&date_pattern, &v) {
                         result.push_str(&format_date_pattern(d, pat));
                     } else {
-                        result.push_str(&pure_to_string(&v, ctx));
+                        result.push_str(&pure_to_string(&v, ctx)?);
                     }
                 }
                 _ => unreachable!(),

@@ -194,6 +194,28 @@ pub trait EvalContextTrait {
     /// native→user-code boundary.
     fn call_function(&mut self, callable: &Value, args: &[Value]) -> Result<Value, PureException>;
 
+    /// Look up a qualified property by `name` on the receiver's class
+    /// (walking generalizations) and invoke it with `$this` bound to the
+    /// receiver and `args` bound to its parameters.
+    ///
+    /// Returns `Ok(None)` when the receiver is not a heap object, or when
+    /// no QP of that name+arity exists anywhere on the class hierarchy.
+    /// Mirrors Java Pure's `_Class.findQualifiedPropertyWithNoExplicit\
+    /// ArgsUsingGeneralization` + `executeLambdaFromNative` pair (see
+    /// `legend-pure-runtime-java-engine-interpreted/.../ToString.java:50`).
+    /// The generic `toString` native uses this to dispatch to per-class
+    /// `toString()` definitions in platform `.pure` source rather than
+    /// hardcoding classifier names in the runtime.
+    ///
+    /// # Errors
+    /// Propagates any `PureException` raised while evaluating the QP body.
+    fn invoke_qualified_property(
+        &mut self,
+        receiver: &Value,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, PureException>;
+
     /// Access the compiled Pure model (element lookup, type resolution).
     fn model(&self) -> &PureModel;
 
@@ -593,6 +615,17 @@ impl EvalContextTrait for MockCtx {
             "MockCtx::call_function should never be called in simple native tests; \
              move this test to eval_tests.rs"
         )
+    }
+    fn invoke_qualified_property(
+        &mut self,
+        _receiver: &Value,
+        _name: &str,
+        _args: &[Value],
+    ) -> Result<Option<Value>, PureException> {
+        // No model in MockCtx — there can be no class to host a QP, so
+        // the structural answer is "no such QP". Real-evaluator-backed
+        // tests live in eval_tests.rs and exercise the full dispatch.
+        Ok(None)
     }
     fn model(&self) -> &PureModel {
         unreachable!("MockCtx::model should never be called in simple native tests")

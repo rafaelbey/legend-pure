@@ -2016,6 +2016,63 @@ impl<H: EvalHooks> crate::native::EvalContextTrait for EvalContext<'_, '_, H> {
     fn console_output(&mut self, msg: &str) {
         self.evaluator.hooks.console_output(msg);
     }
+
+    fn invoke_qualified_property(
+        &mut self,
+        receiver: &Value,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Option<Value>, PureException> {
+        // QPs only attach to Class instances on the heap. Other Value
+        // shapes (primitives, elements, lambdas) have no per-class
+        // toString hook in the platform — Java's `ToString.execute`
+        // short-circuits the same way via the primitive-type guard.
+        let Value::Object(obj_id) = *receiver else {
+            return Ok(None);
+        };
+        let classifier = self
+            .evaluator
+            .heap
+            .classifier(obj_id)
+            .map_err(PureException::from)?
+            .to_string();
+        if classifier.is_empty() {
+            return Ok(None);
+        }
+        let segments: Vec<SmolStr> = classifier.split("::").map(SmolStr::new).collect();
+        let Some(class_id) = self.evaluator.model.resolve_by_path(&segments) else {
+            return Ok(None);
+        };
+        let Some(found) = find_qp_with_generalization(self.evaluator.model, class_id, name, args.len()) else {
+            return Ok(None);
+        };
+        // Detach owned copies before re-borrowing self mutably for eval.
+        let params = found.parameters;
+        let body = found.body;
+        let type_var_param_names = found.type_var_param_names;
+        let type_var_values: Vec<Value> = if type_var_param_names.is_empty() {
+            Vec::new()
+        } else {
+            self.evaluator
+                .heap
+                .get_property_values(obj_id, "__typeVariableValues")
+                .map(|v| v.iter().cloned().collect())
+                .unwrap_or_default()
+        };
+        self.evaluator.context.push_scope();
+        self.evaluator
+            .context
+            .set(SmolStr::new("this"), Value::Object(obj_id));
+        for (n, v) in type_var_param_names.iter().zip(type_var_values.iter()) {
+            self.evaluator.context.set(n.clone(), v.clone());
+        }
+        for (param, arg) in params.iter().zip(args.iter()) {
+            self.evaluator.context.set(param.name.clone(), arg.clone());
+        }
+        let result = self.evaluator.eval_body(&body);
+        self.evaluator.context.pop_scope();
+        result.map(Some)
+    }
 }
 
 impl<H: EvalHooks> std::fmt::Debug for Evaluator<'_, H> {
@@ -2025,6 +2082,67 @@ impl<H: EvalHooks> std::fmt::Debug for Evaluator<'_, H> {
             .field("context_depth", &self.context.depth())
             .finish()
     }
+}
+
+/// Owned snapshot of a qualified-property definition that survives a
+/// later `&mut self` borrow on the evaluator. Returned by
+/// [`find_qp_with_generalization`] so the caller can drop the
+/// model-borrow before calling `eval_body` on the cloned body.
+struct FoundQp {
+    parameters: Vec<legend_pure_parser_pure::types::Parameter>,
+    body: Vec<ValueSpec>,
+    type_var_param_names: Vec<SmolStr>,
+}
+
+/// Locate a qualified property by `name` and `arity` on `class_id` or any
+/// of its generalizations (BFS). Mirrors Java Pure's
+/// `_Class.findQualifiedPropertyWithNoExplicitArgsUsingGeneralization`
+/// but kept generic in arity since callers other than `toString` may
+/// invoke parameterized QPs.
+///
+/// Returns `None` when no class on the inheritance chain declares a QP
+/// with the matching name and parameter count. Type-variable parameter
+/// names are captured from the **declaring** class (the one that owns
+/// the QP), not the receiver's class — same contract as
+/// `eval_qualified_property`.
+fn find_qp_with_generalization(
+    model: &legend_pure_parser_pure::model::PureModel,
+    class_id: ElementId,
+    name: &str,
+    arity: usize,
+) -> Option<FoundQp> {
+    let mut visited: std::collections::HashSet<ElementId> = std::collections::HashSet::new();
+    let mut queue: std::collections::VecDeque<ElementId> = std::collections::VecDeque::new();
+    queue.push_back(class_id);
+    visited.insert(class_id);
+    while let Some(cid) = queue.pop_front() {
+        let Element::Class(class) = model.get_element(cid) else {
+            continue;
+        };
+        if let Some(qp) = class
+            .qualified_properties
+            .iter()
+            .find(|q| q.name == name && q.parameters.len() == arity)
+        {
+            return Some(FoundQp {
+                parameters: qp.parameters.clone(),
+                body: qp.body.clone(),
+                type_var_param_names: class
+                    .type_variable_parameters
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect(),
+            });
+        }
+        for super_ty in &class.super_types {
+            if let TypeExpr::Named { element, .. } = super_ty
+                && visited.insert(*element)
+            {
+                queue.push_back(*element);
+            }
+        }
+    }
+    None
 }
 
 /// Map a Multiplicity-constant element (under

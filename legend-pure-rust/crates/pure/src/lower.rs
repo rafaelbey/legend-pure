@@ -1851,6 +1851,7 @@ mod tests {
                 second: 0,
                 subsecond_nanos: 0,
                 subsecond_digits: 0,
+                has_minutes: true,
                 has_seconds: true,
                 tz_offset_minutes: None,
             }
@@ -1871,6 +1872,7 @@ mod tests {
                 second: 45,
                 subsecond_nanos: 123_000_000,
                 subsecond_digits: 3,
+                has_minutes: true,
                 has_seconds: true,
                 tz_offset_minutes: None,
             }
@@ -1891,6 +1893,7 @@ mod tests {
                 second: 45,
                 subsecond_nanos: 352_000_000,
                 subsecond_digits: 3,
+                has_minutes: true,
                 has_seconds: true,
                 tz_offset_minutes: Some(-300),
             }
@@ -1911,6 +1914,7 @@ mod tests {
                 second: 0,
                 subsecond_nanos: 0,
                 subsecond_digits: 0,
+                has_minutes: true,
                 has_seconds: false,
                 tz_offset_minutes: Some(0),
             }
