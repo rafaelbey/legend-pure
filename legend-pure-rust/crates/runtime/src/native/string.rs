@@ -1009,8 +1009,12 @@ impl NativeFunction for ParseDecimal {
                 Ok(Evaluated::new(Value::Decimal(d)))
             }
             3 => {
+                // Signature is parseDecimal(string, precision, scale).
+                // values[1] is precision (declared but not enforced —
+                // platform tests assert only the rounded value, not
+                // total-digit truncation), values[2] is scale.
                 let s = values[0].as_string()?;
-                let scale = i64_arg(&values[1], "parseDecimal scale")?;
+                let scale = i64_arg(&values[2], "parseDecimal scale")?;
                 if !(0..=28).contains(&scale) {
                     return Err(PureRuntimeError::EvaluationError(format!(
                         "parseDecimal: scale must be in 0..=28, got {scale}"

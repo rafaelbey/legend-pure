@@ -294,7 +294,14 @@ impl PartialEq for Value {
         match (self, other) {
             (Self::Boolean(a), Self::Boolean(b)) => a == b,
             (Self::Integer(a), Self::Integer(b)) => a == b,
-            (Self::Float(a), Self::Float(b)) => a.to_bits() == b.to_bits(),
+            // Mirror Java Pure's `CompiledSupport.eq` (compiled-engine
+            // path): `-0.0` and `+0.0` compare equal (Java normalizes
+            // both to `0.0` before comparing), and NaN compares equal
+            // to NaN (Java's `Double.equals` semantics — distinct from
+            // IEEE 754 `==`). Our previous `to_bits()` check inverted
+            // both: `parseFloat('-000.000') == 0.0` returned false, and
+            // NaN-bearing comparisons disagreed by NaN bit pattern.
+            (Self::Float(a), Self::Float(b)) => a == b || (a.is_nan() && b.is_nan()),
             (Self::Decimal(a), Self::Decimal(b)) => a == b,
             (Self::String(a), Self::String(b)) => a == b,
             (Self::Date(a), Self::Date(b)) => a == b,
