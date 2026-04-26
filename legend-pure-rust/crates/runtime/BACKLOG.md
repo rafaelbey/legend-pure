@@ -148,9 +148,11 @@ precision derived from value or `Decimal::scale()`.)
 `testDateCompare` moved to **Excluded — intentional** above (year
 10999 outside jiff's `-9999..=9999`).
 
-#### Boolean (1 FAIL)
-- `boolean::tests::equality::equal::testEqualNonPrimitive` (FAIL) —
-  structural equality on heap objects with non-primitive fields.
+#### Boolean — empty
+
+(Phase 8 closed the boolean cluster: `equality_key_properties` now
+walks supertypes for inherited keys with subclass-override semantics
+— see `native::equality`.)
 
 #### Collection — empty
 

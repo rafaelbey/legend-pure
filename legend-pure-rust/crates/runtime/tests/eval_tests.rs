@@ -2787,6 +2787,7 @@ fn eval_pct_lang_status_dump() {
     pct_status_dump("meta::pure::functions::lang");
 }
 
+
 #[test]
 #[ignore = "diagnostic: list all date tests' status + message"]
 fn eval_pct_date_status_dump() {
@@ -3111,7 +3112,20 @@ fn eval_pct_date_error_histogram() {
 ///   `Decimal::from_f64` (rounds to canonical round-trip form:
 ///   `3.8`). Matches Java Pure's `BigDecimal.valueOf(double)`
 ///   contract. Resolves testDoubleToDecimal.
-const PCT_PASS_BASELINE: i64 = 463;
+/// - 2026-04-26 → 464: `equality_key_properties` (in
+///   `native::equality`) now BFS-walks the class + supertype
+///   chain so an `<<equality.Key>>` declared on a parent
+///   (`TopClass.<<equality.Key>> name : String[1]`) is honoured
+///   when comparing subclass instances (`LeftClass extends
+///   TopClass`). Override semantics: a subclass that redefines a
+///   property — with or without the stereotype — wins for that
+///   property name. So `OtherBottomClass.sides : SideClass[*]`
+///   (no stereotype) overrides `TopClass.<<equality.Key>> sides
+///   : SideClass[*]` and the result excludes `sides` from
+///   equality keys for OtherBottomClass instances. Tracking
+///   *all* seen names (not just keys) enforces this. Resolves
+///   testEqualNonPrimitive (last FAIL).
+const PCT_PASS_BASELINE: i64 = 464;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in
