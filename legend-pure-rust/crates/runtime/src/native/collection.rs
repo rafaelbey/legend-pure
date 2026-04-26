@@ -676,15 +676,22 @@ impl NativeFunction for ForAll {
 // removeDuplicates (non-lambda variant)
 // ---------------------------------------------------------------------------
 
-/// Pure `removeDuplicates<T>(value:T[*]):T[*]`
+/// Pure `removeDuplicates<T,V>(col:T[*], key:Function<{T[1]->V[1]}>[0..1],
+/// eql:Function<{V[1],V[1]->Boolean[1]}>[0..1]):T[*]`.
 ///
-/// Returns a new collection with duplicate elements removed, preserving
-/// the first occurrence order. Uses `PartialEq` on [`Value`] for comparison.
+/// Removes duplicate elements, preserving first-occurrence order.
+/// Both function arguments are optional (`[0..1]`). When `key` is
+/// supplied each element is mapped through it before comparison;
+/// when `eql` is supplied that function decides equality
+/// (otherwise [`Value::eq`] is used).
 ///
-/// Also accepts two optional `Function[0..1]` hasher/equator arguments in the
-/// richer signature (`removeDuplicates_T_MANY__Function_$0_1$__Function_$0_1$__T_MANY_`);
-/// those arguments are ignored here — we fall back to value equality, matching
-/// the default Pure semantics when no custom comparator is supplied.
+/// The 1-arg `removeDuplicates(col)` and 2-arg
+/// `removeDuplicates(col, eql)` shapes are platform `.pure`
+/// wrappers that delegate to this 3-arg native with `[]` (empty)
+/// for the omitted parameters — see
+/// `legend-pure-core/.../removeDuplicates.pure:25-33`. The 1-arg
+/// `removeDuplicatesBy(col, key)` similarly delegates here with
+/// `[]` for `eql` (`removeDuplicatesBy.pure:18-21`).
 #[derive(Debug)]
 pub struct RemoveDuplicates;
 
@@ -695,31 +702,80 @@ impl NativeFunction for RemoveDuplicates {
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
-        // Accept 1-arg and 3-arg variants. The 3-arg variant has optional
-        // hash/equality lambdas that we currently ignore.
-        if values.is_empty() || values.len() > 3 {
+        // Accept 1-arg (col only) and 3-arg (col, key, eql) variants.
+        // Platform wrappers normalise to 3-arg before dispatch, but
+        // direct callers may use the bare native.
+        if values.is_empty() || values.len() == 2 || values.len() > 3 {
             return Err(PureRuntimeError::EvaluationError(format!(
-                "removeDuplicates: expected 1..=3 arguments, got {}",
+                "removeDuplicates: expected 1 or 3 argument(s), got {}",
                 values.len()
             ))
             .into());
         }
         let source = values[0].to_collection();
+        let key_fn: Option<Value> = values
+            .get(1)
+            .filter(|v| !is_empty_optional(v))
+            .cloned();
+        let eql_fn: Option<Value> = values
+            .get(2)
+            .filter(|v| !is_empty_optional(v))
+            .cloned();
 
-        let mut seen: Vec<Value> = Vec::with_capacity(source.len());
-        let mut out: Vec<Value> = Vec::with_capacity(source.len());
-        for item in &source {
-            if !seen.iter().any(|s| s == item) {
-                seen.push(item.clone());
-                out.push(item.clone());
+        // Pre-compute the comparison key for each input element.
+        // When no `key` is provided the element itself is its key.
+        let mut keys: Vec<Value> = Vec::with_capacity(source.len());
+        for item in source.iter() {
+            let k = match &key_fn {
+                Some(kf) => ctx.call_function(kf, &[item.clone()])?,
+                None => item.clone(),
+            };
+            keys.push(k);
+        }
+
+        // Two-pass dedup: walk elements in order, keeping each whose
+        // key isn't equal (under `eql_fn` if provided, else
+        // `Value::eq`) to any already-kept element's key.
+        let mut kept: Vec<usize> = Vec::with_capacity(source.len());
+        for i in 0..source.len() {
+            let mut is_dup = false;
+            for &j in &kept {
+                let eq = match &eql_fn {
+                    Some(ef) => {
+                        let result =
+                            ctx.call_function(ef, &[keys[j].clone(), keys[i].clone()])?;
+                        result.as_boolean()?
+                    }
+                    None => keys[j] == keys[i],
+                };
+                if eq {
+                    is_dup = true;
+                    break;
+                }
+            }
+            if !is_dup {
+                kept.push(i);
             }
         }
 
+        let out: Vec<Value> = kept.iter().map(|&i| source[i].clone()).collect();
         Ok(Evaluated::new(Value::from_vec(out)))
     }
 
     fn signature(&self) -> &'static str {
-        "removeDuplicates(T[*]): T[*]"
+        "removeDuplicates(T[*], key:Function[0..1], eql:Function[0..1]): T[*]"
+    }
+}
+
+/// Whether a `Value` should be treated as an absent optional argument
+/// — i.e., the `[]` literal that the platform wrappers pass for
+/// omitted `key`/`eql` parameters. Matches `Value::Unit` and any
+/// empty collection.
+fn is_empty_optional(v: &Value) -> bool {
+    match v {
+        Value::Unit => true,
+        Value::Collection(items) => items.is_empty(),
+        _ => false,
     }
 }
 

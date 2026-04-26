@@ -140,17 +140,12 @@ Grouped by likely fix shape. Each bullet has the test FQN, the failure type
 - `boolean::tests::equality::equal::testEqualNonPrimitive` (FAIL) —
   structural equality on heap objects with non-primitive fields.
 
-#### Collection (1 ERROR + 4 FAIL)
-- `collection::tests::getAll::testEvalParse` (ERROR) — needs `getAll`
-  native (the only missing simple-name native left from the Phase 2
-  harvest).
-- `concatenate::testConcatenateTypeInference` (FAIL),
-  `removeDuplicatesBy::testRemoveDuplicatesByPrimitive` (FAIL),
-  `removeDuplicates::testRemoveDuplicatesPrimitiveStandardFunctionExplicit`
-  (FAIL),
-  `removeDuplicates::testRemoveDuplicatesPrimitiveNonStandardFunction`
-  (FAIL) — each needs targeted investigation; likely small per-test
-  fixes in the relevant native.
+#### Collection — empty
+
+(Phase 8 closed the collection cluster: removeDuplicates honours
+its optional key/eql Function args, and `Value::Collection.type()`
+folds element types through `least_upper_bound_ids` instead of
+returning `Any`.)
 
 #### Math (1 FAIL)
 - `math::tests::toDecimal::testDoubleToDecimal` (FAIL) — Float→Decimal

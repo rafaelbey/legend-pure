@@ -1225,8 +1225,10 @@ fn type_distance(
 /// Collects `a`'s ancestor chain, then walks `b`'s ancestors until a
 /// common type is found. Falls back to `Any` if no common ancestor exists.
 ///
-/// Public within the crate for use from `lower.rs` (collection type inference).
-pub(crate) fn least_upper_bound_ids(
+/// Exposed for the runtime `type()` native (`crates/runtime/.../meta.rs`)
+/// to compute LUB across collection elements when no compile-time type
+/// information is available.
+pub fn least_upper_bound_ids(
     a: ElementId,
     b: ElementId,
     model: &crate::model::PureModel,
