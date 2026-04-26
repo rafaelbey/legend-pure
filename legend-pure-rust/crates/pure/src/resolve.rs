@@ -976,6 +976,17 @@ pub(crate) fn infer_typeexpr_from_valuespec(
         type_arguments: vec![],
         value_arguments: vec![],
     };
+    // Honour pre-set `type_info` first — this is the canonical
+    // "lowering captures parametric type info; consumers read from
+    // type_info" pattern documented in `reference_type_info_capture.md`.
+    // `lower_new_instance` (for `^Class<T>(...)`) and
+    // `lower_packageable_element_ref` (for bare `P` references that
+    // need `Class<P>` parametric capture) both populate this slot;
+    // reading it before kind-based inference avoids re-deriving what
+    // the AST layer already knows.
+    if let Some(rt) = vs.type_info.as_deref() {
+        return Some(rt.type_expr.clone());
+    }
     match vs.kind.as_ref() {
         // Variable: look up the declared TypeExpr and return it as-is —
         // this is the load-bearing case for Lane B. `var_types` stores
