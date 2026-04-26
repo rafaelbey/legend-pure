@@ -191,6 +191,7 @@ pub(crate) fn resolve_type_ref(
 ///   `multiplicity_arguments[0]`
 /// - `type_arguments[n-1]` — the return type
 /// - top-level `multiplicity_arguments[0]` — the return multiplicity
+#[allow(clippy::unnecessary_wraps)]
 fn resolve_function_type_sentinel(
     type_ref: &ast_type::TypeReference,
     ctx: &mut ResolutionContext<'_>,
@@ -214,14 +215,14 @@ fn resolve_function_type_sentinel(
             resolve_type_ref(param_ref, ctx, errors).unwrap_or(TypeExpr::Generic("Any".into()));
 
         // Each parameter's multiplicity is stored in its multiplicity_arguments[0]
-        let param_mult = param_ref
-            .multiplicity_arguments
-            .first()
-            .map(|ma| match ma {
-                ast_type::MultiplicityArgument::Concrete(m, _) => lower_multiplicity(m),
-                ast_type::MultiplicityArgument::Identifier(_, _) => Multiplicity::ZeroOrMany,
-            })
-            .unwrap_or(Multiplicity::PureOne);
+        let param_mult =
+            param_ref
+                .multiplicity_arguments
+                .first()
+                .map_or(Multiplicity::PureOne, |ma| match ma {
+                    ast_type::MultiplicityArgument::Concrete(m, _) => lower_multiplicity(m),
+                    ast_type::MultiplicityArgument::Identifier(_, _) => Multiplicity::ZeroOrMany,
+                });
 
         parameters.push((param_type, param_mult));
     }
@@ -232,14 +233,14 @@ fn resolve_function_type_sentinel(
         resolve_type_ref(return_ref, ctx, errors).unwrap_or(TypeExpr::Generic("Any".into()));
 
     // Return multiplicity is in the top-level multiplicity_arguments[0]
-    let return_multiplicity = type_ref
-        .multiplicity_arguments
-        .first()
-        .map(|ma| match ma {
-            ast_type::MultiplicityArgument::Concrete(m, _) => lower_multiplicity(m),
-            ast_type::MultiplicityArgument::Identifier(_, _) => Multiplicity::ZeroOrMany,
-        })
-        .unwrap_or(Multiplicity::PureOne);
+    let return_multiplicity =
+        type_ref
+            .multiplicity_arguments
+            .first()
+            .map_or(Multiplicity::PureOne, |ma| match ma {
+                ast_type::MultiplicityArgument::Concrete(m, _) => lower_multiplicity(m),
+                ast_type::MultiplicityArgument::Identifier(_, _) => Multiplicity::ZeroOrMany,
+            });
 
     Some(TypeExpr::FunctionType {
         parameters,
@@ -372,20 +373,19 @@ fn resolve_unqualified_cached(
     // Resolve and cache
     let pre_errors = errors.len();
     let result = resolve_unqualified(name, source_info, ctx, errors);
-    let cache_entry = match result {
-        Some(id) => ResolveResult::Found(id),
-        None => {
-            // Cache the error that was just emitted (if any)
-            let cached = errors
-                .get(pre_errors)
-                .cloned()
-                .unwrap_or_else(|| CompilationError {
-                    message: format!("Cannot resolve element '{name}'"),
-                    source_info: source_info.clone(),
-                    kind: CompilationErrorKind::UnresolvedElement { path: name.clone() },
-                });
-            ResolveResult::Failed(cached)
-        }
+    let cache_entry = if let Some(id) = result {
+        ResolveResult::Found(id)
+    } else {
+        // Cache the error that was just emitted (if any)
+        let cached = errors
+            .get(pre_errors)
+            .cloned()
+            .unwrap_or_else(|| CompilationError {
+                message: format!("Cannot resolve element '{name}'"),
+                source_info: source_info.clone(),
+                kind: CompilationErrorKind::UnresolvedElement { path: name.clone() },
+            });
+        ResolveResult::Failed(cached)
     };
     ctx.resolve_cache.insert(name.clone(), cache_entry);
     result
@@ -586,7 +586,7 @@ pub(crate) fn resolve_element_ptr(
         for &child_id in &root.children_packages {
             if ctx.model.get_package(child_id).name == *ptr.name() {
                 // Remove the error that resolve_unqualified_cached added
-                if errors.last().map_or(false, |e| {
+                if errors.last().is_some_and(|e| {
                     matches!(&e.kind, CompilationErrorKind::UnresolvedElement { path } if path == ptr.name())
                 }) {
                     errors.pop();
@@ -614,11 +614,12 @@ pub(crate) fn resolve_element_ptr(
     skip(lowered_args, ctx, errors),
     fields(
         name = %ptr.name(),
-        package = ?ptr.package().map(|p| p.to_string()),
+        package = ?ptr.package().map(std::string::ToString::to_string),
         arg_count,
         n_imports = ctx.import_scopes.len(),
     ),
 )]
+#[allow(clippy::too_many_lines, clippy::single_match_else)]
 pub(crate) fn resolve_function_call(
     ptr: &ast_ann::PackageableElementPtr,
     arg_count: usize,
@@ -654,7 +655,7 @@ pub(crate) fn resolve_function_call(
         if let Some(id) = ctx.model.resolve_in_package(pkg, name) {
             return Some(id);
         }
-        let display = SmolStr::new(format!("{}::{}", pkg, name));
+        let display = SmolStr::new(format!("{pkg}::{name}"));
         errors.push(CompilationError {
             message: format!("Cannot resolve element '{display}'"),
             source_info: source_info.clone(),
@@ -780,6 +781,7 @@ pub(crate) fn resolve_function_call(
 /// Type alias for variable scope: name → (type, multiplicity).
 type VarTypes = HashMap<SmolStr, (crate::types::TypeExpr, crate::types::Multiplicity)>;
 
+#[allow(clippy::too_many_lines)]
 fn infer_type_from_valuespec(
     vs: &crate::types::ValueSpec,
     model: &crate::model::PureModel,
@@ -802,7 +804,6 @@ fn infer_type_from_valuespec(
                 DateValue::StrictTime { .. } => Some(bootstrap::STRICT_TIME_ID),
             }
         }
-        ExprKind::Lambda { .. } => None, // FunctionType — no ElementId
         ExprKind::TypeReference { type_expr } => {
             // A `@Foo` expression is a type-token value. For dispatch,
             // expose the wrapped type's element so `cast<T>(_, @Class<Any>)`
@@ -820,35 +821,28 @@ fn infer_type_from_valuespec(
         } => {
             // Use the return type of the resolved function, with generic
             // type variables (`T`) bound from call-site arguments.
-            if let Some(fid) = function {
-                if let Element::Function(f) = model.get_element(*fid) {
-                    let bindings =
-                        infer_generic_bindings(&f.parameters, arguments, model, var_types);
-                    let substituted = substitute_type(&f.return_type, &bindings.ty);
-                    match &substituted {
-                        crate::types::TypeExpr::Named { element, .. } => return Some(*element),
-                        // Unbound type variable — widen to Any (type unknown at this call site).
-                        crate::types::TypeExpr::Generic(_) => return Some(bootstrap::ANY_ID),
-                        _ => {}
-                    }
+            if let Some(fid) = function
+                && let Element::Function(f) = model.get_element(*fid)
+            {
+                let bindings = infer_generic_bindings(&f.parameters, arguments, model, var_types);
+                let substituted = substitute_type(&f.return_type, &bindings.ty);
+                match &substituted {
+                    crate::types::TypeExpr::Named { element, .. } => return Some(*element),
+                    // Unbound type variable — widen to Any (type unknown at this call site).
+                    crate::types::TypeExpr::Generic(_) => return Some(bootstrap::ANY_ID),
+                    _ => {}
                 }
             }
             // Well-known function return types — these operators always return
             // a specific type regardless of resolution status.
             match function_name.as_str() {
-                // Comparison/equality → Boolean
+                // Comparison/equality/logical/assert family → Boolean
                 "equal" | "lessThan" | "lessThanEqual" | "greaterThan" | "greaterThanEqual"
                 | "is" | "in" | "contains" | "startsWith" | "endsWith" | "isEmpty"
-                | "isNotEmpty" => {
-                    return Some(bootstrap::BOOLEAN_ID);
-                }
-                // Logical → Boolean
-                "and" | "or" | "not" => return Some(bootstrap::BOOLEAN_ID),
-                // Assert family → Boolean
-                "assert" | "assertFalse" | "assertEquals" | "assertNotEquals"
-                | "assertNotEmpty" | "assertEmpty" | "assertSize" | "assertSameElements"
-                | "assertIs" | "assertIsNot" | "assertContains" | "assertNotContains"
-                | "assertNotSize" => {
+                | "isNotEmpty" | "and" | "or" | "not" | "assert" | "assertFalse"
+                | "assertEquals" | "assertNotEquals" | "assertNotEmpty" | "assertEmpty"
+                | "assertSize" | "assertSameElements" | "assertIs" | "assertIsNot"
+                | "assertContains" | "assertNotContains" | "assertNotSize" => {
                     return Some(bootstrap::BOOLEAN_ID);
                 }
                 // String operations
@@ -860,12 +854,11 @@ fn infer_type_from_valuespec(
             // `new(Class, name, keys)` → return type is the class itself
             // `dynamicNew(Class, keys)` → same pattern
             // `copy(src, keys)` → return type is the receiver
-            if matches!(function_name.as_str(), "new" | "dynamicNew") {
-                if let Some(first_arg) = arguments.first() {
-                    if let ExprKind::PackageableElementRef { element } = first_arg.kind.as_ref() {
-                        return Some(*element);
-                    }
-                }
+            if matches!(function_name.as_str(), "new" | "dynamicNew")
+                && let Some(first_arg) = arguments.first()
+                && let ExprKind::PackageableElementRef { element } = first_arg.kind.as_ref()
+            {
+                return Some(*element);
             }
             // When the function is unresolved and there's no dedicated rule
             // above, give up. The "fallback from first arg" heuristic that
@@ -960,9 +953,9 @@ fn infer_type_from_valuespec(
 /// `Option<TypeExpr>`. Most arms just call back into the cheap fn
 /// and wrap; the value-add is in the arms that carry parametric
 /// bindings: `Variable` (read declared type from scope, including
-/// type_arguments), `FunctionCall` (substitute T-bindings into the
+/// `type_arguments`), `FunctionCall` (substitute T-bindings into the
 /// resolved function's return type, preserving the result's
-/// type_arguments — this is what makes `$l1->class()` produce
+/// `type_arguments` — this is what makes `$l1->class()` produce
 /// `Class<List<String>>` instead of bare `Class`),
 /// `PropertyAccess` (substitute class-level generics).
 pub(crate) fn infer_typeexpr_from_valuespec(
@@ -1115,7 +1108,7 @@ fn substitute_class_generics(
 
 /// Checks if `arg_type` is compatible with `param_type` in the type hierarchy.
 ///
-/// Compatible means: same type, or arg_type is a subtype of param_type.
+/// Compatible means: same type, or `arg_type` is a subtype of `param_type`.
 /// Returns true if we can't determine (either side is `None`/`Any`/generic).
 fn is_type_compatible(
     arg_type: Option<ElementId>,
@@ -1126,8 +1119,7 @@ fn is_type_compatible(
 
     let param_eid = match param_type {
         crate::types::TypeExpr::Named { element, .. } => *element,
-        crate::types::TypeExpr::Generic(_) => return true, // Generic matches anything
-        crate::types::TypeExpr::FunctionType { .. } => return true, // Can't check structurally
+        // Generic matches anything, FunctionType can't be checked structurally
         _ => return true,
     };
 
@@ -1173,10 +1165,9 @@ fn is_subtype(child: ElementId, parent: ElementId, model: &crate::model::PureMod
         if let crate::types::TypeExpr::Named {
             element: sup_eid, ..
         } = st
+            && (*sup_eid == parent || is_subtype(*sup_eid, parent, model))
         {
-            if *sup_eid == parent || is_subtype(*sup_eid, parent, model) {
-                return true;
-            }
+            return true;
         }
     }
     false
@@ -1210,11 +1201,10 @@ fn type_distance(
         if let crate::types::TypeExpr::Named {
             element: sup_eid, ..
         } = st
+            && let Some(d) = type_distance(*sup_eid, parent, model)
         {
-            if let Some(d) = type_distance(*sup_eid, parent, model) {
-                let dist = d + 1;
-                min_dist = Some(min_dist.map_or(dist, |m: usize| m.min(dist)));
-            }
+            let dist = d + 1;
+            min_dist = Some(min_dist.map_or(dist, |m: usize| m.min(dist)));
         }
     }
     min_dist
@@ -1228,6 +1218,7 @@ fn type_distance(
 /// Exposed for the runtime `type()` native (`crates/runtime/.../meta.rs`)
 /// to compute LUB across collection elements when no compile-time type
 /// information is available.
+#[must_use]
 pub fn least_upper_bound_ids(
     a: ElementId,
     b: ElementId,
@@ -1302,32 +1293,25 @@ fn infer_multiplicity_from_valuespec(
     use crate::types::{ExprKind, Multiplicity};
 
     match vs.kind.as_ref() {
-        // All literals produce exactly one value
+        // All literals produce exactly one value; enum values are [1]; lambda is [1];
+        // bare element refs and type references are single values
         ExprKind::IntegerLiteral(_)
         | ExprKind::FloatLiteral(_)
         | ExprKind::DecimalLiteral(_)
         | ExprKind::StringLiteral(_)
         | ExprKind::BooleanLiteral(_)
-        | ExprKind::DateLiteral(_) => Some(Multiplicity::PureOne),
-
-        // Enum values are always [1]
-        ExprKind::EnumValue { .. } => Some(Multiplicity::PureOne),
-
-        // Lambda is [1]
-        ExprKind::Lambda { .. } => Some(Multiplicity::PureOne),
-
-        // Bare element ref (e.g., `ClassWithDefault`) is a single value —
-        // a reference to the class/enum/function itself.
-        ExprKind::PackageableElementRef { .. } => Some(Multiplicity::PureOne),
-
-        // `@Foo` type-reference literal is a single value (a type token).
-        ExprKind::TypeReference { .. } => Some(Multiplicity::PureOne),
+        | ExprKind::DateLiteral(_)
+        | ExprKind::EnumValue { .. }
+        | ExprKind::Lambda { .. }
+        | ExprKind::PackageableElementRef { .. }
+        | ExprKind::TypeReference { .. } => Some(Multiplicity::PureOne),
 
         // Collection: precise cardinality from element count.
         // `[]` is `[0..0]`, `[x]` is `[1]`, `[x, y]` is `[2..2]`, etc.
         // This precision matters for dispatch — `[]` must match an `[0..1]`
         // parameter but not a `[1]` parameter.
         ExprKind::Collection { elements } => {
+            #[allow(clippy::cast_possible_truncation)]
             let n = elements.len() as u32;
             Some(match n {
                 0 => Multiplicity::Range {
@@ -1385,7 +1369,7 @@ pub(crate) struct GenericBindings {
 /// argument's inferred `TypeExpr`. For each parameter whose multiplicity is
 /// `Variable(name)`, binds `name` to the argument's inferred `Multiplicity`.
 /// Also recurses into `Named { type_arguments, … }` so `@T[1]` binds `T` from
-/// the TypeReference's wrapped type.
+/// the `TypeReference`'s wrapped type.
 ///
 /// If the same variable is bound by multiple arguments (e.g., `T` appears in
 /// two params), the bindings are merged using LUB rather than first-wins.
@@ -1399,18 +1383,18 @@ pub(crate) fn infer_generic_bindings(
     let mut bindings = GenericBindings::default();
     for (param, arg) in params.iter().zip(args.iter()) {
         // Bind the param's multiplicity variable from the arg's multiplicity.
-        if let Multiplicity::Variable(name) = &param.multiplicity {
-            if let Some(arg_mult) = infer_multiplicity_from_valuespec(arg, model, var_types) {
-                use std::collections::hash_map::Entry;
-                match bindings.mult.entry(name.clone()) {
-                    Entry::Vacant(e) => {
-                        e.insert(arg_mult);
-                    }
-                    Entry::Occupied(mut e) => {
-                        // m already bound — compute LUB (widest range covering both).
-                        let lub = mult_lub(e.get(), &arg_mult);
-                        *e.get_mut() = lub;
-                    }
+        if let Multiplicity::Variable(name) = &param.multiplicity
+            && let Some(arg_mult) = infer_multiplicity_from_valuespec(arg, model, var_types)
+        {
+            use std::collections::hash_map::Entry;
+            match bindings.mult.entry(name.clone()) {
+                Entry::Vacant(e) => {
+                    e.insert(arg_mult);
+                }
+                Entry::Occupied(mut e) => {
+                    // m already bound — compute LUB (widest range covering both).
+                    let lub = mult_lub(e.get(), &arg_mult);
+                    *e.get_mut() = lub;
                 }
             }
         }
@@ -1643,7 +1627,7 @@ pub(crate) fn substitute_mult(
 /// `[1]` fits into `[0..1]`, `[0..1]`, `[1..*]`, `[*]`.
 /// `[*]` only fits into `[*]`.
 fn is_multiplicity_compatible(
-    arg_mult: &Option<crate::types::Multiplicity>,
+    arg_mult: Option<&crate::types::Multiplicity>,
     param_mult: &crate::types::Multiplicity,
 ) -> bool {
     let Some(am) = arg_mult else {
@@ -1660,18 +1644,16 @@ fn is_multiplicity_compatible(
 }
 
 /// Returns (lower, upper) bounds for a multiplicity.
-/// `None` upper means unbounded (represented as u32::MAX).
+/// `None` upper means unbounded (represented as `u32::MAX`).
 fn mult_bounds(m: &crate::types::Multiplicity) -> (u32, u32) {
     use crate::types::Multiplicity;
     match m {
         Multiplicity::PureOne => (1, 1),
         Multiplicity::ZeroOrOne => (0, 1),
-        Multiplicity::ZeroOrMany => (0, u32::MAX),
         Multiplicity::OneOrMany => (1, u32::MAX),
         Multiplicity::Range { lower, upper } => (*lower, upper.unwrap_or(u32::MAX)),
-        // Variable multiplicity is unbounded at declaration; treated as [*]
-        // for compatibility/ordering. Substitution binds it before dispatch.
-        Multiplicity::Variable(_) => (0, u32::MAX),
+        // ZeroOrMany and Variable: both unbounded lower bound
+        Multiplicity::ZeroOrMany | Multiplicity::Variable(_) => (0, u32::MAX),
     }
 }
 
@@ -1681,13 +1663,11 @@ fn mult_specificity(m: &crate::types::Multiplicity) -> i32 {
     use crate::types::Multiplicity;
     match m {
         Multiplicity::PureOne => 4,
-        Multiplicity::ZeroOrOne => 3,
         Multiplicity::OneOrMany => 2,
-        Multiplicity::Range { upper: Some(_), .. } => 3, // bounded range
-        Multiplicity::Range { upper: None, .. } => 1,    // unbounded
-        Multiplicity::ZeroOrMany => 1,
-        // Unbound variable: same specificity as ZeroOrMany.
-        Multiplicity::Variable(_) => 1,
+        Multiplicity::ZeroOrOne | Multiplicity::Range { upper: Some(_), .. } => 3, // bounded cases
+        Multiplicity::Range { upper: None, .. }
+        | Multiplicity::ZeroOrMany
+        | Multiplicity::Variable(_) => 1, // unbounded cases
     }
 }
 
@@ -1724,7 +1704,7 @@ fn extract_function_type_return_mult(
 ///
 /// Returns `true` (compatible) if:
 /// - The arg is not a lambda (not applicable)
-/// - The param type doesn't contain a FunctionType (not applicable)
+/// - The param type doesn't contain a `FunctionType` (not applicable)
 /// - The lambda's body return multiplicity can't be determined (assume OK)
 /// - The lambda's body return multiplicity fits within the param's expected mult
 fn is_lambda_compatible(
@@ -1781,7 +1761,7 @@ fn is_lambda_compatible(
     };
 
     let inferred = infer_multiplicity_from_valuespec(last_expr, model, var_types);
-    is_multiplicity_compatible(&inferred, expected_mult)
+    is_multiplicity_compatible(inferred.as_ref(), expected_mult)
 }
 
 /// Narrows function candidates using a two-phase approach:
@@ -1810,6 +1790,7 @@ fn is_lambda_compatible(
     skip(candidates, lowered_args, model, var_types),
     fields(n_candidates = candidates.len(), n_args = lowered_args.len()),
 )]
+#[allow(clippy::too_many_lines)]
 pub(crate) fn narrow_candidates_by_type(
     candidates: &[ElementId],
     lowered_args: &[crate::types::ValueSpec],
@@ -1854,16 +1835,16 @@ pub(crate) fn narrow_candidates_by_type(
                     return false;
                 }
                 let arg_mult = arg_mults.get(i).cloned().flatten();
-                if !is_multiplicity_compatible(&arg_mult, &param.multiplicity) {
+                if !is_multiplicity_compatible(arg_mult.as_ref(), &param.multiplicity) {
                     return false;
                 }
                 // Lambda vs Function<{...->V[m]}> structural check:
                 // when the arg is a lambda and the param expects a Function type,
                 // verify the lambda's body return multiplicity matches.
-                if let Some(arg_vs) = lowered_args.get(i) {
-                    if !is_lambda_compatible(arg_vs, &param.type_expr, model, var_types) {
-                        return false;
-                    }
+                if let Some(arg_vs) = lowered_args.get(i)
+                    && !is_lambda_compatible(arg_vs, &param.type_expr, model, var_types)
+                {
+                    return false;
                 }
             }
             true
@@ -1888,15 +1869,15 @@ pub(crate) fn narrow_candidates_by_type(
             let mut score: i32 = 0;
             for (i, param) in f.parameters.iter().enumerate() {
                 // --- Type specificity ---
-                if let Some(at) = arg_types.get(i).copied().flatten() {
-                    if let crate::types::TypeExpr::Named { element: pe, .. } = &param.type_expr {
-                        if at == *pe {
-                            score += 3; // exact type match
-                        } else if is_subtype(at, *pe, model) {
-                            score += 1; // subtype match
-                        }
-                        // else: compatible via Any/generic — +0
+                if let Some(at) = arg_types.get(i).copied().flatten()
+                    && let crate::types::TypeExpr::Named { element: pe, .. } = &param.type_expr
+                {
+                    if at == *pe {
+                        score += 3; // exact type match
+                    } else if is_subtype(at, *pe, model) {
+                        score += 1; // subtype match
                     }
+                    // else: compatible via Any/generic — +0
                 }
                 // If arg type is unknown, no type score — all candidates equal
 
@@ -1915,12 +1896,11 @@ pub(crate) fn narrow_candidates_by_type(
                 // --- Lambda FunctionType return multiplicity specificity ---
                 // When the arg is a lambda and the param expects Function<{...->V[m]}>,
                 // prefer the overload with the most specific return multiplicity.
-                if let Some(arg_vs) = lowered_args.get(i) {
-                    if matches!(arg_vs.kind.as_ref(), crate::types::ExprKind::Lambda { .. }) {
-                        if let Some(ft_mult) = extract_function_type_return_mult(&param.type_expr) {
-                            score += mult_specificity(ft_mult);
-                        }
-                    }
+                if let Some(arg_vs) = lowered_args.get(i)
+                    && matches!(arg_vs.kind.as_ref(), crate::types::ExprKind::Lambda { .. })
+                    && let Some(ft_mult) = extract_function_type_return_mult(&param.type_expr)
+                {
+                    score += mult_specificity(ft_mult);
                 }
 
                 // --- Concrete vs Function-wrapped type preference ---
@@ -1928,7 +1908,7 @@ pub(crate) fn narrow_candidates_by_type(
                 // concrete (String) or Function-wrapped (Function<{->String}>),
                 // prefer the concrete type.
                 // When the arg IS a lambda, prefer the Function-wrapped param.
-                let arg_is_lambda = lowered_args.get(i).map_or(false, |vs| {
+                let arg_is_lambda = lowered_args.get(i).is_some_and(|vs| {
                     matches!(vs.kind.as_ref(), crate::types::ExprKind::Lambda { .. })
                 });
                 let param_is_function_type =
@@ -1987,16 +1967,16 @@ pub(crate) fn narrow_candidates_by_type(
                 .iter()
                 .zip(fj.parameters.iter())
                 .all(|(pi, pj)| {
-                    let pi_eid = match &pi.type_expr {
+                    let i_eid = match &pi.type_expr {
                         crate::types::TypeExpr::Named { element, .. } => Some(*element),
                         _ => None,
                     };
-                    let pj_eid = match &pj.type_expr {
+                    let j_eid = match &pj.type_expr {
                         crate::types::TypeExpr::Named { element, .. } => Some(*element),
                         _ => None,
                     };
-                    match (pi_eid, pj_eid) {
-                        (Some(pi_e), Some(pj_e)) => pi_e == pj_e || is_subtype(pi_e, pj_e, model),
+                    match (i_eid, j_eid) {
+                        (Some(i_e), Some(j_e)) => i_e == j_e || is_subtype(i_e, j_e, model),
                         _ => true, // can't compare generics — don't eliminate
                     }
                 });
@@ -2032,13 +2012,11 @@ pub(crate) fn narrow_candidates_by_type(
             let mut total_distance = 0usize;
             let mut can_score = true;
             for (pi, arg_type_opt) in f.parameters.iter().zip(arg_types.iter()) {
-                let param_eid = match &pi.type_expr {
-                    crate::types::TypeExpr::Named { element, .. } => *element,
-                    _ => {
-                        can_score = false;
-                        break;
-                    }
+                let crate::types::TypeExpr::Named { element, .. } = &pi.type_expr else {
+                    can_score = false;
+                    break;
                 };
+                let param_eid = *element;
                 let Some(arg_eid) = arg_type_opt else {
                     can_score = false;
                     break;

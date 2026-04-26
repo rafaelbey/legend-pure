@@ -828,8 +828,10 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         };
         let is_to_one = matches!(
             prop_mult,
-            Some(legend_pure_parser_pure::types::Multiplicity::PureOne)
-                | Some(legend_pure_parser_pure::types::Multiplicity::ZeroOrOne)
+            Some(
+                legend_pure_parser_pure::types::Multiplicity::PureOne
+                    | legend_pure_parser_pure::types::Multiplicity::ZeroOrOne
+            )
         );
         let lambda_slot = if is_to_one {
             "getterOverrideToOne"
@@ -995,11 +997,22 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         if matches!(property, "upperBound" | "lowerBound")
             && let Some(bounds) = multiplicity_constant_bounds(&self.model, id)
         {
-            let cache_key = (id, if property == "upperBound" { "_mult_upperBound" } else { "_mult_lowerBound" });
+            let cache_key = (
+                id,
+                if property == "upperBound" {
+                    "_mult_upperBound"
+                } else {
+                    "_mult_lowerBound"
+                },
+            );
             if let Some(cached) = self.member_wrapper_cache.get(&cache_key) {
                 return Ok(Value::from_vec(cached.clone()));
             }
-            let bound = if property == "upperBound" { bounds.1 } else { Some(bounds.0) };
+            let bound = if property == "upperBound" {
+                bounds.1
+            } else {
+                Some(bounds.0)
+            };
             let result = match bound {
                 Some(b) => {
                     let mv = self.heap.alloc_dynamic(crate::m3_paths::MULTIPLICITY_VALUE);
@@ -1034,11 +1047,12 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             let fv = FunctionValue::Compiled(id);
             let inner_ft_obj = {
                 let mut ctx = EvalContext { evaluator: self };
-                crate::native::meta::build_function_type_wrapper(&mut ctx, &fv)
-                    .map_err(|e| match e.kind {
+                crate::native::meta::build_function_type_wrapper(&mut ctx, &fv).map_err(
+                    |e| match e.kind {
                         PureExceptionKind::ExecutionError(err) => err,
                         other => PureRuntimeError::EvaluationError(format!("{other:?}")),
-                    })?
+                    },
+                )?
             };
             let inner_gt = self.heap.alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
             self.heap
@@ -1051,18 +1065,16 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             //   ->cast(@FunctionType)`. Resolved once via path lookup;
             // bootstrapped by m3.pure so the lookup always succeeds in a
             // valid model.
-            if let Some(ft_class_id) = crate::m3_paths::resolve(
-                &self.model,
-                "meta::pure::metamodel::type::FunctionType",
-            ) {
+            if let Some(ft_class_id) =
+                crate::m3_paths::resolve(&self.model, "meta::pure::metamodel::type::FunctionType")
+            {
                 self.heap
                     .mutate_add(outer_gt, "rawType", &[Value::Element(ft_class_id)])?;
             }
             self.heap
                 .mutate_add(outer_gt, "typeArguments", &[Value::Object(inner_gt)])?;
             let result = vec![Value::Object(outer_gt)];
-            self.member_wrapper_cache
-                .insert(cache_key, result.clone());
+            self.member_wrapper_cache.insert(cache_key, result.clone());
             return Ok(Value::from_vec(result));
         }
 
@@ -2043,7 +2055,9 @@ impl<H: EvalHooks> crate::native::EvalContextTrait for EvalContext<'_, '_, H> {
         let Some(class_id) = self.evaluator.model.resolve_by_path(&segments) else {
             return Ok(None);
         };
-        let Some(found) = find_qp_with_generalization(self.evaluator.model, class_id, name, args.len()) else {
+        let Some(found) =
+            find_qp_with_generalization(self.evaluator.model, class_id, name, args.len())
+        else {
             return Ok(None);
         };
         // Detach owned copies before re-borrowing self mutably for eval.

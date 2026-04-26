@@ -291,10 +291,9 @@ impl NativeFunction for Hour {
         let d = values[0].as_date()?;
         match d.get_hour() {
             Some(h) => Ok(Evaluated::new(Value::Integer(i64::from(h)))),
-            None => Err(PureRuntimeError::EvaluationError(format!(
-                "Cannot get hour for {d}"
-            ))
-            .into()),
+            None => {
+                Err(PureRuntimeError::EvaluationError(format!("Cannot get hour for {d}")).into())
+            }
         }
     }
 
@@ -319,10 +318,9 @@ impl NativeFunction for Minute {
         let d = values[0].as_date()?;
         match d.get_minute() {
             Some(m) => Ok(Evaluated::new(Value::Integer(i64::from(m)))),
-            None => Err(PureRuntimeError::EvaluationError(format!(
-                "Cannot get minute for {d}"
-            ))
-            .into()),
+            None => {
+                Err(PureRuntimeError::EvaluationError(format!("Cannot get minute for {d}")).into())
+            }
         }
     }
 
@@ -347,10 +345,9 @@ impl NativeFunction for Second {
         let d = values[0].as_date()?;
         match d.get_second() {
             Some(s) => Ok(Evaluated::new(Value::Integer(i64::from(s)))),
-            None => Err(PureRuntimeError::EvaluationError(format!(
-                "Cannot get second for {d}"
-            ))
-            .into()),
+            None => {
+                Err(PureRuntimeError::EvaluationError(format!("Cannot get second for {d}")).into())
+            }
         }
     }
 
@@ -537,9 +534,9 @@ impl NativeFunction for DateDiff {
                         + (i64::from(b.month()) - i64::from(a.month()))
                 }
                 DurationUnit::Days => {
-                    let span = a.until(b).map_err(|e| {
-                        PureRuntimeError::EvaluationError(format!("dateDiff: {e}"))
-                    })?;
+                    let span = a
+                        .until(b)
+                        .map_err(|e| PureRuntimeError::EvaluationError(format!("dateDiff: {e}")))?;
                     i64::from(span.get_days())
                 }
                 DurationUnit::Weeks => {
@@ -551,9 +548,9 @@ impl NativeFunction for DateDiff {
                     // is crossed; Sun → Sat = 0 because no Sunday is
                     // included. Tested by testDateDiffWeeks in
                     // essential/date/operation/dateDiff.pure.
-                    let span = a.until(b).map_err(|e| {
-                        PureRuntimeError::EvaluationError(format!("dateDiff: {e}"))
-                    })?;
+                    let span = a
+                        .until(b)
+                        .map_err(|e| PureRuntimeError::EvaluationError(format!("dateDiff: {e}")))?;
                     let days = i64::from(span.get_days());
                     sunday_boundaries_between(a, b, days)
                 }
@@ -1048,9 +1045,8 @@ fn translate_date_error(err: PureRuntimeError, values: &[Value]) -> PureRuntimeE
     let Some(name) = after_param.split('\'').next() else {
         return err;
     };
-    let value_at = |idx: usize| -> Option<i64> {
-        values.get(idx).and_then(|v| v.as_integer().ok())
-    };
+    let value_at =
+        |idx: usize| -> Option<i64> { values.get(idx).and_then(|v| v.as_integer().ok()) };
     match name {
         "month" => {
             if let Some(v) = value_at(1) {

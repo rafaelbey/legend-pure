@@ -291,7 +291,7 @@ struct UnitMapping {
 /// properties via the dense `^Root.children[...]` syntax that
 /// `m3_parser` currently skips. Filling them in here keeps the
 /// reflective surface complete without re-parsing the bootstrap
-/// region or growing m3_parser to handle the slot syntax.
+/// region or growing `m3_parser` to handle the slot syntax.
 ///
 /// Looks up `GenericType` and `ElementOverride` by their canonical
 /// FQN and silently no-ops if either resolution fails (e.g. the
@@ -414,15 +414,15 @@ fn resolve_m3_supertypes(model: &mut PureModel) {
             _ => {}
         };
 
-        for st in c.super_types.iter_mut() {
+        for st in &mut c.super_types {
             resolve_in_place(st);
         }
-        for p in c.properties.iter_mut() {
+        for p in &mut c.properties {
             resolve_in_place(&mut p.type_expr);
         }
-        for qp in c.qualified_properties.iter_mut() {
+        for qp in &mut c.qualified_properties {
             resolve_in_place(&mut qp.return_type);
-            for param in qp.parameters.iter_mut() {
+            for param in &mut qp.parameters {
                 resolve_in_place(&mut param.type_expr);
             }
         }
@@ -481,18 +481,18 @@ fn pass_declare(
                 let fqn = build_fqn(&pkg_path, &element_name);
 
                 // Check for duplicates — allow function overloads
-                if let Some(existing) = declarations.get(&fqn) {
-                    if !is_function_like || !existing.iter().all(|d| d.is_function) {
-                        // Non-function duplicate, or mixing function with non-function
-                        errors.push(CompilationError {
-                            message: format!("Duplicate element: '{fqn}'"),
-                            source_info: source_info.clone(),
-                            kind: CompilationErrorKind::DuplicateElement { name: fqn.clone() },
-                        });
-                        continue;
-                    }
-                    // Function overload — fall through to allocate
+                if let Some(existing) = declarations.get(&fqn)
+                    && (!is_function_like || !existing.iter().all(|d| d.is_function))
+                {
+                    // Non-function duplicate, or mixing function with non-function
+                    errors.push(CompilationError {
+                        message: format!("Duplicate element: '{fqn}'"),
+                        source_info: source_info.clone(),
+                        kind: CompilationErrorKind::DuplicateElement { name: fqn.clone() },
+                    });
+                    continue;
                 }
+                // Function overload — fall through to allocate
 
                 // Allocate shell
                 let shell = create_shell(element);
@@ -669,7 +669,7 @@ fn pass_topo_sort(
         .map(|(&id, _)| id)
         .collect();
 
-    let total_decls: usize = declarations.values().map(|v| v.len()).sum();
+    let total_decls: usize = declarations.values().map(std::vec::Vec::len).sum();
     let mut sorted = Vec::with_capacity(total_decls);
 
     while let Some(id) = queue.pop_front() {
@@ -845,6 +845,7 @@ fn pass_define_signatures<'a>(
 /// Takes `&mut` references to the per-section caches so the follow-up
 /// `pass_define_class_bodies` can reuse the populated import scopes and
 /// resolve memos.
+#[allow(clippy::too_many_arguments)]
 fn pass_define_bodies(
     sorted: &[ElementId],
     source_files: &[SourceFile],
@@ -937,6 +938,7 @@ fn pass_define_bodies(
 /// Skips elements whose AST has no body-shape items, so the cost is
 /// proportional to the number of constraints / QP bodies / default values
 /// in the program, not the total element count.
+#[allow(clippy::too_many_arguments)]
 fn pass_define_class_bodies(
     sorted: &[ElementId],
     source_files: &[SourceFile],
@@ -1057,9 +1059,9 @@ fn pass_define_class_bodies(
     }
 }
 
-/// Patches lowered QP bodies into existing QualifiedProperty entries.
+/// Patches lowered QP bodies into existing `QualifiedProperty` entries.
 /// AST QP count may exceed model QP count if signature lowering filtered
-/// some out (return_type didn't resolve), so we zip and drop any extras.
+/// some out (`return_type` didn't resolve), so we zip and drop any extras.
 fn patch_qp_bodies(
     model_qps: &mut [class::QualifiedProperty],
     new_bodies: Vec<Vec<crate::types::ValueSpec>>,
@@ -1477,7 +1479,7 @@ fn lower_qualified_property_signatures(
 
 /// Lowers QP bodies for all qualified properties of the given AST list.
 /// Returns one `Vec<Expression>` per QP, in the same order; `vec![]` if
-/// the QP was filtered out of the signature pass (return_type couldn't
+/// the QP was filtered out of the signature pass (`return_type` couldn't
 /// resolve) so the index doesn't get out of sync with the model.
 fn lower_qualified_property_bodies(
     qprops: &[ast::QualifiedProperty],
@@ -1609,7 +1611,6 @@ fn ast_element_source(element: &ast::Element) -> &SourceInfo {
 /// Matches Java Pure's `SourceInformation.line`/`column` (distinct from
 /// `startLine`/`startColumn`).
 fn ast_element_name_source(element: &ast::Element) -> &SourceInfo {
-    use legend_pure_parser_ast::Spanned;
     match element {
         ast::Element::Class(c) => c.name.source_info(),
         ast::Element::Function(f) => f.name.source_info(),

@@ -417,7 +417,7 @@ pub enum ExprKind {
 pub struct RelationColumnLowered {
     /// Column name (e.g. `"x"` in `~[x:String[1]]`).
     pub name: SmolStr,
-    /// Resolved type element (e.g. `String`'s ElementId).
+    /// Resolved type element (e.g. `String`'s `ElementId`).
     pub type_element: ElementId,
     /// Column multiplicity. Defaults to `ZeroOrOne` when the source omits
     /// `[mult]` (matches the platform's expected `'x:String[0..1]'` form).

@@ -112,11 +112,7 @@ pub fn build_lcov_records(map: &CoverageMap, source_roots: &[PathBuf]) -> Vec<Re
         // -- Branch records (BRDA, BRF, BRH) ------------------------------
         let mut br_found: u32 = 0;
         let mut br_hit: u32 = 0;
-        for (block_idx, point) in map
-            .branches
-            .points_in_file(source.as_str())
-            .enumerate()
-        {
+        for (block_idx, point) in map.branches.points_in_file(source.as_str()).enumerate() {
             for (arm_idx, arm) in point.arms.iter().enumerate() {
                 let taken = if arm.hit_count > 0 {
                     Some(arm.hit_count)
@@ -178,10 +174,7 @@ fn resolve_source_path(virtual_path: &str, source_roots: &[PathBuf]) -> String {
         }
     }
     // No root matched — use the first root as a best-effort prefix.
-    source_roots[0]
-        .join(trimmed)
-        .to_string_lossy()
-        .into_owned()
+    source_roots[0].join(trimmed).to_string_lossy().into_owned()
 }
 
 // ---------------------------------------------------------------------------
@@ -215,15 +208,14 @@ pub fn generate_html(lcov_path: &Path, output_dir: &Path) -> Result<(), String> 
     match status {
         Ok(s) if s.success() => Ok(()),
         Ok(s) => Err(format!("genhtml exited with {s}")),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(
-            "genhtml not found. Install the lcov package: \
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err("genhtml not found. Install the lcov package: \
              brew install lcov (macOS) / apt install lcov (Linux)"
-                .into(),
-        ),
+                .into())
+        }
         Err(e) => Err(format!("Failed to run genhtml: {e}")),
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -257,12 +249,12 @@ mod tests {
 
         // Should contain: TN, SF, FNF, FNH, BRF, BRH, DA×3, LF, LH, end_of_record
         assert!(records.iter().any(|r| matches!(r, Record::TestName { .. })));
-        assert!(records
-            .iter()
-            .any(|r| matches!(r, Record::SourceFile { .. })));
-        assert!(records
-            .iter()
-            .any(|r| matches!(r, Record::EndOfRecord)));
+        assert!(
+            records
+                .iter()
+                .any(|r| matches!(r, Record::SourceFile { .. }))
+        );
+        assert!(records.iter().any(|r| matches!(r, Record::EndOfRecord)));
 
         // Verify line data.
         let line_data: Vec<_> = records
@@ -281,12 +273,16 @@ mod tests {
         assert!(line_data.contains(&(3, 0)));
 
         // Verify summary records.
-        assert!(records
-            .iter()
-            .any(|r| matches!(r, Record::LinesFound { found: 3 })));
-        assert!(records
-            .iter()
-            .any(|r| matches!(r, Record::LinesHit { hit: 2 })));
+        assert!(
+            records
+                .iter()
+                .any(|r| matches!(r, Record::LinesFound { found: 3 }))
+        );
+        assert!(
+            records
+                .iter()
+                .any(|r| matches!(r, Record::LinesHit { hit: 2 }))
+        );
     }
 
     #[test]

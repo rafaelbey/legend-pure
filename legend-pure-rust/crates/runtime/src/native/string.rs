@@ -416,13 +416,11 @@ pub(crate) fn pure_to_string(
         // Pair / List / user classes all flow through this path —
         // their `toString()` lives in platform `.pure` source, so the
         // runtime never needs to hardcode classifier names.
-        Value::Object(obj_id) => {
-            match ctx.invoke_qualified_property(value, "toString", &[])? {
-                Some(Value::String(s)) => Ok(s.to_string()),
-                Some(other) => pure_to_string(&other, ctx),
-                None => Ok(format!("Anonymous_{obj_id}")),
-            }
-        }
+        Value::Object(obj_id) => match ctx.invoke_qualified_property(value, "toString", &[])? {
+            Some(Value::String(s)) => Ok(s.to_string()),
+            Some(other) => pure_to_string(&other, ctx),
+            None => Ok(format!("Anonymous_{obj_id}")),
+        },
         // Element ref (Class, Function, Enumeration, …): simple-leaf
         // name. testClassToString and testEnumerationToString assert
         // `STR_Person->toString() == 'STR_Person'`.
@@ -491,6 +489,7 @@ fn repr_value(v: &Value) -> String {
 pub struct Format;
 
 impl NativeFunction for Format {
+    #[allow(clippy::many_single_char_names)]
     fn execute(
         &self,
         args: &[ValueSpec],
@@ -520,7 +519,9 @@ impl NativeFunction for Format {
             // Parse `%[0][width][.precision]<spec>` or `%t{template}`.
             let mut j = i + 1;
             let mut zero_pad = false;
-            if j < bytes.len() && bytes[j] == b'0' && j + 1 < bytes.len()
+            if j < bytes.len()
+                && bytes[j] == b'0'
+                && j + 1 < bytes.len()
                 && bytes[j + 1].is_ascii_digit()
             {
                 zero_pad = true;
@@ -560,22 +561,20 @@ impl NativeFunction for Format {
             }
             let spec = bytes[j];
             // `%t{pattern}` — date format with explicit pattern.
-            let date_pattern: Option<String> = if spec == b't'
-                && j + 1 < bytes.len()
-                && bytes[j + 1] == b'{'
-            {
-                let pat_start = j + 2;
-                if let Some(end) = template[pat_start..].find('}') {
-                    let pat = template[pat_start..pat_start + end].to_string();
-                    j = pat_start + end + 1; // past `}`
-                    Some(pat)
+            let date_pattern: Option<String> =
+                if spec == b't' && j + 1 < bytes.len() && bytes[j + 1] == b'{' {
+                    let pat_start = j + 2;
+                    if let Some(end) = template[pat_start..].find('}') {
+                        let pat = template[pat_start..pat_start + end].to_string();
+                        j = pat_start + end + 1; // past `}`
+                        Some(pat)
+                    } else {
+                        None
+                    }
                 } else {
+                    j += 1;
                     None
-                }
-            } else {
-                j += 1;
-                None
-            };
+                };
             if !matches!(spec, b's' | b'r' | b'd' | b'f' | b't') {
                 result.push('%');
                 i += 1;
@@ -660,6 +659,7 @@ impl NativeFunction for Format {
 ///
 /// Unsupported patterns pass through verbatim. Anything beyond the test
 /// surface is best-effort; revisit when more tests need it.
+#[allow(clippy::many_single_char_names)]
 fn format_date_pattern(d: &crate::date::PureDate, pat: &str) -> String {
     use crate::date::PureDate;
     // [TZ] prefix — shift the date by the named offset for output.

@@ -43,7 +43,7 @@ use crate::types::PrimitiveType;
 thread_local! {
     /// Side-channel for M3 registration data produced by `create_bootstrap_chunk`
     /// and consumed by `register_m3_packages`.
-    static M3_REGISTRATIONS: RefCell<Vec<M3Registration>> = RefCell::new(Vec::new());
+    static M3_REGISTRATIONS: RefCell<Vec<M3Registration>> = const { RefCell::new(Vec::new()) };
 }
 
 // ---------------------------------------------------------------------------
@@ -332,7 +332,6 @@ pub fn metatype_of(model: &crate::model::PureModel, element: &Element) -> Option
             "PackageableMultiplicity",
         ],
         Element::Package(_) => &["meta", "pure", "metamodel", "type", "Package"],
-        _ => return None,
     };
     let segments: Vec<SmolStr> = path.iter().map(|&s| SmolStr::new(s)).collect();
     model.resolve_by_path(&segments)
@@ -351,7 +350,7 @@ pub fn metatype_of(model: &crate::model::PureModel, element: &Element) -> Option
 /// and before Pass 1.
 pub fn register_m3_packages(model: &mut crate::model::PureModel) {
     // Take the registrations produced by create_bootstrap_chunk
-    let registrations = M3_REGISTRATIONS.with(|cell| cell.take());
+    let registrations = M3_REGISTRATIONS.with(std::cell::RefCell::take);
 
     for reg in &registrations {
         let package_id = model.get_or_create_package(&reg.package_segments);

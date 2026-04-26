@@ -57,7 +57,7 @@ impl Parser {
             // the span to cover them too (matches Java Pure endLine).
             if let Some(last) = parsed
                 .last()
-                .map(|t| legend_pure_parser_ast::source_info::Spanned::source_info(t))
+                .map(legend_pure_parser_ast::source_info::Spanned::source_info)
             {
                 span = span.merge(last);
             }

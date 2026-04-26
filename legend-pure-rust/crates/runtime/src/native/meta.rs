@@ -548,9 +548,9 @@ impl NativeFunction for Match {
                     TypeExpr::Named {
                         element: type_class_id,
                         ..
-                    } => elements.iter().all(|e| {
-                        value_matches_type(ctx.model(), e, *type_class_id, ctx.heap())
-                    }),
+                    } => elements
+                        .iter()
+                        .all(|e| value_matches_type(ctx.model(), e, *type_class_id, ctx.heap())),
                     // Unconstrained generic parameter → always matches.
                     TypeExpr::Generic(_) => true,
                     _ => false,
@@ -1946,10 +1946,6 @@ impl NativeFunction for EvaluateAndDeactivate {
     }
 }
 
-/// Wrap a runtime value in a fresh `InstanceValue` heap object with
-/// `values = [value]` — the canonical deactivated shape for a
-/// pre-evaluated scalar / collection entry.
-
 /// Detect whether `v` already represents an M3
 /// `ValueSpecification` heap node — `InstanceValue`,
 /// `VariableExpression`, or any concrete `FunctionExpression`
@@ -2180,10 +2176,7 @@ fn infer_function_call_static_type(
 /// the small subset of `pure::resolve::infer_type_from_valuespec`
 /// that the deactivation path needs without exposing the full
 /// resolver to the runtime.
-fn infer_spec_static_type(
-    vs: &ValueSpec,
-    ctx: &dyn EvalContextTrait,
-) -> Option<ElementId> {
+fn infer_spec_static_type(vs: &ValueSpec, ctx: &dyn EvalContextTrait) -> Option<ElementId> {
     use legend_pure_parser_pure::types::{ExprKind, TypeExpr};
     match &*vs.kind {
         ExprKind::IntegerLiteral(_) => Some(bootstrap::INTEGER_ID),
@@ -2293,9 +2286,7 @@ fn deactivate_spec(
             ctx.heap_mut()
                 .mutate_add(obj, "parametersValues", &deactivated_args)?;
             if let Some(type_id) = static_type {
-                let gt = ctx
-                    .heap_mut()
-                    .alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
+                let gt = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
                 ctx.heap_mut()
                     .mutate_add(gt, "rawType", &[Value::Element(type_id)])?;
                 ctx.heap_mut()
@@ -2331,9 +2322,7 @@ fn deactivate_spec(
             };
             ctx.heap_mut().mutate_add(obj, "values", &values)?;
             if let Some(type_id) = runtime_type {
-                let gt = ctx
-                    .heap_mut()
-                    .alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
+                let gt = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
                 ctx.heap_mut()
                     .mutate_add(gt, "rawType", &[Value::Element(type_id)])?;
                 ctx.heap_mut()

@@ -2403,7 +2403,9 @@ fn eval_pct_bignumber_messages() {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let Value::Object(report_id) = report else { continue };
+        let Value::Object(report_id) = report else {
+            continue;
+        };
         let results = evaluator
             .heap()
             .get_property_values(report_id, "results")
@@ -2735,8 +2737,6 @@ fn eval_pct_lang_status_dump() {
     pct_status_dump("meta::pure::functions::lang");
 }
 
-
-
 #[test]
 #[ignore = "diagnostic: list all date tests' status + message"]
 fn eval_pct_date_status_dump() {
@@ -2756,18 +2756,45 @@ fn eval_pct_date_status_dump() {
     let Ok(Value::Object(report_id)) = evaluator.call(
         "meta::pure::test::surveyor::runPCTTests",
         &[pkg, Value::String("".into()), adapter, exclusions],
-    ) else { return };
-    let results = evaluator.heap().get_property_values(report_id, "results").unwrap_or_else(|_| im_rc::Vector::new());
+    ) else {
+        return;
+    };
+    let results = evaluator
+        .heap()
+        .get_property_values(report_id, "results")
+        .unwrap_or_else(|_| im_rc::Vector::new());
     for v in results.iter() {
         let Value::Object(rid) = v else { continue };
-        let status = evaluator.heap().get_property_values(*rid, "status").ok().and_then(|v| v.iter().next().cloned());
+        let status = evaluator
+            .heap()
+            .get_property_values(*rid, "status")
+            .ok()
+            .and_then(|v| v.iter().next().cloned());
         let bucket = match &status {
             Some(Value::EnumValue { member, .. }) if member.as_str() == "PASS" => continue,
             Some(Value::EnumValue { member, .. }) => member.to_string(),
             _ => "?".into(),
         };
-        let fqn = evaluator.heap().get_property_values(*rid, "fqn").ok().and_then(|v| v.iter().next().cloned()).and_then(|v| match v { Value::String(s) => Some(s.to_string()), _ => None }).unwrap_or_default();
-        let msg = evaluator.heap().get_property_values(*rid, "message").ok().and_then(|v| v.iter().next().cloned()).and_then(|v| match v { Value::String(s) => Some(s.to_string()), _ => None }).unwrap_or_default();
+        let fqn = evaluator
+            .heap()
+            .get_property_values(*rid, "fqn")
+            .ok()
+            .and_then(|v| v.iter().next().cloned())
+            .and_then(|v| match v {
+                Value::String(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let msg = evaluator
+            .heap()
+            .get_property_values(*rid, "message")
+            .ok()
+            .and_then(|v| v.iter().next().cloned())
+            .and_then(|v| match v {
+                Value::String(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .unwrap_or_default();
         eprintln!("\n[{bucket}] {fqn}\n  {msg}");
     }
 }
@@ -2785,15 +2812,20 @@ fn eval_pct_date_probe() {
         "meta::pure::functions::date::tests::testDatePartYearOnly",
     ] {
         let mut evaluator = Evaluator::new(&model, &registry);
-        let pkg = evaluator
-            .call(
-                "meta::pure::functions::meta::pathToElement",
-                &[
-                    Value::String(SmolStr::new(*testname)),
-                    Value::String("::".into()),
-                ],
-            );
-        let pkg = match pkg { Ok(v) => v, Err(_) => { eprintln!("not found: {testname}"); continue; } };
+        let pkg = evaluator.call(
+            "meta::pure::functions::meta::pathToElement",
+            &[
+                Value::String(SmolStr::new(*testname)),
+                Value::String("::".into()),
+            ],
+        );
+        let pkg = match pkg {
+            Ok(v) => v,
+            Err(_) => {
+                eprintln!("not found: {testname}");
+                continue;
+            }
+        };
         let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
         // testname is the test fn itself, not a package; use it as adapter input
         let _ = pkg;
@@ -2817,15 +2849,43 @@ fn eval_pct_date_probe() {
             &[pkg2, Value::String("".into()), adapter, exclusions],
         ) {
             Ok(v) => v,
-            Err(e) => { eprintln!("{testname}: surveyor failed: {e}"); continue; }
+            Err(e) => {
+                eprintln!("{testname}: surveyor failed: {e}");
+                continue;
+            }
         };
-        let Value::Object(report_id) = report else { continue };
-        let results = evaluator.heap().get_property_values(report_id, "results").unwrap_or_else(|_| im_rc::Vector::new());
+        let Value::Object(report_id) = report else {
+            continue;
+        };
+        let results = evaluator
+            .heap()
+            .get_property_values(report_id, "results")
+            .unwrap_or_else(|_| im_rc::Vector::new());
         for v in results.iter() {
             let Value::Object(rid) = v else { continue };
-            let fqn = evaluator.heap().get_property_values(*rid, "fqn").ok().and_then(|v| v.iter().next().cloned()).and_then(|v| match v { Value::String(s) => Some(s.to_string()), _ => None }).unwrap_or_default();
-            if !fqn.contains(testname.split("::").last().unwrap()) { continue; }
-            let msg = evaluator.heap().get_property_values(*rid, "message").ok().and_then(|v| v.iter().next().cloned()).and_then(|v| match v { Value::String(s) => Some(s.to_string()), _ => None }).unwrap_or_default();
+            let fqn = evaluator
+                .heap()
+                .get_property_values(*rid, "fqn")
+                .ok()
+                .and_then(|v| v.iter().next().cloned())
+                .and_then(|v| match v {
+                    Value::String(s) => Some(s.to_string()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            if !fqn.contains(testname.split("::").last().unwrap()) {
+                continue;
+            }
+            let msg = evaluator
+                .heap()
+                .get_property_values(*rid, "message")
+                .ok()
+                .and_then(|v| v.iter().next().cloned())
+                .and_then(|v| match v {
+                    Value::String(s) => Some(s.to_string()),
+                    _ => None,
+                })
+                .unwrap_or_default();
             eprintln!("\n=== {testname} ===\n{msg}");
         }
     }

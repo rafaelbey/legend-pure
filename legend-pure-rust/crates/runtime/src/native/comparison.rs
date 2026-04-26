@@ -225,10 +225,12 @@ pub fn compare_values(a: &Value, b: &Value) -> i64 {
         (Value::Decimal(a), Value::Decimal(b)) => a.cmp(b),
         (Value::Integer(a), Value::Decimal(b)) => Decimal::from(*a).cmp(b),
         (Value::Decimal(a), Value::Integer(b)) => a.cmp(&Decimal::from(*b)),
-        (Value::Decimal(a), Value::Float(b)) => Decimal::from_f64(*b)
-            .map_or(Ordering::Equal, |bd| a.cmp(&bd)),
-        (Value::Float(a), Value::Decimal(b)) => Decimal::from_f64(*a)
-            .map_or(Ordering::Equal, |ad| ad.cmp(b)),
+        (Value::Decimal(a), Value::Float(b)) => {
+            Decimal::from_f64(*b).map_or(Ordering::Equal, |bd| a.cmp(&bd))
+        }
+        (Value::Float(a), Value::Decimal(b)) => {
+            Decimal::from_f64(*a).map_or(Ordering::Equal, |ad| ad.cmp(b))
+        }
         (Value::Boolean(a), Value::Boolean(b)) => a.cmp(b),
         (Value::String(a), Value::String(b)) => a.cmp(b),
         (Value::Date(a), Value::Date(b)) => a.cmp(b),

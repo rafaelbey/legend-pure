@@ -110,13 +110,13 @@ pub enum Element {
     PrimitiveType(PrimitiveType),
     /// A unit within a measure (Kilogram, Meter). Each has its own `ElementId`.
     Unit(Unit),
-    /// A named multiplicity instance from the M3 metamodel (PureOne, ZeroMany, etc.).
+    /// A named multiplicity instance from the M3 metamodel (`PureOne`, `ZeroMany`, etc.).
     ///
     /// These are singleton instances of `PackageableMultiplicity` registered
     /// in `meta::pure::metamodel::multiplicity`. They carry the actual
     /// multiplicity bounds they represent.
     PackageableMultiplicity(crate::types::Multiplicity),
-    /// A package (Package extends PackageableElement in M3).
+    /// A package (`Package` extends `PackageableElement` in M3).
     ///
     /// The actual package data (name, children) lives in `global_packages`.
     /// This variant carries the `PackageId` so `get_element` works uniformly
@@ -553,6 +553,7 @@ impl PureModel {
     /// Returns the overload candidates — functions whose `function_name`
     /// matches the given name. Used by unqualified resolution for function
     /// dispatch.
+    #[must_use]
     pub fn resolve_functions_by_name_in_package(
         &self,
         pkg_id: PackageId,

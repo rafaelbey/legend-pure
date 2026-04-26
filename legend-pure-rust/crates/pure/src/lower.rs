@@ -92,7 +92,7 @@ pub(crate) fn lower_expression(
 
         // Phase 2 — Function & member access
         ast_expr::Expression::FunctionApplication(e) => lower_function_application(e, ctx, errors),
-        ast_expr::Expression::ArrowFunction(e) => lower_arrow_function(e, ctx, errors),
+        ast_expr::Expression::ArrowFunction(e) => Some(lower_arrow_function(e, ctx, errors)),
         ast_expr::Expression::MemberAccess(e) => lower_member_access(e, ctx, errors),
         ast_expr::Expression::TypeReferenceExpr(e) => lower_type_reference(e, ctx, errors),
         ast_expr::Expression::PackageableElementRef(e) => {
@@ -117,7 +117,7 @@ pub(crate) fn lower_expression(
             });
             None
         }
-        ast_expr::Expression::Copy(e) => lower_copy(e, ctx, errors),
+        ast_expr::Expression::Copy(e) => Some(lower_copy(e, ctx, errors)),
         ast_expr::Expression::Slice(e) => lower_slice(e, ctx, errors),
         ast_expr::Expression::UnitInstance(e) => lower_unit_instance(e, ctx, errors),
     }
@@ -341,7 +341,7 @@ fn lower_arithmetic(
 /// through prefix-name dispatch (which used to silently pick numeric
 /// `plus` and fail on String operands at runtime). Trace-driven
 /// debugging: run with
-///     RUST_LOG=legend_pure_parser_pure::resolve=debug
+///     `RUST_LOG=legend_pure_parser_pure::resolve=debug`
 /// to see per-call narrowing decisions and identify the operand whose
 /// type couldn't be inferred.
 #[tracing::instrument(
@@ -564,7 +564,7 @@ fn lower_arrow_function(
     e: &ast_expr::ArrowFunction,
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
-) -> Option<ValueSpec> {
+) -> ValueSpec {
     // Treat the target as the first argument so it participates in the
     // same two-phase inference as the explicit args. If it's a lambda, it
     // will be deferred until the explicit args have been lowered.
@@ -591,14 +591,14 @@ fn lower_arrow_function(
         errors,
     );
 
-    Some(untyped(
+    untyped(
         ExprKind::FunctionCall {
             function: function_id,
             function_name: SmolStr::new(e.function.name.as_str()),
             arguments,
         },
         e.source_info.clone(),
-    ))
+    )
 }
 
 /// Two-phase argument lowering with lambda-parameter type inference.
@@ -616,6 +616,9 @@ fn lower_arrow_function(
 ///
 /// `prepended` is the arrow-function target: it occupies position 0 and is
 /// already lowered (or absent for plain function applications).
+type LambdaExpectations =
+    Vec<Option<Vec<Option<(crate::types::TypeExpr, crate::types::Multiplicity)>>>>;
+
 fn lower_args_with_lambda_inference(
     function_ptr: &legend_pure_parser_ast::annotation::PackageableElementPtr,
     ast_args: &[ast_expr::Expression],
@@ -669,9 +672,7 @@ fn lower_args_with_lambda_inference(
     };
 
     // Compute expected param types per lambda slot.
-    let lambda_expectations: Vec<
-        Option<Vec<Option<(crate::types::TypeExpr, crate::types::Multiplicity)>>>,
-    > = if let Some(fid) = candidate {
+    let lambda_expectations: LambdaExpectations = if let Some(fid) = candidate {
         compute_lambda_param_expectations(fid, &slots, ctx)
     } else {
         (0..total_arity).map(|_| None).collect()
@@ -729,10 +730,11 @@ fn candidates_by_arity(
 
     let push_filtered = |found: Vec<crate::ids::ElementId>, out: &mut Vec<_>| {
         for eid in found {
-            if let Element::Function(f) = ctx.model.get_element(eid) {
-                if f.parameters.len() == arity && !out.contains(&eid) {
-                    out.push(eid);
-                }
+            if let Element::Function(f) = ctx.model.get_element(eid)
+                && f.parameters.len() == arity
+                && !out.contains(&eid)
+            {
+                out.push(eid);
             }
         }
     };
@@ -791,7 +793,7 @@ fn compute_lambda_param_expectations(
     callee: crate::ids::ElementId,
     slots: &[Option<ValueSpec>],
     ctx: &ResolutionContext<'_>,
-) -> Vec<Option<Vec<Option<(crate::types::TypeExpr, crate::types::Multiplicity)>>>> {
+) -> LambdaExpectations {
     use crate::types::TypeExpr;
 
     let crate::model::Element::Function(callee_fn) = ctx.model.get_element(callee) else {
@@ -904,7 +906,7 @@ fn lower_member_access(
 /// position) lowers to `ExprKind::RelationLiteral` instead, with the
 /// column metadata captured at lowering time. The runtime allocator
 /// materialises a `RelationType` heap object whose `columns` slot
-/// carries the lowered specs. The lowered ValueSpec carries
+/// carries the lowered specs. The lowered `ValueSpec` carries
 /// `type_info = RelationType<Any>[1]` so dispatch + inference see the
 /// same shape `resolve_type_spec(TypeSpec::Relation)` reports.
 fn lower_type_reference(
@@ -939,7 +941,7 @@ fn lower_type_reference(
 ///
 /// Pre-sets `type_info` via [`build_packageable_element_ref`]. The AST
 /// node `ExprKind::PackageableElementRef { element }` stays a pure
-/// name-on-graph reference — type capture lives on the ValueSpec's
+/// name-on-graph reference — type capture lives on the `ValueSpec`'s
 /// `type_info` slot per `reference_type_info_capture.md`.
 fn lower_packageable_element_ref(
     e: &ast_expr::PackageableElementRef,
@@ -954,14 +956,14 @@ fn lower_packageable_element_ref(
     ))
 }
 
-/// Build a `PackageableElementRef` ValueSpec whose `type_info` carries
+/// Build a `PackageableElementRef` `ValueSpec` whose `type_info` carries
 /// the element's parametric metatype shape — e.g. a class element `P`
 /// produces `type_info = Class<P>[1]`. Mirrors Java's
 /// `InstanceValueProcessor.getGenericType` Class-instance branch
 /// (`InstanceValueProcessor.java:154-183`) which wraps the element as
 /// the metatype's type-argument.
 ///
-/// Centralising this construction keeps every PackageableElementRef
+/// Centralising this construction keeps every `PackageableElementRef`
 /// call site (lowering, `lower_new_instance`'s class arg + type-arg
 /// specs) producing the same shape so generic substitution against
 /// `new<T>(class:Class<T>[1], …)` always sees `T` bound to the actual
@@ -1260,6 +1262,7 @@ fn infer_let_type(
 
             // Multiplicity is derived from the element count:
             // [1,2,5] → [3], [x] → [1], [] → [0]
+            #[allow(clippy::cast_possible_truncation)]
             let n = elements.len() as u32;
             let mult = match n {
                 0 => Multiplicity::Range {
@@ -1299,9 +1302,9 @@ fn infer_let_type(
 /// runtime can hang the bindings off the new instance and `genericType()`
 /// surface them via `typeArguments`. Position 0/1 stay as the class element
 /// + simple name. Position 4.. carries `(key, value, augmented_bool)`
-/// triples — the augmented flag distinguishes `=` (replace, `mutate_set`)
-/// from `+=` (append, `mutate_add`). Java threads this as the `KeyValue.add`
-/// slot; we encode it inline so the runtime needs no schema lookup.
+///   triples — the augmented flag distinguishes `=` (replace, `mutate_set`)
+///   from `+=` (append, `mutate_add`). Java threads this as the `KeyValue.add`
+///   slot; we encode it inline so the runtime needs no schema lookup.
 fn lower_new_instance(
     e: &ast_expr::NewInstanceExpr,
     ctx: &mut ResolutionContext<'_>,
@@ -1441,7 +1444,7 @@ fn lower_copy(
     e: &ast_expr::CopyExpr,
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
-) -> Option<ValueSpec> {
+) -> ValueSpec {
     let source_var = untyped(
         ExprKind::Variable {
             name: e.source.clone(),
@@ -1469,14 +1472,14 @@ fn lower_copy(
         ));
     }
 
-    Some(untyped(
+    untyped(
         ExprKind::FunctionCall {
             function: None,
             function_name: SmolStr::new_static("copy"),
             arguments,
         },
         e.source_info.clone(),
-    ))
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1500,10 +1503,10 @@ fn lower_slice(
     let stop = lower_expression(&e.stop, ctx, errors)?;
 
     let mut arguments = vec![start, stop];
-    if let Some(ref step) = e.step {
-        if let Some(step_val) = lower_expression(step, ctx, errors) {
-            arguments.push(step_val);
-        }
+    if let Some(ref step) = e.step
+        && let Some(step_val) = lower_expression(step, ctx, errors)
+    {
+        arguments.push(step_val);
     }
 
     Some(untyped(
@@ -1525,12 +1528,12 @@ fn lower_slice(
 /// Captures column triples (`name`, resolved `type_element`, `multiplicity`)
 /// at lowering time so the runtime allocator can materialise the
 /// `ColSpecArray` heap shape without re-resolving names. The lowered
-/// ValueSpec carries `type_info = ColSpecArray<Any>[1]` so dispatch +
+/// `ValueSpec` carries `type_info = ColSpecArray<Any>[1]` so dispatch +
 /// inference see the same shape.
 ///
 /// Lambda-bearing `~name:x|$x+1` columns and column-spec arrays inside
 /// `funcColSpecArray` / `aggColSpecArray` are not exercised by the
-/// initial RelationType test surface — those columns are dropped here.
+/// initial `RelationType` test surface — those columns are dropped here.
 /// Add a follow-up if a subsequent test forces them.
 fn lower_column(
     e: &ast_expr::ColumnBuilderExpr,
@@ -1563,9 +1566,12 @@ fn lower_relation_columns(
     cols.iter()
         .filter_map(|c| {
             let type_expr = resolve::resolve_type_ref(&c.type_ref, ctx, errors)?;
-            let type_element = match type_expr {
-                TypeExpr::Named { element, .. } => element,
-                _ => return None,
+            let TypeExpr::Named {
+                element: type_element,
+                ..
+            } = type_expr
+            else {
+                return None;
             };
             let multiplicity = c
                 .multiplicity
@@ -1594,9 +1600,12 @@ fn lower_relation_columns_from_specs(
                 _ => return None,
             };
             let type_expr = resolve::resolve_type_ref(type_ref, ctx, errors)?;
-            let type_element = match type_expr {
-                TypeExpr::Named { element, .. } => element,
-                _ => return None,
+            let TypeExpr::Named {
+                element: type_element,
+                ..
+            } = type_expr
+            else {
+                return None;
             };
             let multiplicity = mult.map_or(Multiplicity::ZeroOrOne, resolve::lower_multiplicity);
             Some(RelationColumnLowered {
@@ -1739,7 +1748,7 @@ fn split_tz(s: &str) -> (&str, Option<i16>) {
         let byte = s.as_bytes()[idx];
         if byte == b'+' || byte == b'-' {
             let tail = &s[idx..];
-            if tail.len() == 5 && tail[1..].as_bytes().iter().all(u8::is_ascii_digit) {
+            if tail.len() == 5 && tail.as_bytes()[1..].iter().all(u8::is_ascii_digit) {
                 let sign: i16 = if byte == b'+' { 1 } else { -1 };
                 let hh: i16 = tail[1..3].parse().unwrap_or(0);
                 let mm: i16 = tail[3..5].parse().unwrap_or(0);
@@ -1761,6 +1770,7 @@ fn parse_subsecond_parts(frac: &str) -> (i32, u8) {
         return (0, 0);
     }
     let trimmed: String = frac.chars().take(9).collect();
+    #[allow(clippy::cast_possible_truncation)]
     let digits: u8 = trimmed.len() as u8;
     let mut padded = String::with_capacity(9);
     padded.push_str(&trimmed);

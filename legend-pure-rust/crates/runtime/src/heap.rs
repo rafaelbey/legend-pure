@@ -39,7 +39,7 @@ use std::fmt;
 
 use im_rc::Vector as PVector;
 use legend_pure_parser_pure::ids::{ElementId, PackageId};
-use legend_pure_parser_pure::model::{Element, PureModel};
+use legend_pure_parser_pure::model::PureModel;
 use slotmap::{SlotMap, new_key_type};
 use smol_str::SmolStr;
 
