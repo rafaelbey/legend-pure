@@ -2316,7 +2316,24 @@ fn eval_pct_date_error_histogram() {
 ///   collection (+4), math (+4 inc 2 FAIL→PASS via half-even), string (+3)
 /// - 388 — Phase 4: numeric coercion via promote_pair (Decimal+Float
 ///   promotion) cleared 9 math tests (rem with mixed types)
-const PCT_PASS_BASELINE: i64 = 388;
+/// - 395 — Phase 5: multiplicity-aware Match + 3-arg overload cleared
+///   7 lang tests (match-pattern with empty / multi-element subjects
+///   against [0..1] / [*] / [1..*] params)
+const PCT_PASS_BASELINE: i64 = 395;
+
+/// Minimum `<<test.Test>>` surveyor pass count across the same packages
+/// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in
+/// PCT-specific dispatch; this companion lock catches regressions in the
+/// surveyor path that runs against the metamodel reflection / lang /
+/// collection / etc. tests Java exercises via `<<test.Test>>`.
+///
+/// Update protocol: same as `PCT_PASS_BASELINE` — bump after a phase
+/// commit confirms the new pass count via `eval_surveyor_broad_canary`.
+///
+/// History:
+/// - 211 — initial 100% pass rate at PCT harness shipping (commit
+///   f8ebca6263c). Held through Phase 1–5.
+const SURVEYOR_PASS_BASELINE: i64 = 211;
 
 #[test]
 fn eval_pct_baseline_lock() {
@@ -2358,6 +2375,56 @@ fn eval_pct_baseline_lock() {
     assert!(
         grand_pass >= PCT_PASS_BASELINE,
         "PCT pass count regressed: got {grand_pass}, baseline is {PCT_PASS_BASELINE}.\n\
+         Per-package: {per_pkg:#?}\n\
+         Either you regressed a previously-passing test (fix it) or you legitimately \
+         dropped support (lower the baseline with a comment explaining why)."
+    );
+}
+
+/// Surveyor packages — same as `PCT_BROAD_CANARY_PACKAGES` but rooted at
+/// the `tests` subpackage where `<<test.Test>>` functions live (PCT
+/// tests are scattered alongside their function impls; surveyor tests
+/// are in dedicated `tests` subdirs).
+const SURVEYOR_BROAD_CANARY_PACKAGES: &[&str] = &[
+    "meta::pure::functions::meta::tests",
+    "meta::pure::functions::collection::tests",
+    "meta::pure::functions::string::tests",
+    "meta::pure::functions::math::tests",
+    "meta::pure::functions::date::tests",
+    "meta::pure::functions::boolean::tests",
+    "meta::pure::functions::lang::tests",
+];
+
+#[test]
+fn eval_surveyor_baseline_lock() {
+    // Companion to eval_pct_baseline_lock — guards <<test.Test>> coverage
+    // (the metamodel reflection / lang / collection tests Java exercises
+    // via the surveyor's runTestsFromPath path). Phase 1–5 fixes touched
+    // dispatch, comparison, arithmetic, and match-pattern code that the
+    // surveyor also walks; this lock ensures none of those touches
+    // regressed a previously-passing surveyor test.
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+
+    let mut grand_pass = 0i64;
+    let mut per_pkg = Vec::new();
+    for pkg in SURVEYOR_BROAD_CANARY_PACKAGES {
+        let mut evaluator = Evaluator::new(&model, &registry);
+        let Ok(Value::Object(report_id)) = evaluator.call(
+            "meta::pure::test::surveyor::runTestsFromPath",
+            &[Value::String(SmolStr::new(pkg)), Value::String("".into())],
+        ) else {
+            continue;
+        };
+        let pass = read_report_counter(&evaluator, report_id, "passCount");
+        grand_pass += pass;
+        per_pkg.push((*pkg, pass));
+    }
+
+    assert!(
+        grand_pass >= SURVEYOR_PASS_BASELINE,
+        "Surveyor (<<test.Test>>) pass count regressed: got {grand_pass}, \
+         baseline is {SURVEYOR_PASS_BASELINE}.\n\
          Per-package: {per_pkg:#?}\n\
          Either you regressed a previously-passing test (fix it) or you legitimately \
          dropped support (lower the baseline with a comment explaining why)."

@@ -494,9 +494,31 @@ impl NativeFunction for Match {
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
-        expect_args("match", &values, 2)?;
-        let subject = values[0].clone();
-        let functions = values[1].to_collection();
+        let (subject, functions, extra) = match values.len() {
+            2 => (values[0].clone(), values[1].to_collection(), None),
+            3 => (
+                values[0].clone(),
+                values[1].to_collection(),
+                Some(values[2].clone()),
+            ),
+            n => {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "match: expected 2 or 3 argument(s), got {n}"
+                ))
+                .into());
+            }
+        };
+
+        // Decompose the subject into (count, elements). Collection / Unit /
+        // scalar all normalize to a uniform (count, element-iterator) shape
+        // so multiplicity + element-type checks share one path.
+        let elements: Vec<Value> = match &subject {
+            Value::Collection(c) => c.iter().cloned().collect(),
+            Value::Unit => Vec::new(),
+            other => vec![other.clone()],
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let subject_count = elements.len() as u32;
 
         for func_val in functions.iter() {
             let Value::Function(fv) = func_val else {
@@ -508,23 +530,43 @@ impl NativeFunction for Match {
 
             // Zero-arg lambda is a catch-all branch.
             if lambda.parameters.is_empty() {
-                return ctx.call_function(func_val, &[]).map(Evaluated::new);
+                let extras: Vec<Value> = extra.iter().cloned().collect();
+                return ctx.call_function(func_val, &extras).map(Evaluated::new);
             }
 
             let param = &lambda.parameters[0];
-            let is_match = match &param.type_expr {
-                TypeExpr::Named {
-                    element: type_class_id,
-                    ..
-                } => value_matches_type(ctx.model(), &subject, *type_class_id, ctx.heap()),
-                // Unconstrained generic parameter → always matches.
-                TypeExpr::Generic(_) => true,
-                _ => false,
-            };
-
-            if is_match {
-                return ctx.call_function(func_val, &[subject]).map(Evaluated::new);
+            let (lower, upper) = mult_bounds(&param.multiplicity);
+            // Multiplicity gate: subject count must fit [lower..=upper].
+            // Empty subject (`[]->cast(@String)`) matches any branch with
+            // `lower == 0` regardless of the param's type — there are no
+            // elements to type-check.
+            if subject_count < lower || upper.is_some_and(|u| subject_count > u) {
+                continue;
             }
+            let type_ok = subject_count == 0
+                || match &param.type_expr {
+                    TypeExpr::Named {
+                        element: type_class_id,
+                        ..
+                    } => elements.iter().all(|e| {
+                        value_matches_type(ctx.model(), e, *type_class_id, ctx.heap())
+                    }),
+                    // Unconstrained generic parameter → always matches.
+                    TypeExpr::Generic(_) => true,
+                    _ => false,
+                };
+            if !type_ok {
+                continue;
+            }
+            // Match. Build the call args: `(subject, extra?)`. Pass the
+            // *original* subject value so collections stay collections —
+            // re-materializing from `elements` would change identity for
+            // single-element collections.
+            let mut call_args = vec![subject.clone()];
+            if let Some(extra_v) = &extra {
+                call_args.push(extra_v.clone());
+            }
+            return ctx.call_function(func_val, &call_args).map(Evaluated::new);
         }
 
         Err(PureRuntimeError::EvaluationError(format!(
@@ -534,7 +576,22 @@ impl NativeFunction for Match {
     }
 
     fn signature(&self) -> &'static str {
-        "match<T|m,n>(var:Any[*], functions:Function<{Nil[n]->T[m]}>[1..*]):T[m]"
+        "match<T,P|m,n,o>(var:Any[*], functions:Function<{Nil[n] [, P[o]] -> T[m]}>[1..*] [, with:P[o]]):T[m]"
+    }
+}
+
+/// Decode a [`Multiplicity`] into concrete `[lower, upper]` bounds.
+/// `Variable(_)` maps to `[0, *]` since at the runtime level a multiplicity
+/// variable hasn't been bound to a specific range — it acts as
+/// "any cardinality" for matching purposes.
+fn mult_bounds(m: &legend_pure_parser_pure::types::Multiplicity) -> (u32, Option<u32>) {
+    use legend_pure_parser_pure::types::Multiplicity as M;
+    match m {
+        M::PureOne => (1, Some(1)),
+        M::ZeroOrOne => (0, Some(1)),
+        M::ZeroOrMany | M::Variable(_) => (0, None),
+        M::OneOrMany => (1, None),
+        M::Range { lower, upper } => (*lower, *upper),
     }
 }
 
@@ -2606,6 +2663,7 @@ pub fn register(registry: &mut NativeRegistry) {
     // with `"match_"` so the runtime's simple-name prefix fallback finds it
     // when the exact-FQN lookup misses. See [`NativeRegistry::find_by_prefix`].
     registry.register("match_Any_MANY__Function_$1_MANY$__T_m_", Match);
+    registry.register("match_Any_MANY__Function_$1_MANY$__P_o__T_m_", Match);
     registry.register("id_Any_1__String_1_", Id);
     registry.register("type_Any_1__Type_1_", TypeOf);
     registry.register("genericType_Any_1__GenericType_1_", GenericTypeOf);
