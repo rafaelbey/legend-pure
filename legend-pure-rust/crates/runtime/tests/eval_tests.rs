@@ -3003,7 +3003,19 @@ fn eval_pct_date_error_histogram() {
 ///   scale — off-by-one in argument indexing. Fixed to use
 ///   `values[2]` (scale). Resolves
 ///   `testParseDecimalWithPrecisionScale`.
-const PCT_PASS_BASELINE: i64 = 467;
+/// - 2026-04-26 → 475: `binary_op` (the comparison/logical operator
+///   lowering) now routes through `resolve_function_call` so the
+///   compiler's type-based overload narrowing picks the right
+///   `lessThan(Date,Date)` / `lessThan(Boolean,Boolean)` /
+///   `lessThan(String,String)` etc. platform overload instead of
+///   falling through the runtime's prefix-name fallback (which
+///   always picked the Number native and errored on non-Number
+///   operands). Mirrors `variadic_op`. Resolves the entire
+///   boolean-inequality cluster: testGreaterThan_Date,
+///   testGreaterThanEqual_Date, testLessThan_Date,
+///   testLessThanEqual_Date plus the same four for Boolean
+///   operands. Net +8 PASS, error count 13 → 5.
+const PCT_PASS_BASELINE: i64 = 475;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in

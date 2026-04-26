@@ -228,11 +228,38 @@ fn binary_op(
 ) -> Option<ValueSpec> {
     let l = lower_expression(left, ctx, errors)?;
     let r = lower_expression(right, ctx, errors)?;
+    let arguments = vec![l, r];
+    // Route through `resolve_function_call` so type-based overload
+    // narrowing picks the right `lessThan(Date,Date)` /
+    // `lessThan(Boolean,Boolean)` / `lessThan(String,String)` etc.
+    // platform overload instead of falling through the runtime's
+    // prefix-name fallback which always picks the Number native.
+    // Mirrors `variadic_op` for plus/minus/times.
+    //
+    // We use a *scratch* error buffer and discard those errors when
+    // resolution fails: comparison/logical operators have always been
+    // permitted to leave dispatch unresolved at compile time (the
+    // runtime's prefix-name fallback then picks the only registered
+    // native — which is correct when nothing better exists, and
+    // tolerated by integration tests that compile without the
+    // platform). When resolution *succeeds*, we commit the
+    // ElementId so the runtime can dispatch directly to the right
+    // overload; otherwise we leave `function: None` exactly like
+    // before this change.
+    let ptr = synthetic_unqualified_ptr(name, source_info);
+    let mut scratch_errors: Vec<CompilationError> = Vec::new();
+    let function_id =
+        resolve::resolve_function_call(&ptr, 2, &arguments, source_info, ctx, &mut scratch_errors);
+    if function_id.is_some() {
+        // Resolution succeeded — propagate any non-fatal diagnostics
+        // it produced (e.g. multi-candidate ambiguity warnings).
+        errors.extend(scratch_errors);
+    }
     Some(untyped(
         ExprKind::FunctionCall {
-            function: None,
+            function: function_id,
             function_name: SmolStr::new(name),
-            arguments: vec![l, r],
+            arguments,
         },
         source_info.clone(),
     ))
