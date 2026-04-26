@@ -204,23 +204,54 @@ fn objects_equal(ctx: &dyn EvalContextTrait, a: ObjectId, b: ObjectId) -> bool {
 /// string match. Returns empty if the equality profile isn't loaded.
 #[must_use]
 pub fn equality_key_properties(model: &PureModel, class_id: ElementId) -> Vec<SmolStr> {
-    let Element::Class(class) = model.get_element(class_id) else {
-        return Vec::new();
-    };
     let Some(equality_profile) = crate::m3_paths::resolve(model, crate::m3_paths::EQUALITY_PROFILE)
     else {
         return Vec::new();
     };
-    class
-        .properties
-        .iter()
-        .filter(|p| {
-            p.stereotypes
+    // Walk class + supertypes (BFS) so an `<<equality.Key>>` declared on
+    // `TopClass` is honoured when comparing two `LeftClass extends
+    // TopClass` instances. Keep declaration order: subclass properties
+    // appear before inherited supertype properties.
+    //
+    // Override semantics: a subclass that redefines a property — with or
+    // without the `<<equality.Key>>` stereotype — wins for that property
+    // name. So `OtherBottomClass.sides : SideClass[*]` (no stereotype)
+    // overrides `TopClass.<<equality.Key>> sides : SideClass[*]` and the
+    // result excludes `sides` from equality keys for `OtherBottomClass`
+    // instances. Tracking *all* seen property names (not just keys)
+    // enforces this: when the BFS reaches the supertype with a key, the
+    // name is already in `seen_names` and gets skipped.
+    let mut visited: std::collections::HashSet<ElementId> = std::collections::HashSet::new();
+    let mut queue: std::collections::VecDeque<ElementId> = std::collections::VecDeque::new();
+    let mut seen_names: std::collections::HashSet<SmolStr> = std::collections::HashSet::new();
+    let mut out: Vec<SmolStr> = Vec::new();
+    queue.push_back(class_id);
+    visited.insert(class_id);
+    while let Some(cid) = queue.pop_front() {
+        let Element::Class(class) = model.get_element(cid) else {
+            continue;
+        };
+        for prop in &class.properties {
+            if !seen_names.insert(prop.name.clone()) {
+                continue; // subclass already defined (or redefined) this name
+            }
+            if prop
+                .stereotypes
                 .iter()
                 .any(|s| is_equality_key_stereotype(s, equality_profile))
-        })
-        .map(|p| p.name.clone())
-        .collect()
+            {
+                out.push(prop.name.clone());
+            }
+        }
+        for super_ty in &class.super_types {
+            if let legend_pure_parser_pure::types::TypeExpr::Named { element, .. } = super_ty
+                && visited.insert(*element)
+            {
+                queue.push_back(*element);
+            }
+        }
+    }
+    out
 }
 
 /// True when a stereotype reference is exactly `meta::pure::profiles::equality.Key`.
