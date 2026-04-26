@@ -13,9 +13,13 @@
 // limitations under the License.
 
 //! Comparison native functions: `equal`, `lessThan`, `lessThanEqual`,
-//! `greaterThan`, `greaterThanEqual`.
+//! `greaterThan`, `greaterThanEqual`, `compare`.
+
+use std::cmp::Ordering;
 
 use legend_pure_parser_pure::types::ValueSpec;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::FromPrimitive;
 
 use crate::error::{PureException, PureRuntimeError};
 use crate::native::{
@@ -180,6 +184,120 @@ impl NativeFunction for GreaterThan {
     }
 }
 
+// ---------------------------------------------------------------------------
+// compare
+// ---------------------------------------------------------------------------
+
+/// Total order between two `Value`s, returning -1, 0, or 1.
+///
+/// The ordering is total: any two `Value`s have a defined comparison.
+/// Same-type primitives compare via the natural ordering of their
+/// underlying type (`i64::cmp`, `f64::partial_cmp` falling back to
+/// `Equal` on NaN, `String`'s lexicographic order, `PureDate`'s
+/// chronological order with mixed-precision support, `Boolean` where
+/// `false < true`).
+///
+/// Mixed numeric types promote toward the wider type:
+/// - Integer ↔ Float: convert Integer to f64 and `partial_cmp`
+/// - Integer ↔ Decimal: convert Integer to Decimal and compare exactly
+/// - Float ↔ Decimal: convert Decimal to f64 and `partial_cmp`
+///
+/// Cross-type comparisons (Integer ↔ String, Boolean ↔ Date, etc.)
+/// fall through to a stable per-variant ordinal so the contract stays
+/// total — `compare(5, '5')` returns a non-zero value with consistent
+/// direction (`compare(a, b) < 0` ⇒ `compare(b, a) > 0`).
+///
+/// Reused by [`Compare`] (the public native), and by sort/iteration
+/// natives that need comparator semantics without a user-supplied
+/// lambda.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn compare_values(a: &Value, b: &Value) -> i64 {
+    let ord = match (a, b) {
+        (Value::Integer(a), Value::Integer(b)) => a.cmp(b),
+        (Value::Integer(a), Value::Float(b)) => {
+            (*a as f64).partial_cmp(b).unwrap_or(Ordering::Equal)
+        }
+        (Value::Float(a), Value::Integer(b)) => {
+            a.partial_cmp(&(*b as f64)).unwrap_or(Ordering::Equal)
+        }
+        (Value::Float(a), Value::Float(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
+        (Value::Decimal(a), Value::Decimal(b)) => a.cmp(b),
+        (Value::Integer(a), Value::Decimal(b)) => Decimal::from(*a).cmp(b),
+        (Value::Decimal(a), Value::Integer(b)) => a.cmp(&Decimal::from(*b)),
+        (Value::Decimal(a), Value::Float(b)) => Decimal::from_f64(*b)
+            .map_or(Ordering::Equal, |bd| a.cmp(&bd)),
+        (Value::Float(a), Value::Decimal(b)) => Decimal::from_f64(*a)
+            .map_or(Ordering::Equal, |ad| ad.cmp(b)),
+        (Value::Boolean(a), Value::Boolean(b)) => a.cmp(b),
+        (Value::String(a), Value::String(b)) => a.cmp(b),
+        (Value::Date(a), Value::Date(b)) => a.cmp(b),
+        (Value::StrictTime(a), Value::StrictTime(b)) => a.cmp(b),
+        // Cross-type: stable ordinal so comparison stays total + symmetric.
+        _ => type_ordinal(a).cmp(&type_ordinal(b)),
+    };
+    match ord {
+        Ordering::Less => -1,
+        Ordering::Equal => 0,
+        Ordering::Greater => 1,
+    }
+}
+
+/// Stable per-variant ordinal for cross-type comparisons. Ordering is
+/// arbitrary but fixed — `compare(5, '5')` consistently routes one way
+/// (here: Integer < String) and the reverse call routes the other.
+fn type_ordinal(v: &Value) -> u8 {
+    match v {
+        Value::Boolean(_) => 0,
+        Value::Integer(_) => 1,
+        Value::Float(_) => 2,
+        Value::Decimal(_) => 3,
+        Value::String(_) => 4,
+        Value::Date(_) => 5,
+        Value::StrictTime(_) => 6,
+        Value::EnumValue { .. } => 7,
+        Value::UnitInstance { .. } => 8,
+        Value::Element(_) => 9,
+        Value::Object(_) => 10,
+        Value::Collection(_) => 11,
+        Value::Map(_) => 12,
+        Value::Function(_) => 13,
+        Value::Unit => 14,
+    }
+}
+
+/// Pure `compare<T>(a:T[1], b:T[1]): Integer[1]` — total comparator.
+///
+/// Returns -1 / 0 / 1; the parametric `T` is honored only as a hint —
+/// the runtime treats the args as `Any` and dispatches via
+/// [`compare_values`]. This is the implementation of
+/// `meta::pure::functions::lang::compare` declared in
+/// `legend-pure-core/.../grammar/functions/lang/compare.pure:23`.
+///
+/// Backs both inequality dispatch (when no specialised
+/// `lessThan(Number, Number)` overload matches) and `sort`'s default
+/// comparator.
+#[derive(Debug)]
+pub struct Compare;
+
+impl NativeFunction for Compare {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("compare", &values, 2)?;
+        Ok(Evaluated::new(Value::Integer(compare_values(
+            &values[0], &values[1],
+        ))))
+    }
+
+    fn signature(&self) -> &'static str {
+        "compare<T>(a:T[1], b:T[1]): Integer[1]"
+    }
+}
+
 /// Pure `greaterThanEqual(Number[1], Number[1]): Boolean[1]`
 #[derive(Debug)]
 pub struct GreaterThanEqual;
@@ -223,6 +341,7 @@ pub fn register(registry: &mut NativeRegistry) {
         "greaterThanEqual_Number_1__Number_1__Boolean_1_",
         GreaterThanEqual,
     );
+    registry.register("compare_T_1__T_1__Integer_1_", Compare);
 }
 
 // ---------------------------------------------------------------------------
@@ -323,4 +442,124 @@ mod tests {
     #[test]
     #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
     fn invalid_type_comparisons() {}
+
+    // ----------------------------------------------------------------------
+    // compare — Phase 1 contract tests
+    // ----------------------------------------------------------------------
+
+    #[test]
+    fn compare_integers() {
+        assert_eq!(compare_values(&Value::Integer(1), &Value::Integer(2)), -1);
+        assert_eq!(compare_values(&Value::Integer(2), &Value::Integer(2)), 0);
+        assert_eq!(compare_values(&Value::Integer(2), &Value::Integer(1)), 1);
+    }
+
+    #[test]
+    fn compare_floats() {
+        assert_eq!(compare_values(&Value::Float(1.3), &Value::Float(2.1)), -1);
+        assert_eq!(compare_values(&Value::Float(2.2), &Value::Float(2.2)), 0);
+        assert_eq!(compare_values(&Value::Float(2.1), &Value::Float(1.0)), 1);
+    }
+
+    #[test]
+    fn compare_mixed_numeric_int_and_float() {
+        // testNumberCompare from the platform: Integer ↔ Float promotes
+        assert_eq!(compare_values(&Value::Integer(1), &Value::Float(2.2)), -1);
+        assert_eq!(compare_values(&Value::Integer(2), &Value::Float(1.5)), 1);
+        assert_eq!(compare_values(&Value::Float(2.7), &Value::Integer(171)), -1);
+    }
+
+    #[test]
+    fn compare_decimal_and_integer_equal() {
+        // testCompareDecimalAndLongTypes — Decimal vs Integer with same
+        // value must compare equal even at the i64 limit.
+        let d = Decimal::from(9_999_999_999_999_992_i64);
+        assert_eq!(
+            compare_values(&Value::Decimal(d), &Value::Integer(9_999_999_999_999_992)),
+            0
+        );
+        assert_eq!(
+            compare_values(&Value::Decimal(d), &Value::Integer(9_999_999_999_999_991)),
+            1
+        );
+        assert_eq!(
+            compare_values(&Value::Decimal(d), &Value::Integer(9_999_999_999_999_993)),
+            -1
+        );
+    }
+
+    #[test]
+    fn compare_strings_lexicographic() {
+        assert_eq!(
+            compare_values(&Value::String("a".into()), &Value::String("b".into())),
+            -1
+        );
+        assert_eq!(
+            compare_values(&Value::String("aaa".into()), &Value::String("aaa".into())),
+            0
+        );
+        assert_eq!(
+            compare_values(&Value::String("baa".into()), &Value::String("aaa".into())),
+            1
+        );
+        assert_eq!(
+            compare_values(&Value::String("aa".into()), &Value::String("aaa".into())),
+            -1
+        );
+    }
+
+    #[test]
+    fn compare_booleans_false_lt_true() {
+        assert_eq!(
+            compare_values(&Value::Boolean(true), &Value::Boolean(false)),
+            1
+        );
+        assert_eq!(
+            compare_values(&Value::Boolean(true), &Value::Boolean(true)),
+            0
+        );
+        assert_eq!(
+            compare_values(&Value::Boolean(false), &Value::Boolean(true)),
+            -1
+        );
+    }
+
+    #[test]
+    fn compare_mixed_types_nonzero_and_symmetric() {
+        // testCompareMixedTypes invariant: compare(a, b) and compare(b, a)
+        // must be non-zero with opposite signs for any cross-type pair.
+        let pairs = [
+            (Value::Integer(5), Value::String("5".into())),
+            (Value::Boolean(true), Value::String("true".into())),
+            (Value::String("2014".into()), Value::Integer(2014)),
+            (
+                Value::Integer(2014),
+                Value::Date(crate::date::PureDate::year(2014).unwrap()),
+            ),
+        ];
+        for (a, b) in &pairs {
+            let ab = compare_values(a, b);
+            let ba = compare_values(b, a);
+            assert_ne!(ab, 0, "compare({a:?}, {b:?}) returned 0");
+            assert_eq!(
+                ab, -ba,
+                "compare not symmetric for {a:?} vs {b:?}: ab={ab} ba={ba}"
+            );
+        }
+    }
+
+    #[test]
+    fn compare_native_returns_integer() {
+        let r = Compare
+            .execute(&[lit_int(1), lit_int(5)], &mut MockCtx)
+            .unwrap()
+            .into_value();
+        assert_eq!(r, Value::Integer(-1));
+    }
+
+    #[test]
+    fn compare_wrong_arg_count_errors() {
+        assert!(Compare.execute(&[lit_int(1)], &mut MockCtx).is_err());
+        assert!(Compare.execute(&[], &mut MockCtx).is_err());
+    }
 }
