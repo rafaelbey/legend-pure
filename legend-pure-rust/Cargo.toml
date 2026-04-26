@@ -54,6 +54,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Parallelism
 rayon = "1"
 
+# Coverage (LCOV tracefile read/write/merge — only dep is thiserror)
+lcov = "0.8"
+
 # Serialization (protocol crate only)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
