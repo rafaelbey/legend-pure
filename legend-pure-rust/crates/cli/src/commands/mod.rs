@@ -21,6 +21,9 @@
 pub mod check;
 pub mod compile;
 pub mod completions;
+pub mod coverage;
+pub mod coverage_cmd;
+pub mod coverage_report;
 pub mod emit;
 pub mod init;
 pub mod package;

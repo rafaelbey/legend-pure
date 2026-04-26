@@ -76,6 +76,9 @@ enum Commands {
     /// Run Pure tests on testable elements
     Test(commands::test::TestArgs),
 
+    /// Merge and report on Pure code coverage
+    Coverage(commands::coverage_cmd::CoverageArgs),
+
     /// Generate an execution plan for a function or query
     Plan(commands::plan::PlanArgs),
 
@@ -105,6 +108,7 @@ fn main() {
         Commands::Compile(args) => commands::compile::run(args),
         Commands::Check(args) => commands::check::run(args),
         Commands::Test(args) => commands::test::run(args),
+        Commands::Coverage(args) => commands::coverage_cmd::run(args),
         Commands::Plan(args) => commands::plan::run(args),
         Commands::Package(args) => commands::package::run(args),
         Commands::Publish(args) => commands::publish::run(args),

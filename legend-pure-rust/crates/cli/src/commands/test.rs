@@ -43,9 +43,11 @@ use owo_colors::OwoColorize;
 
 use legend_pure_core_platform::platform::load_platform;
 use legend_pure_parser_pure::model::PureModel;
+use super::coverage::{CoverageHooks, CoverageMap};
 use legend_pure_runtime::error::PureException;
 use legend_pure_runtime::eval::Evaluator;
 use legend_pure_runtime::heap::{ObjectId, RuntimeHeap};
+use legend_pure_runtime::hooks::EvalHooks;
 use legend_pure_runtime::native::NativeRegistry;
 use legend_pure_runtime::native::testing::find_pct_adapter;
 use legend_pure_runtime::value::{MapState, Value};
@@ -91,6 +93,33 @@ pub struct TestArgs {
     /// meaningful with `--pct`.
     #[arg(long)]
     pub manifest: Option<String>,
+
+    /// Collect Pure code coverage during test execution.
+    #[arg(long)]
+    pub coverage: bool,
+
+    /// Only track coverage for Pure source files whose path starts with
+    /// this prefix. Requires `--coverage`.
+    #[arg(long, default_value = "")]
+    pub coverage_filter: String,
+
+    /// Write LCOV tracefile to this path (default: `coverage.lcov`).
+    /// Requires `--coverage`.
+    #[arg(long, default_value = "coverage.lcov")]
+    pub coverage_output: PathBuf,
+
+    /// Generate an HTML coverage report in this directory via `genhtml`.
+    /// Requires `--coverage`.
+    #[arg(long)]
+    pub coverage_html: Option<PathBuf>,
+
+    /// Root directories for Pure source files. Virtual source paths in the
+    /// compiled model (e.g. `/platform/pure/essential/...`) are resolved
+    /// relative to these directories, allowing `genhtml` to display actual
+    /// source code in the HTML report. Multiple roots can be specified;
+    /// each is tried in order until the file is found.
+    #[arg(long)]
+    pub coverage_source_root: Vec<PathBuf>,
 }
 
 /// Execute the `legend test` command.
@@ -131,12 +160,82 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
         }
     };
 
-    // 2. Drive the Pure surveyor — pick the entry point per mode.
     let registry = NativeRegistry::standard();
-    let mut evaluator = Evaluator::new(&model, &registry);
 
+    if args.coverage {
+        // Coverage path — use CoverageHooks.
+        let mut hooks = CoverageHooks::new(args.coverage_filter.clone());
+        hooks.map_mut().populate_coverable(&model);
+        let mut evaluator = Evaluator::with_hooks(&model, &registry, hooks);
+
+        let (report, fail) = run_tests(&model, &mut evaluator, &args)?;
+        report.render(args.show_detail);
+
+        // Extract coverage data and generate reports.
+        let map = evaluator.into_hooks().into_map();
+        print_coverage_summary(&map);
+
+        super::coverage_report::write_lcov(
+            &map,
+            &args.coverage_output,
+            &args.coverage_source_root,
+        )
+            .map_err(|e| CliError::Custom(format!("Failed to write LCOV: {e}")))?;
+        eprintln!(
+            "  {} LCOV tracefile written to {}",
+            "✓".green().bold(),
+            args.coverage_output.display(),
+        );
+
+        if let Some(ref html_dir) = args.coverage_html {
+            match super::coverage_report::generate_html(&args.coverage_output, html_dir) {
+                Ok(()) => eprintln!(
+                    "  {} HTML report generated in {}",
+                    "✓".green().bold(),
+                    html_dir.display(),
+                ),
+                Err(e) => eprintln!(
+                    "  {} HTML report: {}",
+                    "warning:".yellow().bold(),
+                    e,
+                ),
+            }
+        }
+
+        if fail {
+            Err(CliError::Custom(format!(
+                "{} test(s) failed, {} test(s) errored",
+                report.fail_count, report.error_count
+            )))
+        } else {
+            Ok(())
+        }
+    } else {
+        // Production path — zero-overhead NoOpHooks.
+        let mut evaluator = Evaluator::new(&model, &registry);
+        let (report, fail) = run_tests(&model, &mut evaluator, &args)?;
+        report.render(args.show_detail);
+
+        if fail {
+            Err(CliError::Custom(format!(
+                "{} test(s) failed, {} test(s) errored",
+                report.fail_count, report.error_count
+            )))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Common test execution logic — generic over hooks so both production
+/// and coverage paths share the same code.
+fn run_tests<'m, H: EvalHooks>(
+    model: &'m PureModel,
+    evaluator: &mut Evaluator<'m, H>,
+    args: &TestArgs,
+) -> Result<(TestReport, bool), CliError> {
     let result = if args.pct {
-        run_pct(&model, &mut evaluator, &args)
+        run_pct(model, evaluator, args)
     } else {
         evaluator.call(
             "meta::pure::test::surveyor::runTestsFromPath",
@@ -148,31 +247,22 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
     }
     .map_err(|e| CliError::Custom(format!("Test execution failed: {e}")))?;
 
-    // 3. Render the TestReport.
     let Value::Object(report_id) = result else {
         return Err(CliError::Custom(format!(
             "Test surveyor returned non-Object: {result:?}"
         )));
     };
     let report = TestReport::read(evaluator.heap(), report_id)?;
-    report.render(args.show_detail);
-
-    if report.fail_count + report.error_count > 0 {
-        Err(CliError::Custom(format!(
-            "{} test(s) failed, {} test(s) errored",
-            report.fail_count, report.error_count
-        )))
-    } else {
-        Ok(())
-    }
+    let fail = report.fail_count + report.error_count > 0;
+    Ok((report, fail))
 }
 
 /// Drive the PCT surveyor — either via adapter discovery (default) or via
 /// a JSON manifest path (`--manifest`). Both paths return a `TestReport`
 /// heap object identical in shape to `runTestsFromPath`.
-fn run_pct(
+fn run_pct<H: EvalHooks>(
     model: &PureModel,
-    evaluator: &mut Evaluator<'_>,
+    evaluator: &mut Evaluator<'_, H>,
     args: &TestArgs,
 ) -> Result<Value, PureException> {
     if let Some(manifest_path) = &args.manifest {
@@ -391,3 +481,112 @@ fn read_string_slot(heap: &RuntimeHeap, id: ObjectId, slot: &str) -> Result<Stri
         None => Err(CliError::Custom(format!("{slot}: empty"))),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Coverage Summary (CLI output)
+// ---------------------------------------------------------------------------
+
+/// Print a colored coverage summary table to stderr.
+fn print_coverage_summary(map: &CoverageMap) {
+    let summary = map.summary();
+
+    eprintln!();
+    eprintln!(
+        "{}",
+        "┌──────────────────────────────────────────────────────────────────────────┐"
+    );
+    eprintln!(
+        "│ {}                                                    │",
+        "Pure Coverage Summary".bold()
+    );
+    eprintln!(
+        "├──────────────────────────────────┬────────┬───────┬───────┬───────┬──────┤"
+    );
+    eprintln!(
+        "│ {:<32} │ {:>6} │ {:>5} │ {:>5} │ {:>5} │ {:>4} │",
+        "File".bold(),
+        "Lines".bold(),
+        "Hit".bold(),
+        "L%".bold(),
+        "Br".bold(),
+        "F%".bold(),
+    );
+    eprintln!(
+        "├──────────────────────────────────┼────────┼───────┼───────┼───────┼──────┤"
+    );
+
+    for (source, file_cov) in map.files() {
+        let lf = file_cov.lines_found();
+        let lh = file_cov.lines_hit();
+        let lp = file_cov.line_percentage();
+
+        let mut file_br_found: u32 = 0;
+        let mut file_br_hit: u32 = 0;
+        for point in map.branches.points_in_file(source.as_str()) {
+            for arm in &point.arms {
+                file_br_found += 1;
+                if arm.hit_count > 0 {
+                    file_br_hit += 1;
+                }
+            }
+        }
+        let br_str = format!("{file_br_hit}/{file_br_found}");
+
+        let mut file_fn_found: u32 = 0;
+        let mut file_fn_hit: u32 = 0;
+        for (_, entry) in map.functions.functions_in_file(source.as_str()) {
+            file_fn_found += 1;
+            if entry.hit_count > 0 {
+                file_fn_hit += 1;
+            }
+        }
+        let fp = if file_fn_found == 0 {
+            100.0
+        } else {
+            (f64::from(file_fn_hit) / f64::from(file_fn_found)) * 100.0
+        };
+
+        let display_source = if source.len() > 32 {
+            format!("…{}", &source[source.len() - 31..])
+        } else {
+            source.to_string()
+        };
+
+        let lp_str = format!("{lp:.1}%");
+        let fp_str = format!("{fp:.0}%");
+
+        eprintln!(
+            "│ {:<32} │ {:>6} │ {:>5} │ {:>5} │ {:>5} │ {:>4} │",
+            display_source, lf, lh, lp_str, br_str, fp_str,
+        );
+    }
+
+    eprintln!(
+        "├──────────────────────────────────┼────────┼───────┼───────┼───────┼──────┤"
+    );
+
+    let lp_str = format!("{:.1}%", summary.line_percentage);
+    let br_str = format!("{}/{}", summary.branches_hit, summary.branches_found);
+    let fp_str = format!("{:.0}%", summary.function_percentage);
+
+    eprintln!(
+        "│ {:<32} │ {:>6} │ {:>5} │ {:>5} │ {:>5} │ {:>4} │",
+        "TOTAL".bold(),
+        summary.lines_found,
+        summary.lines_hit,
+        lp_str,
+        br_str,
+        fp_str,
+    );
+    eprintln!(
+        "└──────────────────────────────────┴────────┴───────┴───────┴───────┴──────┘"
+    );
+    eprintln!();
+    eprintln!(
+        " {} = line coverage   {} = branches hit/total   {} = function coverage",
+        "L%".dimmed(),
+        "Br".dimmed(),
+        "F%".dimmed(),
+    );
+}
+
