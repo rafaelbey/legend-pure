@@ -2314,7 +2314,9 @@ fn eval_pct_date_error_histogram() {
 /// - 379 — Phase 3: round/2 (+ banker's rounding) / substring/2 /
 ///   indexOf/3 / add/3 / range/2 overloads cleared 11 tests across
 ///   collection (+4), math (+4 inc 2 FAIL→PASS via half-even), string (+3)
-const PCT_PASS_BASELINE: i64 = 379;
+/// - 388 — Phase 4: numeric coercion via promote_pair (Decimal+Float
+///   promotion) cleared 9 math tests (rem with mixed types)
+const PCT_PASS_BASELINE: i64 = 388;
 
 #[test]
 fn eval_pct_baseline_lock() {

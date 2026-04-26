@@ -19,13 +19,56 @@
 //! each call promotes that into the `PureException` the trait requires.
 
 use legend_pure_parser_pure::types::ValueSpec;
-use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
 
 use crate::error::{PureException, PureRuntimeError};
 use crate::native::{
     EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
 };
 use crate::value::Value;
+
+// ---------------------------------------------------------------------------
+// Numeric promotion lattice — shared across plus/minus/times/divide/rem
+// ---------------------------------------------------------------------------
+
+/// Promote two numeric values to the wider common type.
+///
+/// Lattice: `Integer < Float < Decimal`. Mixed pairs both convert to
+/// the higher level. Float ↔ Decimal goes via [`Decimal::from_f64`] —
+/// non-finite floats (NaN / ±Inf) fail to convert and the helper
+/// returns `None`, which the caller surfaces as a clear type-mismatch
+/// error rather than silent wrong arithmetic.
+///
+/// Returns `None` if either operand isn't a numeric variant
+/// (`Integer` / `Float` / `Decimal`).
+#[allow(clippy::cast_precision_loss)]
+fn promote_pair(a: &Value, b: &Value) -> Option<(Value, Value)> {
+    match (a, b) {
+        // Same type — no promotion needed.
+        (Value::Integer(_), Value::Integer(_))
+        | (Value::Float(_), Value::Float(_))
+        | (Value::Decimal(_), Value::Decimal(_)) => Some((a.clone(), b.clone())),
+        // Integer ↔ Float
+        (Value::Integer(i), Value::Float(_)) => Some((Value::Float(*i as f64), b.clone())),
+        (Value::Float(_), Value::Integer(i)) => Some((a.clone(), Value::Float(*i as f64))),
+        // Integer ↔ Decimal — exact (no precision loss).
+        (Value::Integer(i), Value::Decimal(_)) => {
+            Some((Value::Decimal(Decimal::from(*i)), b.clone()))
+        }
+        (Value::Decimal(_), Value::Integer(i)) => {
+            Some((a.clone(), Value::Decimal(Decimal::from(*i))))
+        }
+        // Float ↔ Decimal — Decimal wins (wider precision).
+        (Value::Float(f), Value::Decimal(_)) => {
+            Decimal::from_f64(*f).map(|d| (Value::Decimal(d), b.clone()))
+        }
+        (Value::Decimal(_), Value::Float(f)) => {
+            Decimal::from_f64(*f).map(|d| (a.clone(), Value::Decimal(d)))
+        }
+        _ => None,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // plus — polymorphic addition (Integer, Float, Decimal, String)
@@ -66,25 +109,15 @@ impl NativeFunction for Plus {
     }
 }
 
-/// Pairwise `plus` — the promotion matrix for the numeric `plus` shapes
-/// (Integer / Float / Decimal). String concatenation has its own
-/// dedicated native (`StringPlus`, registered as
+/// Pairwise `plus` — promotes operands via [`promote_pair`] then
+/// dispatches on the (now uniform) numeric type. String concatenation
+/// has its own dedicated native (`StringPlus`, registered as
 /// `plus_String_MANY__String_1_`), so this fold never sees strings.
 fn plus_pair(a: &Value, b: &Value) -> Result<Value, PureRuntimeError> {
-    match (a, b) {
-        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a.wrapping_add(*b))),
-        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
-        #[allow(clippy::cast_precision_loss)]
-        (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f64 + b)),
-        #[allow(clippy::cast_precision_loss)]
-        (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a + *b as f64)),
-        (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(*a + *b)),
-        (Value::Decimal(a), Value::Integer(b)) => {
-            Ok(Value::Decimal(*a + rust_decimal::Decimal::from(*b)))
-        }
-        (Value::Integer(a), Value::Decimal(b)) => {
-            Ok(Value::Decimal(rust_decimal::Decimal::from(*a) + *b))
-        }
+    match promote_pair(a, b) {
+        Some((Value::Integer(a), Value::Integer(b))) => Ok(Value::Integer(a.wrapping_add(b))),
+        Some((Value::Float(a), Value::Float(b))) => Ok(Value::Float(a + b)),
+        Some((Value::Decimal(a), Value::Decimal(b))) => Ok(Value::Decimal(a + b)),
         _ => Err(PureRuntimeError::EvaluationError(format!(
             "plus: unsupported types {} and {}",
             a.type_name(),
@@ -156,23 +189,13 @@ fn minus_unary(v: &Value) -> Result<Value, PureRuntimeError> {
     }
 }
 
-/// Pairwise subtraction with Integer → Float → Decimal promotion, mirroring
-/// `plus_pair`'s matrix.
+/// Pairwise subtraction with the same Integer → Float → Decimal lattice
+/// as [`plus_pair`].
 fn minus_pair(a: &Value, b: &Value) -> Result<Value, PureRuntimeError> {
-    match (a, b) {
-        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a.wrapping_sub(*b))),
-        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
-        #[allow(clippy::cast_precision_loss)]
-        (Value::Integer(a), Value::Float(b)) => Ok(Value::Float(*a as f64 - b)),
-        #[allow(clippy::cast_precision_loss)]
-        (Value::Float(a), Value::Integer(b)) => Ok(Value::Float(a - *b as f64)),
-        (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(*a - *b)),
-        (Value::Decimal(a), Value::Integer(b)) => {
-            Ok(Value::Decimal(*a - rust_decimal::Decimal::from(*b)))
-        }
-        (Value::Integer(a), Value::Decimal(b)) => {
-            Ok(Value::Decimal(rust_decimal::Decimal::from(*a) - *b))
-        }
+    match promote_pair(a, b) {
+        Some((Value::Integer(a), Value::Integer(b))) => Ok(Value::Integer(a.wrapping_sub(b))),
+        Some((Value::Float(a), Value::Float(b))) => Ok(Value::Float(a - b)),
+        Some((Value::Decimal(a), Value::Decimal(b))) => Ok(Value::Decimal(a - b)),
         _ => Err(PureRuntimeError::EvaluationError(format!(
             "minus: unsupported types {} and {}",
             a.type_name(),
@@ -228,20 +251,13 @@ impl NativeFunction for Times {
     }
 }
 
-/// Pairwise multiplication with Integer → Float → Decimal promotion,
-/// mirroring `plus_pair`'s matrix.
+/// Pairwise multiplication with the same Integer → Float → Decimal
+/// lattice as [`plus_pair`].
 fn times_pair(a: &Value, b: &Value) -> Result<Value, PureRuntimeError> {
-    match (a, b) {
-        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a.wrapping_mul(*b))),
-        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
-        #[allow(clippy::cast_precision_loss)]
-        (Value::Integer(a), Value::Float(b)) | (Value::Float(b), Value::Integer(a)) => {
-            Ok(Value::Float(*a as f64 * b))
-        }
-        (Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(*a * *b)),
-        (Value::Decimal(a), Value::Integer(b)) | (Value::Integer(b), Value::Decimal(a)) => {
-            Ok(Value::Decimal(*a * rust_decimal::Decimal::from(*b)))
-        }
+    match promote_pair(a, b) {
+        Some((Value::Integer(a), Value::Integer(b))) => Ok(Value::Integer(a.wrapping_mul(b))),
+        Some((Value::Float(a), Value::Float(b))) => Ok(Value::Float(a * b)),
+        Some((Value::Decimal(a), Value::Decimal(b))) => Ok(Value::Decimal(a * b)),
         _ => Err(PureRuntimeError::EvaluationError(format!(
             "times: unsupported types {} and {}",
             a.type_name(),
@@ -282,32 +298,34 @@ impl NativeFunction for Divide {
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
         expect_args("divide", &values, 2)?;
-        let v = match (&values[0], &values[1]) {
-            (Value::Integer(_), Value::Integer(0)) => {
-                return Err(PureRuntimeError::DivisionByZero.into());
+        let promoted = promote_pair(&values[0], &values[1]).ok_or_else(|| {
+            PureRuntimeError::EvaluationError(format!(
+                "divide: unsupported types {} and {}",
+                values[0].type_name(),
+                values[1].type_name()
+            ))
+        })?;
+        let v = match promoted {
+            (Value::Integer(a), Value::Integer(b)) => {
+                if b == 0 {
+                    return Err(PureRuntimeError::DivisionByZero.into());
+                }
+                Value::Float(a as f64 / b as f64)
             }
-            (Value::Float(_), Value::Float(b)) if *b == 0.0 => {
-                return Err(PureRuntimeError::DivisionByZero.into());
+            (Value::Float(a), Value::Float(b)) => {
+                if b == 0.0 {
+                    return Err(PureRuntimeError::DivisionByZero.into());
+                }
+                Value::Float(a / b)
             }
-            (Value::Integer(a), Value::Integer(b)) => Value::Float(*a as f64 / *b as f64),
-            (Value::Float(a), Value::Float(b)) => Value::Float(a / b),
-            (Value::Integer(a), Value::Float(b)) => Value::Float(*a as f64 / b),
-            (Value::Float(a), Value::Integer(b)) => Value::Float(a / *b as f64),
             (Value::Decimal(a), Value::Decimal(b)) => {
                 if b.is_zero() {
                     return Err(PureRuntimeError::DivisionByZero.into());
                 }
-                // Decimal division → Float to match Pure semantics
+                // Pure spec says Decimal/Decimal → Float; preserve that.
                 Value::Float(a.to_f64().unwrap_or(f64::NAN) / b.to_f64().unwrap_or(f64::NAN))
             }
-            _ => {
-                return Err(PureRuntimeError::EvaluationError(format!(
-                    "divide: unsupported types {} and {}",
-                    values[0].type_name(),
-                    values[1].type_name()
-                ))
-                .into());
-            }
+            _ => unreachable!("promote_pair returns matched types"),
         };
         Ok(Evaluated::new(v))
     }
@@ -377,6 +395,11 @@ impl NativeFunction for Mod {
 }
 
 /// Pure `rem(Number[1], Number[1]): Number[1]` — remainder (preserves sign of dividend).
+///
+/// Promotes via [`promote_pair`] so mixed-type calls like `rem(7.5, 2)`
+/// or `rem(7d, 2)` work without the caller having to coerce. Empty
+/// remainder for `Decimal` uses `Decimal::checked_rem` which returns
+/// `None` only on division-by-zero (already trapped above).
 #[derive(Debug)]
 pub struct Rem;
 
@@ -388,20 +411,33 @@ impl NativeFunction for Rem {
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
         expect_args("rem", &values, 2)?;
-        let v = match (&values[0], &values[1]) {
+        let promoted = promote_pair(&values[0], &values[1]).ok_or_else(|| {
+            PureRuntimeError::EvaluationError(format!(
+                "rem: unsupported types {} and {}",
+                values[0].type_name(),
+                values[1].type_name()
+            ))
+        })?;
+        let v = match promoted {
             (Value::Integer(a), Value::Integer(b)) => {
-                if *b == 0 {
+                if b == 0 {
                     return Err(PureRuntimeError::DivisionByZero.into());
                 }
                 Value::Integer(a % b)
             }
-            (Value::Float(a), Value::Float(b)) => Value::Float(a % b),
-            _ => {
-                return Err(PureRuntimeError::EvaluationError(
-                    "rem: both arguments must be the same numeric type".into(),
-                )
-                .into());
+            (Value::Float(a), Value::Float(b)) => {
+                if b == 0.0 {
+                    return Err(PureRuntimeError::DivisionByZero.into());
+                }
+                Value::Float(a % b)
             }
+            (Value::Decimal(a), Value::Decimal(b)) => {
+                if b.is_zero() {
+                    return Err(PureRuntimeError::DivisionByZero.into());
+                }
+                Value::Decimal(a % b)
+            }
+            _ => unreachable!("promote_pair returns matched types"),
         };
         Ok(Evaluated::new(v))
     }
@@ -675,5 +711,98 @@ mod tests {
             Rem.execute(&[lit_int(5), lit_int(0)], &mut MockCtx)
                 .is_err()
         );
+    }
+
+    // ----------------------------------------------------------------------
+    // promote_pair — Phase 4 contract tests
+    // ----------------------------------------------------------------------
+
+    fn dec(s: &str) -> Value {
+        use std::str::FromStr;
+        Value::Decimal(rust_decimal::Decimal::from_str(s).unwrap())
+    }
+
+    #[test]
+    fn promote_pair_same_type_passthrough() {
+        // Same type — returned unchanged.
+        let (a, b) = promote_pair(&Value::Integer(1), &Value::Integer(2)).unwrap();
+        assert_eq!(a, Value::Integer(1));
+        assert_eq!(b, Value::Integer(2));
+        let (a, b) = promote_pair(&Value::Float(1.5), &Value::Float(2.5)).unwrap();
+        assert_eq!(a, Value::Float(1.5));
+        assert_eq!(b, Value::Float(2.5));
+        let (a, b) = promote_pair(&dec("1.5"), &dec("2.5")).unwrap();
+        assert_eq!(a, dec("1.5"));
+        assert_eq!(b, dec("2.5"));
+    }
+
+    #[test]
+    fn promote_pair_int_float() {
+        // Integer ↔ Float — both end up Float.
+        let (a, b) = promote_pair(&Value::Integer(3), &Value::Float(2.5)).unwrap();
+        assert_eq!(a, Value::Float(3.0));
+        assert_eq!(b, Value::Float(2.5));
+        let (a, b) = promote_pair(&Value::Float(2.5), &Value::Integer(3)).unwrap();
+        assert_eq!(a, Value::Float(2.5));
+        assert_eq!(b, Value::Float(3.0));
+    }
+
+    #[test]
+    fn promote_pair_int_decimal() {
+        // Integer ↔ Decimal — Decimal wins, exact via Decimal::from(i64).
+        let (a, b) = promote_pair(&Value::Integer(5), &dec("2.5")).unwrap();
+        assert_eq!(a, dec("5"));
+        assert_eq!(b, dec("2.5"));
+        let (a, b) = promote_pair(&dec("2.5"), &Value::Integer(5)).unwrap();
+        assert_eq!(a, dec("2.5"));
+        assert_eq!(b, dec("5"));
+    }
+
+    #[test]
+    fn promote_pair_float_decimal() {
+        // Float ↔ Decimal — Decimal wins, via Decimal::from_f64.
+        let (a, b) = promote_pair(&Value::Float(1.5), &dec("2.5")).unwrap();
+        assert_eq!(a, dec("1.5"));
+        assert_eq!(b, dec("2.5"));
+        let (a, b) = promote_pair(&dec("2.5"), &Value::Float(1.5)).unwrap();
+        assert_eq!(a, dec("2.5"));
+        assert_eq!(b, dec("1.5"));
+    }
+
+    #[test]
+    fn promote_pair_non_numeric_returns_none() {
+        assert!(promote_pair(&Value::Integer(1), &Value::String("x".into())).is_none());
+        assert!(promote_pair(&Value::Boolean(true), &Value::Integer(1)).is_none());
+    }
+
+    #[test]
+    fn promote_pair_nan_float_with_decimal_returns_none() {
+        // Decimal::from_f64 rejects NaN/Inf — promote_pair surfaces that
+        // as None so the caller errors with a clear message instead of
+        // silent wrong arithmetic.
+        assert!(promote_pair(&Value::Float(f64::NAN), &dec("1")).is_none());
+        assert!(promote_pair(&dec("1"), &Value::Float(f64::INFINITY)).is_none());
+    }
+
+    #[test]
+    fn plus_pair_handles_decimal_float_mix() {
+        // Phase 4 deliverable: Decimal+Float in pairwise plus no
+        // longer errors. Tests the pair helper directly because Plus's
+        // public surface takes a fold-collected Number[*] arg.
+        let r = plus_pair(&Value::Float(1.5), &dec("2.5")).unwrap();
+        assert_eq!(r, dec("4"));
+        let r = plus_pair(&dec("2.5"), &Value::Float(1.5)).unwrap();
+        assert_eq!(r, dec("4"));
+    }
+
+    #[test]
+    fn rem_handles_mixed_types() {
+        // Previously errored with "rem: both arguments must be the same
+        // numeric type". Now promotes via promote_pair.
+        let r = Rem
+            .execute(&[lit_float(7.5), lit_int(2)], &mut MockCtx)
+            .unwrap()
+            .into_value();
+        assert_eq!(r, Value::Float(1.5));
     }
 }
