@@ -2257,6 +2257,135 @@ fn eval_pct_boolean_error_histogram() {
 }
 
 #[test]
+fn eval_year_native_directly() {
+    // year(%2015) directly — no arrow, no eval/lambda — should return 2015.
+    let r = eval_pure(
+        "function test::f(): Integer[1] { %2015->year(); }",
+        "f__Integer_1_",
+    );
+    assert_eq!(r, Value::Integer(2015));
+}
+
+#[test]
+fn eval_year_minute_precision_date_isolated() {
+    // The line that fails inside testYear: minute-precision datetime
+    // followed by ->year(). Standalone test isolates the issue from
+    // the multi-statement body to make sure it's not state pollution.
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Integer[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            $adapter->eval(|%2015-04-15T17:09->year());
+        }
+        ",
+        "f__Integer_1_",
+    );
+    assert_eq!(r, Value::Integer(2015));
+}
+
+#[test]
+#[ignore = "diagnostic: testYear's full body fails on a multi-precision date — Phase 6 follow-up"]
+fn eval_year_full_test_body() {
+    // Inline the full testYear body (sans the PCT.test annotation
+    // round-trip) to trace whether the multi-precision date inputs
+    // matter.
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(2015, $adapter->eval(|%2015->year()));
+            assertEquals(2015, $adapter->eval(|%2015-04->year()));
+            assertEquals(2015, $adapter->eval(|%2015-04-15->year()));
+            assertEquals(2015, $adapter->eval(|%2015-04-15T17->year()));
+            assertEquals(2015, $adapter->eval(|%2015-04-15T17:09->year()));
+            assertEquals(2015, $adapter->eval(|%2015-04-15T17:09:21->year()));
+            assertEquals(2015, $adapter->eval(|%2015-04-15T17:09:21.398->year()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_year_via_pct_adapter_lambda() {
+    // Exact PCT shape: lambda-of-lambda where inner uses ->year() on a date.
+    // testYear pattern: assertEquals(2015, $f->eval(|%2015->year()));
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Integer[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            $adapter->eval(|%2015->year());
+        }
+        ",
+        "f__Integer_1_",
+    );
+    assert_eq!(r, Value::Integer(2015));
+}
+
+#[test]
+#[ignore = "diagnostic: probe a single date test"]
+fn eval_pct_date_probe() {
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    for testname in &[
+        "meta::pure::functions::date::tests::testYear",
+        "meta::pure::functions::date::tests::testHour",
+        "meta::pure::functions::date::tests::testHasMinute",
+        "meta::pure::functions::date::tests::testDateFromHour",
+        "meta::pure::functions::date::tests::testDatePartYearOnly",
+    ] {
+        let mut evaluator = Evaluator::new(&model, &registry);
+        let pkg = evaluator
+            .call(
+                "meta::pure::functions::meta::pathToElement",
+                &[
+                    Value::String(SmolStr::new(*testname)),
+                    Value::String("::".into()),
+                ],
+            );
+        let pkg = match pkg { Ok(v) => v, Err(_) => { eprintln!("not found: {testname}"); continue; } };
+        let (adapter, exclusions) = pct_canary_args(&model);
+        // testname is the test fn itself, not a package; use it as adapter input
+        let _ = pkg;
+        let _ = adapter;
+        let _ = exclusions;
+        // Use the parent path
+        let parent = testname.rsplit_once("::").map(|(p, _)| p).unwrap_or("");
+        let pkg2 = match evaluator.call(
+            "meta::pure::functions::meta::pathToElement",
+            &[
+                Value::String(SmolStr::new(parent)),
+                Value::String("::".into()),
+            ],
+        ) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let (adapter, exclusions) = pct_canary_args(&model);
+        let report = match evaluator.call(
+            "meta::pure::test::surveyor::runPCTTests",
+            &[pkg2, Value::String("".into()), adapter, exclusions],
+        ) {
+            Ok(v) => v,
+            Err(e) => { eprintln!("{testname}: surveyor failed: {e}"); continue; }
+        };
+        let Value::Object(report_id) = report else { continue };
+        let results = evaluator.heap().get_property_values(report_id, "results").unwrap_or_else(|_| im_rc::Vector::new());
+        for v in results.iter() {
+            let Value::Object(rid) = v else { continue };
+            let fqn = evaluator.heap().get_property_values(*rid, "fqn").ok().and_then(|v| v.iter().next().cloned()).and_then(|v| match v { Value::String(s) => Some(s.to_string()), _ => None }).unwrap_or_default();
+            if !fqn.contains(testname.split("::").last().unwrap()) { continue; }
+            let msg = evaluator.heap().get_property_values(*rid, "message").ok().and_then(|v| v.iter().next().cloned()).and_then(|v| match v { Value::String(s) => Some(s.to_string()), _ => None }).unwrap_or_default();
+            eprintln!("\n=== {testname} ===\n{msg}");
+        }
+    }
+}
+
+#[test]
 #[ignore = "diagnostic: PCT ERROR histogram for math package"]
 fn eval_pct_math_error_histogram() {
     pct_error_histogram("meta::pure::functions::math");
@@ -2328,7 +2457,13 @@ fn eval_pct_date_error_histogram() {
 /// - 398 — Phase 5b: Sort routes through compare_values (cross-type
 ///   sort works), at error message matches Java exactly. Cleared 3
 ///   collection tests; surveyor `asserts` package went 20/4/1 → 25/0/0.
-const PCT_PASS_BASELINE: i64 = 398;
+/// - 417 — Phase 6 (part 1): date subsystem. `Adjust` now accepts
+///   `Value::EnumValue` for the DurationUnit arg (was string-only),
+///   adds Milliseconds/Microseconds/Nanoseconds support via new
+///   `PureDate::add_*` methods, and routes through jiff's `try_*`
+///   span builders to error gracefully on out-of-range adjustments
+///   instead of panicking. Cleared 19 date PCT tests.
+const PCT_PASS_BASELINE: i64 = 417;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in

@@ -327,10 +327,13 @@ impl PureDate {
     /// # Errors
     /// Returns an error if the result overflows.
     pub fn add_years(&self, years: i64) -> Result<Self, PureRuntimeError> {
-        let span = jiff::Span::new().years(years);
-        let new_dt = self
-            .inner
-            .checked_add(span)
+        // jiff::Span clamps each unit to ±19998 years; large adjustments
+        // outside that range can't be expressed as a Span and would
+        // panic on construction. Surface as a clean overflow error
+        // (BigNumber tests expecting years like 800_002_016 fall here).
+        let new_dt = jiff::Span::new()
+            .try_years(years)
+            .and_then(|sp| self.inner.checked_add(sp))
             .map_err(|e| PureRuntimeError::EvaluationError(format!("Date overflow: {e}")))?;
         Ok(Self {
             inner: new_dt,
@@ -348,10 +351,9 @@ impl PureDate {
                 "Cannot add months to a year-only date".into(),
             ));
         }
-        let span = jiff::Span::new().months(months);
-        let new_dt = self
-            .inner
-            .checked_add(span)
+        let new_dt = jiff::Span::new()
+            .try_months(months)
+            .and_then(|sp| self.inner.checked_add(sp))
             .map_err(|e| PureRuntimeError::EvaluationError(format!("Date overflow: {e}")))?;
         Ok(Self {
             inner: new_dt,
@@ -369,10 +371,9 @@ impl PureDate {
                 "Cannot add days to a date without day precision".into(),
             ));
         }
-        let span = jiff::Span::new().days(days);
-        let new_dt = self
-            .inner
-            .checked_add(span)
+        let new_dt = jiff::Span::new()
+            .try_days(days)
+            .and_then(|sp| self.inner.checked_add(sp))
             .map_err(|e| PureRuntimeError::EvaluationError(format!("Date overflow: {e}")))?;
         Ok(Self {
             inner: new_dt,
@@ -390,10 +391,9 @@ impl PureDate {
                 "Cannot add hours to a date without time precision".into(),
             ));
         }
-        let span = jiff::Span::new().hours(hours);
-        let new_dt = self
-            .inner
-            .checked_add(span)
+        let new_dt = jiff::Span::new()
+            .try_hours(hours)
+            .and_then(|sp| self.inner.checked_add(sp))
             .map_err(|e| PureRuntimeError::EvaluationError(format!("Date overflow: {e}")))?;
         Ok(Self {
             inner: new_dt,
@@ -414,10 +414,9 @@ impl PureDate {
                 ));
             }
         }
-        let span = jiff::Span::new().minutes(minutes);
-        let new_dt = self
-            .inner
-            .checked_add(span)
+        let new_dt = jiff::Span::new()
+            .try_minutes(minutes)
+            .and_then(|sp| self.inner.checked_add(sp))
             .map_err(|e| PureRuntimeError::EvaluationError(format!("Date overflow: {e}")))?;
         Ok(Self {
             inner: new_dt,
@@ -438,10 +437,66 @@ impl PureDate {
                 ));
             }
         }
-        let span = jiff::Span::new().seconds(seconds);
-        let new_dt = self
-            .inner
-            .checked_add(span)
+        let new_dt = jiff::Span::new()
+            .try_seconds(seconds)
+            .and_then(|sp| self.inner.checked_add(sp))
+            .map_err(|e| PureRuntimeError::EvaluationError(format!("Date overflow: {e}")))?;
+        Ok(Self {
+            inner: new_dt,
+            precision: self.precision,
+        })
+    }
+
+    /// Add milliseconds (requires sub-second precision).
+    ///
+    /// # Errors
+    /// Returns an error on overflow or insufficient precision.
+    pub fn add_milliseconds(&self, ms: i64) -> Result<Self, PureRuntimeError> {
+        self.add_subsecond_unit("milliseconds", ms, |sp, n| sp.try_milliseconds(n))
+    }
+
+    /// Add microseconds (requires sub-second precision).
+    ///
+    /// # Errors
+    /// Returns an error on overflow or insufficient precision.
+    pub fn add_microseconds(&self, us: i64) -> Result<Self, PureRuntimeError> {
+        self.add_subsecond_unit("microseconds", us, |sp, n| sp.try_microseconds(n))
+    }
+
+    /// Add nanoseconds (requires sub-second precision).
+    ///
+    /// # Errors
+    /// Returns an error on overflow or insufficient precision.
+    pub fn add_nanoseconds(&self, ns: i64) -> Result<Self, PureRuntimeError> {
+        self.add_subsecond_unit("nanoseconds", ns, |sp, n| sp.try_nanoseconds(n))
+    }
+
+    /// Shared helper for sub-second arithmetic. The Pure platform tests
+    /// (testAdjustByMilliseconds, etc.) accept any time-precision input
+    /// — milliseconds added to a date with second precision still work
+    /// in Java Pure (the result simply gains sub-second precision).
+    /// We require at least second precision here; sub-second adjustments
+    /// to year/month/day-only dates still error per the platform's
+    /// "needs time" contract on adjust.
+    fn add_subsecond_unit<F>(
+        &self,
+        unit_name: &'static str,
+        n: i64,
+        build: F,
+    ) -> Result<Self, PureRuntimeError>
+    where
+        F: FnOnce(jiff::Span, i64) -> Result<jiff::Span, jiff::Error>,
+    {
+        match self.precision {
+            DatePrecision::Time(tp) if tp >= TimePrecision::Second => {}
+            _ => {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "Cannot add {unit_name} to a date without second precision"
+                )));
+            }
+        }
+        let new_dt = build(jiff::Span::new(), n)
+            .and_then(|sp| self.inner.checked_add(sp))
             .map_err(|e| PureRuntimeError::EvaluationError(format!("Date overflow: {e}")))?;
         Ok(Self {
             inner: new_dt,

@@ -74,15 +74,27 @@ pub enum DurationUnit {
     Nanoseconds,
 }
 
-/// Parse a `DurationUnit` from a Pure enum-value string.
+/// Parse a `DurationUnit` from a Pure enum value (either typed
+/// `Value::EnumValue` reading off `.member`, or a fallback string of
+/// the form `"DurationUnit.DAYS"` / `"DAYS"`).
 ///
-/// Accepts both the fully-qualified form (`"DurationUnit.DAYS"`) and the
-/// bare variant (`"DAYS"`). The `rsplit('.').next()` call yields
-/// `Some("DAYS")` in both cases; the `unwrap_or` branch defends against
-/// future changes to the format.
+/// Java Pure passes the typed enum at runtime; PCT tests like
+/// testAdjustByYears do `DurationUnit.YEARS`, which lowers to a
+/// `Value::EnumValue { enum_id, member: "YEARS" }`. The `as_string`
+/// path was only hit by historical synthetic test code; it stays as a
+/// fallback so the matcher keeps tolerating both shapes.
 fn duration_unit(v: &Value) -> Result<DurationUnit, PureRuntimeError> {
-    let s = v.as_string()?;
-    let suffix = s.rsplit('.').next().unwrap_or(s.as_str());
+    let suffix_owned;
+    let suffix: &str = match v {
+        Value::EnumValue { member, .. } => member.as_str(),
+        Value::String(s) => {
+            suffix_owned = s.rsplit('.').next().unwrap_or(s.as_str()).to_string();
+            &suffix_owned[..]
+        }
+        other => {
+            return Err(PureRuntimeError::type_mismatch("DurationUnit", other));
+        }
+    };
     match suffix {
         "YEARS" => Ok(DurationUnit::Years),
         "MONTHS" => Ok(DurationUnit::Months),
@@ -500,12 +512,9 @@ impl NativeFunction for Adjust {
             DurationUnit::Hours => d.add_hours(n),
             DurationUnit::Minutes => d.add_minutes(n),
             DurationUnit::Seconds => d.add_seconds(n),
-            DurationUnit::Milliseconds | DurationUnit::Microseconds | DurationUnit::Nanoseconds => {
-                return Err(PureRuntimeError::EvaluationError(format!(
-                    "adjust: DurationUnit {unit:?} not supported by PureDate arithmetic"
-                ))
-                .into());
-            }
+            DurationUnit::Milliseconds => d.add_milliseconds(n),
+            DurationUnit::Microseconds => d.add_microseconds(n),
+            DurationUnit::Nanoseconds => d.add_nanoseconds(n),
         }?;
         Ok(Evaluated::new(Value::Date(new_date)))
     }
