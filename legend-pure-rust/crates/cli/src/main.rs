@@ -94,6 +94,9 @@ enum Commands {
     /// Generate shell completion scripts
     Completions(commands::completions::CompletionsArgs),
 
+    /// Interactive Pure expression evaluator
+    Repl(commands::repl::ReplArgs),
+
     /// Print version information
     Version,
 }
@@ -114,6 +117,7 @@ fn main() {
         Commands::Publish(args) => commands::publish::run(args),
         Commands::Init(args) => commands::init::run(args),
         Commands::Completions(args) => commands::completions::run(args),
+        Commands::Repl(args) => commands::repl::run(args),
         Commands::Version => {
             print_version();
             Ok(())
