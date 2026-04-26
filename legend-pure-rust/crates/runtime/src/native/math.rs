@@ -691,10 +691,13 @@ impl NativeFunction for ParseFloat {
     }
 }
 
-/// Pure `parseBoolean(String[1]):Boolean[1]` — `"true"` / `"false"`
-/// (case-sensitive per Pure spec).
+/// Pure `parseBoolean(String[1]):Boolean[1]` — case-insensitive
+/// `"true"` / `"false"`.
 ///
-/// Returns an `EvaluationError` for any other input.
+/// The platform tests `testParseTrue` / `testParseFalse` accept all
+/// case combinations (`'True'`, `'tRue'`, `'TRUE'`, …) — Java Pure's
+/// `Boolean.parseBoolean` semantics. Returns an `EvaluationError` for
+/// any other input.
 #[derive(Debug)]
 pub struct ParseBoolean;
 
@@ -707,11 +710,13 @@ impl NativeFunction for ParseBoolean {
         let values = force_all(args, ctx)?;
         expect_args("parseBoolean", &values, 1)?;
         let s = values[0].as_string()?;
-        let b = match s.as_str() {
+        let lower = s.as_str().to_ascii_lowercase();
+        let b = match lower.as_str() {
             "true" => Ok(true),
             "false" => Ok(false),
-            other => Err(PureRuntimeError::EvaluationError(format!(
-                "parseBoolean: expected \"true\" or \"false\", got {other:?}"
+            _ => Err(PureRuntimeError::EvaluationError(format!(
+                "parseBoolean: expected \"true\" or \"false\" (case-insensitive), got {:?}",
+                s.as_str()
             ))),
         }?;
         Ok(Evaluated::new(Value::Boolean(b)))
@@ -1583,18 +1588,22 @@ mod tests {
     }
 
     #[test]
-    fn parse_boolean_case_sensitive() {
-        // "True" / "TRUE" / "False" are NOT accepted per Pure spec.
-        assert!(
-            ParseBoolean
-                .execute(&[lit_str("True")], &mut MockCtx)
-                .is_err()
-        );
-        assert!(
-            ParseBoolean
-                .execute(&[lit_str("FALSE")], &mut MockCtx)
-                .is_err()
-        );
+    fn parse_boolean_case_insensitive() {
+        // Phase 7: Java Pure parity — `True` / `TRUE` / `False` are
+        // all accepted by `parseBoolean`. The PCT testParseTrue and
+        // testParseFalse pin every case combination.
+        for variant in ["True", "TRUE", "tRue", "trUe", "truE"] {
+            let r = ParseBoolean
+                .execute(&[lit_str(variant)], &mut MockCtx)
+                .unwrap();
+            assert_eq!(r.into_value(), Value::Boolean(true), "expected true for {variant}");
+        }
+        for variant in ["False", "FALSE", "fAlse", "faLse", "falSe", "falsE"] {
+            let r = ParseBoolean
+                .execute(&[lit_str(variant)], &mut MockCtx)
+                .unwrap();
+            assert_eq!(r.into_value(), Value::Boolean(false), "expected false for {variant}");
+        }
     }
 
     #[test]

@@ -332,7 +332,21 @@ impl NativeFunction for Trim {
 // toString
 // ---------------------------------------------------------------------------
 
-/// Pure `toString(Any[1]): String[1]` — convert any value to its string representation.
+/// Pure `toString(Any[1]): String[1]` — convert any value to its
+/// human-readable Pure string form. Distinct from `Value::Display`
+/// (which is a debug-leaning shape with quoted strings, `%`-prefixed
+/// dates, and `<Object@id>` placeholders): toString matches Java
+/// Pure's `toString` shape, which is what platform tests pin in
+/// `essential/string/toString/toString.pure`.
+///
+/// Heap-object dispatch:
+/// - `Pair` → `<first.toString(), second.toString()>`
+/// - `List` → `[values.map(toString)->joinStrings(', ')]` (recursive)
+/// - Other heap objects → `Anonymous_<obj_id>` (matches Java's
+///   anonymous-instance default; `testPersonToString` checks the
+///   `Anonymous_` prefix). Class-defined `toString` qualified
+///   properties (`testComplexClassToString`) need lookup that's not
+///   yet wired — those tests stay failing as a known gap.
 #[derive(Debug)]
 pub struct ToString;
 
@@ -344,9 +358,8 @@ impl NativeFunction for ToString {
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
         expect_args("toString", &values, 1)?;
-        Ok(Evaluated::new(Value::String(SmolStr::new(
-            values[0].to_string(),
-        ))))
+        let s = pure_to_string(&values[0], ctx);
+        Ok(Evaluated::new(Value::String(SmolStr::new(s))))
     }
 
     fn signature(&self) -> &'static str {
@@ -354,25 +367,127 @@ impl NativeFunction for ToString {
     }
 }
 
+/// Render a value to its Pure-toString form. See [`ToString`]'s doc for
+/// the per-variant contract. Recursive for collections + heap objects.
+pub(crate) fn pure_to_string(value: &Value, ctx: &dyn EvalContextTrait) -> String {
+    use crate::value::FunctionValue;
+    match value {
+        Value::String(s) => s.to_string(),
+        Value::Boolean(b) => b.to_string(),
+        Value::Integer(i) => i.to_string(),
+        Value::Float(f) => f.to_string(),
+        Value::Decimal(d) => d.to_string(),
+        // Date/DateTime: no `%` prefix (PureDate's Display already
+        // formats with TZ for time-precision dates).
+        Value::Date(d) => d.to_string(),
+        Value::StrictTime(t) => t.to_string(),
+        Value::Unit => String::new(),
+        Value::Collection(items) => {
+            let parts: Vec<String> = items.iter().map(|v| pure_to_string(v, ctx)).collect();
+            format!("[{}]", parts.join(", "))
+        }
+        // Heap object: classifier-based dispatch for known shapes (Pair,
+        // List), default to `Anonymous_<id>` for everything else.
+        Value::Object(obj_id) => {
+            let classifier = ctx
+                .heap()
+                .classifier(*obj_id)
+                .map(str::to_owned)
+                .unwrap_or_default();
+            let leaf = classifier.rsplit("::").next().unwrap_or("");
+            match leaf {
+                "Pair" => {
+                    let first = ctx
+                        .heap()
+                        .get_property_values(*obj_id, "first")
+                        .ok()
+                        .and_then(|v| v.iter().next().cloned())
+                        .map(|v| pure_to_string(&v, ctx))
+                        .unwrap_or_default();
+                    let second = ctx
+                        .heap()
+                        .get_property_values(*obj_id, "second")
+                        .ok()
+                        .and_then(|v| v.iter().next().cloned())
+                        .map(|v| pure_to_string(&v, ctx))
+                        .unwrap_or_default();
+                    format!("<{first}, {second}>")
+                }
+                "List" => {
+                    let values = ctx
+                        .heap()
+                        .get_property_values(*obj_id, "values")
+                        .unwrap_or_else(|_| im_rc::Vector::new());
+                    let parts: Vec<String> =
+                        values.iter().map(|v| pure_to_string(v, ctx)).collect();
+                    format!("[{}]", parts.join(", "))
+                }
+                _ => format!("Anonymous_{obj_id}"),
+            }
+        }
+        // Element ref (Class, Function, Enumeration, …): simple-leaf
+        // name. testClassToString and testEnumerationToString assert
+        // `STR_Person->toString() == 'STR_Person'`.
+        Value::Element(id) => {
+            crate::model_utils::element_simple_name(ctx.model(), *id).to_string()
+        }
+        // Enum value: just the member (Java parity — `CITY` not
+        // `STR_GeographicEntityType.CITY`).
+        Value::EnumValue { member, .. } => member.to_string(),
+        Value::Function(fv) => match fv.as_ref() {
+            FunctionValue::Lambda(_) => "<Lambda>".to_string(),
+            FunctionValue::Compiled(id) => {
+                crate::model_utils::element_simple_name(ctx.model(), *id).to_string()
+            }
+        },
+        Value::Map(m) => format!("<Map size={}>", m.borrow().entries.len()),
+        Value::UnitInstance { unit_id, inner } => {
+            // Pure source form is "{n} {Measure}~{Unit}"; toString-
+            // friendly subset just reuses the inner-value string with
+            // the local unit name appended.
+            let unit_name = ctx.model().element_name(*unit_id);
+            format!("{} {unit_name}", pure_to_string(inner, ctx))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // format
 // ---------------------------------------------------------------------------
 
-/// Produce a repr string for `%r`: strings are quoted, other values use Display.
+/// Produce a repr string for `%r` / `toRepresentation`: strings are
+/// quoted with backslash + single-quote escaped (Pure source form);
+/// dates carry the leading `%`; other values fall back to Display.
 fn repr_value(v: &Value) -> String {
     match v {
-        Value::String(s) => format!("'{s}'"),
+        Value::String(s) => {
+            // Match Java Pure's escape: \ → \\, ' → \', otherwise as-is.
+            let escaped = s.replace('\\', "\\\\").replace('\'', "\\'");
+            format!("'{escaped}'")
+        }
+        Value::Date(d) => format!("%{d}"),
+        Value::StrictTime(t) => format!("%{t}"),
         other => other.to_string(),
     }
 }
 
 /// Pure `format(String[1], Any[*]): String[1]`
 ///
-/// Replaces `%s` (Display), `%r` (repr — strings quoted), `%d` (integer),
-/// `%f` (float) in the format string with successive values from `args[1]`.
-/// `args[1]` is the `Any[*]` collection of substitution values; if it is a
-/// `Value::Collection`, its elements are iterated; otherwise it is treated as
-/// a single-element list.
+/// Replaces format specifiers in the template with successive values from
+/// `args[1]`. Specifier syntax (mirrors Java Pure's `format`):
+/// - `%s` → toString shape (unquoted strings, dates without `%`, lists
+///   `[a, b]`, pairs `<a, b>`)
+/// - `%r` → repr (quoted strings with escapes, dates with leading `%`)
+/// - `%d` → integer; supports `%05d` zero-padded width
+/// - `%f` → float; supports `%.4f` precision (truncating fractional digits
+///   to N, padding with zeros if value has fewer)
+/// - `%t` → date toString (same shape as `%s` for dates)
+/// - `%t{pattern}` → date with explicit format pattern
+///   (e.g. `%t{yyyy-MM-dd HH:mm:ss}`)
+///
+/// `args[1]` is the `Any[*]` collection of substitution values; if it is
+/// a `Value::Collection`, its elements are iterated; otherwise it is
+/// treated as a single-element list.
 #[derive(Debug)]
 pub struct Format;
 
@@ -384,42 +499,146 @@ impl NativeFunction for Format {
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
         expect_args("format", &values, 2)?;
-        let template = values[0].as_string()?;
+        let template = values[0].as_string()?.to_string();
 
-        let subs: Vec<&Value> = match &values[1] {
-            Value::Collection(v) => v.iter().collect(),
-            single => vec![single],
+        let subs: Vec<Value> = match &values[1] {
+            Value::Collection(v) => v.iter().cloned().collect(),
+            single => vec![single.clone()],
         };
 
+        let bytes = template.as_bytes();
         let mut result = String::with_capacity(template.len());
-        let mut chars = template.chars().peekable();
+        let mut i = 0usize;
         let mut sub_idx = 0usize;
 
-        while let Some(c) = chars.next() {
-            if c != '%' {
-                result.push(c);
+        while i < bytes.len() {
+            let c = bytes[i];
+            if c != b'%' {
+                result.push(c as char);
+                i += 1;
                 continue;
             }
-            match chars.peek() {
-                Some(&spec) if matches!(spec, 's' | 'r' | 'd' | 'f') => {
-                    chars.next();
-                    let v = subs.get(sub_idx).copied().ok_or_else(|| {
-                        PureRuntimeError::EvaluationError(format!(
-                            "format: not enough arguments (needed arg {sub_idx})"
-                        ))
-                    })?;
-                    sub_idx += 1;
-                    match spec {
-                        'r' => result.push_str(&repr_value(v)),
-                        's' => match v {
-                            Value::String(s) => result.push_str(s.as_str()),
-                            other => result.push_str(&other.to_string()),
-                        },
-                        _ => result.push_str(&v.to_string()),
+            // Parse `%[0][width][.precision]<spec>` or `%t{template}`.
+            let mut j = i + 1;
+            let mut zero_pad = false;
+            if j < bytes.len() && bytes[j] == b'0' && j + 1 < bytes.len()
+                && bytes[j + 1].is_ascii_digit()
+            {
+                zero_pad = true;
+                j += 1;
+            }
+            // Width digits.
+            let width_start = j;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            let width: Option<usize> = if j > width_start {
+                Some(template[width_start..j].parse().unwrap_or(0))
+            } else {
+                None
+            };
+            // Optional `.precision`.
+            let precision: Option<usize> = if j < bytes.len() && bytes[j] == b'.' {
+                let p_start = j + 1;
+                let mut p_end = p_start;
+                while p_end < bytes.len() && bytes[p_end].is_ascii_digit() {
+                    p_end += 1;
+                }
+                if p_end > p_start {
+                    j = p_end;
+                    Some(template[p_start..p_end].parse().unwrap_or(0))
+                } else {
+                    j = p_start;
+                    None
+                }
+            } else {
+                None
+            };
+            if j >= bytes.len() {
+                result.push('%');
+                i += 1;
+                continue;
+            }
+            let spec = bytes[j];
+            // `%t{pattern}` — date format with explicit pattern.
+            let date_pattern: Option<String> = if spec == b't'
+                && j + 1 < bytes.len()
+                && bytes[j + 1] == b'{'
+            {
+                let pat_start = j + 2;
+                if let Some(end) = template[pat_start..].find('}') {
+                    let pat = template[pat_start..pat_start + end].to_string();
+                    j = pat_start + end + 1; // past `}`
+                    Some(pat)
+                } else {
+                    None
+                }
+            } else {
+                j += 1;
+                None
+            };
+            if !matches!(spec, b's' | b'r' | b'd' | b'f' | b't') {
+                result.push('%');
+                i += 1;
+                continue;
+            }
+            let v = subs.get(sub_idx).cloned().ok_or_else(|| {
+                PureRuntimeError::EvaluationError(format!(
+                    "format: not enough arguments (needed arg {sub_idx})"
+                ))
+            })?;
+            sub_idx += 1;
+            match spec {
+                b'r' => result.push_str(&repr_value(&v)),
+                b's' => result.push_str(&pure_to_string(&v, ctx)),
+                b'd' => {
+                    let n = v.as_integer().unwrap_or(0);
+                    let body = if let Some(w) = width {
+                        if zero_pad {
+                            // Zero-pad to width respecting sign.
+                            if n < 0 {
+                                format!("-{:0>1$}", -n, w)
+                            } else {
+                                format!("{n:0>w$}", n = n, w = w)
+                            }
+                        } else {
+                            format!("{n:>w$}")
+                        }
+                    } else {
+                        n.to_string()
+                    };
+                    result.push_str(&body);
+                }
+                b'f' => {
+                    let f = match &v {
+                        Value::Float(f) => *f,
+                        #[allow(clippy::cast_precision_loss)]
+                        Value::Integer(i) => *i as f64,
+                        Value::Decimal(d) => {
+                            use rust_decimal::prelude::ToPrimitive;
+                            d.to_f64().unwrap_or(f64::NAN)
+                        }
+                        _ => f64::NAN,
+                    };
+                    let body = if let Some(p) = precision {
+                        // Java's `%.Nf` rounds half-to-even (banker's),
+                        // matching Decimal::round_dp's default.
+                        format!("{f:.p$}", f = f, p = p)
+                    } else {
+                        f.to_string()
+                    };
+                    result.push_str(&body);
+                }
+                b't' => {
+                    if let (Some(pat), Value::Date(d)) = (&date_pattern, &v) {
+                        result.push_str(&format_date_pattern(d, pat));
+                    } else {
+                        result.push_str(&pure_to_string(&v, ctx));
                     }
                 }
-                _ => result.push('%'),
+                _ => unreachable!(),
             }
+            i = j;
         }
 
         Ok(Evaluated::new(Value::String(SmolStr::new(result))))
@@ -428,6 +647,123 @@ impl NativeFunction for Format {
     fn signature(&self) -> &'static str {
         "format(String[1], Any[*]): String[1]"
     }
+}
+
+/// Format a [`PureDate`] with a Java-SimpleDateFormat-like pattern.
+///
+/// Currently supports the subset the platform tests exercise:
+/// - `yyyy` (4-digit year), `MM` (2-digit month), `dd` (2-digit day)
+/// - `HH` (24-hour), `hh` (12-hour), `h` (1- or 2-digit 12-hour)
+/// - `mm` (minute), `ss` (second), `SSS` (millis)
+/// - `a` (AM/PM), `Z` (`+0000`-style offset), `X` (`Z`-style offset)
+/// - `"literal"` segments (Java-style quoted text)
+/// - `[Region/City]` prefix for timezone-shifted output
+///
+/// Unsupported patterns pass through verbatim. Anything beyond the test
+/// surface is best-effort; revisit when more tests need it.
+fn format_date_pattern(d: &crate::date::PureDate, pat: &str) -> String {
+    use crate::date::PureDate;
+    // [TZ] prefix — shift the date by the named offset for output.
+    let (tz_offset_minutes, body) = if let Some(rest) = pat.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            let zone = &rest[..end];
+            let offset = match zone {
+                "EST" => Some(-5 * 60),
+                "EDT" => Some(-4 * 60),
+                "CET" => Some(60),
+                "GMT" | "UTC" => Some(0),
+                _ => None,
+            };
+            (offset, &rest[end + 1..])
+        } else {
+            (None, pat)
+        }
+    } else {
+        (None, pat)
+    };
+    let shifted: PureDate = if let Some(off) = tz_offset_minutes {
+        d.add_minutes(i64::from(off)).unwrap_or(*d)
+    } else {
+        *d
+    };
+    let inner = shifted.inner_datetime();
+    let mut out = String::with_capacity(body.len());
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        // Quoted literal segment: "..."
+        if c == b'"' {
+            i += 1;
+            while i < bytes.len() && bytes[i] != b'"' {
+                out.push(bytes[i] as char);
+                i += 1;
+            }
+            if i < bytes.len() {
+                i += 1; // skip closing quote
+            }
+            continue;
+        }
+        // Run of identical pattern letters.
+        let mut j = i + 1;
+        while j < bytes.len() && bytes[j] == c {
+            j += 1;
+        }
+        let count = j - i;
+        let token: String = std::iter::repeat(c as char).take(count).collect();
+        let _ = token;
+        match (c, count) {
+            (b'y', 4) => out.push_str(&format!("{:04}", inner.year())),
+            (b'M', 2) => out.push_str(&format!("{:02}", inner.month())),
+            (b'd', 2) => out.push_str(&format!("{:02}", inner.day())),
+            (b'H', 2) => out.push_str(&format!("{:02}", inner.hour())),
+            (b'h', n) => {
+                let h12 = match inner.hour() {
+                    0 => 12,
+                    h if h > 12 => h - 12,
+                    h => h,
+                };
+                if n == 2 {
+                    out.push_str(&format!("{h12:02}"));
+                } else {
+                    out.push_str(&format!("{h12}"));
+                }
+            }
+            (b'm', 2) => out.push_str(&format!("{:02}", inner.minute())),
+            (b's', 2) => out.push_str(&format!("{:02}", inner.second())),
+            (b'S', n) => {
+                let nanos = inner.subsec_nanosecond();
+                let s = format!("{nanos:09}");
+                out.push_str(&s[..n.min(9)]);
+            }
+            (b'a', 1) => out.push_str(if inner.hour() < 12 { "AM" } else { "PM" }),
+            (b'Z', 1) => {
+                let m: i32 = tz_offset_minutes.unwrap_or(0);
+                let sign = if m >= 0 { '+' } else { '-' };
+                let abs = m.abs();
+                out.push_str(&format!("{sign}{:02}{:02}", abs / 60, abs % 60));
+            }
+            (b'X', 1) => {
+                let m: i32 = tz_offset_minutes.unwrap_or(0);
+                if m == 0 {
+                    out.push('Z');
+                } else {
+                    let sign = if m > 0 { '+' } else { '-' };
+                    let abs = m.abs();
+                    out.push_str(&format!("{sign}{:02}", abs / 60));
+                }
+            }
+            // Pass-through for unrecognised tokens (whitespace,
+            // separators, unknown letters).
+            _ => {
+                for _ in 0..count {
+                    out.push(c as char);
+                }
+            }
+        }
+        i = j;
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------

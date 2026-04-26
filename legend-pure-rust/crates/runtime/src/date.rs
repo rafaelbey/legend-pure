@@ -292,6 +292,16 @@ impl PureDate {
         self.precision
     }
 
+    /// Borrow the underlying `jiff::civil::DateTime` directly. Useful
+    /// for low-level format-string formatters that need every component
+    /// without going through precision-gated accessors. Year- and
+    /// month-only dates default month=1, day=1, hour=0, etc., so every
+    /// field is well-formed.
+    #[must_use]
+    pub fn inner_datetime(&self) -> jiff::civil::DateTime {
+        self.inner
+    }
+
     /// Get the underlying `jiff::civil::Date`.
     ///
     /// Year- and month-only PureDates default month=1 and day=1, so
