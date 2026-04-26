@@ -389,7 +389,15 @@ pub(crate) fn pure_to_string(
         Value::String(s) => Ok(s.to_string()),
         Value::Boolean(b) => Ok(b.to_string()),
         Value::Integer(i) => Ok(i.to_string()),
-        Value::Float(f) => Ok(f.to_string()),
+        // Float: route through the Java-style formatter so
+        // integer-valued doubles render with the trailing `.0`
+        // platform tests pin (testFloatToStringWithExcessTrailingZeros,
+        // testFloatToStringWithPositiveExponent). Rust's native
+        // `{f64}` Display strips the `.0`; everything else
+        // (including the avoidance of E-notation for normal-range
+        // values, and 0.000000013421-style expanded form for very
+        // small values) already matches Java's expected output.
+        Value::Float(_) => Ok(crate::native::math::java_number_string(value)),
         Value::Decimal(d) => Ok(d.to_string()),
         // Date/DateTime: no `%` prefix (PureDate's Display already
         // formats with TZ for time-precision dates).

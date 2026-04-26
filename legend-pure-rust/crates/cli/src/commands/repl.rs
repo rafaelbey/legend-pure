@@ -480,7 +480,15 @@ impl Completer for ReplCompleter {
                 }
             }
         } else if word.starts_with('$') {
-            for var in &self.variables {
+            // Combine persistent let bindings with inline lambda variables
+            let mut active_vars = self.variables.clone();
+            for lambda_var in extract_lambda_vars(line_to_pos) {
+                if !active_vars.contains(&lambda_var) {
+                    active_vars.push(lambda_var);
+                }
+            }
+
+            for var in active_vars {
                 if var.starts_with(word) {
                     candidates.push(Pair {
                         display: var.clone(),
@@ -501,4 +509,55 @@ impl Completer for ReplCompleter {
 
         Ok((start, candidates))
     }
+}
+
+/// Extract variable names defined in lambda scopes from the current line.
+///
+/// Uses a reverse-scanning heuristic from each `|` to find words that look
+/// like lambda parameters (lowercase initials) bounded by operators or `(`.
+fn extract_lambda_vars(line: &str) -> Vec<String> {
+    let mut vars = Vec::new();
+    let parts: Vec<&str> = line.split('|').collect();
+
+    // We only care about parts that precede a '|' (i.e. all but the last split)
+    for i in 0..parts.len().saturating_sub(1) {
+        let before_pipe = parts[i].trim_end();
+        let mut tokens = Vec::new();
+        let mut current_word = String::new();
+
+        // Scan backwards from the `|`
+        for c in before_pipe.chars().rev() {
+            if c.is_alphanumeric() || c == '_' {
+                current_word.push(c);
+            } else {
+                if !current_word.is_empty() {
+                    let word: String = current_word.chars().rev().collect();
+                    tokens.push(word);
+                    current_word.clear();
+                }
+                // Stop going backwards if we hit an operator or structural character
+                // that clearly bounds the lambda parameter list
+                if c == '(' || c == '>' || c == '=' || c == '+' || c == '-' || c == '*' || c == '/' || c == '[' || c == '{' {
+                    break;
+                }
+            }
+        }
+        if !current_word.is_empty() {
+            let word: String = current_word.chars().rev().collect();
+            tokens.push(word);
+        }
+
+        // Any extracted word that starts with a lowercase letter is a likely parameter
+        for token in tokens {
+            if let Some(first) = token.chars().next() {
+                if first.is_lowercase() {
+                    let var_name = format!("${token}");
+                    if !vars.contains(&var_name) {
+                        vars.push(var_name);
+                    }
+                }
+            }
+        }
+    }
+    vars
 }
