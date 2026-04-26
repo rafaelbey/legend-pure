@@ -56,6 +56,6 @@ pub(crate) mod m3_parser;
 pub mod model;
 pub mod nodes;
 pub mod pipeline;
-pub(crate) mod resolve;
+pub mod resolve;
 pub mod types;
 pub(crate) mod validate;

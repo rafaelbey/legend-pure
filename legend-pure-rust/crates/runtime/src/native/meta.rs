@@ -1543,9 +1543,32 @@ fn resolve_value_type(
                 )
             }
         },
-        // Collections / maps / unit — no reified runtime type,
-        // classify as `Any`.
-        Value::Collection(_) | Value::Map(_) | Value::Unit => Ok(bootstrap::ANY_ID),
+        // Collection runtime type is the least-upper-bound of its
+        // elements' types — `[1, 2, 3].type() == Integer`,
+        // `[1, 'a'].type() == Any`, `[CO_Address, CO_Location].type()
+        // == CO_GeographicEntity`. Empty collections fall through to
+        // `Any`. Mirrors what Java compiled mode can't do because
+        // of erasure — `testConcatenateTypeInference` is excluded
+        // there but exercised here. Resolution per element reuses
+        // this function recursively, then folds via
+        // `least_upper_bound_ids` (the same compile-time LUB the
+        // overload resolver uses).
+        Value::Collection(items) => {
+            let mut iter = items.iter();
+            let Some(first) = iter.next() else {
+                return Ok(bootstrap::ANY_ID);
+            };
+            let mut acc = resolve_value_type(first, model, heap)?;
+            for item in iter {
+                if acc == bootstrap::ANY_ID {
+                    break; // Any is the top — no further widening possible.
+                }
+                let t = resolve_value_type(item, model, heap)?;
+                acc = legend_pure_parser_pure::resolve::least_upper_bound_ids(acc, t, model);
+            }
+            Ok(acc)
+        }
+        Value::Map(_) | Value::Unit => Ok(bootstrap::ANY_ID),
     }
 }
 

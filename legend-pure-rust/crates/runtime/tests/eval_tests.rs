@@ -3063,7 +3063,21 @@ fn eval_pct_date_error_histogram() {
 ///   scale using banker's rounding (mirrors Java's BigDecimal
 ///   `setScale(scale, HALF_EVEN)`). Same dispatch shape as
 ///   `parseDecimal`'s 2/3-arg branch. Resolves testDecimalDivide.
-const PCT_PASS_BASELINE: i64 = 454;
+/// - 2026-04-26 → 458: collection cluster (Phase 8). `RemoveDuplicates`
+///   now honours its optional `key` and `eql` Function arguments
+///   (was ignoring them), routing `removeDuplicatesBy(col, key)` and
+///   `removeDuplicates(col, eql)` (both platform `.pure` wrappers
+///   that delegate to the 3-arg native) through the same code path.
+///   `resolve_value_type` for `Value::Collection` now folds element
+///   types through `least_upper_bound_ids` (newly `pub` in
+///   `pure/src/resolve.rs`) instead of returning `Any` — so
+///   `[1,2,3].type() == Integer` and `[CO_Address, CO_Location]
+///   .type() == CO_GeographicEntity`. Resolves
+///   testRemoveDuplicatesByPrimitive,
+///   testRemoveDuplicatesPrimitiveStandardFunctionExplicit,
+///   testRemoveDuplicatesPrimitiveNonStandardFunction,
+///   testConcatenateTypeInference. Net +4 PASS.
+const PCT_PASS_BASELINE: i64 = 458;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in
