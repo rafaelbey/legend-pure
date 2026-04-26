@@ -2311,7 +2311,10 @@ fn eval_pct_date_error_histogram() {
 ///   boolean (+4), collection (+4), lang (+7)
 /// - 368 — Phase 2: tail / zip / values / split / parseDecimal natives
 ///   cleared 20 tests across collection (+15) and string (+5)
-const PCT_PASS_BASELINE: i64 = 368;
+/// - 379 — Phase 3: round/2 (+ banker's rounding) / substring/2 /
+///   indexOf/3 / add/3 / range/2 overloads cleared 11 tests across
+///   collection (+4), math (+4 inc 2 FAIL→PASS via half-even), string (+3)
+const PCT_PASS_BASELINE: i64 = 379;
 
 #[test]
 fn eval_pct_baseline_lock() {

@@ -344,9 +344,12 @@ impl NativeFunction for Values {
 // ---------------------------------------------------------------------------
 
 /// Pure `range(Integer[1], Integer[1], Integer[1]): Integer[*]`
+/// Pure `range(Integer[1], Integer[1]): Integer[*]` — step defaults to 1
+/// Pure `range(Integer[1]): Integer[*]` — start defaults to 0, step to 1
 ///
-/// `range(start, stop, step)` — generates integers from start (inclusive)
-/// to stop (exclusive) with the given step.
+/// Generates integers from `start` (inclusive) to `stop` (exclusive)
+/// with the given `step`. Java's stride direction follows the sign of
+/// `step` — positive step ascends, negative step descends.
 #[derive(Debug)]
 pub struct Range;
 
@@ -357,10 +360,21 @@ impl NativeFunction for Range {
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
-        expect_args("range", &values, 3)?;
-        let start = values[0].as_integer()?;
-        let end_exclusive = values[1].as_integer()?;
-        let increment = values[2].as_integer()?;
+        let (start, end_exclusive, increment) = match values.len() {
+            1 => (0i64, values[0].as_integer()?, 1i64),
+            2 => (values[0].as_integer()?, values[1].as_integer()?, 1i64),
+            3 => (
+                values[0].as_integer()?,
+                values[1].as_integer()?,
+                values[2].as_integer()?,
+            ),
+            n => {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "range: expected 1, 2, or 3 argument(s), got {n}"
+                ))
+                .into());
+            }
+        };
         if increment == 0 {
             return Err(
                 PureRuntimeError::EvaluationError("range: step cannot be zero".into()).into(),
@@ -383,7 +397,7 @@ impl NativeFunction for Range {
     }
 
     fn signature(&self) -> &'static str {
-        "range(Integer[1], Integer[1], Integer[1]): Integer[*]"
+        "range(Integer[1] [, Integer[1] [, Integer[1]]]): Integer[*]"
     }
 }
 
@@ -896,13 +910,15 @@ impl NativeFunction for Find {
 }
 
 // ---------------------------------------------------------------------------
-// add (append)
+// add (append / insert)
 // ---------------------------------------------------------------------------
 
 /// Pure `add<T|m>(T[m], T[1]): T[$1_MANY$]`
+/// Pure `add<T|m>(T[m], Integer[1], T[1]): T[$1_MANY$]`
 ///
-/// Appends a single element to the end of a collection, producing a new
-/// collection. Scalar inputs are promoted; empty inputs yield a singleton.
+/// 2-arg form appends to the end; 3-arg form inserts at the given index
+/// (0-based, clamped to `[0, len]`). Scalar inputs are promoted; empty
+/// inputs yield a singleton.
 #[derive(Debug)]
 pub struct Add;
 
@@ -913,15 +929,32 @@ impl NativeFunction for Add {
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
-        expect_args("add", &values, 2)?;
-        let mut coll = values[0].to_collection();
-        coll.push_back(values[1].clone());
-        let as_vec: Vec<Value> = coll.into_iter().collect();
-        Ok(Evaluated::new(Value::from_vec(as_vec)))
+        match values.len() {
+            2 => {
+                let mut coll = values[0].to_collection();
+                coll.push_back(values[1].clone());
+                let as_vec: Vec<Value> = coll.into_iter().collect();
+                Ok(Evaluated::new(Value::from_vec(as_vec)))
+            }
+            3 => {
+                let mut coll = values[0].to_collection();
+                let raw_index = values[1].as_integer()?;
+                let len = i64::try_from(coll.len()).unwrap_or(i64::MAX);
+                let index = raw_index.clamp(0, len);
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                coll.insert(index as usize, values[2].clone());
+                let as_vec: Vec<Value> = coll.into_iter().collect();
+                Ok(Evaluated::new(Value::from_vec(as_vec)))
+            }
+            n => Err(PureRuntimeError::EvaluationError(format!(
+                "add: expected 2 or 3 argument(s), got {n}"
+            ))
+            .into()),
+        }
     }
 
     fn signature(&self) -> &'static str {
-        "add(T[m], T[1]): T[$1_MANY$]"
+        "add(T[m], Integer[0..1], T[1]): T[$1_MANY$]"
     }
 }
 
@@ -2078,9 +2111,14 @@ mod tests {
     fn wrong_arg_count_errors() {
         assert!(Size.execute(&[], &mut MockCtx).is_err());
         assert!(At.execute(&[int_spec(&[1])], &mut MockCtx).is_err());
+        // Range now accepts 1, 2, or 3 args (Phase 3) — only 0 or >3 errors.
+        assert!(Range.execute(&[], &mut MockCtx).is_err());
         assert!(
             Range
-                .execute(&[lit_int(1), lit_int(5)], &mut MockCtx)
+                .execute(
+                    &[lit_int(1), lit_int(2), lit_int(3), lit_int(4)],
+                    &mut MockCtx,
+                )
                 .is_err()
         );
         assert!(Take.execute(&[int_spec(&[1])], &mut MockCtx).is_err());
