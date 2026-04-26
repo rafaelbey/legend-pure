@@ -503,7 +503,8 @@ fn decode_key_expressions(
             continue;
         }
         let key_vals = ctx.heap().get_property_values(*obj_id, "key")?;
-        let key_str = unwrap_instance_value_string(&key_vals.iter().cloned().collect::<Vec<_>>(), ctx)?;
+        let key_str =
+            unwrap_instance_value_string(&key_vals.iter().cloned().collect::<Vec<_>>(), ctx)?;
         let expr_vals = ctx.heap().get_property_values(*obj_id, "expression")?;
         let expr_payload: Vec<Value> = expr_vals.iter().cloned().collect();
         let expression_values = unwrap_instance_value_list(&expr_payload, ctx)?;
@@ -526,10 +527,7 @@ fn unwrap_instance_value_string(
     ctx: &mut dyn EvalContextTrait,
 ) -> Result<SmolStr, PureException> {
     let Some(first) = payload.first() else {
-        return Err(PureRuntimeError::EvaluationError(
-            "KeyExpression.key is empty".into(),
-        )
-        .into());
+        return Err(PureRuntimeError::EvaluationError("KeyExpression.key is empty".into()).into());
     };
     match first {
         Value::String(s) => Ok(s.clone()),
@@ -836,9 +834,7 @@ impl NativeFunction for Copy {
         }
         for clone_obj in cloned_objs {
             let clone_classifier = ctx.heap().classifier(clone_obj)?.to_owned();
-            if let Some(clone_class_id) =
-                crate::m3_paths::resolve(ctx.model(), &clone_classifier)
-            {
+            if let Some(clone_class_id) = crate::m3_paths::resolve(ctx.model(), &clone_classifier) {
                 sync_object_inverses(ctx, clone_obj, clone_class_id)?;
             }
         }
@@ -1146,7 +1142,8 @@ fn populate_association_inverses(
     // avoid re-borrowing the model mid-loop. Walk supertypes too, so a
     // subclass `^LA_Division(firm=$firmX)` finds the `firm`/`organizations`
     // association declared against the LA_Organization supertype.
-    let entries: Vec<(ElementId, usize)> = collect_inherited_association_properties(ctx.model(), class_id);
+    let entries: Vec<(ElementId, usize)> =
+        collect_inherited_association_properties(ctx.model(), class_id);
     if entries.is_empty() {
         return Ok(());
     }
@@ -1204,7 +1201,10 @@ fn populate_association_inverses(
                 let already_present = ctx
                     .heap()
                     .get_property_values(target, inverse_name.as_str())
-                    .map(|vs| vs.iter().any(|v| matches!(v, Value::Object(id) if *id == obj)))
+                    .map(|vs| {
+                        vs.iter()
+                            .any(|v| matches!(v, Value::Object(id) if *id == obj))
+                    })
                     .unwrap_or(false);
                 if already_present {
                     continue;
@@ -1542,7 +1542,8 @@ fn sync_object_inverses(
     obj: ObjectId,
     class_id: ElementId,
 ) -> Result<(), PureException> {
-    let entries: Vec<(ElementId, usize)> = collect_inherited_association_properties(ctx.model(), class_id);
+    let entries: Vec<(ElementId, usize)> =
+        collect_inherited_association_properties(ctx.model(), class_id);
     if entries.is_empty() {
         return Ok(());
     }
@@ -1574,7 +1575,10 @@ fn sync_object_inverses(
             let already_present = ctx
                 .heap()
                 .get_property_values(target, inverse_name.as_str())
-                .map(|vs| vs.iter().any(|v| matches!(v, Value::Object(id) if *id == obj)))
+                .map(|vs| {
+                    vs.iter()
+                        .any(|v| matches!(v, Value::Object(id) if *id == obj))
+                })
                 .unwrap_or(false);
             if already_present {
                 continue;
@@ -1755,10 +1759,7 @@ pub fn register(registry: &mut NativeRegistry) {
     //
     // Splitting eliminates the previous heuristic probing inside `New`
     // and lets each native trust its declared shape.
-    registry.register(
-        "new_Class_1__String_1__Any_MANY__T_1_",
-        New,
-    );
+    registry.register("new_Class_1__String_1__Any_MANY__T_1_", New);
     registry.register(
         "new_Class_1__String_1__KeyExpression_MANY__T_1_",
         NewWithKeyExpressions,
