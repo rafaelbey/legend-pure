@@ -125,13 +125,9 @@ Grouped by likely fix shape. Each bullet has the test FQN, the failure type
   with branches returning different types. The multiplicity-aware
   Match in Phase 5 doesn't yet validate / unify branch return types.
 
-#### Boolean (1 FAIL + 8 ERROR)
+#### Boolean (1 FAIL)
 - `boolean::tests::equality::equal::testEqualNonPrimitive` (FAIL) —
   structural equality on heap objects with non-primitive fields.
-- 8 inequality-on-Date/Boolean ERRORs (`testGreaterThan_Date`,
-  `testLessThanEqual_Boolean`, …): the comparison ops need to accept
-  Date and Boolean operands by routing through the Phase 1 `compare`
-  native (currently they reject non-Number inputs).
 
 #### Collection (1 ERROR + 5 FAIL)
 - `collection::tests::getAll::testEvalParse` (ERROR) — needs `getAll`
