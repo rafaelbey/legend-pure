@@ -1209,6 +1209,26 @@ fn eval_surveyor_meta_tests_error_histogram() {
 }
 
 #[test]
+fn eval_string_plus_string_variable() {
+    // Mirrors what stress generators emit: `function f(name: String[1]) { 'hello ' + $name }`.
+    use legend_pure_runtime::eval::Evaluator;
+    let model = compile_with_platform(
+        r#"
+        function test::greet(name: String[1]): String[1]
+        {
+            'hello ' + $name
+        }
+        "#,
+    );
+    let registry = NativeRegistry::standard();
+    let mut eval = Evaluator::new(&model, &registry);
+    let result = eval
+        .call("test::greet", &[Value::String("world".into())])
+        .expect("call should succeed");
+    assert_eq!(result, Value::String("hello world".into()));
+}
+
+#[test]
 fn eval_lambda_param_inference_narrows_overloads() {
     // Locks the bug fixed by the type-narrowing step in
     // `lower_args_with_lambda_inference`. Pure's platform `map` declares

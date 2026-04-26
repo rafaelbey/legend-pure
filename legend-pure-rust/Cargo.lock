@@ -916,6 +916,7 @@ name = "legend-pure-parser-stress"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "legend-pure-core-platform",
  "legend-pure-parser-ast",
  "legend-pure-parser-compose",
  "legend-pure-parser-parser",

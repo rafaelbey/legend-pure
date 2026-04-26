@@ -963,10 +963,13 @@ mod tests {
 
     #[test]
     fn join_strings_4arg_with_prefix_and_suffix() {
+        // 4-arg signature is `joinStrings(strings, prefix, separator, suffix)`
+        // — see commit b72e67822ca for the impl's arg-order fix that this
+        // test had drifted out of sync with.
         let coll = lit_collection(vec![lit_str("a"), lit_str("b")]);
         let r = JoinStrings
             .execute(
-                &[coll, lit_str(", "), lit_str("["), lit_str("]")],
+                &[coll, lit_str("["), lit_str(", "), lit_str("]")],
                 &mut MockCtx,
             )
             .unwrap();

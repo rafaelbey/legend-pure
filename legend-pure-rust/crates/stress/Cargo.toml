@@ -30,6 +30,7 @@ legend-pure-parser-ast = { path = "../ast" }
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-pure = { path = "../pure" }
 legend-pure-parser-compose = { path = "../compose" }
+legend-pure-core-platform = { path = "../core-platform-pure" }
 smol_str = { workspace = true }
 
 [dev-dependencies]

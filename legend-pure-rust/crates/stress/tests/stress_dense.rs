@@ -14,9 +14,10 @@
 
 //! Dense connectivity stress test: 10K classes with ~10 links per hub.
 
-use legend_pure_parser_stress::generate::common::PhaseTimer;
+use legend_pure_parser_stress::generate::common::{PhaseTimer, platform_fixture};
 use legend_pure_parser_stress::generate::hub_spoke::{self, HubSpokeConfig};
 
+use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::Element;
 use smol_str::SmolStr;
 
@@ -43,9 +44,40 @@ fn stress_10k_dense() {
     let element_count = source_file.element_count();
     println!("  AST elements: {element_count}");
 
-    // Phase 2: Compile → PureModel
+    // Phase 2: Compile → PureModel (with platform — generated functions
+    // use `+` which lowers to a platform `plus` resolution).
+    //
+    // Mirrors `eval_tests::compile_with_platform`: accept partial models
+    // — the platform itself currently has a small number of pre-existing
+    // ambiguity errors in `fold.pure` / `plus.pure` that the runtime
+    // canary tolerates. Assert that no error originated in the
+    // stress-generated source file specifically.
     let t2 = PhaseTimer::start("Phase 2 (compile → model)");
-    let model = legend_pure_parser_pure::compile!(&[source_file]).expect("compilation failed");
+    let fixture = platform_fixture();
+    let mut all_files = fixture.parsed_files.clone();
+    all_files.push(source_file);
+    let model = match legend_pure_parser_pure::pipeline::compile(&all_files, &fixture.auto_imports)
+    {
+        Ok(m) => m,
+        Err(partial) => {
+            let user_errs: Vec<_> = partial
+                .errors
+                .iter()
+                .filter(|e| e.source_info.source == "stress_dense.pure")
+                .collect();
+            assert!(
+                user_errs.is_empty(),
+                "{} compilation errors in stress_dense.pure (first: {:?})",
+                user_errs.len(),
+                user_errs.first().map(|e| (
+                    e.source_info.start_line,
+                    e.source_info.start_column,
+                    &e.message,
+                ))
+            );
+            partial.model
+        }
+    };
     t2.stop();
 
     // Phase 3: Compose roundtrip
@@ -67,10 +99,23 @@ fn stress_10k_dense() {
     // Phase 4: Model assertions
     let t4 = PhaseTimer::start("Phase 4 (model assertions)");
 
-    // Count elements
+    // Count elements under the user's `test::` package — the model also
+    // contains every platform element loaded above. `resolve_by_path` is
+    // element-position only, so locate the `test` package by walking the
+    // root package's children directly.
+    let root = model.get_package(model.root_package);
+    let test_pkg_id = root
+        .children_packages
+        .iter()
+        .find(|&&pid| model.get_package(pid).name == "test")
+        .copied()
+        .expect("test package not found in model");
     let (mut classes, mut assocs) = (0, 0);
     for chunk in model.chunks.iter().skip(1) {
-        for (_, element) in chunk.elements.iter() {
+        for ((_, element), (_, node)) in chunk.elements.iter().zip(chunk.nodes.iter()) {
+            if node.parent_package != test_pkg_id {
+                continue;
+            }
             match element {
                 Element::Class(_) => classes += 1,
                 Element::Association(_) => assocs += 1,
