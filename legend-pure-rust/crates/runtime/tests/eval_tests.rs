@@ -2983,7 +2983,16 @@ fn eval_pct_date_error_histogram() {
 ///   yyyy/MM/dd/HH/hh/h/mm/ss/SSS/a/Z/X plus quoted literals and
 ///   [TZ] prefix), and `%r` repr now escapes backslash + single
 ///   quote per Pure source rules. Cleared 23 string PCT tests.
-const PCT_PASS_BASELINE: i64 = 460;
+/// - 2026-04-26 → 461: `pure_to_string` now dispatches heap objects
+///   through their class's `toString()` qualified property (with
+///   generalization walk), mirroring Java
+///   `ToString.findBestToStringFunction`. Removed the hardcoded
+///   `Pair`/`List` classifier-string match arms — those types format
+///   identically because their platform `.pure` `toString()` QPs run
+///   under the new dispatch path. Drops the combined fail+error
+///   bucket from 78 to 36 (most of which were assertEq mismatches
+///   cascading off the broken object formatter).
+const PCT_PASS_BASELINE: i64 = 461;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in

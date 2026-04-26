@@ -69,3 +69,115 @@ let mut eval = Evaluator::with_registry(&model, registry);   // custom / extende
 
 Depends on the distributed-slice item above, since `Evaluator::new` needs a
 complete list of natives without manually enumerating them.
+
+---
+
+## PCT — deferred failures (Phase 9)
+
+Tracking the long tail of platform PCT tests that don't pass yet, with the
+structural reason and what would unblock each. PCT broad-canary baseline at
+the time of writing: **460/41/37 of 497 tests (93% pass)**, surveyor at
+**246/0/0**. Update this list when items land.
+
+Two buckets: **Excluded** (in `PCT_RUST_PORT_EXCLUSIONS`, count as PASS via
+the exclusion mechanism) and **Tracked** (still FAIL/ERROR — fix or accept).
+
+### Excluded — intentional
+
+5 BigNumber `adjust` tests that expect result years outside `i16` (PureDate's
+year field via `jiff::civil::DateTime`). Java Pure carries year as `i32`. The
+Rust port's smaller-but-correct trade is to reject extreme inputs cleanly.
+
+| Test | Reason |
+|------|--------|
+| `date::tests::testAdjustByMonthsBigNumber`  | year `800002016` overflows i16 |
+| `date::tests::testAdjustByWeeksBigNumber`   | year `236611261`  overflows i16 |
+| `date::tests::testAdjustByDaysBigNumber`    | year `33803336`   overflows i16 |
+| `date::tests::testAdjustByHoursBigNumber`   | year `1410404`    overflows i16 |
+| `date::tests::testAdjustByMinutesBigNumber` | year `25489` fits but the *expected* literal `%-21457` overflows the parser's i16 year |
+
+**Unblocks if PureDate.year widens to `i32`.** Then `apply_exclusion`'s
+needs-rebase check will flip these to FAIL with "PCT exclusion needs rebase"
+and the entries here can be removed.
+
+### Tracked — needs investigation or structural work
+
+Grouped by likely fix shape. Each bullet has the test FQN, the failure type
+(FAIL = wrong answer; ERROR = exception), and one sentence on what's needed.
+
+#### Date (2 ERROR)
+- `date::tests::testDateDiffWithDifferentTimeZones` (ERROR) — TZ
+  arithmetic on `dateDiff` between dates carrying explicit offset literals.
+  PureDate normalises to UTC at construction; the test expects per-TZ
+  comparison semantics. Needs offset-preserving date model OR a
+  TZ-aware path in `dateDiff`.
+- `date::tests::testDateFromSubSecond` (ERROR) — sub-second datetime
+  literal parsing edge (`%2014-01-01T00:00:00.123456789` etc). The
+  parser may be truncating fractional digits beyond 9 (jiff nanos
+  range). Investigate `parse_subsecond_parts` in `lower.rs`.
+
+#### Lang (2 ERROR)
+- `lang::tests::compare::testDateCompare` (ERROR) — generic `compare`
+  on Date with sub-second precision. The Phase 1 compare native handles
+  Date but may not respect sub-second comparison. Cross-check against
+  `PureDate::cmp`.
+- `lang::tests::match::testMatchWithMixedReturnType` (ERROR) — `match`
+  with branches returning different types. The multiplicity-aware
+  Match in Phase 5 doesn't yet validate / unify branch return types.
+
+#### Boolean (1 FAIL + 8 ERROR)
+- `boolean::tests::equality::equal::testEqualNonPrimitive` (FAIL) —
+  structural equality on heap objects with non-primitive fields.
+- 8 inequality-on-Date/Boolean ERRORs (`testGreaterThan_Date`,
+  `testLessThanEqual_Boolean`, …): the comparison ops need to accept
+  Date and Boolean operands by routing through the Phase 1 `compare`
+  native (currently they reject non-Number inputs).
+
+#### Collection (1 ERROR + 5 FAIL)
+- `collection::tests::getAll::testEvalParse` (ERROR) — needs `getAll`
+  native (the only missing simple-name native left from the Phase 2
+  harvest).
+- `collection::tests::slice::testSliceError` (FAIL),
+  `concatenate::testConcatenateTypeInference` (FAIL),
+  `removeDuplicatesBy::testRemoveDuplicatesByPrimitive` (FAIL),
+  `removeDuplicates::testRemoveDuplicatesPrimitiveStandardFunctionExplicit`
+  (FAIL),
+  `removeDuplicates::testRemoveDuplicatesPrimitiveNonStandardFunction`
+  (FAIL) — each needs targeted investigation; likely small per-test
+  fixes in the relevant native.
+
+#### Math (1 ERROR + 9 FAIL)
+- `math::tests::divide::testDecimalDivide` (ERROR) — Decimal division
+  edge case (likely the Phase 4 promotion needs an extra branch).
+- `math::tests::times::testLargeTimes`,
+  `math::tests::minus::testLargeMinus`,
+  `math::tests::plus::testLargePlus` (3 FAIL) — i64 overflow / wrap;
+  the fix is likely promoting to Decimal when overflow detected.
+- `math::tests::range::testRangeStepError`,
+  `math::tests::rem::testRemError`,
+  `math::tests::trigonometry::testArcCosineError`,
+  `math::tests::trigonometry::testArcSineError`,
+  `math::tests::testSquareRootError` (5 FAIL) — error-message tests
+  that pin Java's exact error text (similar to the Phase 5b `at`
+  fix).
+- `math::tests::toDecimal::testDoubleToDecimal` (FAIL) — Float→Decimal
+  conversion precision; revisit the conversion path.
+
+#### String (2 ERROR + 5 FAIL)
+- `string::tests::parseDate::testParseDate` (ERROR),
+  `parseDate::testParseDateWithZ` (ERROR),
+  `parseDate::testParseDateWithTimezone` (FAIL) — parseDate native
+  rejects valid Pure date formats including `Z` (UTC) suffix and
+  `YYYY-MM-DD` (with single-digit month/day). Re-write parseDate
+  using jiff's `Timestamp::from_str` + civil-date conversion.
+- `string::tests::parseFloat::testParseZero` (FAIL) — `parseFloat('0')`
+  returns slightly off; probably default-precision issue in the
+  parser path.
+- `string::tests::parseDecimal::testParseDecimalWithPrecisionScale`
+  (FAIL) — precision argument not fully honored (Phase 2's
+  `parseDecimal` rounds to scale but doesn't enforce precision).
+- `string::tests::toString::testFloatToStringWithExcessTrailingZeros`,
+  `toString::testFloatToStringWithPositiveExponent` (2 FAIL) — Float
+  Display. Java's `Float.toString` uses specific rules around
+  trailing zeros and `E`-notation; Rust's `{f64}` differs.
+
