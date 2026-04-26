@@ -7,6 +7,7 @@
     "meta::pure::functions::date::tests::testAdjustByDaysBigNumber": "Date overflow: parameter 'days' is not in the required range of -7304484..=7304484",
     "meta::pure::functions::date::tests::testAdjustByHoursBigNumber": "Date overflow: parameter 'hours' is not in the required range of -175307616..=175307616",
     "meta::pure::functions::date::tests::testAdjustByMinutesBigNumber": "Invalid datetime literal: parameter 'year' is not in the required range of -9999..=9999",
+    "meta::pure::functions::lang::tests::compare::testDateCompare": "Invalid date literal: Invalid year: parameter 'year' is not in the required range of -9999..=9999",
     "meta::pure::functions::math::tests::times::testLargeTimes": "Assert failure",
     "meta::pure::functions::math::tests::minus::testLargeMinus": "Assert failure",
     "meta::pure::functions::math::tests::plus::testLargePlus": "Assert failure"

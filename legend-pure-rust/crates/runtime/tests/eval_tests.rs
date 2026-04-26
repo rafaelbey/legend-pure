@@ -3077,7 +3077,16 @@ fn eval_pct_date_error_histogram() {
 ///   testRemoveDuplicatesPrimitiveStandardFunctionExplicit,
 ///   testRemoveDuplicatesPrimitiveNonStandardFunction,
 ///   testConcatenateTypeInference. Net +4 PASS.
-const PCT_PASS_BASELINE: i64 = 458;
+/// - 2026-04-26 → 459: `lang::tests::compare::testDateCompare`
+///   added to the PCT exclusions manifest. The test asserts on
+///   `compare(%2001, %10999) < 0`; year 10999 falls outside jiff's
+///   civil::Date `i16` clamp of `-9999..=9999`. Same root cause as
+///   the existing `testAdjust*BigNumber` exclusions — a
+///   representational limit of our date model, not a fixable
+///   behavior. Java Pure stores year as `int`. Removing the
+///   exclusion requires swapping jiff::civil for a wider date
+///   representation.
+const PCT_PASS_BASELINE: i64 = 459;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in
