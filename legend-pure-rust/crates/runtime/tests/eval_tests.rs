@@ -2281,6 +2281,12 @@ fn eval_pct_lang_error_histogram() {
 }
 
 #[test]
+#[ignore = "diagnostic: surveyor failure histogram for multiplicity package"]
+fn eval_surveyor_multiplicity_error_histogram() {
+    surveyor_error_histogram("meta::pure::functions::multiplicity");
+}
+
+#[test]
 #[ignore = "diagnostic: PCT ERROR histogram for date package"]
 fn eval_pct_date_error_histogram() {
     pct_error_histogram("meta::pure::functions::date");
@@ -2319,7 +2325,10 @@ fn eval_pct_date_error_histogram() {
 /// - 395 — Phase 5: multiplicity-aware Match + 3-arg overload cleared
 ///   7 lang tests (match-pattern with empty / multi-element subjects
 ///   against [0..1] / [*] / [1..*] params)
-const PCT_PASS_BASELINE: i64 = 395;
+/// - 398 — Phase 5b: Sort routes through compare_values (cross-type
+///   sort works), at error message matches Java exactly. Cleared 3
+///   collection tests; surveyor `asserts` package went 20/4/1 → 25/0/0.
+const PCT_PASS_BASELINE: i64 = 398;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in
@@ -2332,8 +2341,16 @@ const PCT_PASS_BASELINE: i64 = 395;
 ///
 /// History:
 /// - 211 — initial 100% pass rate at PCT harness shipping (commit
-///   f8ebca6263c). Held through Phase 1–5.
-const SURVEYOR_PASS_BASELINE: i64 = 211;
+///   f8ebca6263c). Held through Phase 1–5 across the 7-package canary.
+/// - 233 — Phase 5b initial: expanded lock to include `asserts`
+///   (20 PASS), `multiplicity` (1 PASS), `relation` (1 PASS). The CLI
+///   default `legend test --package Root` walks all of these, so locking
+///   only the 7-package subset was hiding 22 additional surveyor passes
+///   from regression detection.
+/// - 238 — Phase 5b complete: asserts cleared via Java-parity `at`
+///   error message + Sort routing through compare_values. asserts
+///   package went 20/4/1 → 25/0/0; no regressions elsewhere.
+const SURVEYOR_PASS_BASELINE: i64 = 238;
 
 #[test]
 fn eval_pct_baseline_lock() {
@@ -2381,10 +2398,15 @@ fn eval_pct_baseline_lock() {
     );
 }
 
-/// Surveyor packages — same as `PCT_BROAD_CANARY_PACKAGES` but rooted at
-/// the `tests` subpackage where `<<test.Test>>` functions live (PCT
-/// tests are scattered alongside their function impls; surveyor tests
-/// are in dedicated `tests` subdirs).
+/// Surveyor packages — covers every `<<test.Test>>`-bearing package
+/// under `meta::pure::functions::*`. Mirrors what `legend test` (the
+/// CLI default) walks via `--package Root`, so the lock catches any
+/// regression a user would see at the CLI.
+///
+/// Note these are rooted at `::tests` (PCT tests live alongside their
+/// function impls; surveyor tests live in dedicated `tests` subdirs).
+/// The asserts / multiplicity / relation packages were originally left
+/// out of the canary; Phase 5b added them.
 const SURVEYOR_BROAD_CANARY_PACKAGES: &[&str] = &[
     "meta::pure::functions::meta::tests",
     "meta::pure::functions::collection::tests",
@@ -2393,6 +2415,9 @@ const SURVEYOR_BROAD_CANARY_PACKAGES: &[&str] = &[
     "meta::pure::functions::date::tests",
     "meta::pure::functions::boolean::tests",
     "meta::pure::functions::lang::tests",
+    "meta::pure::functions::asserts::tests",
+    "meta::pure::functions::multiplicity::tests",
+    "meta::pure::functions::relation::tests",
 ];
 
 #[test]

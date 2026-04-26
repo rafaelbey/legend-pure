@@ -105,8 +105,12 @@ impl NativeFunction for At {
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let idx = idx as usize;
         coll.get(idx).cloned().map(Evaluated::new).ok_or_else(|| {
+            // Java-parity message: assertError tests in the platform
+            // (testSimpleAssertError* in essential/tests/assertError.pure)
+            // pin this exact phrasing via String equality on the error
+            // text. Anything else fails the assertion silently.
             PureRuntimeError::EvaluationError(format!(
-                "at: index {idx} out of bounds for collection of size {}",
+                "The system is trying to get an element at offset {idx} where the collection is of size {}",
                 coll.len()
             ))
             .into()
@@ -1015,65 +1019,18 @@ impl NativeFunction for Slice {
 // ---------------------------------------------------------------------------
 
 /// Default comparator used by [`Sort`] when no user-supplied comparator
-/// is provided. Compares values of the same primitive type using their
-/// natural ordering. Cross-type comparisons produce an evaluation error.
+/// is provided. Routes through [`crate::native::comparison::compare_values`]
+/// — Phase 1's total comparator that handles same-type primitives,
+/// cross-numeric promotion (Integer/Float/Decimal lattice), and
+/// cross-type pairs via stable per-variant ordinals.
+///
+/// Cross-type sorts (e.g. `['aaa', 2]`) used to error here; now they
+/// produce a deterministic ordering — Integer before String, both
+/// before Object/Collection — because the underlying comparator is
+/// total. `assertSameElements(['aaa', 2], [2, 'aaa'])` and similar
+/// mixed-type comparisons depend on this.
 fn cmp_values(a: &Value, b: &Value) -> Result<std::cmp::Ordering, PureRuntimeError> {
-    use std::cmp::Ordering;
-    match (a, b) {
-        (Value::Integer(x), Value::Integer(y)) => Ok(x.cmp(y)),
-        (Value::Float(x), Value::Float(y)) => Ok(x.partial_cmp(y).unwrap_or(Ordering::Equal)),
-        (Value::Decimal(x), Value::Decimal(y)) => Ok(x.cmp(y)),
-        (Value::String(x), Value::String(y)) => Ok(x.cmp(y)),
-        (Value::Boolean(x), Value::Boolean(y)) => Ok(x.cmp(y)),
-        (Value::Date(x), Value::Date(y)) => Ok(x.cmp(y)),
-        // Enum values sort by the member's declaration order within the
-        // enumeration (matching Java Pure's enum ordering). Values from
-        // different enumerations are unordered — surface as an explicit
-        // error rather than producing a misleading cross-enum ordering.
-        (
-            Value::EnumValue {
-                enum_id: e1,
-                member: m1,
-                ..
-            },
-            Value::EnumValue {
-                enum_id: e2,
-                member: m2,
-                ..
-            },
-        ) => {
-            if e1 == e2 {
-                Ok(m1.cmp(m2))
-            } else {
-                Err(PureRuntimeError::EvaluationError(format!(
-                    "sort: cannot compare EnumValues from different enumerations"
-                )))
-            }
-        }
-        // Heap objects sort by allocation order (ObjectId). This is a
-        // stable but semantically arbitrary ordering — meaningful only
-        // when the caller cares about determinism, not Pure-level object
-        // identity. Tests that need property-based ordering must pass a
-        // key or comparator function.
-        (Value::Object(a), Value::Object(b)) => {
-            use std::cmp::Ordering as O;
-            let av = slotmap::Key::data(a).as_ffi();
-            let bv = slotmap::Key::data(b).as_ffi();
-            Ok(if av == bv {
-                O::Equal
-            } else if av < bv {
-                O::Less
-            } else {
-                O::Greater
-            })
-        }
-        (Value::Element(a), Value::Element(b)) => Ok(format!("{a}").cmp(&format!("{b}"))),
-        _ => Err(PureRuntimeError::EvaluationError(format!(
-            "sort: cannot compare {} and {}",
-            a.type_name(),
-            b.type_name()
-        ))),
-    }
+    Ok(crate::native::comparison::compare_values(a, b).cmp(&0))
 }
 
 /// Pure `sort<T,U|m>(col:T[m], key:Function[0..1], comp:Function[0..1]):T[m]`.
@@ -2514,15 +2471,30 @@ mod tests {
     }
 
     #[test]
-    fn sort_mixed_types_errors() {
+    fn sort_mixed_types_succeeds_with_total_order() {
+        // Phase 5b: Sort routes through compare_values which is total
+        // (cross-type pairs fall back to a stable per-variant ordinal),
+        // so mixed Integer + String sorts no longer error. The platform
+        // assertSameElements PCT tests rely on this — see the
+        // testSuccessAssertSameElements case. The trade-off: previous
+        // "explicit error on cross-type sort" behavior is gone, but it
+        // was a Java-divergence — Java Pure's sort tolerates mixed types.
         let input = lit_collection(vec![lit_int(1), lit_str("oops")]);
-        assert!(
-            Sort.execute(
+        let r = Sort
+            .execute(
                 &[input, lit_collection(vec![]), lit_collection(vec![])],
                 &mut MockCtx,
             )
-            .is_err()
-        );
+            .unwrap()
+            .into_value();
+        let Value::Collection(c) = r else {
+            panic!("expected Collection, got {r:?}");
+        };
+        // Integer's type ordinal (1) is less than String's (4), so the
+        // Integer comes first.
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0], Value::Integer(1));
+        assert_eq!(c[1], Value::String("oops".into()));
     }
 
     #[test]
