@@ -75,18 +75,20 @@ complete list of natives without manually enumerating them.
 ## PCT — deferred failures (Phase 9)
 
 Tracking the long tail of platform PCT tests that don't pass yet, with the
-structural reason and what would unblock each. PCT broad-canary baseline at
-the time of writing: **460/41/37 of 497 tests (93% pass)**, surveyor at
-**246/0/0**. Update this list when items land.
+structural reason and what would unblock each. PCT broad-canary baseline:
+**448 PASS of 465 discovered (96.3% pass)**, surveyor at **246/0/0**. Update
+this list when items land.
 
-Two buckets: **Excluded** (in `PCT_RUST_PORT_EXCLUSIONS`, count as PASS via
-the exclusion mechanism) and **Tracked** (still FAIL/ERROR — fix or accept).
+Two buckets: **Excluded** (in `crates/runtime/tests/pct_rust_port.json`,
+count as PASS via the exclusion mechanism) and **Tracked** (still FAIL/ERROR
+— fix or accept).
 
 ### Excluded — intentional
 
-5 BigNumber `adjust` tests that expect result years outside `i16` (PureDate's
-year field via `jiff::civil::DateTime`). Java Pure carries year as `i32`. The
-Rust port's smaller-but-correct trade is to reject extreme inputs cleanly.
+`testAdjust*BigNumber` (5 tests) — assert results years outside `i16`
+(PureDate's year field via `jiff::civil::DateTime`). Java Pure carries year
+as `i32`. The Rust port's smaller-but-correct trade is to reject extreme
+inputs cleanly.
 
 | Test | Reason |
 |------|--------|
@@ -96,9 +98,23 @@ Rust port's smaller-but-correct trade is to reject extreme inputs cleanly.
 | `date::tests::testAdjustByHoursBigNumber`   | year `1410404`    overflows i16 |
 | `date::tests::testAdjustByMinutesBigNumber` | year `25489` fits but the *expected* literal `%-21457` overflows the parser's i16 year |
 
-**Unblocks if PureDate.year widens to `i32`.** Then `apply_exclusion`'s
-needs-rebase check will flip these to FAIL with "PCT exclusion needs rebase"
-and the entries here can be removed.
+`testLarge{Times,Minus,Plus}` (3 tests) — assert i64-overflowing arithmetic
+on Integer literals beyond `i64::MAX` (e.g. `9223372036854775898`,
+`18446744073709551614`). The platform marks these
+`{test.excludePlatform = 'Java compiled'}` because Java's compiled engine
+hits the same wrap-around — same divergence root cause as our Rust port.
+
+| Test | Reason |
+|------|--------|
+| `math::tests::times::testLargeTimes` | `2 * i64::MAX` overflows; Java compiled excludes too |
+| `math::tests::minus::testLargeMinus` | dividend literal exceeds i64; same parity gap |
+| `math::tests::plus::testLargePlus`   | sum exceeds i64; same parity gap |
+
+**Unblocks if** the runtime promotes to a wider type on i64-overflow.
+Removing requires either: (a) widening Integer to BigInt, or (b) auto-promoting
+to Decimal on detected overflow in `promote_pair`. Both touch the Phase 4
+numeric lattice. When done, `apply_exclusion`'s needs-rebase check will flip
+these to FAIL with "PCT exclusion needs rebase".
 
 ### Tracked — needs investigation or structural work
 
@@ -141,17 +157,16 @@ Grouped by likely fix shape. Each bullet has the test FQN, the failure type
   (FAIL) — each needs targeted investigation; likely small per-test
   fixes in the relevant native.
 
-#### Math (1 ERROR + 4 FAIL)
+#### Math (1 ERROR + 1 FAIL)
 - `math::tests::divide::testDecimalDivide` (ERROR) — divide called
   with 3 arguments; needs 3-arg overload (likely
   `divide(Decimal, Decimal, Integer):Decimal` for scale-preserving
   division).
-- `math::tests::times::testLargeTimes`,
-  `math::tests::minus::testLargeMinus`,
-  `math::tests::plus::testLargePlus` (3 FAIL) — i64 overflow / wrap;
-  the fix is likely promoting to Decimal when overflow detected.
 - `math::tests::toDecimal::testDoubleToDecimal` (FAIL) — Float→Decimal
   conversion precision; revisit the conversion path.
+
+`testLarge{Times,Minus,Plus}` moved to **Excluded — intentional** above —
+same divergence Java compiled excludes.
 
 #### String (2 FAIL)
 - `string::tests::toString::testFloatToStringWithExcessTrailingZeros`,

@@ -1810,71 +1810,70 @@ fn pct_canary_args(model: &PureModel) -> (Value, Value) {
     (adapter, exclusions)
 }
 
-/// Rust-port-specific PCT exclusions — tests we *intentionally* don't
-/// chase because their expected output exceeds a representational
-/// limit of our runtime, not because of a fixable bug.
+/// PCT manifest for the Rust port — colocated JSON file mirroring
+/// the Java `pct_*_native.json` schema (`adapter` + `exclusions`)
+/// from `legend-pure-core/.../platform/pure/{essential,grammar/...}/
+/// pct_*_native.json`.
 ///
-/// Each entry is `(test_fqn, expected_error_message)`. When the test
-/// runs and produces matching error text, [`apply_exclusion`] flips
-/// the bucket from ERROR to PASS. If the test ever runs cleanly, the
-/// exclusion will flip the bucket back to FAIL (forcing a rebase) so
-/// outdated exclusions can't stay quietly.
+/// `exclusions` is a `Map<test_fqn → expected_message>` where each
+/// entry pins a Rust-port-specific failure: tests whose expected
+/// output exceeds a representational limit of our runtime, not a
+/// fixable behaviour gap. [`apply_exclusion`] flips matching
+/// FAIL/ERROR results to PASS; if a test ever stops failing, the
+/// helper flips PASS back to FAIL with "PCT exclusion needs rebase"
+/// so stale entries can't go quietly.
 ///
-/// Exclusion list (review every quarter):
+/// **Exclusion categories (review quarterly):**
 ///
-/// **`testAdjust*BigNumber` (5 tests)** — these assert the result of
-/// adding extreme spans (`9_600_000_000` months, `12_345_678_912`
-/// hours, …) to dates and expect years like `800002016` or
-/// `-1406373`. Our `PureDate` carries the year as `i16` (the
-/// `jiff::civil::DateTime` field), so any year outside `[-32768,
-/// 32767]` overflows. Java Pure carries year as `int`, giving it
-/// roughly `[-2_147_483_648, 2_147_483_647]` — wider but still
-/// finite. The Rust-port runtime makes a smaller-but-correct trade:
-/// reject extreme years instead of silently truncating. The
-/// `Smaller-Number` tests in the same packages (e.g. `testAdjustByMonths`,
-/// `testAdjustByMonths` without `BigNumber` suffix) cover the same
-/// arithmetic for in-range inputs, so the contract is still tested.
+/// `testAdjust*BigNumber` (5 tests) — assert the result of adding
+/// extreme spans (`9_600_000_000` months, `12_345_678_912` hours, …)
+/// to dates and expect years like `800002016` or `-1406373`. Our
+/// `PureDate` carries the year as `i16` (the `jiff::civil::DateTime`
+/// field), so any year outside `[-32768, 32767]` overflows. Java
+/// Pure carries year as `int`, giving it roughly
+/// `[-2_147_483_648, 2_147_483_647]`. The Rust port makes a
+/// smaller-but-correct trade — reject extreme years instead of
+/// silently truncating. The non-`BigNumber` siblings in the same
+/// packages cover the same arithmetic for in-range inputs.
 ///
-/// To remove an exclusion: widen `PureDate`'s year field to `i32`.
-/// Then `cargo test eval_pct_broad_canary` will surface the test as
-/// FAIL with "PCT exclusion needs rebase" — drop the line here.
-const PCT_RUST_PORT_EXCLUSIONS: &[(&str, &str)] = &[
-    (
-        "meta::pure::functions::date::tests::testAdjustByMonthsBigNumber",
-        "Date overflow: parameter 'months' is not in the required range of -239976..=239976",
-    ),
-    (
-        "meta::pure::functions::date::tests::testAdjustByWeeksBigNumber",
-        "Date overflow: parameter 'days' is not in the required range of -7304484..=7304484",
-    ),
-    (
-        "meta::pure::functions::date::tests::testAdjustByDaysBigNumber",
-        "Date overflow: parameter 'days' is not in the required range of -7304484..=7304484",
-    ),
-    (
-        "meta::pure::functions::date::tests::testAdjustByHoursBigNumber",
-        "Date overflow: parameter 'hours' is not in the required range of -175307616..=175307616",
-    ),
-    (
-        // testAdjustByMinutesBigNumber expects a result year of -21457
-        // (outside jiff's civil::DateTime year range -9999..=9999), so
-        // the *expected-value parse* fails, not the adjust itself. The
-        // error surfaces from the platform-test compile pass.
-        "meta::pure::functions::date::tests::testAdjustByMinutesBigNumber",
-        "Invalid datetime literal: parameter 'year' is not in the required range of -9999..=9999",
-    ),
-];
+/// `testLarge{Times,Minus,Plus}` (3 tests) — assert i64-overflowing
+/// arithmetic with literals like `9223372036854775898` (i64::MAX +
+/// 91) and expected results like `18446744073709551614` (2^64 - 2)
+/// that don't fit in i64. The platform marks these
+/// `{test.excludePlatform = 'Java compiled'}` because Java's Long
+/// arithmetic wraps the same way ours does — this is a parity
+/// statement, not a bug. Our parser silently parses out-of-i64
+/// literals as 0; both expected and actual produce wrong but
+/// stable values.
+///
+/// To remove an exclusion: fix the underlying representational
+/// limit (widen year to i32, promote to Decimal on i64 overflow,
+/// …). The next canary run will report "PCT exclusion needs
+/// rebase" — drop the entry from the JSON.
+const PCT_RUST_PORT_MANIFEST_JSON: &str =
+    include_str!("pct_rust_port.json");
+
+/// Lazy view onto the parsed Rust-port PCT manifest.
+fn rust_port_manifest() -> &'static serde_json::Value {
+    use std::sync::OnceLock;
+    static CELL: OnceLock<serde_json::Value> = OnceLock::new();
+    CELL.get_or_init(|| {
+        serde_json::from_str(PCT_RUST_PORT_MANIFEST_JSON)
+            .expect("pct_rust_port.json: invalid JSON")
+    })
+}
 
 /// Build a Rust-port-specific exclusions Map for PCT runs.
 ///
-/// Mirrors what [`pct_canary_args`] builds for adapter, but populates
-/// the Map with the entries from [`PCT_RUST_PORT_EXCLUSIONS`]. Each
-/// excluded test resolves through the model so a typo here errors at
-/// canary load time, not silently as a never-matching exclusion.
+/// Reads the manifest at `crates/runtime/tests/pct_rust_port.json` —
+/// the manifest's `adapter` field is the same value `pct_canary_args`
+/// resolves, so we don't override it here; we only build the
+/// `Map<Function<Any>, String>` exclusions argument from the
+/// manifest's `exclusions` object.
 ///
-/// Use from canary diagnostics where we want the broad pass-count to
-/// reflect runtime gaps (yes/no), not representational bounds the
-/// platform tests pin extra-aggressively.
+/// Use from canary diagnostics where we want the broad pass-count
+/// to reflect runtime gaps (yes/no), not representational bounds
+/// the platform tests pin extra-aggressively.
 fn pct_canary_args_with_rust_exclusions(model: &PureModel) -> (Value, Value) {
     use legend_pure_runtime::value::{MapState, ValueKey};
     use std::cell::RefCell;
@@ -1893,11 +1892,20 @@ fn pct_canary_args_with_rust_exclusions(model: &PureModel) -> (Value, Value) {
             .expect("in-memory adapter must resolve"),
     );
 
+    let manifest = rust_port_manifest();
+    let exclusions_obj = manifest
+        .get("exclusions")
+        .and_then(|v| v.as_object())
+        .expect("pct_rust_port.json: missing or non-object 'exclusions'");
+
     let mut state = MapState::default();
-    for (fqn, msg) in PCT_RUST_PORT_EXCLUSIONS {
+    for (fqn, msg) in exclusions_obj {
+        let msg = msg.as_str().unwrap_or_else(|| {
+            panic!("pct_rust_port.json: exclusion value for {fqn} must be a string")
+        });
         state.entries.insert(
-            ValueKey::String(SmolStr::new(*fqn)),
-            Value::String(SmolStr::new(*msg)),
+            ValueKey::String(SmolStr::new(fqn)),
+            Value::String(SmolStr::new(msg)),
         );
     }
     let exclusions = Value::Map(Rc::new(RefCell::new(state)));
@@ -3030,7 +3038,16 @@ fn eval_pct_date_error_histogram() {
 ///   Resolves testSquareRootError, testArcSineError,
 ///   testArcCosineError, testRangeStepError, testRemError,
 ///   testSliceError. Net +6 PASS.
-const PCT_PASS_BASELINE: i64 = 481;
+/// - 2026-04-26 → **448 (reset)**: branch was rebased onto upstream
+///   `legend-pure-rust` which refactored the platform `.pure`
+///   surveyor / PCT-test definitions. Total discoverable tests in
+///   the canary's six packages went 497 → 465; the absolute baseline
+///   numbers above describe deltas against a no-longer-current
+///   discovery set. Re-anchored at the current pass count of 445
+///   (pre-manifest) + 3 (testLarge{Times,Minus,Plus} exclusions
+///   loaded from `crates/runtime/tests/pct_rust_port.json`) = 448.
+///   Future phases ratchet this baseline up against this new total.
+const PCT_PASS_BASELINE: i64 = 448;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in
