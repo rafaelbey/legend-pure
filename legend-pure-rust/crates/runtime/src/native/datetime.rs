@@ -359,8 +359,12 @@ impl NativeFunction for Second {
 
 /// Pure `datePart(Date[1]): StrictDate[1]` — drop the time component.
 ///
-/// Requires at least day precision. A year- or year-month-only date is
-/// rejected rather than being silently padded with `month=1`/`day=1`.
+/// Per the platform comment on `datePart` (`essential/date/extract/
+/// datePart.pure:17`): "For dates that are month or year precision, the
+/// date is returned unchanged." Day-or-finer precision drops to
+/// strict-date (year+month+day, no time); year- or month-only inputs
+/// pass through. The platform tests `testDatePartYearOnly` and
+/// `testDatePartYearMonthOnly` lock this behavior.
 #[derive(Debug)]
 pub struct DatePart;
 
@@ -373,19 +377,78 @@ impl NativeFunction for DatePart {
         let values = force_all(args, ctx)?;
         expect_args("datePart", &values, 1)?;
         let d = values[0].as_date()?;
+        // Year- or month-only: pass through unchanged.
+        let Some(month) = d.get_month() else {
+            return Ok(Evaluated::new(Value::Date(d)));
+        };
+        let Some(day) = d.get_day() else {
+            return Ok(Evaluated::new(Value::Date(d)));
+        };
         let year = d.get_year();
-        let month = d.get_month().ok_or_else(|| {
-            PureRuntimeError::EvaluationError("datePart: date has no month component".into())
-        })?;
-        let day = d.get_day().ok_or_else(|| {
-            PureRuntimeError::EvaluationError("datePart: date has no day component".into())
-        })?;
         let result = PureDate::strict_date(year, month, day).map(Value::Date)?;
         Ok(Evaluated::new(result))
     }
 
     fn signature(&self) -> &'static str {
         "datePart(Date[1]): StrictDate[1]"
+    }
+}
+
+/// Count Sunday boundaries crossed between two civil dates.
+///
+/// Returns a positive integer when `b > a`, negative when `b < a`, and
+/// 0 when they're equal. Forward intervals count Sundays in `(a, b]`;
+/// backward intervals count Sundays in `[b, a)` and negate. Matches
+/// Java Pure's `dateDiff(WEEKS)` contract — see `testDateDiffWeeks`.
+///
+/// Direction asymmetry note: the half-open intervals differ at the
+/// endpoints — forward includes the latest date, backward includes the
+/// earliest. This matches the test fixtures where Sat → Sun = 1 (Sun
+/// included) while Sun → Sat = 0 (Sun excluded going backward).
+fn sunday_boundaries_between(a: jiff::civil::Date, b: jiff::civil::Date, days: i64) -> i64 {
+    use jiff::civil::Weekday;
+    if days == 0 {
+        return 0;
+    }
+    /// Days until the *next* Sunday strictly after this weekday.
+    /// Sunday → 7 (a full week to the next Sunday).
+    fn to_next_sun(w: Weekday) -> i64 {
+        match w {
+            Weekday::Sunday => 7,
+            Weekday::Monday => 6,
+            Weekday::Tuesday => 5,
+            Weekday::Wednesday => 4,
+            Weekday::Thursday => 3,
+            Weekday::Friday => 2,
+            Weekday::Saturday => 1,
+        }
+    }
+    /// Days from this weekday to the next Sunday on/after it (Sunday
+    /// itself → 0).
+    fn to_this_or_next_sun(w: Weekday) -> i64 {
+        match w {
+            Weekday::Sunday => 0,
+            other => to_next_sun(other),
+        }
+    }
+    if days > 0 {
+        // Forward (a, b]: count Sundays strictly after a, on/before b.
+        let span = days;
+        let to_first = to_next_sun(a.weekday());
+        if to_first > span {
+            0
+        } else {
+            (span - to_first) / 7 + 1
+        }
+    } else {
+        // Backward [b, a): count Sundays on/after b, strictly before a.
+        let span = -days;
+        let to_first = to_this_or_next_sun(b.weekday());
+        if to_first >= span {
+            0
+        } else {
+            -(((span - to_first - 1) / 7) + 1)
+        }
     }
 }
 
@@ -451,23 +514,43 @@ impl NativeFunction for DateDiff {
             };
             Ok(Evaluated::new(Value::Integer(v)))
         } else {
+            // Calendar-component math for date-based units. Java Pure's
+            // `dateDiff(a, b, YEARS)` returns `b.year - a.year` regardless
+            // of the day/time within each year — so `dateDiff(2015-12-31,
+            // 2016-01-01, YEARS) == 1`. jiff's `Span.years` measures
+            // *elapsed* years (the same call would yield 0). Same shape
+            // for Months: `(b.year - a.year) * 12 + (b.month - a.month)`.
+            // Days/Weeks use the calendar-day delta (Days = epoch diff;
+            // Weeks = `Days / 7` truncating toward zero).
             let a = d1.to_civil_date()?;
             let b = d2.to_civil_date()?;
-            let jiff_unit = match unit {
-                DurationUnit::Years => jiff::Unit::Year,
-                DurationUnit::Months => jiff::Unit::Month,
-                DurationUnit::Weeks => jiff::Unit::Week,
-                DurationUnit::Days => jiff::Unit::Day,
-                _ => unreachable!(),
-            };
-            let span = a
-                .until((jiff_unit, b))
-                .map_err(|e| PureRuntimeError::EvaluationError(format!("dateDiff: {e}")))?;
             let v = match unit {
-                DurationUnit::Years => i64::from(span.get_years()),
-                DurationUnit::Months => i64::from(span.get_months()),
-                DurationUnit::Weeks => i64::from(span.get_weeks()),
-                DurationUnit::Days => i64::from(span.get_days()),
+                DurationUnit::Years => i64::from(b.year()) - i64::from(a.year()),
+                DurationUnit::Months => {
+                    (i64::from(b.year()) - i64::from(a.year())) * 12
+                        + (i64::from(b.month()) - i64::from(a.month()))
+                }
+                DurationUnit::Days => {
+                    let span = a.until(b).map_err(|e| {
+                        PureRuntimeError::EvaluationError(format!("dateDiff: {e}"))
+                    })?;
+                    i64::from(span.get_days())
+                }
+                DurationUnit::Weeks => {
+                    // Java Pure semantics: count of Sunday boundaries
+                    // crossed, NOT raw `days / 7`. Forward (a < b):
+                    // # Sundays in (a, b]; Backward (a > b): negative #
+                    // Sundays in [b, a). Concretely Sat → Sun = 1 even
+                    // though it's only 1 day, because one Sunday boundary
+                    // is crossed; Sun → Sat = 0 because no Sunday is
+                    // included. Tested by testDateDiffWeeks in
+                    // essential/date/operation/dateDiff.pure.
+                    let span = a.until(b).map_err(|e| {
+                        PureRuntimeError::EvaluationError(format!("dateDiff: {e}"))
+                    })?;
+                    let days = i64::from(span.get_days());
+                    sunday_boundaries_between(a, b, days)
+                }
                 _ => unreachable!(),
             };
             Ok(Evaluated::new(Value::Integer(v)))

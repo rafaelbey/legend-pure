@@ -2624,6 +2624,19 @@ fn eval_year_pair_two_precisions() {
 }
 
 #[test]
+fn eval_datediff_weeks_sat_to_sun_eq_1() {
+    let r = eval_pure(
+        r"
+        function test::f(): Integer[1] {
+            %2015-07-04->dateDiff(%2015-07-05, DurationUnit.WEEKS);
+        }
+        ",
+        "f__Integer_1_",
+    );
+    assert_eq!(r, Value::Integer(1));
+}
+
+#[test]
 #[ignore = "diagnostic: testYear's full body fails on a multi-precision date — Phase 6 follow-up"]
 fn eval_year_full_test_body() {
     // Inline the full testYear body (sans the PCT.test annotation
@@ -2663,6 +2676,41 @@ fn eval_year_via_pct_adapter_lambda() {
         "f__Integer_1_",
     );
     assert_eq!(r, Value::Integer(2015));
+}
+
+#[test]
+#[ignore = "diagnostic: list all date tests' status + message"]
+fn eval_pct_date_status_dump() {
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    let mut evaluator = Evaluator::new(&model, &registry);
+    let pkg = evaluator
+        .call(
+            "meta::pure::functions::meta::pathToElement",
+            &[
+                Value::String("meta::pure::functions::date::tests".into()),
+                Value::String("::".into()),
+            ],
+        )
+        .expect("pkg");
+    let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
+    let Ok(Value::Object(report_id)) = evaluator.call(
+        "meta::pure::test::surveyor::runPCTTests",
+        &[pkg, Value::String("".into()), adapter, exclusions],
+    ) else { return };
+    let results = evaluator.heap().get_property_values(report_id, "results").unwrap_or_else(|_| im_rc::Vector::new());
+    for v in results.iter() {
+        let Value::Object(rid) = v else { continue };
+        let status = evaluator.heap().get_property_values(*rid, "status").ok().and_then(|v| v.iter().next().cloned());
+        let bucket = match &status {
+            Some(Value::EnumValue { member, .. }) if member.as_str() == "PASS" => continue,
+            Some(Value::EnumValue { member, .. }) => member.to_string(),
+            _ => "?".into(),
+        };
+        let fqn = evaluator.heap().get_property_values(*rid, "fqn").ok().and_then(|v| v.iter().next().cloned()).and_then(|v| match v { Value::String(s) => Some(s.to_string()), _ => None }).unwrap_or_default();
+        let msg = evaluator.heap().get_property_values(*rid, "message").ok().and_then(|v| v.iter().next().cloned()).and_then(|v| match v { Value::String(s) => Some(s.to_string()), _ => None }).unwrap_or_default();
+        eprintln!("\n[{bucket}] {fqn}\n  {msg}");
+    }
 }
 
 #[test]
@@ -2810,7 +2858,19 @@ fn eval_pct_date_error_histogram() {
 ///   exclusion messages by substring (so entries can pin just the
 ///   PureRuntimeError text without the full Display wrapper).
 ///   Cleared 17 date PCT tests; date package now 47/1/5.
-const PCT_PASS_BASELINE: i64 = 434;
+/// - 438 — Phase 6 (part 3): `datePart` passes through year- and
+///   month-only dates unchanged (Java parity per the platform
+///   comment); `dateDiff(YEARS|MONTHS)` uses calendar-component math
+///   (`b.year - a.year`, `(b.year - a.year)*12 + (b.month - a.month)`)
+///   instead of jiff's `until` (which measures elapsed time, not
+///   calendar deltas); `dateDiff(WEEKS)` counts Sunday-boundary
+///   crossings with direction-asymmetric half-open intervals
+///   (forward `(a, b]` vs backward `[b, a)`); `to_civil_date` no
+///   longer requires day precision (year/month-only dates default to
+///   month=1/day=1, well-formed for week/year arithmetic). date
+///   package now 51/0/2 — only TZ + sub-second datetime literal
+///   parsing edge cases remain.
+const PCT_PASS_BASELINE: i64 = 438;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in
