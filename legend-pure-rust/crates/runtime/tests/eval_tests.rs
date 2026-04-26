@@ -1209,6 +1209,63 @@ fn eval_surveyor_meta_tests_error_histogram() {
 }
 
 #[test]
+fn eval_string_plus_inside_fold_lambda() {
+    // Mirrors the platform plus.pure:66 pattern:
+    // `$people->fold({p1, p2 | $p2.lastName + ' ' + $p1.lastName}, init)`
+    // — `+` between two narrowed-by-fold lambda params and a string
+    // literal. Today this fails to compile against the platform with
+    // "Ambiguous function call 'plus': found 5 overloads with 1 args
+    // (narrowed from 5 candidates)" because the lambda-param narrowing
+    // doesn't reach `+` operands inside `fold`.
+    let result = eval_pure(
+        r"
+        function test::f(): String[1]
+        {
+            ['a', 'b', 'c']->fold({p, s | $s + '/' + $p}, 'init')
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("init/a/b/c".into()));
+}
+
+#[test]
+fn eval_class_let_then_lambda_param_typed_via_pkg_ref_typeinfo() {
+    // Locks the platform-AmbiguousImport fix from the same series as
+    // `eval_lambda_param_inference_narrows_overloads` but on the
+    // type-info-flow side. Pre-fix, `^test::P(...)` lowering produced
+    // a `new(@P, ...)` ValueSpec whose `function` was None and whose
+    // `type_info` carried `P[1]` — but `infer_let_type` didn't read
+    // `type_info`, so `var_types["people"]` was never populated,
+    // causing `$people->map(p | …)` to leave `p` typed as `Any` and
+    // killing every `+` overload narrowing inside the lambda body.
+    // Post-fix:
+    //   1. `lower_packageable_element_ref` pre-sets `type_info` to
+    //      `Class<P>[1]` via the new `build_packageable_element_ref`
+    //      helper (used by all three PackageableElementRef call
+    //      sites).
+    //   2. `infer_typeexpr_from_valuespec` and `infer_let_type` both
+    //      honour `vs.type_info` first, mirroring the canonical
+    //      `reference_type_info_capture` pattern.
+    // Together this lets `$people->map(p | $p.lastName + 'X')` flow
+    // `Person` from the let through to the lambda body's `+` operand
+    // narrowing.
+    let result = eval_pure(
+        r"
+        Class test::P { lastName: String[1]; }
+
+        function test::f(): String[1]
+        {
+            let people = [^test::P(lastName='Doe')];
+            $people->map(p | $p.lastName + 'X')->joinStrings(',')
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("DoeX".into()));
+}
+
+#[test]
 fn eval_string_plus_string_variable() {
     // Mirrors what stress generators emit: `function f(name: String[1]) { 'hello ' + $name }`.
     use legend_pure_runtime::eval::Evaluator;

@@ -909,18 +909,64 @@ fn lower_type_reference(
 }
 
 /// Lowers a bare element reference: `String`, `my::Enum` → `PackageableElementRef`.
+///
+/// Pre-sets `type_info` via [`build_packageable_element_ref`]. The AST
+/// node `ExprKind::PackageableElementRef { element }` stays a pure
+/// name-on-graph reference — type capture lives on the ValueSpec's
+/// `type_info` slot per `reference_type_info_capture.md`.
 fn lower_packageable_element_ref(
     e: &ast_expr::PackageableElementRef,
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
     let element_id = resolve::resolve_element_ptr(&e.element, &e.source_info, ctx, errors)?;
-    Some(untyped(
-        ExprKind::PackageableElementRef {
-            element: element_id,
-        },
+    Some(build_packageable_element_ref(
+        element_id,
         e.source_info.clone(),
+        ctx.model,
     ))
+}
+
+/// Build a `PackageableElementRef` ValueSpec whose `type_info` carries
+/// the element's parametric metatype shape — e.g. a class element `P`
+/// produces `type_info = Class<P>[1]`. Mirrors Java's
+/// `InstanceValueProcessor.getGenericType` Class-instance branch
+/// (`InstanceValueProcessor.java:154-183`) which wraps the element as
+/// the metatype's type-argument.
+///
+/// Centralising this construction keeps every PackageableElementRef
+/// call site (lowering, `lower_new_instance`'s class arg + type-arg
+/// specs) producing the same shape so generic substitution against
+/// `new<T>(class:Class<T>[1], …)` always sees `T` bound to the actual
+/// element rather than the bare metatype.
+pub(crate) fn build_packageable_element_ref(
+    element_id: crate::ids::ElementId,
+    source_info: SourceInfo,
+    model: &crate::model::PureModel,
+) -> ValueSpec {
+    let type_info =
+        crate::bootstrap::metatype_of(model, model.get_element(element_id)).map(|metatype| {
+            let element_te = TypeExpr::Named {
+                element: element_id,
+                type_arguments: vec![],
+                value_arguments: vec![],
+            };
+            Box::new(ResolvedType {
+                type_expr: TypeExpr::Named {
+                    element: metatype,
+                    type_arguments: vec![element_te],
+                    value_arguments: vec![],
+                },
+                multiplicity: Multiplicity::PureOne,
+            })
+        });
+    ValueSpec {
+        kind: Box::new(ExprKind::PackageableElementRef {
+            element: element_id,
+        }),
+        source_info,
+        type_info,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1109,6 +1155,19 @@ fn infer_let_type(
         value_arguments: vec![],
     };
 
+    // Honour pre-set `type_info` first — same canonical
+    // "lowering-captures-type / consumers-read-from-type_info" pattern
+    // used by `infer_typeexpr_from_valuespec` (`reference_type_info_capture.md`).
+    // Required for `^Class<T>(...)` (whose lowering pre-sets type_info
+    // but leaves `function: None`) and for bare `P` references that pre-set
+    // `Class<P>` via `build_packageable_element_ref`. Without this,
+    // `let people = [^P()]` inferred as None and `$people`'s var_types
+    // entry was missing, which then poisoned every downstream
+    // narrowing that depended on it.
+    if let Some(rt) = value.type_info.as_deref() {
+        return Some((rt.type_expr.clone(), rt.multiplicity.clone()));
+    }
+
     match value.kind.as_ref() {
         ExprKind::IntegerLiteral(_) => Some((named(bootstrap::INTEGER_ID), Multiplicity::PureOne)),
         ExprKind::FloatLiteral(_) => Some((named(bootstrap::FLOAT_ID), Multiplicity::PureOne)),
@@ -1224,9 +1283,10 @@ fn lower_new_instance(
     let class_id = resolve::resolve_element_ptr(&e.class, &e.source_info, ctx, errors)?;
 
     let mut arguments = Vec::with_capacity(4 + e.assignments.len() * 3);
-    arguments.push(untyped(
-        ExprKind::PackageableElementRef { element: class_id },
+    arguments.push(build_packageable_element_ref(
+        class_id,
         e.source_info.clone(),
+        ctx.model,
     ));
     arguments.push(untyped(
         ExprKind::StringLiteral(SmolStr::new(e.class.name.as_str())),
@@ -1245,17 +1305,17 @@ fn lower_new_instance(
         .iter()
         .filter_map(|ta| resolve::resolve_type_ref(ta, ctx, errors))
         .collect();
-    let type_arg_specs: Vec<ValueSpec> = resolved_type_args
-        .iter()
-        .zip(e.type_arguments.iter())
-        .filter_map(|(resolved, ta)| match resolved {
-            crate::types::TypeExpr::Named { element, .. } => Some(untyped(
-                ExprKind::PackageableElementRef { element: *element },
-                ta.source_info.clone(),
-            )),
-            _ => None,
-        })
-        .collect();
+    let type_arg_specs: Vec<ValueSpec> =
+        resolved_type_args
+            .iter()
+            .zip(e.type_arguments.iter())
+            .filter_map(|(resolved, ta)| match resolved {
+                crate::types::TypeExpr::Named { element, .. } => Some(
+                    build_packageable_element_ref(*element, ta.source_info.clone(), ctx.model),
+                ),
+                _ => None,
+            })
+            .collect();
     arguments.push(untyped(
         ExprKind::Collection {
             elements: type_arg_specs,
