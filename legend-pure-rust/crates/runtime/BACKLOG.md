@@ -129,12 +129,11 @@ Grouped by likely fix shape. Each bullet has the test FQN, the failure type
 - `boolean::tests::equality::equal::testEqualNonPrimitive` (FAIL) —
   structural equality on heap objects with non-primitive fields.
 
-#### Collection (1 ERROR + 5 FAIL)
+#### Collection (1 ERROR + 4 FAIL)
 - `collection::tests::getAll::testEvalParse` (ERROR) — needs `getAll`
   native (the only missing simple-name native left from the Phase 2
   harvest).
-- `collection::tests::slice::testSliceError` (FAIL),
-  `concatenate::testConcatenateTypeInference` (FAIL),
+- `concatenate::testConcatenateTypeInference` (FAIL),
   `removeDuplicatesBy::testRemoveDuplicatesByPrimitive` (FAIL),
   `removeDuplicates::testRemoveDuplicatesPrimitiveStandardFunctionExplicit`
   (FAIL),
@@ -142,20 +141,15 @@ Grouped by likely fix shape. Each bullet has the test FQN, the failure type
   (FAIL) — each needs targeted investigation; likely small per-test
   fixes in the relevant native.
 
-#### Math (1 ERROR + 9 FAIL)
-- `math::tests::divide::testDecimalDivide` (ERROR) — Decimal division
-  edge case (likely the Phase 4 promotion needs an extra branch).
+#### Math (1 ERROR + 4 FAIL)
+- `math::tests::divide::testDecimalDivide` (ERROR) — divide called
+  with 3 arguments; needs 3-arg overload (likely
+  `divide(Decimal, Decimal, Integer):Decimal` for scale-preserving
+  division).
 - `math::tests::times::testLargeTimes`,
   `math::tests::minus::testLargeMinus`,
   `math::tests::plus::testLargePlus` (3 FAIL) — i64 overflow / wrap;
   the fix is likely promoting to Decimal when overflow detected.
-- `math::tests::range::testRangeStepError`,
-  `math::tests::rem::testRemError`,
-  `math::tests::trigonometry::testArcCosineError`,
-  `math::tests::trigonometry::testArcSineError`,
-  `math::tests::testSquareRootError` (5 FAIL) — error-message tests
-  that pin Java's exact error text (similar to the Phase 5b `at`
-  fix).
 - `math::tests::toDecimal::testDoubleToDecimal` (FAIL) — Float→Decimal
   conversion precision; revisit the conversion path.
 

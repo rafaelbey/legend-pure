@@ -380,8 +380,10 @@ impl NativeFunction for Range {
             }
         };
         if increment == 0 {
+            // Java's `Range.execute` throws "range step must not be 0";
+            // platform `testRangeStepError` pins the exact text.
             return Err(
-                PureRuntimeError::EvaluationError("range: step cannot be zero".into()).into(),
+                PureRuntimeError::EvaluationError("range step must not be 0".into()).into(),
             );
         }
         let mut result = PVector::new();
@@ -1041,6 +1043,18 @@ impl NativeFunction for Slice {
         let source = values[0].to_collection();
         let start = values[1].as_integer()?;
         let end = values[2].as_integer()?;
+
+        // Java Pure's `Slice.execute` throws when the low bound exceeds
+        // the high bound — `testSliceError` pins the exact text:
+        // "The low bound (X) can't be higher than the high bound (Y) in
+        // a slice operation". Empty result when start == end stays as
+        // a soft return (Java behaves the same).
+        if start > end {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "The low bound ({start}) can't be higher than the high bound ({end}) in a slice operation"
+            ))
+            .into());
+        }
 
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let start = start.max(0) as usize;

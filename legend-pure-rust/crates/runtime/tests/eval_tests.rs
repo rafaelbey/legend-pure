@@ -3015,7 +3015,22 @@ fn eval_pct_date_error_histogram() {
 ///   testGreaterThanEqual_Date, testLessThan_Date,
 ///   testLessThanEqual_Date plus the same four for Boolean
 ///   operands. Net +8 PASS, error count 13 → 5.
-const PCT_PASS_BASELINE: i64 = 475;
+/// - 2026-04-26 → 481: error-message-pinning fixes. `sqrt`/`asin`/
+///   `acos` now throw "Unable to compute X of N" on out-of-domain
+///   inputs (Java's `Sqrt.java:53`/`ArcSine.java:53`/
+///   `ArcCosine.java:53` semantics — Java throws when the IEEE-754
+///   result is NaN). `range` step error message changed from
+///   "range: step cannot be zero" to "range step must not be 0".
+///   `rem` divide-by-zero now formats as "Cannot divide N by zero"
+///   (parametric on dividend, mirroring `Rem.java:?`). `slice`
+///   throws "The low bound (X) can't be higher than the high bound
+///   (Y) in a slice operation" instead of returning empty. New
+///   `java_number_string` helper in `native::math` renders integer-
+///   valued doubles as "2.0" (matching Java's `Double.toString`).
+///   Resolves testSquareRootError, testArcSineError,
+///   testArcCosineError, testRangeStepError, testRemError,
+///   testSliceError. Net +6 PASS.
+const PCT_PASS_BASELINE: i64 = 481;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in

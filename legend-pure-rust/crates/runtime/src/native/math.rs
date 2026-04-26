@@ -58,6 +58,32 @@ fn number_to_f64(func_name: &str, v: &Value) -> Result<f64, PureRuntimeError> {
     }
 }
 
+/// Render a numeric value using Java's `toString` rules — used in
+/// the error-message text the platform PCT tests pin (`assertError`
+/// against e.g. "Unable to compute sqrt of -1.0"). The key divergence
+/// from Rust's default `{f64}`/`{i64}` Display is that Java's
+/// `Double.toString` always emits at least one decimal place for
+/// integer-valued doubles (`2.0`, not `2`); integer values format as
+/// the bare number. NaN / infinity surface verbatim.
+pub(crate) fn java_number_string(v: &Value) -> String {
+    match v {
+        Value::Integer(i) => i.to_string(),
+        Value::Float(f) => {
+            if f.is_nan() {
+                "NaN".to_string()
+            } else if f.is_infinite() {
+                if *f > 0.0 { "Infinity".into() } else { "-Infinity".into() }
+            } else if *f == f.trunc() && f.is_finite() {
+                format!("{f:.1}")
+            } else {
+                f.to_string()
+            }
+        }
+        Value::Decimal(d) => d.to_string(),
+        other => other.to_string(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // floor
 // ---------------------------------------------------------------------------
@@ -240,8 +266,11 @@ impl NativeFunction for Sign {
 
 /// Pure `sqrt(Number[1]):Float[1]` — square root.
 ///
-/// Negative inputs yield `NaN` per IEEE-754, matching Java's
-/// `Math.sqrt` semantics.
+/// Negative inputs throw the platform-pinned error
+/// `"Unable to compute sqrt of <input>"` (mirrors
+/// `legend-pure-runtime-java-engine-interpreted/.../Sqrt.java:53`,
+/// which throws on `Double.isNaN(result)` rather than letting the
+/// IEEE-754 NaN propagate).
 #[derive(Debug)]
 pub struct Sqrt;
 
@@ -254,7 +283,15 @@ impl NativeFunction for Sqrt {
         let values = force_all(args, ctx)?;
         expect_args("sqrt", &values, 1)?;
         let x = number_to_f64("sqrt", &values[0])?;
-        Ok(Evaluated::new(Value::Float(x.sqrt())))
+        let r = x.sqrt();
+        if r.is_nan() {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "Unable to compute sqrt of {}",
+                java_number_string(&values[0])
+            ))
+            .into());
+        }
+        Ok(Evaluated::new(Value::Float(r)))
     }
 
     fn signature(&self) -> &'static str {
@@ -483,7 +520,8 @@ impl NativeFunction for Cot {
 // ---------------------------------------------------------------------------
 
 /// Pure `asin(Number[1]):Float[1]` — inverse sine (radians). Inputs
-/// outside [-1, 1] yield `NaN` per IEEE-754.
+/// outside `[-1, 1]` throw `"Unable to compute asin of <input>"`,
+/// mirroring `ArcSine.java:53` (Java throws on `Double.isNaN(result)`).
 #[derive(Debug)]
 pub struct Asin;
 
@@ -496,7 +534,15 @@ impl NativeFunction for Asin {
         let values = force_all(args, ctx)?;
         expect_args("asin", &values, 1)?;
         let x = number_to_f64("asin", &values[0])?;
-        Ok(Evaluated::new(Value::Float(x.asin())))
+        let r = x.asin();
+        if r.is_nan() {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "Unable to compute asin of {}",
+                java_number_string(&values[0])
+            ))
+            .into());
+        }
+        Ok(Evaluated::new(Value::Float(r)))
     }
 
     fn signature(&self) -> &'static str {
@@ -505,7 +551,8 @@ impl NativeFunction for Asin {
 }
 
 /// Pure `acos(Number[1]):Float[1]` — inverse cosine (radians). Inputs
-/// outside [-1, 1] yield `NaN` per IEEE-754.
+/// outside `[-1, 1]` throw `"Unable to compute acos of <input>"`,
+/// mirroring `ArcCosine.java:53`.
 #[derive(Debug)]
 pub struct Acos;
 
@@ -518,7 +565,15 @@ impl NativeFunction for Acos {
         let values = force_all(args, ctx)?;
         expect_args("acos", &values, 1)?;
         let x = number_to_f64("acos", &values[0])?;
-        Ok(Evaluated::new(Value::Float(x.acos())))
+        let r = x.acos();
+        if r.is_nan() {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "Unable to compute acos of {}",
+                java_number_string(&values[0])
+            ))
+            .into());
+        }
+        Ok(Evaluated::new(Value::Float(r)))
     }
 
     fn signature(&self) -> &'static str {
@@ -990,13 +1045,16 @@ mod tests {
     }
 
     #[test]
-    fn sqrt_negative_is_nan() {
-        // IEEE-754 sqrt of a negative yields NaN.
-        let r = Sqrt.execute(&[lit_float(-1.0)], &mut MockCtx).unwrap();
-        match r.into_value() {
-            Value::Float(f) => assert!(f.is_nan(), "expected NaN, got {f}"),
-            other => panic!("expected Float, got {other:?}"),
-        }
+    fn sqrt_negative_throws_unable_to_compute() {
+        // Java parity: instead of returning NaN per IEEE-754, sqrt
+        // throws "Unable to compute sqrt of -1.0" so platform PCT
+        // tests like `testSquareRootError` can assertError on it.
+        let err = Sqrt.execute(&[lit_float(-1.0)], &mut MockCtx).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Unable to compute sqrt of -1.0"),
+            "expected error containing 'Unable to compute sqrt of -1.0', got: {msg}"
+        );
     }
 
     #[test]
@@ -1320,12 +1378,15 @@ mod tests {
     }
 
     #[test]
-    fn asin_out_of_range_is_nan() {
-        let r = Asin.execute(&[lit_float(2.0)], &mut MockCtx).unwrap();
-        match r.into_value() {
-            Value::Float(f) => assert!(f.is_nan()),
-            other => panic!("expected Float, got {other:?}"),
-        }
+    fn asin_out_of_range_throws_unable_to_compute() {
+        // Java parity: out-of-domain inputs (|x| > 1) throw
+        // "Unable to compute asin of <input>" — see ArcSine.java.
+        let err = Asin.execute(&[lit_float(2.0)], &mut MockCtx).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Unable to compute asin of 2.0"),
+            "expected error containing 'Unable to compute asin of 2.0', got: {msg}"
+        );
     }
 
     #[test]
