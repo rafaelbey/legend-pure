@@ -27,8 +27,6 @@
 //! arrive as `Value::String("DurationUnit.DAYS")` (the evaluator's
 //! enum-value shape) and are parsed by their suffix.
 
-use std::str::FromStr;
-
 use legend_pure_parser_pure::types::ValueSpec;
 
 use crate::date::{DatePrecision, PureDate, TimePrecision};
@@ -803,11 +801,16 @@ impl NativeFunction for HasSubsecondWithAtLeastPrecision {
 
 /// Pure `parseDate(String[1]): Date[1]`.
 ///
-/// Accepts a small family of ISO-like shapes (delegated to `jiff::civil`):
-/// * `"YYYY-MM-DDTHH:MM:SS[.fffffffff]"` → `DateTime`
-/// * `"YYYY-MM-DD"`                       → `StrictDate`
+/// Accepts the same family of ISO-like literals the Pure compiler
+/// recognises for `%`-prefixed date literals (see
+/// `legend-pure-rust/crates/pure/src/lower.rs::parse_datetime`):
+/// * `"YYYY[-M[-D[THH[:MM[:SS[.fffffffff]]]][Z|±HHMM]]]"`
+/// * `"YYYY-MM-DD"`                                   → `StrictDate`
 ///
-/// Returns `EvaluationError` if neither shape parses.
+/// Single-digit month/day are accepted (`"2014-2-27T…"`). A trailing
+/// `Z` is treated as the UTC offset `+0000`. `±HHMM` shifts the
+/// resulting instant to UTC, mirroring the date-literal lowering at
+/// `eval.rs:428`. Returns `EvaluationError` when no shape matches.
 #[derive(Debug)]
 pub struct ParseDate;
 
@@ -819,28 +822,142 @@ impl NativeFunction for ParseDate {
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
         expect_args("parseDate", &values, 1)?;
-        let s = values[0].as_string()?.as_str();
-
-        // DateTime first — has the 'T' separator when present.
-        if s.contains('T') {
-            let dt = jiff::civil::DateTime::from_str(s).map_err(|e| {
-                PureRuntimeError::EvaluationError(format!("parseDate: invalid datetime: {e}"))
-            })?;
-            return Ok(Evaluated::new(Value::Date(PureDate::from_civil_datetime(
-                dt,
-            ))));
-        }
-
-        // Fall back to date.
-        let date = jiff::civil::Date::from_str(s).map_err(|e| {
-            PureRuntimeError::EvaluationError(format!("parseDate: invalid date: {e}"))
+        let raw = values[0].as_string()?;
+        let s = raw.as_str();
+        let date = parse_date_lenient(s).ok_or_else(|| {
+            PureRuntimeError::EvaluationError(format!("parseDate: invalid date string {s:?}"))
         })?;
-        Ok(Evaluated::new(Value::Date(PureDate::from_civil_date(date))))
+        Ok(Evaluated::new(Value::Date(date)))
     }
 
     fn signature(&self) -> &'static str {
         "parseDate(String[1]): Date[1]"
     }
+}
+
+/// Parse a Pure-flavoured ISO date string into a [`PureDate`]. Mirrors
+/// the literal parser in `legend-pure-rust/crates/pure/src/lower.rs`
+/// so the runtime accepts every shape that compile-time `%…` literals
+/// already recognise. Returns `None` when no recognised shape matches.
+fn parse_date_lenient(input: &str) -> Option<PureDate> {
+    let s = input.strip_prefix('%').unwrap_or(input);
+    let (date_part, time_part) = match s.split_once('T') {
+        Some((d, t)) => (d, Some(t)),
+        None => (s, None),
+    };
+    let date_parts: Vec<&str> = date_part.split('-').collect();
+    if date_parts.is_empty() || date_parts.len() > 3 {
+        return None;
+    }
+    let year: i16 = date_parts.first()?.parse().ok()?;
+    let month: Option<i8> = date_parts.get(1).and_then(|s| s.parse().ok());
+    let day: Option<i8> = date_parts.get(2).and_then(|s| s.parse().ok());
+
+    let Some(time_part) = time_part else {
+        return match (month, day) {
+            (Some(m), Some(d)) => PureDate::strict_date(year, m, d).ok(),
+            (Some(m), None) => PureDate::year_month(year, m).ok(),
+            (None, None) => PureDate::year(year).ok(),
+            _ => None,
+        };
+    };
+
+    // Strip a trailing `Z` (Zulu time) and treat it as `+0000`. After
+    // that we look for a `±HHMM` offset suffix on what remains.
+    let (time_part, zulu) = match time_part.strip_suffix('Z') {
+        Some(rest) => (rest, true),
+        None => (time_part, false),
+    };
+    let (time_body, parsed_offset) = split_tz_native(time_part);
+    let tz_offset_minutes: Option<i16> = if zulu { Some(0) } else { parsed_offset };
+
+    let (time_main, subsec_str) = match time_body.split_once('.') {
+        Some((main, frac)) => (main, frac),
+        None => (time_body, ""),
+    };
+    let time_components: Vec<&str> = time_main.split(':').collect();
+    if time_components.is_empty() {
+        return None;
+    }
+    let hour: i8 = time_components.first()?.parse().ok()?;
+    let minute: i8 = time_components
+        .get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let second: i8 = time_components
+        .get(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let (subsec_nanos, subsec_digits) = parse_subsecond_lenient(subsec_str);
+
+    let m = month?;
+    let d = day?;
+    // Build the civil datetime, then shift by `tz_offset_minutes` so
+    // the stored instant is UTC — mirrors `eval.rs:428`'s literal path.
+    let civil = jiff::civil::DateTime::new(year, m, d, hour, minute, second, subsec_nanos).ok()?;
+    let shifted = if let Some(offset) = tz_offset_minutes {
+        civil
+            .checked_sub(jiff::Span::new().minutes(i64::from(offset)))
+            .ok()?
+    } else {
+        civil
+    };
+    let precision = if subsec_digits > 0 {
+        TimePrecision::Subsecond(subsec_digits)
+    } else if time_components.len() >= 3 {
+        TimePrecision::Second
+    } else if time_components.len() >= 2 {
+        TimePrecision::Minute
+    } else {
+        TimePrecision::Hour
+    };
+    PureDate::datetime(
+        shifted.year(),
+        shifted.month(),
+        shifted.day(),
+        shifted.hour(),
+        shifted.minute(),
+        shifted.second(),
+        shifted.subsec_nanosecond(),
+        precision,
+    )
+    .ok()
+}
+
+/// Find the trailing `±HHMM` offset on a time string and split it off.
+/// Mirrors `lower.rs::split_tz` — the runtime can't reach into the
+/// pure crate's parsing helpers, so this is a small re-implementation.
+fn split_tz_native(s: &str) -> (&str, Option<i16>) {
+    for (idx, _) in s.char_indices().rev() {
+        let byte = s.as_bytes()[idx];
+        if byte == b'+' || byte == b'-' {
+            let tail = &s[idx..];
+            if tail.len() == 5 && tail[1..].as_bytes().iter().all(u8::is_ascii_digit) {
+                let sign: i16 = if byte == b'+' { 1 } else { -1 };
+                let hh: i16 = tail[1..3].parse().unwrap_or(0);
+                let mm: i16 = tail[3..5].parse().unwrap_or(0);
+                return (&s[..idx], Some(sign * (hh * 60 + mm)));
+            }
+        }
+    }
+    (s, None)
+}
+
+/// Pad a fractional-second string out to 9 nanos. Mirrors
+/// `lower.rs::parse_subsecond_parts`.
+fn parse_subsecond_lenient(frac: &str) -> (i32, u8) {
+    if frac.is_empty() {
+        return (0, 0);
+    }
+    let trimmed: String = frac.chars().take(9).collect();
+    #[allow(clippy::cast_possible_truncation)]
+    let digits: u8 = trimmed.len() as u8;
+    let mut padded = String::with_capacity(9);
+    padded.push_str(&trimmed);
+    while padded.len() < 9 {
+        padded.push('0');
+    }
+    (padded.parse().unwrap_or(0), digits)
 }
 
 // ---------------------------------------------------------------------------

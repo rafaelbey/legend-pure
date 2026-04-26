@@ -2992,7 +2992,18 @@ fn eval_pct_date_error_histogram() {
 ///   under the new dispatch path. Drops the combined fail+error
 ///   bucket from 78 to 36 (most of which were assertEq mismatches
 ///   cascading off the broken object formatter).
-const PCT_PASS_BASELINE: i64 = 461;
+/// - 2026-04-26 → 466: Float equality now mirrors Java
+///   `CompiledSupport.eq` (normalizes `-0.0`→`0.0`, NaN==NaN);
+///   `parseDate` rewritten to accept the same lenient ISO shapes the
+///   `%`-literal lowering recognises (single-digit month/day, `Z`
+///   suffix, `±HHMM` offset). +1 testParseZero (parseFloat) and the
+///   3 parseDate tests; net +5 PASS, -2 FAIL, -3 ERROR.
+/// - 2026-04-26 → 467: `parseDecimal(string, precision, scale)`
+///   3-arg form was reading `values[1]` (precision) as the rounding
+///   scale — off-by-one in argument indexing. Fixed to use
+///   `values[2]` (scale). Resolves
+///   `testParseDecimalWithPrecisionScale`.
+const PCT_PASS_BASELINE: i64 = 467;
 
 /// Minimum `<<test.Test>>` surveyor pass count across the same packages
 /// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in

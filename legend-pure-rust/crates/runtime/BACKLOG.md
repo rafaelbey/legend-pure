@@ -163,19 +163,7 @@ Grouped by likely fix shape. Each bullet has the test FQN, the failure type
 - `math::tests::toDecimal::testDoubleToDecimal` (FAIL) — Float→Decimal
   conversion precision; revisit the conversion path.
 
-#### String (2 ERROR + 5 FAIL)
-- `string::tests::parseDate::testParseDate` (ERROR),
-  `parseDate::testParseDateWithZ` (ERROR),
-  `parseDate::testParseDateWithTimezone` (FAIL) — parseDate native
-  rejects valid Pure date formats including `Z` (UTC) suffix and
-  `YYYY-MM-DD` (with single-digit month/day). Re-write parseDate
-  using jiff's `Timestamp::from_str` + civil-date conversion.
-- `string::tests::parseFloat::testParseZero` (FAIL) — `parseFloat('0')`
-  returns slightly off; probably default-precision issue in the
-  parser path.
-- `string::tests::parseDecimal::testParseDecimalWithPrecisionScale`
-  (FAIL) — precision argument not fully honored (Phase 2's
-  `parseDecimal` rounds to scale but doesn't enforce precision).
+#### String (2 FAIL)
 - `string::tests::toString::testFloatToStringWithExcessTrailingZeros`,
   `toString::testFloatToStringWithPositiveExponent` (2 FAIL) — Float
   Display. Java's `Float.toString` uses specific rules around
