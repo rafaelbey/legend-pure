@@ -110,7 +110,6 @@ fn eval_pure(source: &str, fqn: &str) -> Value {
 }
 
 /// Like `eval_pure` but expects an evaluation error.
-#[allow(dead_code)]
 fn eval_pure_err(source: &str, fqn: &str) -> String {
     let model = compile_with_platform(source);
     let registry = NativeRegistry::standard();
@@ -3286,4 +3285,733 @@ fn eval_surveyor_baseline_lock() {
          Either you regressed a previously-passing test (fix it) or you legitimately \
          dropped support (lower the baseline with a comment explaining why)."
     );
+}
+
+// ===========================================================================
+// Date native — verbatim ports of Java <<PCT.test>> functions and matching
+// Rust-only error tests. Migrated from the empty MockCtx stubs in
+// crates/runtime/src/native/datetime.rs (those required full evaluator
+// support to exercise date literals + arrow chains).
+//
+// Source-of-truth Java tests live in
+// legend-pure-core/legend-pure-m3-core/src/main/resources/platform/pure/essential/date/
+// — copy the assertion lines verbatim into the function bodies below so a
+// future divergence is caught here, not in the broad PCT canary.
+// ===========================================================================
+
+// ----- monthNumber (mirrors testMonthNumber in extract/monthNumber.pure) -----
+
+#[test]
+fn eval_test_month_number() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(4, $adapter->eval(|%2015-04->monthNumber()));
+            assertEquals(4, $adapter->eval(|%2015-04-15->monthNumber()));
+            assertEquals(4, $adapter->eval(|%2015-04-15T17->monthNumber()));
+            assertEquals(4, $adapter->eval(|%2015-04-15T17:09->monthNumber()));
+            assertEquals(4, $adapter->eval(|%2015-04-15T17:09:21->monthNumber()));
+            assertEquals(4, $adapter->eval(|%2015-04-15T17:09:21.398->monthNumber()));
+
+            assertEquals(1, $adapter->eval(|%2015-01->monthNumber()));
+            assertEquals(2, $adapter->eval(|%2015-02->monthNumber()));
+            assertEquals(3, $adapter->eval(|%2015-03->monthNumber()));
+            assertEquals(5, $adapter->eval(|%2015-05->monthNumber()));
+            assertEquals(6, $adapter->eval(|%2015-06->monthNumber()));
+            assertEquals(7, $adapter->eval(|%2015-07->monthNumber()));
+            assertEquals(8, $adapter->eval(|%2015-08->monthNumber()));
+            assertEquals(9, $adapter->eval(|%2015-09->monthNumber()));
+            assertEquals(10, $adapter->eval(|%2015-10->monthNumber()));
+            assertEquals(11, $adapter->eval(|%2015-11->monthNumber()));
+            assertEquals(12, $adapter->eval(|%2015-12->monthNumber()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_month_number_year_only_errors() {
+    let msg = eval_pure_err(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Integer[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            $adapter->eval(|%2015->monthNumber());
+        }
+        ",
+        "f__Integer_1_",
+    );
+    assert!(
+        msg.contains("month"),
+        "expected month-component error, got: {msg}"
+    );
+}
+
+// ----- dayOfMonth (mirrors testDayOfMonth + testDayOfMonthError) -----
+
+#[test]
+fn eval_test_day_of_month() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(15, $adapter->eval(|%2015-04-15->dayOfMonth()));
+            assertEquals(15, $adapter->eval(|%2015-04-15T17->dayOfMonth()));
+            assertEquals(15, $adapter->eval(|%2015-04-15T17:09->dayOfMonth()));
+            assertEquals(15, $adapter->eval(|%2015-04-15T17:09:21->dayOfMonth()));
+            assertEquals(15, $adapter->eval(|%2015-04-15T17:09:21.398->dayOfMonth()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_day_of_month_no_day_errors() {
+    let msg = eval_pure_err(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Integer[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            $adapter->eval(|%2017->dayOfMonth());
+        }
+        ",
+        "f__Integer_1_",
+    );
+    assert!(
+        msg.contains("Cannot get day of month"),
+        "expected day-component error, got: {msg}"
+    );
+}
+
+// ----- hour (mirrors testHour + testHourError) -----
+
+#[test]
+fn eval_test_hour() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(17, $adapter->eval(|%2015-04-15T17->hour()));
+            assertEquals(17, $adapter->eval(|%2015-04-15T17:09->hour()));
+            assertEquals(17, $adapter->eval(|%2015-04-15T17:09:21->hour()));
+            assertEquals(17, $adapter->eval(|%2015-04-15T17:09:21.398->hour()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_hour_no_time_errors() {
+    let msg = eval_pure_err(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Integer[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            $adapter->eval(|%2017->hour());
+        }
+        ",
+        "f__Integer_1_",
+    );
+    assert!(
+        msg.contains("Cannot get hour"),
+        "expected hour-component error, got: {msg}"
+    );
+}
+
+// ----- minute (mirrors testMinute + testMinuteError) -----
+
+#[test]
+fn eval_test_minute() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(9, $adapter->eval(|%2015-04-15T17:09->minute()));
+            assertEquals(9, $adapter->eval(|%2015-04-15T17:09:21->minute()));
+            assertEquals(9, $adapter->eval(|%2015-04-15T17:09:21.398->minute()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_minute_only_hour_errors() {
+    let msg = eval_pure_err(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Integer[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            $adapter->eval(|%2015-04-15T17->minute());
+        }
+        ",
+        "f__Integer_1_",
+    );
+    assert!(
+        msg.contains("Cannot get minute"),
+        "expected minute-component error, got: {msg}"
+    );
+}
+
+// ----- second (mirrors testSecond + testSecondError) -----
+
+#[test]
+fn eval_test_second() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(21, $adapter->eval(|%2015-04-15T17:09:21->second()));
+            assertEquals(21, $adapter->eval(|%2015-04-15T17:09:21.398->second()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_second_only_minute_errors() {
+    let msg = eval_pure_err(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Integer[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            $adapter->eval(|%2015-04-15T17:09->second());
+        }
+        ",
+        "f__Integer_1_",
+    );
+    assert!(
+        msg.contains("Cannot get second"),
+        "expected second-component error, got: {msg}"
+    );
+}
+
+// ----- datePart (mirrors testDatePart + …Trivial + …YearMonthOnly + …YearOnly) -----
+
+#[test]
+fn eval_test_date_part() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(%1973-11-05, $adapter->eval(|%1973-11-05T13:01:25->datePart()));
+            assertEquals(%2015-08-29, $adapter->eval(|%2015-08-29T22:22:22.9914234->datePart()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_date_part_trivial() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(%1973-11-05, $adapter->eval(|%1973-11-05->datePart()));
+            assertEquals(%2015-08-29, $adapter->eval(|%2015-08-29->datePart()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_date_part_year_month_only() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(%1973-11, $adapter->eval(|%1973-11->datePart()));
+            assertEquals(%2015-08, $adapter->eval(|%2015-08->datePart()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_date_part_year_only() {
+    // Mirrors testDatePartYearOnly. Note: stub `date_part_rejects_year_only`
+    // had a misleading name — Java semantics (and the Rust impl at
+    // datetime.rs:378) explicitly pass year-only dates through unchanged.
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(%1973, $adapter->eval(|%1973->datePart()));
+            assertEquals(%2015, $adapter->eval(|%2015->datePart()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+// ----- dateDiff (mirrors testDateDiff{Years,Months,Weeks,Days,Hours,Minutes,Seconds} in operation/dateDiff.pure) -----
+
+#[test]
+fn eval_test_date_diff_years() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(1, $adapter->eval(|%2015->dateDiff(%2016, DurationUnit.YEARS)));
+            assertEquals(-1, $adapter->eval(|%2016->dateDiff(%2015, DurationUnit.YEARS)));
+            assertEquals(20, $adapter->eval(|%2000->dateDiff(%2020, DurationUnit.YEARS)));
+            assertEquals(-20, $adapter->eval(|%2020->dateDiff(%2000, DurationUnit.YEARS)));
+            assertEquals(0, $adapter->eval(|%2015->dateDiff(%2015, DurationUnit.YEARS)));
+            assertEquals(0, $adapter->eval(|%2015-01-01T00:00:00->dateDiff(%2015-12-31T23:59:59, DurationUnit.YEARS)));
+            assertEquals(1, $adapter->eval(|%2015-12-31T23:59:59->dateDiff(%2016-01-01T00:00:01, DurationUnit.YEARS)));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_date_diff_months() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(0, $adapter->eval(|%2016-02-01->dateDiff(%2016-02-01, DurationUnit.MONTHS)));
+            assertEquals(0, $adapter->eval(|%2016-02-01->dateDiff(%2016-02-29, DurationUnit.MONTHS)));
+            assertEquals(1, $adapter->eval(|%2016-02-01->dateDiff(%2016-03-01, DurationUnit.MONTHS)));
+            assertEquals(-1, $adapter->eval(|%2016-03-01->dateDiff(%2016-02-01, DurationUnit.MONTHS)));
+            assertEquals(12, $adapter->eval(|%2015-01-29->dateDiff(%2016-01-29, DurationUnit.MONTHS)));
+            assertEquals(14, $adapter->eval(|%2015-01-29->dateDiff(%2016-03-29, DurationUnit.MONTHS)));
+            assertEquals(-14, $adapter->eval(|%2016-03-29->dateDiff(%2015-01-29, DurationUnit.MONTHS)));
+            assertEquals(0, $adapter->eval(|%2014-12-01T00:00:00->dateDiff(%2014-12-01T23:59:59, DurationUnit.MONTHS)));
+            assertEquals(11, $adapter->eval(|%2016-01-01->dateDiff(%2016-12-31, DurationUnit.MONTHS)));
+            assertEquals(11, $adapter->eval(|%2016-01-31->dateDiff(%2016-12-31, DurationUnit.MONTHS)));
+            assertEquals(12, $adapter->eval(|%2016-01-01->dateDiff(%2017-01-01, DurationUnit.MONTHS)));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_date_diff_weeks() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(0, $adapter->eval(|%2015-07-05->dateDiff(%2015-07-05, DurationUnit.WEEKS)));
+            assertEquals(0, $adapter->eval(|%2015-07-03->dateDiff(%2015-07-04, DurationUnit.WEEKS)));
+            assertEquals(1, $adapter->eval(|%2015-07-04->dateDiff(%2015-07-05, DurationUnit.WEEKS)));
+            assertEquals(0, $adapter->eval(|%2015-07-05->dateDiff(%2015-07-04, DurationUnit.WEEKS)));
+            assertEquals(1, $adapter->eval(|%2015-07-05->dateDiff(%2015-07-12, DurationUnit.WEEKS)));
+            assertEquals(-1, $adapter->eval(|%2015-07-12->dateDiff(%2015-07-05, DurationUnit.WEEKS)));
+            assertEquals(0, $adapter->eval(|%2015-07-12->dateDiff(%2015-07-06, DurationUnit.WEEKS)));
+            assertEquals(4, $adapter->eval(|%2015-07-05->dateDiff(%2015-08-02, DurationUnit.WEEKS)));
+            assertEquals(-4, $adapter->eval(|%2015-08-02->dateDiff(%2015-07-05, DurationUnit.WEEKS)));
+            assertEquals(-3, $adapter->eval(|%2015-08-02->dateDiff(%2015-07-06, DurationUnit.WEEKS)));
+            assertEquals(1, $adapter->eval(|%2014-12-28->dateDiff(%2015-01-04, DurationUnit.WEEKS)));
+            assertEquals(52, $adapter->eval(|%2015-01-01->dateDiff(%2016-01-01, DurationUnit.WEEKS)));
+            assertEquals(52, $adapter->eval(|%2016-01-01->dateDiff(%2016-12-31, DurationUnit.WEEKS)));
+            assertEquals(53, $adapter->eval(|%2016-01-01->dateDiff(%2017-01-01, DurationUnit.WEEKS)));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_date_diff_days() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(0, $adapter->eval(|%2015-07-07->dateDiff(%2015-07-07, DurationUnit.DAYS)));
+            assertEquals(1, $adapter->eval(|%2015-07-07->dateDiff(%2015-07-08, DurationUnit.DAYS)));
+            assertEquals(-1, $adapter->eval(|%2015-07-08->dateDiff(%2015-07-07, DurationUnit.DAYS)));
+            assertEquals(365, $adapter->eval(|%2015-01-1->dateDiff(%2016-01-01, DurationUnit.DAYS)));
+            assertEquals(366, $adapter->eval(|%2016-01-1->dateDiff(%2017-01-01, DurationUnit.DAYS)));
+            assertEquals(394, $adapter->eval(|%2014-01-31->dateDiff(%2015-03-01, DurationUnit.DAYS)));
+            assertEquals(395, $adapter->eval(|%2016-01-31->dateDiff(%2017-03-01, DurationUnit.DAYS)));
+            assertEquals(-395, $adapter->eval(|%2017-03-01->dateDiff(%2016-01-31, DurationUnit.DAYS)));
+            assertEquals(7, $adapter->eval(|%2014-12-28->dateDiff(%2015-01-04, DurationUnit.DAYS)));
+            assertEquals(-7, $adapter->eval(|%2015-01-04->dateDiff(%2014-12-28, DurationUnit.DAYS)));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_date_diff_hours() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(0, $adapter->eval(|%2015-07-07T13:00:00->dateDiff(%2015-07-07T13:00:00, DurationUnit.HOURS)));
+            assertEquals(1, $adapter->eval(|%2015-07-07T13:00:00->dateDiff(%2015-07-07T14:00:00, DurationUnit.HOURS)));
+            assertEquals(-1, $adapter->eval(|%2015-07-07T14:00:00->dateDiff(%2015-07-07T13:00:00, DurationUnit.HOURS)));
+            assertEquals(2, $adapter->eval(|%2015-07-07T23:00:00->dateDiff(%2015-07-08T01:00:00, DurationUnit.HOURS)));
+            assertEquals(2, $adapter->eval(|%2015-07-07T23:00:00->dateDiff(%2015-07-08T01:59:59, DurationUnit.HOURS)));
+            assertEquals(24, $adapter->eval(|%2014-12-31T23:00:00->dateDiff(%2015-01-01T23:00:00, DurationUnit.HOURS)));
+            assertEquals(0, $adapter->eval(|%2014-12-01T00:00:00->dateDiff(%2014-12-01T00:59:59, DurationUnit.HOURS)));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_date_diff_minutes() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(0, $adapter->eval(|%2015-07-07T13:00:00->dateDiff(%2015-07-07T13:00:00, DurationUnit.MINUTES)));
+            assertEquals(1, $adapter->eval(|%2015-07-07T13:00:00->dateDiff(%2015-07-07T13:01:00, DurationUnit.MINUTES)));
+            assertEquals(-1, $adapter->eval(|%2015-07-07T13:01:00->dateDiff(%2015-07-07T13:00:00, DurationUnit.MINUTES)));
+            assertEquals(1, $adapter->eval(|%2015-07-07T13:00:00->dateDiff(%2015-07-07T13:01:01, DurationUnit.MINUTES)));
+            assertEquals(61, $adapter->eval(|%2015-07-07T13:00:00->dateDiff(%2015-07-07T14:01:00, DurationUnit.MINUTES)));
+            assertEquals(120, $adapter->eval(|%2015-07-07T23:00:00->dateDiff(%2015-07-08T01:00:00, DurationUnit.MINUTES)));
+            assertEquals(0, $adapter->eval(|%2014-12-01T00:00:00->dateDiff(%2014-12-01T00:00:59, DurationUnit.MINUTES)));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_date_diff_seconds() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(0, $adapter->eval(|%2015-07-07T13:00:00->dateDiff(%2015-07-07T13:00:00, DurationUnit.SECONDS)));
+            assertEquals(1, $adapter->eval(|%2015-07-07T13:00:00->dateDiff(%2015-07-07T13:00:01, DurationUnit.SECONDS)));
+            assertEquals(-1, $adapter->eval(|%2015-07-07T13:00:01->dateDiff(%2015-07-07T13:00:00, DurationUnit.SECONDS)));
+            assertEquals(60, $adapter->eval(|%2015-07-07T13:00:00->dateDiff(%2015-07-07T13:01:00, DurationUnit.SECONDS)));
+            assertEquals(61, $adapter->eval(|%2015-07-07T13:00:00->dateDiff(%2015-07-07T13:01:01, DurationUnit.SECONDS)));
+            assertEquals(3661, $adapter->eval(|%2015-07-07T13:00:00->dateDiff(%2015-07-07T14:01:01, DurationUnit.SECONDS)));
+            assertEquals(7200, $adapter->eval(|%2015-07-07T23:00:00->dateDiff(%2015-07-08T01:00:00, DurationUnit.SECONDS)));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_date_diff_time_unit_needs_time_precision() {
+    // Time-based units (HOURS/MINUTES/SECONDS/...) require both inputs to have
+    // datetime precision; year-only inputs should error out of jiff's until().
+    let msg = eval_pure_err(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Integer[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            $adapter->eval(|%2015->dateDiff(%2016, DurationUnit.HOURS));
+        }
+        ",
+        "f__Integer_1_",
+    );
+    assert!(
+        msg.contains("dateDiff") || msg.contains("Cannot get hour"),
+        "expected time-precision error from dateDiff(YEAR, YEAR, HOURS), got: {msg}"
+    );
+}
+
+// ----- adjust (mirrors testAdjustBy{Days,Weeks,Years,Hours} in operation/adjust.pure) -----
+
+#[test]
+fn eval_test_adjust_by_days() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(%2015-04-20, $adapter->eval(|%2015-04-16->adjust(4, DurationUnit.DAYS)));
+            assertEquals(%2015-04-12, $adapter->eval(|%2015-04-16->adjust(-4, DurationUnit.DAYS)));
+
+            assertEquals(%2015-05-02, $adapter->eval(|%2015-04-16->adjust(16, DurationUnit.DAYS)));
+            assertEquals(%2015-06-01, $adapter->eval(|%2015-05-16->adjust(16, DurationUnit.DAYS)));
+
+            assertEquals(%2015-03-31, $adapter->eval(|%2015-04-16->adjust(-16, DurationUnit.DAYS)));
+            assertEquals(%2015-03-30, $adapter->eval(|%2015-04-16->adjust(-17, DurationUnit.DAYS)));
+
+            assertEquals(%2015-03-30, $adapter->eval(|%2014-03-30->adjust(365, DurationUnit.DAYS)));
+            assertEquals(%2013-03-30, $adapter->eval(|%2014-03-30->adjust(-365, DurationUnit.DAYS)));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_adjust_by_weeks() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(%2015-04-23, $adapter->eval(|%2015-04-16->adjust(1, DurationUnit.WEEKS)));
+            assertEquals(%2015-04-09, $adapter->eval(|%2015-04-16->adjust(-1, DurationUnit.WEEKS)));
+
+            assertEquals(%2015-04-30, $adapter->eval(|%2015-04-16->adjust(2, DurationUnit.WEEKS)));
+            assertEquals(%2015-04-02, $adapter->eval(|%2015-04-16->adjust(-2, DurationUnit.WEEKS)));
+
+            assertEquals(%2015-05-07, $adapter->eval(|%2015-04-16->adjust(3, DurationUnit.WEEKS)));
+            assertEquals(%2015-06-06, $adapter->eval(|%2015-05-16->adjust(3, DurationUnit.WEEKS)));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_adjust_by_years() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(%2016, $adapter->eval(|%2015->adjust(1, DurationUnit.YEARS)));
+            assertEquals(%2027, $adapter->eval(|%2015->adjust(12, DurationUnit.YEARS)));
+            assertEquals(%2011, $adapter->eval(|%2015->adjust(-4, DurationUnit.YEARS)));
+
+            assertEquals(%2016-02-28, $adapter->eval(|%2015-02-28->adjust(1, DurationUnit.YEARS)));
+            assertEquals(%2013-02-28, $adapter->eval(|%2012-02-29->adjust(1, DurationUnit.YEARS)));
+            assertEquals(%2016-02-29, $adapter->eval(|%2012-02-29->adjust(4, DurationUnit.YEARS)));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_adjust_by_hours() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assertEquals(%2015-04-15T13:12:11, $adapter->eval(|%2015-04-15T12:12:11->adjust(1, DurationUnit.HOURS)));
+            assertEquals(%2015-04-15T11:12:11, $adapter->eval(|%2015-04-15T12:12:11->adjust(-1, DurationUnit.HOURS)));
+
+            assertEquals(%2015-04-16T12:12:11, $adapter->eval(|%2015-04-15T12:12:11->adjust(24, DurationUnit.HOURS)));
+            assertEquals(%2015-04-14T12:12:11, $adapter->eval(|%2015-04-15T12:12:11->adjust(-24, DurationUnit.HOURS)));
+
+            assertEquals(%2015-04-17T00:12:11, $adapter->eval(|%2015-04-15T12:12:11->adjust(36, DurationUnit.HOURS)));
+            assertEquals(%2015-04-14T00:12:11, $adapter->eval(|%2015-04-15T12:12:11->adjust(-36, DurationUnit.HOURS)));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_adjust_hours_on_year_only_errors() {
+    let msg = eval_pure_err(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Date[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            $adapter->eval(|%2015->adjust(1, DurationUnit.HOURS));
+        }
+        ",
+        "f__Date_1_",
+    );
+    assert!(
+        !msg.is_empty(),
+        "expected error adjusting hours on year-only date, got empty"
+    );
+}
+
+// ----- has* (mirrors test{HasMonth,HasDay,HasHour,HasMinute,HasSecond,HasSubsecond,HasSubsecondWithAtLeastPrecision}) -----
+
+#[test]
+fn eval_test_has_month() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assert($adapter->eval(|%2015-04-15T17:09:21.398->hasMonth()));
+            assert($adapter->eval(|%2015-04-15T17:09:21->hasMonth()));
+            assert($adapter->eval(|%2015-04-15T17:09->hasMonth()));
+            assert($adapter->eval(|%2015-04-15T17->hasMonth()));
+            assert($adapter->eval(|%2015-04-15->hasMonth()));
+            assert($adapter->eval(|%2015-04->hasMonth()));
+            assertFalse($adapter->eval(|%2015->hasMonth()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_has_day() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assert($adapter->eval(|%2015-04-15T17:09:21.398->hasDay()));
+            assert($adapter->eval(|%2015-04-15T17:09:21->hasDay()));
+            assert($adapter->eval(|%2015-04-15T17:09->hasDay()));
+            assert($adapter->eval(|%2015-04-15T17->hasDay()));
+            assert($adapter->eval(|%2015-04-15->hasDay()));
+            assertFalse($adapter->eval(|%2015-04->hasDay()));
+            assertFalse($adapter->eval(|%2015->hasDay()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_has_hour() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assert($adapter->eval(|%2015-04-15T17:09:21.398->hasHour()));
+            assert($adapter->eval(|%2015-04-15T17:09:21->hasHour()));
+            assert($adapter->eval(|%2015-04-15T17:09->hasHour()));
+            assert($adapter->eval(|%2015-04-15T17->hasHour()));
+            assertFalse($adapter->eval(|%2015-04-15->hasHour()));
+            assertFalse($adapter->eval(|%2015-04->hasHour()));
+            assertFalse($adapter->eval(|%2015->hasHour()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_has_minute() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assert($adapter->eval(|%2015-04-15T17:09:21.398->hasMinute()));
+            assert($adapter->eval(|%2015-04-15T17:09:21->hasMinute()));
+            assert($adapter->eval(|%2015-04-15T17:09->hasMinute()));
+            assertFalse($adapter->eval(|%2015-04-15T17->hasMinute()));
+            assertFalse($adapter->eval(|%2015-04-15->hasMinute()));
+            assertFalse($adapter->eval(|%2015-04->hasMinute()));
+            assertFalse($adapter->eval(|%2015->hasMinute()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_has_second() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assert($adapter->eval(|%2015-04-15T17:09:21.398->hasSecond()));
+            assert($adapter->eval(|%2015-04-15T17:09:21->hasSecond()));
+            assertFalse($adapter->eval(|%2015-04-15T17:09->hasSecond()));
+            assertFalse($adapter->eval(|%2015-04-15T17->hasSecond()));
+            assertFalse($adapter->eval(|%2015-04-15->hasSecond()));
+            assertFalse($adapter->eval(|%2015-04->hasSecond()));
+            assertFalse($adapter->eval(|%2015->hasSecond()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_has_subsecond() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assert($adapter->eval(|%2015-04-15T17:09:21.398->hasSubsecond()));
+            assertFalse($adapter->eval(|%2015-04-15T17:09:21->hasSubsecond()));
+            assertFalse($adapter->eval(|%2015-04-15T17:09->hasSubsecond()));
+            assertFalse($adapter->eval(|%2015-04-15T17->hasSubsecond()));
+            assertFalse($adapter->eval(|%2015-04-15->hasSubsecond()));
+            assertFalse($adapter->eval(|%2015-04->hasSubsecond()));
+            assertFalse($adapter->eval(|%2015->hasSubsecond()));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
+}
+
+#[test]
+fn eval_test_has_subsecond_with_at_least_precision() {
+    let r = eval_pure(
+        r"
+        import meta::pure::test::pct::*;
+        function test::f(): Boolean[1] {
+            let adapter = testAdapterForInMemoryExecution_Function_1__X_o_;
+            assert($adapter->eval(|%2015-04-15T17:09:21.398->hasSubsecondWithAtLeastPrecision(1)));
+            assert($adapter->eval(|%2015-04-15T17:09:21.398->hasSubsecondWithAtLeastPrecision(2)));
+            assert($adapter->eval(|%2015-04-15T17:09:21.398->hasSubsecondWithAtLeastPrecision(3)));
+            assertFalse($adapter->eval(|%2015-04-15T17:09:21.398->hasSubsecondWithAtLeastPrecision(4)));
+            assertFalse($adapter->eval(|%2015-04-15T17:09:21.398->hasSubsecondWithAtLeastPrecision(5)));
+            assertFalse($adapter->eval(|%2015-04-15T17:09:21->hasSubsecondWithAtLeastPrecision(1)));
+            assertFalse($adapter->eval(|%2015-04-15T17:09->hasSubsecondWithAtLeastPrecision(1)));
+            assertFalse($adapter->eval(|%2015-04-15T17->hasSubsecondWithAtLeastPrecision(1)));
+            assertFalse($adapter->eval(|%2015-04-15->hasSubsecondWithAtLeastPrecision(1)));
+            assertFalse($adapter->eval(|%2015-04->hasSubsecondWithAtLeastPrecision(1)));
+            assertFalse($adapter->eval(|%2015->hasSubsecondWithAtLeastPrecision(1)));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    assert_eq!(r, Value::Boolean(true));
 }
