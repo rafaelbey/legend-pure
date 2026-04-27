@@ -36,7 +36,8 @@ use crate::error::{CompilationError, CompilationErrorKind};
 use crate::ids::ElementId;
 use crate::model::{Element, PureModel};
 use crate::types::{
-    CallKind, DateValue, ExprKind, Multiplicity, Parameter, ResolvedType, TypeExpr, ValueSpec,
+    DateValue, ExprKind, FunctionCallData, Multiplicity, Parameter, ResolvedType, TypeExpr,
+    ValueSpec,
 };
 
 // ---------------------------------------------------------------------------
@@ -170,103 +171,73 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
 
         // -- Function call --------------------------------------------------
         //
-        // `kind` dispatches:
-        //   `Function`           — overload-by-signature dispatch via
-        //                          `infer_function_call`.
-        //   `Property`           — `arguments[0]` is the receiver and
-        //                          `function_name` is the property name;
-        //                          delegate to `infer_simple_property`.
-        //   `QualifiedProperty`  — `arguments[0]` is the receiver,
-        //                          `arguments[1..]` are the QP args;
-        //                          delegate to `infer_qualified_property`.
-        //
-        // The kind-Property and kind-QualifiedProperty branches share
-        // their lookup helpers with the legacy
-        // `ExprKind::PropertyAccess` / `ExprKind::QualifiedPropertyAccess`
-        // arms below — both consume the same `PropertyLookup` shape.
-        ExprKind::FunctionCall {
-            kind,
+        // Overload-by-signature dispatch via `infer_function_call`.
+        ExprKind::FunctionCall(FunctionCallData {
             function,
             function_name,
             arguments,
-        } => match kind {
-            CallKind::Function => {
-                // Infer argument types first (bottom-up)
-                let arg_types: Vec<Option<ResolvedType>> =
-                    arguments.iter_mut().map(|a| infer_expr(ctx, a)).collect();
+        }) => {
+            // Infer argument types first (bottom-up)
+            let arg_types: Vec<Option<ResolvedType>> =
+                arguments.iter_mut().map(|a| infer_expr(ctx, a)).collect();
 
-                // Extract let name from AST before calling inference
-                let let_name = if function_name == "letFunction" && arguments.len() == 2 {
-                    if let ExprKind::StringLiteral(name) = &*arguments[0].kind {
-                        Some((name, &arguments[0].source_info))
-                    } else {
-                        None
-                    }
+            // Extract let name from AST before calling inference
+            let let_name = if function_name == "letFunction" && arguments.len() == 2 {
+                if let ExprKind::StringLiteral(name) = &*arguments[0].kind {
+                    Some((name, &arguments[0].source_info))
                 } else {
                     None
-                };
+                }
+            } else {
+                None
+            };
 
-                let result =
-                    infer_function_call(ctx, *function, function_name, let_name, &arg_types);
-                return set_and_return(expr, result);
-            }
-            CallKind::Property => {
-                // arguments[0] is the receiver; no further args.
-                let arg_types: Vec<Option<ResolvedType>> =
-                    arguments.iter_mut().map(|a| infer_expr(ctx, a)).collect();
-                let target_type = arg_types.first().and_then(|t| t.as_ref());
-                let result =
-                    infer_simple_property(ctx, target_type, function_name, &expr.source_info);
-                return set_and_return(expr, result);
-            }
-            CallKind::QualifiedProperty => {
-                // arguments[0] is the receiver; arguments[1..] are the
-                // QP arguments.
-                let arg_types: Vec<Option<ResolvedType>> =
-                    arguments.iter_mut().map(|a| infer_expr(ctx, a)).collect();
-                let target_type = arg_types.first().and_then(|t| t.as_ref());
-                let (qp_args, qp_arg_types): (&[ValueSpec], &[Option<ResolvedType>]) =
-                    if arguments.is_empty() {
-                        (&[], &[])
-                    } else {
-                        (&arguments[1..], &arg_types[1..])
-                    };
-                let result = infer_qualified_property(
-                    ctx,
-                    target_type,
-                    function_name,
-                    qp_args,
-                    qp_arg_types,
-                    &expr.source_info,
-                );
-                return set_and_return(expr, result);
-            }
-        },
-
-        // -- Property access ------------------------------------------------
-        ExprKind::PropertyAccess { target, property } => {
-            let target_type = infer_expr(ctx, target);
-            let result =
-                infer_simple_property(ctx, target_type.as_ref(), property, &expr.source_info);
+            let result = infer_function_call(ctx, *function, function_name, let_name, &arg_types);
             return set_and_return(expr, result);
         }
 
-        // -- Qualified property access --------------------------------------
-        ExprKind::QualifiedPropertyAccess {
-            target,
-            property,
+        // -- Property call (`$x.name`) -------------------------------------
+        //
+        // `arguments[0]` is the receiver; resolution is class-property
+        // lookup, not function dispatch. Mirrors Java's
+        // `SimpleFunctionExpression` with `_propertyName` set.
+        ExprKind::PropertyCall(FunctionCallData {
+            function_name,
             arguments,
-        } => {
-            let target_type = infer_expr(ctx, target);
-            // Infer argument types first so we can validate them.
+            ..
+        }) => {
             let arg_types: Vec<Option<ResolvedType>> =
                 arguments.iter_mut().map(|a| infer_expr(ctx, a)).collect();
+            let target_type = arg_types.first().and_then(|t| t.as_ref());
+            let result = infer_simple_property(ctx, target_type, function_name, &expr.source_info);
+            return set_and_return(expr, result);
+        }
+
+        // -- Qualified property call (`$x.qp(args)`) -----------------------
+        //
+        // `arguments[0]` is the receiver; `arguments[1..]` are the QP
+        // arguments. Performs overload-by-arity resolution and per-arg
+        // type/multiplicity validation.
+        ExprKind::QualifiedPropertyCall(FunctionCallData {
+            function_name,
+            arguments,
+            ..
+        }) => {
+            let arg_types: Vec<Option<ResolvedType>> =
+                arguments.iter_mut().map(|a| infer_expr(ctx, a)).collect();
+            let target_type = arg_types.first().and_then(|t| t.as_ref());
+            let (qp_args, qp_arg_types): (&[ValueSpec], &[Option<ResolvedType>]) =
+                if arguments.is_empty() {
+                    (&[], &[])
+                } else {
+                    (&arguments[1..], &arg_types[1..])
+                };
             let result = infer_qualified_property(
                 ctx,
-                target_type.as_ref(),
-                property,
-                arguments,
-                &arg_types,
+                target_type,
+                function_name,
+                qp_args,
+                qp_arg_types,
                 &expr.source_info,
             );
             return set_and_return(expr, result);
@@ -581,7 +552,7 @@ struct QpCandidate {
 
 /// Inference helper for simple property access (`$x.name`). Shared by
 /// the legacy `ExprKind::PropertyAccess` arm and the new
-/// `ExprKind::FunctionCall { kind: CallKind::Property, .. }` arm.
+/// `ExprKind::PropertyCall(FunctionCallData { .. })` arm.
 ///
 /// Looks up `property_name` on `target_type`'s class (and supertypes /
 /// associations); emits `UnknownProperty` if not found and the receiver
@@ -631,7 +602,7 @@ fn infer_simple_property(
 /// Inference helper for qualified property invocation
 /// (`$x.qp(arg1, arg2)`). Shared by the legacy
 /// `ExprKind::QualifiedPropertyAccess` arm and the new
-/// `ExprKind::FunctionCall { kind: CallKind::QualifiedProperty, .. }` arm.
+/// `ExprKind::QualifiedPropertyCall(FunctionCallData { .. })` arm.
 ///
 /// Performs the same overload-by-arity resolution and per-argument
 /// type/multiplicity validation as the legacy path.

@@ -18,7 +18,7 @@ use legend_pure_parser_ast::section::SourceFile;
 use legend_pure_parser_pure::bootstrap;
 use legend_pure_parser_pure::compile;
 use legend_pure_parser_pure::model::Element;
-use legend_pure_parser_pure::types::{CallKind, Multiplicity, TypeExpr};
+use legend_pure_parser_pure::types::{Multiplicity, TypeExpr};
 
 /// Helper: parse a `.pure` string into a `SourceFile`.
 fn parse(source: &str) -> SourceFile {
@@ -920,7 +920,7 @@ Class <<doc.deprecated>> {model::meta::doc.description = 'old'} model::domain::L
 // Expression Lowering — Phase 1
 // ---------------------------------------------------------------------------
 
-use legend_pure_parser_pure::types::{DateValue, ExprKind};
+use legend_pure_parser_pure::types::{DateValue, ExprKind, FunctionCallData};
 
 #[test]
 fn function_body_integer_literal() {
@@ -1116,12 +1116,12 @@ fn expression_arithmetic_desugars_to_function_call() {
             // Pure-level signature `plus(Number[*]):Number[1]` and
             // Java Pure's single-param dispatch.
             match &*f.body[0].kind {
-                ExprKind::FunctionCall {
+                ExprKind::FunctionCall(FunctionCallData {
                     function,
                     function_name,
                     arguments,
                     ..
-                } => {
+                }) => {
                     assert!(
                         function.is_some(),
                         "operator should resolve to a model element via resolve_function_call"
@@ -1156,19 +1156,19 @@ fn expression_not_equal_desugars_to_not_equal() {
             assert_eq!(f.body.len(), 1);
             // != desugars to not(equal(1, 2))
             match &*f.body[0].kind {
-                ExprKind::FunctionCall {
+                ExprKind::FunctionCall(FunctionCallData {
                     function_name,
                     arguments,
                     ..
-                } => {
+                }) => {
                     assert_eq!(function_name.as_str(), "not");
                     assert_eq!(arguments.len(), 1);
                     match &*arguments[0].kind {
-                        ExprKind::FunctionCall {
+                        ExprKind::FunctionCall(FunctionCallData {
                             function_name: inner_name,
                             arguments: inner_args,
                             ..
-                        } => {
+                        }) => {
                             assert_eq!(inner_name.as_str(), "equal");
                             assert_eq!(inner_args.len(), 2);
                         }
@@ -1201,7 +1201,7 @@ fn expression_comparison_operators() {
             Element::Function(f) => {
                 assert_eq!(f.body.len(), 1, "body should have 1 expression for {op}");
                 match &*f.body[0].kind {
-                    ExprKind::FunctionCall { function_name, .. } => {
+                    ExprKind::FunctionCall(FunctionCallData { function_name, .. }) => {
                         assert_eq!(
                             function_name.as_str(),
                             *expected_name,
@@ -1227,11 +1227,11 @@ fn expression_logical_operators() {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
             match &*f.body[0].kind {
-                ExprKind::FunctionCall {
+                ExprKind::FunctionCall(FunctionCallData {
                     function_name,
                     arguments,
                     ..
-                } => {
+                }) => {
                     assert_eq!(function_name.as_str(), "and");
                     assert_eq!(arguments.len(), 2);
                     assert!(matches!(
@@ -1261,11 +1261,11 @@ fn expression_unary_not() {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
             match &*f.body[0].kind {
-                ExprKind::FunctionCall {
+                ExprKind::FunctionCall(FunctionCallData {
                     function_name,
                     arguments,
                     ..
-                } => {
+                }) => {
                     assert_eq!(function_name.as_str(), "not");
                     assert_eq!(arguments.len(), 1);
                     assert!(matches!(
@@ -1298,12 +1298,11 @@ fn expression_property_access() {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
             match &*f.body[0].kind {
-                ExprKind::FunctionCall {
-                    kind: CallKind::Property,
+                ExprKind::PropertyCall(FunctionCallData {
                     function_name,
                     arguments,
                     ..
-                } => {
+                }) => {
                     assert_eq!(function_name.as_str(), "name");
                     assert_eq!(arguments.len(), 1, "Property kind carries one receiver arg");
                     assert!(matches!(
@@ -1336,12 +1335,12 @@ fn expression_function_call_resolved() {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
             match &*f.body[0].kind {
-                ExprKind::FunctionCall {
+                ExprKind::FunctionCall(FunctionCallData {
                     function,
                     function_name,
                     arguments,
                     ..
-                } => {
+                }) => {
                     assert!(
                         function.is_some(),
                         "resolved function should have element ID"
@@ -1379,11 +1378,11 @@ fn expression_lambda_lowering() {
             assert_eq!(f.body.len(), 1);
             // body is: $people->filter(lambda)
             match &*f.body[0].kind {
-                ExprKind::FunctionCall {
+                ExprKind::FunctionCall(FunctionCallData {
                     function_name,
                     arguments,
                     ..
-                } => {
+                }) => {
                     assert_eq!(function_name.as_str(), "filter");
                     assert_eq!(arguments.len(), 2, "filter takes target + lambda");
                     // Second arg should be the lambda
@@ -1417,11 +1416,11 @@ fn expression_let_desugars_to_let_function() {
             assert!(f.body.len() >= 2, "body should have let + reference");
             // First expression should be letFunction
             match &*f.body[0].kind {
-                ExprKind::FunctionCall {
+                ExprKind::FunctionCall(FunctionCallData {
                     function_name,
                     arguments,
                     ..
-                } => {
+                }) => {
                     assert_eq!(function_name.as_str(), "letFunction");
                     assert_eq!(arguments.len(), 2);
                     // First arg is the variable name as a string literal
@@ -1453,11 +1452,11 @@ fn expression_new_instance_desugars_to_new() {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
             match &*f.body[0].kind {
-                ExprKind::FunctionCall {
+                ExprKind::FunctionCall(FunctionCallData {
                     function_name,
                     arguments,
                     ..
-                } => {
+                }) => {
                     assert_eq!(function_name.as_str(), "new");
                     // class_ref, class_name_string, [type_args],
                     // [type_var_values], (key1, val1, augmented1),
@@ -1576,12 +1575,11 @@ fn dispatch_target(
     // Walk the body looking for the first FunctionCall with a resolved target.
     // Skip `letFunction` calls, which are the implicit `let x = …` desugaring.
     for stmt in &f.body {
-        if let legend_pure_parser_pure::types::ExprKind::FunctionCall {
-            kind: CallKind::Function,
+        if let legend_pure_parser_pure::types::ExprKind::FunctionCall(FunctionCallData {
             function: Some(fid),
             function_name,
             ..
-        } = stmt.kind.as_ref()
+        }) = stmt.kind.as_ref()
         {
             if function_name.as_str() == "letFunction" {
                 continue;

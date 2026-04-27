@@ -29,7 +29,7 @@ use crate::annotations::{StereotypeRef, TaggedValueRef};
 use crate::error::{CompilationError, CompilationErrorKind};
 use crate::ids::ElementId;
 use crate::model::{Element, PureModel};
-use crate::types::{ConstValue, Multiplicity, TypeExpr};
+use crate::types::{ConstValue, FunctionCallData, Multiplicity, TypeExpr};
 
 // ---------------------------------------------------------------------------
 // Import Scope — uses the AST Package type directly
@@ -814,37 +814,29 @@ fn infer_type_from_valuespec(
                 None
             }
         }
-        ExprKind::FunctionCall {
-            kind,
+        ExprKind::PropertyCall(data) | ExprKind::QualifiedPropertyCall(data) => {
+            // Property / qualified-property invocation: resolve via
+            // class property lookup, not function dispatch. `arguments[0]`
+            // is the receiver. Mirrors the Java `propertyExpression`
+            // post-processor.
+            let target = data.arguments.first()?;
+            let target_eid = infer_type_from_valuespec(target, model, var_types)?;
+            let receiver_type_args = extract_receiver_type_args(target, var_types);
+            let (prop_ty_owned, type_params_owned) =
+                find_property_with_inheritance(target_eid, &data.function_name, model)?;
+            let resolved =
+                substitute_class_generics(&prop_ty_owned, &type_params_owned, &receiver_type_args);
+            return match resolved {
+                crate::types::TypeExpr::Named { element, .. } => Some(element),
+                crate::types::TypeExpr::Generic(_) => Some(crate::bootstrap::ANY_ID),
+                _ => None,
+            };
+        }
+        ExprKind::FunctionCall(FunctionCallData {
             function,
             function_name,
             arguments,
-        } => {
-            // Property/QualifiedProperty kinds: resolve via class
-            // property lookup, not function dispatch. `arguments[0]`
-            // is the receiver. Mirrors the legacy
-            // `PropertyAccess`/`QualifiedPropertyAccess` arm below
-            // and the Java `propertyExpression` post-processor.
-            if matches!(
-                kind,
-                crate::types::CallKind::Property | crate::types::CallKind::QualifiedProperty
-            ) {
-                let target = arguments.first()?;
-                let target_eid = infer_type_from_valuespec(target, model, var_types)?;
-                let receiver_type_args = extract_receiver_type_args(target, var_types);
-                let (prop_ty_owned, type_params_owned) =
-                    find_property_with_inheritance(target_eid, function_name, model)?;
-                let resolved = substitute_class_generics(
-                    &prop_ty_owned,
-                    &type_params_owned,
-                    &receiver_type_args,
-                );
-                return match resolved {
-                    crate::types::TypeExpr::Named { element, .. } => Some(element),
-                    crate::types::TypeExpr::Generic(_) => Some(crate::bootstrap::ANY_ID),
-                    _ => None,
-                };
-            }
+        }) => {
             // Use the return type of the resolved function, with generic
             // type variables (`T`) bound from call-site arguments.
             if let Some(fid) = function
@@ -938,28 +930,8 @@ fn infer_type_from_valuespec(
             // vs `dynamicNew(GenericType[1], ...)`.
             crate::bootstrap::metatype_of(model, model.get_element(*element))
         }
-        ExprKind::PropertyAccess { target, property }
-        | ExprKind::QualifiedPropertyAccess {
-            target, property, ..
-        } => {
-            // Resolve the property's return type, substituting class-level
-            // generic parameters from the receiver's type arguments. Walks
-            // the supertype chain so inherited properties (e.g.
-            // `.package` on a `Package` value, inherited from
-            // `PackageableElement`) resolve.
-            let target_eid = infer_type_from_valuespec(target, model, var_types)?;
-            let receiver_type_args = extract_receiver_type_args(target, var_types);
-            let (prop_ty_owned, type_params_owned) =
-                find_property_with_inheritance(target_eid, property, model)?;
-            // Substitute class type params (T, U, …) from receiver's args.
-            let resolved =
-                substitute_class_generics(&prop_ty_owned, &type_params_owned, &receiver_type_args);
-            match resolved {
-                crate::types::TypeExpr::Named { element, .. } => Some(element),
-                crate::types::TypeExpr::Generic(_) => Some(crate::bootstrap::ANY_ID),
-                _ => None,
-            }
-        }
+        // PropertyCall / QualifiedPropertyCall arms live above — property
+        // invocation is handled before the FunctionCall arm.
         _ => None,
     }
 }
@@ -1018,31 +990,11 @@ pub(crate) fn infer_typeexpr_from_valuespec(
         // the resolved function's return type. This is what flows
         // `<String>` from `$l1: List<String>` through
         // `class<T>(T[*]):Class<T>[1]` to a `Class<List<String>>` result.
-        //
-        // Property/QualifiedProperty kinds dispatch differently —
-        // class property lookup, not function dispatch. `arguments[0]`
-        // is the receiver.
-        ExprKind::FunctionCall {
-            kind,
+        ExprKind::FunctionCall(FunctionCallData {
             function,
-            function_name,
             arguments,
-        } => {
-            if matches!(
-                kind,
-                crate::types::CallKind::Property | crate::types::CallKind::QualifiedProperty
-            ) {
-                let target = arguments.first()?;
-                let target_eid = infer_type_from_valuespec(target, model, var_types)?;
-                let receiver_type_args = extract_receiver_type_args(target, var_types);
-                let (prop_ty_owned, type_params_owned) =
-                    find_property_with_inheritance(target_eid, function_name, model)?;
-                return Some(substitute_class_generics(
-                    &prop_ty_owned,
-                    &type_params_owned,
-                    &receiver_type_args,
-                ));
-            }
+            ..
+        }) => {
             let fid = (*function)?;
             let crate::model::Element::Function(f) = model.get_element(fid) else {
                 return None;
@@ -1050,16 +1002,14 @@ pub(crate) fn infer_typeexpr_from_valuespec(
             let bindings = infer_generic_bindings(&f.parameters, arguments, model, var_types);
             Some(substitute_type(&f.return_type, &bindings.ty))
         }
-        // PropertyAccess: same machinery as the cheap fn but return the
-        // substituted TypeExpr instead of just its element.
-        ExprKind::PropertyAccess { target, property }
-        | ExprKind::QualifiedPropertyAccess {
-            target, property, ..
-        } => {
+        // Property / qualified-property invocation: class property
+        // lookup, not function dispatch. `arguments[0]` is the receiver.
+        ExprKind::PropertyCall(data) | ExprKind::QualifiedPropertyCall(data) => {
+            let target = data.arguments.first()?;
             let target_eid = infer_type_from_valuespec(target, model, var_types)?;
             let receiver_type_args = extract_receiver_type_args(target, var_types);
             let (prop_ty_owned, type_params_owned) =
-                find_property_with_inheritance(target_eid, property, model)?;
+                find_property_with_inheritance(target_eid, &data.function_name, model)?;
             Some(substitute_class_generics(
                 &prop_ty_owned,
                 &type_params_owned,
@@ -1374,11 +1324,11 @@ fn infer_multiplicity_from_valuespec(
 
         // Function call → return multiplicity of the resolved function,
         // with generic multiplicity variables (`m`) bound from arguments.
-        ExprKind::FunctionCall {
+        ExprKind::FunctionCall(FunctionCallData {
             function,
             arguments,
             ..
-        } => function.and_then(|fid| {
+        }) => function.and_then(|fid| {
             if let Element::Function(f) = model.get_element(fid) {
                 let bindings = infer_generic_bindings(&f.parameters, arguments, model, var_types);
                 Some(substitute_mult(&f.return_multiplicity, &bindings.mult))

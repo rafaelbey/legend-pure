@@ -53,7 +53,7 @@ use std::collections::HashMap;
 use im_rc::Vector as PVector;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
-use legend_pure_parser_pure::types::{CallKind, DateValue, ExprKind, TypeExpr, ValueSpec};
+use legend_pure_parser_pure::types::{DateValue, ExprKind, FunctionCallData, TypeExpr, ValueSpec};
 use smol_str::SmolStr;
 
 use crate::context::VariableContext;
@@ -247,45 +247,40 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             // IR, so the kind-Property / kind-QualifiedProperty arms
             // here are reachable only after commit 3 swings the
             // lowering. They land first so each commit keeps PCT green.
-            ExprKind::FunctionCall {
-                kind,
+            ExprKind::FunctionCall(FunctionCallData {
                 function,
                 function_name,
                 arguments,
-            } => match kind {
-                CallKind::Function => {
-                    self.eval_function_call(*function, function_name, arguments, &expr.source_info)
-                }
-                CallKind::Property => {
-                    debug_assert!(
-                        arguments.len() == 1,
-                        "Property-kind FunctionCall must have exactly one argument (the receiver)"
-                    );
-                    self.eval_property_access(&arguments[0], function_name)
-                }
-                CallKind::QualifiedProperty => {
-                    debug_assert!(
-                        !arguments.is_empty(),
-                        "QualifiedProperty-kind FunctionCall must carry a receiver in arguments[0]"
-                    );
-                    let (receiver, qp_args) = arguments.split_first().unwrap_or_else(|| {
-                        unreachable!("split_first guarded by debug_assert above")
-                    });
-                    self.eval_qualified_property(receiver, function_name, qp_args)
-                }
-            },
+            }) => self.eval_function_call(*function, function_name, arguments, &expr.source_info),
 
-            // -- Property access ------------------------------------------
-            ExprKind::PropertyAccess { target, property } => {
-                self.eval_property_access(target, property)
+            // -- Property call (`$x.name`) -------------------------------
+            ExprKind::PropertyCall(FunctionCallData {
+                function_name,
+                arguments,
+                ..
+            }) => {
+                debug_assert!(
+                    arguments.len() == 1,
+                    "PropertyCall must have exactly one argument (the receiver)"
+                );
+                self.eval_property_access(&arguments[0], function_name)
             }
 
-            // -- Qualified property access --------------------------------
-            ExprKind::QualifiedPropertyAccess {
-                target,
-                property,
+            // -- Qualified property call (`$x.qp(args)`) -----------------
+            ExprKind::QualifiedPropertyCall(FunctionCallData {
+                function_name,
                 arguments,
-            } => self.eval_qualified_property(target, property, arguments),
+                ..
+            }) => {
+                debug_assert!(
+                    !arguments.is_empty(),
+                    "QualifiedPropertyCall must carry a receiver in arguments[0]"
+                );
+                let (receiver, qp_args) = arguments
+                    .split_first()
+                    .unwrap_or_else(|| unreachable!("split_first guarded by debug_assert above"));
+                self.eval_qualified_property(receiver, function_name, qp_args)
+            }
 
             // -- Enum value -----------------------------------------------
             ExprKind::EnumValue {
@@ -2250,11 +2245,11 @@ fn walk_free_variables(
                 free.insert(name.clone());
             }
         }
-        ExprKind::FunctionCall {
+        ExprKind::FunctionCall(FunctionCallData {
             function_name,
             arguments,
             ..
-        } => {
+        }) => {
             // `let x = rhs` lowers to `FunctionCall("letFunction",
             // [StringLiteral("x"), rhs])`. The rhs may reference free
             // variables / captures, so it's visited first. Only then does
@@ -2287,14 +2282,8 @@ fn walk_free_variables(
                 walk_free_variables(inner, &mut inner_binders, free);
             }
         }
-        ExprKind::PropertyAccess { target, .. } => {
-            walk_free_variables(target, binders, free);
-        }
-        ExprKind::QualifiedPropertyAccess {
-            target, arguments, ..
-        } => {
-            walk_free_variables(target, binders, free);
-            for arg in arguments {
+        ExprKind::PropertyCall(data) | ExprKind::QualifiedPropertyCall(data) => {
+            for arg in &data.arguments {
                 walk_free_variables(arg, binders, free);
             }
         }
@@ -2396,7 +2385,7 @@ pub(crate) enum WrapperKind {
 mod tests {
     use legend_pure_parser_ast::SourceInfo;
     use legend_pure_parser_pure::bootstrap;
-    use legend_pure_parser_pure::types::{CallKind, ExprKind, ValueSpec};
+    use legend_pure_parser_pure::types::{ExprKind, FunctionCallData, ValueSpec};
 
     use super::*;
 
@@ -2488,8 +2477,7 @@ mod tests {
         let mut eval = Evaluator::new(&model, &registry);
         // `plus` has the single signature `(Number[*]):Number[1]`, so the
         // call shape is `plus([2, 3])` — one argument wrapping a Collection.
-        let expr = make_expr(ExprKind::FunctionCall {
-            kind: CallKind::Function,
+        let expr = make_expr(ExprKind::FunctionCall(FunctionCallData {
             function: None,
             function_name: "plus_Number_MANY__Number_1_".into(),
             arguments: vec![make_expr(ExprKind::Collection {
@@ -2498,7 +2486,7 @@ mod tests {
                     make_expr(ExprKind::IntegerLiteral(3)),
                 ],
             })],
-        });
+        }));
         assert_eq!(eval.eval(&expr).unwrap(), Value::Integer(5));
     }
 
@@ -2508,15 +2496,13 @@ mod tests {
         let registry = NativeRegistry::standard();
         let mut eval = Evaluator::new(&model, &registry);
         // plus([2, times([3, 4])]) -> 14
-        let expr = make_expr(ExprKind::FunctionCall {
-            kind: CallKind::Function,
+        let expr = make_expr(ExprKind::FunctionCall(FunctionCallData {
             function: None,
             function_name: "plus_Number_MANY__Number_1_".into(),
             arguments: vec![make_expr(ExprKind::Collection {
                 elements: vec![
                     make_expr(ExprKind::IntegerLiteral(2)),
-                    make_expr(ExprKind::FunctionCall {
-                        kind: CallKind::Function,
+                    make_expr(ExprKind::FunctionCall(FunctionCallData {
                         function: None,
                         function_name: "times_Number_MANY__Number_1_".into(),
                         arguments: vec![make_expr(ExprKind::Collection {
@@ -2525,10 +2511,10 @@ mod tests {
                                 make_expr(ExprKind::IntegerLiteral(4)),
                             ],
                         })],
-                    }),
+                    })),
                 ],
             })],
-        });
+        }));
         assert_eq!(eval.eval(&expr).unwrap(), Value::Integer(14));
     }
 
@@ -2592,12 +2578,11 @@ mod tests {
         let model = test_model();
         let registry = NativeRegistry::standard();
         let mut eval = Evaluator::new(&model, &registry);
-        let expr = make_expr(ExprKind::FunctionCall {
-            kind: CallKind::Function,
+        let expr = make_expr(ExprKind::FunctionCall(FunctionCallData {
             function: None,
             function_name: "nonexistent".into(),
             arguments: vec![],
-        });
+        }));
         assert!(eval.eval(&expr).is_err());
     }
 
