@@ -61,6 +61,10 @@ tracing-subscriber = { workspace = true }
 # REPL
 rustyline = { workspace = true }
 
+# Live reload
+notify = { workspace = true }
+notify-debouncer-mini = { workspace = true }
+
 [dev-dependencies]
 assert_cmd = { workspace = true }
 predicates = { workspace = true }

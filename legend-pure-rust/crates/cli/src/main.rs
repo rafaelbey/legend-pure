@@ -28,6 +28,7 @@
 mod commands;
 mod diagnostics;
 mod discovery;
+mod live;
 
 use clap::{Parser, Subcommand};
 
