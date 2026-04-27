@@ -1298,16 +1298,20 @@ fn expression_property_access() {
         Element::Function(f) => {
             assert_eq!(f.body.len(), 1);
             match &*f.body[0].kind {
-                ExprKind::PropertyAccess {
-                    target, property, ..
+                ExprKind::FunctionCall {
+                    kind: CallKind::Property,
+                    function_name,
+                    arguments,
+                    ..
                 } => {
-                    assert_eq!(property.as_str(), "name");
+                    assert_eq!(function_name.as_str(), "name");
+                    assert_eq!(arguments.len(), 1, "Property kind carries one receiver arg");
                     assert!(matches!(
-                        &*target.kind,
+                        &*arguments[0].kind,
                         ExprKind::Variable { name, .. } if name == "p"
                     ));
                 }
-                other => panic!("expected PropertyAccess, got {other:?}"),
+                other => panic!("expected FunctionCall(kind: Property), got {other:?}"),
             }
         }
         _ => panic!("expected Function"),
