@@ -472,8 +472,22 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn invalid_type_comparisons() {}
+    fn invalid_type_comparisons() {
+        // numeric_cmp errors when the two values aren't comparable —
+        // e.g. mixing Integer with String. Force_all evaluates the
+        // literals via MockCtx; the type check happens inside the
+        // native, so no evaluator is required.
+        assert!(
+            LessThan
+                .execute(&[lit_int(1), lit_str("foo")], &mut MockCtx)
+                .is_err()
+        );
+        assert!(
+            GreaterThan
+                .execute(&[lit_str("foo"), lit_int(1)], &mut MockCtx)
+                .is_err()
+        );
+    }
 
     // ----------------------------------------------------------------------
     // compare — Phase 1 contract tests

@@ -1363,213 +1363,43 @@ mod tests {
         assert!(Today.execute(&[lit_int(1)], &mut MockCtx).is_err());
     }
 
-    // ---- year / monthNumber / dayOfMonth ----
+    // ---- defensive checks (arity + type) ----
+    //
+    // Pure-level behavior tests (happy paths + semantic errors) live in
+    // crates/runtime/tests/eval_tests.rs (search for `eval_test_*` and
+    // `eval_*_errors`). The tests below only exercise the natives'
+    // own defensive checks — `expect_args` for arity, `as_date()`
+    // type assertion — which don't need a real evaluator. The empty
+    // MockCtx stubs that previously sat here have been migrated out.
 
     #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn year_happy() {}
+    fn year_wrong_arg_count() {
+        assert!(Year.execute(&[], &mut MockCtx).is_err());
+    }
 
     #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn year_year_only() {}
+    fn year_type_mismatch() {
+        assert!(Year.execute(&[lit_int(5)], &mut MockCtx).is_err());
+    }
 
     #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn year_wrong_arg_count() {}
+    fn date_diff_wrong_arg_count() {
+        assert!(DateDiff.execute(&[], &mut MockCtx).is_err());
+    }
 
     #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn year_type_mismatch() {}
+    fn adjust_wrong_arg_count() {
+        assert!(Adjust.execute(&[], &mut MockCtx).is_err());
+    }
 
     #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn month_number_happy() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn month_number_year_only_errors() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn day_of_month_happy() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn day_of_month_no_day_errors() {}
-
-    // ---- hour / minute / second ----
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn hour_happy() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn hour_no_time_errors() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn minute_happy() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn minute_only_hour_errors() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn second_happy() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn second_only_minute_errors() {}
-
-    // ---- datePart ----
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn date_part_strips_time() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn date_part_of_strict_date_is_identity() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn date_part_rejects_year_only() {}
-
-    // ---- dateDiff ----
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn date_diff_days() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn date_diff_days_negative() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn date_diff_years() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn date_diff_months() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn date_diff_weeks() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn date_diff_hours() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn date_diff_seconds() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn date_diff_time_unit_needs_time_precision() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn date_diff_wrong_arg_count() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn date_diff_unknown_unit() {}
-
-    // ---- adjust ----
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn adjust_days() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn adjust_weeks() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn adjust_years() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn adjust_hours_on_datetime() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn adjust_hours_on_year_only_errors() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn adjust_milliseconds_unsupported() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn adjust_wrong_arg_count() {}
-
-    // ---- hasXxx probes ----
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn has_month_true() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn has_month_false_on_year_only() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn has_day_true() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn has_day_false_on_year_month() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn has_hour_true_on_datetime() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn has_hour_false_on_date() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn has_minute_true_on_datetime_with_minute() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn has_minute_false_on_hour_only() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn has_second_true_on_seconds() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn has_second_false_on_minute_only() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn has_subsecond_true() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn has_subsecond_false_on_seconds_only() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn has_subsecond_with_at_least_precision_ok() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn has_subsecond_with_at_least_precision_on_seconds_is_false() {}
-
-    #[test]
-    #[ignore = "needs Evaluator; migrate to eval_tests.rs"]
-    fn has_subsecond_with_at_least_precision_wrong_args() {}
+    fn has_subsecond_with_at_least_precision_wrong_args() {
+        assert!(
+            HasSubsecondWithAtLeastPrecision
+                .execute(&[], &mut MockCtx)
+                .is_err()
+        );
+    }
 
     // ---- parseDate ----
 
