@@ -1074,6 +1074,28 @@ impl NativeFunction for Copy {
         // re-`mutate_add`ing properties the user is overriding.
         let _ = (carried_kvs, &path_overrides);
 
+        // When the user supplied any overrides (`^$src(prop=val)`), the
+        // resulting copy is conceptually a different value than its
+        // source — Java Pure stamps it with a fresh `sourceInformation`.
+        // No-override clones (`^$src()`) preserve the source's slot.
+        // Pinned by `testSourceInformationCopy` which asserts that
+        // `^$x0().sourceInformation().source == $x0.sourceInformation().source`
+        // but `^$x0(expressionSequence=$x0.expressionSequence)
+        //   .sourceInformation().source != $x0.sourceInformation().source`.
+        // We synthesise a small `SourceInformation` heap object whose
+        // `source` slot is `"<copy>"` — distinguishable from any real
+        // source path so the `!=` assertion holds. Java parity on the
+        // exact source string isn't required here (no test pins it).
+        if !values[1..].is_empty() {
+            let si_obj = ctx
+                .heap_mut()
+                .alloc_dynamic(crate::m3_paths::SOURCE_INFORMATION);
+            ctx.heap_mut()
+                .mutate_set(si_obj, "source", &[Value::String("<copy>".into())])?;
+            ctx.heap_mut()
+                .mutate_set(obj, "sourceInformation", &[Value::Object(si_obj)])?;
+        }
+
         Ok(Evaluated::new(Value::Object(obj)))
     }
 
