@@ -1107,7 +1107,7 @@ impl NativeFunction for SubTypeOf {
 // ---------------------------------------------------------------------------
 
 /// Extract an `ElementId` from a [`Value::Element`].
-fn as_element_id(v: &Value) -> Result<ElementId, PureException> {
+pub(crate) fn as_element_id(v: &Value) -> Result<ElementId, PureException> {
     match v {
         Value::Element(id) => Ok(*id),
         other => Err(PureRuntimeError::type_mismatch("PackageableElement", other).into()),

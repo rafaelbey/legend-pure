@@ -861,11 +861,21 @@ fn compute_lambda_param_expectations(
 // ---------------------------------------------------------------------------
 
 /// Lowers member access (dot): `$x.name` or `$x.derived('arg')`.
+///
+/// **`.all` desugaring.** Both `$x.all` and `Class.all()` rewrite to a
+/// `FunctionCall("getAll", [target])`. Mirrors Java Pure's parser-level
+/// `allOrFunction` desugaring (`AntlrContextToM3CoreInstance.allOrFunction`)
+/// so the runtime has exactly one entry point — the `getAll` native — for
+/// the `.all` accessor. Without this, the call form `Class.all()` would
+/// fall through to function dispatch and fail to find an `all` native.
 fn lower_member_access(
     e: &ast_expr::MemberAccess,
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
+    if let Some(getall) = desugar_all_to_getall(e, ctx, errors) {
+        return Some(getall);
+    }
     match e {
         ast_expr::MemberAccess::Simple(s) => {
             let target = lower_expression(&s.target, ctx, errors)?;
@@ -894,6 +904,56 @@ fn lower_member_access(
             ))
         }
     }
+}
+
+/// Rewrite `target.all` / `target.all()` → `FunctionCall("getAll", [target])`.
+///
+/// Returns `Some(value_spec)` when the rewrite fires; `None` for everything
+/// else so the regular member-access lowering runs unchanged. The qualified
+/// call form rejects extra arguments — `getAll` is unary.
+fn desugar_all_to_getall(
+    e: &ast_expr::MemberAccess,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    let (target_ast, member, source_info, extra_args): (_, _, _, &[ast_expr::Expression]) = match e
+    {
+        ast_expr::MemberAccess::Simple(s) => (&s.target, &s.member, &s.source_info, &[]),
+        ast_expr::MemberAccess::Qualified(q) => {
+            (&q.target, &q.member, &q.source_info, q.arguments.as_slice())
+        }
+    };
+    if member.as_str() != "all" {
+        return None;
+    }
+    if !extra_args.is_empty() {
+        errors.push(CompilationError {
+            message: "all() takes no arguments — use ::getAll(Class) for the function form"
+                .to_string(),
+            source_info: source_info.clone(),
+            kind: crate::error::CompilationErrorKind::UnsupportedExpression {
+                kind: SmolStr::new_static("MemberAccess::Qualified(\"all\", args)"),
+            },
+        });
+        return None;
+    }
+    let target_val = lower_expression(target_ast, ctx, errors)?;
+    let arguments = vec![target_val];
+    let ptr = synthetic_unqualified_ptr("getAll", source_info);
+    let mut scratch_errors: Vec<CompilationError> = Vec::new();
+    let function_id =
+        resolve::resolve_function_call(&ptr, 1, &arguments, source_info, ctx, &mut scratch_errors);
+    if function_id.is_some() {
+        errors.extend(scratch_errors);
+    }
+    Some(untyped(
+        ExprKind::FunctionCall {
+            function: function_id,
+            function_name: SmolStr::new_static("getAll"),
+            arguments,
+        },
+        source_info.clone(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
