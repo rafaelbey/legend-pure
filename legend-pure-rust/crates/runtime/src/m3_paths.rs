@@ -68,6 +68,14 @@ pub const TAGGED_VALUE: &Classifier = "meta::pure::metamodel::extension::TaggedV
 /// classifier-string compared.
 pub const CLASS: &Classifier = "meta::pure::metamodel::type::Class";
 
+/// `meta::pure::metamodel::type::Nil` — the bottom type. Reserved by the
+/// language and not user-instantiable; `^Nil()` is rejected at the
+/// `New` / `NewWithKeyExpressions` / `DynamicNew` natives' entry. Pinned
+/// by platform test `testNewNil`. Identity-resolved via `m3_paths::resolve`
+/// because `class_fqn` returns just `"Nil"` (top-level type, no package
+/// prefix), so a string compare in the natives wouldn't match.
+pub const NIL: &Classifier = "meta::pure::metamodel::type::Nil";
+
 /// `meta::pure::metamodel::function::KeyExpression` — the M3 wrapper a
 /// Pure-source `new(class, id, [keyExpressions])` call uses to package a
 /// (key, value, add) property assignment. The `NewWithKeyExpressions`

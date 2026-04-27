@@ -581,8 +581,12 @@ impl NativeFunction for Format {
                 continue;
             }
             let v = subs.get(sub_idx).cloned().ok_or_else(|| {
+                // Java-parity error text — pinned by platform test
+                // `testFormatTooFewInputs` in
+                // legend-pure-core/.../grammar/functions/string/format.pure.
                 PureRuntimeError::EvaluationError(format!(
-                    "format: not enough arguments (needed arg {sub_idx})"
+                    "Too few arguments passed to format function. Format expression \"{template}\", number of arguments [{}]",
+                    subs.len()
                 ))
             })?;
             sub_idx += 1;
@@ -637,6 +641,17 @@ impl NativeFunction for Format {
                 _ => unreachable!(),
             }
             i = j;
+        }
+
+        // Reject extra args — Java Pure raises this when the user passes more
+        // values than the template consumed. Pinned by platform test
+        // `testFormatTooManyInputs`.
+        if sub_idx < subs.len() {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "Unused format args. [{}] arguments provided to expression \"{template}\"",
+                subs.len()
+            ))
+            .into());
         }
 
         Ok(Evaluated::new(Value::String(SmolStr::new(result))))
