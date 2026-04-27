@@ -517,7 +517,6 @@ fn eval_variable_shadowing_lambda() {
 }
 
 #[test]
-#[ignore = "TDD: capturing outer scopes correctly across deep function calls"]
 fn eval_closure_captures_outer_scope() {
     let result = eval_pure(
         r"
@@ -541,7 +540,6 @@ fn eval_closure_captures_outer_scope() {
 }
 
 #[test]
-#[ignore = "TDD: awaiting evaluator support for closure variable escaping/capturing"]
 fn eval_closure_captures_and_binds_inner_let() {
     let result = eval_pure(
         r"
@@ -1858,6 +1856,7 @@ fn pct_canary_args(model: &PureModel) -> (Value, Value) {
 /// lockstep on which platform tests are intentionally skipped.
 fn pct_canary_args_with_rust_exclusions(model: &PureModel) -> (Value, Value) {
     legend_pure_runtime::pct::rust_native_pct_args(model)
+        .expect("pct_grammar_rust_native.json: adapter must resolve in the platform model")
 }
 
 /// Read a non-negative integer counter from a heap-allocated `TestReport`.
@@ -2592,7 +2591,6 @@ fn eval_datediff_weeks_sat_to_sun_eq_1() {
 }
 
 #[test]
-#[ignore = "diagnostic: testYear's full body fails on a multi-precision date — Phase 6 follow-up"]
 fn eval_year_full_test_body() {
     // Inline the full testYear body (sans the PCT.test annotation
     // round-trip) to trace whether the multi-precision date inputs
