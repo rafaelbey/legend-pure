@@ -168,7 +168,7 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
         })
         .collect::<Vec<_>>()
         .join(" + ");
-        
+
     let pct_via = if args.mode.contains(&TestMode::Pct) {
         if let Some(m) = &args.manifest {
             format!(" (manifest: {m})")

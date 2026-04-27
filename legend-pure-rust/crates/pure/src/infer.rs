@@ -393,7 +393,9 @@ fn infer_function_call(
         && arg_types.len() == 2
         && let (Some(val_type), Some((name, source_info))) = (&arg_types[1], let_name)
     {
-        if ctx.scopes.last().unwrap().lookup(name).is_some() {
+        if let Some(scope) = ctx.scopes.last()
+            && scope.lookup(name).is_some()
+        {
             ctx.errors.push(crate::error::CompilationError {
                 message: format!("'{name}' has already been defined!"),
                 source_info: (*source_info).clone(),
