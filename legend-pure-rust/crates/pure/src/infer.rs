@@ -906,18 +906,21 @@ fn infer_property_access(
         return found;
     }
 
-    // Receiver is a bootstrap-chunk class — M3 metatype (`Class<X>`,
-    // `Enumeration<X>`, `Function<…>`, `Any`, primitive types, etc.).
-    // Property access on these goes through runtime reflection
-    // (`MyEnum.RED`, `$f.classifierGenericType`, lambda parameters whose
-    // type best-effort-infers to `Any`, …); the compile-time lookup
-    // can't resolve those without a metatype-aware inner-element
-    // walk + improved lambda-param inference. Don't emit a
-    // false-positive UnknownProperty here. TODO: tighten by resolving
-    // metaclass receivers against the inner element X and improving
-    // lambda parameter type inference so `Person`-typed lambdas don't
-    // fall back to `Any`.
-    if is_bootstrap_chunk_class(receiver_id) {
+    // Defer to runtime reflection ONLY when the receiver is a
+    // parametric metatype carrier (Class<X>, Enumeration<X>,
+    // Function<…>) or `Any`. For these:
+    //   - Class<Person>.allInstances, MyEnum.RED, lambda-param-infers-Any
+    //     all bring in members from the inner element X (or are simply
+    //     unknown), and the compile-time lookup can't resolve them
+    //     without a metatype-aware inner-element walk + improved
+    //     lambda-param inference.
+    //
+    // Non-parametric chunk-0 classes (`GenericType`, `Property`,
+    // `FunctionType`, `MultiplicityValue`, `SimpleFunctionExpression`,
+    // …) are real M3 classes with declared properties — validate
+    // them normally so typos like `pair(1,2)->genericType().rawTyp`
+    // produce a compile error instead of silently returning Unit.
+    if is_metatype_carrier(ctx.model, receiver_id) {
         return PropertyLookup::UnknownTarget;
     }
 
@@ -926,20 +929,37 @@ fn infer_property_access(
     }
 }
 
-/// Returns `true` when `class_id` lives in the bootstrap chunk (chunk
-/// 0) — the home of M3 metaclasses (`Class`, `Function`, `Enumeration`,
-/// `Profile`, `Association`, `Package`, `PackageableElement`, …),
-/// primitives (`Integer`, `String`, …), and `Any`. User-defined classes
-/// live in chunk 1+, so this is a structural way to skip
-/// metatype/reflection receivers without re-implementing the M3
-/// hierarchy walk.
-fn is_bootstrap_chunk_class(class_id: ElementId) -> bool {
-    matches!(
+/// Returns `true` when the receiver class is a "metatype carrier" —
+/// a parametric M3 metaclass that wraps an inner element type
+/// (`Class<T>`, `Enumeration<T>`, `Function<...>`, etc.) — or `Any`.
+/// These receivers participate in runtime reflection that the
+/// compile-time lookup can't yet resolve.
+///
+/// Non-parametric chunk-0 classes (`GenericType`, `Property`, etc.)
+/// are real M3 classes with declared properties — they validate
+/// normally.
+fn is_metatype_carrier(model: &PureModel, class_id: ElementId) -> bool {
+    // `Any` — top type, concrete properties unknown (lambda-param-infers-Any).
+    if class_id == bootstrap::ANY_ID {
+        return true;
+    }
+    // Bootstrap-chunk class with type parameters — Class<T>,
+    // Enumeration<T>, Function<…>, etc. User-defined parametric
+    // classes (Pair<U,V>, List<T>, …) live in chunk 1+ and aren't
+    // captured by this predicate.
+    let is_bootstrap = matches!(
         class_id,
         ElementId::InstanceId {
             chunk_id: crate::bootstrap::BOOTSTRAP_CHUNK_ID,
             ..
         }
+    );
+    if !is_bootstrap {
+        return false;
+    }
+    matches!(
+        model.try_get_element(class_id),
+        Some(Element::Class(c)) if !c.type_parameters.is_empty()
     )
 }
 

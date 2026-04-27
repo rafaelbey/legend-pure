@@ -285,6 +285,60 @@ fn deactivate_property_access_on_collection_rewrites_to_map() {
 }
 
 #[test]
+fn compile_typo_on_generic_type_is_unknown_property() {
+    // User-reported gap: `pair(1,2)->genericType().rawTyp` (typo of
+    // `.rawType`) on a GenericType receiver compiled clean instead of
+    // erroring. The previous skip predicate suppressed validation for
+    // ALL chunk-0 classes — too aggressive for non-parametric M3
+    // classes like `GenericType`, `Property`, `FunctionType`, which
+    // are real types with declared properties.
+    //
+    // Refined predicate: skip only `Any` and parametric M3 metatype
+    // carriers (`Class<T>`, `Enumeration<T>`, `Function<...>`).
+    // `GenericType` is non-parametric — validation now fires.
+    use legend_pure_parser_pure::error::CompilationErrorKind;
+    let source = r"
+        function test::f(): Any[*] {
+            pair(1, 2)->genericType().rawTyp
+        }
+    ";
+    let partial = try_compile_with_platform(source)
+        .expect_err(".rawTyp on a GenericType receiver must produce a compile error");
+    let unknown: Vec<_> = partial
+        .errors
+        .iter()
+        .filter(|e| match &e.kind {
+            CompilationErrorKind::UnknownProperty {
+                type_name,
+                property_name,
+            } => type_name.as_str() == "GenericType" && property_name.as_str() == "rawTyp",
+            _ => false,
+        })
+        .collect();
+    assert_eq!(
+        unknown.len(),
+        1,
+        "expected exactly one `GenericType.rawTyp` UnknownProperty, got: {:?}",
+        partial
+            .errors
+            .iter()
+            .filter(|e| matches!(e.kind, CompilationErrorKind::UnknownProperty { .. }))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn compile_known_property_on_generic_type_compiles_clean() {
+    // Positive regression: the valid `.rawType` access still compiles.
+    let source = r"
+        function test::f(): Any[*] {
+            pair(1, 2)->genericType().rawType
+        }
+    ";
+    try_compile_with_platform(source).expect("`.rawType` on GenericType must compile");
+}
+
+#[test]
 fn deactivate_property_access_func_carries_property_wrapper() {
     // The synthesized Property wrapper on `_func` exposes
     // `name` (the property name) and `_owner` (the receiver class).
