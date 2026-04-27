@@ -172,6 +172,21 @@ impl NativeFunction for SourceInformation {
     ) -> Result<Evaluated, PureException> {
         let values = force_all(args, ctx)?;
         expect_args("sourceInformation", &values, 1)?;
+        // Heap object: read its `sourceInformation` slot directly.
+        // `Copy` populates this slot for instances created via
+        // `^$obj(prop=val)` so the override case can be distinguished
+        // from a no-override `^$obj()` clone — pinned by
+        // `testSourceInformationCopy`. Falls back to Unit when the slot
+        // isn't populated (the default for instances `evaluateAndDeactivate`
+        // wraps without an explicit source attribution).
+        if let Value::Object(obj_id) = &values[0] {
+            let slot = ctx
+                .heap()
+                .get_property_values(*obj_id, "sourceInformation")
+                .ok()
+                .and_then(|vs| vs.iter().next().cloned());
+            return Ok(Evaluated::new(slot.unwrap_or(Value::Unit)));
+        }
         let Value::Element(id) = &values[0] else {
             return Ok(Evaluated::new(Value::Unit));
         };
