@@ -40,15 +40,19 @@ in its crate directory; this file provides the high-level view.
 | Numeric coercion (`Integer` → `Float`) | P3 | Java has implicit widening |
 | Return type influence on dispatch | P3 | Expected return type narrows candidates |
 | Move bootstrap chunk 0 to compile-time | P2 | Saves ~1ms startup |
-| M3 parser completeness (constraints, QPs) | P1 | Missing from `m3_parser.rs` |
-| Unit as child of Measure (canonical M3) | P1 | Currently promoted to package-level |
-| Root package `::` references | P1 | 16 expression lowering errors |
-| Lambda variable scope in expressions | P1 | 6+ errors |
-| Package-as-value references | P1 | 5+ errors |
-| Compilation tracing | P1 | `tracing` instrumentation for pipeline |
+| Unit as child of Measure (canonical M3) | P2 | User-visible `package.children` now excludes Units (Java parity); residual debt is making units indexed only on the Measure internally. |
 | Type inference (bottom-up) | P2 | Pass 2.5 in pipeline |
 | Parallel Pass 2 | P3 | Bodies can be parallelized per-element |
 | Incremental compilation | P3 | Re-resolve only changed chunks |
+| Stress bench `compile/hub_spoke_1k` panics | P2 | `crates/stress/benches/pipeline.rs:343` unwraps a `Result` but the synthesized hub_spoke source emits `plus()` calls that are unresolved without the platform. Either load the platform before benching `compile/*`, or change the hub_spoke generator to avoid platform-only operators. |
+
+### Recently Closed
+- Root package `::` references — `crates/pure/src/resolve.rs:554-585` walks from `model.root_package`; platform compile clean.
+- Lambda variable scope in expressions — `crates/pure/src/infer.rs:46`; tracked through `ResolutionContext.variable_types`.
+- Package-as-value references — same root-walk path; clean platform compile (0 errors / 1338 elements) confirms.
+- `^ClassName<TypeArgs>(props)` constructor — parsed at `crates/parser/src/parser/expression.rs:437-553`.
+- M3 parser completeness (constraints, QPs) — user-class constraints/QPs lower via `pipeline.rs:1602`/`1526`; M3 metamodel reflective props populated directly + via supertype walk. Locked by `crates/pure/tests/m3_class_metaprops.rs`.
+- Compilation tracing — `#[tracing::instrument]` on every pipeline pass plus the existing `resolve_function_call` dispatch log. Locked by `crates/pure/tests/tracing_smoke.rs`.
 
 ---
 

@@ -52,10 +52,17 @@ static _FORMAT: (&str, &dyn NativeFunction) =
 `linkme` 0.3+ is compatible with `#![forbid(unsafe_code)]`.
 `NativeRegistry::build()` just iterates `NATIVES`.
 
-### [P2] Standard registry built into `Evaluator`
-`Evaluator::new` currently requires the caller to build and pass a `NativeRegistry`.
-The standard registry (all built-in natives) should be the default; callers that need
-to extend or override it can supply their own.
+### [P2 — partial] Standard registry built into `Evaluator`
+`Evaluator::new(model, &registry)` still works for callers that already
+build a registry. New code can use **`Evaluator::new_default(model)`**
+(`crates/runtime/src/eval.rs`) which lazily allocates a per-thread
+`NativeRegistry::standard()` and returns the evaluator with no
+explicit registry plumbing. Lock test:
+`evaluator_new_default_uses_standard_registry` in
+`crates/runtime/tests/eval_tests.rs`. Outstanding: migrating the 43
+existing `Evaluator::new(model, &registry)` call sites is purely
+churn — leave them on the explicit form until other work brings
+them through.
 
 ```rust
 // today

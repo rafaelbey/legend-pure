@@ -39,7 +39,7 @@ dependencies, so future contributors know what's safe to pick up.
 | Item | Priority | Status | Notes |
 |---|---|---|---|
 | Move chunk 0 to compile-time | P2 | 🔲 Deferred | Currently built at runtime via `create_bootstrap_chunk()`. Could be a `const` or `lazy_static` built from m3.pure at compile time (build.rs or proc-macro). Saves ~1ms startup per compilation. |
-| M3 parser completeness | P1 | 🔲 Partial | `m3_parser.rs` handles classes/enums/associations from m3.pure. Missing: constraints, qualified properties, derived properties. |
+| M3 parser completeness | P1 | ✅ Done | `m3_parser.rs` handles classes/enums/associations/primitives. User-class constraints flow via `parse_constraints` (`parser/class.rs:54`) → `lower_constraints` (`pipeline.rs:1602`); qualified properties via `parse_class_body` → `lower_qualified_property_bodies`. M3 metamodel reflective properties (`properties`, `qualifiedProperties`, `propertiesFromAssociations`, `typeParameters`, `multiplicityParameters`, etc.) are populated directly on Class and inherited members (`constraints`, `name`, `package`) reach Class via the supertype walk through `ElementWithConstraints`. Locked by `crates/pure/tests/m3_class_metaprops.rs`. "Derived properties" listed in the previous entry was a phantom — Pure has no construct distinct from qualified properties. |
 | M3 property types | P1 | 🔲 Partial | M3 class properties are registered with placeholder `Any` types. Should resolve actual types from m3.pure definitions. |
 
 ---
@@ -48,7 +48,7 @@ dependencies, so future contributors know what's safe to pick up.
 
 | Item | Priority | Status | Notes |
 |---|---|---|---|
-| Unit as child of Measure | P1 | 🔲 Deferred | Units are currently promoted to package-level elements (`Element::Unit`). In M3, they're children of their parent Measure. Resolution uses `Measure~Unit` naming convention which works but is non-canonical. |
+| Unit as child of Measure | P2 | ⚠️ Partial | Reflective `package.children` now skips `Element::Unit` (`crates/runtime/src/eval.rs:1278`) so the user-visible API matches Java semantics. Units are still indexed in the package internally for `Measure~UnitName` type-position resolution; making that fully canonical (units indexed only on `Measure`) is the residual debt. Lock test: `eval_package_children_excludes_units` in `crates/runtime/tests/eval_tests.rs`. Canonical navigation works today via `Measure.canonicalUnit` / `Measure.nonCanonicalUnits` (`eval.rs:1437-1451`). |
 | Unit conversion functions | P2 | 🔲 Deferred | `convert(value, sourceUnit, targetUnit)` — needs conversion factor storage. |
 | Canonical unit references | P1 | 🔲 Deferred | Parser emits `MeasureName~UnitName` for unit refs in expressions. This works for resolution but should follow M3's `Measure.canonicalUnit` pattern. |
 
@@ -58,11 +58,11 @@ dependencies, so future contributors know what's safe to pick up.
 
 | Item | Priority | Status | Notes |
 |---|---|---|---|
-| Root package `::` references | P1 | 🔲 Open | 16 errors. `::meta::pure::...` paths starting with `::` need root-anchored resolution. |
-| Lambda variable scope | P1 | 🔲 Open | 6+ errors. Lambda params (`e`, `d`, etc.) not in variable scope during body lowering. |
-| Package-as-value references | P1 | 🔲 Open | 5+ errors. Qualified package paths used in expression context (e.g., `meta::pure::functions::meta`). |
-| `^ClassName(typeArgs)(props)` constructor | P1 | 🔲 Open | Parse failures. Dual-paren new syntax for classes with type variable constructors. |
-| Variable type tracking | P0 | 🔲 Next | Needed for type dispatch. `HashMap<SmolStr, TypeExpr>` in lowering context. |
+| Root package `::` references | P1 | ✅ Done | Root-anchored resolution lives in `resolve.rs:554-585` (`get_package(model.root_package)` walks). Platform compile clean (0 errors / 1338 elements) confirms `::meta::pure::...` paths resolve. |
+| Lambda variable scope | P1 | ✅ Done | Lambda params extend the active scope in `infer.rs:46`; type-tracked through `ResolutionContext.variable_types`. |
+| Package-as-value references | P1 | ✅ Done | Qualified package paths in expression context resolve through the same root-walk. Verified by clean platform compile. |
+| `^ClassName<TypeArgs>(props)` constructor | P1 | ✅ Done | Parsed in `parser/expression.rs:437-553`; type arguments threaded through to `NewInstanceExpr` so `genericType().typeArguments` reflects bindings at runtime. |
+| Variable type tracking | P0 | ✅ Done | See Function Dispatch table above (`ResolutionContext.variable_types` HashMap). |
 
 ---
 
