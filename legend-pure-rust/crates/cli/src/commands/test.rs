@@ -60,6 +60,12 @@ use legend_pure_runtime::value::{MapState, Value};
 
 use crate::diagnostics::CliError;
 
+#[derive(clap::ValueEnum, Clone, Debug, PartialEq, Eq)]
+pub enum TestMode {
+    Normal,
+    Pct,
+}
+
 /// Arguments for the `legend test` command.
 #[derive(clap::Args)]
 #[allow(clippy::struct_excessive_bools)]
@@ -80,12 +86,10 @@ pub struct TestArgs {
     #[arg(long = "show-detail")]
     pub show_detail: bool,
 
-    /// Run PCT tests (`<<PCT.test>>`-stereotyped) instead of the default
-    /// `<<test.Test>>` surveyor. The adapter is selected via `--adapter`
-    /// (default `"In-Memory"`); a `--manifest <path>` overrides that and
-    /// loads adapter + exclusions from a JSON manifest.
-    #[arg(long)]
-    pub pct: bool,
+    /// The test mode to run (normal, pct). Can be specified multiple times
+    /// (e.g., `--mode normal,pct` or `--mode normal --mode pct`).
+    #[arg(long, value_enum, default_value = "normal", value_delimiter = ',')]
+    pub mode: Vec<TestMode>,
 
     /// PCT adapter name — matched against the `PCT.adapterName` tag of
     /// `<<PCT.adapter>>`-stereotyped functions in the model. Default is
@@ -155,8 +159,17 @@ pub struct TestArgs {
 /// Execute the `legend test` command.
 #[allow(clippy::needless_pass_by_value)] // clap convention
 pub fn run(args: TestArgs) -> Result<(), CliError> {
-    let mode_label = if args.pct { "PCT tests" } else { "tests" };
-    let pct_via = if args.pct {
+    let mode_label = args
+        .mode
+        .iter()
+        .map(|m| match m {
+            TestMode::Normal => "normal tests",
+            TestMode::Pct => "PCT tests",
+        })
+        .collect::<Vec<_>>()
+        .join(" + ");
+        
+    let pct_via = if args.mode.contains(&TestMode::Pct) {
         if let Some(m) = &args.manifest {
             format!(" (manifest: {m})")
         } else {
@@ -183,7 +196,7 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
     let mut _debouncer = None;
 
     loop {
-        let res = run_once(&args, mode_label, &pct_via, dir.as_deref());
+        let res = run_once(&args, &mode_label, &pct_via, dir.as_deref());
 
         if !args.watch {
             return res;
@@ -346,27 +359,32 @@ fn run_tests<'m, H: EvalHooks>(
     evaluator: &mut Evaluator<'m, H>,
     args: &TestArgs,
 ) -> Result<(TestReport, bool), CliError> {
-    let result = if args.pct {
-        run_pct(model, evaluator, args)
-    } else {
-        evaluator.call(
-            "meta::pure::test::surveyor::runTestsFromPath",
-            &[
-                Value::String(args.package.clone().into()),
-                Value::String(args.filter.clone().unwrap_or_default().into()),
-            ],
-        )
-    }
-    .map_err(|e| CliError::Custom(format!("Test execution failed: {e}")))?;
+    let mut combined_report = TestReport::empty();
 
-    let Value::Object(report_id) = result else {
-        return Err(CliError::Custom(format!(
-            "Test surveyor returned non-Object: {result:?}"
-        )));
-    };
-    let report = TestReport::read(evaluator.heap(), report_id)?;
-    let fail = report.fail_count + report.error_count > 0;
-    Ok((report, fail))
+    for mode in &args.mode {
+        let result = match mode {
+            TestMode::Pct => run_pct(model, evaluator, args),
+            TestMode::Normal => evaluator.call(
+                "meta::pure::test::surveyor::runTestsFromPath",
+                &[
+                    Value::String(args.package.clone().into()),
+                    Value::String(args.filter.clone().unwrap_or_default().into()),
+                ],
+            ),
+        }
+        .map_err(|e| CliError::Custom(format!("Test execution failed: {e}")))?;
+
+        let Value::Object(report_id) = result else {
+            return Err(CliError::Custom(format!(
+                "Test surveyor returned non-Object: {result:?}"
+            )));
+        };
+        let report = TestReport::read(evaluator.heap(), report_id)?;
+        combined_report.merge(report);
+    }
+
+    let fail = combined_report.fail_count + combined_report.error_count > 0;
+    Ok((combined_report, fail))
 }
 
 /// Drive the PCT surveyor — either via adapter discovery (default) or via
@@ -458,6 +476,26 @@ enum TestStatus {
 }
 
 impl TestReport {
+    fn empty() -> Self {
+        Self {
+            pass_count: 0,
+            fail_count: 0,
+            error_count: 0,
+            skip_count: 0,
+            total_elapsed_ms: 0,
+            results: Vec::new(),
+        }
+    }
+
+    fn merge(&mut self, mut other: Self) {
+        self.pass_count += other.pass_count;
+        self.fail_count += other.fail_count;
+        self.error_count += other.error_count;
+        self.skip_count += other.skip_count;
+        self.total_elapsed_ms += other.total_elapsed_ms;
+        self.results.append(&mut other.results);
+    }
+
     fn read(heap: &RuntimeHeap, id: ObjectId) -> Result<Self, CliError> {
         let pass_count = read_int_slot(heap, id, "passCount")?;
         let fail_count = read_int_slot(heap, id, "failCount")?;
