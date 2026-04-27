@@ -289,7 +289,7 @@ fn run_once(
         let mut evaluator = Evaluator::with_hooks(&model, &registry, hooks);
 
         let (report, fail) = run_tests(&model, &mut evaluator, args)?;
-        report.render(args.show_detail);
+        report.render(&model, args.show_detail);
 
         // Extract coverage data and generate reports.
         let map = evaluator.into_hooks().into_map();
@@ -326,7 +326,7 @@ fn run_once(
         // Production path — zero-overhead NoOpHooks.
         let mut evaluator = Evaluator::new(&model, &registry);
         let (report, fail) = run_tests(&model, &mut evaluator, args)?;
-        report.render(args.show_detail);
+        report.render(&model, args.show_detail);
 
         if fail {
             Err(CliError::Custom(format!(
@@ -484,14 +484,14 @@ impl TestReport {
         })
     }
 
-    fn render(&self, show_detail: bool) {
+    fn render(&self, model: &PureModel, show_detail: bool) {
         // Per-test lines — always show FAIL / ERROR; show PASS / SKIP only
         // when `--show-detail` is set.
         for r in &self.results {
             match (&r.status, show_detail) {
                 (TestStatus::Pass | TestStatus::Skip, true)
                 | (TestStatus::Fail | TestStatus::Error | TestStatus::Other(_), _) => {
-                    r.render_line();
+                    r.render_line(model);
                 }
                 _ => {}
             }
@@ -550,7 +550,7 @@ impl TestResult {
         }
     }
 
-    fn render_line(&self) {
+    fn render_line(&self, model: &PureModel) {
         let mark = match self.status {
             TestStatus::Pass => "✓".green().to_string(),
             TestStatus::Fail => "✗".red().to_string(),
@@ -558,18 +558,53 @@ impl TestResult {
             TestStatus::Skip => "○".yellow().to_string(),
             TestStatus::Other(_) => "?".dimmed().to_string(),
         };
+
+        let mut fqn_display = self.fqn.clone();
+        let path: Vec<smol_str::SmolStr> =
+            self.fqn.split("::").map(smol_str::SmolStr::new).collect();
+        if let Some(element_id) = model.resolve_function_by_path(&path) {
+            let node = model.get_node(element_id);
+            let si = &node.source_info;
+
+            let source_str = si.source.as_str();
+            let mut real_path = std::path::PathBuf::from(source_str);
+            if source_str.starts_with("/platform/pure/") {
+                if let Ok(dir) = crate::live::resolve_platform_dir(None) {
+                    if let Some(rel_path) = source_str.strip_prefix("/platform/pure/") {
+                        real_path = dir.join(rel_path);
+                    }
+                }
+            }
+
+            let abs_path = crate::diagnostics::canonical_or_original(&real_path);
+            fqn_display = format!(
+                "{} ({}:{}:{})",
+                self.fqn.bold(),
+                abs_path.display(),
+                si.start_line,
+                si.start_column
+            );
+        }
+
         eprintln!(
             "  {mark} {fqn}  {timing}",
-            fqn = self.fqn,
+            fqn = fqn_display,
             timing = format!("({}ms)", self.elapsed_ms).dimmed(),
         );
         if matches!(self.status, TestStatus::Fail | TestStatus::Error)
             && let Some(msg) = &self.message
         {
-            // First non-empty line of the message — full stack traces go to
-            // a future `--full-output` flag.
-            if let Some(first) = msg.lines().map(str::trim_start).find(|l| !l.is_empty()) {
-                eprintln!("    {} {}", "└─".dimmed(), first.dimmed());
+            let mut first = true;
+            for line in msg.lines().map(str::trim_end) {
+                if line.is_empty() {
+                    continue;
+                }
+                if first {
+                    eprintln!("    {} {}", "└─".dimmed(), line.dimmed());
+                    first = false;
+                } else {
+                    eprintln!("       {}", line.dimmed());
+                }
             }
         }
     }
