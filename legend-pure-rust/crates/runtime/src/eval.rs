@@ -609,7 +609,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             for arg in arguments {
                 args.push(self.eval(arg)?);
             }
-            let value = self.call_user_function(element_id, &args, function_name, Some(source_info));
+            let value = self.call_user_function(element_id, &args, function_name, Some(source_info))?;
             // Post-hoc back-fill of `__typeArguments` on the returned
             // heap object using the call's compile-time-substituted
             // return type. Pass 2.5 inference (`infer.rs:432-454`)

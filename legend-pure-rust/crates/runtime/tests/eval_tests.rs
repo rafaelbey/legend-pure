@@ -175,7 +175,7 @@ fn try_compile_with_platform(
 }
 
 #[test]
-fn compile_pair_firstType_is_unknown_property() {
+fn compile_pair_first_type_is_unknown_property() {
     // Locks the user-reported bug: against the platform's `Pair<U,V>` (in
     // anonymousCollections.pure, chunk 1+), accessing the non-existent
     // property `firstType` must produce exactly one `UnknownProperty`
