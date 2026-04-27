@@ -1591,10 +1591,13 @@ fn hydrate_element_to_heap(
             type_info: None,
         };
         let access_spec = ValueSpec {
-            kind: Box::new(ExprKind::PropertyAccess {
-                target: Box::new(target_spec),
-                property: prop.clone(),
-            }),
+            kind: Box::new(ExprKind::PropertyCall(
+                legend_pure_parser_pure::types::FunctionCallData {
+                    function: None,
+                    function_name: prop.clone(),
+                    arguments: vec![target_spec],
+                },
+            )),
             source_info: SourceInfo::new("<copy-hydrate>", 0, 0, 0, 0),
             type_info: None,
         };

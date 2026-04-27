@@ -24,7 +24,7 @@
 use legend_pure_parser_pure::bootstrap;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
-use legend_pure_parser_pure::types::{CallKind, TypeExpr, ValueSpec};
+use legend_pure_parser_pure::types::{FunctionCallData, TypeExpr, ValueSpec};
 use smol_str::SmolStr;
 
 use crate::date::DatePrecision;
@@ -2069,11 +2069,10 @@ fn spec_declared_multiplicity_name(
     ctx: &dyn EvalContextTrait,
 ) -> Option<&'static str> {
     use legend_pure_parser_pure::types::ExprKind;
-    if let ExprKind::FunctionCall {
-        kind: CallKind::Function,
+    if let ExprKind::FunctionCall(FunctionCallData {
         function: Some(fn_id),
         ..
-    } = spec.kind.as_ref()
+    }) = spec.kind.as_ref()
         && let Element::Function(f) = ctx.model().get_element(*fn_id)
     {
         return multiplicity_constant_name(&f.return_multiplicity);
@@ -2241,12 +2240,14 @@ fn infer_spec_static_type(vs: &ValueSpec, ctx: &dyn EvalContextTrait) -> Option<
         ExprKind::DecimalLiteral(_) => Some(bootstrap::DECIMAL_ID),
         ExprKind::StringLiteral(_) => Some(bootstrap::STRING_ID),
         ExprKind::BooleanLiteral(_) => Some(bootstrap::BOOLEAN_ID),
-        ExprKind::FunctionCall {
-            function,
-            function_name,
-            arguments,
-            ..
-        } => infer_function_call_static_type(*function, function_name, arguments, ctx),
+        ExprKind::FunctionCall(data)
+        | ExprKind::PropertyCall(data)
+        | ExprKind::QualifiedPropertyCall(data) => infer_function_call_static_type(
+            data.function,
+            &data.function_name,
+            &data.arguments,
+            ctx,
+        ),
         ExprKind::TypeReference {
             type_expr: TypeExpr::Named { element, .. },
         } => Some(*element),
@@ -2282,145 +2283,10 @@ fn deactivate_spec(
             ctx.heap_mut().mutate_add(obj, "values", &deactivated)?;
             Ok(Value::Object(obj))
         }
-        ExprKind::FunctionCall {
-            kind,
-            function,
-            function_name,
-            arguments,
-        } => {
-            let mut deactivated_args: Vec<Value> = Vec::with_capacity(arguments.len());
-            for arg in arguments {
-                deactivated_args.push(deactivate_spec(arg, ctx)?);
-            }
-            // Populate `genericType` from the call's *static* return
-            // type. For `match([lambda…])` the static type is the
-            // least-upper-bound of every lambda body's return type —
-            // even if the runtime branch that fires has a more
-            // specific type. `testMatchWithMixedReturnType` pins this:
-            // `$f->eval(|^LA_Location(…)->match([… → 'address',
-            // … → 1, … → 'Any1']))` selects the LA_Location branch at
-            // runtime (returning Integer), but the static LUB is Any
-            // (mixing String + Integer), and that's what
-            // `$z.genericType.rawType->toOne()` reads. See
-            // `infer_function_call_static_type`.
-            let static_type = infer_function_call_static_type(
-                function.as_ref().copied(),
-                function_name,
-                arguments,
-                ctx,
-            );
-            let obj = ctx
-                .heap_mut()
-                .alloc_dynamic(crate::m3_paths::SIMPLE_FUNCTION_EXPRESSION);
-            // Mirror Java's `SimpleFunctionExpression` slot conventions:
-            // `_functionName` for ordinary calls, `_propertyName` for
-            // simple property access, `_qualifiedPropertyName` for QP
-            // invocation. The slot population is what platform
-            // reflection (`$f.propertyName.values->toOne()`,
-            // `Automap.getAutoMapExpressionSequence`, …) reads back.
-            //
-            // For Property/QP kinds we also synthesize a `Property` /
-            // `QualifiedProperty` heap wrapper for the `func` slot so
-            // `$f.func.name` / `$f.func._owner` reflect what they would
-            // in Java. The wrapper carries `_owner` (the receiver
-            // class) and `name`; richer slots (classifierGenericType,
-            // multiplicity) are populated by the existing
-            // `eval_class_member_collection` helper which we'll factor
-            // out in a follow-up.
-            let property_slot = match kind {
-                CallKind::Function => "functionName",
-                CallKind::Property => "propertyName",
-                CallKind::QualifiedProperty => "qualifiedPropertyName",
-            };
-            // Java wraps the property name as an InstanceValue with
-            // `_values = [<name string>]`; for `_functionName` it's a
-            // bare String. Match both.
-            match kind {
-                CallKind::Function => {
-                    ctx.heap_mut().mutate_add(
-                        obj,
-                        property_slot,
-                        &[Value::String(function_name.clone())],
-                    )?;
-                }
-                CallKind::Property | CallKind::QualifiedProperty => {
-                    let iv = ctx
-                        .heap_mut()
-                        .alloc_dynamic(crate::m3_paths::INSTANCE_VALUE);
-                    ctx.heap_mut().mutate_add(
-                        iv,
-                        "values",
-                        &[Value::String(function_name.clone())],
-                    )?;
-                    ctx.heap_mut()
-                        .mutate_add(obj, property_slot, &[Value::Object(iv)])?;
-                }
-            }
-            if let Some(fn_id) = function {
-                ctx.heap_mut()
-                    .mutate_add(obj, "func", &[Value::Element(*fn_id)])?;
-                // Populate `multiplicity` from the resolved function's
-                // declared return multiplicity. The platform tests
-                // (testToOneMultiplicity / testToOneManyMultiplicity) read
-                // `evaluateAndDeactivate(SFE).multiplicity` and expect the
-                // *declared* return multiplicity (PureOne for `toOne`,
-                // OneMany for `toOneMany`), not the runtime cardinality of
-                // the result. Java Pure populates this slot from the
-                // function's GenericType.multiplicityArguments at compile
-                // time; we mirror it by reading return_multiplicity off
-                // the resolved Function element here.
-                let mult_name = match ctx.model().get_element(*fn_id) {
-                    Element::Function(f) => multiplicity_constant_name(&f.return_multiplicity),
-                    _ => None,
-                };
-                if let Some(name) = mult_name
-                    && let Some(mult_id) = resolve_multiplicity_constant(ctx.model(), name)
-                {
-                    ctx.heap_mut()
-                        .mutate_add(obj, "multiplicity", &[Value::Element(mult_id)])?;
-                }
-            } else if matches!(kind, CallKind::Property | CallKind::QualifiedProperty) {
-                // Synthesize a Property heap wrapper for `func` so
-                // metamodel reflection (`$f.func.name`,
-                // `$f.func._owner`) succeeds. The receiver class is
-                // read from arguments[0]'s inferred type_info,
-                // populated by Pass 2.5 inference. Falls through silently
-                // if type_info is absent (the SFE still has a
-                // _propertyName slot, just no func; same shape Java
-                // produces when post-processing skips an unresolved
-                // case).
-                if let Some(receiver) = arguments.first()
-                    && let Some(rt) = receiver.type_info.as_deref()
-                    && let legend_pure_parser_pure::types::TypeExpr::Named { element: cls, .. } =
-                        &rt.type_expr
-                {
-                    let prop_classifier = match kind {
-                        CallKind::Property => crate::m3_paths::PROPERTY,
-                        CallKind::QualifiedProperty => crate::m3_paths::QUALIFIED_PROPERTY,
-                        CallKind::Function => unreachable!(),
-                    };
-                    let prop_obj = ctx.heap_mut().alloc_dynamic(prop_classifier);
-                    ctx.heap_mut()
-                        .mutate_add(prop_obj, "_owner", &[Value::Element(*cls)])?;
-                    ctx.heap_mut().mutate_add(
-                        prop_obj,
-                        "name",
-                        &[Value::String(function_name.clone())],
-                    )?;
-                    ctx.heap_mut()
-                        .mutate_add(obj, "func", &[Value::Object(prop_obj)])?;
-                }
-            }
-            ctx.heap_mut()
-                .mutate_add(obj, "parametersValues", &deactivated_args)?;
-            if let Some(type_id) = static_type {
-                let gt = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
-                ctx.heap_mut()
-                    .mutate_add(gt, "rawType", &[Value::Element(type_id)])?;
-                ctx.heap_mut()
-                    .mutate_add(obj, "genericType", &[Value::Object(gt)])?;
-            }
-            Ok(Value::Object(obj))
+        ExprKind::FunctionCall(data) => deactivate_call(ctx, data, DeactivateCallShape::Function),
+        ExprKind::PropertyCall(data) => deactivate_call(ctx, data, DeactivateCallShape::Property),
+        ExprKind::QualifiedPropertyCall(data) => {
+            deactivate_call(ctx, data, DeactivateCallShape::QualifiedProperty)
         }
         // All other kinds (literals, lambda, property access, etc.) — wrap
         // the evaluated value as an `InstanceValue`. The evaluated value
@@ -2459,6 +2325,129 @@ fn deactivate_spec(
             Ok(Value::Object(obj))
         }
     }
+}
+
+/// Discriminator for the three call-shaped variants when reified into a
+/// `SimpleFunctionExpression`. Mirrors Java's `_functionName` /
+/// `_propertyName` / `_qualifiedPropertyName` slots.
+#[derive(Debug, Clone, Copy)]
+enum DeactivateCallShape {
+    Function,
+    Property,
+    QualifiedProperty,
+}
+
+/// Reify a call-shaped IR variant into a `SimpleFunctionExpression`
+/// heap object. Shape-dependent slot population:
+///   `Function`           → `_functionName` (bare String)
+///   `Property`           → `_propertyName` (InstanceValue wrapping String)
+///   `QualifiedProperty`  → `_qualifiedPropertyName` (InstanceValue wrapping String)
+///
+/// For Property/QP without a resolved `func` element, synthesizes a
+/// `Property` / `QualifiedProperty` heap wrapper so reflection like
+/// `$f.func.name` and `$f.func._owner` succeeds. The wrapper carries
+/// `_owner` (the receiver class) and `name`. Receiver class is read
+/// from `arguments[0].type_info`, populated by Pass 2.5 inference.
+#[allow(clippy::result_large_err)]
+fn deactivate_call(
+    ctx: &mut dyn EvalContextTrait,
+    data: &legend_pure_parser_pure::types::FunctionCallData,
+    shape: DeactivateCallShape,
+) -> Result<Value, PureException> {
+    let mut deactivated_args: Vec<Value> = Vec::with_capacity(data.arguments.len());
+    for arg in &data.arguments {
+        deactivated_args.push(deactivate_spec(arg, ctx)?);
+    }
+    // Static return-type for the SFE's `genericType` slot — see the
+    // long-form rationale in the previous flat impl. Same for all three
+    // shapes; the helper computes it from the (function, args) pair.
+    let static_type =
+        infer_function_call_static_type(data.function, &data.function_name, &data.arguments, ctx);
+    let obj = ctx
+        .heap_mut()
+        .alloc_dynamic(crate::m3_paths::SIMPLE_FUNCTION_EXPRESSION);
+    let property_slot = match shape {
+        DeactivateCallShape::Function => "functionName",
+        DeactivateCallShape::Property => "propertyName",
+        DeactivateCallShape::QualifiedProperty => "qualifiedPropertyName",
+    };
+    match shape {
+        DeactivateCallShape::Function => {
+            ctx.heap_mut().mutate_add(
+                obj,
+                property_slot,
+                &[Value::String(data.function_name.clone())],
+            )?;
+        }
+        DeactivateCallShape::Property | DeactivateCallShape::QualifiedProperty => {
+            // Java wraps the property name as an InstanceValue with
+            // `_values = [<name string>]`.
+            let iv = ctx
+                .heap_mut()
+                .alloc_dynamic(crate::m3_paths::INSTANCE_VALUE);
+            ctx.heap_mut().mutate_add(
+                iv,
+                "values",
+                &[Value::String(data.function_name.clone())],
+            )?;
+            ctx.heap_mut()
+                .mutate_add(obj, property_slot, &[Value::Object(iv)])?;
+        }
+    }
+    if let Some(fn_id) = data.function {
+        ctx.heap_mut()
+            .mutate_add(obj, "func", &[Value::Element(fn_id)])?;
+        // Populate `multiplicity` from the resolved function's declared
+        // return multiplicity (testToOneMultiplicity reads this slot).
+        let mult_name = match ctx.model().get_element(fn_id) {
+            Element::Function(f) => multiplicity_constant_name(&f.return_multiplicity),
+            _ => None,
+        };
+        if let Some(name) = mult_name
+            && let Some(mult_id) = resolve_multiplicity_constant(ctx.model(), name)
+        {
+            ctx.heap_mut()
+                .mutate_add(obj, "multiplicity", &[Value::Element(mult_id)])?;
+        }
+    } else if matches!(
+        shape,
+        DeactivateCallShape::Property | DeactivateCallShape::QualifiedProperty
+    ) {
+        // Synthesize a Property / QualifiedProperty heap wrapper for
+        // `func` so reflection like `$f.func.name` and
+        // `$f.func._owner` succeeds.
+        if let Some(receiver) = data.arguments.first()
+            && let Some(rt) = receiver.type_info.as_deref()
+            && let legend_pure_parser_pure::types::TypeExpr::Named { element: cls, .. } =
+                &rt.type_expr
+        {
+            let prop_classifier = match shape {
+                DeactivateCallShape::Property => crate::m3_paths::PROPERTY,
+                DeactivateCallShape::QualifiedProperty => crate::m3_paths::QUALIFIED_PROPERTY,
+                DeactivateCallShape::Function => unreachable!(),
+            };
+            let prop_obj = ctx.heap_mut().alloc_dynamic(prop_classifier);
+            ctx.heap_mut()
+                .mutate_add(prop_obj, "_owner", &[Value::Element(*cls)])?;
+            ctx.heap_mut().mutate_add(
+                prop_obj,
+                "name",
+                &[Value::String(data.function_name.clone())],
+            )?;
+            ctx.heap_mut()
+                .mutate_add(obj, "func", &[Value::Object(prop_obj)])?;
+        }
+    }
+    ctx.heap_mut()
+        .mutate_add(obj, "parametersValues", &deactivated_args)?;
+    if let Some(type_id) = static_type {
+        let gt = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
+        ctx.heap_mut()
+            .mutate_add(gt, "rawType", &[Value::Element(type_id)])?;
+        ctx.heap_mut()
+            .mutate_add(obj, "genericType", &[Value::Object(gt)])?;
+    }
+    Ok(Value::Object(obj))
 }
 
 /// Pure `openVariableValues(f:Function<Any>[1]):Map<String, List<Any>>[1]`

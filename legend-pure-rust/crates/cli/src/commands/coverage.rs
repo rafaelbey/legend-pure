@@ -415,16 +415,16 @@ impl CoverageMap {
 
         // Check for branch-producing function calls and recurse.
         match &*expr.kind {
-            ExprKind::FunctionCall {
-                function_name,
-                arguments,
-                ..
-            } => {
+            ExprKind::FunctionCall(data) => {
                 // Register branch points for `if` and `match`.
-                if function_name == "if" || function_name == "match" {
-                    self.register_branches(&expr.source_info, function_name.as_str(), arguments);
+                if data.function_name == "if" || data.function_name == "match" {
+                    self.register_branches(
+                        &expr.source_info,
+                        data.function_name.as_str(),
+                        &data.arguments,
+                    );
                 }
-                for arg in arguments {
+                for arg in &data.arguments {
                     self.walk_expr_coverable(arg);
                 }
             }
@@ -438,14 +438,8 @@ impl CoverageMap {
                     self.walk_expr_coverable(e);
                 }
             }
-            ExprKind::PropertyAccess { target, .. } => {
-                self.walk_expr_coverable(target);
-            }
-            ExprKind::QualifiedPropertyAccess {
-                target, arguments, ..
-            } => {
-                self.walk_expr_coverable(target);
-                for arg in arguments {
+            ExprKind::PropertyCall(data) | ExprKind::QualifiedPropertyCall(data) => {
+                for arg in &data.arguments {
                     self.walk_expr_coverable(arg);
                 }
             }
