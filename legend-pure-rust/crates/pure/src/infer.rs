@@ -36,7 +36,7 @@ use crate::error::{CompilationError, CompilationErrorKind};
 use crate::ids::ElementId;
 use crate::model::{Element, PureModel};
 use crate::types::{
-    DateValue, ExprKind, Multiplicity, Parameter, ResolvedType, TypeExpr, ValueSpec,
+    CallKind, DateValue, ExprKind, Multiplicity, Parameter, ResolvedType, TypeExpr, ValueSpec,
 };
 
 // ---------------------------------------------------------------------------
@@ -169,66 +169,85 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
         ExprKind::Variable { name } => ctx.lookup_var(name).cloned(),
 
         // -- Function call --------------------------------------------------
+        //
+        // `kind` dispatches:
+        //   `Function`           — overload-by-signature dispatch via
+        //                          `infer_function_call`.
+        //   `Property`           — `arguments[0]` is the receiver and
+        //                          `function_name` is the property name;
+        //                          delegate to `infer_simple_property`.
+        //   `QualifiedProperty`  — `arguments[0]` is the receiver,
+        //                          `arguments[1..]` are the QP args;
+        //                          delegate to `infer_qualified_property`.
+        //
+        // The kind-Property and kind-QualifiedProperty branches share
+        // their lookup helpers with the legacy
+        // `ExprKind::PropertyAccess` / `ExprKind::QualifiedPropertyAccess`
+        // arms below — both consume the same `PropertyLookup` shape.
         ExprKind::FunctionCall {
+            kind,
             function,
             function_name,
             arguments,
-            ..
-        } => {
-            // Infer argument types first (bottom-up)
-            let arg_types: Vec<Option<ResolvedType>> =
-                arguments.iter_mut().map(|a| infer_expr(ctx, a)).collect();
+        } => match kind {
+            CallKind::Function => {
+                // Infer argument types first (bottom-up)
+                let arg_types: Vec<Option<ResolvedType>> =
+                    arguments.iter_mut().map(|a| infer_expr(ctx, a)).collect();
 
-            // Extract let name from AST before calling inference
-            let let_name = if function_name == "letFunction" && arguments.len() == 2 {
-                if let ExprKind::StringLiteral(name) = &*arguments[0].kind {
-                    Some((name, &arguments[0].source_info))
+                // Extract let name from AST before calling inference
+                let let_name = if function_name == "letFunction" && arguments.len() == 2 {
+                    if let ExprKind::StringLiteral(name) = &*arguments[0].kind {
+                        Some((name, &arguments[0].source_info))
+                    } else {
+                        None
+                    }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
 
-            let result = infer_function_call(ctx, *function, function_name, let_name, &arg_types);
-            return set_and_return(expr, result);
-        }
+                let result =
+                    infer_function_call(ctx, *function, function_name, let_name, &arg_types);
+                return set_and_return(expr, result);
+            }
+            CallKind::Property => {
+                // arguments[0] is the receiver; no further args.
+                let arg_types: Vec<Option<ResolvedType>> =
+                    arguments.iter_mut().map(|a| infer_expr(ctx, a)).collect();
+                let target_type = arg_types.first().and_then(|t| t.as_ref());
+                let result =
+                    infer_simple_property(ctx, target_type, function_name, &expr.source_info);
+                return set_and_return(expr, result);
+            }
+            CallKind::QualifiedProperty => {
+                // arguments[0] is the receiver; arguments[1..] are the
+                // QP arguments.
+                let arg_types: Vec<Option<ResolvedType>> =
+                    arguments.iter_mut().map(|a| infer_expr(ctx, a)).collect();
+                let target_type = arg_types.first().and_then(|t| t.as_ref());
+                let (qp_args, qp_arg_types): (&[ValueSpec], &[Option<ResolvedType>]) =
+                    if arguments.is_empty() {
+                        (&[], &[])
+                    } else {
+                        (&arguments[1..], &arg_types[1..])
+                    };
+                let result = infer_qualified_property(
+                    ctx,
+                    target_type,
+                    function_name,
+                    qp_args,
+                    qp_arg_types,
+                    &expr.source_info,
+                );
+                return set_and_return(expr, result);
+            }
+        },
 
         // -- Property access ------------------------------------------------
         ExprKind::PropertyAccess { target, property } => {
             let target_type = infer_expr(ctx, target);
-            let lookup = infer_property_access(ctx, target_type.as_ref(), property);
-            let result = match lookup {
-                PropertyLookup::FoundProperty(rt) => Some(rt),
-                PropertyLookup::FoundQualifiedProperties(mut candidates) => {
-                    // No-paren property access on a QP — pick the 0-arg
-                    // overload if one exists; otherwise return the first
-                    // candidate's return type without firing arity errors
-                    // (mirrors the prior best-effort behaviour for `obj.qp`
-                    // when qp expects args).
-                    let idx = candidates
-                        .iter()
-                        .position(|c| c.parameters.is_empty())
-                        .unwrap_or(0);
-                    let chosen = candidates.swap_remove(idx);
-                    Some(chosen.return_type)
-                }
-                PropertyLookup::NotFound { type_name } => {
-                    ctx.errors.push(CompilationError {
-                        message: format!(
-                            "The property '{property}' can't be found in the type \
-                             '{type_name}' (or any supertype)"
-                        ),
-                        source_info: expr.source_info.clone(),
-                        kind: CompilationErrorKind::UnknownProperty {
-                            type_name,
-                            property_name: property.clone(),
-                        },
-                    });
-                    None
-                }
-                PropertyLookup::UnknownTarget => None,
-            };
+            let result =
+                infer_simple_property(ctx, target_type.as_ref(), property, &expr.source_info);
             return set_and_return(expr, result);
         }
 
@@ -242,41 +261,14 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
             // Infer argument types first so we can validate them.
             let arg_types: Vec<Option<ResolvedType>> =
                 arguments.iter_mut().map(|a| infer_expr(ctx, a)).collect();
-
-            let lookup = infer_property_access(ctx, target_type.as_ref(), property);
-            let result = match lookup {
-                PropertyLookup::FoundQualifiedProperties(candidates) => {
-                    Some(resolve_qualified_property_overload(
-                        ctx,
-                        candidates,
-                        property,
-                        arguments,
-                        &arg_types,
-                        &expr.source_info,
-                    ))
-                }
-                PropertyLookup::FoundProperty(rt) => {
-                    // QP-style call against a regular property — the
-                    // runtime would error; treat the property's type as
-                    // the result and let runtime surface the mismatch.
-                    Some(rt)
-                }
-                PropertyLookup::NotFound { type_name } => {
-                    ctx.errors.push(CompilationError {
-                        message: format!(
-                            "The property '{property}' can't be found in the type \
-                             '{type_name}' (or any supertype)"
-                        ),
-                        source_info: expr.source_info.clone(),
-                        kind: CompilationErrorKind::UnknownProperty {
-                            type_name,
-                            property_name: property.clone(),
-                        },
-                    });
-                    None
-                }
-                PropertyLookup::UnknownTarget => None,
-            };
+            let result = infer_qualified_property(
+                ctx,
+                target_type.as_ref(),
+                property,
+                arguments,
+                &arg_types,
+                &expr.source_info,
+            );
             return set_and_return(expr, result);
         }
 
@@ -585,6 +577,107 @@ struct QpCandidate {
     bindings: HashMap<SmolStr, TypeExpr>,
     /// Receiver class name (for diagnostics).
     receiver_type_name: SmolStr,
+}
+
+/// Inference helper for simple property access (`$x.name`). Shared by
+/// the legacy `ExprKind::PropertyAccess` arm and the new
+/// `ExprKind::FunctionCall { kind: CallKind::Property, .. }` arm.
+///
+/// Looks up `property_name` on `target_type`'s class (and supertypes /
+/// associations); emits `UnknownProperty` if not found and the receiver
+/// isn't a bootstrap-chunk metatype. For QP overloads matched by name
+/// (no-paren property access on a 0-arg QP), picks the 0-arg
+/// candidate's return type.
+fn infer_simple_property(
+    ctx: &mut InferCtx<'_>,
+    target_type: Option<&ResolvedType>,
+    property: &SmolStr,
+    expr_source_info: &legend_pure_parser_ast::SourceInfo,
+) -> Option<ResolvedType> {
+    let lookup = infer_property_access(ctx, target_type, property);
+    match lookup {
+        PropertyLookup::FoundProperty(rt) => Some(rt),
+        PropertyLookup::FoundQualifiedProperties(mut candidates) => {
+            // No-paren property access on a QP — pick the 0-arg
+            // overload if one exists; otherwise return the first
+            // candidate's return type without firing arity errors
+            // (mirrors the prior best-effort behaviour for `obj.qp`
+            // when qp expects args).
+            let idx = candidates
+                .iter()
+                .position(|c| c.parameters.is_empty())
+                .unwrap_or(0);
+            let chosen = candidates.swap_remove(idx);
+            Some(chosen.return_type)
+        }
+        PropertyLookup::NotFound { type_name } => {
+            ctx.errors.push(CompilationError {
+                message: format!(
+                    "The property '{property}' can't be found in the type \
+                     '{type_name}' (or any supertype)"
+                ),
+                source_info: expr_source_info.clone(),
+                kind: CompilationErrorKind::UnknownProperty {
+                    type_name,
+                    property_name: property.clone(),
+                },
+            });
+            None
+        }
+        PropertyLookup::UnknownTarget => None,
+    }
+}
+
+/// Inference helper for qualified property invocation
+/// (`$x.qp(arg1, arg2)`). Shared by the legacy
+/// `ExprKind::QualifiedPropertyAccess` arm and the new
+/// `ExprKind::FunctionCall { kind: CallKind::QualifiedProperty, .. }` arm.
+///
+/// Performs the same overload-by-arity resolution and per-argument
+/// type/multiplicity validation as the legacy path.
+/// `qp_arguments` and `qp_arg_types` exclude the receiver.
+fn infer_qualified_property(
+    ctx: &mut InferCtx<'_>,
+    target_type: Option<&ResolvedType>,
+    property: &SmolStr,
+    qp_arguments: &[ValueSpec],
+    qp_arg_types: &[Option<ResolvedType>],
+    expr_source_info: &legend_pure_parser_ast::SourceInfo,
+) -> Option<ResolvedType> {
+    let lookup = infer_property_access(ctx, target_type, property);
+    match lookup {
+        PropertyLookup::FoundQualifiedProperties(candidates) => {
+            Some(resolve_qualified_property_overload(
+                ctx,
+                candidates,
+                property,
+                qp_arguments,
+                qp_arg_types,
+                expr_source_info,
+            ))
+        }
+        PropertyLookup::FoundProperty(rt) => {
+            // QP-style call against a regular property — the runtime
+            // would error; treat the property's type as the result and
+            // let runtime surface the mismatch.
+            Some(rt)
+        }
+        PropertyLookup::NotFound { type_name } => {
+            ctx.errors.push(CompilationError {
+                message: format!(
+                    "The property '{property}' can't be found in the type \
+                     '{type_name}' (or any supertype)"
+                ),
+                source_info: expr_source_info.clone(),
+                kind: CompilationErrorKind::UnknownProperty {
+                    type_name,
+                    property_name: property.clone(),
+                },
+            });
+            None
+        }
+        PropertyLookup::UnknownTarget => None,
+    }
 }
 
 /// Resolves `target.property` against the type model.

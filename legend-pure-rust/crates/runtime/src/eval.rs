@@ -53,7 +53,7 @@ use std::collections::HashMap;
 use im_rc::Vector as PVector;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
-use legend_pure_parser_pure::types::{DateValue, ExprKind, TypeExpr, ValueSpec};
+use legend_pure_parser_pure::types::{CallKind, DateValue, ExprKind, TypeExpr, ValueSpec};
 use smol_str::SmolStr;
 
 use crate::context::VariableContext;
@@ -231,12 +231,49 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 .map_err(PureException::from),
 
             // -- Function call (the most complex case) --------------------
+            //
+            // Dispatches on `kind`:
+            //   `Function`           — overload-resolved call; existing
+            //                          `eval_function_call` path.
+            //   `Property`           — `arguments[0]` is the receiver and
+            //                          `function_name` is the property
+            //                          name; route to `eval_property_access`.
+            //   `QualifiedProperty`  — `arguments[0]` is the receiver,
+            //                          `arguments[1..]` are the QP args;
+            //                          route to `eval_qualified_property`.
+            //
+            // Pre-migration (commits 1–2) lowering still produces the
+            // standalone `PropertyAccess` / `QualifiedPropertyAccess`
+            // IR, so the kind-Property / kind-QualifiedProperty arms
+            // here are reachable only after commit 3 swings the
+            // lowering. They land first so each commit keeps PCT green.
             ExprKind::FunctionCall {
+                kind,
                 function,
                 function_name,
                 arguments,
-                ..
-            } => self.eval_function_call(*function, function_name, arguments, &expr.source_info),
+            } => match kind {
+                CallKind::Function => {
+                    self.eval_function_call(*function, function_name, arguments, &expr.source_info)
+                }
+                CallKind::Property => {
+                    debug_assert!(
+                        arguments.len() == 1,
+                        "Property-kind FunctionCall must have exactly one argument (the receiver)"
+                    );
+                    self.eval_property_access(&arguments[0], function_name)
+                }
+                CallKind::QualifiedProperty => {
+                    debug_assert!(
+                        !arguments.is_empty(),
+                        "QualifiedProperty-kind FunctionCall must carry a receiver in arguments[0]"
+                    );
+                    let (receiver, qp_args) = arguments.split_first().unwrap_or_else(|| {
+                        unreachable!("split_first guarded by debug_assert above")
+                    });
+                    self.eval_qualified_property(receiver, function_name, qp_args)
+                }
+            },
 
             // -- Property access ------------------------------------------
             ExprKind::PropertyAccess { target, property } => {
