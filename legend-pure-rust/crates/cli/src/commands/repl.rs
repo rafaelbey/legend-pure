@@ -86,7 +86,10 @@ pub fn run(_args: ReplArgs) -> Result<(), CliError> {
 
     // Collect the platform source pairs for re-use in every compile cycle.
     let platform = sources::platform_sources();
-    let platform_pairs: Vec<(&str, &str)> = platform.iter().map(|s| (s.content, s.path)).collect();
+    let mut platform_pairs: Vec<(&str, &str)> =
+        platform.iter().map(|s| (s.content, s.path)).collect();
+    let repl_helper = "function meta::pure::functions::string::__repl_toString(v: Any[1]): String[1] { $v->toString() }";
+    platform_pairs.push((repl_helper, "<repl_helper>"));
 
     print_banner();
 
@@ -220,7 +223,7 @@ pub fn run(_args: ReplArgs) -> Result<(), CliError> {
 
         match evaluator.call(&fn_name, &[]) {
             Ok(value) => {
-                print_value(&value);
+                print_value(&value, &mut evaluator);
                 // If the input was a `let`, persist it.
                 if is_let {
                     let_bindings.push(trimmed.to_string());
@@ -286,7 +289,19 @@ fn build_body(let_bindings: &[String], current: &str) -> String {
 }
 
 /// Pretty-print a Pure value with colors.
-fn print_value(value: &Value) {
+fn print_value(value: &Value, evaluator: &mut Evaluator) {
+    let format_clean = |v: &Value, eval: &mut Evaluator| -> String {
+        if matches!(v, Value::Object(_) | Value::Element(_))
+            && let Ok(Value::String(s)) = eval.call(
+                "meta::pure::functions::string::__repl_toString_Any_1__String_1_",
+                std::slice::from_ref(v),
+            )
+        {
+            return s.to_string();
+        }
+        format!("{v}")
+    };
+
     match value {
         Value::Unit => {
             eprintln!("  {}", "=> ()".dimmed());
@@ -321,7 +336,11 @@ fn print_value(value: &Value) {
             if items.is_empty() {
                 eprintln!("  {} {}", "=>".green().bold(), "[]".dimmed());
             } else {
-                let parts: Vec<String> = items.iter().take(20).map(|v| format!("{v}")).collect();
+                let parts: Vec<String> = items
+                    .iter()
+                    .take(20)
+                    .map(|v| format_clean(v, evaluator))
+                    .collect();
                 let suffix = if items.len() > 20 {
                     format!(", ... ({} more)", items.len() - 20)
                 } else {
@@ -335,7 +354,11 @@ fn print_value(value: &Value) {
         }
         // Fallback: use Display for Objects, Maps, Functions, Elements, etc.
         other => {
-            eprintln!("  {} {}", "=>".green().bold(), other,);
+            eprintln!(
+                "  {} {}",
+                "=>".green().bold(),
+                format_clean(other, evaluator),
+            );
         }
     }
 }
