@@ -105,7 +105,7 @@ pub fn print_error(error: &CliError) {
 
 /// Resolves a path to its canonical (absolute) form, falling back to
 /// the original path if canonicalization fails (e.g., the file was deleted).
-fn canonical_or_original(path: &std::path::Path) -> std::path::PathBuf {
+pub fn canonical_or_original(path: &std::path::Path) -> std::path::PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
