@@ -196,51 +196,25 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
             return set_and_return(expr, result);
         }
 
-        // -- Property call (`$x.name`) -------------------------------------
+        // -- Property / qualified-property call ----------------------------
         //
-        // `arguments[0]` is the receiver; resolution is class-property
-        // lookup, not function dispatch. Mirrors Java's
-        // `SimpleFunctionExpression` with `_propertyName` set.
-        ExprKind::PropertyCall(FunctionCallData {
-            function_name,
-            arguments,
-            ..
-        }) => {
-            let arg_types: Vec<Option<ResolvedType>> =
-                arguments.iter_mut().map(|a| infer_expr(ctx, a)).collect();
-            let target_type = arg_types.first().and_then(|t| t.as_ref());
-            let result = infer_simple_property(ctx, target_type, function_name, &expr.source_info);
-            return set_and_return(expr, result);
-        }
-
-        // -- Qualified property call (`$x.qp(args)`) -----------------------
+        // `arguments[0]` is the receiver; for QP, `arguments[1..]` are
+        // the QP arguments. Resolution is class-property lookup, not
+        // function dispatch. Mirrors Java's `SimpleFunctionExpression`
+        // with `_propertyName` / `_qualifiedPropertyName` set.
         //
-        // `arguments[0]` is the receiver; `arguments[1..]` are the QP
-        // arguments. Performs overload-by-arity resolution and per-arg
-        // type/multiplicity validation.
-        ExprKind::QualifiedPropertyCall(FunctionCallData {
-            function_name,
-            arguments,
-            ..
-        }) => {
-            let arg_types: Vec<Option<ResolvedType>> =
-                arguments.iter_mut().map(|a| infer_expr(ctx, a)).collect();
-            let target_type = arg_types.first().and_then(|t| t.as_ref());
-            let (qp_args, qp_arg_types): (&[ValueSpec], &[Option<ResolvedType>]) =
-                if arguments.is_empty() {
-                    (&[], &[])
-                } else {
-                    (&arguments[1..], &arg_types[1..])
-                };
-            let result = infer_qualified_property(
-                ctx,
-                target_type,
-                function_name,
-                qp_args,
-                qp_arg_types,
-                &expr.source_info,
-            );
-            return set_and_return(expr, result);
+        // **Automap rewrite (Java parity).** When the receiver
+        // multiplicity is NOT strictly `[1..1]` — i.e., `[0..1]`,
+        // `[*]`, `[1..*]`, or any non-unit `Range` — we rewrite in
+        // place to `map(receiver, λ{v_automap | property_call(v_automap, ...)})`.
+        // Mirrors `FunctionExpressionProcessor.reprocessPropertyForManySources`
+        // which uses `isToOne(mult, true)` strict on the receiver.
+        // The synthetic lambda parameter is named `v_automap` (same
+        // sentinel Java uses) so downstream tooling that wants to
+        // unwrap the synthetic shape (`Automap.getAutoMapExpressionSequence`,
+        // milestoning, class projection) sees the marker.
+        ExprKind::PropertyCall(_) | ExprKind::QualifiedPropertyCall(_) => {
+            return infer_property_or_qp_call(ctx, expr);
         }
 
         // -- Enum value -----------------------------------------------------
@@ -554,6 +528,236 @@ struct QpCandidate {
 /// the legacy `ExprKind::PropertyAccess` arm and the new
 /// `ExprKind::PropertyCall(FunctionCallData { .. })` arm.
 ///
+/// Infers a `PropertyCall` or `QualifiedPropertyCall` expression in
+/// place, performing the Java-parity automap rewrite when the receiver
+/// is not strictly `[1..1]`.
+///
+/// Steps:
+/// 1. Take ownership of the expression's `FunctionCallData` via
+///    `mem::replace` so we can mutate `expr.kind` later without
+///    borrow conflicts.
+/// 2. Infer all argument types bottom-up.
+/// 3. Resolve the property's return type via `infer_simple_property`
+///    or `infer_qualified_property` (handles UnknownProperty errors,
+///    QP arity + arg-type validation, etc.).
+/// 4. If the receiver multiplicity is non-strictly-toOne, rewrite
+///    `expr.kind` to a `map(receiver, λ{v_automap | property(v_automap, ...)})`
+///    call and return the rewritten map's resolved type.
+/// 5. Otherwise restore the original `PropertyCall` /
+///    `QualifiedPropertyCall` variant and return the property's type
+///    directly.
+fn infer_property_or_qp_call(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedType> {
+    // Step 1: take the data out so we can later mutate `expr.kind`.
+    let is_qualified = matches!(&*expr.kind, ExprKind::QualifiedPropertyCall(_));
+    let placeholder = ExprKind::IntegerLiteral(0);
+    let kind = std::mem::replace(&mut *expr.kind, placeholder);
+    let mut data = match kind {
+        ExprKind::PropertyCall(d) | ExprKind::QualifiedPropertyCall(d) => d,
+        _ => unreachable!("matched on PropertyCall/QualifiedPropertyCall above"),
+    };
+
+    // Step 2: infer argument types (bottom-up, mutates the args).
+    let arg_types: Vec<Option<ResolvedType>> = data
+        .arguments
+        .iter_mut()
+        .map(|a| infer_expr(ctx, a))
+        .collect();
+    let target_type: Option<ResolvedType> = arg_types.first().cloned().flatten();
+
+    // Step 3: resolve property's return type.
+    let property_return_type = if is_qualified {
+        let (qp_args, qp_arg_types): (&[ValueSpec], &[Option<ResolvedType>]) =
+            if data.arguments.is_empty() {
+                (&[], &[])
+            } else {
+                (&data.arguments[1..], &arg_types[1..])
+            };
+        infer_qualified_property(
+            ctx,
+            target_type.as_ref(),
+            &data.function_name,
+            qp_args,
+            qp_arg_types,
+            &expr.source_info,
+        )
+    } else {
+        infer_simple_property(
+            ctx,
+            target_type.as_ref(),
+            &data.function_name,
+            &expr.source_info,
+        )
+    };
+
+    // Step 4: maybe rewrite to automap.
+    if let (Some(rt), Some(tt)) = (property_return_type.as_ref(), target_type.as_ref())
+        && !is_strictly_to_one(&tt.multiplicity)
+    {
+        let map_kind = build_automap_rewrite(
+            ctx.model,
+            data,
+            tt,
+            rt,
+            is_qualified,
+            expr.source_info.clone(),
+        );
+        let map_result_type = ResolvedType {
+            type_expr: rt.type_expr.clone(),
+            multiplicity: multiply_multiplicities(&tt.multiplicity, &rt.multiplicity),
+        };
+        *expr.kind = map_kind;
+        return set_and_return(expr, Some(map_result_type));
+    }
+
+    // Step 5: restore the original variant.
+    *expr.kind = if is_qualified {
+        ExprKind::QualifiedPropertyCall(data)
+    } else {
+        ExprKind::PropertyCall(data)
+    };
+    set_and_return(expr, property_return_type)
+}
+
+/// Returns `true` when the multiplicity is strictly `[1..1]` — the only
+/// shape that AVOIDS automap rewrite. `[0..1]`, `[*]`, `[1..*]`, and
+/// any non-unit `Range` all return `false`. Mirrors Java's
+/// `Multiplicity.isToOne(mult, true)` strict check.
+fn is_strictly_to_one(m: &Multiplicity) -> bool {
+    match m {
+        Multiplicity::PureOne => true,
+        Multiplicity::Range {
+            lower: 1,
+            upper: Some(1),
+        } => true,
+        _ => false,
+    }
+}
+
+/// Multiplies two multiplicities to produce the result of `map(coll: T[m], λ: T[1] → U[n]): U[m*n]`.
+fn multiply_multiplicities(a: &Multiplicity, b: &Multiplicity) -> Multiplicity {
+    let bounds = |m: &Multiplicity| -> (u32, u32) {
+        match m {
+            Multiplicity::PureOne => (1, 1),
+            Multiplicity::ZeroOrOne => (0, 1),
+            Multiplicity::ZeroOrMany => (0, u32::MAX),
+            Multiplicity::OneOrMany => (1, u32::MAX),
+            Multiplicity::Range { lower, upper } => (*lower, upper.unwrap_or(u32::MAX)),
+            Multiplicity::Variable(_) => (0, u32::MAX),
+        }
+    };
+    let (a_lo, a_hi) = bounds(a);
+    let (b_lo, b_hi) = bounds(b);
+    let lo = a_lo.saturating_mul(b_lo);
+    let hi = if a_hi == u32::MAX || b_hi == u32::MAX {
+        u32::MAX
+    } else {
+        a_hi.saturating_mul(b_hi)
+    };
+    match (lo, hi) {
+        (1, 1) => Multiplicity::PureOne,
+        (0, 1) => Multiplicity::ZeroOrOne,
+        (1, u32::MAX) => Multiplicity::OneOrMany,
+        (0, u32::MAX) => Multiplicity::ZeroOrMany,
+        (l, u) if u == u32::MAX => Multiplicity::Range {
+            lower: l,
+            upper: None,
+        },
+        (l, u) => Multiplicity::Range {
+            lower: l,
+            upper: Some(u),
+        },
+    }
+}
+
+/// Builds the `map(receiver, λ{v_automap | property_call(v_automap, ...)})`
+/// expression that replaces a property/QP call on a non-toOne receiver.
+/// Mirrors Java's `FunctionExpressionProcessor.buildLambdaForMapWithProperty`.
+fn build_automap_rewrite(
+    model: &PureModel,
+    mut data: FunctionCallData,
+    target_type: &ResolvedType,
+    property_return_type: &ResolvedType,
+    is_qualified: bool,
+    source_info: legend_pure_parser_ast::SourceInfo,
+) -> ExprKind {
+    // Receiver-element type (multiplicity stripped to [1]).
+    let elem_type_expr = target_type.type_expr.clone();
+
+    // Take the receiver out of `data.arguments`; remaining entries
+    // are QP arguments (empty for simple property access).
+    let receiver = data.arguments.remove(0);
+    let qp_args = data.arguments;
+    let property_name = data.function_name;
+
+    // `v_automap` parameter expression — sentinel name matches Java's
+    // `Automap.AUTOMAP_LAMBDA_VARIABLE_NAME`.
+    let v_automap_name = SmolStr::new("v_automap");
+    let v_automap_var = ValueSpec {
+        kind: Box::new(ExprKind::Variable {
+            name: v_automap_name.clone(),
+        }),
+        source_info: source_info.clone(),
+        type_info: Some(Box::new(ResolvedType {
+            type_expr: elem_type_expr.clone(),
+            multiplicity: Multiplicity::PureOne,
+        })),
+    };
+
+    // Lambda body: `v_automap.<property>(...)` — same shape as the
+    // original call, just with the receiver replaced by v_automap.
+    let mut body_args = Vec::with_capacity(qp_args.len() + 1);
+    body_args.push(v_automap_var);
+    body_args.extend(qp_args);
+    let body_call_data = FunctionCallData {
+        function: None,
+        function_name: property_name,
+        arguments: body_args,
+    };
+    let body_kind = if is_qualified {
+        ExprKind::QualifiedPropertyCall(body_call_data)
+    } else {
+        ExprKind::PropertyCall(body_call_data)
+    };
+    let body_spec = ValueSpec {
+        kind: Box::new(body_kind),
+        source_info: source_info.clone(),
+        type_info: Some(Box::new(property_return_type.clone())),
+    };
+
+    // Lambda: single parameter `v_automap: <elem>[1]`.
+    let lambda_param = Parameter {
+        name: v_automap_name,
+        type_expr: elem_type_expr,
+        multiplicity: Multiplicity::PureOne,
+        source_info: source_info.clone(),
+    };
+    let lambda_spec = ValueSpec {
+        kind: Box::new(ExprKind::Lambda {
+            parameters: vec![lambda_param],
+            body: vec![body_spec],
+        }),
+        source_info: source_info.clone(),
+        type_info: None,
+    };
+
+    // Resolve `meta::pure::functions::collection::map`. Returns None if
+    // the platform isn't loaded — leaves `function: None` and lets
+    // downstream resolution surface the issue.
+    let map_id = model.resolve_by_path(&[
+        SmolStr::new("meta"),
+        SmolStr::new("pure"),
+        SmolStr::new("functions"),
+        SmolStr::new("collection"),
+        SmolStr::new("map"),
+    ]);
+
+    ExprKind::FunctionCall(FunctionCallData {
+        function: map_id,
+        function_name: SmolStr::new("map"),
+        arguments: vec![receiver, lambda_spec],
+    })
+}
+
 /// Looks up `property_name` on `target_type`'s class (and supertypes /
 /// associations); emits `UnknownProperty` if not found and the receiver
 /// isn't a bootstrap-chunk metatype. For QP overloads matched by name
