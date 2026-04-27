@@ -1110,7 +1110,7 @@ fn substitute_class_generics(
 ///
 /// Compatible means: same type, or `arg_type` is a subtype of `param_type`.
 /// Returns true if we can't determine (either side is `None`/`Any`/generic).
-fn is_type_compatible(
+pub(crate) fn is_type_compatible(
     arg_type: Option<ElementId>,
     param_type: &crate::types::TypeExpr,
     model: &crate::model::PureModel,
@@ -1626,7 +1626,7 @@ pub(crate) fn substitute_mult(
 /// Compatible means: the arg's multiplicity fits within the param's range.
 /// `[1]` fits into `[0..1]`, `[0..1]`, `[1..*]`, `[*]`.
 /// `[*]` only fits into `[*]`.
-fn is_multiplicity_compatible(
+pub(crate) fn is_multiplicity_compatible(
     arg_mult: Option<&crate::types::Multiplicity>,
     param_mult: &crate::types::Multiplicity,
 ) -> bool {

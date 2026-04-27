@@ -157,6 +157,66 @@ fn compile_with_platform(user_source: &str) -> PureModel {
 }
 
 // ===========================================================================
+// 0. Compile-time property validation against the loaded platform
+// ===========================================================================
+
+/// Re-runs platform compile WITHOUT swallowing errors, so the test can
+/// assert on the error set. Mirrors `compile_with_platform` but returns
+/// the `PartialPureModel` directly when compilation produces errors.
+fn try_compile_with_platform(
+    user_source: &str,
+) -> Result<PureModel, legend_pure_parser_pure::pipeline::PartialPureModel> {
+    let fixture = platform_model();
+    let user_ast = legend_pure_parser_parser::parse(user_source, "<test>")
+        .unwrap_or_else(|e| panic!("Parse error: {e:?}"));
+    let mut all_files: Vec<_> = fixture.parsed_files.clone();
+    all_files.push(user_ast);
+    legend_pure_parser_pure::pipeline::compile(&all_files, &fixture.auto_imports)
+}
+
+#[test]
+fn compile_pair_firstType_is_unknown_property() {
+    // Locks the user-reported bug: against the platform's `Pair<U,V>` (in
+    // anonymousCollections.pure, chunk 1+), accessing the non-existent
+    // property `firstType` must produce exactly one `UnknownProperty`
+    // error. The valid sibling `pair(1,3).first` still compiles cleanly
+    // (separate test below).
+    use legend_pure_parser_pure::error::CompilationErrorKind;
+    let source = "function test::f(): Any[*] { pair(1, 3).firstType }";
+    let partial = try_compile_with_platform(source)
+        .expect_err("missing property `firstType` must produce a compile error");
+    let unknown_on_pair: Vec<_> = partial
+        .errors
+        .iter()
+        .filter(|e| match &e.kind {
+            CompilationErrorKind::UnknownProperty {
+                type_name,
+                property_name,
+            } => type_name.as_str() == "Pair" && property_name.as_str() == "firstType",
+            _ => false,
+        })
+        .collect();
+    assert_eq!(
+        unknown_on_pair.len(),
+        1,
+        "expected exactly one `Pair.firstType` UnknownProperty, got: {:?}",
+        partial
+            .errors
+            .iter()
+            .filter(|e| matches!(e.kind, CompilationErrorKind::UnknownProperty { .. }))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn compile_pair_first_compiles_clean() {
+    // Positive regression for the user-reported bug: the valid sibling
+    // `pair(1,3).first` must still compile (no UnknownProperty fires).
+    let source = "function test::f(): Integer[1] { pair(1, 3).first }";
+    try_compile_with_platform(source).expect("valid `Pair.first` must still compile");
+}
+
+// ===========================================================================
 // 1. Literals
 // ===========================================================================
 

@@ -1722,3 +1722,235 @@ fn compile_let_shadows_function_parameter() {
     ));
     assert_eq!(partial.errors[0].message, "'x' has already been defined!");
 }
+
+// ---------------------------------------------------------------------------
+// Property-access compile-time validation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn unknown_property_error() {
+    use legend_pure_parser_pure::error::CompilationErrorKind;
+
+    let source = r"
+        Class test::P { first: Integer[1]; }
+        function test::f(p: test::P[1]): Any[*] { $p.firstType }
+    ";
+    let result = compile_one(source);
+    let partial = result.expect_err("missing property must produce a compile error");
+    let unknown: Vec<_> = partial
+        .errors
+        .iter()
+        .filter(|e| matches!(e.kind, CompilationErrorKind::UnknownProperty { .. }))
+        .collect();
+    assert_eq!(
+        unknown.len(),
+        1,
+        "expected exactly one UnknownProperty error, got {:?}",
+        partial.errors
+    );
+    match &unknown[0].kind {
+        CompilationErrorKind::UnknownProperty {
+            type_name,
+            property_name,
+        } => {
+            assert_eq!(type_name.as_str(), "P");
+            assert_eq!(property_name.as_str(), "firstType");
+        }
+        _ => unreachable!(),
+    }
+    assert!(
+        unknown[0]
+            .message
+            .contains("'firstType' can't be found in the type 'P'"),
+        "diagnostic message should mention property and type, got: {}",
+        unknown[0].message
+    );
+}
+
+#[test]
+fn known_property_compiles_clean() {
+    // Regression guard: the new UnknownProperty check must not fire on
+    // valid property access. We deliberately don't assert on the
+    // substituted concrete type — generic substitution for property
+    // types is a separate latent bug; this test only locks the error
+    // does NOT fire.
+    let source = r"
+        Class test::P { first: Integer[1]; }
+        function test::f(p: test::P[1]): Integer[1] { $p.first }
+    ";
+    let model = compile_one(source).expect("valid property access must compile");
+    let id = model
+        .resolve_function_by_path(&["test".into(), "f".into()])
+        .expect("f should exist");
+    if let Element::Function(f) = model.get_element(id) {
+        assert_eq!(f.body.len(), 1);
+        assert!(
+            f.body[0].type_info.is_some(),
+            "type_info must be populated for valid property access"
+        );
+    } else {
+        panic!("expected Function");
+    }
+}
+
+#[test]
+fn qualified_property_arity_mismatch_error() {
+    use legend_pure_parser_pure::error::CompilationErrorKind;
+
+    let source = r"
+        Class test::C
+        {
+            qp(x: Integer[1], y: Integer[1]) { $x }: Integer[1];
+        }
+        function test::f(c: test::C[1]): Integer[1] { $c.qp(1) }
+    ";
+    let result = compile_one(source);
+    let partial = result.expect_err("wrong QP arity must produce a compile error");
+    let arity: Vec<_> = partial
+        .errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                CompilationErrorKind::QualifiedPropertyArityMismatch { .. }
+            )
+        })
+        .collect();
+    assert_eq!(
+        arity.len(),
+        1,
+        "expected exactly one arity-mismatch error, got: {:?}",
+        partial.errors
+    );
+    match &arity[0].kind {
+        CompilationErrorKind::QualifiedPropertyArityMismatch {
+            type_name,
+            property_name,
+            expected,
+            actual,
+        } => {
+            assert_eq!(type_name.as_str(), "C");
+            assert_eq!(property_name.as_str(), "qp");
+            assert_eq!(*expected, 2);
+            assert_eq!(*actual, 1);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn qualified_property_arg_type_mismatch_error() {
+    use legend_pure_parser_pure::error::CompilationErrorKind;
+
+    let source = r"
+        Class test::C
+        {
+            qp(x: Integer[1], y: Integer[1]) { $x }: Integer[1];
+        }
+        function test::f(c: test::C[1]): Integer[1] { $c.qp(1, 'two') }
+    ";
+    let result = compile_one(source);
+    let partial = result.expect_err("wrong QP arg type must produce a compile error");
+    let mismatches: Vec<_> = partial
+        .errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                CompilationErrorKind::QualifiedPropertyArgTypeMismatch { .. }
+            )
+        })
+        .collect();
+    assert_eq!(
+        mismatches.len(),
+        1,
+        "expected exactly one arg-type mismatch, got: {:?}",
+        partial.errors
+    );
+    match &mismatches[0].kind {
+        CompilationErrorKind::QualifiedPropertyArgTypeMismatch {
+            type_name,
+            property_name,
+            param_index,
+            param_name,
+            ..
+        } => {
+            assert_eq!(type_name.as_str(), "C");
+            assert_eq!(property_name.as_str(), "qp");
+            assert_eq!(*param_index, 1);
+            assert_eq!(param_name.as_str(), "y");
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn qualified_property_arg_multiplicity_mismatch_error() {
+    use legend_pure_parser_pure::error::CompilationErrorKind;
+
+    let source = r"
+        Class test::C
+        {
+            qp(x: Integer[1]) { $x }: Integer[1];
+        }
+        function test::f(c: test::C[1]): Integer[1] { $c.qp([1, 2, 3]) }
+    ";
+    let result = compile_one(source);
+    let partial = result.expect_err("wrong QP arg multiplicity must produce a compile error");
+    let mismatches: Vec<_> = partial
+        .errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                CompilationErrorKind::QualifiedPropertyArgTypeMismatch { .. }
+            )
+        })
+        .collect();
+    assert_eq!(
+        mismatches.len(),
+        1,
+        "expected exactly one multiplicity mismatch, got: {:?}",
+        partial.errors
+    );
+    match &mismatches[0].kind {
+        CompilationErrorKind::QualifiedPropertyArgTypeMismatch { param_index, .. } => {
+            assert_eq!(*param_index, 0);
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn qualified_property_overload_resolves_correctly() {
+    // Mirrors `MyClassWithTypeVariables.res()` / `.res('z')` from the
+    // platform: two QP overloads with the same name, distinguished by
+    // arity. Both forms must compile cleanly.
+    let source = r"
+        Class test::C
+        {
+            qp() { 'zero' }: String[1];
+            qp(z: String[1]) { $z }: String[1];
+        }
+        function test::f(c: test::C[1]): String[1] { $c.qp() }
+        function test::g(c: test::C[1]): String[1] { $c.qp('hi') }
+    ";
+    compile_one(source).expect("QP overloads must resolve cleanly");
+}
+
+#[test]
+fn association_injected_property_resolves() {
+    // Regression guard for the early-freeze pipeline change: the
+    // association-injected property must be visible to the
+    // property-access lookup at inference time. Before the freeze move
+    // (`rebuild_derived_indexes` ran AFTER `pass_infer`), the
+    // association-properties index was empty during inference and the
+    // navigation property would fail with `UnknownProperty`.
+    let source = r"
+        Class test::Person { firstName: String[1]; }
+        Class test::Firm { name: String[1]; }
+        Association test::Employment { employer: test::Firm[1]; employee: test::Person[*]; }
+        function test::f(p: test::Person[1]): test::Firm[1] { $p.employer }
+    ";
+    compile_one(source).expect("association-injected property must resolve");
+}

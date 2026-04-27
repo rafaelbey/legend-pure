@@ -187,11 +187,17 @@ pub fn compile(
     // NOTE: Function name mangling happens at declaration time (Pass 1).
     // Elements are registered with their mangled names from the start.
 
+    // ---- Freeze (early) ----
+    // Rebuild derived indexes BEFORE inference so the
+    // association-injected property index is visible to
+    // property-access lookup. Inference only writes
+    // `expr.type_info` and never mutates the structural data the
+    // indexes are derived from, so a single rebuild here covers
+    // both inference and validation.
+    model.rebuild_derived_indexes();
+
     // ---- Pass 2.5: Type Inference ----
     pass_infer(&mut model, &mut errors);
-
-    // ---- Freeze ----
-    model.rebuild_derived_indexes();
 
     // ---- Pass 3: Validation ----
     errors.extend(crate::validate::validate(&model));
