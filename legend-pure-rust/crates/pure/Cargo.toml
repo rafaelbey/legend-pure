@@ -30,3 +30,4 @@ tracing = { workspace = true }
 [dev-dependencies]
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-core-platform = { path = "../core-platform-pure" }
+tracing-subscriber = { workspace = true }

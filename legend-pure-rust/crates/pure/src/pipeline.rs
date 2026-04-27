@@ -88,6 +88,12 @@ pub struct PartialPureModel {
 /// - `Err(PartialPureModel)` — errors occurred, but the model is still
 ///   available via [`PartialPureModel::model`] for diagnostics / LSP
 #[allow(clippy::result_large_err)] // Ok(PureModel) is equally large — intentional API
+#[tracing::instrument(
+    level = "info",
+    name = "compile",
+    skip_all,
+    fields(n_source_files = source_files.len()),
+)]
 pub fn compile(
     source_files: &[SourceFile],
     auto_imports: &[SmolStr],
@@ -435,6 +441,12 @@ fn resolve_m3_supertypes(model: &mut PureModel) {
     }
 }
 
+#[tracing::instrument(
+    level = "info",
+    name = "pass_declare",
+    skip_all,
+    fields(n_source_files = source_files.len()),
+)]
 fn pass_declare(
     source_files: &[SourceFile],
     model: &mut PureModel,
@@ -640,6 +652,12 @@ fn allocate_unit_shells(
 /// Pass 1.5 — builds a dependency DAG from supertypes and sorts via Kahn's algorithm.
 ///
 /// Returns an ordered list of element IDs safe for definition.
+#[tracing::instrument(
+    level = "info",
+    name = "pass_topo_sort",
+    skip_all,
+    fields(n_declarations = declarations.len()),
+)]
 fn pass_topo_sort(
     declarations: &HashMap<SmolStr, Vec<Declaration>>,
     source_files: &[SourceFile],
@@ -746,6 +764,12 @@ fn extract_hard_dependencies(
 /// EXCEPT function expression bodies. Returns the lookup maps and caches
 /// for reuse in Pass 2b.
 #[allow(clippy::type_complexity)]
+#[tracing::instrument(
+    level = "info",
+    name = "pass_define_signatures",
+    skip_all,
+    fields(n_sorted = sorted.len()),
+)]
 fn pass_define_signatures<'a>(
     sorted: &[ElementId],
     source_files: &[SourceFile],
@@ -852,6 +876,12 @@ fn pass_define_signatures<'a>(
 /// `pass_define_class_bodies` can reuse the populated import scopes and
 /// resolve memos.
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    level = "info",
+    name = "pass_define_bodies",
+    skip_all,
+    fields(n_sorted = sorted.len()),
+)]
 fn pass_define_bodies(
     sorted: &[ElementId],
     source_files: &[SourceFile],
@@ -945,6 +975,12 @@ fn pass_define_bodies(
 /// proportional to the number of constraints / QP bodies / default values
 /// in the program, not the total element count.
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    level = "info",
+    name = "pass_define_class_bodies",
+    skip_all,
+    fields(n_sorted = sorted.len()),
+)]
 fn pass_define_class_bodies(
     sorted: &[ElementId],
     source_files: &[SourceFile],
@@ -1683,6 +1719,7 @@ fn get_ast_element<'a>(source_files: &'a [SourceFile], decl: &Declaration) -> &'
 ///
 /// For each function, infers types for every expression in the body and sets
 /// `type_info` on each expression node in place.
+#[tracing::instrument(level = "info", name = "pass_infer", skip_all)]
 fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
     use crate::infer;
 
