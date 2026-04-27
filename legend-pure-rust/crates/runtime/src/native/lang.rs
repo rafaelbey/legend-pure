@@ -295,6 +295,7 @@ impl NativeFunction for New {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
+        let _frame = ConstructionFrame::enter();
         let values = force_all(args, ctx)?;
         if values.len() < 2 {
             return Err(PureRuntimeError::EvaluationError(format!(
@@ -354,14 +355,19 @@ impl NativeFunction for New {
         }
         let triples: Vec<(SmolStr, Vec<Value>, bool)> =
             triples_from_flat_kv_stream(&values[kvs_offset..])?;
-        finish_construction(
+        let result = finish_construction(
             ctx,
             class_id,
             &type_args,
             &type_var_values,
             &triples,
             /*lambda_shortcut_args*/ Some(&values[kvs_offset..]),
-        )
+        )?;
+        // Outermost-frame validation drain happens here, before frame
+        // exits via Drop — so any pending validation surfaces as the
+        // ?-propagated error from this top-level call.
+        ConstructionFrame::drain_if_outermost(ctx)?;
+        Ok(result)
     }
 
     fn signature(&self) -> &'static str {
@@ -394,6 +400,7 @@ impl NativeFunction for NewWithKeyExpressions {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
+        let _frame = ConstructionFrame::enter();
         let values = force_all(args, ctx)?;
         if values.len() < 2 {
             return Err(PureRuntimeError::EvaluationError(format!(
@@ -429,14 +436,16 @@ impl NativeFunction for NewWithKeyExpressions {
             Vec::new()
         };
         let triples = decode_key_expressions(ctx, key_expr_id, &key_expr_payload)?;
-        finish_construction(
+        let result = finish_construction(
             ctx,
             class_id,
             &type_args,
             &Vec::new(),
             &triples,
             /*lambda_shortcut_args*/ None,
-        )
+        )?;
+        ConstructionFrame::drain_if_outermost(ctx)?;
+        Ok(result)
     }
 
     fn signature(&self) -> &'static str {
@@ -599,6 +608,23 @@ fn triples_from_flat_kv_stream(
     Ok(out)
 }
 
+// Construction-depth tracking — used to defer required-property
+// validation until the OUTERMOST construction completes. When
+// `^Car(owner=^Owner(...))` evaluates, the inner Owner finishes
+// first; at that point its association-injected `car` property is
+// still empty because the parent Car's `populate_association_inverses`
+// hasn't run yet. Validating eagerly there would false-positive on
+// legitimate nested construction (`testNewWithReverseOneToOneProperty`).
+// Java Pure interpreted defers validation to the same point.
+//
+// Push every constructed object's (id, class) pair to `PENDING_VALIDATIONS`
+// during nested calls; drain + validate when depth returns to 0.
+thread_local! {
+    static CONSTRUCTION_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static PENDING_VALIDATIONS: std::cell::RefCell<Vec<(ObjectId, ElementId)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Shared tail of both `New` overloads. Allocates the heap object,
 /// applies type-arg + type-var-value metadata, applies the property
 /// triples, fires off association inverse propagation, and evaluates
@@ -657,8 +683,200 @@ fn finish_construction(
         flat.push(Value::Boolean(*a));
     }
     populate_association_inverses(ctx, obj, class_id, &flat)?;
+    // Defer property-cardinality validation to the outermost level —
+    // depth tracking lives in `New::execute` / `NewWithKeyExpressions::
+    // execute` / `DynamicNew::execute`, which wrap the entire arg-
+    // evaluation + construction call. See CONSTRUCTION_DEPTH comment.
+    PENDING_VALIDATIONS.with(|p| p.borrow_mut().push((obj, class_id)));
     evaluate_class_constraints(ctx, class_id, obj, type_var_values)?;
     Ok(Evaluated::new(Value::Object(obj)))
+}
+
+/// RAII guard that brackets a top-level constructor call (`New`,
+/// `NewWithKeyExpressions`, `DynamicNew`) — increments the construction
+/// depth on entry, decrements on Drop. Combined with
+/// [`ConstructionFrame::drain_if_outermost`] this defers required-property
+/// validation until the outermost call finishes evaluating its (possibly
+/// nested) arguments.
+///
+/// Inner `^Class(...)` expressions are pre-evaluated by `force_all` BEFORE
+/// the outer `finish_construction` runs, so the depth must be tracked at
+/// the native-execute boundary, not inside `finish_construction`.
+struct ConstructionFrame;
+
+impl ConstructionFrame {
+    fn enter() -> Self {
+        CONSTRUCTION_DEPTH.with(|d| d.set(d.get() + 1));
+        ConstructionFrame
+    }
+
+    /// If we are about to leave the outermost frame, drain
+    /// [`PENDING_VALIDATIONS`] and run [`validate_required_properties`] on
+    /// every collected `(obj, class_id)`. Call this right before the
+    /// guard goes out of scope so any validation failure propagates as
+    /// the native's return value (Drop can't return errors).
+    #[allow(clippy::result_large_err)]
+    fn drain_if_outermost(ctx: &mut dyn EvalContextTrait) -> Result<(), PureException> {
+        let depth = CONSTRUCTION_DEPTH.with(std::cell::Cell::get);
+        if depth == 1 {
+            let pending: Vec<(ObjectId, ElementId)> =
+                PENDING_VALIDATIONS.with(|p| std::mem::take(&mut *p.borrow_mut()));
+            for (obj, cid) in pending {
+                validate_required_properties(ctx, obj, cid)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ConstructionFrame {
+    fn drop(&mut self) {
+        CONSTRUCTION_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        // If we exited the outermost frame on an error path that didn't
+        // call drain_if_outermost, the pending list is now stale — clear
+        // it so it doesn't leak into the next top-level call.
+        if CONSTRUCTION_DEPTH.with(std::cell::Cell::get) == 0 {
+            PENDING_VALIDATIONS.with(|p| p.borrow_mut().clear());
+        }
+    }
+}
+
+/// Extract the upper bound of a [`Multiplicity`], or `None` for
+/// unbounded multiplicities (`[*]`, `[N..*]`, unbound variable).
+fn mult_upper_bound(m: &legend_pure_parser_pure::types::Multiplicity) -> Option<u32> {
+    use legend_pure_parser_pure::types::Multiplicity;
+    match m {
+        Multiplicity::PureOne | Multiplicity::ZeroOrOne => Some(1),
+        Multiplicity::OneOrMany | Multiplicity::ZeroOrMany | Multiplicity::Variable(_) => None,
+        Multiplicity::Range { upper, .. } => *upper,
+    }
+}
+
+/// Render a multiplicity as `[1]`, `[0..1]`, `[1..*]`, `[N..M]`, `[*]` —
+/// matches the Java Pure error messages pinned by
+/// `testNewWithChildWithMismatchedReverseOneToOneProperty`.
+fn format_mult_bounds(m: &legend_pure_parser_pure::types::Multiplicity) -> String {
+    use legend_pure_parser_pure::types::Multiplicity;
+    match m {
+        Multiplicity::PureOne => "[1]".into(),
+        Multiplicity::ZeroOrOne => "[0..1]".into(),
+        Multiplicity::OneOrMany => "[1..*]".into(),
+        Multiplicity::ZeroOrMany => "[*]".into(),
+        Multiplicity::Range { lower, upper } => match upper {
+            Some(u) if u == lower => format!("[{lower}]"),
+            Some(u) => format!("[{lower}..{u}]"),
+            None => format!("[{lower}..*]"),
+        },
+        Multiplicity::Variable(name) => format!("[{name}]"),
+    }
+}
+
+/// Render the inner part of a multiplicity (without surrounding brackets)
+/// for the "requires N value(s)" error fragment pinned by
+/// `testNewWithMissingOneToOneProperty` / `…OneToManyProperty`.
+fn format_mult_text(m: &legend_pure_parser_pure::types::Multiplicity) -> String {
+    use legend_pure_parser_pure::types::Multiplicity;
+    match m {
+        Multiplicity::PureOne => "1".into(),
+        Multiplicity::ZeroOrOne => "0..1".into(),
+        Multiplicity::OneOrMany => "1..*".into(),
+        Multiplicity::ZeroOrMany => "*".into(),
+        Multiplicity::Range { lower, upper } => match upper {
+            Some(u) if u == lower => format!("{lower}"),
+            Some(u) => format!("{lower}..{u}"),
+            None => format!("{lower}..*"),
+        },
+        Multiplicity::Variable(name) => name.to_string(),
+    }
+}
+
+/// Walk the class's own + inherited properties (regular + association-
+/// injected) and verify that every property with `lower_bound > 0` has
+/// at least that many values on the populated heap object. Aggregates
+/// all violations into one Java-parity error message — pinned by
+/// `testNewWithMissingOneToOneProperty` and `…OneToManyProperty`.
+#[allow(clippy::result_large_err)]
+fn validate_required_properties(
+    ctx: &mut dyn EvalContextTrait,
+    obj: ObjectId,
+    class_id: ElementId,
+) -> Result<(), PureException> {
+    use legend_pure_parser_pure::types::{Multiplicity, TypeExpr};
+
+    let mut violations: Vec<String> = Vec::new();
+    let mut visited: std::collections::HashSet<ElementId> = std::collections::HashSet::new();
+    // Snapshot of all (property name, multiplicity, source class) — collected
+    // first against an immutable model borrow, then validated against the
+    // heap (which may need a mut borrow if get_property_values caches).
+    let mut to_check: Vec<(SmolStr, Multiplicity)> = Vec::new();
+    {
+        let model = ctx.model();
+        let mut stack: Vec<ElementId> = vec![class_id];
+        while let Some(cid) = stack.pop() {
+            if !visited.insert(cid) {
+                continue;
+            }
+            if let Element::Class(c) = model.get_element(cid) {
+                for prop in &c.properties {
+                    to_check.push((prop.name.clone(), prop.multiplicity.clone()));
+                }
+                for st in &c.super_types {
+                    if let TypeExpr::Named { element, .. } = st {
+                        stack.push(*element);
+                    }
+                }
+            }
+            // Association-injected properties pointing AT this class — the
+            // INJECTED side (the one visible on this class) is at index
+            // `1 - prop_idx_pointing_to_self`.
+            for (assoc_id, prop_idx_pointing_to_self) in model.association_properties(cid) {
+                if let Element::Association(assoc) = model.get_element(*assoc_id)
+                    && assoc.properties.len() == 2
+                {
+                    let injected = &assoc.properties[1 - prop_idx_pointing_to_self];
+                    to_check.push((injected.name.clone(), injected.multiplicity.clone()));
+                }
+            }
+        }
+    }
+
+    for (name, mult) in &to_check {
+        let lower: u32 = match mult {
+            Multiplicity::PureOne | Multiplicity::OneOrMany => 1,
+            Multiplicity::Range { lower, .. } => *lower,
+            Multiplicity::ZeroOrOne | Multiplicity::ZeroOrMany | Multiplicity::Variable(_) => 0,
+        };
+        if lower == 0 {
+            continue;
+        }
+        let count = ctx
+            .heap()
+            .get_property_values(obj, name.as_str())
+            .map(|vs| u32::try_from(vs.len()).unwrap_or(u32::MAX))
+            .unwrap_or(0);
+        if count < lower {
+            let value_word = if matches!(mult, Multiplicity::PureOne) {
+                "value"
+            } else {
+                "values"
+            };
+            violations.push(format!(
+                "'{name}' requires {} {value_word}, got {count}",
+                format_mult_text(mult)
+            ));
+        }
+    }
+
+    if violations.is_empty() {
+        return Ok(());
+    }
+    let class_simple = class_fqn(ctx.model(), class_id);
+    let class_simple = class_simple.rsplit("::").next().unwrap_or(&class_simple);
+    Err(PureRuntimeError::EvaluationError(format!(
+        "Error instantiating class '{class_simple}'.  The following properties have multiplicity violations: {}",
+        violations.join(", ")
+    ))
+    .into())
 }
 
 /// Apply each `(name, values, augmented)` triple to the heap object
@@ -892,6 +1110,7 @@ impl NativeFunction for DynamicNew {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
+        let _frame = ConstructionFrame::enter();
         let values = force_all(args, ctx)?;
         if values.len() < 2 {
             return Err(PureRuntimeError::EvaluationError(format!(
@@ -1086,6 +1305,14 @@ impl NativeFunction for DynamicNew {
         // `<T|m>` arguments are supplied).
         evaluate_class_constraints(ctx, class_id, obj, &[])?;
 
+        // NOTE: `dynamicNew` is intentionally permissive about missing
+        // required properties — `testCyclicalReferencesAreNotImplicit`
+        // pins this by constructing `CyclicalF` without its required `g`
+        // and asserting `$f1.g == []`. We still drain pending
+        // validations from any nested `^Class(...)` invocations the args
+        // produced; the dynamicNew-allocated object itself is NOT pushed.
+        ConstructionFrame::drain_if_outermost(ctx)?;
+
         Ok(Evaluated::new(Value::Object(obj)))
     }
 
@@ -1200,6 +1427,9 @@ fn populate_association_inverses(
                 continue;
             }
             let inverse_name = assoc.properties[*prop_idx_pointing_to_self].name.clone();
+            let inverse_mult = assoc.properties[*prop_idx_pointing_to_self]
+                .multiplicity
+                .clone();
 
             let targets: Vec<ObjectId> = match &assigned {
                 Value::Object(id) => vec![*id],
@@ -1235,6 +1465,36 @@ fn populate_association_inverses(
                     .unwrap_or(false);
                 if already_present {
                     continue;
+                }
+                // Inverse-cardinality check — pinned by
+                // `testNewWithChildWithMismatchedReverseOneToOneProperty`.
+                // If appending `obj` would push the inverse slot past its
+                // declared upper bound, raise the Java-parity cardinality
+                // error before mutating. `inverse_mult` was cloned above
+                // outside the targets loop to keep the model borrow short.
+                if let Some(upper) = mult_upper_bound(&inverse_mult) {
+                    let current_count = ctx
+                        .heap()
+                        .get_property_values(target, inverse_name.as_str())
+                        .map(|vs| u32::try_from(vs.len()).unwrap_or(u32::MAX))
+                        .unwrap_or(0);
+                    let new_count = current_count + 1;
+                    if new_count > upper {
+                        let target_class = ctx
+                            .heap()
+                            .classifier(target)
+                            .map(std::string::ToString::to_string)
+                            .unwrap_or_default();
+                        let target_simple =
+                            target_class.rsplit("::").next().unwrap_or(&target_class);
+                        return Err(PureRuntimeError::EvaluationError(format!(
+                            "Error instantiating the type '{target_simple}'. \
+                             The property '{inverse_name}' has a multiplicity range of {} \
+                             when the given list has a cardinality equal to {new_count}",
+                            format_mult_bounds(&inverse_mult),
+                        ))
+                        .into());
+                    }
                 }
                 ctx.heap_mut()
                     .mutate_add(target, inverse_name.as_str(), &[Value::Object(obj)])?;
