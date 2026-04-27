@@ -618,6 +618,16 @@ fn finish_construction(
     triples: &[(SmolStr, Vec<Value>, bool)],
     lambda_shortcut_args: Option<&[Value]>,
 ) -> Result<Evaluated, PureException> {
+    // Reject `^Nil()` — `meta::pure::metamodel::type::Nil` is the bottom type
+    // and is not instantiable. Java Pure raises the same error; pinned by
+    // platform test `testNewNil`. Identity-resolved (not classifier-string
+    // compared) because `class_fqn` returns `"Nil"` for top-level types.
+    if Some(class_id) == crate::m3_paths::resolve(ctx.model(), crate::m3_paths::NIL) {
+        return Err(PureRuntimeError::EvaluationError(
+            "Cannot instantiate meta::pure::metamodel::type::Nil".into(),
+        )
+        .into());
+    }
     let classifier = class_fqn(ctx.model(), class_id);
     if is_lambda_function_class(ctx.model(), class_id)
         && let Some(args_for_shortcut) = lambda_shortcut_args
@@ -919,6 +929,14 @@ impl NativeFunction for DynamicNew {
             .into());
         }
 
+        // Reject `dynamicNew(Nil, …)` — same contract as `^Nil()`; pinned by
+        // platform test `testNewNil`.
+        if Some(class_id) == crate::m3_paths::resolve(ctx.model(), crate::m3_paths::NIL) {
+            return Err(PureRuntimeError::EvaluationError(
+                "Cannot instantiate meta::pure::metamodel::type::Nil".into(),
+            )
+            .into());
+        }
         let classifier = class_fqn(ctx.model(), class_id);
         let obj = ctx.heap_mut().alloc_dynamic(classifier);
 
@@ -1058,6 +1076,15 @@ impl NativeFunction for DynamicNew {
                 )?;
             }
         }
+
+        // Run the class's `[==]` constraints against the populated
+        // instance — `^Class(...)` does this in `finish_construction`,
+        // and `dynamicNew` carries the same Pure-level contract per
+        // platform test `testConstraintWithDynamicNewNoOverrides`.
+        // No type-variable values flow through this path; we pass
+        // an empty slice (matches the `^Class(...)` codepath when no
+        // `<T|m>` arguments are supplied).
+        evaluate_class_constraints(ctx, class_id, obj, &[])?;
 
         Ok(Evaluated::new(Value::Object(obj)))
     }
