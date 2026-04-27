@@ -884,28 +884,39 @@ fn lower_member_access(
     if let Some(getall) = desugar_all_to_getall(e, ctx, errors) {
         return Some(getall);
     }
+    // Lower into the unified `FunctionCall { kind: Property|QualifiedProperty }`
+    // shape — the receiver is `arguments[0]`, the property name lives in
+    // `function_name`, and (for QPs) any qualifier args follow the
+    // receiver. Mirrors Java's `propertyExpression` in
+    // `AntlrContextToM3CoreInstance` which builds a `SimpleFunctionExpression`
+    // with `_propertyName` / `_qualifiedPropertyName` set and the receiver
+    // as the first parameter value.
     match e {
         ast_expr::MemberAccess::Simple(s) => {
             let target = lower_expression(&s.target, ctx, errors)?;
             Some(untyped(
-                ExprKind::PropertyAccess {
-                    target: Box::new(target),
-                    property: SmolStr::new(s.member.as_str()),
+                ExprKind::FunctionCall {
+                    kind: CallKind::Property,
+                    function: None,
+                    function_name: SmolStr::new(s.member.as_str()),
+                    arguments: vec![target],
                 },
                 s.source_info.clone(),
             ))
         }
         ast_expr::MemberAccess::Qualified(q) => {
             let target = lower_expression(&q.target, ctx, errors)?;
-            let arguments: Vec<ValueSpec> = q
-                .arguments
-                .iter()
-                .filter_map(|a| lower_expression(a, ctx, errors))
-                .collect();
+            let mut arguments: Vec<ValueSpec> = vec![target];
+            arguments.extend(
+                q.arguments
+                    .iter()
+                    .filter_map(|a| lower_expression(a, ctx, errors)),
+            );
             Some(untyped(
-                ExprKind::QualifiedPropertyAccess {
-                    target: Box::new(target),
-                    property: SmolStr::new(q.member.as_str()),
+                ExprKind::FunctionCall {
+                    kind: CallKind::QualifiedProperty,
+                    function: None,
+                    function_name: SmolStr::new(q.member.as_str()),
                     arguments,
                 },
                 q.source_info.clone(),

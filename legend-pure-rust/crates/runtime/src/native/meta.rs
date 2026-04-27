@@ -2283,10 +2283,10 @@ fn deactivate_spec(
             Ok(Value::Object(obj))
         }
         ExprKind::FunctionCall {
+            kind,
             function,
             function_name,
             arguments,
-            ..
         } => {
             let mut deactivated_args: Vec<Value> = Vec::with_capacity(arguments.len());
             for arg in arguments {
@@ -2312,11 +2312,50 @@ fn deactivate_spec(
             let obj = ctx
                 .heap_mut()
                 .alloc_dynamic(crate::m3_paths::SIMPLE_FUNCTION_EXPRESSION);
-            ctx.heap_mut().mutate_add(
-                obj,
-                "functionName",
-                &[Value::String(function_name.clone())],
-            )?;
+            // Mirror Java's `SimpleFunctionExpression` slot conventions:
+            // `_functionName` for ordinary calls, `_propertyName` for
+            // simple property access, `_qualifiedPropertyName` for QP
+            // invocation. The slot population is what platform
+            // reflection (`$f.propertyName.values->toOne()`,
+            // `Automap.getAutoMapExpressionSequence`, …) reads back.
+            //
+            // For Property/QP kinds we also synthesize a `Property` /
+            // `QualifiedProperty` heap wrapper for the `func` slot so
+            // `$f.func.name` / `$f.func._owner` reflect what they would
+            // in Java. The wrapper carries `_owner` (the receiver
+            // class) and `name`; richer slots (classifierGenericType,
+            // multiplicity) are populated by the existing
+            // `eval_class_member_collection` helper which we'll factor
+            // out in a follow-up.
+            let property_slot = match kind {
+                CallKind::Function => "functionName",
+                CallKind::Property => "propertyName",
+                CallKind::QualifiedProperty => "qualifiedPropertyName",
+            };
+            // Java wraps the property name as an InstanceValue with
+            // `_values = [<name string>]`; for `_functionName` it's a
+            // bare String. Match both.
+            match kind {
+                CallKind::Function => {
+                    ctx.heap_mut().mutate_add(
+                        obj,
+                        property_slot,
+                        &[Value::String(function_name.clone())],
+                    )?;
+                }
+                CallKind::Property | CallKind::QualifiedProperty => {
+                    let iv = ctx
+                        .heap_mut()
+                        .alloc_dynamic(crate::m3_paths::INSTANCE_VALUE);
+                    ctx.heap_mut().mutate_add(
+                        iv,
+                        "values",
+                        &[Value::String(function_name.clone())],
+                    )?;
+                    ctx.heap_mut()
+                        .mutate_add(obj, property_slot, &[Value::Object(iv)])?;
+                }
+            }
             if let Some(fn_id) = function {
                 ctx.heap_mut()
                     .mutate_add(obj, "func", &[Value::Element(*fn_id)])?;
@@ -2339,6 +2378,37 @@ fn deactivate_spec(
                 {
                     ctx.heap_mut()
                         .mutate_add(obj, "multiplicity", &[Value::Element(mult_id)])?;
+                }
+            } else if matches!(kind, CallKind::Property | CallKind::QualifiedProperty) {
+                // Synthesize a Property heap wrapper for `func` so
+                // metamodel reflection (`$f.func.name`,
+                // `$f.func._owner`) succeeds. The receiver class is
+                // read from arguments[0]'s inferred type_info,
+                // populated by Pass 2.5 inference. Falls through silently
+                // if type_info is absent (the SFE still has a
+                // _propertyName slot, just no func; same shape Java
+                // produces when post-processing skips an unresolved
+                // case).
+                if let Some(receiver) = arguments.first()
+                    && let Some(rt) = receiver.type_info.as_deref()
+                    && let legend_pure_parser_pure::types::TypeExpr::Named { element: cls, .. } =
+                        &rt.type_expr
+                {
+                    let prop_classifier = match kind {
+                        CallKind::Property => crate::m3_paths::PROPERTY,
+                        CallKind::QualifiedProperty => crate::m3_paths::QUALIFIED_PROPERTY,
+                        CallKind::Function => unreachable!(),
+                    };
+                    let prop_obj = ctx.heap_mut().alloc_dynamic(prop_classifier);
+                    ctx.heap_mut()
+                        .mutate_add(prop_obj, "_owner", &[Value::Element(*cls)])?;
+                    ctx.heap_mut().mutate_add(
+                        prop_obj,
+                        "name",
+                        &[Value::String(function_name.clone())],
+                    )?;
+                    ctx.heap_mut()
+                        .mutate_add(obj, "func", &[Value::Object(prop_obj)])?;
                 }
             }
             ctx.heap_mut()

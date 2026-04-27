@@ -815,11 +815,36 @@ fn infer_type_from_valuespec(
             }
         }
         ExprKind::FunctionCall {
+            kind,
             function,
             function_name,
             arguments,
-            ..
         } => {
+            // Property/QualifiedProperty kinds: resolve via class
+            // property lookup, not function dispatch. `arguments[0]`
+            // is the receiver. Mirrors the legacy
+            // `PropertyAccess`/`QualifiedPropertyAccess` arm below
+            // and the Java `propertyExpression` post-processor.
+            if matches!(
+                kind,
+                crate::types::CallKind::Property | crate::types::CallKind::QualifiedProperty
+            ) {
+                let target = arguments.first()?;
+                let target_eid = infer_type_from_valuespec(target, model, var_types)?;
+                let receiver_type_args = extract_receiver_type_args(target, var_types);
+                let (prop_ty_owned, type_params_owned) =
+                    find_property_with_inheritance(target_eid, function_name, model)?;
+                let resolved = substitute_class_generics(
+                    &prop_ty_owned,
+                    &type_params_owned,
+                    &receiver_type_args,
+                );
+                return match resolved {
+                    crate::types::TypeExpr::Named { element, .. } => Some(element),
+                    crate::types::TypeExpr::Generic(_) => Some(crate::bootstrap::ANY_ID),
+                    _ => None,
+                };
+            }
             // Use the return type of the resolved function, with generic
             // type variables (`T`) bound from call-site arguments.
             if let Some(fid) = function
@@ -993,11 +1018,31 @@ pub(crate) fn infer_typeexpr_from_valuespec(
         // the resolved function's return type. This is what flows
         // `<String>` from `$l1: List<String>` through
         // `class<T>(T[*]):Class<T>[1]` to a `Class<List<String>>` result.
+        //
+        // Property/QualifiedProperty kinds dispatch differently —
+        // class property lookup, not function dispatch. `arguments[0]`
+        // is the receiver.
         ExprKind::FunctionCall {
+            kind,
             function,
+            function_name,
             arguments,
-            ..
         } => {
+            if matches!(
+                kind,
+                crate::types::CallKind::Property | crate::types::CallKind::QualifiedProperty
+            ) {
+                let target = arguments.first()?;
+                let target_eid = infer_type_from_valuespec(target, model, var_types)?;
+                let receiver_type_args = extract_receiver_type_args(target, var_types);
+                let (prop_ty_owned, type_params_owned) =
+                    find_property_with_inheritance(target_eid, function_name, model)?;
+                return Some(substitute_class_generics(
+                    &prop_ty_owned,
+                    &type_params_owned,
+                    &receiver_type_args,
+                ));
+            }
             let fid = (*function)?;
             let crate::model::Element::Function(f) = model.get_element(fid) else {
                 return None;
