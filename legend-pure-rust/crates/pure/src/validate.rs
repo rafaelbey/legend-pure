@@ -47,15 +47,15 @@ use crate::types::TypeExpr;
 ///
 /// This is Pass 3 of the compiler pipeline. It runs after
 /// `rebuild_derived_indexes()` and is purely read-only.
+#[tracing::instrument(level = "info", name = "validate", skip_all)]
 pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
     let mut errors = Vec::new();
 
     // Only validate the current compilation chunk (the last one).
     // Bootstrap chunk (0) is compiler-trusted.
-    let chunk = model
-        .chunks
-        .last()
-        .expect("model must have at least one chunk");
+    let Some(chunk) = model.chunks.last() else {
+        return errors;
+    };
     {
         for (local_idx, element) in chunk.elements.iter() {
             let id = ElementId::InstanceId {
