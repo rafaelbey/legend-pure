@@ -87,7 +87,7 @@ owo-colors = "4"
 walkdir = "2"
 rustyline = "18"
 notify = "8.0.0"
-notify-debouncer-mini = "0.6.0"
+notify-debouncer-mini = "0.7.0"
 
 [workspace.metadata.llvm-cov]
 # Exclude JNI bridge and stress tests from coverage
