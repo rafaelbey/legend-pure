@@ -216,6 +216,48 @@ fn compile_pair_first_compiles_clean() {
     try_compile_with_platform(source).expect("valid `Pair.first` must still compile");
 }
 
+#[test]
+fn deactivate_property_access_produces_simple_function_expression() {
+    // Java-parity check on the metamodel shape `deactivate` produces
+    // for a simple property access. After Option A unification:
+    //   parse → ExprKind::PropertyCall(FunctionCallData { ... })
+    //   deactivate → SimpleFunctionExpression with `_propertyName`
+    //                populated and `_func` carrying a synthesized
+    //                Property heap wrapper.
+    //
+    // Pre-fix this would have wrapped the evaluated value as an
+    // InstanceValue (the catch-all `_ =>` arm), so reflection like
+    // `$f->cast(@SimpleFunctionExpression).propertyName.values->toOne()`
+    // wouldn't have found the slot.
+    let source = r"
+        Class test::User { lastName: String[1]; }
+        function test::f(u: test::User[1]): String[1] {
+            let f = $u.lastName->deactivate();
+            $f->cast(@SimpleFunctionExpression).propertyName.values
+              ->toOne()->cast(@String)->toOne()
+        }
+    ";
+    let result = eval_pure(source, "f_User_1__String_1_");
+    assert_eq!(result, Value::String("lastName".into()));
+}
+
+#[test]
+fn deactivate_property_access_func_carries_property_wrapper() {
+    // The synthesized Property wrapper on `_func` exposes
+    // `name` (the property name) and `_owner` (the receiver class).
+    // This locks in the parity with Java's `_func: Property` slot.
+    let source = r"
+        Class test::User { lastName: String[1]; }
+        function test::f(u: test::User[1]): String[1] {
+            let f = $u.lastName->deactivate();
+            $f->cast(@SimpleFunctionExpression).func->toOne()
+              ->cast(@meta::pure::metamodel::function::property::Property<Nil,Any|*>).name->toOne()
+        }
+    ";
+    let result = eval_pure(source, "f_User_1__String_1_");
+    assert_eq!(result, Value::String("lastName".into()));
+}
+
 // ===========================================================================
 // 1. Literals
 // ===========================================================================
