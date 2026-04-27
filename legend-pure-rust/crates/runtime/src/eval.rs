@@ -373,7 +373,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             .or_else(|| self.model.resolve_by_path(&segments))
             .ok_or_else(|| PureException::from(PureRuntimeError::FunctionNotFound(name.into())))?;
 
-        self.call_user_function(element_id, args, name)
+        self.call_user_function(element_id, args, name, None)
     }
 
     /// Call a Pure function by its resolved [`ElementId`] with no arguments.
@@ -389,7 +389,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         element_id: ElementId,
     ) -> Result<Value, PureException> {
         let name = self.model.get_node(element_id).name.clone();
-        self.call_user_function(element_id, &[], &name)
+        self.call_user_function(element_id, &[], &name, None)
     }
 
     /// Call a Pure function by its resolved [`ElementId`] with explicit arguments.
@@ -403,7 +403,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         args: &[Value],
     ) -> Result<Value, PureException> {
         let name = self.model.get_node(element_id).name.clone();
-        self.call_user_function(element_id, args, &name)
+        self.call_user_function(element_id, args, &name, None)
     }
 
     // -----------------------------------------------------------------------
@@ -566,7 +566,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             for arg in arguments {
                 args.push(self.eval(arg)?);
             }
-            return self.call_user_function(element_id, &args, function_name);
+            return self.call_user_function(element_id, &args, function_name, Some(source_info));
         }
 
         // 2c. Unresolved call or native with an FQN mismatch: last-resort
@@ -626,6 +626,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         element_id: ElementId,
         args: &[Value],
         function_name: &str,
+        call_site: Option<&legend_pure_parser_ast::SourceInfo>,
     ) -> Result<Value, PureException> {
         let element = self.model.get_element(element_id);
         let node = self.model.get_node(element_id);
@@ -639,9 +640,11 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         // Clone the data we need before borrowing self mutably
         let params = func.parameters.clone();
         let body = func.body.clone();
-        let source_info = node.source_info.clone();
+        let def_source_info = node.source_info.clone();
+        // Use the call site if available, otherwise fallback to the definition site
+        let stack_source_info = call_site.cloned().unwrap_or_else(|| def_source_info.clone());
 
-        self.hooks.enter_function(function_name, &source_info);
+        self.hooks.enter_function(function_name, &def_source_info);
 
         // Push scope, bind parameters
         self.context.push_scope();
@@ -658,11 +661,10 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
 
         self.hooks.leave_function(function_name);
 
-        // Wrap error with call stack frame
         result.map_err(|e| {
             e.with_frame(StackFrame {
                 function_name: function_name.into(),
-                source: source_info,
+                source: stack_source_info,
             })
         })
     }
@@ -1941,7 +1943,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             _ => (false, None),
         };
         if !is_native {
-            return self.call_user_function(id, args, mangled.as_str());
+            return self.call_user_function(id, args, mangled.as_str(), None);
         }
         // 3. Simple-name prefix fallback against the native registry.
         if let Some(simple) = simple_name.as_deref()
