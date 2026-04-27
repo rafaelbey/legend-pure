@@ -41,24 +41,23 @@ pub const RUST_NATIVE_MANIFEST_JSON: &str =
     include_str!("../resources/pct_grammar_rust_native.json");
 
 /// Parsed view of the Rust-port manifest, lazily decoded once per
-/// process.
-fn manifest() -> &'static serde_json::Value {
+/// process. Returns `None` if the bundled JSON is malformed (the build
+/// validates this; failure here is a build-time invariant violation).
+fn manifest() -> Option<&'static serde_json::Value> {
     use std::sync::OnceLock;
-    static CELL: OnceLock<serde_json::Value> = OnceLock::new();
-    CELL.get_or_init(|| {
-        serde_json::from_str(RUST_NATIVE_MANIFEST_JSON)
-            .expect("pct_grammar_rust_native.json: invalid JSON")
-    })
+    static CELL: OnceLock<Option<serde_json::Value>> = OnceLock::new();
+    CELL.get_or_init(|| serde_json::from_str(RUST_NATIVE_MANIFEST_JSON).ok())
+        .as_ref()
 }
 
 /// Resolve the manifest's adapter Function path against `model`.
 ///
-/// Returns `None` when the platform model does not include the named
-/// adapter — for the standard in-memory adapter that means a
-/// non-platform model.
+/// Returns `None` when the manifest is malformed or the platform model
+/// does not include the named adapter — for the standard in-memory
+/// adapter the latter means a non-platform model.
 #[must_use]
 pub fn rust_native_adapter_id(model: &PureModel) -> Option<ElementId> {
-    let path = manifest().get("adapter")?.as_str()?;
+    let path = manifest()?.get("adapter")?.as_str()?;
     let segments: Vec<SmolStr> = path.split("::").map(SmolStr::new).collect();
     model.resolve_by_path(&segments)
 }
@@ -67,25 +66,23 @@ pub fn rust_native_adapter_id(model: &PureModel) -> Option<ElementId> {
 /// `meta::pure::test::surveyor::runPCTTests` — a
 /// `Map<Function<Any>, String>` keyed by test FQN.
 ///
-/// # Panics
-///
-/// Panics if the bundled `pct_grammar_rust_native.json` is missing or malformed.
+/// Returns an empty map if the bundled manifest is missing or
+/// malformed. Non-string entries are silently skipped.
 #[must_use]
 pub fn rust_native_exclusions() -> Value {
-    let exclusions_obj = manifest()
-        .get("exclusions")
-        .and_then(|v| v.as_object())
-        .expect("pct_grammar_rust_native.json: missing or non-object 'exclusions'");
-
     let mut state = MapState::default();
-    for (fqn, msg) in exclusions_obj {
-        let msg = msg.as_str().unwrap_or_else(|| {
-            panic!("pct_grammar_rust_native.json: exclusion value for {fqn} must be a string")
-        });
-        state.entries.insert(
-            ValueKey::String(SmolStr::new(fqn)),
-            Value::String(SmolStr::new(msg)),
-        );
+    if let Some(exclusions_obj) = manifest()
+        .and_then(|m| m.get("exclusions"))
+        .and_then(serde_json::Value::as_object)
+    {
+        for (fqn, msg) in exclusions_obj {
+            if let Some(msg) = msg.as_str() {
+                state.entries.insert(
+                    ValueKey::String(SmolStr::new(fqn)),
+                    Value::String(SmolStr::new(msg)),
+                );
+            }
+        }
     }
     Value::Map(Rc::new(RefCell::new(state)))
 }
@@ -93,13 +90,11 @@ pub fn rust_native_exclusions() -> Value {
 /// Convenience helper — the `(adapter, exclusions)` pair callers pass
 /// to `runPCTTests`.
 ///
-/// # Panics
-/// Panics if the manifest's adapter path does not resolve in `model`.
-/// In normal operation `model` is a platform model that always
-/// contains `testAdapterForInMemoryExecution`.
+/// Returns `None` if the manifest's adapter path does not resolve in
+/// `model`. In normal operation `model` is a platform model that
+/// always contains `testAdapterForInMemoryExecution`.
 #[must_use]
-pub fn rust_native_pct_args(model: &PureModel) -> (Value, Value) {
-    let adapter = rust_native_adapter_id(model)
-        .expect("pct_grammar_rust_native.json: adapter must resolve in the platform model");
-    (Value::Element(adapter), rust_native_exclusions())
+pub fn rust_native_pct_args(model: &PureModel) -> Option<(Value, Value)> {
+    let adapter = rust_native_adapter_id(model)?;
+    Some((Value::Element(adapter), rust_native_exclusions()))
 }
