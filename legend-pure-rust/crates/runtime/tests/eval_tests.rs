@@ -415,6 +415,22 @@ fn eval_integer_literal() {
 }
 
 #[test]
+fn evaluator_new_default_uses_standard_registry() {
+    // Locks Phase 4c: `Evaluator::new_default(model)` builds an
+    // evaluator backed by the process-wide default
+    // `NativeRegistry::standard()` without the caller threading a
+    // registry through. A trivial call must dispatch the `plus` native
+    // to confirm the registry is wired.
+    use legend_pure_runtime::eval::Evaluator;
+    let model = compile_with_platform("function test::add(): Integer[1] { 1 + 2 }");
+    let mut evaluator = Evaluator::new_default(&model);
+    let result = evaluator
+        .call("test::add__Integer_1_", &[])
+        .expect("call must dispatch via default registry");
+    assert_eq!(result, Value::Integer(3));
+}
+
+#[test]
 fn eval_negative_integer() {
     let result = eval_pure("function test::f(): Integer[1] { -7 }", "f__Integer_1_");
     assert_eq!(result, Value::Integer(-7));
@@ -879,6 +895,28 @@ fn eval_package_children_includes_sub_packages() {
     match result {
         Value::Integer(n) => assert!(n > 0, "expected non-empty children, got {n}"),
         other => panic!("Expected Integer, got {other:?}"),
+    }
+}
+
+#[test]
+fn eval_package_children_excludes_units() {
+    // M3: Units live under their parent Measure, not the package.
+    // `RomanLength~Pes` is registered in `meta::pure::functions::meta::tests::model`
+    // for type-position resolution, but reflective `package.children`
+    // must skip it (Java semantics). Navigate Units via
+    // `RomanLength.canonicalUnit` / `.nonCanonicalUnits` instead.
+    let result = eval_pure(
+        r"
+        function test::f(): Boolean[1] {
+            let pkg = pathToElement('meta::pure::functions::meta::tests::model', '::');
+            $pkg.children->forAll(c | !$c.name->contains('~'));
+        }
+        ",
+        "f__Boolean_1_",
+    );
+    match result {
+        Value::Boolean(true) => {}
+        other => panic!("expected true (no Unit in children), got {other:?}"),
     }
 }
 

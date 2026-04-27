@@ -110,6 +110,27 @@ pub struct Evaluator<'model, H: EvalHooks = NoOpHooks> {
     hooks: H,
 }
 
+/// Returns a `&'static NativeRegistry` pointing at a per-thread
+/// default, allocated by [`Box::leak`] on first access. Leaks once per
+/// thread; the resulting registry lives until process exit.
+///
+/// Per-thread instead of process-wide because some native impls hold
+/// `Rc<RefCell<…>>` state and the trait is not `Sync`. The default is
+/// cheap to construct (~150 boxed dispatch entries) and shared across
+/// every evaluator on that thread.
+fn leaked_default_registry() -> &'static NativeRegistry {
+    use std::cell::OnceCell;
+    thread_local! {
+        static CELL: OnceCell<&'static NativeRegistry> = const { OnceCell::new() };
+    }
+    CELL.with(|c| {
+        *c.get_or_init(|| {
+            let leaked: &'static NativeRegistry = Box::leak(Box::new(NativeRegistry::standard()));
+            leaked
+        })
+    })
+}
+
 impl<'model> Evaluator<'model, NoOpHooks> {
     /// Create a new evaluator with production (no-op) hooks.
     ///
@@ -132,6 +153,21 @@ impl<'model> Evaluator<'model, NoOpHooks> {
             member_wrapper_cache: HashMap::new(),
             hooks: NoOpHooks,
         }
+    }
+
+    /// Create a new evaluator backed by the per-thread default
+    /// [`NativeRegistry::standard`].
+    ///
+    /// Equivalent to `Evaluator::new(model, default_registry)` but
+    /// callers don't need to construct or hold the registry — the
+    /// registry is initialised once per thread and shared across
+    /// every evaluator on that thread. Use this in tests, the REPL,
+    /// and CLI commands where the registry is just the standard set.
+    #[must_use]
+    pub fn new_default(model: &'model PureModel) -> Self {
+        // `&'static NativeRegistry` coerces freely into `&'model …`
+        // since `'static: 'model`.
+        Self::new(model, leaked_default_registry())
     }
 }
 
@@ -1278,6 +1314,15 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                         items.push(Value::Element(ElementId::Package(child_pkg_id)));
                     }
                     for &child_eid in &pkg.children_elements {
+                        // Units live under their parent Measure in M3; the
+                        // Rust port also indexes them in the package so
+                        // type-position references (`prop: Kilogram[1]`)
+                        // resolve via `Measure~Unit` FQN lookup, but
+                        // reflective `package.children` must match Java
+                        // semantics and skip them.
+                        if matches!(self.model.get_element(child_eid), Element::Unit(_)) {
+                            continue;
+                        }
                         items.push(Value::Element(child_eid));
                     }
                     Ok(Value::from_vec(items))
