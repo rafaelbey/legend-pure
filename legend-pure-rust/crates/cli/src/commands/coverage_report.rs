@@ -121,8 +121,8 @@ pub fn build_lcov_records(map: &CoverageMap, source_roots: &[PathBuf]) -> Vec<Re
                 };
                 records.push(Record::BranchData {
                     line: point.call_source.start_line,
-                    block: block_idx as u32,
-                    branch: arm_idx as u32,
+                    block: u32::try_from(block_idx).unwrap_or(u32::MAX),
+                    branch: u32::try_from(arm_idx).unwrap_or(u32::MAX),
                     taken,
                 });
                 br_found += 1;
@@ -293,7 +293,7 @@ mod tests {
         map.record_hit(&src, 1);
 
         let records = build_lcov_records(&map, &[]);
-        let output: String = records.iter().map(|r| format!("{r}\n")).collect();
+        let output: String = records.iter().map(|r| r.to_string() + "\n").collect();
 
         // Verify the output can be parsed back.
         let reader = lcov::Reader::new(output.as_bytes());

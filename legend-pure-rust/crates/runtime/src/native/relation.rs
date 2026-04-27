@@ -76,7 +76,7 @@ impl NativeFunction for AddColumns {
 
         // -- Source: RelationType — read its columns ---------------------
         let source_value = ctx.evaluate(&args[0])?.into_value();
-        let source_obj = unwrap_instance_value(source_value, instance_value_id, ctx)?;
+        let source_obj = unwrap_instance_value(&source_value, instance_value_id, ctx)?;
         let source_classifier_id = ctx
             .heap()
             .classifier(source_obj)
@@ -101,7 +101,7 @@ impl NativeFunction for AddColumns {
 
         // -- ColSpec: navigate classifierGenericType chain ---------------
         let cs_value = ctx.evaluate(&args[1])?.into_value();
-        let cs_obj = unwrap_instance_value(cs_value, instance_value_id, ctx)?;
+        let cs_obj = unwrap_instance_value(&cs_value, instance_value_id, ctx)?;
         let cs_classifier_id = ctx
             .heap()
             .classifier(cs_obj)
@@ -198,15 +198,16 @@ fn single_object_slot(
 /// require a bare `Value::Object`. Mirrors `lang.rs::unwrap_instance_value_*`.
 #[allow(clippy::result_large_err)]
 fn unwrap_instance_value(
-    value: Value,
+    value: &Value,
     instance_value_id: Option<legend_pure_parser_pure::ids::ElementId>,
     ctx: &mut dyn EvalContextTrait,
 ) -> Result<ObjectId, PureException> {
     let Value::Object(obj) = value else {
         return Err(PureException::from(PureRuntimeError::type_mismatch(
-            "Object", &value,
+            "Object", value,
         )));
     };
+    let obj = *obj;
     if let Some(iv_id) = instance_value_id {
         let classifier = ctx
             .heap()

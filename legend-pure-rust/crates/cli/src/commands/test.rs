@@ -62,6 +62,7 @@ use crate::diagnostics::CliError;
 
 /// Arguments for the `legend test` command.
 #[derive(clap::Args)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct TestArgs {
     /// Input `.pure` file(s) or directory containing tests.
     #[arg(default_value = ".")]
@@ -144,7 +145,9 @@ pub struct TestArgs {
 pub fn run(args: TestArgs) -> Result<(), CliError> {
     let mode_label = if args.pct { "PCT tests" } else { "tests" };
     let pct_via = if args.pct {
-        if let Some(m) = &args.manifest { format!(" (manifest: {m})") } else {
+        if let Some(m) = &args.manifest {
+            format!(" (manifest: {m})")
+        } else {
             let suffix = if args.no_default_exclusions {
                 ", no default exclusions"
             } else {
@@ -273,6 +276,7 @@ fn run_tests<'m, H: EvalHooks>(
 /// Drive the PCT surveyor — either via adapter discovery (default) or via
 /// a JSON manifest path (`--manifest`). Both paths return a `TestReport`
 /// heap object identical in shape to `runTestsFromPath`.
+#[allow(clippy::result_large_err)]
 fn run_pct<H: EvalHooks>(
     model: &PureModel,
     evaluator: &mut Evaluator<'_, H>,
@@ -354,7 +358,7 @@ enum TestStatus {
     Fail,
     Error,
     Skip,
-    Other(String),
+    Other(#[allow(dead_code)] String),
 }
 
 impl TestReport {
@@ -371,7 +375,7 @@ impl TestReport {
         let mut results = Vec::with_capacity(raw_results.len());
         for v in &raw_results {
             if let Value::Object(rid) = v {
-                results.push(TestResult::read(heap, *rid)?);
+                results.push(TestResult::read(heap, *rid));
             }
         }
         Ok(Self {
@@ -389,8 +393,10 @@ impl TestReport {
         // when `--show-detail` is set.
         for r in &self.results {
             match (&r.status, show_detail) {
-                (TestStatus::Pass | TestStatus::Skip, true) => r.render_line(),
-                (TestStatus::Fail | TestStatus::Error | TestStatus::Other(_), _) => r.render_line(),
+                (TestStatus::Pass | TestStatus::Skip, true)
+                | (TestStatus::Fail | TestStatus::Error | TestStatus::Other(_), _) => {
+                    r.render_line();
+                }
                 _ => {}
             }
         }
@@ -423,7 +429,7 @@ impl TestReport {
 }
 
 impl TestResult {
-    fn read(heap: &RuntimeHeap, id: ObjectId) -> Result<Self, CliError> {
+    fn read(heap: &RuntimeHeap, id: ObjectId) -> Self {
         let fqn = read_string_slot(heap, id, "fqn").unwrap_or_else(|_| "<unknown>".into());
         let status = match heap.get_property_values(id, "status") {
             Ok(values) => match values.iter().next() {
@@ -440,12 +446,12 @@ impl TestResult {
         };
         let elapsed_ms = read_int_slot(heap, id, "elapsed").unwrap_or(0);
         let message = read_string_slot(heap, id, "message").ok();
-        Ok(Self {
+        Self {
             fqn,
             status,
             elapsed_ms,
             message,
-        })
+        }
     }
 
     fn render_line(&self) {
@@ -508,9 +514,7 @@ fn print_coverage_summary(map: &CoverageMap) {
     let summary = map.summary();
 
     eprintln!();
-    eprintln!(
-        "┌──────────────────────────────────────────────────────────────────────────┐"
-    );
+    eprintln!("┌──────────────────────────────────────────────────────────────────────────┐");
     eprintln!(
         "│ {}                                                    │",
         "Pure Coverage Summary".bold()

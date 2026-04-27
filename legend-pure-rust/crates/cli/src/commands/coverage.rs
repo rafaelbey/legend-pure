@@ -62,7 +62,7 @@ impl FileCoverage {
     /// Number of coverable lines in this file.
     #[must_use]
     pub fn lines_found(&self) -> u32 {
-        self.coverable_lines.len() as u32
+        u32::try_from(self.coverable_lines.len()).unwrap_or(u32::MAX)
     }
 
     /// Number of coverable lines that were executed at least once.
@@ -71,7 +71,9 @@ impl FileCoverage {
         self.coverable_lines
             .iter()
             .filter(|line| self.line_hits.get(line).is_some_and(|&c| c > 0))
-            .count() as u32
+            .count()
+            .try_into()
+            .unwrap_or(u32::MAX)
     }
 
     /// Line coverage percentage (0.0–100.0). Returns 100.0 if no coverable lines.
@@ -100,6 +102,7 @@ pub enum BranchKind {
 
 /// One arm of a branch point (one lambda body in `if`/`match`).
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct BranchArm {
     /// Source location of the lambda argument.
     pub source: SourceInfo,
@@ -109,6 +112,7 @@ pub struct BranchArm {
 
 /// A single branch point — one `if` or `match` call site.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct BranchPoint {
     /// Source location of the branching expression (`if`/`match` call).
     pub call_source: SourceInfo,
@@ -132,7 +136,10 @@ impl BranchTracker {
     /// Total number of branch arms found across all branch points.
     #[must_use]
     pub fn branches_found(&self) -> u32 {
-        self.points.iter().map(|p| p.arms.len() as u32).sum()
+        self.points
+            .iter()
+            .map(|p| u32::try_from(p.arms.len()).unwrap_or(u32::MAX))
+            .sum()
     }
 
     /// Number of branch arms that were taken at least once.
@@ -142,7 +149,9 @@ impl BranchTracker {
             .iter()
             .flat_map(|p| &p.arms)
             .filter(|arm| arm.hit_count > 0)
-            .count() as u32
+            .count()
+            .try_into()
+            .unwrap_or(u32::MAX)
     }
 
     /// Branch points belonging to a specific source file.
@@ -192,13 +201,18 @@ impl FunctionTracker {
     /// Total number of tracked functions.
     #[must_use]
     pub fn functions_found(&self) -> u32 {
-        self.functions.len() as u32
+        u32::try_from(self.functions.len()).unwrap_or(u32::MAX)
     }
 
     /// Number of functions that were called at least once.
     #[must_use]
     pub fn functions_hit(&self) -> u32 {
-        self.functions.values().filter(|e| e.hit_count > 0).count() as u32
+        self.functions
+            .values()
+            .filter(|e| e.hit_count > 0)
+            .count()
+            .try_into()
+            .unwrap_or(u32::MAX)
     }
 
     /// Functions belonging to a specific source file.
@@ -238,6 +252,7 @@ pub struct CoverageMap {
 
 /// Summary statistics for all coverage dimensions.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct CoverageSummary {
     /// Total coverable lines across all files.
     pub lines_found: u32,
@@ -293,6 +308,7 @@ impl CoverageMap {
 
     /// Get coverage data for a specific file.
     #[must_use]
+    #[allow(dead_code)]
     pub fn file_coverage(&self, source: &str) -> Option<&FileCoverage> {
         self.files.get(source)
     }
@@ -524,6 +540,7 @@ impl CoverageHooks {
 
     /// Access the accumulated coverage map (immutable).
     #[must_use]
+    #[allow(dead_code)]
     pub fn map(&self) -> &CoverageMap {
         &self.map
     }
@@ -546,6 +563,7 @@ impl CoverageHooks {
     /// Call this after model compilation — the test runner / surveyor
     /// discovers which functions carry `<<test.Test>>` or `<<PCT.test>>`
     /// and passes them here before execution.
+    #[allow(dead_code)]
     pub fn register_test_fqns(&mut self, fqns: impl IntoIterator<Item = SmolStr>) {
         self.map.test_fqns.extend(fqns);
     }

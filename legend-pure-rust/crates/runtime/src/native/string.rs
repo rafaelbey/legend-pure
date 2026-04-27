@@ -489,7 +489,7 @@ fn repr_value(v: &Value) -> String {
 pub struct Format;
 
 impl NativeFunction for Format {
-    #[allow(clippy::many_single_char_names)]
+    #[allow(clippy::many_single_char_names, clippy::too_many_lines)]
     fn execute(
         &self,
         args: &[ValueSpec],
@@ -659,9 +659,10 @@ impl NativeFunction for Format {
 ///
 /// Unsupported patterns pass through verbatim. Anything beyond the test
 /// surface is best-effort; revisit when more tests need it.
-#[allow(clippy::many_single_char_names)]
+#[allow(clippy::many_single_char_names, clippy::too_many_lines)]
 fn format_date_pattern(d: &crate::date::PureDate, pat: &str) -> String {
     use crate::date::PureDate;
+    use std::fmt::Write as _;
     // [TZ] prefix — shift the date by the named offset for output.
     let (tz_offset_minutes, body) = if let Some(rest) = pat.strip_prefix('[') {
         if let Some(end) = rest.find(']') {
@@ -712,10 +713,18 @@ fn format_date_pattern(d: &crate::date::PureDate, pat: &str) -> String {
         let token: String = std::iter::repeat_n(c as char, count).collect();
         let _ = token;
         match (c, count) {
-            (b'y', 4) => out.push_str(&format!("{:04}", inner.year())),
-            (b'M', 2) => out.push_str(&format!("{:02}", inner.month())),
-            (b'd', 2) => out.push_str(&format!("{:02}", inner.day())),
-            (b'H', 2) => out.push_str(&format!("{:02}", inner.hour())),
+            (b'y', 4) => {
+                let _ = write!(out, "{:04}", inner.year());
+            }
+            (b'M', 2) => {
+                let _ = write!(out, "{:02}", inner.month());
+            }
+            (b'd', 2) => {
+                let _ = write!(out, "{:02}", inner.day());
+            }
+            (b'H', 2) => {
+                let _ = write!(out, "{:02}", inner.hour());
+            }
             (b'h', n) => {
                 let h12 = match inner.hour() {
                     0 => 12,
@@ -723,13 +732,17 @@ fn format_date_pattern(d: &crate::date::PureDate, pat: &str) -> String {
                     h => h,
                 };
                 if n == 2 {
-                    out.push_str(&format!("{h12:02}"));
+                    let _ = write!(out, "{h12:02}");
                 } else {
-                    out.push_str(&format!("{h12}"));
+                    let _ = write!(out, "{h12}");
                 }
             }
-            (b'm', 2) => out.push_str(&format!("{:02}", inner.minute())),
-            (b's', 2) => out.push_str(&format!("{:02}", inner.second())),
+            (b'm', 2) => {
+                let _ = write!(out, "{:02}", inner.minute());
+            }
+            (b's', 2) => {
+                let _ = write!(out, "{:02}", inner.second());
+            }
             (b'S', n) => {
                 let nanos = inner.subsec_nanosecond();
                 let s = format!("{nanos:09}");
@@ -740,7 +753,7 @@ fn format_date_pattern(d: &crate::date::PureDate, pat: &str) -> String {
                 let m: i32 = tz_offset_minutes.unwrap_or(0);
                 let sign = if m >= 0 { '+' } else { '-' };
                 let abs = m.abs();
-                out.push_str(&format!("{sign}{:02}{:02}", abs / 60, abs % 60));
+                let _ = write!(out, "{sign}{:02}{:02}", abs / 60, abs % 60);
             }
             (b'X', 1) => {
                 let m: i32 = tz_offset_minutes.unwrap_or(0);
@@ -749,7 +762,7 @@ fn format_date_pattern(d: &crate::date::PureDate, pat: &str) -> String {
                 } else {
                     let sign = if m > 0 { '+' } else { '-' };
                     let abs = m.abs();
-                    out.push_str(&format!("{sign}{:02}", abs / 60));
+                    let _ = write!(out, "{sign}{:02}", abs / 60);
                 }
             }
             // Pass-through for unrecognised tokens (whitespace,

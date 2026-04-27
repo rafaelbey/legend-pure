@@ -253,7 +253,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             ExprKind::EnumValue {
                 enum_element,
                 value,
-            } => Ok(self.eval_enum_value(*enum_element, value)),
+            } => Ok(Self::eval_enum_value(*enum_element, value)),
 
             // -- Lambda ---------------------------------------------------
             ExprKind::Lambda { parameters, body } => {
@@ -798,9 +798,8 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             .classifier(instance_id)
             .map_err(PureException::from)?
             .to_owned();
-        let class_id = match crate::m3_paths::resolve(self.model, &classifier) {
-            Some(id) => id,
-            None => return Ok(Value::Unit),
+        let Some(class_id) = crate::m3_paths::resolve(self.model, &classifier) else {
+            return Ok(Value::Unit);
         };
         let prop_mult: Option<&legend_pure_parser_pure::types::Multiplicity> = {
             let mut found: Option<&legend_pure_parser_pure::types::Multiplicity> = None;
@@ -977,9 +976,10 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     /// - `package`      → parent package as `Value::Element(Package(..))`, or `Unit` for root
     /// - `children`     → for packages, child sub-packages + child elements as a Collection
     /// - `stereotypes`  → for Functions, Classes, etc: a Collection of freshly-allocated
-    ///                    heap objects classifying as `meta::pure::metamodel::extension::Stereotype`
-    ///                    with `value`/`profile` properties — matches the M3 representation
-    ///                    surveyor expects.
+    ///   heap objects classifying as `meta::pure::metamodel::extension::Stereotype`
+    ///   with `value`/`profile` properties — matches the M3 representation
+    ///   surveyor expects.
+    #[allow(clippy::too_many_lines)]
     fn eval_element_property(
         &mut self,
         id: ElementId,
@@ -1507,10 +1507,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             }
         }
 
-        let mut _args = Vec::with_capacity(arguments.len());
-        for arg in arguments {
-            _args.push(self.eval(arg)?);
-        }
         Err(PureException::from(PureRuntimeError::EvaluationError(
             format!("Qualified property access not yet supported: {property}"),
         )))
@@ -1520,7 +1516,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     // Enum value
     // -----------------------------------------------------------------------
 
-    fn eval_enum_value(&self, enum_element: ElementId, value: &str) -> Value {
+    fn eval_enum_value(enum_element: ElementId, value: &str) -> Value {
         Value::EnumValue {
             enum_id: enum_element,
             member: SmolStr::new(value),
@@ -2240,12 +2236,14 @@ fn walk_free_variables(
             // variables / captures, so it's visited first. Only then does
             // `x` enter the binder set for the remainder of the body the
             // caller is iterating over.
-            if function_name.as_str() == "letFunction" && arguments.len() == 2
-                && let ExprKind::StringLiteral(binding_name) = &*arguments[0].kind {
-                    walk_free_variables(&arguments[1], binders, free);
-                    binders.insert(binding_name.clone());
-                    return;
-                }
+            if function_name.as_str() == "letFunction"
+                && arguments.len() == 2
+                && let ExprKind::StringLiteral(binding_name) = &*arguments[0].kind
+            {
+                walk_free_variables(&arguments[1], binders, free);
+                binders.insert(binding_name.clone());
+                return;
+            }
             for arg in arguments {
                 walk_free_variables(arg, binders, free);
             }
@@ -2554,7 +2552,9 @@ mod tests {
                     assert_eq!(lc.parameters.len(), 0);
                     assert_eq!(lc.body.len(), 1);
                 }
-                other => panic!("Expected FunctionValue::Lambda, got {other:?}"),
+                other @ FunctionValue::Compiled(_) => {
+                    panic!("Expected FunctionValue::Lambda, got {other:?}")
+                }
             },
             other => panic!("Expected Function, got {other:?}"),
         }

@@ -173,6 +173,14 @@ pub fn alloc_relation_literal(
 /// `@(x:String)->genericType().rawType` return the relation type instance
 /// (via `genericType()`'s `valueCount==0` else branch reading the IV's
 /// pre-set `genericType` slot).
+///
+/// # Errors
+///
+/// Propagates any heap mutation errors.
+///
+/// # Panics
+///
+/// Panics if the `RelationType` element is not found in the model.
 #[allow(clippy::result_large_err)]
 pub fn alloc_relation_literal_at_expression_position(
     heap: &mut RuntimeHeap,

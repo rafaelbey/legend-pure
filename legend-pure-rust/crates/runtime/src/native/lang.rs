@@ -876,6 +876,7 @@ impl NativeFunction for Copy {
 pub struct DynamicNew;
 
 impl NativeFunction for DynamicNew {
+    #[allow(clippy::too_many_lines)]
     fn execute(
         &self,
         args: &[ValueSpec],
@@ -1033,21 +1034,21 @@ impl NativeFunction for DynamicNew {
                     ctx.heap_mut().mutate_add(
                         override_obj,
                         "getterOverrideToOne",
-                        &[getter_to_one.clone()],
+                        std::slice::from_ref(getter_to_one),
                     )?;
                 }
                 if !matches!(getter_to_many, Value::Unit) {
                     ctx.heap_mut().mutate_add(
                         override_obj,
                         "getterOverrideToMany",
-                        &[getter_to_many.clone()],
+                        std::slice::from_ref(getter_to_many),
                     )?;
                 }
                 if !matches!(hidden_payload, Value::Unit) {
                     ctx.heap_mut().mutate_add(
                         override_obj,
                         "hiddenPayload",
-                        &[hidden_payload.clone()],
+                        std::slice::from_ref(hidden_payload),
                     )?;
                 }
                 ctx.heap_mut().mutate_add(

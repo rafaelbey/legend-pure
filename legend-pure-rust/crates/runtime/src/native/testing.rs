@@ -54,8 +54,10 @@ impl NativeFunction for Assert {
             Ok(Evaluated::new(Value::Boolean(true)))
         } else {
             let msg_val = crate::native::force_thunk(&args[1], ctx)?.into_value();
-            let msg = msg_val
-                .as_string().map_or_else(|_| "Assertion failed".to_string(), smol_str::SmolStr::to_string);
+            let msg = msg_val.as_string().map_or_else(
+                |_| "Assertion failed".to_string(),
+                smol_str::SmolStr::to_string,
+            );
             Err(PureRuntimeError::AssertionFailed(msg).into())
         }
     }
@@ -95,7 +97,7 @@ impl NativeFunction for ExecuteTest {
         let fqn = function_fqn(&test_fn_val, ctx);
         let start = Instant::now();
         let result = ctx.call_function(&test_fn_val, &[]);
-        let elapsed = start.elapsed().as_millis() as i64;
+        let elapsed = i64::try_from(start.elapsed().as_millis()).unwrap_or(i64::MAX);
 
         let (status, message) = classify_outcome(result);
         build_test_result(ctx, fqn, status, elapsed, message)
@@ -151,7 +153,7 @@ impl NativeFunction for ExecutePCTTest {
         let fqn = function_fqn(&test_fn_val, ctx);
         let start = Instant::now();
         let result = ctx.call_function(&test_fn_val, &[adapter]);
-        let elapsed = start.elapsed().as_millis() as i64;
+        let elapsed = i64::try_from(start.elapsed().as_millis()).unwrap_or(i64::MAX);
 
         let (status, message) = classify_outcome(result);
         let (final_status, final_message) = apply_exclusion(&fqn, status, message, &exclusions_val);
@@ -298,7 +300,7 @@ fn classify_outcome(
             match &e.kind {
                 PureExceptionKind::AssertionFailed(_)
                 | PureExceptionKind::ConstraintViolation { .. } => (STATUS_FAIL, Some(msg)),
-                _ => (STATUS_ERROR, Some(msg)),
+                PureExceptionKind::ExecutionError(_) => (STATUS_ERROR, Some(msg)),
             }
         }
     }
@@ -571,7 +573,7 @@ impl NativeFunction for LoadPCTManifest {
                 "loadPCTManifest: malformed JSON in '{path}': {e}"
             ))
         })?;
-        build_pct_manifest(ctx, &path, parsed)
+        build_pct_manifest(ctx, &path, &parsed)
     }
 
     fn signature(&self) -> &'static str {
@@ -623,7 +625,7 @@ fn resolve_function_fqn(
 fn build_pct_manifest(
     ctx: &mut dyn EvalContextTrait,
     manifest_path: &str,
-    parsed: ManifestJson,
+    parsed: &ManifestJson,
 ) -> Result<Evaluated, PureException> {
     use crate::value::{MapState, ValueKey};
     use std::cell::RefCell;

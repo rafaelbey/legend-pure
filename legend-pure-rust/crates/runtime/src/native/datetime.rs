@@ -119,12 +119,6 @@ fn i64_to_i16_arg(name: &str, n: i64) -> Result<i16, PureRuntimeError> {
         .map_err(|_| PureRuntimeError::EvaluationError(format!("{name}: year {n} out of range")))
 }
 
-fn i64_to_i8_arg(name: &str, n: i64) -> Result<i8, PureRuntimeError> {
-    i8::try_from(n).map_err(|_| {
-        PureRuntimeError::EvaluationError(format!("{name}: component {n} out of range"))
-    })
-}
-
 // ---------------------------------------------------------------------------
 // now / today
 // ---------------------------------------------------------------------------
@@ -410,9 +404,6 @@ impl NativeFunction for DatePart {
 /// included) while Sun → Sat = 0 (Sun excluded going backward).
 fn sunday_boundaries_between(a: jiff::civil::Date, b: jiff::civil::Date, days: i64) -> i64 {
     use jiff::civil::Weekday;
-    if days == 0 {
-        return 0;
-    }
     /// Days until the *next* Sunday strictly after this weekday.
     /// Sunday → 7 (a full week to the next Sunday).
     fn to_next_sun(w: Weekday) -> i64 {
@@ -433,6 +424,9 @@ fn sunday_boundaries_between(a: jiff::civil::Date, b: jiff::civil::Date, days: i
             Weekday::Sunday => 0,
             other => to_next_sun(other),
         }
+    }
+    if days == 0 {
+        return 0;
     }
     if days > 0 {
         // Forward (a, b]: count Sundays strictly after a, on/before b.
@@ -937,7 +931,7 @@ fn split_tz_native(s: &str) -> (&str, Option<i16>) {
         let byte = s.as_bytes()[idx];
         if byte == b'+' || byte == b'-' {
             let tail = &s[idx..];
-            if tail.len() == 5 && tail[1..].as_bytes().iter().all(u8::is_ascii_digit) {
+            if tail.len() == 5 && tail.as_bytes()[1..].iter().all(u8::is_ascii_digit) {
                 let sign: i16 = if byte == b'+' { 1 } else { -1 };
                 let hh: i16 = tail[1..3].parse().unwrap_or(0);
                 let mm: i16 = tail[3..5].parse().unwrap_or(0);
@@ -1038,9 +1032,8 @@ fn decompose_second(v: &Value) -> Result<(i64, i32, Option<u8>), PureException> 
 /// rejected.
 fn translate_date_error(err: PureRuntimeError, values: &[Value]) -> PureRuntimeError {
     let msg = err.to_string();
-    let after_param = match msg.split("parameter '").nth(1) {
-        Some(rest) => rest,
-        None => return err,
+    let Some(after_param) = msg.split("parameter '").nth(1) else {
+        return err;
     };
     let Some(name) = after_param.split('\'').next() else {
         return err;
@@ -1289,11 +1282,12 @@ mod tests {
     }
 
     #[allow(dead_code)]
+    #[allow(clippy::many_single_char_names)]
     fn datetime_s(y: i16, m: i8, d: i8, h: i8, mi: i8, s: i8) -> Value {
         Value::Date(PureDate::datetime(y, m, d, h, mi, s, 0, TimePrecision::Second).unwrap())
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::many_single_char_names, clippy::too_many_arguments)]
     fn subsec(y: i16, m: i8, d: i8, h: i8, mi: i8, s: i8, nanos: i32, digits: u8) -> Value {
         Value::Date(
             PureDate::datetime(y, m, d, h, mi, s, nanos, TimePrecision::Subsecond(digits)).unwrap(),
@@ -1613,7 +1607,7 @@ mod tests {
     fn parse_date_type_mismatch() {
         assert!(
             ParseDate
-                .execute(&[lit_int(20240315)], &mut MockCtx)
+                .execute(&[lit_int(20_240_315)], &mut MockCtx)
                 .is_err()
         );
     }
