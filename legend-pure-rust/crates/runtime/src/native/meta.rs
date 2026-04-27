@@ -2258,6 +2258,7 @@ fn infer_spec_static_type(vs: &ValueSpec, ctx: &dyn EvalContextTrait) -> Option<
 /// Recursively reify a `ValueSpec` into an AST-metamodel heap object. See
 /// [`Deactivate`] for the mapping from `ExprKind` to M3 classifier.
 #[allow(clippy::result_large_err)]
+#[allow(clippy::too_many_lines)]
 fn deactivate_spec(
     spec: &ValueSpec,
     ctx: &mut dyn EvalContextTrait,
