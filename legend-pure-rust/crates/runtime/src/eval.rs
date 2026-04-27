@@ -235,6 +235,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 function,
                 function_name,
                 arguments,
+                ..
             } => self.eval_function_call(*function, function_name, arguments, &expr.source_info),
 
             // -- Property access ------------------------------------------
@@ -2358,7 +2359,7 @@ pub(crate) enum WrapperKind {
 mod tests {
     use legend_pure_parser_ast::SourceInfo;
     use legend_pure_parser_pure::bootstrap;
-    use legend_pure_parser_pure::types::{ExprKind, ValueSpec};
+    use legend_pure_parser_pure::types::{CallKind, ExprKind, ValueSpec};
 
     use super::*;
 
@@ -2451,6 +2452,7 @@ mod tests {
         // `plus` has the single signature `(Number[*]):Number[1]`, so the
         // call shape is `plus([2, 3])` — one argument wrapping a Collection.
         let expr = make_expr(ExprKind::FunctionCall {
+            kind: CallKind::Function,
             function: None,
             function_name: "plus_Number_MANY__Number_1_".into(),
             arguments: vec![make_expr(ExprKind::Collection {
@@ -2470,12 +2472,14 @@ mod tests {
         let mut eval = Evaluator::new(&model, &registry);
         // plus([2, times([3, 4])]) -> 14
         let expr = make_expr(ExprKind::FunctionCall {
+            kind: CallKind::Function,
             function: None,
             function_name: "plus_Number_MANY__Number_1_".into(),
             arguments: vec![make_expr(ExprKind::Collection {
                 elements: vec![
                     make_expr(ExprKind::IntegerLiteral(2)),
                     make_expr(ExprKind::FunctionCall {
+                        kind: CallKind::Function,
                         function: None,
                         function_name: "times_Number_MANY__Number_1_".into(),
                         arguments: vec![make_expr(ExprKind::Collection {
@@ -2552,6 +2556,7 @@ mod tests {
         let registry = NativeRegistry::standard();
         let mut eval = Evaluator::new(&model, &registry);
         let expr = make_expr(ExprKind::FunctionCall {
+            kind: CallKind::Function,
             function: None,
             function_name: "nonexistent".into(),
             arguments: vec![],

@@ -39,7 +39,8 @@ use smol_str::SmolStr;
 use crate::error::CompilationError;
 use crate::resolve::{self, ResolutionContext};
 use crate::types::{
-    DateValue, ExprKind, Multiplicity, RelationColumnLowered, ResolvedType, TypeExpr, ValueSpec,
+    CallKind, DateValue, ExprKind, Multiplicity, RelationColumnLowered, ResolvedType, TypeExpr,
+    ValueSpec,
 };
 
 /// Convenience: wrap an `ExprKind` into a `ValueSpec` with no type info.
@@ -257,6 +258,7 @@ fn binary_op(
     }
     Some(untyped(
         ExprKind::FunctionCall {
+            kind: CallKind::Function,
             function: function_id,
             function_name: SmolStr::new(name),
             arguments,
@@ -276,6 +278,7 @@ fn unary_op(
     let inner = lower_expression(operand, ctx, errors)?;
     Some(untyped(
         ExprKind::FunctionCall {
+            kind: CallKind::Function,
             function: None,
             function_name: SmolStr::new(name),
             arguments: vec![inner],
@@ -372,6 +375,7 @@ fn variadic_op(
         resolve::resolve_function_call(&ptr, 1, &arguments, source_info, ctx, errors)?;
     Some(untyped(
         ExprKind::FunctionCall {
+            kind: CallKind::Function,
             function: Some(function_id),
             function_name: SmolStr::new(name),
             arguments,
@@ -417,6 +421,7 @@ fn lower_comparison(
     if negate {
         Some(untyped(
             ExprKind::FunctionCall {
+                kind: CallKind::Function,
                 function: None,
                 function_name: SmolStr::new_static("not"),
                 arguments: vec![inner],
@@ -486,6 +491,7 @@ fn lower_unary_minus(
     );
     Some(untyped(
         ExprKind::FunctionCall {
+            kind: CallKind::Function,
             function: None,
             function_name: SmolStr::new("minus"),
             arguments: vec![collection],
@@ -544,6 +550,7 @@ fn lower_function_application(
 
     Some(untyped(
         ExprKind::FunctionCall {
+            kind: CallKind::Function,
             function: function_id,
             function_name: SmolStr::new(e.function.name.as_str()),
             arguments,
@@ -593,6 +600,7 @@ fn lower_arrow_function(
 
     untyped(
         ExprKind::FunctionCall {
+            kind: CallKind::Function,
             function: function_id,
             function_name: SmolStr::new(e.function.name.as_str()),
             arguments,
@@ -948,6 +956,7 @@ fn desugar_all_to_getall(
     }
     Some(untyped(
         ExprKind::FunctionCall {
+            kind: CallKind::Function,
             function: function_id,
             function_name: SmolStr::new_static("getAll"),
             arguments,
@@ -1216,6 +1225,7 @@ fn lower_let(
 
     Some(untyped(
         ExprKind::FunctionCall {
+            kind: CallKind::Function,
             function: None,
             function_name: SmolStr::new_static("letFunction"),
             arguments: vec![
@@ -1478,6 +1488,7 @@ fn lower_new_instance(
     }));
     Some(ValueSpec {
         kind: Box::new(ExprKind::FunctionCall {
+            kind: CallKind::Function,
             function: None,
             function_name: SmolStr::new_static("new"),
             arguments,
@@ -1534,6 +1545,7 @@ fn lower_copy(
 
     untyped(
         ExprKind::FunctionCall {
+            kind: CallKind::Function,
             function: None,
             function_name: SmolStr::new_static("copy"),
             arguments,
@@ -1571,6 +1583,7 @@ fn lower_slice(
 
     Some(untyped(
         ExprKind::FunctionCall {
+            kind: CallKind::Function,
             function: None,
             function_name: SmolStr::new_static("range"),
             arguments,
@@ -1865,6 +1878,7 @@ fn lower_unit_instance(
 
     Some(untyped(
         ExprKind::FunctionCall {
+            kind: CallKind::Function,
             function: None,
             function_name: SmolStr::new_static("newUnit"),
             arguments: vec![unit_ref, value_vs],

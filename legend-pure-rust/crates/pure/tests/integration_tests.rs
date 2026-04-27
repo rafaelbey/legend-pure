@@ -18,7 +18,7 @@ use legend_pure_parser_ast::section::SourceFile;
 use legend_pure_parser_pure::bootstrap;
 use legend_pure_parser_pure::compile;
 use legend_pure_parser_pure::model::Element;
-use legend_pure_parser_pure::types::{Multiplicity, TypeExpr};
+use legend_pure_parser_pure::types::{CallKind, Multiplicity, TypeExpr};
 
 /// Helper: parse a `.pure` string into a `SourceFile`.
 fn parse(source: &str) -> SourceFile {
@@ -1120,6 +1120,7 @@ fn expression_arithmetic_desugars_to_function_call() {
                     function,
                     function_name,
                     arguments,
+                    ..
                 } => {
                     assert!(
                         function.is_some(),
@@ -1335,6 +1336,7 @@ fn expression_function_call_resolved() {
                     function,
                     function_name,
                     arguments,
+                    ..
                 } => {
                     assert!(
                         function.is_some(),
@@ -1571,6 +1573,7 @@ fn dispatch_target(
     // Skip `letFunction` calls, which are the implicit `let x = …` desugaring.
     for stmt in &f.body {
         if let legend_pure_parser_pure::types::ExprKind::FunctionCall {
+            kind: CallKind::Function,
             function: Some(fid),
             function_name,
             ..

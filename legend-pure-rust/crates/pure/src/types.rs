@@ -279,6 +279,30 @@ pub struct ValueSpec {
     pub type_info: Option<Box<ResolvedType>>,
 }
 
+/// Discriminator on [`ExprKind::FunctionCall`] separating a plain function
+/// invocation from the two property-access shapes that — once Option A
+/// (Java-parity property unification) finishes migrating — share the same
+/// IR variant. Mirrors Java's `_functionName` / `_propertyName` /
+/// `_qualifiedPropertyName` slots on `SimpleFunctionExpression`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CallKind {
+    /// Ordinary function/operator/native call. Resolution goes through
+    /// `crate::resolve::resolve_function_call` (overload-by-signature
+    /// dispatch). The default — every existing call site picks this up
+    /// without explicit annotation.
+    #[default]
+    Function,
+    /// Simple property access (`$x.name`). Resolution is "lookup by
+    /// name on `arguments[0]`'s class, walking supertypes and
+    /// associations" — never overload dispatch.
+    Property,
+    /// Qualified-property invocation (`$x.qp(arg1, arg2)`). Same lookup
+    /// shape as `Property`, plus arity- and arg-type-validated against
+    /// the resolved QP overloads. `arguments[0]` is the receiver;
+    /// `arguments[1..]` are the QP arguments.
+    QualifiedProperty,
+}
+
 /// Expression variant — the type-specific payload of a [`ValueSpec`].
 ///
 /// Each variant contains only the data unique to that expression kind.
@@ -317,12 +341,31 @@ pub enum ExprKind {
     /// `lessThan`, `and`, `or`, `not`, etc.
     /// `let` desugars to `letFunction`. `new` desugars to `new`.
     /// Arrow `x->filter(p)` becomes `FunctionCall("filter", [x, p])`.
+    ///
+    /// `kind` distinguishes plain function calls from property access and
+    /// qualified-property access. After full migration to Option A
+    /// (Java-parity property unification), `PropertyAccess` and
+    /// `QualifiedPropertyAccess` variants are dropped and these kinds
+    /// drive the same dispatch path. Today (commit 1) the new variants
+    /// produce no behaviour change — `Function` is the default and all
+    /// existing constructors use it.
     FunctionCall {
-        /// Resolved function element (user-defined functions).
+        /// Whether this is a plain function call, a simple property
+        /// access (`$x.name`), or a qualified-property invocation
+        /// (`$x.name(args)`).
+        kind: CallKind,
+        /// Resolved function element (user-defined functions). `None`
+        /// for unresolved built-ins, operators, and (post-migration)
+        /// property/QP calls — the receiver class plus
+        /// `function_name` disambiguates those.
         function: Option<ElementId>,
-        /// Function name (for built-ins, operators, unresolved).
+        /// Function name (for built-ins, operators, unresolved). For
+        /// `kind != Function`, this carries the property /
+        /// qualified-property name.
         function_name: SmolStr,
-        /// Arguments.
+        /// Arguments. For `kind != Function`, `arguments[0]` is the
+        /// receiver and the remaining entries are the QP arguments
+        /// (empty for simple property access).
         arguments: Vec<ValueSpec>,
     },
 

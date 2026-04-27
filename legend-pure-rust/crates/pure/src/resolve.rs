@@ -818,6 +818,7 @@ fn infer_type_from_valuespec(
             function,
             function_name,
             arguments,
+            ..
         } => {
             // Use the return type of the resolved function, with generic
             // type variables (`T`) bound from call-site arguments.

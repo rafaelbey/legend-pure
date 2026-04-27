@@ -24,7 +24,7 @@
 use legend_pure_parser_pure::bootstrap;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
-use legend_pure_parser_pure::types::{TypeExpr, ValueSpec};
+use legend_pure_parser_pure::types::{CallKind, TypeExpr, ValueSpec};
 use smol_str::SmolStr;
 
 use crate::date::DatePrecision;
@@ -2070,6 +2070,7 @@ fn spec_declared_multiplicity_name(
 ) -> Option<&'static str> {
     use legend_pure_parser_pure::types::ExprKind;
     if let ExprKind::FunctionCall {
+        kind: CallKind::Function,
         function: Some(fn_id),
         ..
     } = spec.kind.as_ref()
@@ -2244,6 +2245,7 @@ fn infer_spec_static_type(vs: &ValueSpec, ctx: &dyn EvalContextTrait) -> Option<
             function,
             function_name,
             arguments,
+            ..
         } => infer_function_call_static_type(*function, function_name, arguments, ctx),
         ExprKind::TypeReference {
             type_expr: TypeExpr::Named { element, .. },
@@ -2284,6 +2286,7 @@ fn deactivate_spec(
             function,
             function_name,
             arguments,
+            ..
         } => {
             let mut deactivated_args: Vec<Value> = Vec::with_capacity(arguments.len());
             for arg in arguments {
