@@ -1200,12 +1200,6 @@ fn eval_multiple_assert_eq_mixed_date_precision() {
 }
 
 #[test]
-#[ignore = "diagnostic: bucket meta::tests errors by first line of message"]
-fn eval_surveyor_meta_tests_error_histogram() {
-    surveyor_error_histogram("meta::pure::functions::meta::tests");
-}
-
-#[test]
 fn eval_string_plus_inside_fold_lambda() {
     // Mirrors the platform plus.pure:66 pattern:
     // `$people->fold({p1, p2 | $p2.lastName + ' ' + $p1.lastName}, init)`
@@ -1377,294 +1371,6 @@ fn eval_relation_add_columns_after_evaluate_and_deactivate() {
         .expect("test should evaluate without error");
 
     assert_eq!(result, Value::Boolean(true));
-}
-
-#[test]
-#[ignore = "diagnostic: bucket lang::tests errors by first line of message"]
-fn eval_surveyor_lang_tests_error_histogram() {
-    surveyor_error_histogram("meta::pure::functions::lang::tests");
-}
-
-#[test]
-#[ignore = "diagnostic: bucket boolean::tests errors by first line of message"]
-fn eval_surveyor_boolean_tests_error_histogram() {
-    surveyor_error_histogram("meta::pure::functions::boolean::tests");
-}
-
-#[test]
-#[ignore = "diagnostic: bucket collection::tests errors by first line of message"]
-fn eval_surveyor_collection_tests_error_histogram() {
-    surveyor_error_histogram("meta::pure::functions::collection::tests");
-}
-
-#[test]
-#[ignore = "diagnostic: bucket string::tests errors by first line of message"]
-fn eval_surveyor_string_tests_error_histogram() {
-    surveyor_error_histogram("meta::pure::functions::string::tests");
-}
-
-#[test]
-#[ignore = "diagnostic: bucket math::tests errors by first line of message"]
-fn eval_surveyor_math_tests_error_histogram() {
-    surveyor_error_histogram("meta::pure::functions::math::tests");
-}
-
-#[test]
-#[ignore = "diagnostic: bucket meta::tests FAILs by first line of message"]
-fn eval_surveyor_meta_tests_fail_histogram() {
-    surveyor_fail_histogram("meta::pure::functions::meta::tests");
-}
-
-#[test]
-#[ignore = "diagnostic: bucket lang::tests FAILs by first line of message"]
-fn eval_surveyor_lang_tests_fail_histogram() {
-    surveyor_fail_histogram("meta::pure::functions::lang::tests");
-}
-
-#[test]
-#[ignore = "diagnostic: bucket string::tests FAILs by first line of message"]
-fn eval_surveyor_string_tests_fail_histogram() {
-    surveyor_fail_histogram("meta::pure::functions::string::tests");
-}
-
-#[test]
-#[ignore = "diagnostic: bucket collection::tests FAILs by first line of message"]
-fn eval_surveyor_collection_tests_fail_histogram() {
-    surveyor_fail_histogram("meta::pure::functions::collection::tests");
-}
-
-fn surveyor_error_histogram(package: &str) {
-    surveyor_outcome_histogram(package, "ERROR");
-}
-
-fn surveyor_fail_histogram(package: &str) {
-    surveyor_outcome_histogram(package, "FAIL");
-}
-
-fn surveyor_outcome_histogram(package: &str, target_status: &str) {
-    use legend_pure_runtime::eval::Evaluator;
-    use std::collections::BTreeMap;
-
-    let model = compile_with_platform("");
-    let registry = NativeRegistry::standard();
-    let mut evaluator = Evaluator::new(&model, &registry);
-
-    let report = evaluator
-        .call(
-            "meta::pure::test::surveyor::runTestsFromPath",
-            &[
-                Value::String(SmolStr::new(package)),
-                Value::String("".into()),
-            ],
-        )
-        .expect("surveyor should return a TestReport");
-    let Value::Object(report_id) = report else {
-        panic!();
-    };
-    let heap = evaluator.heap();
-    let results = heap.get_property_values(report_id, "results").unwrap();
-
-    let mut histogram: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut outcome_count = 0;
-    for val in &results {
-        let Value::Object(res_id) = val else {
-            continue;
-        };
-        let status = heap
-            .get_property_values(*res_id, "status")
-            .ok()
-            .and_then(|v| v.iter().next().cloned());
-        let matches_target = matches!(&status, Some(Value::EnumValue { member, .. }) if member.as_str() == target_status);
-        if !matches_target {
-            continue;
-        }
-        outcome_count += 1;
-        let fqn = heap
-            .get_property_values(*res_id, "fqn")
-            .ok()
-            .and_then(|v| v.iter().next().cloned())
-            .and_then(|v| match v {
-                Value::String(s) => Some(s.to_string()),
-                _ => None,
-            })
-            .unwrap_or_else(|| "<unknown>".into());
-        let msg = heap
-            .get_property_values(*res_id, "message")
-            .ok()
-            .and_then(|v| v.iter().next().cloned())
-            .and_then(|v| match v {
-                Value::String(s) => Some(s.to_string()),
-                _ => None,
-            })
-            .unwrap_or_else(|| "<no message>".into());
-        // Bucket by "first useful line after Execution error" — the actual cause.
-        let bucket = msg
-            .lines()
-            .map(|l| l.trim_matches('"').trim())
-            .find(|l| {
-                !l.is_empty()
-                    && !l.starts_with("Execution error")
-                    && !l.starts_with("Assert failure")
-                    && !l.starts_with("Full Stack")
-            })
-            .unwrap_or("<no bucket line>")
-            .to_string();
-        histogram
-            .entry(bucket)
-            .or_default()
-            .push(format!("{fqn} || {msg}"));
-    }
-    eprintln!("\n=== {package} {target_status} histogram ({outcome_count} results) ===",);
-    let mut rows: Vec<_> = histogram.iter().collect();
-    rows.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
-    for (bucket, tests) in rows {
-        eprintln!("\n[{}] {}", tests.len(), bucket);
-        for (i, t) in tests.iter().enumerate().take(40) {
-            eprintln!("    {}. {}", i + 1, t);
-        }
-        if tests.len() > 40 {
-            eprintln!("    ... and {} more", tests.len() - 40);
-        }
-    }
-}
-
-/// Harvest every distinct `Function not found: FQN` signalled by an
-/// ERROR-bucket result across all surveyor packages. Groups by simple
-/// name (the part before the first mangled-type segment) so we can
-/// spot families of missing overloads the Rust registry hasn't wired
-/// up yet. Previously targeted the SKIP bucket when `classify_outcome`
-/// downgraded `FunctionNotFound`; now that classification policy is
-/// strict (no message-based SKIP), those same results surface in the
-/// ERROR bucket.
-#[test]
-#[ignore = "diagnostic: list missing-native FQNs across all surveyor packages"]
-fn eval_surveyor_missing_natives_harvest() {
-    use legend_pure_runtime::eval::Evaluator;
-    use std::collections::{BTreeMap, BTreeSet};
-
-    let packages = [
-        "meta::pure::functions::meta::tests",
-        "meta::pure::functions::collection::tests",
-        "meta::pure::functions::string::tests",
-        "meta::pure::functions::math::tests",
-        "meta::pure::functions::date::tests",
-        "meta::pure::functions::boolean::tests",
-        "meta::pure::functions::lang::tests",
-    ];
-
-    let model = compile_with_platform("");
-    let registry = NativeRegistry::standard();
-    let mut evaluator = Evaluator::new(&model, &registry);
-    let mut by_simple: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-
-    for pkg in packages {
-        let report = evaluator
-            .call(
-                "meta::pure::test::surveyor::runTestsFromPath",
-                &[Value::String(SmolStr::new(pkg)), Value::String("".into())],
-            )
-            .expect("runTestsFromPath returns a TestReport");
-        let Value::Object(report_id) = report else {
-            continue;
-        };
-        let results = evaluator
-            .heap()
-            .get_property_values(report_id, "results")
-            .unwrap_or_else(|_| im_rc::Vector::new());
-        for val in &results {
-            let Value::Object(res_id) = val else {
-                continue;
-            };
-            let status = evaluator
-                .heap()
-                .get_property_values(*res_id, "status")
-                .ok()
-                .and_then(|v| v.iter().next().cloned());
-            if !matches!(&status, Some(Value::EnumValue { member, .. }) if member.as_str() == "ERROR")
-            {
-                continue;
-            }
-            let msg = evaluator
-                .heap()
-                .get_property_values(*res_id, "message")
-                .ok()
-                .and_then(|v| v.iter().next().cloned())
-                .and_then(|v| match v {
-                    Value::String(s) => Some(s.to_string()),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            // Lines that actually name the missing function — accept both
-            // "Function not found: X" and error wrapping variants.
-            for line in msg.lines() {
-                let trimmed = line.trim_matches('"').trim();
-                if let Some(rest) = trimmed.strip_prefix("Function not found: ") {
-                    let fqn = rest.trim().trim_end_matches('"').to_string();
-                    let simple = fqn.split('_').next().unwrap_or(&fqn).to_string();
-                    by_simple.entry(simple).or_default().insert(fqn);
-                }
-            }
-        }
-    }
-
-    eprintln!(
-        "\n=== Missing-native harvest: {} distinct simple names, {} distinct mangled FQNs ===",
-        by_simple.len(),
-        by_simple.values().map(BTreeSet::len).sum::<usize>()
-    );
-    for (simple, fqns) in &by_simple {
-        eprintln!("\n[{}] {} ({} variants)", fqns.len(), simple, fqns.len());
-        for fqn in fqns {
-            eprintln!("    {fqn}");
-        }
-    }
-}
-
-#[test]
-#[ignore = "broad surveyor canary across meta::pure::functions — prints full bucket breakdown"]
-fn eval_surveyor_broad_canary() {
-    use legend_pure_runtime::eval::Evaluator;
-
-    let packages = [
-        "meta::pure::functions::meta::tests",
-        "meta::pure::functions::collection::tests",
-        "meta::pure::functions::string::tests",
-        "meta::pure::functions::math::tests",
-        "meta::pure::functions::date::tests",
-        "meta::pure::functions::boolean::tests",
-        "meta::pure::functions::lang::tests",
-    ];
-
-    let model = compile_with_platform("");
-    let registry = NativeRegistry::standard();
-
-    for pkg in &packages {
-        let mut evaluator = Evaluator::new(&model, &registry);
-        let report_result = evaluator.call(
-            "meta::pure::test::surveyor::runTestsFromPath",
-            &[Value::String(SmolStr::new(pkg)), Value::String("".into())],
-        );
-        let Ok(Value::Object(report_id)) = report_result else {
-            eprintln!("[{pkg}] surveyor failed: {report_result:?}");
-            continue;
-        };
-        let heap = evaluator.heap();
-        let read = |name: &str| -> i64 {
-            let values = heap.get_property_values(report_id, name).unwrap();
-            match values.iter().next() {
-                Some(Value::Integer(n)) => *n,
-                _ => -1,
-            }
-        };
-        let pass = read("passCount");
-        let fail = read("failCount");
-        let error = read("errorCount");
-        let skip = read("skipCount");
-        eprintln!(
-            "[{pkg}] pass={pass} fail={fail} error={error} skip={skip} total={}",
-            pass + fail + error + skip
-        );
-    }
 }
 
 #[test]
@@ -1929,158 +1635,6 @@ fn eval_pct_canary_boolean_not_runs() {
     );
 }
 
-/// Packages we know contain `<<PCT.test>>` functions in the platform tree.
-/// Mirrors the surveyor's `eval_surveyor_broad_canary` package list, but
-/// PCT discovery walks broader sub-trees (PCT tests live alongside their
-/// `<<PCT.function>>` declarations rather than in a `tests/` subdir, so
-/// rooting at the function package picks them up too).
-const PCT_BROAD_CANARY_PACKAGES: &[&str] = &[
-    "meta::pure::functions::boolean",
-    "meta::pure::functions::collection",
-    "meta::pure::functions::lang",
-    "meta::pure::functions::math",
-    "meta::pure::functions::string",
-    "meta::pure::functions::date",
-    "meta::pure::functions::meta",
-    "meta::pure::functions::multiplicity",
-    "meta::pure::functions::asserts",
-    "meta::pure::functions::relation",
-];
-
-#[test]
-#[ignore = "broad PCT canary across meta::pure::functions::* — prints full bucket breakdown"]
-fn eval_pct_broad_canary() {
-    // The Phase 4 deliverable: how strong is the Rust runtime against the
-    // 501-function PCT contract Java enforces on every build? Per-package
-    // bucket counts are the signal.
-    let model = compile_with_platform("");
-    let registry = NativeRegistry::standard();
-
-    let mut grand_pass = 0i64;
-    let mut grand_fail = 0i64;
-    let mut grand_error = 0i64;
-    let mut grand_skip = 0i64;
-
-    for pkg in PCT_BROAD_CANARY_PACKAGES {
-        let mut evaluator = Evaluator::new(&model, &registry);
-        let pkg_val = match evaluator.call(
-            "meta::pure::functions::meta::pathToElement",
-            &[Value::String(SmolStr::new(pkg)), Value::String("::".into())],
-        ) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("[{pkg}] pathToElement failed: {e}");
-                continue;
-            }
-        };
-        let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
-        let report_result = evaluator.call(
-            "meta::pure::test::surveyor::runPCTTests",
-            &[pkg_val, Value::String("".into()), adapter, exclusions],
-        );
-        let Ok(Value::Object(report_id)) = report_result else {
-            eprintln!("[{pkg}] runPCTTests failed: {report_result:?}");
-            continue;
-        };
-        let pass = read_report_counter(&evaluator, report_id, "passCount");
-        let fail = read_report_counter(&evaluator, report_id, "failCount");
-        let error = read_report_counter(&evaluator, report_id, "errorCount");
-        let skip = read_report_counter(&evaluator, report_id, "skipCount");
-        grand_pass += pass;
-        grand_fail += fail;
-        grand_error += error;
-        grand_skip += skip;
-        eprintln!(
-            "[{pkg}] pass={pass} fail={fail} error={error} skip={skip} total={}",
-            pass + fail + error + skip
-        );
-    }
-    eprintln!(
-        "\n=== PCT GRAND TOTAL ===\n  pass={grand_pass} fail={grand_fail} error={grand_error} skip={grand_skip} total={}",
-        grand_pass + grand_fail + grand_error + grand_skip
-    );
-}
-
-/// Harvest every distinct `Function not found: FQN` signalled by an
-/// ERROR-bucket result across all PCT packages. Mirrors
-/// `eval_surveyor_missing_natives_harvest` but rooted on the broader PCT
-/// tree — surfaces gaps the `<<test.Test>>` surveyor can't reveal because
-/// PCT tests exercise function *implementations* directly.
-#[test]
-#[ignore = "diagnostic: list missing-native FQNs across all PCT packages"]
-fn eval_pct_missing_natives_harvest() {
-    use std::collections::{BTreeMap, BTreeSet};
-
-    let model = compile_with_platform("");
-    let registry = NativeRegistry::standard();
-    let mut by_simple: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-
-    for pkg in PCT_BROAD_CANARY_PACKAGES {
-        let mut evaluator = Evaluator::new(&model, &registry);
-        let Ok(pkg_val) = evaluator.call(
-            "meta::pure::functions::meta::pathToElement",
-            &[Value::String(SmolStr::new(pkg)), Value::String("::".into())],
-        ) else {
-            continue;
-        };
-        let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
-        let Ok(Value::Object(report_id)) = evaluator.call(
-            "meta::pure::test::surveyor::runPCTTests",
-            &[pkg_val, Value::String("".into()), adapter, exclusions],
-        ) else {
-            continue;
-        };
-        let results = evaluator
-            .heap()
-            .get_property_values(report_id, "results")
-            .unwrap_or_else(|_| im_rc::Vector::new());
-        for val in &results {
-            let Value::Object(res_id) = val else {
-                continue;
-            };
-            let status = evaluator
-                .heap()
-                .get_property_values(*res_id, "status")
-                .ok()
-                .and_then(|v| v.iter().next().cloned());
-            if !matches!(&status, Some(Value::EnumValue { member, .. }) if member.as_str() == "ERROR")
-            {
-                continue;
-            }
-            let msg = evaluator
-                .heap()
-                .get_property_values(*res_id, "message")
-                .ok()
-                .and_then(|v| v.iter().next().cloned())
-                .and_then(|v| match v {
-                    Value::String(s) => Some(s.to_string()),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            for line in msg.lines() {
-                let trimmed = line.trim_matches('"').trim();
-                if let Some(rest) = trimmed.strip_prefix("Function not found: ") {
-                    let fqn = rest.trim().trim_end_matches('"').to_string();
-                    let simple = fqn.split('_').next().unwrap_or(&fqn).to_string();
-                    by_simple.entry(simple).or_default().insert(fqn);
-                }
-            }
-        }
-    }
-
-    eprintln!(
-        "\n=== PCT missing-native harvest: {} distinct simple names, {} distinct mangled FQNs ===",
-        by_simple.len(),
-        by_simple.values().map(BTreeSet::len).sum::<usize>()
-    );
-    for (simple, fqns) in &by_simple {
-        eprintln!("\n[{}] {} ({} variants)", fqns.len(), simple, fqns.len());
-        for fqn in fqns {
-            eprintln!("    {fqn}");
-        }
-    }
-}
-
 #[test]
 fn find_pct_adapter_resolves_in_memory() {
     // Phase 6 contract: `find_pct_adapter(model, "In-Memory")` discovers the
@@ -2206,103 +1760,6 @@ fn eval_pct_run_from_path_essential_manifest() {
     assert!(pass > 0, "expected at least one PASS via the manifest path");
 }
 
-/// Per-package PCT ERROR histogram — clusters error messages by their
-/// first useful line so a long tail of similar failures collapses to one
-/// bucket. Mirrors the `eval_surveyor_*_error_histogram` shape.
-fn pct_error_histogram(package: &str) {
-    use std::collections::BTreeMap;
-
-    let model = compile_with_platform("");
-    let registry = NativeRegistry::standard();
-    let mut evaluator = Evaluator::new(&model, &registry);
-
-    let pkg_val = evaluator
-        .call(
-            "meta::pure::functions::meta::pathToElement",
-            &[
-                Value::String(SmolStr::new(package)),
-                Value::String("::".into()),
-            ],
-        )
-        .expect("pathToElement");
-    let (adapter, exclusions) = pct_canary_args(&model);
-    let Ok(Value::Object(report_id)) = evaluator.call(
-        "meta::pure::test::surveyor::runPCTTests",
-        &[pkg_val, Value::String("".into()), adapter, exclusions],
-    ) else {
-        eprintln!("[{package}] runPCTTests failed");
-        return;
-    };
-
-    let results = evaluator
-        .heap()
-        .get_property_values(report_id, "results")
-        .unwrap_or_else(|_| im_rc::Vector::new());
-    let mut histogram: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut outcome_count = 0usize;
-    for val in &results {
-        let Value::Object(res_id) = val else { continue };
-        let status = evaluator
-            .heap()
-            .get_property_values(*res_id, "status")
-            .ok()
-            .and_then(|v| v.iter().next().cloned());
-        if !matches!(&status, Some(Value::EnumValue { member, .. }) if member.as_str() == "ERROR") {
-            continue;
-        }
-        outcome_count += 1;
-        let fqn = evaluator
-            .heap()
-            .get_property_values(*res_id, "fqn")
-            .ok()
-            .and_then(|v| v.iter().next().cloned())
-            .and_then(|v| match v {
-                Value::String(s) => Some(s.to_string()),
-                _ => None,
-            })
-            .unwrap_or_default();
-        let msg = evaluator
-            .heap()
-            .get_property_values(*res_id, "message")
-            .ok()
-            .and_then(|v| v.iter().next().cloned())
-            .and_then(|v| match v {
-                Value::String(s) => Some(s.to_string()),
-                _ => None,
-            })
-            .unwrap_or_default();
-        let bucket = msg
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or("<empty error message>")
-            .trim()
-            .to_string();
-        histogram
-            .entry(bucket)
-            .or_default()
-            .push(format!("{fqn} || {msg}"));
-    }
-
-    eprintln!("\n=== {package} PCT ERROR histogram ({outcome_count} results) ===");
-    let mut rows: Vec<_> = histogram.iter().collect();
-    rows.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
-    for (bucket, tests) in rows {
-        eprintln!("\n[{}] {}", tests.len(), bucket);
-        for (i, t) in tests.iter().enumerate().take(20) {
-            eprintln!("    {}. {}", i + 1, t);
-        }
-        if tests.len() > 20 {
-            eprintln!("    ... and {} more", tests.len() - 20);
-        }
-    }
-}
-
-#[test]
-#[ignore = "diagnostic: PCT ERROR histogram for boolean package"]
-fn eval_pct_boolean_error_histogram() {
-    pct_error_histogram("meta::pure::functions::boolean");
-}
-
 #[test]
 fn eval_year_native_directly() {
     // year(%2015) directly — no arrow, no eval/lambda — should return 2015.
@@ -2364,84 +1821,6 @@ fn eval_year_four_precisions() {
         "f__Boolean_1_",
     );
     assert_eq!(r, Value::Boolean(true));
-}
-
-#[test]
-#[ignore = "diagnostic: print exact error messages for the BigNumber adjust tests"]
-fn eval_pct_bignumber_messages() {
-    // Run each BigNumber adjust test and print its error message so we
-    // can pin the exclusion-list strings.
-    let model = compile_with_platform("");
-    let registry = NativeRegistry::standard();
-    let testnames = [
-        "testAdjustByMonthsBigNumber",
-        "testAdjustByWeeksBigNumber",
-        "testAdjustByDaysBigNumber",
-        "testAdjustByHoursBigNumber",
-        "testAdjustByMinutesBigNumber",
-    ];
-    for tn in &testnames {
-        let mut evaluator = Evaluator::new(&model, &registry);
-        let Ok(pkg) = evaluator.call(
-            "meta::pure::functions::meta::pathToElement",
-            &[
-                Value::String("meta::pure::functions::date::tests".into()),
-                Value::String("::".into()),
-            ],
-        ) else {
-            continue;
-        };
-        let (adapter, exclusions) = pct_canary_args(&model);
-        let Ok(report) = evaluator.call(
-            "meta::pure::test::surveyor::runPCTTests",
-            &[pkg, Value::String("".into()), adapter, exclusions],
-        ) else {
-            continue;
-        };
-        let Value::Object(report_id) = report else {
-            continue;
-        };
-        let results = evaluator
-            .heap()
-            .get_property_values(report_id, "results")
-            .unwrap_or_else(|_| im_rc::Vector::new());
-        for v in &results {
-            let Value::Object(rid) = v else { continue };
-            let fqn = evaluator
-                .heap()
-                .get_property_values(*rid, "fqn")
-                .ok()
-                .and_then(|v| v.iter().next().cloned())
-                .and_then(|v| match v {
-                    Value::String(s) => Some(s.to_string()),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            if !fqn.contains(tn) {
-                continue;
-            }
-            let msg = evaluator
-                .heap()
-                .get_property_values(*rid, "message")
-                .ok()
-                .and_then(|v| v.iter().next().cloned())
-                .and_then(|v| match v {
-                    Value::String(s) => Some(s.to_string()),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            // Strip the source-location prefix "Execution error\n" and
-            // the trailing "\nFull Stack: …" — leaves just the inner
-            // PureRuntimeError::Display payload that exclusion-message
-            // matching compares against.
-            let core = msg
-                .lines()
-                .nth(1)
-                .map(|l| l.trim_matches('"').to_string())
-                .unwrap_or_default();
-            eprintln!("\n=== {fqn} ===\nFULL: {msg}\nCORE: {core}");
-        }
-    }
 }
 
 #[test]
@@ -2628,663 +2007,6 @@ fn eval_year_via_pct_adapter_lambda() {
         "f__Integer_1_",
     );
     assert_eq!(r, Value::Integer(2015));
-}
-
-/// Dump every non-PASS test in `package` with its FQN + first line of
-/// its message. Reads through `pct_canary_args_with_rust_exclusions`
-/// so excluded tests show as PASS (i.e., excluded from the dump). Used
-/// by Phase 7+ to triage FAIL/ERROR clusters package-by-package.
-fn pct_status_dump(package: &str) {
-    let model = compile_with_platform("");
-    let registry = NativeRegistry::standard();
-    let mut evaluator = Evaluator::new(&model, &registry);
-    let pkg = evaluator
-        .call(
-            "meta::pure::functions::meta::pathToElement",
-            &[
-                Value::String(SmolStr::new(package)),
-                Value::String("::".into()),
-            ],
-        )
-        .expect("pathToElement");
-    let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
-    let Ok(Value::Object(report_id)) = evaluator.call(
-        "meta::pure::test::surveyor::runPCTTests",
-        &[pkg, Value::String("".into()), adapter, exclusions],
-    ) else {
-        eprintln!("[{package}] runPCTTests failed");
-        return;
-    };
-    let results = evaluator
-        .heap()
-        .get_property_values(report_id, "results")
-        .unwrap_or_else(|_| im_rc::Vector::new());
-    eprintln!("\n=== {package} non-PASS dump ===");
-    for v in &results {
-        let Value::Object(rid) = v else { continue };
-        let status = evaluator
-            .heap()
-            .get_property_values(*rid, "status")
-            .ok()
-            .and_then(|v| v.iter().next().cloned());
-        let bucket = match &status {
-            Some(Value::EnumValue { member, .. }) if member.as_str() == "PASS" => continue,
-            Some(Value::EnumValue { member, .. }) => member.to_string(),
-            _ => "?".into(),
-        };
-        let fqn = evaluator
-            .heap()
-            .get_property_values(*rid, "fqn")
-            .ok()
-            .and_then(|v| v.iter().next().cloned())
-            .and_then(|v| match v {
-                Value::String(s) => Some(s.to_string()),
-                _ => None,
-            })
-            .unwrap_or_default();
-        let msg = evaluator
-            .heap()
-            .get_property_values(*rid, "message")
-            .ok()
-            .and_then(|v| v.iter().next().cloned())
-            .and_then(|v| match v {
-                Value::String(s) => Some(s.to_string()),
-                _ => None,
-            })
-            .unwrap_or_default();
-        let summary = msg.lines().nth(1).map_or_else(
-            || msg.lines().next().unwrap_or("").to_string(),
-            |l| l.trim_matches('"').to_string(),
-        );
-        eprintln!("[{bucket}] {fqn}\n  {summary}");
-    }
-}
-
-#[test]
-#[ignore = "diagnostic: PCT non-PASS dump for string package"]
-fn eval_pct_string_status_dump() {
-    pct_status_dump("meta::pure::functions::string");
-}
-
-#[test]
-#[ignore = "diagnostic: PCT non-PASS dump for math package"]
-fn eval_pct_math_status_dump() {
-    pct_status_dump("meta::pure::functions::math");
-}
-
-#[test]
-#[ignore = "diagnostic: PCT non-PASS dump for boolean package"]
-fn eval_pct_boolean_status_dump() {
-    pct_status_dump("meta::pure::functions::boolean");
-}
-
-#[test]
-#[ignore = "diagnostic: PCT non-PASS dump for collection package"]
-fn eval_pct_collection_status_dump() {
-    pct_status_dump("meta::pure::functions::collection");
-}
-
-#[test]
-#[ignore = "diagnostic: PCT non-PASS dump for lang package"]
-fn eval_pct_lang_status_dump() {
-    pct_status_dump("meta::pure::functions::lang");
-}
-
-#[test]
-#[ignore = "diagnostic: list all date tests' status + message"]
-fn eval_pct_date_status_dump() {
-    let model = compile_with_platform("");
-    let registry = NativeRegistry::standard();
-    let mut evaluator = Evaluator::new(&model, &registry);
-    let pkg = evaluator
-        .call(
-            "meta::pure::functions::meta::pathToElement",
-            &[
-                Value::String("meta::pure::functions::date::tests".into()),
-                Value::String("::".into()),
-            ],
-        )
-        .expect("pkg");
-    let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
-    let Ok(Value::Object(report_id)) = evaluator.call(
-        "meta::pure::test::surveyor::runPCTTests",
-        &[pkg, Value::String("".into()), adapter, exclusions],
-    ) else {
-        return;
-    };
-    let results = evaluator
-        .heap()
-        .get_property_values(report_id, "results")
-        .unwrap_or_else(|_| im_rc::Vector::new());
-    for v in &results {
-        let Value::Object(rid) = v else { continue };
-        let status = evaluator
-            .heap()
-            .get_property_values(*rid, "status")
-            .ok()
-            .and_then(|v| v.iter().next().cloned());
-        let bucket = match &status {
-            Some(Value::EnumValue { member, .. }) if member.as_str() == "PASS" => continue,
-            Some(Value::EnumValue { member, .. }) => member.to_string(),
-            _ => "?".into(),
-        };
-        let fqn = evaluator
-            .heap()
-            .get_property_values(*rid, "fqn")
-            .ok()
-            .and_then(|v| v.iter().next().cloned())
-            .and_then(|v| match v {
-                Value::String(s) => Some(s.to_string()),
-                _ => None,
-            })
-            .unwrap_or_default();
-        let msg = evaluator
-            .heap()
-            .get_property_values(*rid, "message")
-            .ok()
-            .and_then(|v| v.iter().next().cloned())
-            .and_then(|v| match v {
-                Value::String(s) => Some(s.to_string()),
-                _ => None,
-            })
-            .unwrap_or_default();
-        eprintln!("\n[{bucket}] {fqn}\n  {msg}");
-    }
-}
-
-#[test]
-#[ignore = "diagnostic: probe a single date test"]
-fn eval_pct_date_probe() {
-    let model = compile_with_platform("");
-    let registry = NativeRegistry::standard();
-    for testname in &[
-        "meta::pure::functions::date::tests::testYear",
-        "meta::pure::functions::date::tests::testHour",
-        "meta::pure::functions::date::tests::testHasMinute",
-        "meta::pure::functions::date::tests::testDateFromHour",
-        "meta::pure::functions::date::tests::testDatePartYearOnly",
-    ] {
-        let mut evaluator = Evaluator::new(&model, &registry);
-        let pkg = evaluator.call(
-            "meta::pure::functions::meta::pathToElement",
-            &[
-                Value::String(SmolStr::new(*testname)),
-                Value::String("::".into()),
-            ],
-        );
-        let Ok(pkg) = pkg else {
-            eprintln!("not found: {testname}");
-            continue;
-        };
-        let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
-        // testname is the test fn itself, not a package; use it as adapter input
-        let _ = pkg;
-        let _ = adapter;
-        let _ = exclusions;
-        // Use the parent path
-        let parent = testname.rsplit_once("::").map_or("", |(p, _)| p);
-        let Ok(pkg2) = evaluator.call(
-            "meta::pure::functions::meta::pathToElement",
-            &[
-                Value::String(SmolStr::new(parent)),
-                Value::String("::".into()),
-            ],
-        ) else {
-            continue;
-        };
-        let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
-        let report = match evaluator.call(
-            "meta::pure::test::surveyor::runPCTTests",
-            &[pkg2, Value::String("".into()), adapter, exclusions],
-        ) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("{testname}: surveyor failed: {e}");
-                continue;
-            }
-        };
-        let Value::Object(report_id) = report else {
-            continue;
-        };
-        let results = evaluator
-            .heap()
-            .get_property_values(report_id, "results")
-            .unwrap_or_else(|_| im_rc::Vector::new());
-        for v in &results {
-            let Value::Object(rid) = v else { continue };
-            let fqn = evaluator
-                .heap()
-                .get_property_values(*rid, "fqn")
-                .ok()
-                .and_then(|v| v.iter().next().cloned())
-                .and_then(|v| match v {
-                    Value::String(s) => Some(s.to_string()),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            if !fqn.contains(testname.split("::").last().unwrap()) {
-                continue;
-            }
-            let msg = evaluator
-                .heap()
-                .get_property_values(*rid, "message")
-                .ok()
-                .and_then(|v| v.iter().next().cloned())
-                .and_then(|v| match v {
-                    Value::String(s) => Some(s.to_string()),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            eprintln!("\n=== {testname} ===\n{msg}");
-        }
-    }
-}
-
-#[test]
-#[ignore = "diagnostic: PCT ERROR histogram for math package"]
-fn eval_pct_math_error_histogram() {
-    pct_error_histogram("meta::pure::functions::math");
-}
-
-#[test]
-#[ignore = "diagnostic: PCT ERROR histogram for string package"]
-fn eval_pct_string_error_histogram() {
-    pct_error_histogram("meta::pure::functions::string");
-}
-
-#[test]
-#[ignore = "diagnostic: PCT ERROR histogram for collection package"]
-fn eval_pct_collection_error_histogram() {
-    pct_error_histogram("meta::pure::functions::collection");
-}
-
-#[test]
-#[ignore = "diagnostic: PCT ERROR histogram for lang package"]
-fn eval_pct_lang_error_histogram() {
-    pct_error_histogram("meta::pure::functions::lang");
-}
-
-#[test]
-#[ignore = "diagnostic: surveyor failure histogram for multiplicity package"]
-fn eval_surveyor_multiplicity_error_histogram() {
-    surveyor_error_histogram("meta::pure::functions::multiplicity");
-}
-
-#[test]
-#[ignore = "diagnostic: PCT ERROR histogram for date package"]
-fn eval_pct_date_error_histogram() {
-    pct_error_histogram("meta::pure::functions::date");
-}
-
-// ===========================================================================
-// PCT monotonic baseline lock
-// ===========================================================================
-
-/// Minimum PCT pass count across `PCT_BROAD_CANARY_PACKAGES`. Bump this
-/// after each phase commit confirms a higher pass count via
-/// `eval_pct_broad_canary`. A tactical fix that flips one new test PASS
-/// while breaking three previously-passing tests fails this lock —
-/// cheapest possible defense against silent regressions in a 1000+ line
-/// diff. The "no tactical test-pass hacks" policy in CLAUDE.md is the
-/// principle; this is the enforcement.
-///
-/// Update protocol:
-/// 1. Land the fix.
-/// 2. Run `cargo test --test eval_tests eval_pct_broad_canary -- --ignored
-///    --nocapture` and read the new GRAND TOTAL pass count.
-/// 3. Bump this constant to the new value (or floor of it if the fix is
-///    expected to gain over time).
-///
-/// History (oldest first):
-/// - 333 — initial baseline at PCT harness shipping (commit f8ebca6263c)
-/// - 348 — Phase 1: generic `compare` native cleared 15 tests across
-///   boolean (+4), collection (+4), lang (+7)
-/// - 368 — Phase 2: tail / zip / values / split / parseDecimal natives
-///   cleared 20 tests across collection (+15) and string (+5)
-/// - 379 — Phase 3: round/2 (+ banker's rounding) / substring/2 /
-///   indexOf/3 / add/3 / range/2 overloads cleared 11 tests across
-///   collection (+4), math (+4 inc 2 FAIL→PASS via half-even), string (+3)
-/// - 388 — Phase 4: numeric coercion via `promote_pair` (Decimal+Float
-///   promotion) cleared 9 math tests (rem with mixed types)
-/// - 395 — Phase 5: multiplicity-aware Match + 3-arg overload cleared
-///   7 lang tests (match-pattern with empty / multi-element subjects
-///   against [0..1] / [*] / [1..*] params)
-/// - 398 — Phase 5b: Sort routes through `compare_values` (cross-type
-///   sort works), at error message matches Java exactly. Cleared 3
-///   collection tests; surveyor `asserts` package went 20/4/1 → 25/0/0.
-/// - 417 — Phase 6 (part 1): date subsystem. `Adjust` now accepts
-///   `Value::EnumValue` for the `DurationUnit` arg (was string-only),
-///   adds Milliseconds/Microseconds/Nanoseconds support via new
-///   `PureDate::add_*` methods, and routes through jiff's `try_*`
-///   span builders to error gracefully on out-of-range adjustments
-///   instead of panicking. Cleared 19 date PCT tests.
-/// - 434 — Phase 6 (part 2): hour-only datetime literals (`%2015-04-15T17`)
-///   now parse + carry `TimePrecision::Hour` (was rejected by
-///   `parse_datetime`'s `time_parts.len() < 2` gate), Rust-port
-///   exclusion list seeded for the 5 `BigNumber` adjust tests that
-///   expect years outside i16 range, and `apply_exclusion` matches
-///   exclusion messages by substring (so entries can pin just the
-///   `PureRuntimeError` text without the full Display wrapper).
-///   Cleared 17 date PCT tests; date package now 47/1/5.
-/// - 438 — Phase 6 (part 3): `datePart` passes through year- and
-///   month-only dates unchanged (Java parity per the platform
-///   comment); `dateDiff(YEARS|MONTHS)` uses calendar-component math
-///   (`b.year - a.year`, `(b.year - a.year)*12 + (b.month - a.month)`)
-///   instead of jiff's `until` (which measures elapsed time, not
-///   calendar deltas); `dateDiff(WEEKS)` counts Sunday-boundary
-///   crossings with direction-asymmetric half-open intervals
-///   (forward `(a, b]` vs backward `[b, a)`); `to_civil_date` no
-///   longer requires day precision (year/month-only dates default to
-///   month=1/day=1, well-formed for week/year arithmetic). date
-///   package now 51/0/2 — only TZ + sub-second datetime literal
-///   parsing edge cases remain.
-/// - 460 — Phase 7 (part 1): string subsystem.
-///   parseBoolean is now case-insensitive ("True", "TRUE", … all
-///   accepted, Java parity). toString routes through a dedicated
-///   `pure_to_string` renderer instead of `Value::Display`: strings
-///   unquoted, dates without leading `%`, Pair → `<a, b>`, List →
-///   `[values…]` (recursive), Class/Element → simple-leaf name, enum
-///   value → bare member. format gains zero-pad width (`%05d`),
-///   precision (`%.4f` rounds half-to-even), date specifier (`%t`),
-///   date-with-pattern (`%t{yyyy-MM-dd HH:mm:ss}` covering
-///   yyyy/MM/dd/HH/hh/h/mm/ss/SSS/a/Z/X plus quoted literals and
-///   [TZ] prefix), and `%r` repr now escapes backslash + single
-///   quote per Pure source rules. Cleared 23 string PCT tests.
-/// - 2026-04-26 → 461: `pure_to_string` now dispatches heap objects
-///   through their class's `toString()` qualified property (with
-///   generalization walk), mirroring Java
-///   `ToString.findBestToStringFunction`. Removed the hardcoded
-///   `Pair`/`List` classifier-string match arms — those types format
-///   identically because their platform `.pure` `toString()` QPs run
-///   under the new dispatch path. Drops the combined fail+error
-///   bucket from 78 to 36 (most of which were assertEq mismatches
-///   cascading off the broken object formatter).
-/// - 2026-04-26 → 466: Float equality now mirrors Java
-///   `CompiledSupport.eq` (normalizes `-0.0`→`0.0`, NaN==NaN);
-///   `parseDate` rewritten to accept the same lenient ISO shapes the
-///   `%`-literal lowering recognises (single-digit month/day, `Z`
-///   suffix, `±HHMM` offset). +1 testParseZero (parseFloat) and the
-///   3 parseDate tests; net +5 PASS, -2 FAIL, -3 ERROR.
-/// - 2026-04-26 → 467: `parseDecimal(string, precision, scale)`
-///   3-arg form was reading `values[1]` (precision) as the rounding
-///   scale — off-by-one in argument indexing. Fixed to use
-///   `values[2]` (scale). Resolves
-///   `testParseDecimalWithPrecisionScale`.
-/// - 2026-04-26 → 475: `binary_op` (the comparison/logical operator
-///   lowering) now routes through `resolve_function_call` so the
-///   compiler's type-based overload narrowing picks the right
-///   `lessThan(Date,Date)` / `lessThan(Boolean,Boolean)` /
-///   `lessThan(String,String)` etc. platform overload instead of
-///   falling through the runtime's prefix-name fallback (which
-///   always picked the Number native and errored on non-Number
-///   operands). Mirrors `variadic_op`. Resolves the entire
-///   boolean-inequality cluster: `testGreaterThan_Date`,
-///   `testGreaterThanEqual_Date`, `testLessThan_Date`,
-///   `testLessThanEqual_Date` plus the same four for Boolean
-///   operands. Net +8 PASS, error count 13 → 5.
-/// - 2026-04-26 → 481: error-message-pinning fixes. `sqrt`/`asin`/
-///   `acos` now throw "Unable to compute X of N" on out-of-domain
-///   inputs (Java's `Sqrt.java:53`/`ArcSine.java:53`/
-///   `ArcCosine.java:53` semantics — Java throws when the IEEE-754
-///   result is NaN). `range` step error message changed from
-///   "range: step cannot be zero" to "range step must not be 0".
-///   `rem` divide-by-zero now formats as "Cannot divide N by zero"
-///   (parametric on dividend, mirroring `Rem.java:?`). `slice`
-///   throws "The low bound (X) can't be higher than the high bound
-///   (Y) in a slice operation" instead of returning empty. New
-///   `java_number_string` helper in `native::math` renders integer-
-///   valued doubles as "2.0" (matching Java's `Double.toString`).
-///   Resolves testSquareRootError, testArcSineError,
-///   testArcCosineError, testRangeStepError, testRemError,
-///   testSliceError. Net +6 PASS.
-/// - 2026-04-26 → **448 (reset)**: branch was rebased onto upstream
-///   `legend-pure-rust` which refactored the platform `.pure`
-///   surveyor / PCT-test definitions. Total discoverable tests in
-///   the canary's six packages went 497 → 465; the absolute baseline
-///   numbers above describe deltas against a no-longer-current
-///   discovery set. Re-anchored at the current pass count of 445
-///   (pre-manifest) + 3 (testLarge{Times,Minus,Plus} exclusions
-///   loaded from `crates/runtime/resources/pct_grammar_rust_native.json`)
-///   = 448.
-///   Future phases ratchet this baseline up against this new total.
-/// - 2026-04-26 → 453: date assertError text-pinning (Phase 8).
-///   `dayOfMonth`/`hour`/`minute`/`second` natives now throw
-///   "Cannot get X for <date>" (mirroring the Java natives) when
-///   the receiver lacks the requested component.
-///   `DateConstruct` (the `date(...)` overloaded native) translates
-///   jiff's `"parameter 'X' is not in the required range of …"`
-///   into Java-Pure's `"Invalid X: Y"` post-hoc — see
-///   `translate_date_error` in `native/datetime.rs`. Single source
-///   of truth for date validity stays with jiff. Resolves
-///   testHourError, testMinuteError, testSecondError,
-///   testDayOfMonthError, testNewDateError. Net +5 PASS.
-/// - 2026-04-26 → 454: 3-arg `divide(Decimal, Decimal, Integer)`
-///   overload added — divides two Decimals and rounds to the given
-///   scale using banker's rounding (mirrors Java's `BigDecimal`
-///   `setScale(scale, HALF_EVEN)`). Same dispatch shape as
-///   `parseDecimal`'s 2/3-arg branch. Resolves testDecimalDivide.
-/// - 2026-04-26 → 458: collection cluster (Phase 8). `RemoveDuplicates`
-///   now honours its optional `key` and `eql` Function arguments
-///   (was ignoring them), routing `removeDuplicatesBy(col, key)` and
-///   `removeDuplicates(col, eql)` (both platform `.pure` wrappers
-///   that delegate to the 3-arg native) through the same code path.
-///   `resolve_value_type` for `Value::Collection` now folds element
-///   types through `least_upper_bound_ids` (newly `pub` in
-///   `pure/src/resolve.rs`) instead of returning `Any` — so
-///   `[1,2,3].type() == Integer` and `[CO_Address, CO_Location]
-///   .type() == CO_GeographicEntity`. Resolves
-///   testRemoveDuplicatesByPrimitive,
-///   testRemoveDuplicatesPrimitiveStandardFunctionExplicit,
-///   testRemoveDuplicatesPrimitiveNonStandardFunction,
-///   testConcatenateTypeInference. Net +4 PASS.
-/// - 2026-04-26 → 459: `lang::tests::compare::testDateCompare`
-///   added to the PCT exclusions manifest. The test asserts on
-///   `compare(%2001, %10999) < 0`; year 10999 falls outside jiff's
-///   `civil::Date` `i16` clamp of `-9999..=9999`. Same root cause as
-///   the existing `testAdjust*BigNumber` exclusions — a
-///   representational limit of our date model, not a fixable
-///   behavior. Java Pure stores year as `int`. Removing the
-///   exclusion requires swapping `jiff::civil` for a wider date
-///   representation.
-/// - 2026-04-26 → 460: 6-arg `date(year, month, day, hour, minute,
-///   second:Number[1])` now accepts Float and Decimal for the
-///   second argument (was Integer-only). New `decompose_second`
-///   helper splits the value into integer seconds + subsecond
-///   nanos and picks the subsecond-digit count: Float uses the
-///   trailing-zero heuristic (3/6/9, 1 when nanos==0); Decimal
-///   uses `scale()` directly so `59.999D` → 3 digits and `11.0D`
-///   → 1. Resolves `testDateFromSubSecond`.
-/// - 2026-04-26 → 462: `pure_to_string` for `Value::Float` now
-///   routes through `java_number_string` (already in
-///   `native::math` for the trig/sqrt error messages) so
-///   integer-valued doubles render with the trailing `.0`
-///   platform tests pin. `17.0->toString() == '17.0'` (was
-///   `'17'`); `134210000.0->toString() == '134210000.0'`. Resolves
-///   testFloatToStringWithExcessTrailingZeros and
-///   testFloatToStringWithPositiveExponent. Rust's native
-///   `{f64}` Display already handles avoidance of E-notation
-///   and expanded `0.000000013421` form correctly — only the
-///   `.0` suffix needed adding.
-/// - 2026-04-26 → 463: `toDecimal(Float)` switched from
-///   `Decimal::from_f64_retain` (preserves f64's full binary
-///   expansion: `3.8_f64 → 3.7999999999999998…`) to
-///   `Decimal::from_f64` (rounds to canonical round-trip form:
-///   `3.8`). Matches Java Pure's `BigDecimal.valueOf(double)`
-///   contract. Resolves testDoubleToDecimal.
-/// - 2026-04-26 → 464: `equality_key_properties` (in
-///   `native::equality`) now BFS-walks the class + supertype
-///   chain so an `<<equality.Key>>` declared on a parent
-///   (`TopClass.<<equality.Key>> name : String[1]`) is honoured
-///   when comparing subclass instances (`LeftClass extends
-///   TopClass`). Override semantics: a subclass that redefines a
-///   property — with or without the stereotype — wins for that
-///   property name. So `OtherBottomClass.sides : SideClass[*]`
-///   (no stereotype) overrides `TopClass.<<equality.Key>> sides
-///   : SideClass[*]` and the result excludes `sides` from
-///   equality keys for `OtherBottomClass` instances. Tracking
-///   *all* seen names (not just keys) enforces this. Resolves
-///   testEqualNonPrimitive (last FAIL).
-/// - 2026-04-26 → 465: `deactivate_spec`'s `FunctionCall` branch
-///   now populates the `SimpleFunctionExpression`'s `genericType`
-///   slot with a `GenericType{rawType=…}` heap wrapper. The
-///   raw type is computed by `infer_function_call_static_type`,
-///   which special-cases `match([lambda…])` to return the LUB
-///   of every lambda body's return type (`String + Integer +
-///   String → Any` via `least_upper_bound_ids`); other
-///   functions use their resolved `Function::return_type`.
-///   `infer_spec_static_type` walks the small subset of
-///   `ExprKinds` the deactivation path needs without exposing
-///   the full compile-time resolver to the runtime.
-///   The Catch-all branch (literals, lambdas, etc.) populates
-///   `genericType` from the *runtime* type via
-///   `resolve_value_type` — which already folds collection
-///   elements through `least_upper_bound_ids` (the Phase 8
-///   collection commit). Resolves testMatchWithMixedReturnType
-///   (last ERROR). 🎉 PCT 465/465 = 100%.
-const PCT_PASS_BASELINE: i64 = 465;
-
-/// Minimum `<<test.Test>>` surveyor pass count across the same packages
-/// as [`PCT_BROAD_CANARY_PACKAGES`]. The PCT lock catches regressions in
-/// PCT-specific dispatch; this companion lock catches regressions in the
-/// surveyor path that runs against the metamodel reflection / lang /
-/// collection / etc. tests Java exercises via `<<test.Test>>`.
-///
-/// Update protocol: same as `PCT_PASS_BASELINE` — bump after a phase
-/// commit confirms the new pass count via `eval_surveyor_broad_canary`.
-///
-/// History:
-/// - 211 — initial 100% pass rate at PCT harness shipping (commit
-///   f8ebca6263c). Held through Phase 1–5 across the 7-package canary.
-/// - 233 — Phase 5b initial: expanded lock to include `asserts`
-///   (20 PASS), `multiplicity` (1 PASS), `relation` (1 PASS). The CLI
-///   default `legend test --package Root` walks all of these, so locking
-///   only the 7-package subset was hiding 22 additional surveyor passes
-///   from regression detection.
-/// - 238 — Phase 5b complete: asserts cleared via Java-parity `at`
-///   error message + Sort routing through `compare_values`. asserts
-///   package went 20/4/1 → 25/0/0; no regressions elsewhere.
-/// - 243 — Phase 5c: Multiplicity-constant property shim (`PureZero` /
-///   `PureOne` / `ZeroOne` / `ZeroMany` / `OneMany` expose `upperBound` /
-///   `lowerBound` slots as `MultiplicityValue` heap objects with
-///   `.value` populated) + `toOneMany` native + 2-arg toOne overload.
-///   multiplicity package went 1/2/6 → 6/0/3.
-/// - 244 — Phase 5d: classifierGenericType shim on Function elements
-///   (synthesises GenericType→FunctionType chain so `someFn->functionType()`
-///   reflection works) + multiplicity slot populated on deactivated
-///   `FunctionCall` AST nodes from declared `return_multiplicity`. Cleared
-///   testHasUpperBoundNonConcrete.
-/// - 246 — Phase 5d-3: `evaluateAndDeactivate` populates `.multiplicity`
-///   on the deactivated `LambdaFunction` wrapper from the last body
-///   expression's declared `return_multiplicity` (Pure semantics: a
-///   lambda's return mult is the last expression's mult). Cleared
-///   testToOneMultiplicity + testToOneManyMultiplicity. Surveyor is
-///   now 246/0/0 — 100% pass on `<<test.Test>>` across every
-///   `meta::pure::functions::*` package the CLI walks.
-const SURVEYOR_PASS_BASELINE: i64 = 246;
-
-#[test]
-fn eval_pct_baseline_lock() {
-    // Active regression lock — runs as part of the default `cargo test`
-    // sweep, no `#[ignore]`. Walks the same package list as
-    // `eval_pct_broad_canary` and asserts the cumulative pass count is
-    // at least PCT_PASS_BASELINE.
-    //
-    // Cost: ~5–10 seconds because it executes every PCT test in every
-    // package on every CI run. That's the price of preventing silent
-    // pass-count regressions; the alternative is a tactical hack that
-    // games one test and goes unnoticed for weeks.
-    let model = compile_with_platform("");
-    let registry = NativeRegistry::standard();
-
-    let mut grand_pass = 0i64;
-    let mut per_pkg = Vec::new();
-    for pkg in PCT_BROAD_CANARY_PACKAGES {
-        let mut evaluator = Evaluator::new(&model, &registry);
-        let Ok(pkg_val) = evaluator.call(
-            "meta::pure::functions::meta::pathToElement",
-            &[Value::String(SmolStr::new(pkg)), Value::String("::".into())],
-        ) else {
-            continue;
-        };
-        let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
-        let Ok(Value::Object(report_id)) = evaluator.call(
-            "meta::pure::test::surveyor::runPCTTests",
-            &[pkg_val, Value::String("".into()), adapter, exclusions],
-        ) else {
-            continue;
-        };
-        let pass = read_report_counter(&evaluator, report_id, "passCount");
-        grand_pass += pass;
-        per_pkg.push((*pkg, pass));
-    }
-
-    assert!(
-        grand_pass >= PCT_PASS_BASELINE,
-        "PCT pass count regressed: got {grand_pass}, baseline is {PCT_PASS_BASELINE}.\n\
-         Per-package: {per_pkg:#?}\n\
-         Either you regressed a previously-passing test (fix it) or you legitimately \
-         dropped support (lower the baseline with a comment explaining why)."
-    );
-}
-
-/// Surveyor packages — covers every `<<test.Test>>`-bearing package
-/// under `meta::pure::functions::*`. Mirrors what `legend test` (the
-/// CLI default) walks via `--package Root`, so the lock catches any
-/// regression a user would see at the CLI.
-///
-/// The seven core packages are rooted at `::tests` (where their
-/// `<<test.Test>>` functions live). `asserts` is the exception: some
-/// of its tests are declared directly under `asserts::*` (alongside
-/// the assertion natives they test) rather than `asserts::tests::*`,
-/// so the lock targets the parent package to catch all of them. The
-/// CLI's `--package Root` walk picks them all up uniformly.
-const SURVEYOR_BROAD_CANARY_PACKAGES: &[&str] = &[
-    "meta::pure::functions::meta::tests",
-    "meta::pure::functions::collection::tests",
-    "meta::pure::functions::string::tests",
-    "meta::pure::functions::math::tests",
-    "meta::pure::functions::date::tests",
-    "meta::pure::functions::boolean::tests",
-    "meta::pure::functions::lang::tests",
-    "meta::pure::functions::asserts",
-    "meta::pure::functions::multiplicity",
-    "meta::pure::functions::relation",
-];
-
-#[test]
-fn eval_surveyor_baseline_lock() {
-    // Companion to eval_pct_baseline_lock — guards <<test.Test>> coverage
-    // (the metamodel reflection / lang / collection tests Java exercises
-    // via the surveyor's runTestsFromPath path). Phase 1–5 fixes touched
-    // dispatch, comparison, arithmetic, and match-pattern code that the
-    // surveyor also walks; this lock ensures none of those touches
-    // regressed a previously-passing surveyor test.
-    let model = compile_with_platform("");
-    let registry = NativeRegistry::standard();
-
-    let mut grand_pass = 0i64;
-    let mut per_pkg = Vec::new();
-    for pkg in SURVEYOR_BROAD_CANARY_PACKAGES {
-        let mut evaluator = Evaluator::new(&model, &registry);
-        let Ok(Value::Object(report_id)) = evaluator.call(
-            "meta::pure::test::surveyor::runTestsFromPath",
-            &[Value::String(SmolStr::new(pkg)), Value::String("".into())],
-        ) else {
-            continue;
-        };
-        let pass = read_report_counter(&evaluator, report_id, "passCount");
-        grand_pass += pass;
-        per_pkg.push((*pkg, pass));
-    }
-
-    assert!(
-        grand_pass >= SURVEYOR_PASS_BASELINE,
-        "Surveyor (<<test.Test>>) pass count regressed: got {grand_pass}, \
-         baseline is {SURVEYOR_PASS_BASELINE}.\n\
-         Per-package: {per_pkg:#?}\n\
-         Either you regressed a previously-passing test (fix it) or you legitimately \
-         dropped support (lower the baseline with a comment explaining why)."
-    );
 }
 
 // ===========================================================================
@@ -4014,4 +2736,205 @@ fn eval_test_has_subsecond_with_at_least_precision() {
         "f__Boolean_1_",
     );
     assert_eq!(r, Value::Boolean(true));
+}
+
+// ===========================================================================
+// Root-level surveyor regression locks — run on every `cargo test` (no #[ignore]).
+//
+// These three tests emulate the Java coverage matrix as a strict
+// regression gate: every discovered test must PASS. There is no
+// "minimum baseline" tolerance — fail / error counts must be zero.
+// Each invokes one surveyor entry point from the root package (`::`) so
+// newly-added test files in any subpackage are picked up automatically,
+// with no hardcoded package list to maintain.
+//
+// On failure the test prints every non-PASS result with its FQN and
+// failure message — that is the entire diagnostic surface, intentionally.
+// To investigate locally:
+//   cargo test -p legend-pure-runtime --test eval_tests \
+//     <test_name> -- --nocapture
+//
+// Cost: ~10–30s combined because each runs every test in scope on every
+// build. That's the price of a regression-proof gate.
+// ===========================================================================
+
+/// Pretty-print every non-PASS `TestResult` row from a `TestReport` heap
+/// object as `[STATUS] fqn — message-first-line`. Used by the three
+/// strict-assertion surveyor locks below to surface failure detail
+/// directly inside the panic message.
+fn dump_non_pass_results(
+    evaluator: &Evaluator,
+    report_id: legend_pure_runtime::heap::ObjectId,
+) -> String {
+    use std::fmt::Write as _;
+    let results = evaluator
+        .heap()
+        .get_property_values(report_id, "results")
+        .unwrap_or_else(|_| im_rc::Vector::new());
+    let mut out = String::new();
+    for v in &results {
+        let Value::Object(rid) = v else { continue };
+        let status = evaluator
+            .heap()
+            .get_property_values(*rid, "status")
+            .ok()
+            .and_then(|v| v.iter().next().cloned());
+        let bucket = match &status {
+            Some(Value::EnumValue { member, .. }) if member.as_str() == "PASS" => continue,
+            Some(Value::EnumValue { member, .. }) => member.to_string(),
+            _ => "?".into(),
+        };
+        let fqn = evaluator
+            .heap()
+            .get_property_values(*rid, "fqn")
+            .ok()
+            .and_then(|v| v.iter().next().cloned())
+            .and_then(|v| match v {
+                Value::String(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let msg = evaluator
+            .heap()
+            .get_property_values(*rid, "message")
+            .ok()
+            .and_then(|v| v.iter().next().cloned())
+            .and_then(|v| match v {
+                Value::String(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let summary = msg
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("")
+            .trim_matches('"')
+            .trim();
+        let _ = writeln!(out, "  [{bucket}] {fqn}\n      {summary}");
+    }
+    out
+}
+
+#[test]
+fn eval_surveyor_root_strict_pass() {
+    // Strict gate on `runTestsFromPath('Root', '')` — every <<test.Test>>
+    // discovered from the root package must PASS. No baseline tolerance,
+    // no ignored failures. If this turns red, fix the underlying tests
+    // (or, if the regression is intentional, the right answer is to remove
+    // the failing tests, not to lower a baseline).
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    let mut evaluator = Evaluator::new(&model, &registry);
+
+    let report = evaluator
+        .call(
+            "meta::pure::test::surveyor::runTestsFromPath",
+            &[Value::String("Root".into()), Value::String("".into())],
+        )
+        .expect("runTestsFromPath('Root', '') must succeed");
+    let Value::Object(report_id) = report else {
+        panic!("runTestsFromPath returned non-object: {report:?}");
+    };
+    let pass = read_report_counter(&evaluator, report_id, "passCount");
+    let fail = read_report_counter(&evaluator, report_id, "failCount");
+    let error = read_report_counter(&evaluator, report_id, "errorCount");
+    let skip = read_report_counter(&evaluator, report_id, "skipCount");
+
+    if fail != 0 || error != 0 || skip != 0 {
+        let detail = dump_non_pass_results(&evaluator, report_id);
+        panic!(
+            "<<test.Test>> root surveyor not 100% PASS: pass={pass} fail={fail} error={error} skip={skip}\n\
+             Non-PASS results:\n{detail}"
+        );
+    }
+}
+
+#[test]
+fn eval_pct_essential_strict_pass() {
+    // Strict gate on `runPCTTests(::, '/platform/pure/essential/', …)` —
+    // every <<PCT.test>> sourced from /platform/pure/essential/ must PASS
+    // (after applying the bundled Rust-port exclusions in
+    // crates/runtime/resources/pct_grammar_rust_native.json — those are
+    // representational limits like the i16 year clamp, not behavioural
+    // gaps). No baseline tolerance.
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    let mut evaluator = Evaluator::new(&model, &registry);
+
+    let root = evaluator
+        .call(
+            "meta::pure::functions::meta::pathToElement",
+            &[Value::String("Root".into()), Value::String("::".into())],
+        )
+        .expect("pathToElement('Root') must resolve to ::");
+    let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
+    let report = evaluator
+        .call(
+            "meta::pure::test::surveyor::runPCTTests",
+            &[
+                root,
+                Value::String("/platform/pure/essential/".into()),
+                adapter,
+                exclusions,
+            ],
+        )
+        .expect("runPCTTests on /platform/pure/essential/ must succeed");
+    let Value::Object(report_id) = report else {
+        panic!("runPCTTests returned non-object: {report:?}");
+    };
+    let pass = read_report_counter(&evaluator, report_id, "passCount");
+    let fail = read_report_counter(&evaluator, report_id, "failCount");
+    let error = read_report_counter(&evaluator, report_id, "errorCount");
+    let skip = read_report_counter(&evaluator, report_id, "skipCount");
+
+    if fail != 0 || error != 0 || skip != 0 {
+        let detail = dump_non_pass_results(&evaluator, report_id);
+        panic!(
+            "PCT essential surveyor not 100% PASS: pass={pass} fail={fail} error={error} skip={skip}\n\
+             Non-PASS results:\n{detail}"
+        );
+    }
+}
+
+#[test]
+fn eval_pct_grammar_functions_strict_pass() {
+    // Strict gate on `runPCTTests(::, '/platform/pure/grammar/functions/', …)` —
+    // grammar-layer counterpart to the essential lock. No baseline tolerance.
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    let mut evaluator = Evaluator::new(&model, &registry);
+
+    let root = evaluator
+        .call(
+            "meta::pure::functions::meta::pathToElement",
+            &[Value::String("Root".into()), Value::String("::".into())],
+        )
+        .expect("pathToElement('Root') must resolve to ::");
+    let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
+    let report = evaluator
+        .call(
+            "meta::pure::test::surveyor::runPCTTests",
+            &[
+                root,
+                Value::String("/platform/pure/grammar/functions/".into()),
+                adapter,
+                exclusions,
+            ],
+        )
+        .expect("runPCTTests on /platform/pure/grammar/functions/ must succeed");
+    let Value::Object(report_id) = report else {
+        panic!("runPCTTests returned non-object: {report:?}");
+    };
+    let pass = read_report_counter(&evaluator, report_id, "passCount");
+    let fail = read_report_counter(&evaluator, report_id, "failCount");
+    let error = read_report_counter(&evaluator, report_id, "errorCount");
+    let skip = read_report_counter(&evaluator, report_id, "skipCount");
+
+    if fail != 0 || error != 0 || skip != 0 {
+        let detail = dump_non_pass_results(&evaluator, report_id);
+        panic!(
+            "PCT grammar/functions surveyor not 100% PASS: pass={pass} fail={fail} error={error} skip={skip}\n\
+             Non-PASS results:\n{detail}"
+        );
+    }
 }
