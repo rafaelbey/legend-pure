@@ -339,6 +339,55 @@ fn compile_known_property_on_generic_type_compiles_clean() {
 }
 
 #[test]
+fn pair_generic_type_args_match_call_site_substitution_first() {
+    // User-reported gap: `pair(1, '')->genericType().typeArguments` was
+    // empty because the body's `^Pair<U,V>(...)` saw Generic
+    // placeholders. Pass 2.5 inference substitutes U → Integer, V →
+    // String into the OUTER call's `expr.type_info` (mirroring
+    // Java's `_genericType` slot). The runtime now reads that
+    // type_info after the body returns and back-fills
+    // `__typeArguments` onto the heap object.
+    let source = r"
+        function test::f(): String[1] {
+            pair(1, 'hello')->genericType().typeArguments->at(0).rawType->toOne()->id()
+        }
+    ";
+    let result = eval_pure(source, "f__String_1_");
+    assert_eq!(result, Value::String("Integer".into()));
+}
+
+#[test]
+fn pair_generic_type_args_match_call_site_substitution_second() {
+    let source = r"
+        function test::f(): String[1] {
+            pair(1, 'hello')->genericType().typeArguments->at(1).rawType->toOne()->id()
+        }
+    ";
+    let result = eval_pure(source, "f__String_1_");
+    assert_eq!(result, Value::String("String".into()));
+}
+
+#[test]
+fn passthrough_generic_function_preserves_existing_type_args() {
+    // `myId<T>(x:T[1]):T[1] { $x }` returning a Pair created by
+    // `pair(1,2)`: the back-fill's empty-slot guard must skip writing
+    // because pair's outer-call back-fill already populated the slot
+    // with [Integer, Integer]. Without the guard, the outer myId call's
+    // back-fill would attempt to overwrite (with the same data — so
+    // observed result is the same). The guard avoids the wasted write
+    // and preserves correctness for any future case where T is bound
+    // to a wider type than the inner construction.
+    let source = r"
+        function <<test.Test>> test::myId<T>(x: T[1]): T[1] { $x }
+        function test::f(): String[1] {
+            test::myId(pair(1, 2))->genericType().typeArguments->at(0).rawType->toOne()->id()
+        }
+    ";
+    let result = eval_pure(source, "f__String_1_");
+    assert_eq!(result, Value::String("Integer".into()));
+}
+
+#[test]
 fn deactivate_property_access_func_carries_property_wrapper() {
     // The synthesized Property wrapper on `_func` exposes
     // `name` (the property name) and `_owner` (the receiver class).

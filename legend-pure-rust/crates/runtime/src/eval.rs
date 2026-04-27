@@ -251,7 +251,13 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 function,
                 function_name,
                 arguments,
-            }) => self.eval_function_call(*function, function_name, arguments, &expr.source_info),
+            }) => self.eval_function_call(
+                *function,
+                function_name,
+                arguments,
+                &expr.source_info,
+                expr.type_info.as_deref(),
+            ),
 
             // -- Property call (`$x.name`) -------------------------------
             ExprKind::PropertyCall(FunctionCallData {
@@ -533,6 +539,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         function_name: &str,
         arguments: &[ValueSpec],
         source_info: &legend_pure_parser_ast::SourceInfo,
+        return_type_info: Option<&legend_pure_parser_pure::types::ResolvedType>,
     ) -> Result<Value, PureException> {
         // 1. Resolve the function's mangled FQN for native lookup.
         //    The compiler's Pass 2.1 stores the mangled FQN in ElementNode.name,
@@ -566,7 +573,22 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             for arg in arguments {
                 args.push(self.eval(arg)?);
             }
-            return self.call_user_function(element_id, &args, function_name, Some(source_info));
+            let value = self.call_user_function(element_id, &args, function_name, Some(source_info));
+            // Post-hoc back-fill of `__typeArguments` on the returned
+            // heap object using the call's compile-time-substituted
+            // return type. Pass 2.5 inference (`infer.rs:432-454`)
+            // resolved T, U, … to concrete elements via
+            // `infer_generic_bindings`; mirroring Java's
+            // `_genericType` slot on `SimpleFunctionExpression`, the
+            // call's `expr.type_info` carries those concrete bindings.
+            // The body's `^Class<U,V>(...)` left the slot empty
+            // (Generic placeholders evaluate to `Value::Unit` and
+            // are filtered by `New`'s type_args collection), so the
+            // empty-slot guard fires for fresh generic instantiations
+            // and preserves pre-populated tags from inner `^Class<T>`
+            // constructions or pass-through identity returns.
+            self.back_fill_call_type_arguments(&value, return_type_info)?;
+            return Ok(value);
         }
 
         // 2c. Unresolved call or native with an FQN mismatch: last-resort
@@ -613,6 +635,99 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 source: source_info.clone(),
             })
         })
+    }
+
+    /// Back-fill `__typeArguments` on a freshly returned heap object
+    /// from a generic Pure-function call.
+    ///
+    /// The compiler-substituted return type (`expr.type_info`) is the
+    /// source of truth — Java's `SimpleFunctionExpression._genericType`
+    /// slot in our IR. When a generic factory like
+    /// `pair<U,V>(first:U, second:V):Pair<U,V>[1]` is called as
+    /// `pair(1, '')`, Pass 2.5 substitutes U → Integer, V → String;
+    /// the call's `type_info` becomes `Pair<Integer, String>[1]`. The
+    /// body's `^Pair<U,V>(...)` left the heap object's
+    /// `__typeArguments` empty (Generic placeholders are filtered at
+    /// the `New` native's type_args collection), so we write
+    /// `[Integer, String]` here.
+    ///
+    /// Guarded by:
+    /// - Returned value is `Value::Object(_)` (other shapes have no slot).
+    /// - Return type is `TypeExpr::Named` with non-empty `type_arguments`.
+    /// - Every `type_arguments[i]` is `TypeExpr::Named { .. }` — Generic
+    ///   placeholders shouldn't reach here post-Pass-2.5 substitution,
+    ///   but the all-Named check makes the write idempotent under any
+    ///   future call site whose substitution leaves residual generics.
+    /// - The slot is empty — never overwrite an inner `^Class<T>(...)`
+    ///   population or a pass-through identity return's pre-existing tags.
+    /// - The object's classifier matches the return type's outer class —
+    ///   defensive guard against a polymorphic return type wider than
+    ///   the actual returned object's class (rare but possible with
+    ///   subtype returns).
+    #[allow(clippy::result_large_err)]
+    fn back_fill_call_type_arguments(
+        &mut self,
+        value: &Value,
+        return_type_info: Option<&legend_pure_parser_pure::types::ResolvedType>,
+    ) -> Result<(), PureException> {
+        let Value::Object(obj_id) = value else {
+            return Ok(());
+        };
+        let Some(rt) = return_type_info else {
+            return Ok(());
+        };
+        let legend_pure_parser_pure::types::TypeExpr::Named {
+            element: return_outer,
+            type_arguments,
+            ..
+        } = &rt.type_expr
+        else {
+            return Ok(());
+        };
+        if type_arguments.is_empty() {
+            return Ok(());
+        }
+        // Skip if any arg isn't fully resolved — stay conservative.
+        if !type_arguments
+            .iter()
+            .all(|ta| matches!(ta, legend_pure_parser_pure::types::TypeExpr::Named { .. }))
+        {
+            return Ok(());
+        }
+        // Empty-slot guard.
+        let existing = self
+            .heap
+            .get_property_values(*obj_id, "__typeArguments")
+            .map_err(PureException::from)?;
+        if !existing.is_empty() {
+            return Ok(());
+        }
+        // Classifier-match guard.
+        let classifier_path = self
+            .heap
+            .classifier(*obj_id)
+            .map_err(PureException::from)?
+            .to_owned();
+        let classifier_id = crate::m3_paths::resolve(self.model, &classifier_path);
+        if classifier_id != Some(*return_outer) {
+            return Ok(());
+        }
+        // Convert TypeExpr::Named { element } → Value::Element(_).
+        let type_args: Vec<Value> = type_arguments
+            .iter()
+            .filter_map(|ta| match ta {
+                legend_pure_parser_pure::types::TypeExpr::Named { element, .. } => {
+                    Some(Value::Element(*element))
+                }
+                _ => None,
+            })
+            .collect();
+        if !type_args.is_empty() {
+            self.heap
+                .mutate_set(*obj_id, "__typeArguments", &type_args)
+                .map_err(PureException::from)?;
+        }
+        Ok(())
     }
 
     // -----------------------------------------------------------------------

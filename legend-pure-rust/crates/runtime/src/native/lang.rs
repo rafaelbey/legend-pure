@@ -329,9 +329,24 @@ impl NativeFunction for New {
         let mut type_var_values: Vec<Value> = Vec::new();
         let mut kvs_offset = 2;
         if values.len() >= 3 {
+            // Only collect Element entries — `^Class<U,V>(...)` lowering
+            // emits `TypeReference` exprs whose Generic("U") variant
+            // evaluates to `Value::Unit` (eval.rs:304-309). Writing
+            // those Units to `__typeArguments` produces a non-empty
+            // but useless slot (downstream `genericType` reflection
+            // filters Units anyway). Skipping them here keeps the
+            // slot truly empty for the inner `^Class<U,V>` case,
+            // which lets the outer call's post-hoc write fire when
+            // the substituted return type carries concrete args.
             match &values[2] {
                 Value::Element(_) => type_args = vec![values[2].clone()],
-                Value::Collection(coll) => type_args = coll.iter().cloned().collect(),
+                Value::Collection(coll) => {
+                    type_args = coll
+                        .iter()
+                        .filter(|v| matches!(v, Value::Element(_)))
+                        .cloned()
+                        .collect();
+                }
                 _ => {}
             }
             if values.len() >= 4 {
