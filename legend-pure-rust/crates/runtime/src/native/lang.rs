@@ -2041,6 +2041,73 @@ fn class_fqn(model: &PureModel, id: ElementId) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// getAll
+// ---------------------------------------------------------------------------
+
+/// Pure `getAll<T>(class:Class<T>[1]):T[*]`
+///
+/// Returns every heap-resident instance whose classifier matches the given
+/// class exactly. Mirrors Java Pure's `Context.getClassifierInstances` —
+/// strict classifier match, no subtype walk.
+///
+/// **`Value::Element` flip for bootstrapped rows.** `RuntimeHeap::bootstrap_metamodel`
+/// stamps a heap row for every model element classified by its M3 metatype
+/// (a Class element gets classifier `meta::pure::metamodel::type::Class`,
+/// a Function gets `ConcreteFunctionDefinition`, etc.). Those rows have no
+/// reflective slots populated, so returning them as `Value::Object` would
+/// surface empty `.name`/`.package` reads via the bare-heap path. We
+/// instead return `Value::Element(eid)` whenever the matched object has a
+/// reverse-mapped `ElementId` (`heap.element_for_object`), so downstream
+/// property access flows through `eval_property_access`'s Element branch
+/// which falls back to model-aware dispatch (`eval_function_property` /
+/// `eval_element_property`). User-allocated objects with no reverse mapping
+/// still surface as `Value::Object` — exactly the pre-bootstrap shape.
+///
+/// The lowerer rewrites both `Class.all` and `Class.all()` into
+/// `FunctionCall("getAll", [Class])`, so this native is the single
+/// runtime entry point for the `.all` accessor.
+#[derive(Debug)]
+pub struct GetAll;
+
+impl NativeFunction for GetAll {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("getAll", &values, 1)?;
+        let class_id = crate::native::meta::as_element_id(&values[0])?;
+
+        // Reject Nil — `Nil.all()` makes no sense (no instances are ever
+        // classified as Nil). Mirrors the same guard in `New` / `dynamicNew`.
+        if Some(class_id) == crate::m3_paths::resolve(ctx.model(), crate::m3_paths::NIL) {
+            return Err(PureRuntimeError::EvaluationError(
+                "Cannot getAll instances of meta::pure::metamodel::type::Nil".into(),
+            )
+            .into());
+        }
+
+        let target_path =
+            crate::model_utils::build_element_path(ctx.model(), class_id, "::", false);
+        let heap = ctx.heap();
+        let projected: Vec<Value> = heap
+            .iter_classifiers()
+            .filter(|(_, cls)| *cls == target_path)
+            .map(|(oid, _)| match heap.element_for_object(oid) {
+                Some(eid) => Value::Element(eid),
+                None => Value::Object(oid),
+            })
+            .collect();
+        Ok(Evaluated::new(Value::from_vec(projected)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "getAll(class:Class<T>[1]):T[*]"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -2049,6 +2116,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("letFunction_String_1__T_m__T_m_", LetFunction);
     registry.register("if_Boolean_1__Function_1__Function_1__T_m_", If);
     registry.register("print_Any_MANY__Integer_1__Nil_0_", Print);
+    registry.register("getAll_Class_1__T_MANY_", GetAll);
     // `new` is split across two natives by call shape:
     //
     // - `New` handles the compiler-emitted `^Class<T>(prop=val, …)`

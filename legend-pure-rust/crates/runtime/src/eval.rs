@@ -1426,23 +1426,9 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     ) -> Result<Value, PureException> {
         let target_val = self.eval(target)?;
 
-        // Universal `.all` — every Class has an implicit `MyClass.all` that
-        // returns every heap instance classified as `MyClass` or any of its
-        // subclasses. Mirrors Java Pure's platform-level `.all` accessor.
-        if property == "all"
-            && let Value::Element(class_id) = target_val
-            && matches!(self.model.get_element(class_id), Element::Class(_))
-        {
-            let target_path =
-                crate::model_utils::build_element_path(self.model, class_id, "::", false);
-            let mut instances: Vec<Value> = Vec::new();
-            for (obj_id, classifier) in self.heap.iter_classifiers() {
-                if classifier == target_path {
-                    instances.push(Value::Object(obj_id));
-                }
-            }
-            return Ok(Value::from_vec(instances));
-        }
+        // `.all` (no parens) and `.all()` (with parens) are desugared to
+        // `getAll(target)` in the lowerer (`lower_member_access` in
+        // `crates/pure/src/lower.rs`), so this code path never sees them.
 
         // Direct QP invocation on a heap instance: `$instance.qp(args)`.
         // Resolve the instance's classifier → Class → `qualified_properties`

@@ -190,10 +190,16 @@ pub struct RuntimeHeap {
     /// Read direction (`element_to_object`) is the hot path —
     /// `Value::Element(eid)` projects to its heap row in O(1) for
     /// reflective property access. The reverse direction
-    /// (`object_to_element`) is rare; we synthesise it by walking
-    /// the forward map at access time rather than storing two
-    /// `HashMaps`.
+    /// (`object_to_element`) is now also O(1): `getAll` against an
+    /// M3 metaclass like `ConcreteFunctionDefinition` returns one
+    /// match per model element row, and each match needs to flip
+    /// back to its `ElementId` so model-aware property dispatch
+    /// (`eval_property_access` `Value::Element` branch) can answer
+    /// `.name`/`.package`/etc. without the bootstrap rows being
+    /// pre-populated. Two parallel `HashMap`s — kept in sync by
+    /// the only writer, `bootstrap_metamodel`.
     element_to_object: HashMap<ElementId, ObjectId>,
+    object_to_element: HashMap<ObjectId, ElementId>,
 }
 
 impl RuntimeHeap {
@@ -203,6 +209,7 @@ impl RuntimeHeap {
         Self {
             objects: SlotMap::with_key(),
             element_to_object: HashMap::new(),
+            object_to_element: HashMap::new(),
         }
     }
 
@@ -212,6 +219,7 @@ impl RuntimeHeap {
         Self {
             objects: SlotMap::with_capacity_and_key(capacity),
             element_to_object: HashMap::with_capacity(capacity),
+            object_to_element: HashMap::with_capacity(capacity),
         }
     }
 
@@ -227,14 +235,11 @@ impl RuntimeHeap {
     }
 
     /// Reverse lookup — find the `ElementId` whose metamodel row
-    /// is `oid`, or `None` if `oid` isn't a metamodel row. O(n) in
-    /// the bimap; reserved for diagnostic / consistency-check paths,
-    /// not hot evaluation.
+    /// is `oid`, or `None` if `oid` isn't a bootstrapped element row.
+    /// O(1) via `object_to_element`.
     #[must_use]
     pub fn element_for_object(&self, oid: ObjectId) -> Option<ElementId> {
-        self.element_to_object
-            .iter()
-            .find_map(|(eid, &id)| (id == oid).then_some(*eid))
+        self.object_to_element.get(&oid).copied()
     }
 
     // -- Allocation --
@@ -512,6 +517,7 @@ impl RuntimeHeap {
                     };
                 let obj_id = self.alloc_dynamic(classifier);
                 self.element_to_object.insert(eid, obj_id);
+                self.object_to_element.insert(obj_id, eid);
             }
         }
         // Walk the package table separately — Packages live in
