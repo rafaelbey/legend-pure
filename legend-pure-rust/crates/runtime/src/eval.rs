@@ -629,7 +629,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         call_site: Option<&legend_pure_parser_ast::SourceInfo>,
     ) -> Result<Value, PureException> {
         let element = self.model.get_element(element_id);
-        let node = self.model.get_node(element_id);
 
         let Element::Function(func) = element else {
             return Err(PureException::from(PureRuntimeError::EvaluationError(
@@ -640,11 +639,8 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         // Clone the data we need before borrowing self mutably
         let params = func.parameters.clone();
         let body = func.body.clone();
-        let def_source_info = node.source_info.clone();
-        // Use the call site if available, otherwise fallback to the definition site
-        let stack_source_info = call_site.cloned().unwrap_or_else(|| def_source_info.clone());
 
-        self.hooks.enter_function(function_name, &def_source_info);
+        self.hooks.enter_function(function_name, &self.model.get_node(element_id).source_info);
 
         // Push scope, bind parameters
         self.context.push_scope();
@@ -662,6 +658,10 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         self.hooks.leave_function(function_name);
 
         result.map_err(|e| {
+            let stack_source_info = call_site
+                .cloned()
+                .unwrap_or_else(|| self.model.get_node(element_id).source_info.clone());
+
             e.with_frame(StackFrame {
                 function_name: function_name.into(),
                 source: stack_source_info,
