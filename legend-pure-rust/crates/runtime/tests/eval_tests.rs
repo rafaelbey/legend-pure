@@ -44,7 +44,7 @@ use smol_str::SmolStr;
 /// `reactivate_value`, etc.) surface in test output when the user
 /// sets `RUST_LOG`. Default filter is `error` (silent); override
 /// with e.g.
-///     RUST_LOG=legend_pure_parser_pure::resolve=debug cargo test ...
+///     `RUST_LOG=legend_pure_parser_pure::resolve=debug` cargo test ...
 /// to trace overload resolution for a specific failing test.
 fn init_test_tracing() {
     static INIT: OnceLock<()> = OnceLock::new();
@@ -1270,12 +1270,12 @@ fn eval_string_plus_string_variable() {
     // Mirrors what stress generators emit: `function f(name: String[1]) { 'hello ' + $name }`.
     use legend_pure_runtime::eval::Evaluator;
     let model = compile_with_platform(
-        r#"
+        r"
         function test::greet(name: String[1]): String[1]
         {
             'hello ' + $name
         }
-        "#,
+        ",
     );
     let registry = NativeRegistry::standard();
     let mut eval = Evaluator::new(&model, &registry);
@@ -1296,12 +1296,12 @@ fn eval_lambda_param_inference_narrows_overloads() {
     // collapses the overload set to one and feeds `String[1]` into the
     // lambda body's type info.
     let result = eval_pure(
-        r#"
+        r"
         function test::f(): String[1]
         {
             ['a','b']->map(s| $s + 'X')->joinStrings(',')
         }
-        "#,
+        ",
         "f__String_1_",
     );
     assert_eq!(result, Value::String("aX,bX".into()));
@@ -1314,14 +1314,14 @@ fn eval_relation_at_chain_returns_relation_type() {
     // its source argument. Returns the column's element name reached via
     // `.columns->at(0).classifierGenericType.typeArguments[1].rawType.name`.
     let result = eval_pure(
-        r#"
+        r"
         function test::f(): String[1]
         {
             let rt = @(x:String)->genericType().rawType->cast(@RelationType<Any>)->toOne();
             let col = $rt.columns->at(0);
             $col.classifierGenericType->toOne().typeArguments->at(1).rawType.name->toOne()
         }
-        "#,
+        ",
         "f__String_1_",
     );
     assert_eq!(result, Value::String("String".into()));
@@ -1335,7 +1335,7 @@ fn eval_relation_add_columns_against_at_chain_source() {
     // `.classifierGenericType.multiplicityArguments[0].lowerBound.value`
     // chain (P0's MultiplicityValue shape fix).
     let result = eval_pure(
-        r#"
+        r"
         function test::f(): String[1]
         {
             let rt = addColumns(
@@ -1352,7 +1352,7 @@ fn eval_relation_add_columns_against_at_chain_source() {
                 + $mult.upperBound.value->toOne()->toString()
                 + ']'
         }
-        "#,
+        ",
         "f__String_1_",
     );
     assert_eq!(result, Value::String("z:Integer[0..1]".into()));
@@ -1469,7 +1469,7 @@ fn surveyor_outcome_histogram(package: &str, target_status: &str) {
 
     let mut histogram: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut outcome_count = 0;
-    for val in results.iter() {
+    for val in &results {
         let Value::Object(res_id) = val else {
             continue;
         };
@@ -1536,7 +1536,7 @@ fn surveyor_outcome_histogram(package: &str, target_status: &str) {
 /// name (the part before the first mangled-type segment) so we can
 /// spot families of missing overloads the Rust registry hasn't wired
 /// up yet. Previously targeted the SKIP bucket when `classify_outcome`
-/// downgraded FunctionNotFound; now that classification policy is
+/// downgraded `FunctionNotFound`; now that classification policy is
 /// strict (no message-based SKIP), those same results surface in the
 /// ERROR bucket.
 #[test]
@@ -1574,7 +1574,7 @@ fn eval_surveyor_missing_natives_harvest() {
             .heap()
             .get_property_values(report_id, "results")
             .unwrap_or_else(|_| im_rc::Vector::new());
-        for val in results.iter() {
+        for val in &results {
             let Value::Object(res_id) = val else {
                 continue;
             };
@@ -1837,7 +1837,7 @@ fn pct_canary_args(model: &PureModel) -> (Value, Value) {
 /// packages cover the same arithmetic for in-range inputs.
 ///
 /// `testLarge{Times,Minus,Plus}` (3 tests) — assert i64-overflowing
-/// arithmetic with literals like `9223372036854775898` (i64::MAX +
+/// arithmetic with literals like `9223372036854775898` (`i64::MAX` +
 /// 91) and expected results like `18446744073709551614` (2^64 - 2)
 /// that don't fit in i64. The platform marks these
 /// `{test.excludePlatform = 'Java compiled'}` because Java's Long
@@ -2037,7 +2037,7 @@ fn eval_pct_missing_natives_harvest() {
             .heap()
             .get_property_values(report_id, "results")
             .unwrap_or_else(|_| im_rc::Vector::new());
-        for val in results.iter() {
+        for val in &results {
             let Value::Object(res_id) = val else {
                 continue;
             };
@@ -2243,7 +2243,7 @@ fn pct_error_histogram(package: &str) {
         .unwrap_or_else(|_| im_rc::Vector::new());
     let mut histogram: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut outcome_count = 0usize;
-    for val in results.iter() {
+    for val in &results {
         let Value::Object(res_id) = val else { continue };
         let status = evaluator
             .heap()
@@ -2410,7 +2410,7 @@ fn eval_pct_bignumber_messages() {
             .heap()
             .get_property_values(report_id, "results")
             .unwrap_or_else(|_| im_rc::Vector::new());
-        for v in results.iter() {
+        for v in &results {
             let Value::Object(rid) = v else { continue };
             let fqn = evaluator
                 .heap()
@@ -2666,7 +2666,7 @@ fn pct_status_dump(package: &str) {
         .get_property_values(report_id, "results")
         .unwrap_or_else(|_| im_rc::Vector::new());
     eprintln!("\n=== {package} non-PASS dump ===");
-    for v in results.iter() {
+    for v in &results {
         let Value::Object(rid) = v else { continue };
         let status = evaluator
             .heap()
@@ -2700,9 +2700,7 @@ fn pct_status_dump(package: &str) {
             .unwrap_or_default();
         let summary = msg
             .lines()
-            .nth(1)
-            .map(|l| l.trim_matches('"').to_string())
-            .unwrap_or_else(|| msg.lines().next().unwrap_or("").to_string());
+            .nth(1).map_or_else(|| msg.lines().next().unwrap_or("").to_string(), |l| l.trim_matches('"').to_string());
         eprintln!("[{bucket}] {fqn}\n  {summary}");
     }
 }
@@ -2763,7 +2761,7 @@ fn eval_pct_date_status_dump() {
         .heap()
         .get_property_values(report_id, "results")
         .unwrap_or_else(|_| im_rc::Vector::new());
-    for v in results.iter() {
+    for v in &results {
         let Value::Object(rid) = v else { continue };
         let status = evaluator
             .heap()
@@ -2819,12 +2817,9 @@ fn eval_pct_date_probe() {
                 Value::String("::".into()),
             ],
         );
-        let pkg = match pkg {
-            Ok(v) => v,
-            Err(_) => {
-                eprintln!("not found: {testname}");
-                continue;
-            }
+        let pkg = if let Ok(v) = pkg { v } else {
+            eprintln!("not found: {testname}");
+            continue;
         };
         let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
         // testname is the test fn itself, not a package; use it as adapter input
@@ -2832,7 +2827,7 @@ fn eval_pct_date_probe() {
         let _ = adapter;
         let _ = exclusions;
         // Use the parent path
-        let parent = testname.rsplit_once("::").map(|(p, _)| p).unwrap_or("");
+        let parent = testname.rsplit_once("::").map_or("", |(p, _)| p);
         let pkg2 = match evaluator.call(
             "meta::pure::functions::meta::pathToElement",
             &[
@@ -2861,7 +2856,7 @@ fn eval_pct_date_probe() {
             .heap()
             .get_property_values(report_id, "results")
             .unwrap_or_else(|_| im_rc::Vector::new());
-        for v in results.iter() {
+        for v in &results {
             let Value::Object(rid) = v else { continue };
             let fqn = evaluator
                 .heap()
@@ -2955,16 +2950,16 @@ fn eval_pct_date_error_histogram() {
 /// - 379 — Phase 3: round/2 (+ banker's rounding) / substring/2 /
 ///   indexOf/3 / add/3 / range/2 overloads cleared 11 tests across
 ///   collection (+4), math (+4 inc 2 FAIL→PASS via half-even), string (+3)
-/// - 388 — Phase 4: numeric coercion via promote_pair (Decimal+Float
+/// - 388 — Phase 4: numeric coercion via `promote_pair` (Decimal+Float
 ///   promotion) cleared 9 math tests (rem with mixed types)
 /// - 395 — Phase 5: multiplicity-aware Match + 3-arg overload cleared
 ///   7 lang tests (match-pattern with empty / multi-element subjects
 ///   against [0..1] / [*] / [1..*] params)
-/// - 398 — Phase 5b: Sort routes through compare_values (cross-type
+/// - 398 — Phase 5b: Sort routes through `compare_values` (cross-type
 ///   sort works), at error message matches Java exactly. Cleared 3
 ///   collection tests; surveyor `asserts` package went 20/4/1 → 25/0/0.
 /// - 417 — Phase 6 (part 1): date subsystem. `Adjust` now accepts
-///   `Value::EnumValue` for the DurationUnit arg (was string-only),
+///   `Value::EnumValue` for the `DurationUnit` arg (was string-only),
 ///   adds Milliseconds/Microseconds/Nanoseconds support via new
 ///   `PureDate::add_*` methods, and routes through jiff's `try_*`
 ///   span builders to error gracefully on out-of-range adjustments
@@ -2972,10 +2967,10 @@ fn eval_pct_date_error_histogram() {
 /// - 434 — Phase 6 (part 2): hour-only datetime literals (`%2015-04-15T17`)
 ///   now parse + carry `TimePrecision::Hour` (was rejected by
 ///   `parse_datetime`'s `time_parts.len() < 2` gate), Rust-port
-///   exclusion list seeded for the 5 BigNumber adjust tests that
+///   exclusion list seeded for the 5 `BigNumber` adjust tests that
 ///   expect years outside i16 range, and `apply_exclusion` matches
 ///   exclusion messages by substring (so entries can pin just the
-///   PureRuntimeError text without the full Display wrapper).
+///   `PureRuntimeError` text without the full Display wrapper).
 ///   Cleared 17 date PCT tests; date package now 47/1/5.
 /// - 438 — Phase 6 (part 3): `datePart` passes through year- and
 ///   month-only dates unchanged (Java parity per the platform
@@ -3029,9 +3024,9 @@ fn eval_pct_date_error_histogram() {
 ///   falling through the runtime's prefix-name fallback (which
 ///   always picked the Number native and errored on non-Number
 ///   operands). Mirrors `variadic_op`. Resolves the entire
-///   boolean-inequality cluster: testGreaterThan_Date,
-///   testGreaterThanEqual_Date, testLessThan_Date,
-///   testLessThanEqual_Date plus the same four for Boolean
+///   boolean-inequality cluster: `testGreaterThan_Date`,
+///   `testGreaterThanEqual_Date`, `testLessThan_Date`,
+///   `testLessThanEqual_Date` plus the same four for Boolean
 ///   operands. Net +8 PASS, error count 13 → 5.
 /// - 2026-04-26 → 481: error-message-pinning fixes. `sqrt`/`asin`/
 ///   `acos` now throw "Unable to compute X of N" on out-of-domain
@@ -3071,7 +3066,7 @@ fn eval_pct_date_error_histogram() {
 ///   testDayOfMonthError, testNewDateError. Net +5 PASS.
 /// - 2026-04-26 → 454: 3-arg `divide(Decimal, Decimal, Integer)`
 ///   overload added — divides two Decimals and rounds to the given
-///   scale using banker's rounding (mirrors Java's BigDecimal
+///   scale using banker's rounding (mirrors Java's `BigDecimal`
 ///   `setScale(scale, HALF_EVEN)`). Same dispatch shape as
 ///   `parseDecimal`'s 2/3-arg branch. Resolves testDecimalDivide.
 /// - 2026-04-26 → 458: collection cluster (Phase 8). `RemoveDuplicates`
@@ -3091,11 +3086,11 @@ fn eval_pct_date_error_histogram() {
 /// - 2026-04-26 → 459: `lang::tests::compare::testDateCompare`
 ///   added to the PCT exclusions manifest. The test asserts on
 ///   `compare(%2001, %10999) < 0`; year 10999 falls outside jiff's
-///   civil::Date `i16` clamp of `-9999..=9999`. Same root cause as
+///   `civil::Date` `i16` clamp of `-9999..=9999`. Same root cause as
 ///   the existing `testAdjust*BigNumber` exclusions — a
 ///   representational limit of our date model, not a fixable
 ///   behavior. Java Pure stores year as `int`. Removing the
-///   exclusion requires swapping jiff::civil for a wider date
+///   exclusion requires swapping `jiff::civil` for a wider date
 ///   representation.
 /// - 2026-04-26 → 460: 6-arg `date(year, month, day, hour, minute,
 ///   second:Number[1])` now accepts Float and Decimal for the
@@ -3132,11 +3127,11 @@ fn eval_pct_date_error_histogram() {
 ///   property name. So `OtherBottomClass.sides : SideClass[*]`
 ///   (no stereotype) overrides `TopClass.<<equality.Key>> sides
 ///   : SideClass[*]` and the result excludes `sides` from
-///   equality keys for OtherBottomClass instances. Tracking
+///   equality keys for `OtherBottomClass` instances. Tracking
 ///   *all* seen names (not just keys) enforces this. Resolves
 ///   testEqualNonPrimitive (last FAIL).
-/// - 2026-04-26 → 465: `deactivate_spec`'s FunctionCall branch
-///   now populates the SimpleFunctionExpression's `genericType`
+/// - 2026-04-26 → 465: `deactivate_spec`'s `FunctionCall` branch
+///   now populates the `SimpleFunctionExpression`'s `genericType`
 ///   slot with a `GenericType{rawType=…}` heap wrapper. The
 ///   raw type is computed by `infer_function_call_static_type`,
 ///   which special-cases `match([lambda…])` to return the LUB
@@ -3144,7 +3139,7 @@ fn eval_pct_date_error_histogram() {
 ///   String → Any` via `least_upper_bound_ids`); other
 ///   functions use their resolved `Function::return_type`.
 ///   `infer_spec_static_type` walks the small subset of
-///   ExprKinds the deactivation path needs without exposing
+///   `ExprKinds` the deactivation path needs without exposing
 ///   the full compile-time resolver to the runtime.
 ///   The Catch-all branch (literals, lambdas, etc.) populates
 ///   `genericType` from the *runtime* type via
@@ -3172,21 +3167,21 @@ const PCT_PASS_BASELINE: i64 = 465;
 ///   only the 7-package subset was hiding 22 additional surveyor passes
 ///   from regression detection.
 /// - 238 — Phase 5b complete: asserts cleared via Java-parity `at`
-///   error message + Sort routing through compare_values. asserts
+///   error message + Sort routing through `compare_values`. asserts
 ///   package went 20/4/1 → 25/0/0; no regressions elsewhere.
-/// - 243 — Phase 5c: Multiplicity-constant property shim (PureZero /
-///   PureOne / ZeroOne / ZeroMany / OneMany expose `upperBound` /
+/// - 243 — Phase 5c: Multiplicity-constant property shim (`PureZero` /
+///   `PureOne` / `ZeroOne` / `ZeroMany` / `OneMany` expose `upperBound` /
 ///   `lowerBound` slots as `MultiplicityValue` heap objects with
 ///   `.value` populated) + `toOneMany` native + 2-arg toOne overload.
 ///   multiplicity package went 1/2/6 → 6/0/3.
 /// - 244 — Phase 5d: classifierGenericType shim on Function elements
 ///   (synthesises GenericType→FunctionType chain so `someFn->functionType()`
 ///   reflection works) + multiplicity slot populated on deactivated
-///   FunctionCall AST nodes from declared return_multiplicity. Cleared
+///   `FunctionCall` AST nodes from declared `return_multiplicity`. Cleared
 ///   testHasUpperBoundNonConcrete.
 /// - 246 — Phase 5d-3: `evaluateAndDeactivate` populates `.multiplicity`
-///   on the deactivated LambdaFunction wrapper from the last body
-///   expression's declared return_multiplicity (Pure semantics: a
+///   on the deactivated `LambdaFunction` wrapper from the last body
+///   expression's declared `return_multiplicity` (Pure semantics: a
 ///   lambda's return mult is the last expression's mult). Cleared
 ///   testToOneMultiplicity + testToOneManyMultiplicity. Surveyor is
 ///   now 246/0/0 — 100% pass on `<<test.Test>>` across every

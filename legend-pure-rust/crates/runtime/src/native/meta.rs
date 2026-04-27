@@ -155,7 +155,7 @@ impl NativeFunction for ElementToPath {
 
 /// Pure `sourceInformation(node:Any[1]):SourceInformation[0..1]`
 ///
-/// Returns a SourceInformation heap object for a model-element reference
+/// Returns a `SourceInformation` heap object for a model-element reference
 /// (`Value::Element`) if source info is recoverable, otherwise [`Value::Unit`].
 ///
 /// Populates `source`, `startLine`, `startColumn`, `line`, `column`,
@@ -520,7 +520,7 @@ impl NativeFunction for Match {
         #[allow(clippy::cast_possible_truncation)]
         let subject_count = elements.len() as u32;
 
-        for func_val in functions.iter() {
+        for func_val in &functions {
             let Value::Function(fv) = func_val else {
                 continue;
             };
@@ -782,7 +782,7 @@ impl NativeFunction for GenericTypeOf {
 /// describing a `Value::Function`'s signature.
 ///
 /// For lambdas: every declared parameter becomes a `VariableExpression`
-/// child carrying `name` plus a `genericType` GenericType wrapping the
+/// child carrying `name` plus a `genericType` `GenericType` wrapping the
 /// parameter's resolved type, with multiplicity reified as a sibling
 /// `Multiplicity` wrapper. The lambda body's static return type isn't
 /// known at this layer (no Pass-2.5 inference plumbed through to
@@ -882,13 +882,10 @@ fn build_multiplicity_wrapper(
     let (lower, upper): (i64, Option<i64>) = match m {
         M::PureOne => (1, Some(1)),
         M::ZeroOrOne => (0, Some(1)),
-        M::ZeroOrMany => (0, None),
         M::OneOrMany => (1, None),
         M::Range { lower, upper } => (i64::from(*lower), upper.map(i64::from)),
-        // Multiplicity variables (`m` in `reverse<T|m>(…)`) act like
-        // `[*]` at the runtime layer where the binding hasn't been
-        // resolved.
-        M::Variable(_) => (0, None),
+        // ZeroOrMany and unbound variables: unbounded, zero or more
+        M::ZeroOrMany | M::Variable(_) => (0, None),
     };
     let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::MULTIPLICITY);
     let lower_value = ctx
@@ -1280,7 +1277,7 @@ fn value_matches_type(
 }
 
 /// Direct parents of `id` in declaration order, with an implicit edge to
-/// `Any` when a Class / PrimitiveType declares none.
+/// `Any` when a Class / `PrimitiveType` declares none.
 fn direct_parents(model: &PureModel, id: ElementId) -> Vec<ElementId> {
     let mut parents: Vec<ElementId> = Vec::new();
     match model.get_element(id) {
@@ -1372,7 +1369,7 @@ fn linearize_c3(model: &PureModel, id: ElementId) -> Vec<ElementId> {
                 },
             };
             result.push(pick);
-            for list in lists.iter_mut() {
+            for list in &mut lists {
                 if list.front() == Some(&pick) {
                     list.pop_front();
                 }
@@ -1717,7 +1714,7 @@ fn render_float_repr(f: f64) -> String {
 /// pure-crate function is `pub(crate)` and we cannot edit that crate.
 ///
 /// Honours two implicit edges the compiler does not materialise:
-/// - Every Class / PrimitiveType implicitly extends `Any`, so an empty
+/// - Every Class / `PrimitiveType` implicitly extends `Any`, so an empty
 ///   `super_types` chain terminates at the top of the lattice rather than
 ///   the first node the walk sees. `SA->subTypeOf(Any)` expects `true`
 ///   even though `SA` declares no explicit `extends`.
@@ -1828,7 +1825,7 @@ impl NativeFunction for ExtractEnumValue {
         }
         Ok(Evaluated::new(Value::EnumValue {
             enum_id,
-            member: SmolStr::new(&*name),
+            member: SmolStr::new(name),
         }))
     }
 
@@ -1844,12 +1841,12 @@ impl NativeFunction for ExtractEnumValue {
 /// Pure `evaluateAndDeactivate<T|m>(var:T[m]):T[m]`
 ///
 /// Java Pure evaluates the value then re-wraps it as a deactivated
-/// ValueSpecification. Semantically equivalent to `deactivate(evaluate(x))`.
+/// `ValueSpecification`. Semantically equivalent to `deactivate(evaluate(x))`.
 /// This matters for lambdas: `{|true}->evaluateAndDeactivate()` produces a
 /// LambdaFunction-shaped heap object whose `.expressionSequence` is the
 /// deactivated body — so downstream reflection
 /// (`...expressionSequence->cast(@InstanceValue).values`) can walk the
-/// evaluated body without losing the "this is a ValueSpec" shape.
+/// evaluated body without losing the "this is a `ValueSpec`" shape.
 ///
 /// For scalar / collection inputs we evaluate per-argument and wrap the
 /// result in an `InstanceValue` — the deactivate-of-evaluated form.
@@ -2399,7 +2396,7 @@ impl NativeFunction for OpenVariableValues {
 
 /// Pure `genericTypeClass(g:GenericType[1]):Class<Any>[0..1]`
 ///
-/// Reads the GenericType's `rawType` property and returns it only when it
+/// Reads the `GenericType`'s `rawType` property and returns it only when it
 /// references a Class element. Primitive types, Enumerations, Measures,
 /// Associations, Profiles, and empty-rawType generic types all produce
 /// [`Value::Unit`] — matching `testGenericTypeClassPrimitive` /
@@ -2551,7 +2548,7 @@ impl NativeFunction for ElementPath {
 ///
 /// Mirror of [`Deactivate`]. Java Pure re-evaluates a previously-deactivated
 /// value-spec, optionally substituting free variables from the `vars` map.
-/// The Rust runtime treats `Value::Function` closures as the ValueSpec
+/// The Rust runtime treats `Value::Function` closures as the `ValueSpec`
 /// proxy already (see [`Deactivate`] and the `expressionSequence` round-trip
 /// in `eval_property_access`), so reactivation just means invoking the
 /// closure. Non-closure specs pass through unchanged — they were never

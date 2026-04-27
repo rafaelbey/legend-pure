@@ -1554,7 +1554,7 @@ fn compile_lambda_let_shadows_outer_let() {
 // Function dispatch phases — targeted tests per phase
 // ---------------------------------------------------------------------------
 
-/// Resolve the single FunctionCall in `caller_fqn`'s body and return the
+/// Resolve the single `FunctionCall` in `caller_fqn`'s body and return the
 /// mangled name of the resolved callee (i.e. which overload dispatch picked).
 fn dispatch_target(
     model: &legend_pure_parser_pure::model::PureModel,
@@ -1562,7 +1562,7 @@ fn dispatch_target(
 ) -> String {
     let path: Vec<smol_str::SmolStr> = caller_fqn
         .iter()
-        .map(|s| smol_str::SmolStr::new(s))
+        .map(smol_str::SmolStr::new)
         .collect();
     let caller_id = model
         .resolve_by_path(&path)

@@ -206,8 +206,7 @@ impl NativeFunction for Init {
             }
             // Scalar / Unit: no "last" to drop; mirror Java Pure's
             // behaviour of returning the empty segment.
-            Value::Unit => Value::Unit,
-            _ => Value::Unit,
+            Value::Unit | _ => Value::Unit,
         };
         Ok(Evaluated::new(result))
     }
@@ -718,7 +717,7 @@ impl NativeFunction for RemoveDuplicates {
         // Pre-compute the comparison key for each input element.
         // When no `key` is provided the element itself is its key.
         let mut keys: Vec<Value> = Vec::with_capacity(source.len());
-        for item in source.iter() {
+        for item in &source {
             let k = match &key_fn {
                 Some(kf) => ctx.call_function(kf, &[item.clone()])?,
                 None => item.clone(),
@@ -1239,7 +1238,6 @@ impl NativeFunction for Sort {
 /// `Function[0..1]` parameter.
 fn lambda_or_none(v: &Value) -> Option<&Value> {
     match v {
-        Value::Unit => None,
         Value::Function(_) => Some(v),
         _ => None,
     }
@@ -1415,7 +1413,7 @@ impl NativeFunction for NewMap {
         }
         let pairs = values[0].to_collection();
         let mut entries = im_rc::HashMap::new();
-        for pair in pairs.iter() {
+        for pair in &pairs {
             let Value::Object(obj_id) = pair else {
                 return Err(PureRuntimeError::EvaluationError(format!(
                     "newMap: expected Pair<U,V>, got {}",
@@ -1651,7 +1649,7 @@ impl NativeFunction for PutAll {
                 }
             }
             other => {
-                for pair in other.to_collection().iter() {
+                for pair in &other.to_collection() {
                     let (k, v) = pair_first_second(ctx, pair, "putAll")?;
                     updated.insert(value_to_key(&k, ctx)?, v);
                 }
@@ -1687,7 +1685,7 @@ impl NativeFunction for ReplaceAll {
             return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
         };
         let mut updated: im_rc::HashMap<ValueKey, Value> = im_rc::HashMap::new();
-        for pair in values[1].to_collection().iter() {
+        for pair in &values[1].to_collection() {
             let (k, v) = pair_first_second(ctx, pair, "replaceAll")?;
             updated.insert(value_to_key(&k, ctx)?, v);
         }
@@ -1843,7 +1841,7 @@ impl NativeFunction for GroupBy {
         // track order separately via a Vec<ValueKey> of first-seen keys.
         let mut groups: im_rc::HashMap<ValueKey, Vec<Value>> = im_rc::HashMap::new();
         let mut key_order: Vec<ValueKey> = Vec::new();
-        for item in items.iter() {
+        for item in &items {
             let key_val = ctx.call_function(&f, &[item.clone()])?;
             let key = value_to_key(&key_val, ctx)?;
             if !groups.contains_key(&key) {
@@ -1986,7 +1984,7 @@ pub fn register(registry: &mut NativeRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::{MockCtx, force_all, lit_collection, lit_int, lit_str};
+    use crate::native::{MockCtx, lit_collection, lit_int, lit_str};
 
     /// Build a `ValueSpec` for an integer collection — mirrors the old `int_collection`
     /// helper but produces a `ValueSpec` suitable for `MockCtx`.

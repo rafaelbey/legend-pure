@@ -179,8 +179,8 @@ pub enum HeapEntry {
 /// via `Arc`.
 pub struct RuntimeHeap {
     objects: SlotMap<ObjectId, HeapEntry>,
-    /// BiMap between compiled `ElementId`s and the heap rows that
-    /// represent them as M3 metamodel CoreInstances. Populated by
+    /// `BiMap` between compiled `ElementId`s and the heap rows that
+    /// represent them as M3 metamodel `CoreInstances`. Populated by
     /// [`Self::bootstrap_metamodel`] at Evaluator construction;
     /// drives the unified-reflection refactor where every metamodel
     /// reference is reachable as both an `ElementId` (compiled-model
@@ -192,7 +192,7 @@ pub struct RuntimeHeap {
     /// reflective property access. The reverse direction
     /// (`object_to_element`) is rare; we synthesise it by walking
     /// the forward map at access time rather than storing two
-    /// HashMaps.
+    /// `HashMaps`.
     element_to_object: HashMap<ElementId, ObjectId>,
 }
 
@@ -518,7 +518,7 @@ impl RuntimeHeap {
         // `global_packages`, not in element chunks.
         for raw_pkg_idx in 0..model.global_packages.len() {
             #[allow(clippy::cast_possible_truncation)]
-            let pkg_id = PackageId(raw_pkg_idx as u32);
+            let pkg_id = PackageId(raw_pkg_idx);
             let eid = ElementId::Package(pkg_id);
             if self.element_to_object.contains_key(&eid) {
                 continue;

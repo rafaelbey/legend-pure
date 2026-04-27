@@ -627,7 +627,7 @@ impl Value {
     /// Inverse of [`Self::as_object_id`]. Returns:
     /// - `Value::Element(eid)` → `Some(eid)`
     /// - `Value::Function(Compiled(eid))` → `Some(eid)`
-    /// - `Value::Object(oid)` → reverse-lookup via the BiMap when the
+    /// - `Value::Object(oid)` → reverse-lookup via the `BiMap` when the
     ///   row was created by `bootstrap_metamodel` (rare; reserved for
     ///   diagnostics)
     /// - everything else → `None`

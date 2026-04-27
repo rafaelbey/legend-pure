@@ -55,9 +55,7 @@ impl NativeFunction for Assert {
         } else {
             let msg_val = crate::native::force_thunk(&args[1], ctx)?.into_value();
             let msg = msg_val
-                .as_string()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|_| "Assertion failed".to_string());
+                .as_string().map_or_else(|_| "Assertion failed".to_string(), smol_str::SmolStr::to_string);
             Err(PureRuntimeError::AssertionFailed(msg).into())
         }
     }
@@ -267,7 +265,7 @@ fn function_fqn(callable: &Value, ctx: &dyn EvalContextTrait) -> String {
     }
 }
 
-/// Classify a function call result into (status_name, optional_message).
+/// Classify a function call result into (`status_name`, `optional_message`).
 ///
 /// Status values are *member* names (`"PASS"`, `"FAIL"`, `"ERROR"`,
 /// `"SKIP"`) that [`build_test_result`] pairs with the `TestStatus`

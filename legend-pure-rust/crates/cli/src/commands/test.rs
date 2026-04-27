@@ -144,16 +144,13 @@ pub struct TestArgs {
 pub fn run(args: TestArgs) -> Result<(), CliError> {
     let mode_label = if args.pct { "PCT tests" } else { "tests" };
     let pct_via = if args.pct {
-        match &args.manifest {
-            Some(m) => format!(" (manifest: {m})"),
-            None => {
-                let suffix = if args.no_default_exclusions {
-                    ", no default exclusions"
-                } else {
-                    ", default exclusions: pct_grammar_rust_native.json"
-                };
-                format!(" (adapter: {}{})", args.adapter, suffix)
-            }
+        if let Some(m) = &args.manifest { format!(" (manifest: {m})") } else {
+            let suffix = if args.no_default_exclusions {
+                ", no default exclusions"
+            } else {
+                ", default exclusions: pct_grammar_rust_native.json"
+            };
+            format!(" (adapter: {}{})", args.adapter, suffix)
         }
     } else {
         String::new()
@@ -372,7 +369,7 @@ impl TestReport {
             .get_property_values(id, "results")
             .map_err(|e| CliError::Custom(format!("TestReport.results read failed: {e}")))?;
         let mut results = Vec::with_capacity(raw_results.len());
-        for v in raw_results.iter() {
+        for v in &raw_results {
             if let Value::Object(rid) = v {
                 results.push(TestResult::read(heap, *rid)?);
             }
@@ -392,7 +389,7 @@ impl TestReport {
         // when `--show-detail` is set.
         for r in &self.results {
             match (&r.status, show_detail) {
-                (TestStatus::Pass, true) | (TestStatus::Skip, true) => r.render_line(),
+                (TestStatus::Pass | TestStatus::Skip, true) => r.render_line(),
                 (TestStatus::Fail | TestStatus::Error | TestStatus::Other(_), _) => r.render_line(),
                 _ => {}
             }
@@ -512,7 +509,6 @@ fn print_coverage_summary(map: &CoverageMap) {
 
     eprintln!();
     eprintln!(
-        "{}",
         "┌──────────────────────────────────────────────────────────────────────────┐"
     );
     eprintln!(
@@ -572,8 +568,7 @@ fn print_coverage_summary(map: &CoverageMap) {
         let fp_str = format!("{fp:.0}%");
 
         eprintln!(
-            "│ {:<32} │ {:>6} │ {:>5} │ {:>5} │ {:>5} │ {:>4} │",
-            display_source, lf, lh, lp_str, br_str, fp_str,
+            "│ {display_source:<32} │ {lf:>6} │ {lh:>5} │ {lp_str:>5} │ {br_str:>5} │ {fp_str:>4} │",
         );
     }
 

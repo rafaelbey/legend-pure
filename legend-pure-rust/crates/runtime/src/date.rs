@@ -304,13 +304,13 @@ impl PureDate {
 
     /// Get the underlying `jiff::civil::Date`.
     ///
-    /// Year- and month-only PureDates default month=1 and day=1, so
+    /// Year- and month-only `PureDates` default month=1 and day=1, so
     /// the underlying date is well-formed at every precision. The
     /// returned date is meaningful for any precision-tolerant use:
     /// `dateDiff(%2015, %2016, YEARS)` measures Jan 1 → Jan 1 = 1 yr,
     /// matching Java Pure semantics where year-precision dates compare
     /// at their nominal start. Callers that need a *strict* day-level
-    /// guarantee (e.g. `datePart` returning a StrictDate) should still
+    /// guarantee (e.g. `datePart` returning a `StrictDate`) should still
     /// gate on `precision >= DatePrecision::Day` themselves.
     #[allow(clippy::unnecessary_wraps)] // Result kept for API symmetry with to_civil_datetime
     pub fn to_civil_date(&self) -> Result<jiff::civil::Date, PureRuntimeError> {
@@ -463,7 +463,7 @@ impl PureDate {
     /// # Errors
     /// Returns an error on overflow or insufficient precision.
     pub fn add_milliseconds(&self, ms: i64) -> Result<Self, PureRuntimeError> {
-        self.add_subsecond_unit("milliseconds", ms, |sp, n| sp.try_milliseconds(n))
+        self.add_subsecond_unit("milliseconds", ms, jiff::Span::try_milliseconds)
     }
 
     /// Add microseconds (requires sub-second precision).
@@ -471,7 +471,7 @@ impl PureDate {
     /// # Errors
     /// Returns an error on overflow or insufficient precision.
     pub fn add_microseconds(&self, us: i64) -> Result<Self, PureRuntimeError> {
-        self.add_subsecond_unit("microseconds", us, |sp, n| sp.try_microseconds(n))
+        self.add_subsecond_unit("microseconds", us, jiff::Span::try_microseconds)
     }
 
     /// Add nanoseconds (requires sub-second precision).
@@ -479,7 +479,7 @@ impl PureDate {
     /// # Errors
     /// Returns an error on overflow or insufficient precision.
     pub fn add_nanoseconds(&self, ns: i64) -> Result<Self, PureRuntimeError> {
-        self.add_subsecond_unit("nanoseconds", ns, |sp, n| sp.try_nanoseconds(n))
+        self.add_subsecond_unit("nanoseconds", ns, jiff::Span::try_nanoseconds)
     }
 
     /// Shared helper for sub-second arithmetic. The Pure platform tests

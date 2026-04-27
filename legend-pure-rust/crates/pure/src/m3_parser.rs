@@ -1335,7 +1335,7 @@ mod tests {
 
     #[test]
     fn parse_profile_with_stereotypes() {
-        let src = r#"
+        let src = r"
 ^Root.children[meta].children[pure].children[metamodel].children[extension].children[Profile] ProtocolInfo @Root.children[meta].children[pure].children[metamodel].children
 {
     Root.children[meta].children[pure].children[metamodel].children[PackageableElement].properties[package] : Root.children[meta].children[pure].children[metamodel],
@@ -1353,7 +1353,7 @@ mod tests {
         }
     ]
 }
-        "#;
+        ";
 
         let (nodes, elements, regs) = parse_fragment(src);
         assert_eq!(regs.len(), 1);
@@ -1372,7 +1372,7 @@ mod tests {
 
     #[test]
     fn parse_enumeration_with_values() {
-        let src = r#"
+        let src = r"
 ^Root.children[meta].children[pure].children[metamodel].children[type].children[Enumeration] AggregationKind @Root.children[meta].children[pure].children[metamodel].children[function].children[property].children
 {
     Root.children[meta].children[pure].children[metamodel].children[type].children[Enumeration].properties[values]:
@@ -1383,7 +1383,7 @@ mod tests {
              ],
     Root.children[meta].children[pure].children[metamodel].children[ModelElement].properties[name]:'AggregationKind'
 }
-        "#;
+        ";
 
         let (_nodes, elements, regs) = parse_fragment(src);
         assert_eq!(regs.len(), 1);
@@ -1398,14 +1398,14 @@ mod tests {
 
     #[test]
     fn parse_package_skipped() {
-        let src = r#"
+        let src = r"
 ^Package meta @Root.children
 {
     Root.children[meta].children[pure].children[metamodel].children[ModelElement].properties[name] : 'meta',
     Package.properties[children] : [],
     Root.children[meta].children[pure].children[metamodel].children[PackageableElement].properties[package] : Root
 }
-        "#;
+        ";
 
         let (_nodes, _elements, regs) = parse_fragment(src);
         // Packages don't produce elements
@@ -1442,7 +1442,7 @@ mod tests {
         let protocol_idx = (0..nodes.len())
             .find(|&i| nodes.get(i).name == "ProtocolInfo")
             .expect("ProtocolInfo should exist");
-        if let Element::Profile(p) = elements.get(protocol_idx as u32) {
+        if let Element::Profile(p) = elements.get(protocol_idx) {
             assert_eq!(
                 p.stereotypes,
                 vec![SmolStr::new("inferred"), SmolStr::new("excluded")],
@@ -1456,7 +1456,7 @@ mod tests {
         let agg_idx = (0..nodes.len())
             .find(|&i| nodes.get(i).name == "AggregationKind")
             .expect("AggregationKind should exist");
-        if let Element::Enumeration(e) = elements.get(agg_idx as u32) {
+        if let Element::Enumeration(e) = elements.get(agg_idx) {
             let names: Vec<&str> = e.values.iter().map(|v| v.name.as_str()).collect();
             assert_eq!(names, vec!["None", "Shared", "Composite"]);
         } else {
@@ -1469,7 +1469,7 @@ mod tests {
             .expect("PureOne should exist");
         assert!(
             matches!(
-                elements.get(pure_one_idx as u32),
+                elements.get(pure_one_idx),
                 Element::PackageableMultiplicity(Multiplicity::PureOne)
             ),
             "PureOne should be PackageableMultiplicity(PureOne)"

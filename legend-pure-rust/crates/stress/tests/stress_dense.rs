@@ -17,7 +17,6 @@
 use legend_pure_parser_stress::generate::common::{PhaseTimer, platform_fixture};
 use legend_pure_parser_stress::generate::hub_spoke::{self, HubSpokeConfig};
 
-use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::Element;
 use smol_str::SmolStr;
 
