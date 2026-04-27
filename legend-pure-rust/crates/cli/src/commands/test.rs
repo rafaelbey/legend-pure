@@ -138,6 +138,18 @@ pub struct TestArgs {
     /// each is tried in order until the file is found.
     #[arg(long)]
     pub coverage_source_root: Vec<PathBuf>,
+
+    /// Read platform .pure files from disk instead of embedded copies.
+    #[arg(long)]
+    pub live: bool,
+
+    /// Override the platform source directory. Only with --live.
+    #[arg(long)]
+    pub platform_dir: Option<PathBuf>,
+
+    /// Re-run tests whenever .pure files change (implies --live).
+    #[arg(long)]
+    pub watch: bool,
 }
 
 /// Execute the `legend test` command.
@@ -158,6 +170,69 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
     } else {
         String::new()
     };
+    let dir = if args.live || args.watch {
+        Some(crate::live::resolve_platform_dir(
+            args.platform_dir.as_deref(),
+        )?)
+    } else {
+        None
+    };
+
+    let mut watcher_setup = false;
+    let mut rx: Option<std::sync::Arc<std::sync::atomic::AtomicBool>> = None;
+    let mut _debouncer = None;
+
+    loop {
+        let res = run_once(&args, mode_label, &pct_via, dir.as_deref());
+
+        if !args.watch {
+            return res;
+        }
+
+        if let Err(e) = res {
+            crate::diagnostics::print_error(&e);
+        }
+
+        if !watcher_setup {
+            if let Some(ref d) = dir {
+                match crate::live::watch_dir(d) {
+                    Ok((debouncer, flag)) => {
+                        _debouncer = Some(debouncer);
+                        rx = Some(flag);
+                        watcher_setup = true;
+                    }
+                    Err(e) => {
+                        return Err(CliError::Custom(format!("Failed to start watcher: {e}")));
+                    }
+                }
+            }
+        }
+
+        eprintln!(
+            "\n  {}",
+            "Watching for changes... (Ctrl+C to stop)".dimmed()
+        );
+
+        if let Some(flag) = &rx {
+            loop {
+                if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    flag.store(false, std::sync::atomic::Ordering::SeqCst);
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+
+        eprintln!("  {}\n", "File changed — re-running...".dimmed());
+    }
+}
+
+fn run_once(
+    args: &TestArgs,
+    mode_label: &str,
+    pct_via: &str,
+    live_dir: Option<&std::path::Path>,
+) -> Result<(), CliError> {
     eprintln!(
         "{} {} in {}{}{}",
         "Running".cyan().bold(),
@@ -170,17 +245,38 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
         pct_via,
     );
 
-    // 1. Load platform model — accept partial models so a partially-broken
-    //    platform doesn't block test discovery.
-    let model = match load_platform() {
-        Ok(m) => m,
-        Err(partial) => {
-            eprintln!(
-                "  {} platform compiled with {} error(s)",
-                "warning:".yellow().bold(),
-                partial.errors.len()
-            );
-            partial.model
+    let model = if let Some(dir) = live_dir {
+        let owned = crate::live::load_from_disk(dir)?;
+        let auto_imports: Vec<smol_str::SmolStr> =
+            legend_pure_core_platform::platform::PLATFORM_AUTO_IMPORTS
+                .iter()
+                .map(|&s| smol_str::SmolStr::new(s))
+                .collect();
+        match legend_pure_core_platform::platform::parse_and_compile(
+            owned.iter().map(|s| (s.content.as_str(), s.path.as_str())),
+            &auto_imports,
+        ) {
+            Ok(m) => m,
+            Err(partial) => {
+                eprintln!(
+                    "  {} platform compiled with {} error(s)",
+                    "warning:".yellow().bold(),
+                    partial.errors.len()
+                );
+                partial.model
+            }
+        }
+    } else {
+        match load_platform() {
+            Ok(m) => m,
+            Err(partial) => {
+                eprintln!(
+                    "  {} platform compiled with {} error(s)",
+                    "warning:".yellow().bold(),
+                    partial.errors.len()
+                );
+                partial.model
+            }
         }
     };
 
@@ -192,7 +288,7 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
         hooks.map_mut().populate_coverable(&model);
         let mut evaluator = Evaluator::with_hooks(&model, &registry, hooks);
 
-        let (report, fail) = run_tests(&model, &mut evaluator, &args)?;
+        let (report, fail) = run_tests(&model, &mut evaluator, args)?;
         report.render(args.show_detail);
 
         // Extract coverage data and generate reports.
@@ -229,7 +325,7 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
     } else {
         // Production path — zero-overhead NoOpHooks.
         let mut evaluator = Evaluator::new(&model, &registry);
-        let (report, fail) = run_tests(&model, &mut evaluator, &args)?;
+        let (report, fail) = run_tests(&model, &mut evaluator, args)?;
         report.render(args.show_detail);
 
         if fail {

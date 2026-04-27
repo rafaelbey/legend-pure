@@ -69,6 +69,16 @@ pub struct ReplArgs {
     /// Additional `.pure` source files or directories to load.
     #[arg(short, long)]
     pub source: Vec<PathBuf>,
+
+    /// Read platform .pure files from disk instead of embedded copies.
+    /// Enables :reload and :watch commands for zero-rebuild iteration.
+    #[arg(long)]
+    pub live: bool,
+
+    /// Override the platform source directory (default: auto-detected).
+    /// Only meaningful with --live.
+    #[arg(long)]
+    pub platform_dir: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +87,7 @@ pub struct ReplArgs {
 
 /// Execute the `legend repl` command.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
-pub fn run(_args: ReplArgs) -> Result<(), CliError> {
+pub fn run(args: ReplArgs) -> Result<(), CliError> {
     // Build the auto-import list once.
     let auto_imports: Vec<SmolStr> = PLATFORM_AUTO_IMPORTS
         .iter()
@@ -85,13 +95,26 @@ pub fn run(_args: ReplArgs) -> Result<(), CliError> {
         .collect();
 
     // Collect the platform source pairs for re-use in every compile cycle.
-    let platform = sources::platform_sources();
-    let mut platform_pairs: Vec<(&str, &str)> =
-        platform.iter().map(|s| (s.content, s.path)).collect();
     let repl_helper = "function meta::pure::functions::string::__repl_toString(v: Any[1]): String[1] { $v->toString() }";
-    platform_pairs.push((repl_helper, "<repl_helper>"));
 
-    print_banner();
+    let mut live_sources;
+    let mut platform_pairs: Vec<(&str, &str)> = if args.live {
+        let dir = crate::live::resolve_platform_dir(args.platform_dir.as_deref())?;
+        live_sources = crate::live::load_from_disk(&dir)?;
+        let mut pairs: Vec<(&str, &str)> = live_sources
+            .iter()
+            .map(|s| (s.content.as_str(), s.path.as_str()))
+            .collect();
+        pairs.push((repl_helper, "<repl_helper>"));
+        pairs
+    } else {
+        let platform = sources::platform_sources();
+        let mut pairs: Vec<(&str, &str)> = platform.iter().map(|s| (s.content, s.path)).collect();
+        pairs.push((repl_helper, "<repl_helper>"));
+        pairs
+    };
+
+    print_banner(args.live);
 
     // Compile platform sources once to extract model elements for autocomplete
     let t0 = Instant::now();
@@ -119,7 +142,9 @@ pub fn run(_args: ReplArgs) -> Result<(), CliError> {
     );
 
     let completer = ReplCompleter {
-        commands: vec![":quit", ":q", ":reset", ":lets", ":help", ":h"],
+        commands: vec![
+            ":quit", ":q", ":reset", ":lets", ":reload", ":watch", ":help", ":h",
+        ],
         model_elements,
         variables: Vec::new(),
     };
@@ -138,7 +163,40 @@ pub fn run(_args: ReplArgs) -> Result<(), CliError> {
         let _ = rl.load_history(p);
     }
 
+    let mut is_watching = false;
+    let mut file_changed_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>> = None;
+    let mut _debouncer = None;
+
     loop {
+        // Auto-reload check
+        if let Some(flag) = &file_changed_flag {
+            if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                flag.store(false, std::sync::atomic::Ordering::SeqCst);
+                eprintln!(
+                    "  {}",
+                    "File change detected — reloading platform...".dimmed()
+                );
+
+                let dir = crate::live::resolve_platform_dir(args.platform_dir.as_deref())?;
+                let t0 = Instant::now();
+                live_sources = crate::live::load_from_disk(&dir)?;
+                platform_pairs = live_sources
+                    .iter()
+                    .map(|s| (s.content.as_str(), s.path.as_str()))
+                    .collect();
+                platform_pairs.push((repl_helper, "<repl_helper>"));
+                eprintln!(
+                    "  {}",
+                    format!(
+                        "Reloaded {} files from disk ({}ms)",
+                        live_sources.len(),
+                        t0.elapsed().as_millis()
+                    )
+                    .dimmed()
+                );
+            }
+        }
+
         let prompt = format!("{} ", "pure>".cyan().bold());
         let line = match rl.readline(&prompt) {
             Ok(l) => l,
@@ -167,6 +225,57 @@ pub fn run(_args: ReplArgs) -> Result<(), CliError> {
             }
             ":help" | ":h" => {
                 print_help();
+                continue;
+            }
+            ":reload" => {
+                if !args.live {
+                    eprintln!("  {}", "Error: :reload requires --live mode".red());
+                } else {
+                    let dir = crate::live::resolve_platform_dir(args.platform_dir.as_deref())?;
+                    let t0 = Instant::now();
+                    live_sources = crate::live::load_from_disk(&dir)?;
+                    platform_pairs = live_sources
+                        .iter()
+                        .map(|s| (s.content.as_str(), s.path.as_str()))
+                        .collect();
+                    platform_pairs.push((repl_helper, "<repl_helper>"));
+                    eprintln!(
+                        "  {}",
+                        format!(
+                            "Reloaded {} files from disk ({}ms)",
+                            live_sources.len(),
+                            t0.elapsed().as_millis()
+                        )
+                        .dimmed()
+                    );
+                }
+                continue;
+            }
+            ":watch" => {
+                if !args.live {
+                    eprintln!("  {}", "Error: :watch requires --live mode".red());
+                } else if is_watching {
+                    is_watching = false;
+                    _debouncer = None;
+                    file_changed_flag = None;
+                    eprintln!("  {}", "File watching disabled.".dimmed());
+                } else {
+                    let dir = crate::live::resolve_platform_dir(args.platform_dir.as_deref())?;
+                    match crate::live::watch_dir(&dir) {
+                        Ok((debouncer, flag)) => {
+                            _debouncer = Some(debouncer);
+                            file_changed_flag = Some(flag);
+                            is_watching = true;
+                            eprintln!(
+                                "  {}",
+                                format!("Watching {} for changes...", dir.display()).dimmed()
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!("  {} Failed to start watcher: {}", "error:".red(), e);
+                        }
+                    }
+                }
                 continue;
             }
             ":lets" => {
@@ -364,13 +473,19 @@ fn print_value(value: &Value, evaluator: &mut Evaluator) {
 }
 
 /// Banner printed at REPL startup.
-fn print_banner() {
+fn print_banner(is_live: bool) {
     let version = env!("CARGO_PKG_VERSION");
+    let mode_str = if is_live {
+        " (live mode: type :watch for auto-reload)"
+    } else {
+        ""
+    };
     eprintln!(
-        "\n  {} {} {}",
+        "\n  {} {} {}{}",
         "Legend Pure REPL".bold(),
         version.green(),
         "(type :help for commands)".dimmed(),
+        mode_str.yellow()
     );
     eprintln!();
 }
@@ -382,6 +497,14 @@ fn print_help() {
     eprintln!("    {}    Exit the REPL", ":quit, :q".cyan());
     eprintln!("    {}     Reset all let bindings", ":reset".cyan());
     eprintln!("    {}      Show accumulated let bindings", ":lets".cyan());
+    eprintln!(
+        "    {}   Re-read platform sources from disk (--live mode)",
+        ":reload".cyan()
+    );
+    eprintln!(
+        "    {}    Toggle auto-reload on file changes (--live mode)",
+        ":watch".cyan()
+    );
     eprintln!("    {}  Show this help", ":help, :h".cyan());
     eprintln!();
     eprintln!("  {}", "Examples:".bold());
