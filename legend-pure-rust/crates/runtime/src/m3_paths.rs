@@ -75,7 +75,7 @@ pub const CLASS: &Classifier = "meta::pure::metamodel::type::Class";
 /// these by walking the heap object's `key`, `expression`, and `add`
 /// slots — never probing the classifier string. The `KeyExpression`
 /// objects themselves are constructed via the compiler-internal fast
-/// path so this decoder is the canonical home of all KeyExpression
+/// path so this decoder is the canonical home of all `KeyExpression`
 /// recognition.
 pub const KEY_EXPRESSION: &Classifier = "meta::pure::metamodel::function::KeyExpression";
 
@@ -127,8 +127,8 @@ pub const VARIABLE_EXPRESSION: &Classifier =
 pub const FUNCTION_TYPE: &Classifier = "meta::pure::metamodel::type::FunctionType";
 
 /// `meta::pure::metamodel::multiplicity::Multiplicity` — heap wrapper for
-/// a `[m..n]` multiplicity declaration. Used by FunctionType /
-/// VariableExpression to expose lambda parameter and return-side
+/// a `[m..n]` multiplicity declaration. Used by `FunctionType` /
+/// `VariableExpression` to expose lambda parameter and return-side
 /// cardinalities through the reflective metamodel.
 pub const MULTIPLICITY: &Classifier = "meta::pure::metamodel::multiplicity::Multiplicity";
 
@@ -172,7 +172,7 @@ pub const PCT_MANIFEST: &Classifier = "meta::pure::test::pct::PCTManifest";
 /// `meta::pure::metamodel::relation::RelationType` — heap classifier for
 /// an anonymous relation type (column bag). Allocated by the
 /// `RelationLiteral` lowering and by the `addColumns` native; navigated
-/// by the native via `obj._columns()`. Identified via M3 ElementId,
+/// by the native via `obj._columns()`. Identified via M3 `ElementId`,
 /// never via classifier-string suffix.
 pub const RELATION_TYPE: &Classifier = "meta::pure::metamodel::relation::RelationType";
 
@@ -185,7 +185,7 @@ pub const COLUMN: &Classifier = "meta::pure::metamodel::relation::Column";
 /// `meta::pure::metamodel::relation::ColSpecArray` — heap classifier for
 /// the `~[col:Type[mult], …]` literal. Carries `names: String[*]` plus
 /// `classifierGenericType.typeArguments[0].rawType` pointing at a
-/// RelationType with the column metadata, mirroring Java's path through
+/// `RelationType` with the column metadata, mirroring Java's path through
 /// `ColSpecArrayInstance._classifierGenericType()._typeArguments()
 /// .getFirst()._rawType()._columns()`.
 pub const COL_SPEC_ARRAY: &Classifier = "meta::pure::metamodel::relation::ColSpecArray";

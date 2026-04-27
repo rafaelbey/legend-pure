@@ -203,7 +203,7 @@ fn push_list_values(
             // scalar, if single). This matches Java Pure's List-packing
             // convention — the receiver function sees one param per List.
             let mut copy: Vec<Value> = Vec::with_capacity(values.len());
-            for val in values.iter() {
+            for val in &values {
                 copy.push(val.clone());
             }
             out.push(Value::from_vec(copy));
@@ -329,7 +329,6 @@ impl NativeFunction for New {
         let mut kvs_offset = 2;
         if values.len() >= 3 {
             match &values[2] {
-                Value::Unit => {}
                 Value::Element(_) => type_args = vec![values[2].clone()],
                 Value::Collection(coll) => type_args = coll.iter().cloned().collect(),
                 _ => {}
@@ -358,9 +357,9 @@ impl NativeFunction for New {
         finish_construction(
             ctx,
             class_id,
-            type_args,
-            type_var_values,
-            triples,
+            &type_args,
+            &type_var_values,
+            &triples,
             /*lambda_shortcut_args*/ Some(&values[kvs_offset..]),
         )
     }
@@ -380,7 +379,7 @@ impl NativeFunction for New {
 /// targets the flat-triple shape (see `New`); this native handles
 /// Pure-source `new(class, '', [^KeyExpression(...)])` calls.
 ///
-/// Decodes each KeyExpression by reading its `key`, `expression`, and
+/// Decodes each `KeyExpression` by reading its `key`, `expression`, and
 /// `add` slots, then funnels through the shared `finish_construction`
 /// path so heap allocation, `__typeArguments` back-fill, association
 /// inverses, and constraint evaluation are identical for both
@@ -433,9 +432,9 @@ impl NativeFunction for NewWithKeyExpressions {
         finish_construction(
             ctx,
             class_id,
-            type_args,
-            Vec::new(),
-            triples,
+            &type_args,
+            &Vec::new(),
+            &triples,
             /*lambda_shortcut_args*/ None,
         )
     }
@@ -448,7 +447,7 @@ impl NativeFunction for NewWithKeyExpressions {
 /// Read parametric type-args off `args[0].type_info` when the inferred
 /// type is `Class<X<...>>` and return the inner `<...>` as a list of
 /// `Value::Element`. Identity-based: the outer element must match the
-/// resolved `m3_paths::CLASS` id. Empty when args is empty, type_info
+/// resolved `m3_paths::CLASS` id. Empty when args is empty, `type_info`
 /// is missing, or the shape doesn't match.
 fn back_fill_type_args(args: &[ValueSpec], class_metatype_id: Option<ElementId>) -> Vec<Value> {
     let mut type_args = Vec::new();
@@ -475,12 +474,12 @@ fn back_fill_type_args(args: &[ValueSpec], class_metatype_id: Option<ElementId>)
     type_args
 }
 
-/// Walk an M3 KeyExpression collection and return the canonical
+/// Walk an M3 `KeyExpression` collection and return the canonical
 /// `(name, values, augmented)` triple stream the construction helpers
-/// expect. Identity check uses the pre-resolved KeyExpression M3
-/// element id — never the classifier string. Each KeyExpression's
+/// expect. Identity check uses the pre-resolved `KeyExpression` M3
+/// element id — never the classifier string. Each `KeyExpression`'s
 /// `key` slot is expected to wrap a String value (directly or inside
-/// an InstanceValue's `.values`); the `expression` slot's value(s)
+/// an `InstanceValue`'s `.values`); the `expression` slot's value(s)
 /// flow through unchanged. The `add` slot defaults to `false` when
 /// absent or non-Boolean (matches `^KeyExpression(key=…, expression=…)`
 /// constructions that don't set the augmented flag).
@@ -576,7 +575,7 @@ fn unwrap_instance_value_list(
 fn triples_from_flat_kv_stream(
     kvs: &[Value],
 ) -> Result<Vec<(SmolStr, Vec<Value>, bool)>, PureException> {
-    if kvs.len() % 3 != 0 {
+    if !kvs.len().is_multiple_of(3) {
         return Err(PureRuntimeError::EvaluationError(format!(
             "object construction: expected (key, value, augmented) triples, got {} extra arguments",
             kvs.len()
@@ -608,15 +607,15 @@ fn triples_from_flat_kv_stream(
 /// single Function value (the `^LambdaFunction(expressionSequence =
 /// $fn)` clone idiom), the shortcut returns the function value
 /// directly without allocating — only the compiler-emitted call shape
-/// passes the shortcut probe (Pure-source KeyExpression construction
+/// passes the shortcut probe (Pure-source `KeyExpression` construction
 /// of a Function would be unusual; left out for now).
 #[allow(clippy::result_large_err, clippy::too_many_arguments)]
 fn finish_construction(
     ctx: &mut dyn EvalContextTrait,
     class_id: ElementId,
-    type_args: Vec<Value>,
-    type_var_values: Vec<Value>,
-    triples: Vec<(SmolStr, Vec<Value>, bool)>,
+    type_args: &[Value],
+    type_var_values: &[Value],
+    triples: &[(SmolStr, Vec<Value>, bool)],
     lambda_shortcut_args: Option<&[Value]>,
 ) -> Result<Evaluated, PureException> {
     let classifier = class_fqn(ctx.model(), class_id);
@@ -630,25 +629,25 @@ fn finish_construction(
     let obj = ctx.heap_mut().alloc_dynamic(classifier);
     if !type_args.is_empty() {
         ctx.heap_mut()
-            .mutate_set(obj, "__typeArguments", &type_args)?;
+            .mutate_set(obj, "__typeArguments", type_args)?;
     }
     if !type_var_values.is_empty() {
         ctx.heap_mut()
-            .mutate_set(obj, "__typeVariableValues", &type_var_values)?;
+            .mutate_set(obj, "__typeVariableValues", type_var_values)?;
     }
-    apply_property_triples(ctx, obj, &triples)?;
+    apply_property_triples(ctx, obj, triples)?;
     // Re-flatten triples back to the kv-stream shape that
     // `populate_association_inverses` consumes — the helper drives
     // its inverse walk off `(key, value, augmented)` triples already,
     // so this is a thin re-pack rather than a reimplementation.
     let mut flat: Vec<Value> = Vec::with_capacity(triples.len() * 3);
-    for (k, v, a) in &triples {
+    for (k, v, a) in triples {
         flat.push(Value::String(k.clone()));
         flat.push(Value::from_vec(v.clone()));
         flat.push(Value::Boolean(*a));
     }
     populate_association_inverses(ctx, obj, class_id, &flat)?;
-    evaluate_class_constraints(ctx, class_id, obj, &type_var_values)?;
+    evaluate_class_constraints(ctx, class_id, obj, type_var_values)?;
     Ok(Evaluated::new(Value::Object(obj)))
 }
 
@@ -929,7 +928,7 @@ impl NativeFunction for DynamicNew {
         let mut supplied: Vec<(SmolStr, Vec<Value>)> = Vec::with_capacity(kvs.len());
         let mut supplied_keys: std::collections::HashSet<SmolStr> =
             std::collections::HashSet::with_capacity(kvs.len());
-        for kv in kvs.iter() {
+        for kv in &kvs {
             let Value::Object(kv_id) = kv else {
                 return Err(PureRuntimeError::EvaluationError(format!(
                     "dynamicNew: expected KeyValue, got {}",
@@ -1134,7 +1133,7 @@ fn populate_association_inverses(
     class_id: ElementId,
     kvs: &[Value],
 ) -> Result<(), PureException> {
-    if kvs.len() % 3 != 0 {
+    if !kvs.len().is_multiple_of(3) {
         return Ok(()); // Arity already validated by apply_key_value_triples
     }
 
@@ -1325,7 +1324,7 @@ fn apply_key_value_triples(
     obj: ObjectId,
     kvs: &[Value],
 ) -> Result<(), PureException> {
-    if kvs.len() % 3 != 0 {
+    if !kvs.len().is_multiple_of(3) {
         return Err(PureRuntimeError::EvaluationError(format!(
             "object construction: expected (key, value, augmented) triples, got {} extra arguments",
             kvs.len()
@@ -1359,7 +1358,7 @@ fn apply_key_value_triples(
 /// `apply_path_property_updates` can consume them uniformly.
 #[allow(clippy::result_large_err)]
 fn partition_path_kvs(kvs: &[Value]) -> Result<(Vec<Value>, Vec<Value>), PureException> {
-    if kvs.len() % 3 != 0 {
+    if !kvs.len().is_multiple_of(3) {
         return Err(PureRuntimeError::EvaluationError(format!(
             "copy: expected (key, value, augmented) triples, got {} extra arguments",
             kvs.len()
@@ -1440,7 +1439,7 @@ fn apply_path_property_updates(
     for (head, updates) in groups {
         let nested = ctx.heap().get_property_values(source_id, head.as_str())?;
         let mut cloned: Vec<Value> = Vec::with_capacity(nested.len());
-        for v in nested.iter() {
+        for v in &nested {
             let Value::Object(inner_id) = v else {
                 return Err(PureRuntimeError::EvaluationError(format!(
                     "copy: cannot path-set '{head}.…' on a non-object property value"
@@ -1482,7 +1481,7 @@ fn apply_path_property_updates(
 /// Walks the supertype chain of `class_id` and accumulates every
 /// association entry (`(association_id, prop_idx_pointing_to_self)`)
 /// the class participates in — directly or via inheritance. The compiler
-/// indexes association_properties only on the property's *declared*
+/// indexes `association_properties` only on the property's *declared*
 /// target type (`PureModel::association_properties` keyed by the type
 /// the association declared), so a subclass inherits no entries from
 /// `model.derived.association_properties` directly. Without walking

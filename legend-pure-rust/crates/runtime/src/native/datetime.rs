@@ -1280,7 +1280,7 @@ pub fn register(registry: &mut NativeRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::{MockCtx, force_all, lit_int, lit_str};
+    use crate::native::{MockCtx, lit_int, lit_str};
 
     // ---- helpers ----
 

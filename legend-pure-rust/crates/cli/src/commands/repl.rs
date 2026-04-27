@@ -224,14 +224,13 @@ pub fn run(_args: ReplArgs) -> Result<(), CliError> {
                 // If the input was a `let`, persist it.
                 if is_let {
                     let_bindings.push(trimmed.to_string());
-                    if let Some(helper) = rl.helper_mut() {
-                        if let Some(var_name) = extract_let_var(trimmed) {
+                    if let Some(helper) = rl.helper_mut()
+                        && let Some(var_name) = extract_let_var(trimmed) {
                             let var_str = format!("${var_name}");
                             if !helper.variables.contains(&var_str) {
                                 helper.variables.push(var_str);
                             }
                         }
-                    }
                 }
                 eprintln!("{}", format!("  ({compile_ms}ms)").dimmed(),);
             }
@@ -261,10 +260,10 @@ pub fn run(_args: ReplArgs) -> Result<(), CliError> {
 fn extract_let_var(line: &str) -> Option<&str> {
     let line = line.strip_prefix("let ")?;
     let var_name = line.split('=').next()?.trim();
-    if !var_name.is_empty() {
-        Some(var_name)
-    } else {
+    if var_name.is_empty() {
         None
+    } else {
+        Some(var_name)
     }
 }
 
@@ -503,14 +502,13 @@ fn extract_lambda_vars(line: &str) -> Vec<String> {
 
         // Any extracted word that starts with a lowercase letter is a likely parameter
         for token in tokens {
-            if let Some(first) = token.chars().next() {
-                if first.is_lowercase() {
+            if let Some(first) = token.chars().next()
+                && first.is_lowercase() {
                     let var_name = format!("${token}");
                     if !vars.contains(&var_name) {
                         vars.push(var_name);
                     }
                 }
-            }
         }
     }
     vars

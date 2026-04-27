@@ -383,7 +383,7 @@ pub fn register(registry: &mut NativeRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::{MockCtx, force_all, lit_float, lit_int, lit_str};
+    use crate::native::{MockCtx, lit_float, lit_int, lit_str};
 
     #[test]
     fn equal_same_type() {

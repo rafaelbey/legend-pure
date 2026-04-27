@@ -116,7 +116,7 @@ fn run_report(args: ReportArgs) -> Result<(), CliError> {
     );
 
     super::coverage_report::generate_html(&args.input, &args.html)
-        .map_err(|e| CliError::Custom(e))?;
+        .map_err(CliError::Custom)?;
 
     eprintln!(
         "  {} HTML report generated in {}",

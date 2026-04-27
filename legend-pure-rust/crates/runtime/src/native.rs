@@ -569,7 +569,7 @@ fn spec(kind: ExprKind) -> ValueSpec {
 /// (variables, lambda bodies, function calls, heap, model lookups, …).
 ///
 /// All other `EvalContextTrait` methods panic — if your native uses the
-/// heap, model, or call_function, the test must live in the integration
+/// heap, model, or `call_function`, the test must live in the integration
 /// file with a real `Evaluator`.
 #[cfg(test)]
 pub(crate) struct MockCtx;

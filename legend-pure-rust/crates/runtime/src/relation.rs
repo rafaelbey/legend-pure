@@ -21,10 +21,10 @@
 //!
 //! - **Column** — `name` (String), `nameWildCard` (Boolean = false),
 //!   `classifierGenericType` → GenericType{rawType=Column,
-//!   typeArguments=[null, GT(rawType=type_element)],
+//!   typeArguments=[null, `GT(rawType=type_element)`],
 //!   multiplicityArguments=[Multiplicity]}
-//! - **RelationType** — `columns` (Column[*])
-//! - **ColSpecArray** — `names` (String[*]) plus `classifierGenericType` →
+//! - **`RelationType`** — `columns` (Column[*])
+//! - **`ColSpecArray`** — `names` (String[*]) plus `classifierGenericType` →
 //!   GenericType{rawType=ColSpecArray,
 //!   typeArguments=[GT(rawType=<inner RelationType>)]}, so the addColumns
 //!   native can navigate
@@ -47,7 +47,7 @@ use crate::value::Value;
 ///
 /// # Errors
 /// Returns `PureException` if heap mutation fails (only on a stale
-/// ObjectId, which the freshly-allocated objects below cannot produce).
+/// `ObjectId`, which the freshly-allocated objects below cannot produce).
 #[allow(clippy::result_large_err)]
 pub fn alloc_multiplicity(
     heap: &mut RuntimeHeap,
@@ -56,10 +56,9 @@ pub fn alloc_multiplicity(
     let (lower, upper): (i64, Option<i64>) = match m {
         Multiplicity::PureOne => (1, Some(1)),
         Multiplicity::ZeroOrOne => (0, Some(1)),
-        Multiplicity::ZeroOrMany => (0, None),
         Multiplicity::OneOrMany => (1, None),
         Multiplicity::Range { lower, upper } => (i64::from(*lower), upper.map(i64::from)),
-        Multiplicity::Variable(_) => (0, None),
+        Multiplicity::ZeroOrMany | Multiplicity::Variable(_) => (0, None),
     };
     let mult = heap.alloc_dynamic(m3_paths::MULTIPLICITY);
     let lower_value = heap.alloc_dynamic(m3_paths::MULTIPLICITY_VALUE);
@@ -149,7 +148,7 @@ pub fn alloc_relation_type_with_columns(
 }
 
 /// Allocate `RelationType` from the lowered triples — used by `addColumns`'s
-/// result (a bare RelationType heap object, no metadata wrapper).
+/// result (a bare `RelationType` heap object, no metadata wrapper).
 ///
 /// # Errors
 /// Returns `PureException` if any underlying heap allocation fails.
@@ -205,7 +204,7 @@ pub fn alloc_relation_literal_at_expression_position(
 }
 
 /// Allocate the `ColSpecArray` literal heap shape per Java's
-/// AddColumns navigation chain
+/// `AddColumns` navigation chain
 /// (`csa.classifierGenericType.typeArguments[0].rawType._columns()`).
 ///
 /// # Errors

@@ -51,7 +51,7 @@ impl NativeFunction for StringPlus {
         expect_args("plus (String)", &values, 1)?;
         let items = values[0].to_collection();
         let mut out = String::new();
-        for item in items.iter() {
+        for item in &items {
             out.push_str(item.as_string()?.as_str());
         }
         Ok(Evaluated::new(Value::String(SmolStr::new(&out))))
@@ -597,7 +597,7 @@ impl NativeFunction for Format {
                             if n < 0 {
                                 format!("-{:0>1$}", -n, w)
                             } else {
-                                format!("{n:0>w$}", n = n, w = w)
+                                format!("{n:0>w$}")
                             }
                         } else {
                             format!("{n:>w$}")
@@ -621,7 +621,7 @@ impl NativeFunction for Format {
                     let body = if let Some(p) = precision {
                         // Java's `%.Nf` rounds half-to-even (banker's),
                         // matching Decimal::round_dp's default.
-                        format!("{f:.p$}", f = f, p = p)
+                        format!("{f:.p$}")
                     } else {
                         f.to_string()
                     };
@@ -709,7 +709,7 @@ fn format_date_pattern(d: &crate::date::PureDate, pat: &str) -> String {
             j += 1;
         }
         let count = j - i;
-        let token: String = std::iter::repeat(c as char).take(count).collect();
+        let token: String = std::iter::repeat_n(c as char, count).collect();
         let _ = token;
         match (c, count) {
             (b'y', 4) => out.push_str(&format!("{:04}", inner.year())),
@@ -922,7 +922,7 @@ impl NativeFunction for JoinStrings {
 
         let coll = values[0].to_collection();
         let mut parts: Vec<String> = Vec::with_capacity(coll.len());
-        for v in coll.iter() {
+        for v in &coll {
             parts.push(v.as_string()?.as_str().to_owned());
         }
         let joined = parts.join(separator.as_str());
@@ -988,7 +988,7 @@ impl NativeFunction for Split {
 ///
 /// The 3-arg overload rounds to `scale` digits after the decimal
 /// point using banker's rounding (Decimal's default), which matches
-/// Java's BigDecimal `setScale(scale, HALF_EVEN)` behavior.
+/// Java's `BigDecimal` `setScale(scale, HALF_EVEN)` behavior.
 /// `precision` is accepted for signature parity but not enforced —
 /// the platform tests assert only on the rounded value, not on
 /// total-digit truncation.
@@ -1108,7 +1108,7 @@ pub fn register(registry: &mut NativeRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::{MockCtx, force_all, lit_collection, lit_int, lit_str};
+    use crate::native::{MockCtx, lit_collection, lit_int, lit_str};
 
     #[test]
     fn string_plus() {

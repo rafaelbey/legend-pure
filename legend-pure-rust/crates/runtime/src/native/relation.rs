@@ -44,7 +44,7 @@ use crate::value::Value;
 ///    holds the merged list.
 ///
 /// The Java reference clones each column via `_Column.getColumnInstance`;
-/// this implementation reuses the existing Column ObjectIds. The two
+/// this implementation reuses the existing Column `ObjectIds`. The two
 /// platform tests (`testAddColumns`, `testAddColumnsAfterEvaluateAndDeactivate`)
 /// only read column metadata, never mutate it through aliased Column
 /// references, so aliasing is safe. Promote to clone-on-merge if a

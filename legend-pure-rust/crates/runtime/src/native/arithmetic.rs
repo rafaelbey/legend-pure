@@ -291,8 +291,8 @@ fn times_fold(values: Vec<Value>) -> Result<Value, PureRuntimeError> {
 /// matching Java's `divide(left, right): Float`.
 ///
 /// 3-arg: Decimal/Decimal returns `Decimal` rounded to `scale`
-/// fractional digits via banker's rounding (rust_decimal's
-/// `round_dp` default; matches Java BigDecimal `setScale(scale,
+/// fractional digits via banker's rounding (`rust_decimal`'s
+/// `round_dp` default; matches Java `BigDecimal` `setScale(scale,
 /// HALF_EVEN)`). `testDecimalDivide` exercises this with
 /// `-3.1415d->divide(0.1d, 2) == -31.42d`.
 #[derive(Debug)]
@@ -547,7 +547,7 @@ mod tests {
 
     use super::*;
     use crate::native::{
-        MockCtx, force_all, lit_bool, lit_collection, lit_float, lit_int, lit_str,
+        MockCtx, lit_bool, lit_collection, lit_float, lit_int, lit_str,
     };
 
     /// Decimal-literal shim — `MockCtx` supports only bare `DecimalLiteral`

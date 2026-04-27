@@ -843,7 +843,7 @@ mod tests {
     use rust_decimal::Decimal;
 
     use super::*;
-    use crate::native::{MockCtx, force_all, lit_bool, lit_decimal, lit_float, lit_int, lit_str};
+    use crate::native::{MockCtx, lit_bool, lit_decimal, lit_float, lit_int, lit_str};
 
     // Small helper — abs-difference comparison for floats. Avoids pulling in
     // `approx` or hand-rolling tolerances throughout the test body.

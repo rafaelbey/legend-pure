@@ -934,7 +934,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     /// function refs — most importantly `expressionSequence`, which the
     /// `^LambdaFunction(expressionSequence = $fn.expressionSequence)` idiom
     /// uses to clone a lambda. We return the function itself wrapped as a
-    /// single-element collection so the `New` native's LambdaFunction
+    /// single-element collection so the `New` native's `LambdaFunction`
     /// shortcut can round-trip it back into an invokable `Value::Function`.
     #[allow(clippy::result_large_err)]
     fn eval_function_property(
@@ -995,7 +995,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         // `Element::Class`/`Function` shapes — we synthesize the wrappers
         // on demand here, cached so `$m.upperBound == $m.upperBound` holds.
         if matches!(property, "upperBound" | "lowerBound")
-            && let Some(bounds) = multiplicity_constant_bounds(&self.model, id)
+            && let Some(bounds) = multiplicity_constant_bounds(self.model, id)
         {
             let cache_key = (
                 id,
@@ -1066,7 +1066,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             // bootstrapped by m3.pure so the lookup always succeeds in a
             // valid model.
             if let Some(ft_class_id) =
-                crate::m3_paths::resolve(&self.model, "meta::pure::metamodel::type::FunctionType")
+                crate::m3_paths::resolve(self.model, "meta::pure::metamodel::type::FunctionType")
             {
                 self.heap
                     .mutate_add(outer_gt, "rawType", &[Value::Element(ft_class_id)])?;
@@ -1434,7 +1434,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             && matches!(self.model.get_element(class_id), Element::Class(_))
         {
             let target_path =
-                crate::model_utils::build_element_path(&self.model, class_id, "::", false);
+                crate::model_utils::build_element_path(self.model, class_id, "::", false);
             let mut instances: Vec<Value> = Vec::new();
             for (obj_id, classifier) in self.heap.iter_classifiers() {
                 if classifier == target_path {
@@ -1777,7 +1777,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         result
     }
 
-    /// Read the `name` slot of a Property / QualifiedProperty wrapper as a
+    /// Read the `name` slot of a Property / `QualifiedProperty` wrapper as a
     /// plain string, erroring if it is missing or multi-valued.
     #[allow(clippy::result_large_err)]
     fn read_wrapper_name(&self, id: crate::heap::ObjectId) -> Result<SmolStr, PureException> {
@@ -2240,13 +2240,12 @@ fn walk_free_variables(
             // variables / captures, so it's visited first. Only then does
             // `x` enter the binder set for the remainder of the body the
             // caller is iterating over.
-            if function_name.as_str() == "letFunction" && arguments.len() == 2 {
-                if let ExprKind::StringLiteral(binding_name) = &*arguments[0].kind {
+            if function_name.as_str() == "letFunction" && arguments.len() == 2
+                && let ExprKind::StringLiteral(binding_name) = &*arguments[0].kind {
                     walk_free_variables(&arguments[1], binders, free);
                     binders.insert(binding_name.clone());
                     return;
                 }
-            }
             for arg in arguments {
                 walk_free_variables(arg, binders, free);
             }
@@ -2299,7 +2298,7 @@ fn walk_free_variables(
 
 /// Classify a heap object by resolving its classifier string to a
 /// well-known M3 `ElementId`. Used by `apply_object_callable` to dispatch
-/// Property / QualifiedProperty wrappers without relying on textual
+/// Property / `QualifiedProperty` wrappers without relying on textual
 /// suffix matching. Returns `None` if the classifier doesn't correspond
 /// to one of the callable wrapper classes.
 pub(crate) fn callable_wrapper_kind(model: &PureModel, classifier: &str) -> Option<WrapperKind> {
