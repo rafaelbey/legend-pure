@@ -712,10 +712,14 @@ fn convert_column(e: &ast::expression::ColumnBuilderExpr) -> v1::value_spec::Val
     use v1::value_spec::ClassInstance;
     use v1::value_spec::ValueSpecification;
 
-    // For now, extract the first column spec (if any)
-    let col = e.columns.first().unwrap();
-
     let mut value_map = serde_json::Map::new();
+    let Some(col) = e.columns.first() else {
+        return ValueSpecification::ClassInstance(ClassInstance {
+            type_name: "colSpec".to_string(),
+            value: serde_json::Value::Object(value_map),
+            source_information: source_information(&e.source_info),
+        });
+    };
     value_map.insert("name".to_string(), serde_json::json!(col.name.to_string()));
 
     // In a real implementation we would convert the annotations, tagged values, etc.
