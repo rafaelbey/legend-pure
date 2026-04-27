@@ -76,7 +76,7 @@ pub struct ReplArgs {
 // ---------------------------------------------------------------------------
 
 /// Execute the `legend repl` command.
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
 pub fn run(_args: ReplArgs) -> Result<(), CliError> {
     // Build the auto-import list once.
     let auto_imports: Vec<SmolStr> = PLATFORM_AUTO_IMPORTS
@@ -225,12 +225,13 @@ pub fn run(_args: ReplArgs) -> Result<(), CliError> {
                 if is_let {
                     let_bindings.push(trimmed.to_string());
                     if let Some(helper) = rl.helper_mut()
-                        && let Some(var_name) = extract_let_var(trimmed) {
-                            let var_str = format!("${var_name}");
-                            if !helper.variables.contains(&var_str) {
-                                helper.variables.push(var_str);
-                            }
+                        && let Some(var_name) = extract_let_var(trimmed)
+                    {
+                        let var_str = format!("${var_name}");
+                        if !helper.variables.contains(&var_str) {
+                            helper.variables.push(var_str);
                         }
+                    }
                 }
                 eprintln!("{}", format!("  ({compile_ms}ms)").dimmed(),);
             }
@@ -464,8 +465,10 @@ fn extract_lambda_vars(line: &str) -> Vec<String> {
     let parts: Vec<&str> = line.split('|').collect();
 
     // We only care about parts that precede a '|' (i.e. all but the last split)
-    for i in 0..parts.len().saturating_sub(1) {
-        let before_pipe = parts[i].trim_end();
+    for before_pipe in parts[..parts.len().saturating_sub(1)]
+        .iter()
+        .map(|p| p.trim_end())
+    {
         let mut tokens = Vec::new();
         let mut current_word = String::new();
 
@@ -503,12 +506,13 @@ fn extract_lambda_vars(line: &str) -> Vec<String> {
         // Any extracted word that starts with a lowercase letter is a likely parameter
         for token in tokens {
             if let Some(first) = token.chars().next()
-                && first.is_lowercase() {
-                    let var_name = format!("${token}");
-                    if !vars.contains(&var_name) {
-                        vars.push(var_name);
-                    }
+                && first.is_lowercase()
+            {
+                let var_name = format!("${token}");
+                if !vars.contains(&var_name) {
+                    vars.push(var_name);
                 }
+            }
         }
     }
     vars

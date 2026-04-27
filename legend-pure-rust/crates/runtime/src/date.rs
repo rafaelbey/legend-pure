@@ -312,7 +312,10 @@ impl PureDate {
     /// at their nominal start. Callers that need a *strict* day-level
     /// guarantee (e.g. `datePart` returning a `StrictDate`) should still
     /// gate on `precision >= DatePrecision::Day` themselves.
-    #[allow(clippy::unnecessary_wraps)] // Result kept for API symmetry with to_civil_datetime
+    /// # Errors
+    ///
+    /// Always returns `Ok`; the `Result` is kept for API symmetry with `to_civil_datetime`.
+    #[allow(clippy::unnecessary_wraps)]
     pub fn to_civil_date(&self) -> Result<jiff::civil::Date, PureRuntimeError> {
         Ok(self.inner.date())
     }

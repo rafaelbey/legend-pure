@@ -546,9 +546,7 @@ mod tests {
     use rust_decimal::Decimal;
 
     use super::*;
-    use crate::native::{
-        MockCtx, lit_bool, lit_collection, lit_float, lit_int, lit_str,
-    };
+    use crate::native::{MockCtx, lit_bool, lit_collection, lit_float, lit_int, lit_str};
 
     /// Decimal-literal shim — `MockCtx` supports only bare `DecimalLiteral`
     /// specs, so tests that need a Decimal value go through this helper

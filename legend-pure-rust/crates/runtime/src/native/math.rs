@@ -77,7 +77,7 @@ pub(crate) fn java_number_string(v: &Value) -> String {
                 } else {
                     "-Infinity".into()
                 }
-            } else if *f == f.trunc() && f.is_finite() {
+            } else if (*f - f.trunc()).abs() < f64::EPSILON && f.is_finite() {
                 format!("{f:.1}")
             } else {
                 f.to_string()
@@ -1517,6 +1517,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)] // 3.14 is the test decimal value, not π
     fn to_float_from_decimal() {
         let d = Decimal::from_str("3.14").unwrap();
         let r = ToFloat.execute(&[ld(d)], &mut MockCtx).unwrap();
@@ -1607,6 +1608,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)] // 3.14 is the test decimal value, not π
     fn parse_float_decimal_form() {
         let r = ParseFloat
             .execute(&[lit_str("3.14")], &mut MockCtx)

@@ -120,8 +120,8 @@ pub const VARIABLE_EXPRESSION: &Classifier =
     "meta::pure::metamodel::valuespecification::VariableExpression";
 
 /// `meta::pure::metamodel::type::FunctionType` — heap wrapper exposing
-/// a lambda's `parameters: VariableExpression[*]` + `returnType: GenericType[1]`
-/// + `returnMultiplicity: Multiplicity[1]`. Produced as
+/// a lambda's `parameters: VariableExpression[*]`, `returnType: GenericType[1]`,
+/// and `returnMultiplicity: Multiplicity[1]`. Produced as
 /// `genericType($lambda).typeArguments[0].rawType` so reflective walks
 /// match Java Pure's m3 metamodel.
 pub const FUNCTION_TYPE: &Classifier = "meta::pure::metamodel::type::FunctionType";

@@ -52,6 +52,9 @@
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+// PureException carries a call stack (Vec) so its size is inherently large.
+// Boxing it at every call site would require rewriting the entire native API.
+#![allow(clippy::result_large_err)]
 
 pub mod context;
 pub mod date;

@@ -26,6 +26,7 @@ use smol_str::SmolStr;
 
 #[test]
 #[cfg(feature = "heavy")]
+#[allow(clippy::too_many_lines)]
 fn stress_100k_chaotic() {
     let config = ChaoticConfig::standard_100k();
     let title = "Chaotic 100K";

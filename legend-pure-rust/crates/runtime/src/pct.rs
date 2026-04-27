@@ -66,6 +66,10 @@ pub fn rust_native_adapter_id(model: &PureModel) -> Option<ElementId> {
 /// Build the `exclusions` argument expected by
 /// `meta::pure::test::surveyor::runPCTTests` — a
 /// `Map<Function<Any>, String>` keyed by test FQN.
+///
+/// # Panics
+///
+/// Panics if the bundled `pct_grammar_rust_native.json` is missing or malformed.
 #[must_use]
 pub fn rust_native_exclusions() -> Value {
     let exclusions_obj = manifest()

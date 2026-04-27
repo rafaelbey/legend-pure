@@ -82,13 +82,13 @@ pub struct ReportArgs {
 #[allow(clippy::needless_pass_by_value)]
 pub fn run(args: CoverageArgs) -> Result<(), CliError> {
     match args.action {
-        CoverageAction::Merge(merge_args) => run_merge(merge_args),
-        CoverageAction::Report(report_args) => run_report(report_args),
+        CoverageAction::Merge(merge_args) => run_merge(&merge_args),
+        CoverageAction::Report(report_args) => run_report(&report_args),
     }
 }
 
 /// Merge N LCOV tracefiles into one.
-fn run_merge(args: MergeArgs) -> Result<(), CliError> {
+fn run_merge(args: &MergeArgs) -> Result<(), CliError> {
     eprintln!(
         "{} {} tracefile(s) into {}",
         "Merging".cyan().bold(),
@@ -108,15 +108,14 @@ fn run_merge(args: MergeArgs) -> Result<(), CliError> {
 }
 
 /// Generate an HTML report from an LCOV tracefile.
-fn run_report(args: ReportArgs) -> Result<(), CliError> {
+fn run_report(args: &ReportArgs) -> Result<(), CliError> {
     eprintln!(
         "{} HTML report from {}",
         "Generating".cyan().bold(),
         args.input.display(),
     );
 
-    super::coverage_report::generate_html(&args.input, &args.html)
-        .map_err(CliError::Custom)?;
+    super::coverage_report::generate_html(&args.input, &args.html).map_err(CliError::Custom)?;
 
     eprintln!(
         "  {} HTML report generated in {}",

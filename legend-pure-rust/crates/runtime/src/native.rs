@@ -449,6 +449,10 @@ pub(crate) fn force_all(
 /// This helper detects that shape and calls the closure with no arguments to
 /// produce the branch's actual value, matching the old `defer_execution +
 /// eval_lambda(&arg, &[])` behaviour without re-introducing the flag.
+///
+/// # Errors
+///
+/// Propagates any `PureException` raised while evaluating the spec or invoking the lambda.
 pub fn force_thunk(
     spec: &ValueSpec,
     ctx: &mut dyn EvalContextTrait,

@@ -167,9 +167,8 @@ fn objects_equal(ctx: &dyn EvalContextTrait, a: ObjectId, b: ObjectId) -> bool {
     if a_classifier != b_classifier {
         return false;
     }
-    let class_id = match crate::m3_paths::resolve(ctx.model(), a_classifier) {
-        Some(id) => id,
-        None => return false, // unknown classifier — can't structurally compare
+    let Some(class_id) = crate::m3_paths::resolve(ctx.model(), a_classifier) else {
+        return false; // unknown classifier — can't structurally compare
     };
     let keys = equality_key_properties(ctx.model(), class_id);
     if keys.is_empty() {

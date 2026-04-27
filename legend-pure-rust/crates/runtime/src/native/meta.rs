@@ -2186,10 +2186,9 @@ fn infer_spec_static_type(vs: &ValueSpec, ctx: &dyn EvalContextTrait) -> Option<
             function_name,
             arguments,
         } => infer_function_call_static_type(*function, function_name, arguments, ctx),
-        ExprKind::TypeReference { type_expr } => match type_expr {
-            TypeExpr::Named { element, .. } => Some(*element),
-            _ => None,
-        },
+        ExprKind::TypeReference {
+            type_expr: TypeExpr::Named { element, .. },
+        } => Some(*element),
         _ => None,
     }
 }
@@ -2531,7 +2530,7 @@ impl NativeFunction for ElementPath {
                     .get_package(pid)
                     .parent
                     .map(legend_pure_parser_pure::ids::ElementId::Package),
-                _ => None,
+                legend_pure_parser_pure::ids::ElementId::InstanceId { .. } => None,
             };
         }
         chain.reverse();

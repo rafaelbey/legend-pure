@@ -64,8 +64,8 @@ fn init_test_tracing() {
 /// them once and cache the ASTs. Each test then clones the ASTs and combines
 /// them with user code for a fresh compilation.
 fn platform_model() -> &'static PlatformFixture {
-    init_test_tracing();
     static FIXTURE: OnceLock<PlatformFixture> = OnceLock::new();
+    init_test_tracing();
     FIXTURE.get_or_init(|| {
         let raw = legend_pure_core_platform::sources::platform_sources();
         let mut parsed_files = Vec::new();
@@ -1158,7 +1158,7 @@ fn eval_element_to_path_ephemeral_nameless() {
 }
 
 #[test]
-fn eval_partial_date_literals_round_trip_toRepresentation() {
+fn eval_partial_date_literals_round_trip_to_representation() {
     // A year-only and a year-month StrictDate literal must preserve
     // precision through lowering and `toRepresentation`. Before the
     // partial-precision fix, the parser accepted `%2014` / `%2014-01`
@@ -1182,7 +1182,7 @@ fn eval_partial_date_literals_round_trip_toRepresentation() {
 }
 
 #[test]
-fn eval_multiple_assertEq_mixed_date_precision() {
+fn eval_multiple_assert_eq_mixed_date_precision() {
     // Regression: multiple assertEq calls with mixed date precisions —
     // previously crashed with "Variable 'actual' not found" because
     // the year-month date literal failed to lower and `filter_map`
@@ -2019,12 +2019,11 @@ fn eval_pct_missing_natives_harvest() {
 
     for pkg in PCT_BROAD_CANARY_PACKAGES {
         let mut evaluator = Evaluator::new(&model, &registry);
-        let pkg_val = match evaluator.call(
+        let Ok(pkg_val) = evaluator.call(
             "meta::pure::functions::meta::pathToElement",
             &[Value::String(SmolStr::new(pkg)), Value::String("::".into())],
-        ) {
-            Ok(v) => v,
-            Err(_) => continue,
+        ) else {
+            continue;
         };
         let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
         let Ok(Value::Object(report_id)) = evaluator.call(
@@ -2385,23 +2384,21 @@ fn eval_pct_bignumber_messages() {
     ];
     for tn in &testnames {
         let mut evaluator = Evaluator::new(&model, &registry);
-        let pkg = match evaluator.call(
+        let Ok(pkg) = evaluator.call(
             "meta::pure::functions::meta::pathToElement",
             &[
                 Value::String("meta::pure::functions::date::tests".into()),
                 Value::String("::".into()),
             ],
-        ) {
-            Ok(v) => v,
-            Err(_) => continue,
+        ) else {
+            continue;
         };
         let (adapter, exclusions) = pct_canary_args(&model);
-        let report = match evaluator.call(
+        let Ok(report) = evaluator.call(
             "meta::pure::test::surveyor::runPCTTests",
             &[pkg, Value::String("".into()), adapter, exclusions],
-        ) {
-            Ok(v) => v,
-            Err(_) => continue,
+        ) else {
+            continue;
         };
         let Value::Object(report_id) = report else {
             continue;
@@ -2698,9 +2695,10 @@ fn pct_status_dump(package: &str) {
                 _ => None,
             })
             .unwrap_or_default();
-        let summary = msg
-            .lines()
-            .nth(1).map_or_else(|| msg.lines().next().unwrap_or("").to_string(), |l| l.trim_matches('"').to_string());
+        let summary = msg.lines().nth(1).map_or_else(
+            || msg.lines().next().unwrap_or("").to_string(),
+            |l| l.trim_matches('"').to_string(),
+        );
         eprintln!("[{bucket}] {fqn}\n  {summary}");
     }
 }
@@ -2817,7 +2815,7 @@ fn eval_pct_date_probe() {
                 Value::String("::".into()),
             ],
         );
-        let pkg = if let Ok(v) = pkg { v } else {
+        let Ok(pkg) = pkg else {
             eprintln!("not found: {testname}");
             continue;
         };
@@ -2828,15 +2826,14 @@ fn eval_pct_date_probe() {
         let _ = exclusions;
         // Use the parent path
         let parent = testname.rsplit_once("::").map_or("", |(p, _)| p);
-        let pkg2 = match evaluator.call(
+        let Ok(pkg2) = evaluator.call(
             "meta::pure::functions::meta::pathToElement",
             &[
                 Value::String(SmolStr::new(parent)),
                 Value::String("::".into()),
             ],
-        ) {
-            Ok(v) => v,
-            Err(_) => continue,
+        ) else {
+            continue;
         };
         let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
         let report = match evaluator.call(
@@ -3206,12 +3203,11 @@ fn eval_pct_baseline_lock() {
     let mut per_pkg = Vec::new();
     for pkg in PCT_BROAD_CANARY_PACKAGES {
         let mut evaluator = Evaluator::new(&model, &registry);
-        let pkg_val = match evaluator.call(
+        let Ok(pkg_val) = evaluator.call(
             "meta::pure::functions::meta::pathToElement",
             &[Value::String(SmolStr::new(pkg)), Value::String("::".into())],
-        ) {
-            Ok(v) => v,
-            Err(_) => continue,
+        ) else {
+            continue;
         };
         let (adapter, exclusions) = pct_canary_args_with_rust_exclusions(&model);
         let Ok(Value::Object(report_id)) = evaluator.call(

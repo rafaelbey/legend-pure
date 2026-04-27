@@ -206,7 +206,7 @@ impl NativeFunction for Init {
             }
             // Scalar / Unit: no "last" to drop; mirror Java Pure's
             // behaviour of returning the empty segment.
-            Value::Unit | _ => Value::Unit,
+            _ => Value::Unit,
         };
         Ok(Evaluated::new(result))
     }
@@ -719,7 +719,7 @@ impl NativeFunction for RemoveDuplicates {
         let mut keys: Vec<Value> = Vec::with_capacity(source.len());
         for item in &source {
             let k = match &key_fn {
-                Some(kf) => ctx.call_function(kf, &[item.clone()])?,
+                Some(kf) => ctx.call_function(kf, std::slice::from_ref(item))?,
                 None => item.clone(),
             };
             keys.push(k);
@@ -1145,8 +1145,8 @@ impl NativeFunction for Slice {
 /// before Object/Collection — because the underlying comparator is
 /// total. `assertSameElements(['aaa', 2], [2, 'aaa'])` and similar
 /// mixed-type comparisons depend on this.
-fn cmp_values(a: &Value, b: &Value) -> Result<std::cmp::Ordering, PureRuntimeError> {
-    Ok(crate::native::comparison::compare_values(a, b).cmp(&0))
+fn cmp_values(a: &Value, b: &Value) -> std::cmp::Ordering {
+    crate::native::comparison::compare_values(a, b).cmp(&0)
 }
 
 /// Pure `sort<T,U|m>(col:T[m], key:Function[0..1], comp:Function[0..1]):T[m]`.
@@ -1179,7 +1179,7 @@ impl NativeFunction for Sort {
         let keys: Vec<Value> = if let Some(k) = key_fn {
             let mut out = Vec::with_capacity(items.len());
             for it in &items {
-                out.push(ctx.call_function(k, &[it.clone()])?);
+                out.push(ctx.call_function(k, std::slice::from_ref(it))?);
             }
             out
         } else {
@@ -1209,15 +1209,7 @@ impl NativeFunction for Sort {
                 }
             });
         } else {
-            indices.sort_by(|&i, &j| match cmp_values(&keys[i], &keys[j]) {
-                Ok(o) => o,
-                Err(e) => {
-                    if cmp_err.is_none() {
-                        cmp_err = Some(e);
-                    }
-                    std::cmp::Ordering::Equal
-                }
-            });
+            indices.sort_by(|&i, &j| cmp_values(&keys[i], &keys[j]));
         }
         if let Some(e) = cmp_err {
             return Err(e.into());
@@ -1600,7 +1592,8 @@ impl NativeFunction for KeyValues {
             let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::PAIR);
             ctx.heap_mut()
                 .mutate_add(obj, "first", &[key_to_value(k)])?;
-            ctx.heap_mut().mutate_add(obj, "second", &[v.clone()])?;
+            ctx.heap_mut()
+                .mutate_add(obj, "second", std::slice::from_ref(v))?;
             items.push(Value::Object(obj));
         }
         Ok(Evaluated::new(Value::from_vec(items)))
@@ -1842,7 +1835,7 @@ impl NativeFunction for GroupBy {
         let mut groups: im_rc::HashMap<ValueKey, Vec<Value>> = im_rc::HashMap::new();
         let mut key_order: Vec<ValueKey> = Vec::new();
         for item in &items {
-            let key_val = ctx.call_function(&f, &[item.clone()])?;
+            let key_val = ctx.call_function(&f, std::slice::from_ref(item))?;
             let key = value_to_key(&key_val, ctx)?;
             if !groups.contains_key(&key) {
                 key_order.push(key.clone());
@@ -1856,7 +1849,7 @@ impl NativeFunction for GroupBy {
             let list_obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::LIST);
             for v in &bucket {
                 ctx.heap_mut()
-                    .mutate_add(list_obj, "values", &[v.clone()])?;
+                    .mutate_add(list_obj, "values", std::slice::from_ref(v))?;
             }
             map.insert(key, Value::Object(list_obj));
         }

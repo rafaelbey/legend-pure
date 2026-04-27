@@ -1560,10 +1560,7 @@ fn dispatch_target(
     model: &legend_pure_parser_pure::model::PureModel,
     caller_fqn: &[&str],
 ) -> String {
-    let path: Vec<smol_str::SmolStr> = caller_fqn
-        .iter()
-        .map(smol_str::SmolStr::new)
-        .collect();
+    let path: Vec<smol_str::SmolStr> = caller_fqn.iter().map(smol_str::SmolStr::new).collect();
     let caller_id = model
         .resolve_by_path(&path)
         .unwrap_or_else(|| panic!("caller {caller_fqn:?} should exist"));
