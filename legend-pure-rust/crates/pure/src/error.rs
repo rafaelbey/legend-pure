@@ -97,4 +97,38 @@ pub enum CompilationErrorKind {
         /// The source file that failed.
         source: SmolStr,
     },
+    /// A property does not exist on the receiver type (or any supertype).
+    UnknownProperty {
+        /// Name of the receiver type that was searched.
+        type_name: SmolStr,
+        /// The unknown property name.
+        property_name: SmolStr,
+    },
+    /// A qualified property was called with the wrong number of arguments.
+    QualifiedPropertyArityMismatch {
+        /// Name of the receiver type.
+        type_name: SmolStr,
+        /// The qualified property name.
+        property_name: SmolStr,
+        /// Number of parameters declared.
+        expected: usize,
+        /// Number of arguments supplied.
+        actual: usize,
+    },
+    /// A qualified property argument has a type incompatible with the
+    /// declared parameter (wrong type or wrong multiplicity).
+    QualifiedPropertyArgTypeMismatch {
+        /// Name of the receiver type.
+        type_name: SmolStr,
+        /// The qualified property name.
+        property_name: SmolStr,
+        /// Zero-based index of the offending argument.
+        param_index: usize,
+        /// Parameter name (for diagnostics).
+        param_name: SmolStr,
+        /// Expected param type (rendered).
+        expected: SmolStr,
+        /// Inferred argument type (rendered).
+        actual: SmolStr,
+    },
 }

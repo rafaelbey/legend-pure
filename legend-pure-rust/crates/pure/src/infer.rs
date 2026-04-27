@@ -27,10 +27,13 @@
 //! - **Scope chain** — `let` bindings and lambda parameters push entries
 //!   into a scope stack. Variable references resolve by walking up.
 
+use std::collections::HashMap;
+
 use smol_str::SmolStr;
 
 use crate::bootstrap;
-use crate::error::CompilationError;
+use crate::error::{CompilationError, CompilationErrorKind};
+use crate::ids::ElementId;
 use crate::model::{Element, PureModel};
 use crate::types::{
     DateValue, ExprKind, Multiplicity, Parameter, ResolvedType, TypeExpr, ValueSpec,
@@ -193,7 +196,38 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
         // -- Property access ------------------------------------------------
         ExprKind::PropertyAccess { target, property } => {
             let target_type = infer_expr(ctx, target);
-            let result = infer_property_access(ctx, target_type.as_ref(), property);
+            let lookup = infer_property_access(ctx, target_type.as_ref(), property);
+            let result = match lookup {
+                PropertyLookup::FoundProperty(rt) => Some(rt),
+                PropertyLookup::FoundQualifiedProperties(mut candidates) => {
+                    // No-paren property access on a QP — pick the 0-arg
+                    // overload if one exists; otherwise return the first
+                    // candidate's return type without firing arity errors
+                    // (mirrors the prior best-effort behaviour for `obj.qp`
+                    // when qp expects args).
+                    let idx = candidates
+                        .iter()
+                        .position(|c| c.parameters.is_empty())
+                        .unwrap_or(0);
+                    let chosen = candidates.swap_remove(idx);
+                    Some(chosen.return_type)
+                }
+                PropertyLookup::NotFound { type_name } => {
+                    ctx.errors.push(CompilationError {
+                        message: format!(
+                            "The property '{property}' can't be found in the type \
+                             '{type_name}' (or any supertype)"
+                        ),
+                        source_info: expr.source_info.clone(),
+                        kind: CompilationErrorKind::UnknownProperty {
+                            type_name,
+                            property_name: property.clone(),
+                        },
+                    });
+                    None
+                }
+                PropertyLookup::UnknownTarget => None,
+            };
             return set_and_return(expr, result);
         }
 
@@ -204,11 +238,44 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
             arguments,
         } => {
             let target_type = infer_expr(ctx, target);
-            // Infer argument types (for completeness)
-            for arg in arguments.iter_mut() {
-                infer_expr(ctx, arg);
-            }
-            let result = infer_property_access(ctx, target_type.as_ref(), property);
+            // Infer argument types first so we can validate them.
+            let arg_types: Vec<Option<ResolvedType>> =
+                arguments.iter_mut().map(|a| infer_expr(ctx, a)).collect();
+
+            let lookup = infer_property_access(ctx, target_type.as_ref(), property);
+            let result = match lookup {
+                PropertyLookup::FoundQualifiedProperties(candidates) => {
+                    Some(resolve_qualified_property_overload(
+                        ctx,
+                        candidates,
+                        property,
+                        arguments,
+                        &arg_types,
+                        &expr.source_info,
+                    ))
+                }
+                PropertyLookup::FoundProperty(rt) => {
+                    // QP-style call against a regular property — the
+                    // runtime would error; treat the property's type as
+                    // the result and let runtime surface the mismatch.
+                    Some(rt)
+                }
+                PropertyLookup::NotFound { type_name } => {
+                    ctx.errors.push(CompilationError {
+                        message: format!(
+                            "The property '{property}' can't be found in the type \
+                             '{type_name}' (or any supertype)"
+                        ),
+                        source_info: expr.source_info.clone(),
+                        kind: CompilationErrorKind::UnknownProperty {
+                            type_name,
+                            property_name: property.clone(),
+                        },
+                    });
+                    None
+                }
+                PropertyLookup::UnknownTarget => None,
+            };
             return set_and_return(expr, result);
         }
 
@@ -480,56 +547,407 @@ fn infer_builtin_return_type(
 // Property access type inference
 // ---------------------------------------------------------------------------
 
-/// Infers the type of a property access (`$target.property`).
+/// Outcome of resolving `target.property` against the type model.
+enum PropertyLookup {
+    /// A regular property (declared on the class or association-injected,
+    /// possibly inherited) matched the name.
+    FoundProperty(ResolvedType),
+    /// One or more qualified-property overloads matched the name.
+    /// Caller picks the one whose arity matches the call site.
+    FoundQualifiedProperties(Vec<QpCandidate>),
+    /// Receiver resolved to a Class but no member with this name exists
+    /// on it, on any supertype, or in any association targeting it.
+    NotFound {
+        /// Name of the receiver class (for diagnostics).
+        type_name: SmolStr,
+    },
+    /// Receiver type is unknown / not a Class — caller should silently
+    /// propagate `None` (existing upstream error already reported, or
+    /// non-Class receiver is out of scope for this check).
+    ///
+    /// Also used when the receiver is an M3 metatype (`Class<X>`,
+    /// `Enumeration<X>`, etc.) — element-side reflection (`MyEnum.RED`,
+    /// `Person.name`) goes through runtime dispatch and the compile-time
+    /// check would produce false positives. TODO: tighten this once the
+    /// metatype-aware lookup lands.
+    UnknownTarget,
+}
+
+/// One qualified-property overload candidate, ready for arity + arg-type
+/// validation against a specific call site.
+struct QpCandidate {
+    /// Return type with receiver type-arg bindings already substituted.
+    return_type: ResolvedType,
+    /// QP parameter list (cloned from the resolved QP).
+    parameters: Vec<Parameter>,
+    /// Bindings to substitute when checking `parameters[i].type_expr`.
+    bindings: HashMap<SmolStr, TypeExpr>,
+    /// Receiver class name (for diagnostics).
+    receiver_type_name: SmolStr,
+}
+
+/// Resolves `target.property` against the type model.
+///
+/// Walks the receiver class plus its supertypes, looking at declared
+/// properties, qualified properties, and association-injected properties
+/// (via the derived index). Returns a [`PropertyLookup`] describing the
+/// outcome — callers decide whether to emit an error.
 fn infer_property_access(
     ctx: &InferCtx<'_>,
     target_type: Option<&ResolvedType>,
     property_name: &str,
-) -> Option<ResolvedType> {
-    let target = target_type?;
-
-    // Get the element ID from the target type
-    let element_id = match &target.type_expr {
-        TypeExpr::Named { element, .. } => *element,
-        _ => return None,
+) -> PropertyLookup {
+    let Some(target) = target_type else {
+        return PropertyLookup::UnknownTarget;
     };
 
-    // Look up the element — it must be a Class
-    let elem = ctx.model.try_get_element(element_id)?;
-    if let Element::Class(class) = elem {
-        // Search in own properties
-        if let Some(prop) = class.properties.iter().find(|p| p.name == property_name) {
-            return Some(ResolvedType {
-                type_expr: prop.type_expr.clone(),
-                multiplicity: prop.multiplicity.clone(),
-            });
+    // Receiver must be a `Named` type whose element resolves to a Class.
+    let (receiver_id, receiver_type_args) = match &target.type_expr {
+        TypeExpr::Named {
+            element,
+            type_arguments,
+            ..
+        } => (*element, type_arguments.clone()),
+        _ => return PropertyLookup::UnknownTarget,
+    };
+    let Some(receiver_elem) = ctx.model.try_get_element(receiver_id) else {
+        return PropertyLookup::UnknownTarget;
+    };
+    if !matches!(receiver_elem, Element::Class(_)) {
+        return PropertyLookup::UnknownTarget;
+    }
+    let receiver_type_name = ctx.model.get_node(receiver_id).name.clone();
+
+    // Build type-argument bindings for the immediate receiver class
+    // (e.g., receiver `Pair<Integer,String>` with class `Pair<U,V>`
+    // produces { U → Integer, V → String }).
+    let receiver_bindings = compute_type_arg_bindings(ctx.model, receiver_id, &receiver_type_args);
+
+    // Walk type hierarchy (own + association + supertypes) looking for
+    // a member named `property_name`.
+    let mut visited: std::collections::HashSet<ElementId> = std::collections::HashSet::new();
+    if let Some(found) = lookup_member_in_class(
+        ctx.model,
+        receiver_id,
+        property_name,
+        &receiver_bindings,
+        &receiver_type_name,
+        &mut visited,
+    ) {
+        return found;
+    }
+
+    // Receiver is a bootstrap-chunk class — M3 metatype (`Class<X>`,
+    // `Enumeration<X>`, `Function<…>`, `Any`, primitive types, etc.).
+    // Property access on these goes through runtime reflection
+    // (`MyEnum.RED`, `$f.classifierGenericType`, lambda parameters whose
+    // type best-effort-infers to `Any`, …); the compile-time lookup
+    // can't resolve those without a metatype-aware inner-element
+    // walk + improved lambda-param inference. Don't emit a
+    // false-positive UnknownProperty here. TODO: tighten by resolving
+    // metaclass receivers against the inner element X and improving
+    // lambda parameter type inference so `Person`-typed lambdas don't
+    // fall back to `Any`.
+    if is_bootstrap_chunk_class(receiver_id) {
+        return PropertyLookup::UnknownTarget;
+    }
+
+    PropertyLookup::NotFound {
+        type_name: receiver_type_name,
+    }
+}
+
+/// Returns `true` when `class_id` lives in the bootstrap chunk (chunk
+/// 0) — the home of M3 metaclasses (`Class`, `Function`, `Enumeration`,
+/// `Profile`, `Association`, `Package`, `PackageableElement`, …),
+/// primitives (`Integer`, `String`, …), and `Any`. User-defined classes
+/// live in chunk 1+, so this is a structural way to skip
+/// metatype/reflection receivers without re-implementing the M3
+/// hierarchy walk.
+fn is_bootstrap_chunk_class(class_id: ElementId) -> bool {
+    matches!(
+        class_id,
+        ElementId::InstanceId {
+            chunk_id: crate::bootstrap::BOOTSTRAP_CHUNK_ID,
+            ..
         }
-        // Search in qualified properties
-        if let Some(qp) = class
-            .qualified_properties
-            .iter()
-            .find(|q| q.name == property_name)
+    )
+}
+
+/// Computes type-parameter → type-argument bindings for a class.
+///
+/// Returns an empty map when the class has no type parameters or the
+/// receiver carried no type arguments.
+fn compute_type_arg_bindings(
+    model: &PureModel,
+    class_id: ElementId,
+    type_arguments: &[TypeExpr],
+) -> HashMap<SmolStr, TypeExpr> {
+    let mut out = HashMap::new();
+    if let Some(Element::Class(class)) = model.try_get_element(class_id) {
+        for (param_name, arg) in class.type_parameters.iter().zip(type_arguments.iter()) {
+            out.insert(param_name.clone(), arg.clone());
+        }
+    }
+    out
+}
+
+/// Recursively searches `class_id` and its supertypes (including
+/// association-injected properties) for a member named `property_name`.
+///
+/// Returns a [`PropertyLookup`] describing the kind of match. Qualified
+/// properties may have multiple overloads at the same class (Pure
+/// supports overload-by-arity for QPs); all of them are returned so the
+/// caller can pick by arity. Bindings are threaded through the supertype
+/// chain so a parametric supertype (e.g., `Foo<T> extends List<T>`)
+/// substitutes `T` when looking up properties on `List`.
+fn lookup_member_in_class(
+    model: &PureModel,
+    class_id: ElementId,
+    property_name: &str,
+    bindings: &HashMap<SmolStr, TypeExpr>,
+    receiver_type_name: &SmolStr,
+    visited: &mut std::collections::HashSet<ElementId>,
+) -> Option<PropertyLookup> {
+    if !visited.insert(class_id) {
+        return None;
+    }
+    let Some(Element::Class(class)) = model.try_get_element(class_id) else {
+        return None;
+    };
+
+    // 1. Own declared properties.
+    if let Some(prop) = class.properties.iter().find(|p| p.name == property_name) {
+        let resolved = ResolvedType {
+            type_expr: crate::resolve::substitute_type(&prop.type_expr, bindings),
+            multiplicity: prop.multiplicity.clone(),
+        };
+        return Some(PropertyLookup::FoundProperty(resolved));
+    }
+
+    // 2. Own qualified properties — collect ALL overloads with this name.
+    let qp_overloads: Vec<&crate::nodes::class::QualifiedProperty> = class
+        .qualified_properties
+        .iter()
+        .filter(|q| q.name == property_name)
+        .collect();
+    if !qp_overloads.is_empty() {
+        let candidates: Vec<QpCandidate> = qp_overloads
+            .into_iter()
+            .map(|qp| QpCandidate {
+                return_type: ResolvedType {
+                    type_expr: crate::resolve::substitute_type(&qp.return_type, bindings),
+                    multiplicity: qp.return_multiplicity.clone(),
+                },
+                parameters: qp.parameters.clone(),
+                bindings: bindings.clone(),
+                receiver_type_name: receiver_type_name.clone(),
+            })
+            .collect();
+        return Some(PropertyLookup::FoundQualifiedProperties(candidates));
+    }
+
+    // 3. Association-injected properties. The derived index registers
+    //    each association property on its OWN target class; the property
+    //    visible from this class for navigation is the OTHER end (index
+    //    `1 - prop_idx_pointing_to_self`). Same convention as
+    //    `runtime/native/lang.rs:832`.
+    for (assoc_id, prop_idx_pointing_to_self) in model.association_properties(class_id) {
+        if let Some(Element::Association(assoc)) = model.try_get_element(*assoc_id)
+            && assoc.properties.len() == 2
         {
-            return Some(ResolvedType {
-                type_expr: qp.return_type.clone(),
-                multiplicity: qp.return_multiplicity.clone(),
-            });
-        }
-        // Walk supertypes for inherited properties
-        for st in &class.super_types {
-            if matches!(st, TypeExpr::Named { .. }) {
-                let super_type = ResolvedType {
-                    type_expr: st.clone(),
-                    multiplicity: Multiplicity::PureOne,
+            let injected = &assoc.properties[1 - *prop_idx_pointing_to_self];
+            if injected.name == property_name {
+                let resolved = ResolvedType {
+                    type_expr: crate::resolve::substitute_type(&injected.type_expr, bindings),
+                    multiplicity: injected.multiplicity.clone(),
                 };
-                if let Some(result) = infer_property_access(ctx, Some(&super_type), property_name) {
-                    return Some(result);
-                }
+                return Some(PropertyLookup::FoundProperty(resolved));
+            }
+        }
+    }
+
+    // 4. Supertypes — thread bindings through any parametric supertype.
+    let super_types = class.super_types.clone();
+    for st in &super_types {
+        if let TypeExpr::Named {
+            element: super_id,
+            type_arguments: super_args,
+            ..
+        } = st
+        {
+            // Substitute current bindings into the supertype's type args
+            // so generics carry through (`Foo<T> extends Bar<List<T>>`
+            // looks up properties on Bar with X → List<T_resolved>).
+            let substituted_args: Vec<TypeExpr> = super_args
+                .iter()
+                .map(|a| crate::resolve::substitute_type(a, bindings))
+                .collect();
+            let super_bindings = compute_type_arg_bindings(model, *super_id, &substituted_args);
+            if let Some(found) = lookup_member_in_class(
+                model,
+                *super_id,
+                property_name,
+                &super_bindings,
+                receiver_type_name,
+                visited,
+            ) {
+                return Some(found);
             }
         }
     }
 
     None
+}
+
+/// Resolves a qualified-property overload at a call site against the
+/// declared QP candidates: pick the unique arity match, then validate
+/// per-argument type and multiplicity.
+///
+/// Returns the resolved return type. Errors are pushed to `ctx.errors`.
+/// Mirrors the rigour of function-call dispatch in `resolve.rs`.
+fn resolve_qualified_property_overload(
+    ctx: &mut InferCtx<'_>,
+    mut candidates: Vec<QpCandidate>,
+    property_name: &SmolStr,
+    arguments: &[ValueSpec],
+    arg_types: &[Option<ResolvedType>],
+    call_source_info: &legend_pure_parser_ast::SourceInfo,
+) -> ResolvedType {
+    // Arity match: pick the candidate whose parameter count equals the
+    // call's argument count.
+    let chosen_idx = candidates
+        .iter()
+        .position(|c| c.parameters.len() == arguments.len());
+
+    let chosen = if let Some(idx) = chosen_idx {
+        candidates.swap_remove(idx)
+    } else {
+        // No overload matches arity — emit one error using the
+        // smallest-arity candidate (most likely the user intended that
+        // overload). The receiver type name and other diagnostic fields
+        // are identical across candidates for the same call site.
+        let receiver_type_name = candidates[0].receiver_type_name.clone();
+        let arities: Vec<usize> = candidates.iter().map(|c| c.parameters.len()).collect();
+        let expected = *arities.iter().min().unwrap_or(&0);
+        ctx.errors.push(CompilationError {
+            message: format!(
+                "Qualified property '{}.{}' expects {} argument(s), got {} \
+                 (available overload arities: {:?})",
+                receiver_type_name,
+                property_name,
+                expected,
+                arguments.len(),
+                arities,
+            ),
+            source_info: call_source_info.clone(),
+            kind: CompilationErrorKind::QualifiedPropertyArityMismatch {
+                type_name: receiver_type_name,
+                property_name: property_name.clone(),
+                expected,
+                actual: arguments.len(),
+            },
+        });
+        // Return the first candidate's return type so downstream
+        // inference has something to work with.
+        return candidates.swap_remove(0).return_type;
+    };
+
+    // Per-argument type + multiplicity check on the chosen overload.
+    for (idx, (param, arg_ty)) in chosen.parameters.iter().zip(arg_types.iter()).enumerate() {
+        let expected_type = crate::resolve::substitute_type(&param.type_expr, &chosen.bindings);
+        let arg_eid = arg_ty.as_ref().and_then(|rt| match &rt.type_expr {
+            TypeExpr::Named { element, .. } => Some(*element),
+            _ => None,
+        });
+        let arg_mult = arg_ty.as_ref().map(|rt| &rt.multiplicity);
+
+        let type_ok = crate::resolve::is_type_compatible(arg_eid, &expected_type, ctx.model);
+        let mult_ok = crate::resolve::is_multiplicity_compatible(arg_mult, &param.multiplicity);
+
+        if !type_ok || !mult_ok {
+            let expected = render_type(ctx.model, &expected_type, &param.multiplicity);
+            let actual = arg_ty.as_ref().map_or_else(
+                || SmolStr::new("<unknown>"),
+                |rt| render_type(ctx.model, &rt.type_expr, &rt.multiplicity),
+            );
+            ctx.errors.push(CompilationError {
+                message: format!(
+                    "Qualified property '{}.{}' argument {} ('{}'): expected '{}', got '{}'",
+                    chosen.receiver_type_name, property_name, idx, param.name, expected, actual
+                ),
+                source_info: arguments
+                    .get(idx)
+                    .map_or_else(|| call_source_info.clone(), |a| a.source_info.clone()),
+                kind: CompilationErrorKind::QualifiedPropertyArgTypeMismatch {
+                    type_name: chosen.receiver_type_name.clone(),
+                    property_name: property_name.clone(),
+                    param_index: idx,
+                    param_name: param.name.clone(),
+                    expected,
+                    actual,
+                },
+            });
+        }
+    }
+
+    chosen.return_type
+}
+
+/// Renders a `TypeExpr` + `Multiplicity` as a Pure-style string like
+/// `Integer[1]` or `Foo<Bar>[*]` for use in diagnostic messages.
+fn render_type(model: &PureModel, type_expr: &TypeExpr, multiplicity: &Multiplicity) -> SmolStr {
+    let mut s = String::new();
+    render_type_expr(model, type_expr, &mut s);
+    s.push('[');
+    s.push_str(&render_multiplicity(multiplicity));
+    s.push(']');
+    SmolStr::new(s)
+}
+
+fn render_type_expr(model: &PureModel, type_expr: &TypeExpr, out: &mut String) {
+    match type_expr {
+        TypeExpr::Named {
+            element,
+            type_arguments,
+            ..
+        } => {
+            out.push_str(&model.get_node(*element).name);
+            if !type_arguments.is_empty() {
+                out.push('<');
+                for (i, arg) in type_arguments.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    render_type_expr(model, arg, out);
+                }
+                out.push('>');
+            }
+        }
+        TypeExpr::Generic(name) => out.push_str(name),
+        TypeExpr::FunctionType { .. } => out.push_str("<FunctionType>"),
+        TypeExpr::AlgebraUnion(a, b) => {
+            render_type_expr(model, a, out);
+            out.push_str(" | ");
+            render_type_expr(model, b, out);
+        }
+        TypeExpr::Relation(_) => out.push_str("<Relation>"),
+    }
+}
+
+fn render_multiplicity(m: &Multiplicity) -> String {
+    match m {
+        Multiplicity::PureOne => "1".to_string(),
+        Multiplicity::ZeroOrOne => "0..1".to_string(),
+        Multiplicity::ZeroOrMany => "*".to_string(),
+        Multiplicity::OneOrMany => "1..*".to_string(),
+        Multiplicity::Range { lower, upper } => match upper {
+            Some(u) if u == lower => format!("{lower}"),
+            Some(u) => format!("{lower}..{u}"),
+            None => format!("{lower}..*"),
+        },
+        Multiplicity::Variable(v) => v.to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------
