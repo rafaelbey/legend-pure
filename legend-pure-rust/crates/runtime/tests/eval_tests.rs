@@ -242,6 +242,49 @@ fn deactivate_property_access_produces_simple_function_expression() {
 }
 
 #[test]
+fn deactivate_property_access_on_collection_rewrites_to_map() {
+    // Java-parity check on the automap rewrite. When the receiver
+    // multiplicity is non-strictly-toOne (`[*]`, `[0..1]`, `[1..*]`),
+    // inference rewrites `$x.aliases` in place to
+    // `map($x.aliases_collection, λ{v_automap | $v_automap.something})`.
+    // Here we test the simpler shape: `$u.aliases` where aliases:[*]
+    // doesn't itself rewrite (it's the FIRST property access, with a
+    // toOne `$u`), so we exercise the chained case `$u.aliases.length`
+    // implicitly through the platform's ConcreteFunctionDefinition.all
+    // pattern, but here we just check that compiling a simple [*]
+    // accessor produces the expected metamodel shape.
+    //
+    // This test checks: a property access whose RECEIVER is multi-valued
+    // gets rewritten to `map`. We construct that scenario by using
+    // `pair(1,3).first` (returns Integer[1]) — that's still toOne, no
+    // rewrite. The actual chained shape `$col.field` requires a
+    // platform helper — defer that as a follow-up. For now, lock in
+    // that the deactivate path produces SimpleFunctionExpression with
+    // `_functionName = 'map'` when the rewrite fires.
+    //
+    // To avoid building a full platform-dependent multi-valued source
+    // here, this test currently uses `let xs = [1, 2]; $xs.foo` —
+    // BUT primitive integers don't have a `.foo` property. So we use
+    // a property of a class on a multi-valued receiver via a chain
+    // through the platform's `ConcreteFunctionDefinition.all`.
+    let source = r"
+        Class test::User { firstName: String[1]; }
+        function test::f(): String[1] {
+            let users = [^test::User(firstName='a'), ^test::User(firstName='b')];
+            // $users is User[*]; $users.firstName triggers automap rewrite.
+            let f = $users.firstName->deactivate();
+            $f->cast(@SimpleFunctionExpression).functionName->toOne()
+        }
+    ";
+    let result = eval_pure(source, "f__String_1_");
+    assert_eq!(
+        result,
+        Value::String("map".into()),
+        "multi-valued property access must rewrite to a `map` SFE"
+    );
+}
+
+#[test]
 fn deactivate_property_access_func_carries_property_wrapper() {
     // The synthesized Property wrapper on `_func` exposes
     // `name` (the property name) and `_owner` (the receiver class).
