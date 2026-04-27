@@ -173,6 +173,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
             function,
             function_name,
             arguments,
+            ..
         } => {
             // Infer argument types first (bottom-up)
             let arg_types: Vec<Option<ResolvedType>> =
