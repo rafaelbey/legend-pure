@@ -916,6 +916,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "legend-pure-dsl-diagram"
+version = "0.1.0"
+dependencies = [
+ "indoc",
+ "legend-pure-parser-ast",
+ "legend-pure-parser-lexer",
+ "legend-pure-parser-parser",
+ "legend-pure-parser-pure",
+ "smol_str",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "legend-pure-parser-ast"
 version = "0.1.0"
 dependencies = [
