@@ -43,6 +43,7 @@ use smol_str::SmolStr;
 
 use crate::bootstrap;
 use crate::error::{CompilationError, CompilationErrorKind};
+use crate::extension::{DeclareCtx, DefineCtx, ValidateCtx};
 use crate::ids::ElementId;
 use crate::model::{Element, ElementNode, ModelChunk, PureModel};
 use crate::nodes::association::Association;
@@ -88,15 +89,32 @@ pub struct PartialPureModel {
 /// - `Err(PartialPureModel)` — errors occurred, but the model is still
 ///   available via [`PartialPureModel::model`] for diagnostics / LSP
 #[allow(clippy::result_large_err)] // Ok(PureModel) is equally large — intentional API
+pub fn compile(
+    source_files: &[SourceFile],
+    auto_imports: &[SmolStr],
+) -> Result<PureModel, PartialPureModel> {
+    compile_with_extensions(source_files, auto_imports, &[])
+}
+
+/// Compiles with a slice of [`CompilerExtension`]s. Extensions plug
+/// into each pipeline phase after the M3 work for that phase is done.
+///
+/// The 0-extension call is identical to [`compile`]. The intent of the
+/// extension slot is M2 DSL support (Mapping, Diagram, Relational).
+///
+/// # Errors
+/// Same `Result<PureModel, PartialPureModel>` shape as [`compile`].
+#[allow(clippy::result_large_err)]
 #[tracing::instrument(
     level = "info",
     name = "compile",
     skip_all,
-    fields(n_source_files = source_files.len()),
+    fields(n_source_files = source_files.len(), n_extensions = extensions.len()),
 )]
-pub fn compile(
+pub fn compile_with_extensions(
     source_files: &[SourceFile],
     auto_imports: &[SmolStr],
+    extensions: &[&dyn crate::extension::CompilerExtension],
 ) -> Result<PureModel, PartialPureModel> {
     let mut model = PureModel::new();
 
@@ -138,6 +156,20 @@ pub fn compile(
     // ---- Pass 1: Declaration ----
     let (declarations, unit_mappings) = pass_declare(source_files, &mut model, &mut errors);
 
+    // ---- Pass 1: Extension declare hooks ----
+    // Extensions allocate shells for any DSL-specific element variants
+    // they own. Runs after M3 declarations so extension hooks see a
+    // fully-populated M3 package tree to anchor against.
+    for ext in extensions {
+        let mut ctx = DeclareCtx {
+            source_files,
+            model: &mut model,
+            auto_imports,
+            errors: &mut errors,
+        };
+        ext.declare(&mut ctx);
+    }
+
     // ---- Pass 1.5: Topological Sort ----
     let sorted = pass_topo_sort(&declarations, source_files, &model, &mut errors);
 
@@ -154,6 +186,17 @@ pub fn compile(
         &mut model,
         &mut errors,
     );
+
+    // ---- Pass 2a: Extension define_signatures hooks ----
+    for ext in extensions {
+        let mut ctx = DefineCtx {
+            source_files,
+            model: &mut model,
+            auto_imports,
+            errors: &mut errors,
+        };
+        ext.define_signatures(&mut ctx);
+    }
 
     // ---- Pass 2b: Function Bodies + Class/Assoc/Primitive bodies ----
     // Compile expression bodies using fully-resolved function signatures.
@@ -190,6 +233,17 @@ pub fn compile(
         &mut errors,
     );
 
+    // ---- Pass 2b: Extension define_bodies hooks ----
+    for ext in extensions {
+        let mut ctx = DefineCtx {
+            source_files,
+            model: &mut model,
+            auto_imports,
+            errors: &mut errors,
+        };
+        ext.define_bodies(&mut ctx);
+    }
+
     // NOTE: Function name mangling happens at declaration time (Pass 1).
     // Elements are registered with their mangled names from the start.
 
@@ -207,6 +261,15 @@ pub fn compile(
 
     // ---- Pass 3: Validation ----
     errors.extend(crate::validate::validate(&model));
+
+    // ---- Pass 3: Extension validate hooks ----
+    for ext in extensions {
+        let mut ctx = ValidateCtx {
+            model: &model,
+            errors: &mut errors,
+        };
+        ext.validate(&mut ctx);
+    }
 
     if errors.is_empty() {
         Ok(model)
