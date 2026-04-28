@@ -40,5 +40,6 @@
 #![deny(missing_docs)]
 
 pub mod ast;
+pub mod compiler;
 pub mod compose;
 pub mod parser;
