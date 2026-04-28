@@ -21,7 +21,11 @@ use smol_str::SmolStr;
 use crate::error::ParseError;
 
 /// A cursor over a token stream, supporting peek, advance, and expect.
-pub(crate) struct Cursor {
+///
+/// Exposed publicly so external section/island parser plug-ins can
+/// consume tokens directly via [`SectionParser`](crate::SectionParser)
+/// implementations.
+pub struct Cursor {
     tokens: Vec<Token>,
     pos: usize,
 }

@@ -60,7 +60,13 @@ pub trait Annotated {
 ///
 /// This is the root type the parser produces — a source file parses into
 /// a `Vec<Element>`.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// The [`DSLElement`](Self::DSLElement) variant is the extensibility
+/// hook for M2 DSLs. Each DSL crate (`dsl-diagram`, `dsl-mapping`, …)
+/// defines its own concrete element types and stores them
+/// type-erased as `Box<dyn dsl::DSLElement>`. Core never carries any
+/// DSL-specific knowledge.
+#[derive(Debug)]
 pub enum Element {
     /// A class definition.
     Class(ClassDef),
@@ -78,6 +84,43 @@ pub enum Element {
     Measure(MeasureDef),
     /// A primitive type definition.
     Primitive(PrimitiveDef),
+    /// A DSL-defined element. The boxed trait object is owned by an
+    /// out-of-core DSL crate (e.g. `dsl-diagram`'s `DiagramDef`).
+    /// Consumers downcast via [`crate::dsl::DSLElement::as_any`].
+    DSLElement(Box<dyn crate::dsl::DSLElement>),
+}
+
+impl Clone for Element {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Class(e) => Self::Class(e.clone()),
+            Self::Enumeration(e) => Self::Enumeration(e.clone()),
+            Self::Function(e) => Self::Function(e.clone()),
+            Self::NativeFunction(e) => Self::NativeFunction(e.clone()),
+            Self::Profile(e) => Self::Profile(e.clone()),
+            Self::Association(e) => Self::Association(e.clone()),
+            Self::Measure(e) => Self::Measure(e.clone()),
+            Self::Primitive(e) => Self::Primitive(e.clone()),
+            Self::DSLElement(e) => Self::DSLElement(e.clone_box()),
+        }
+    }
+}
+
+impl PartialEq for Element {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Class(a), Self::Class(b)) => a == b,
+            (Self::Enumeration(a), Self::Enumeration(b)) => a == b,
+            (Self::Function(a), Self::Function(b)) => a == b,
+            (Self::NativeFunction(a), Self::NativeFunction(b)) => a == b,
+            (Self::Profile(a), Self::Profile(b)) => a == b,
+            (Self::Association(a), Self::Association(b)) => a == b,
+            (Self::Measure(a), Self::Measure(b)) => a == b,
+            (Self::Primitive(a), Self::Primitive(b)) => a == b,
+            (Self::DSLElement(a), Self::DSLElement(b)) => a.eq_content(b.as_ref()),
+            _ => false,
+        }
+    }
 }
 
 impl Spanned for Element {
@@ -91,6 +134,7 @@ impl Spanned for Element {
             Self::Association(e) => e.source_info(),
             Self::Measure(e) => e.source_info(),
             Self::Primitive(e) => e.source_info(),
+            Self::DSLElement(e) => e.source_info(),
         }
     }
 }
@@ -106,6 +150,7 @@ impl PackageableElement for Element {
             Self::Association(e) => e.package(),
             Self::Measure(e) => e.package(),
             Self::Primitive(e) => e.package(),
+            Self::DSLElement(e) => e.package(),
         }
     }
 
@@ -119,6 +164,7 @@ impl PackageableElement for Element {
             Self::Association(e) => e.name(),
             Self::Measure(e) => e.name(),
             Self::Primitive(e) => e.name(),
+            Self::DSLElement(e) => e.name(),
         }
     }
 }
@@ -134,6 +180,7 @@ impl Annotated for Element {
             Self::Association(e) => e.stereotypes(),
             Self::Measure(e) => e.stereotypes(),
             Self::Primitive(e) => e.stereotypes(),
+            Self::DSLElement(e) => e.stereotypes(),
         }
     }
 
@@ -147,6 +194,7 @@ impl Annotated for Element {
             Self::Association(e) => e.tagged_values(),
             Self::Measure(e) => e.tagged_values(),
             Self::Primitive(e) => e.tagged_values(),
+            Self::DSLElement(e) => e.tagged_values(),
         }
     }
 }
@@ -722,6 +770,9 @@ pub trait ElementVisitor {
     fn visit_measure(&mut self, measure: &MeasureDef);
     /// Visit a primitive type definition.
     fn visit_primitive(&mut self, primitive: &PrimitiveDef);
+    /// Visit a DSL-defined element. Default no-op so pre-DSL visitors
+    /// keep compiling unchanged; DSL-aware visitors override.
+    fn visit_dsl_element(&mut self, _element: &dyn crate::dsl::DSLElement) {}
 }
 
 impl Element {
@@ -736,6 +787,7 @@ impl Element {
             Self::Association(e) => visitor.visit_association(e),
             Self::Measure(e) => visitor.visit_measure(e),
             Self::Primitive(e) => visitor.visit_primitive(e),
+            Self::DSLElement(e) => visitor.visit_dsl_element(e.as_ref()),
         }
     }
 }

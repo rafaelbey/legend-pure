@@ -37,6 +37,12 @@ use crate::writer::IndentWriter;
 // ---------------------------------------------------------------------------
 
 /// Composes any element.
+///
+/// `Element::DSLElement` is currently emitted as an empty placeholder
+/// — DSL-owned elements are round-tripped by the DSL crate's own
+/// composer (e.g. `legend-pure-dsl-diagram` ships a Diagram composer)
+/// rather than by the core composer. A future `SectionComposer`
+/// plug-in trait, mirroring `IslandComposer`, will delegate here.
 pub fn compose_element(w: &mut IndentWriter, elem: &Element) {
     match elem {
         Element::Class(c) => compose_class(w, c),
@@ -47,6 +53,7 @@ pub fn compose_element(w: &mut IndentWriter, elem: &Element) {
         Element::Association(a) => compose_association(w, a),
         Element::Measure(m) => compose_measure(w, m),
         Element::Primitive(p) => compose_primitive(w, p),
+        Element::DSLElement(_) => { /* delegated to DSL crate composer */ }
     }
 }
 

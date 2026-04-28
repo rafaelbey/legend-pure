@@ -70,26 +70,43 @@ pub(crate) struct ElementHeader {
     pub name: SpannedString,
 }
 
-/// Main parser struct wrapping a token cursor and island grammar plugins.
+/// Main parser struct wrapping a token cursor and grammar plug-ins.
 pub(crate) struct Parser {
     cursor: Cursor,
     island_parsers: Vec<Box<dyn IslandParser>>,
+    section_parsers: Vec<Box<dyn crate::SectionParser>>,
 }
 
 impl Parser {
-    /// Create a parser with the default set of island grammar plugins.
+    /// Create a parser with the default set of island grammar plug-ins
+    /// and no section parsers (only `Pure` sections recognised).
     pub fn new(cursor: Cursor) -> Self {
         Self {
             cursor,
             island_parsers: crate::island::default_island_parsers(),
+            section_parsers: Vec::new(),
         }
     }
 
-    /// Create a parser with a custom set of island grammar plugins.
+    /// Create a parser with a custom set of island grammar plug-ins.
     pub fn with_island_parsers(cursor: Cursor, island_parsers: Vec<Box<dyn IslandParser>>) -> Self {
         Self {
             cursor,
             island_parsers,
+            section_parsers: Vec::new(),
+        }
+    }
+
+    /// Create a parser with both island and section grammar plug-ins.
+    pub fn with_plugins(
+        cursor: Cursor,
+        island_parsers: Vec<Box<dyn IslandParser>>,
+        section_parsers: Vec<Box<dyn crate::SectionParser>>,
+    ) -> Self {
+        Self {
+            cursor,
+            island_parsers,
+            section_parsers,
         }
     }
 
@@ -138,6 +155,12 @@ impl Parser {
     /// When an element fails to parse, the error is collected and the cursor
     /// skips to the next element boundary (a top-level keyword like `function`,
     /// `class`, `native`, etc.).
+    ///
+    /// If a registered [`SectionParser`](crate::SectionParser) matches the
+    /// section header (e.g. `###Diagram`), the body is delegated to that
+    /// plug-in and the resulting `DSLElement`s are wrapped as
+    /// `Element::DSLElement` entries. The default `Pure` section continues
+    /// to use the M3 element grammar.
     fn parse_section(&mut self, errors: &mut Vec<ParseError>) -> Section {
         let start = self.cursor.current_source_info();
         let kind = if self.cursor.check(TokenKind::SectionHeader) {
@@ -158,6 +181,34 @@ impl Parser {
                     self.skip_to_next_element();
                 }
             }
+        }
+
+        // Section-level plug-in dispatch: if a `SectionParser` is
+        // registered for this section's kind, hand the cursor over.
+        // The plug-in consumes tokens up to the next section header
+        // / EOF and returns its own DSL elements.
+        if let Some(idx) = self
+            .section_parsers
+            .iter()
+            .position(|p| p.kind() == kind.as_str())
+        {
+            // Take the parser out of the Vec to avoid an aliasing
+            // borrow on `self`. The plug-in only needs the cursor.
+            let plug_in = self.section_parsers.swap_remove(idx);
+            let dsl_elements = plug_in.parse_body(&mut self.cursor, errors);
+            // Restore the parser; order doesn't matter since lookup
+            // is by kind, not index.
+            self.section_parsers.push(plug_in);
+            let elements = dsl_elements
+                .into_iter()
+                .map(legend_pure_parser_ast::element::Element::DSLElement)
+                .collect();
+            return Section {
+                kind,
+                imports,
+                elements,
+                source_info: start,
+            };
         }
 
         let mut elements = Vec::new();
