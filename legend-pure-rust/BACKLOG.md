@@ -12,7 +12,7 @@ in its crate directory; this file provides the high-level view.
 | Component | Status | Platform Errors | Test Count | Key Milestone |
 |-----------|--------|----------------|------------|---------------|
 | Parser | ✅ Complete | 0 | ~400+ | Full grammar coverage |
-| Compiler | ✅ Platform clean | **0** | ~50+ | 236 files / 1338 elements; `load_platform()` compiles with **zero errors** |
+| Compiler | ✅ Platform clean | **0** | ~50+ | 238 files / 1572 elements (M3 + Store DSL metamodel); `load_platform()` compiles with **zero errors** |
 | Runtime | ✅ Surveyor 246/0/0; PCT 465/465 | N/A | 357+ lib + 71 eval + 246 surveyor | PCT broad-canary at 100% with 9 manifest exclusions |
 | CLI | 🚧 Partial | N/A | ~20+ | 8/11 commands; `legend test --pct` defaults to bundled `pct_grammar_rust_native.json` exclusions |
 | **Total** | | **0** | **739+** | |
@@ -45,6 +45,7 @@ in its crate directory; this file provides the high-level view.
 | Parallel Pass 2 | P3 | Bodies can be parallelized per-element |
 | Incremental compilation | P3 | Re-resolve only changed chunks |
 | Stress bench `compile/hub_spoke_1k` panics | P2 | `crates/stress/benches/pipeline.rs:343` unwraps a `Result` but the synthesized hub_spoke source emits `plus()` calls that are unresolved without the platform. Either load the platform before benching `compile/*`, or change the hub_spoke generator to avoid platform-only operators. |
+| Repo descriptors + manifest (Pure-graph composition) | P1 | Java Pure ships a JSON descriptor next to every repo's `src/main/resources/`: `platform.json`, `platform_dsl_store.definition.json`, `platform_dsl_diagram.definition.json`, `platform_dsl_mapping.definition.json`, `platform_store_relational.definition.json`. Shape: `{ name, pattern (regex over FQN), dependencies: [name…] }`. Sources live relative to the descriptor. Today `crates/core-platform-pure/build.rs` walks two hand-listed directories (`platform`, `platform_dsl_store`); replace with a manifest-driven loader: (1) parse one descriptor JSON into `RepoDescriptor { name, pattern: Regex, dependencies, source_root }`; (2) top-level manifest enumerates repos to compose; (3) topo-sort by dependencies; (4) validate every `.pure` file's declared FQN against its repo's `pattern` regex (build-time error on mismatch — this is the layering primitive); (5) keep the loader trait open for future `.purem` (binary) and remote artifact-coordinate (Maven-style) source kinds. Goal: compose the Pure graph through descriptor files instead of hardcoded paths. The current hand-list is an interim stopgap. |
 
 ### Recently Closed
 - Root package `::` references — `crates/pure/src/resolve.rs:554-585` walks from `model.root_package`; platform compile clean.
@@ -53,6 +54,7 @@ in its crate directory; this file provides the high-level view.
 - `^ClassName<TypeArgs>(props)` constructor — parsed at `crates/parser/src/parser/expression.rs:437-553`.
 - M3 parser completeness (constraints, QPs) — user-class constraints/QPs lower via `pipeline.rs:1602`/`1526`; M3 metamodel reflective props populated directly + via supertype walk. Locked by `crates/pure/tests/m3_class_metaprops.rs`.
 - Compilation tracing — `#[tracing::instrument]` on every pipeline pass plus the existing `resolve_function_call` dispatch log. Locked by `crates/pure/tests/tracing_smoke.rs`.
+- Store DSL metamodel embedded — `legend-pure-dsl-store/.../platform_dsl_store/grammar/{store,runtime}.pure` now flow through `crates/core-platform-pure/build.rs` alongside the M3 platform sources, exposing `meta::pure::store::*` and `meta::core::runtime::*` classes in the compiled model. Hand-embedded via the new `PureRepo { root, prefix }` helper; the descriptor-driven loader (separate backlog item) is the proper long-term path. Locked by `store_dsl_metamodel_resolves_in_platform` in `crates/runtime/tests/eval_tests.rs`.
 
 ---
 
