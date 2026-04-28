@@ -184,10 +184,19 @@ pub enum TokenKind {
     // -- Section & island markers --
     /// `###` followed by section name (e.g., `###Pure`)
     SectionHeader,
-    /// `#{`
+    /// `#{` — atomic opener for the empty-tag (graph fetch) island.
+    /// Kept as a single token for the most common case so the
+    /// existing parser dispatch path stays untouched.
     HashLBrace,
-    /// `}#`
+    /// `}#` — closing for `#tag{ … }#` curly-body islands.
     RBraceHash,
+    /// `#` — single hash. Used as both the opener for tagged
+    /// islands (`#TDS`, `#>`, `#sql`) and the closer for
+    /// raw-content islands like TDS (`#TDS\n…\n#`). Section
+    /// headers (`###Identifier`) and the empty-tag opener (`#{`)
+    /// take precedence at lex time and produce their own token
+    /// kinds; `Hash` is emitted only when neither matches.
+    Hash,
 
     // -- End of file --
     /// End of input.
@@ -293,6 +302,7 @@ impl TokenKind {
             TokenKind::SectionHeader => "section header",
             TokenKind::HashLBrace => "'#{'",
             TokenKind::RBraceHash => "'}#'",
+            TokenKind::Hash => "'#'",
             TokenKind::Eof => "end of file",
         }
     }

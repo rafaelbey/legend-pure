@@ -239,6 +239,12 @@ impl<'a> Lexer<'a> {
                 TokenKind::HashLBrace
             }
 
+            // -- Single # — opener for tagged islands (`#TDS`,
+            //    `#>`, `#sql`) and closer for raw-content islands.
+            //    Section headers (`###`) and `#{` are matched
+            //    above and never reach this arm.
+            '#' => TokenKind::Hash,
+
             // -- Delimiters --
             '(' => TokenKind::LParen,
             ')' => TokenKind::RParen,
@@ -902,6 +908,59 @@ mod tests {
             kinds("#{ }#"),
             vec![TokenKind::HashLBrace, TokenKind::RBraceHash, TokenKind::Eof]
         );
+    }
+
+    #[test]
+    fn tagged_island_relation_store_accessor() {
+        // `#>{ db::Store.col }#` lexes as `Hash` + `Greater` +
+        // `LBrace` ... `RBraceHash`. The parser dispatches on the
+        // `Hash` followed by the tag char `>`.
+        assert_eq!(
+            kinds("#>{ }#"),
+            vec![
+                TokenKind::Hash,
+                TokenKind::Greater,
+                TokenKind::LBrace,
+                TokenKind::RBraceHash,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn tagged_island_tds_raw_body_terminator() {
+        // `#TDS\n a, b\n 1, 2\n#` — `Hash` + `Identifier(TDS)` ...
+        // closing `Hash`. The TDS parser scans tokens between the
+        // two `Hash`es as raw body.
+        assert_eq!(
+            kinds("#TDS\n a, b\n#"),
+            vec![
+                TokenKind::Hash,
+                TokenKind::Identifier,
+                TokenKind::Identifier,
+                TokenKind::Comma,
+                TokenKind::Identifier,
+                TokenKind::Hash,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn section_header_still_takes_precedence_over_hash() {
+        // `###Foo` must still produce a single `SectionHeader`,
+        // not `Hash` + `Hash` + `Hash` + identifier.
+        assert_eq!(
+            kinds("###Foo"),
+            vec![TokenKind::SectionHeader, TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn empty_tag_island_still_atomic() {
+        // `#{` must still produce `HashLBrace` (one token),
+        // preserving the existing graph-fetch parser dispatch path.
+        assert_eq!(kinds("#{"), vec![TokenKind::HashLBrace, TokenKind::Eof]);
     }
 
     // -- Comments --
