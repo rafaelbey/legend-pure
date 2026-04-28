@@ -24,14 +24,37 @@ fn main() {
     }
 }
 
+/// One Pure repo to embed: a filesystem root + a virtual path prefix
+/// applied to every file's `SourceInformation.source`.
+///
+/// Until the descriptor-driven loader lands (see deferred backlog
+/// item: "Repo descriptors + manifest"), repos are enumerated here
+/// directly. The prefix mirrors Java Pure's resource-URL convention:
+/// `legend-pure-m3-core/.../platform/pure/<rel>` ↔ `/platform/pure/<rel>`,
+/// `legend-pure-dsl-store/.../platform_dsl_store/<rel>` ↔ `/platform_dsl_store/<rel>`.
+struct PureRepo {
+    root: PathBuf,
+    prefix: &'static str,
+}
+
 fn generate() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = env::var("OUT_DIR")?;
     let dest_path = Path::new(&out_dir).join("generated_sources.rs");
 
-    // Platform directory from legend-pure Java module
-    let platform_dir = PathBuf::from(
-        "../../../legend-pure-core/legend-pure-m3-core/src/main/resources/platform/pure",
-    );
+    let repos = [
+        PureRepo {
+            root: PathBuf::from(
+                "../../../legend-pure-core/legend-pure-m3-core/src/main/resources/platform/pure",
+            ),
+            prefix: "/platform/pure",
+        },
+        PureRepo {
+            root: PathBuf::from(
+                "../../../legend-pure-dsl/legend-pure-dsl-store/legend-pure-m2-dsl-store-pure/src/main/resources/platform_dsl_store",
+            ),
+            prefix: "/platform_dsl_store",
+        },
+    ];
 
     let mut generated_code = String::new();
     generated_code.push_str("/// Array containing all embedded platform Pure files\n");
@@ -39,65 +62,10 @@ fn generate() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut manifest_entries = String::new();
 
-    if platform_dir.exists() {
-        for entry in WalkDir::new(&platform_dir) {
-            let entry = entry?;
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-                continue;
-            };
-            if ext != "pure" && ext != "json" {
-                continue;
-            }
-            let relative_path = path
-                .strip_prefix(&platform_dir)
-                .map_err(|e| format!("strip_prefix failed for {}: {e}", path.display()))?;
-            let relative_path_str = relative_path
-                .to_str()
-                .ok_or_else(|| format!("non-UTF-8 path: {}", relative_path.display()))?
-                .replace('\\', "/");
-
-            if ext == "pure" && relative_path_str == "grammar/m3.pure" {
-                continue;
-            }
-
-            // Embed paths in the Java Pure "resource URL" form —
-            // `/platform/pure/<relative>`. That matches the upstream
-            // convention platform tests assert against (e.g.
-            // `Class.sourceInformation.source ==
-            // '/platform/pure/essential/meta/source/sourceInformation.pure'`)
-            // and gives every downstream consumer (parser, error
-            // display, SourceInformation native) a single source of
-            // truth rather than reconstructing the prefix ad-hoc.
-            let canonical_path_str = format!("/platform/pure/{relative_path_str}");
-
-            let absolute_path = fs::canonicalize(path)
-                .map_err(|e| format!("canonicalize failed for {}: {e}", path.display()))?;
-            let abs_path_str = absolute_path
-                .to_str()
-                .ok_or_else(|| format!("non-UTF-8 path: {}", absolute_path.display()))?
-                .replace('\\', "/");
-
-            if ext == "pure" {
-                let _ = write!(
-                    generated_code,
-                    "    PureSourceFile {{\n        path: \"{canonical_path_str}\",\n        content: include_str!(\"{abs_path_str}\"),\n    }},\n"
-                );
-            } else {
-                let _ = write!(
-                    manifest_entries,
-                    "    PureSourceFile {{\n        path: \"{canonical_path_str}\",\n        content: include_str!(\"{abs_path_str}\"),\n    }},\n"
-                );
-            }
-
-            println!("cargo:rerun-if-changed={abs_path_str}");
-        }
+    for repo in &repos {
+        embed_repo(repo, &mut generated_code, &mut manifest_entries)?;
+        println!("cargo:rerun-if-changed={}", repo.root.display());
     }
-
-    println!("cargo:rerun-if-changed={}", platform_dir.display());
 
     generated_code.push_str("];\n\n");
     generated_code
@@ -109,5 +77,67 @@ fn generate() -> Result<(), Box<dyn std::error::Error>> {
     fs::write(&dest_path, generated_code)
         .map_err(|e| format!("failed to write {}: {e}", dest_path.display()))?;
 
+    Ok(())
+}
+
+fn embed_repo(
+    repo: &PureRepo,
+    generated_code: &mut String,
+    manifest_entries: &mut String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !repo.root.exists() {
+        return Ok(());
+    }
+    for entry in WalkDir::new(&repo.root) {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        if ext != "pure" && ext != "json" {
+            continue;
+        }
+        let relative_path = path
+            .strip_prefix(&repo.root)
+            .map_err(|e| format!("strip_prefix failed for {}: {e}", path.display()))?;
+        let relative_path_str = relative_path
+            .to_str()
+            .ok_or_else(|| format!("non-UTF-8 path: {}", relative_path.display()))?
+            .replace('\\', "/");
+
+        // m3.pure is the bootstrap instance graph and is parsed by
+        // a special-purpose reader, not the regular parser.
+        if ext == "pure" && relative_path_str == "grammar/m3.pure" {
+            continue;
+        }
+
+        // Embed paths in the Java Pure "resource URL" form — see the
+        // `PureRepo.prefix` field comment for why these are stable.
+        let canonical_path_str = format!("{}/{relative_path_str}", repo.prefix);
+
+        let absolute_path = fs::canonicalize(path)
+            .map_err(|e| format!("canonicalize failed for {}: {e}", path.display()))?;
+        let abs_path_str = absolute_path
+            .to_str()
+            .ok_or_else(|| format!("non-UTF-8 path: {}", absolute_path.display()))?
+            .replace('\\', "/");
+
+        if ext == "pure" {
+            let _ = write!(
+                generated_code,
+                "    PureSourceFile {{\n        path: \"{canonical_path_str}\",\n        content: include_str!(\"{abs_path_str}\"),\n    }},\n"
+            );
+        } else {
+            let _ = write!(
+                manifest_entries,
+                "    PureSourceFile {{\n        path: \"{canonical_path_str}\",\n        content: include_str!(\"{abs_path_str}\"),\n    }},\n"
+            );
+        }
+
+        println!("cargo:rerun-if-changed={abs_path_str}");
+    }
     Ok(())
 }

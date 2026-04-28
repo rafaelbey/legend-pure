@@ -431,6 +431,47 @@ fn evaluator_new_default_uses_standard_registry() {
 }
 
 #[test]
+fn store_dsl_metamodel_resolves_in_platform() {
+    // Locks the Store DSL embedding: the platform_dsl_store repo
+    // ships two metamodel files (`grammar/store.pure`,
+    // `grammar/runtime.pure`) defining `meta::pure::store::Store`,
+    // `meta::pure::store::set::*`, and `meta::core::runtime::*`.
+    // After the build script picks them up, every named class must
+    // resolve to a Class element in the compiled model.
+    //
+    // Until the descriptor-driven loader lands, these files are
+    // hand-embedded via `crates/core-platform-pure/build.rs`. This
+    // test catches a regression where the embedding is silently
+    // dropped, or where one of the M2 classes fails to compile
+    // against the M3 base model.
+    use legend_pure_parser_pure::model::Element;
+    let model = compile_with_platform("");
+    for fqn_segments in [
+        ["meta", "pure", "store", "Store"].as_slice(),
+        ["meta", "pure", "store", "set", "SetBasedStore"].as_slice(),
+        ["meta", "pure", "store", "set", "Namespace"].as_slice(),
+        ["meta", "pure", "store", "set", "SetRelation"].as_slice(),
+        ["meta", "pure", "store", "set", "SetColumn"].as_slice(),
+        ["meta", "core", "runtime", "Runtime"].as_slice(),
+        ["meta", "core", "runtime", "ConnectionStore"].as_slice(),
+        ["meta", "core", "runtime", "Connection"].as_slice(),
+        ["meta", "pure", "runtime", "ExecutionContext"].as_slice(),
+    ] {
+        let segments: Vec<smol_str::SmolStr> = fqn_segments
+            .iter()
+            .map(|s| smol_str::SmolStr::new(*s))
+            .collect();
+        let id = model
+            .resolve_by_path(&segments)
+            .unwrap_or_else(|| panic!("Store DSL element missing: {fqn_segments:?}"));
+        assert!(
+            matches!(model.get_element(id), Element::Class(_)),
+            "Store DSL element is not a Class: {fqn_segments:?}",
+        );
+    }
+}
+
+#[test]
 fn eval_negative_integer() {
     let result = eval_pure("function test::f(): Integer[1] { -7 }", "f__Integer_1_");
     assert_eq!(result, Value::Integer(-7));
