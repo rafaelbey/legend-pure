@@ -527,6 +527,14 @@ fn pass_declare(
     for (file_idx, source_file) in source_files.iter().enumerate() {
         for (section_idx, section) in source_file.sections.iter().enumerate() {
             for (element_idx, element) in section.elements.iter().enumerate() {
+                // DSL-defined elements are declared by their owning
+                // CompilerExtension's `declare` hook (see
+                // `compile_with_extensions`). Skip here so the M3
+                // shell-allocation path doesn't run on them.
+                if matches!(element, ast::Element::DSLElement(_)) {
+                    continue;
+                }
+
                 let simple_name = ast_element_name(element);
                 let source_info = ast_element_source(element);
                 let name_source_info = ast_element_name_source(element);
@@ -1322,6 +1330,17 @@ fn create_shell(element: &ast::Element) -> Element {
             type_variable_parameters: Vec::new(),
             constraints: Vec::new(),
         }),
+        ast::Element::DSLElement(_) => {
+            // Unreachable in practice — `pass_declare` skips
+            // `ast::Element::DSLElement` so that DSL crates' own
+            // `CompilerExtension::declare` hook can allocate shells
+            // and IDs without M3's loop interfering. If this ever
+            // fires it means the skip was lost.
+            unreachable!(
+                "DSL elements are handled by the owning CompilerExtension, \
+                 not by the M3 pass_declare loop"
+            )
+        }
     }
 }
 
@@ -1508,6 +1527,10 @@ fn hydrate_element_signature(
                 constraints: Vec::new(),
             })
         }
+        ast::Element::DSLElement(_) => unreachable!(
+            "DSL elements are hydrated by their owning CompilerExtension's \
+             define_signatures hook, never by hydrate_element_signature"
+        ),
     }
 }
 
@@ -1725,6 +1748,10 @@ fn ast_element_name_source(element: &ast::Element) -> &SourceInfo {
         ast::Element::Profile(p) => p.name.source_info(),
         ast::Element::Measure(m) => m.name.source_info(),
         ast::Element::Primitive(p) => p.name.source_info(),
+        // DSL elements expose their name via the trait directly;
+        // a DSL crate manages its own source-info lookups. Core's
+        // `pass_declare` skips DSL elements before reaching here.
+        ast::Element::DSLElement(e) => e.source_info(),
     }
 }
 

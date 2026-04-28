@@ -32,6 +32,7 @@
 #![deny(missing_docs)]
 
 pub mod annotation;
+pub mod dsl;
 pub mod element;
 pub mod expression;
 pub mod island;

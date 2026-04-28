@@ -46,16 +46,18 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-mod cursor;
+pub mod cursor;
 pub mod error;
 pub mod island;
 mod parser;
+pub mod section_parser;
 pub mod source;
 
 use legend_pure_parser_ast::SourceFile;
 
 pub use error::ParseError;
 pub use island::IslandParser;
+pub use section_parser::SectionParser;
 pub use source::SourceProvider;
 
 /// A partial parse result: the best-effort AST plus accumulated errors.
@@ -143,6 +145,49 @@ pub fn parse_with_islands(
         })?;
     let cursor = cursor::Cursor::new(tokens);
     let mut p = parser::Parser::with_island_parsers(cursor, island_parsers);
+    p.parse_source_file()
+}
+
+/// Parse Pure source text with both island and section grammar plug-ins.
+///
+/// Section plug-ins (e.g. `###Diagram`, `###Mapping`) consume the body
+/// of a section whose header matches their `kind()` and contribute
+/// type-erased [`DSLElement`](legend_pure_parser_ast::dsl::DSLElement)
+/// instances. Sections without a registered parser fall through to
+/// the default M3 element grammar.
+///
+/// Use the empty-vec default islands plus your DSL section parser:
+///
+/// ```rust,ignore
+/// parse_with_sections(
+///     source,
+///     name,
+///     legend_pure_parser_parser::island::default_island_parsers(),
+///     vec![Box::new(my_dsl::DiagramSectionParser)],
+/// )
+/// ```
+///
+/// # Errors
+///
+/// - `Ok(SourceFile)` — all elements parsed successfully
+/// - `Err(PartialSourceFile)` — some elements failed, valid elements preserved
+#[allow(clippy::result_large_err)]
+pub fn parse_with_sections(
+    source: &str,
+    source_name: &str,
+    island_parsers: Vec<Box<dyn IslandParser>>,
+    section_parsers: Vec<Box<dyn SectionParser>>,
+) -> Result<SourceFile, PartialSourceFile> {
+    let tokens =
+        legend_pure_parser_lexer::tokenize(source, source_name).map_err(|e| PartialSourceFile {
+            source_file: SourceFile {
+                sections: vec![],
+                source_info: legend_pure_parser_ast::SourceInfo::new(source_name, 0, 0, 0, 0),
+            },
+            errors: vec![e.into()],
+        })?;
+    let cursor = cursor::Cursor::new(tokens);
+    let mut p = parser::Parser::with_plugins(cursor, island_parsers, section_parsers);
     p.parse_source_file()
 }
 

@@ -910,6 +910,13 @@ pub fn convert_element(elem: &ast::element::Element) -> Result<v1::element::Pack
         Element::Primitive(_) => Err(serde_json::Error::custom(
             "primitive type definitions cannot be converted to Engine protocol",
         )),
+        // DSL elements are converted by their owning DSL crate via a
+        // future SectionProtocol plug-in. Core only knows how to
+        // emit M3 elements.
+        Element::DSLElement(e) => Err(serde_json::Error::custom(format!(
+            "DSL element of kind '{}' must be converted by its owning DSL crate",
+            e.kind()
+        ))),
     }
 }
 
