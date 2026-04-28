@@ -472,6 +472,83 @@ fn store_dsl_metamodel_resolves_in_platform() {
 }
 
 #[test]
+fn diagram_dsl_metamodel_resolves_in_platform() {
+    // Locks the Diagram DSL embedding: 150 LOC of metamodel in
+    // `platform_dsl_diagram/diagram.pure` defining the visual-graph
+    // shapes (Diagram, TypeView, AssociationView, …) plus four
+    // Associations that wire Diagram to its child views.
+    //
+    // Like Store, Diagram has no top-level grammar of its own at the
+    // metamodel layer — it's plain Pure. The `###Diagram` user
+    // syntax (for user-authored diagrams) is a separate parser concern.
+    use legend_pure_parser_pure::model::Element;
+    let model = compile_with_platform("");
+    let classes = [
+        ["meta", "pure", "diagram", "DiagramNode"].as_slice(),
+        ["meta", "pure", "diagram", "Visibility"].as_slice(),
+        ["meta", "pure", "diagram", "AttributeVisibility"].as_slice(),
+        ["meta", "pure", "diagram", "TypeVisibility"].as_slice(),
+        ["meta", "pure", "diagram", "AssociationVisibility"].as_slice(),
+        ["meta", "pure", "diagram", "Rendering"].as_slice(),
+        ["meta", "pure", "diagram", "Point"].as_slice(),
+        ["meta", "pure", "diagram", "Geometry"].as_slice(),
+        ["meta", "pure", "diagram", "RectangleGeometry"].as_slice(),
+        ["meta", "pure", "diagram", "LineGeometry"].as_slice(),
+        ["meta", "pure", "diagram", "AbstractPathView"].as_slice(),
+        ["meta", "pure", "diagram", "PropertyView"].as_slice(),
+        ["meta", "pure", "diagram", "AssociationPropertyView"].as_slice(),
+        ["meta", "pure", "diagram", "AssociationView"].as_slice(),
+        ["meta", "pure", "diagram", "GeneralizationView"].as_slice(),
+        ["meta", "pure", "diagram", "TypeView"].as_slice(),
+        ["meta", "pure", "diagram", "Diagram"].as_slice(),
+    ];
+    for fqn_segments in classes {
+        let segments: Vec<smol_str::SmolStr> = fqn_segments
+            .iter()
+            .map(|s| smol_str::SmolStr::new(*s))
+            .collect();
+        let id = model
+            .resolve_by_path(&segments)
+            .unwrap_or_else(|| panic!("Diagram DSL class missing: {fqn_segments:?}"));
+        assert!(
+            matches!(model.get_element(id), Element::Class(_)),
+            "Diagram DSL element is not a Class: {fqn_segments:?}",
+        );
+    }
+    let assocs = [
+        ["meta", "pure", "diagram", "DiagramTypeViews"].as_slice(),
+        ["meta", "pure", "diagram", "DiagramAssociationViews"].as_slice(),
+        ["meta", "pure", "diagram", "DiagramPropertyViews"].as_slice(),
+        ["meta", "pure", "diagram", "DiagramGeneralizationViews"].as_slice(),
+    ];
+    for fqn_segments in assocs {
+        let segments: Vec<smol_str::SmolStr> = fqn_segments
+            .iter()
+            .map(|s| smol_str::SmolStr::new(*s))
+            .collect();
+        let id = model
+            .resolve_by_path(&segments)
+            .unwrap_or_else(|| panic!("Diagram DSL association missing: {fqn_segments:?}"));
+        assert!(
+            matches!(model.get_element(id), Element::Association(_)),
+            "Diagram DSL element is not an Association: {fqn_segments:?}",
+        );
+    }
+    let id = model
+        .resolve_by_path(&[
+            "meta".into(),
+            "pure".into(),
+            "diagram".into(),
+            "LineStyle".into(),
+        ])
+        .expect("LineStyle enum missing");
+    assert!(
+        matches!(model.get_element(id), Element::Enumeration(_)),
+        "LineStyle is not an Enumeration"
+    );
+}
+
+#[test]
 fn eval_negative_integer() {
     let result = eval_pure("function test::f(): Integer[1] { -7 }", "f__Integer_1_");
     assert_eq!(result, Value::Integer(-7));
