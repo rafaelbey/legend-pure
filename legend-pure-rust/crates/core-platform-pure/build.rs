@@ -54,6 +54,12 @@ fn generate() -> Result<(), Box<dyn std::error::Error>> {
             ),
             prefix: "/platform_dsl_store",
         },
+        PureRepo {
+            root: PathBuf::from(
+                "../../../legend-pure-dsl/legend-pure-dsl-diagram/legend-pure-m2-dsl-diagram-pure/src/main/resources/platform_dsl_diagram",
+            ),
+            prefix: "/platform_dsl_diagram",
+        },
     ];
 
     let mut generated_code = String::new();
