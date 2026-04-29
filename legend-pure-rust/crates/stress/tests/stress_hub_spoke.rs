@@ -254,6 +254,7 @@ fn stress_1k_hub_spoke() {
 }
 
 #[test]
+#[cfg(feature = "heavy")]
 fn stress_10k_hub_spoke() {
     run_hub_spoke("Hub-Spoke 10K", &HubSpokeConfig::standard_10k());
 }

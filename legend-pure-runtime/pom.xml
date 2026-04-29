@@ -47,5 +47,6 @@
         <module>legend-pure-runtime-java-engine-compiled</module>
         <module>legend-pure-runtime-java-engine-interpreted</module>
         <module>legend-pure-runtime-java-engine-shared</module>
+        <module>legend-pure-runtime-rust-evaluator</module>
     </modules>
 </project>

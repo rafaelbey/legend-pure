@@ -21,6 +21,7 @@ license.workspace = true
 repository.workspace = true
 
 [lib]
+name = "pure_rust_jni"
 crate-type = ["cdylib"]
 
 [dependencies]
@@ -28,6 +29,12 @@ legend-pure-parser-ast = { path = "../ast" }
 legend-pure-parser-lexer = { path = "../lexer" }
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-protocol = { path = "../protocol" }
+legend-pure-parser-pure = { path = "../pure" }
+legend-pure-runtime = { path = "../runtime" }
+legend-pure-core-platform = { path = "../core-platform-pure" }
+slotmap = { workspace = true }
+smol_str = { workspace = true }
+im-rc = { workspace = true }
 jni = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
