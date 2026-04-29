@@ -22,6 +22,7 @@ use smol_str::SmolStr;
 
 #[test]
 #[allow(clippy::too_many_lines)]
+#[cfg(feature = "heavy")]
 fn stress_10k_dense() {
     let config = HubSpokeConfig::dense_10k();
     let title = "Dense 10K";

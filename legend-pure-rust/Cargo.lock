@@ -962,11 +962,17 @@ dependencies = [
 name = "legend-pure-parser-jni"
 version = "0.1.0"
 dependencies = [
+ "im-rc",
  "jni",
+ "legend-pure-core-platform",
  "legend-pure-parser-ast",
  "legend-pure-parser-lexer",
  "legend-pure-parser-parser",
  "legend-pure-parser-protocol",
+ "legend-pure-parser-pure",
+ "legend-pure-runtime",
+ "slotmap",
+ "smol_str",
  "tracing",
  "tracing-subscriber",
 ]
