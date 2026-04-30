@@ -17,10 +17,10 @@
 //! Each island grammar provides an [`IslandComposer`] implementation that
 //! renders island content back to Pure grammar text.
 
-use legend_pure_parser_ast::island::{
-    IslandContent, IslandExpression, PropertyGraphFetchTree, RootGraphFetchTree,
-    SubTypeGraphFetchTree,
+use legend_pure_dsl_graph::ast::{
+    PropertyGraphFetchTree, RootGraphFetchTree, SubTypeGraphFetchTree,
 };
+use legend_pure_parser_ast::island::{IslandContent, IslandExpression};
 
 use crate::expression::{compose_element_ptr, compose_expression};
 use crate::identifier::maybe_quote;

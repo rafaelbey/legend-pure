@@ -13,8 +13,8 @@
 # limitations under the License.
 
 [package]
-name = "legend-pure-parser-parser"
-description = "Recursive descent parser for the Legend Pure grammar"
+name = "legend-pure-dsl-graph"
+description = "Graph-fetch inline-island grammar for Legend Pure (`#{ class { fields } }#`)"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
@@ -22,12 +22,7 @@ repository.workspace = true
 
 [dependencies]
 legend-pure-parser-ast = { path = "../ast" }
-legend-pure-dsl-graph = { path = "../dsl-graph" }
-legend-pure-parser-lexer = { path = "../lexer" }
-rayon = { workspace = true }
 smol_str = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
 
 [dev-dependencies]
-insta = { workspace = true }
+indoc = "2"

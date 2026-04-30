@@ -39,11 +39,7 @@
 use std::any::Any;
 use std::fmt;
 
-use crate::annotation::PackageableElementPtr;
-use crate::expression::Expression;
 use crate::source_info::SourceInfo;
-use crate::type_ref::Identifier;
-use smol_str::SmolStr;
 
 // ---------------------------------------------------------------------------
 // IslandContent Trait
@@ -141,113 +137,7 @@ impl fmt::Debug for IslandExpression {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Graph Fetch Tree — built-in island grammar
-// ---------------------------------------------------------------------------
-
-/// Root of a graph fetch tree: `#{Type{field1, field2}}#`.
-///
-/// Corresponds to Java's `RootGraphFetchTree` protocol type.
-///
-/// # Example
-///
-/// ```text
-/// #{
-///     my::Person {
-///         firstName,
-///         lastName,
-///         address {
-///             city
-///         }
-///     }
-/// }#
-/// ```
-#[derive(Debug, Clone, PartialEq)]
-pub struct RootGraphFetchTree {
-    /// The root class reference (e.g., `my::Person`).
-    pub class: PackageableElementPtr,
-    /// Property sub-trees: regular field selections.
-    pub sub_trees: Vec<PropertyGraphFetchTree>,
-    /// Subtype sub-trees: `->subType(@Type){...}` casts.
-    pub sub_type_trees: Vec<SubTypeGraphFetchTree>,
-    /// Source location.
-    pub source_info: SourceInfo,
-}
-
-impl IslandContent for RootGraphFetchTree {
-    #[allow(clippy::unnecessary_literal_bound)]
-    fn tag(&self) -> &str {
-        ""
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn clone_box(&self) -> Box<dyn IslandContent> {
-        Box::new(self.clone())
-    }
-
-    fn eq_content(&self, other: &dyn IslandContent) -> bool {
-        other
-            .as_any()
-            .downcast_ref::<Self>()
-            .is_some_and(|o| self == o)
-    }
-}
-
-/// A property field within a graph fetch tree.
-///
-/// Represents: `property`, `property(args)`, `'alias':property`, or
-/// `property{subFields}`, and combinations thereof.
-///
-/// Corresponds to Java's `PropertyGraphFetchTree` protocol type.
-///
-/// # Examples
-///
-/// ```text
-/// firstName                          // simple
-/// 'aliasName' : firstName            // with alias
-/// employeesByName(['Peter'])         // with parameters (qualified property)
-/// address { city, street }           // with sub-tree
-/// ```
-#[derive(Debug, Clone, PartialEq)]
-pub struct PropertyGraphFetchTree {
-    /// The property name.
-    pub property: Identifier,
-    /// Qualified property parameters (e.g., `['Peter']`).
-    pub parameters: Vec<Expression>,
-    /// Optional alias: `'aliasName' : property`.
-    pub alias: Option<SmolStr>,
-    /// Optional subtype cast on the property: `->subType(@Type)`.
-    pub sub_type: Option<PackageableElementPtr>,
-    /// Property sub-trees (nested field selections).
-    pub sub_trees: Vec<PropertyGraphFetchTree>,
-    /// Subtype sub-trees within this property.
-    pub sub_type_trees: Vec<SubTypeGraphFetchTree>,
-    /// Source location.
-    pub source_info: SourceInfo,
-}
-
-/// A subtype cast within a graph fetch tree: `->subType(@Type){fields}`.
-///
-/// Corresponds to Java's `SubTypeGraphFetchTree` protocol type.
-///
-/// # Example
-///
-/// ```text
-/// ->subType(@my::FirmSubType) {
-///     SubTypeName
-/// }
-/// ```
-#[derive(Debug, Clone, PartialEq)]
-pub struct SubTypeGraphFetchTree {
-    /// The subtype class reference.
-    pub sub_type_class: PackageableElementPtr,
-    /// Property sub-trees within the subtype.
-    pub sub_trees: Vec<PropertyGraphFetchTree>,
-    /// Nested subtype sub-trees.
-    pub sub_type_trees: Vec<SubTypeGraphFetchTree>,
-    /// Source location.
-    pub source_info: SourceInfo,
-}
+// Graph-fetch concrete types (`RootGraphFetchTree`,
+// `PropertyGraphFetchTree`, `SubTypeGraphFetchTree`) live in the
+// `legend-pure-dsl-graph` crate's `ast` module. Core ast keeps only
+// the `IslandContent` trait surface so DSL crates can plug in.
