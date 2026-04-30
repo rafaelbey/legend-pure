@@ -769,7 +769,7 @@ fn convert_island_expression(
     if let Some(tree) = island
         .content
         .as_any()
-        .downcast_ref::<ast::island::RootGraphFetchTree>()
+        .downcast_ref::<legend_pure_dsl_graph::ast::RootGraphFetchTree>()
     {
         convert_root_graph_fetch_tree(tree)
     } else {
@@ -786,7 +786,7 @@ fn convert_island_expression(
 
 /// Converts a `RootGraphFetchTree` into a `ClassInstance` value specification.
 fn convert_root_graph_fetch_tree(
-    tree: &ast::island::RootGraphFetchTree,
+    tree: &legend_pure_dsl_graph::ast::RootGraphFetchTree,
 ) -> v1::value_spec::ValueSpecification {
     use v1::value_spec::{ClassInstance, ValueSpecification};
 
@@ -816,7 +816,7 @@ fn convert_root_graph_fetch_tree(
 
 /// Converts a `PropertyGraphFetchTree` into a JSON value.
 fn convert_property_graph_fetch_tree(
-    prop: &ast::island::PropertyGraphFetchTree,
+    prop: &legend_pure_dsl_graph::ast::PropertyGraphFetchTree,
 ) -> serde_json::Value {
     let sub_trees: Vec<serde_json::Value> = prop
         .sub_trees
@@ -862,7 +862,7 @@ fn convert_property_graph_fetch_tree(
 
 /// Converts a `SubTypeGraphFetchTree` into a JSON value.
 fn convert_sub_type_graph_fetch_tree(
-    sub: &ast::island::SubTypeGraphFetchTree,
+    sub: &legend_pure_dsl_graph::ast::SubTypeGraphFetchTree,
 ) -> serde_json::Value {
     let sub_trees: Vec<serde_json::Value> = sub
         .sub_trees

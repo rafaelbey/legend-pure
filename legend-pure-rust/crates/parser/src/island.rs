@@ -121,11 +121,12 @@ pub fn default_island_parsers() -> Vec<Box<dyn IslandParser>> {
 /// This module is public so the types are accessible for testing and
 /// direct use, but the recommended entry point is via `default_island_parsers()`.
 pub mod graph_fetch {
+    use legend_pure_dsl_graph::ast::{
+        PropertyGraphFetchTree, RootGraphFetchTree, SubTypeGraphFetchTree,
+    };
     use legend_pure_parser_ast::annotation::PackageableElementPtr;
     use legend_pure_parser_ast::expression::Expression;
-    use legend_pure_parser_ast::island::{
-        IslandContent, PropertyGraphFetchTree, RootGraphFetchTree, SubTypeGraphFetchTree,
-    };
+    use legend_pure_parser_ast::island::IslandContent;
     use legend_pure_parser_lexer::TokenKind;
     use smol_str::SmolStr;
 

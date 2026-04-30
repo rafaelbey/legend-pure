@@ -929,6 +929,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "legend-pure-dsl-graph"
+version = "0.1.0"
+dependencies = [
+ "indoc",
+ "legend-pure-parser-ast",
+ "smol_str",
+]
+
+[[package]]
 name = "legend-pure-parser-ast"
 version = "0.1.0"
 dependencies = [
@@ -951,6 +960,7 @@ version = "0.1.0"
 dependencies = [
  "indoc",
  "insta",
+ "legend-pure-dsl-graph",
  "legend-pure-parser-ast",
  "legend-pure-parser-parser",
  "legend-pure-parser-protocol",
@@ -992,6 +1002,7 @@ name = "legend-pure-parser-parser"
 version = "0.1.0"
 dependencies = [
  "insta",
+ "legend-pure-dsl-graph",
  "legend-pure-parser-ast",
  "legend-pure-parser-lexer",
  "rayon",
@@ -1005,6 +1016,7 @@ name = "legend-pure-parser-protocol"
 version = "0.1.0"
 dependencies = [
  "insta",
+ "legend-pure-dsl-graph",
  "legend-pure-parser-ast",
  "legend-pure-parser-parser",
  "serde",
