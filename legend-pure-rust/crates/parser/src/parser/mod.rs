@@ -399,7 +399,12 @@ pub struct ParserContext<'a> {
 
 impl ParserContext<'_> {
     /// Access the token cursor directly.
-    pub(crate) fn cursor(&mut self) -> &mut Cursor {
+    ///
+    /// Public so external island-parser plug-ins (`dsl-graph`,
+    /// `dsl-store`, `dsl-tds`, …) can consume tokens directly when
+    /// their grammar isn't expressible via the high-level helpers
+    /// (`parse_expression`, `parse_package_path`, etc.).
+    pub fn cursor(&mut self) -> &mut Cursor {
         &mut self.parser.cursor
     }
 

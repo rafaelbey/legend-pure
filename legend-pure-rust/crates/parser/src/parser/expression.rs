@@ -739,12 +739,14 @@ impl Parser {
                     }))
                 }
             }
-            // Island grammar: #{ content }# or #tag{ content }#
+            // Island grammar: #{ content }# (empty tag — graph fetch).
+            //
+            // Empty-tag dispatch keeps the legacy contract: the
+            // `IslandParser::parse` consumes the body up to (but not
+            // past) `RBraceHash`, and the host parser consumes the
+            // `RBraceHash` itself.
             TokenKind::HashLBrace => {
                 self.cursor.advance();
-                // Currently only the default tag "" is supported.
-                // When tagged islands (#>{}#, #sql{}#) are added, the tag
-                // will be extracted from the token stream here.
                 let tag = "";
 
                 // Temporarily take the island parsers to avoid borrow conflict
@@ -767,6 +769,60 @@ impl Parser {
 
                 let content = result?;
                 self.cursor.expect(TokenKind::RBraceHash)?;
+                Ok(Expression::Island(IslandExpression {
+                    content,
+                    source_info: si,
+                }))
+            }
+
+            // Tagged island grammar: `#tag…#` or `#tag{…}#`.
+            //
+            // The host parser reads the tag (an identifier like `TDS`,
+            // or a single special character like `>`), looks up a
+            // matching `IslandParser` registered for that tag, and
+            // delegates body parsing to it. **Tagged plug-ins are
+            // responsible for consuming their own closing delimiter**
+            // — `RBraceHash` for curly-body shapes (`#>{…}#`) or a
+            // closing `Hash` for raw-body shapes (`#TDS\n…\n#`).
+            // This contract is asymmetric with the empty-tag path
+            // above so the existing graph-fetch parser keeps its
+            // current behaviour, and so each new tagged island can
+            // own its body shape without the host needing to know it.
+            TokenKind::Hash => {
+                self.cursor.advance();
+                let tag_tok = self.cursor.advance().clone();
+                let tag = match tag_tok.kind {
+                    TokenKind::Identifier => tag_tok.text.clone(),
+                    TokenKind::Greater => SmolStr::new(">"),
+                    _ => {
+                        return Err(ParseError::expected(
+                            "island tag (identifier or `>`)",
+                            tag_tok.kind,
+                            tag_tok.source_info,
+                        ));
+                    }
+                };
+
+                let parsers = std::mem::take(&mut self.island_parsers);
+                let result = (|| {
+                    let island_parser = parsers
+                        .iter()
+                        .find(|p| p.tag() == tag.as_str())
+                        .ok_or_else(|| {
+                            ParseError::expected(
+                                &format!("island grammar for tag '{tag}'"),
+                                self.cursor.peek_kind(),
+                                si.clone(),
+                            )
+                        })?;
+                    let mut ctx = ParserContext { parser: self };
+                    island_parser.parse(&mut ctx)
+                })();
+                self.island_parsers = parsers;
+
+                let content = result?;
+                // No host-side closing-delimiter consumption: the
+                // tagged island parser already consumed its own.
                 Ok(Expression::Island(IslandExpression {
                     content,
                     source_info: si,

@@ -57,6 +57,7 @@ use legend_pure_parser_ast::SourceFile;
 
 pub use error::ParseError;
 pub use island::IslandParser;
+pub use parser::ParserContext;
 pub use section_parser::SectionParser;
 pub use source::SourceProvider;
 
