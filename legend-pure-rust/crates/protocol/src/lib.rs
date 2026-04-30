@@ -24,4 +24,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod island_protocol;
 pub mod v1;
+
+pub use island_protocol::{IslandProtocol, dispatch_island_convert};
