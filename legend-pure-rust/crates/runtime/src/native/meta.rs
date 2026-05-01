@@ -826,23 +826,29 @@ pub(crate) fn build_function_type_wrapper(
     fv: &crate::value::FunctionValue,
 ) -> Result<crate::heap::ObjectHandle, PureException> {
     let func_type_obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::FUNCTION_TYPE);
-    let (params, return_type, return_mult) = match fv {
-        crate::value::FunctionValue::Lambda(closure) => (closure.parameters.clone(), None, None),
+    let (params, return_type, return_mult): (
+        std::rc::Rc<[legend_pure_parser_pure::types::Parameter]>,
+        _,
+        _,
+    ) = match fv {
+        crate::value::FunctionValue::Lambda(closure) => {
+            (std::rc::Rc::clone(&closure.parameters), None, None)
+        }
         crate::value::FunctionValue::Compiled(id) => {
             if let Element::Function(f) = ctx.model().get_element(*id) {
                 (
-                    f.parameters.clone(),
+                    std::rc::Rc::clone(&f.parameters),
                     Some(f.return_type.clone()),
                     Some(f.return_multiplicity.clone()),
                 )
             } else {
-                (Vec::new(), None, None)
+                (std::rc::Rc::from(Vec::new()), None, None)
             }
         }
     };
 
     let mut param_objs: Vec<Value> = Vec::with_capacity(params.len());
-    for p in &params {
+    for p in params.iter() {
         let var_expr_obj = ctx
             .heap_mut()
             .alloc_dynamic(crate::m3_paths::VARIABLE_EXPRESSION);
@@ -1950,9 +1956,9 @@ impl NativeFunction for EvaluateAndDeactivate {
         if let Value::Function(fv) = &value
             && let FunctionValue::Lambda(closure) = fv.as_ref()
         {
-            let body_specs = closure.body.clone();
+            let body_specs = std::rc::Rc::clone(&closure.body);
             let mut deactivated_body: Vec<Value> = Vec::with_capacity(body_specs.len());
-            for spec in &body_specs {
+            for spec in body_specs.iter() {
                 let evaluated = ctx.evaluate(spec)?.into_value();
                 deactivated_body.push(instance_value_wrap(evaluated, ctx)?);
             }

@@ -85,7 +85,7 @@ pub(crate) fn build_function_fqn(simple_name: &str, func: &Function, model: &Pur
     builder.push('_');
 
     // Parameters — each produces: Type + multSig + "_"
-    for param in &func.parameters {
+    for param in func.parameters.iter() {
         append_type_signature(&mut builder, &param.type_expr, model);
         append_multiplicity_signature(&mut builder, &param.multiplicity);
         builder.push('_');
@@ -227,14 +227,15 @@ mod tests {
                 "values",
                 bootstrap::INTEGER_ID,
                 Multiplicity::ZeroOrMany,
-            )],
+            )]
+            .into(),
             return_type: TypeExpr::Named {
                 element: bootstrap::INTEGER_ID,
                 type_arguments: vec![],
                 value_arguments: vec![],
             },
             return_multiplicity: Multiplicity::PureOne,
-            body: vec![],
+            body: Vec::new().into(),
             stereotypes: vec![],
             tagged_values: vec![],
         };
@@ -272,13 +273,14 @@ mod tests {
                     multiplicity: Multiplicity::PureOne,
                     source_info: si(),
                 },
-            ],
+            ]
+            .into(),
             return_type: TypeExpr::Generic("T".into()),
             return_multiplicity: Multiplicity::Range {
                 lower: 0,
                 upper: None,
             },
-            body: vec![],
+            body: Vec::new().into(),
             stereotypes: vec![],
             tagged_values: vec![],
         };
@@ -302,10 +304,11 @@ mod tests {
                 type_expr: TypeExpr::Generic("T".into()),
                 multiplicity: Multiplicity::ZeroOrMany,
                 source_info: si(),
-            }],
+            }]
+            .into(),
             return_type: TypeExpr::Generic("T".into()),
             return_multiplicity: Multiplicity::ZeroOrOne,
-            body: vec![],
+            body: Vec::new().into(),
             stereotypes: vec![],
             tagged_values: vec![],
         };
@@ -324,14 +327,15 @@ mod tests {
             parameters: vec![
                 param("left", bootstrap::ANY_ID, Multiplicity::ZeroOrMany),
                 param("right", bootstrap::ANY_ID, Multiplicity::ZeroOrMany),
-            ],
+            ]
+            .into(),
             return_type: TypeExpr::Named {
                 element: bootstrap::BOOLEAN_ID,
                 type_arguments: vec![],
                 value_arguments: vec![],
             },
             return_multiplicity: Multiplicity::PureOne,
-            body: vec![],
+            body: Vec::new().into(),
             stereotypes: vec![],
             tagged_values: vec![],
         };
@@ -353,10 +357,11 @@ mod tests {
                 type_expr: TypeExpr::Generic("T".into()),
                 multiplicity: Multiplicity::Variable("m".into()),
                 source_info: si(),
-            }],
+            }]
+            .into(),
             return_type: TypeExpr::Generic("T".into()),
             return_multiplicity: Multiplicity::Variable("m".into()),
-            body: vec![],
+            body: Vec::new().into(),
             stereotypes: vec![],
             tagged_values: vec![],
         };
@@ -372,14 +377,14 @@ mod tests {
         let func = Function {
             function_name: SmolStr::default(),
             is_native: false,
-            parameters: vec![],
+            parameters: Vec::new().into(),
             return_type: TypeExpr::Named {
                 element: bootstrap::DATE_TIME_ID,
                 type_arguments: vec![],
                 value_arguments: vec![],
             },
             return_multiplicity: Multiplicity::PureOne,
-            body: vec![],
+            body: Vec::new().into(),
             stereotypes: vec![],
             tagged_values: vec![],
         };

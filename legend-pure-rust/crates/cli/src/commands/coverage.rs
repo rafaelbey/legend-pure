@@ -376,7 +376,7 @@ impl CoverageMap {
                             .register(node.name.clone(), node.source_info.clone());
 
                         // Walk function body expressions.
-                        for expr in &func.body {
+                        for expr in func.body.iter() {
                             self.walk_expr_coverable(expr);
                         }
                     }
@@ -394,7 +394,7 @@ impl CoverageMap {
                             let qp_fqn = SmolStr::new(format!("{}.{}", node.name, qp.name));
                             self.functions.register(qp_fqn, qp.source_info.clone());
 
-                            for expr in &qp.body {
+                            for expr in qp.body.iter() {
                                 self.walk_expr_coverable(expr);
                             }
                         }

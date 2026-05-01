@@ -297,6 +297,65 @@ fn bench_add_columns(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// Recursive function dispatch — exercises `call_user_function`'s
+// per-invocation cost (parameter binding + body evaluation). The
+// review identified body/parameters cloning as the hottest path in
+// the interpreter; a recursive Fibonacci pins the cost so the
+// `Rc<[ValueSpec]>` refactor can be measured against this baseline.
+// ---------------------------------------------------------------------------
+
+fn bench_recursion(c: &mut Criterion) {
+    let mut group = c.benchmark_group("eval_recursion");
+
+    let model = compile_user(
+        r"
+        function test::fib(n: Integer[1]): Integer[1]
+        {
+            if($n < 2, | $n, | test::fib($n - 1) + test::fib($n - 2))
+        }
+
+        function test::sum_to(n: Integer[1]): Integer[1]
+        {
+            if($n <= 0, | 0, | $n + test::sum_to($n - 1))
+        }
+        ",
+    );
+    let registry = NativeRegistry::standard();
+
+    // fib(15) = 610 — ~1973 calls, big enough to surface clone cost
+    // without taking long enough to slow the bench loop.
+    group.bench_function("fib_15", |b| {
+        b.iter_batched(
+            || Evaluator::new(&model, &registry),
+            |mut eval| {
+                black_box(
+                    eval.call("test::fib", &[Value::Integer(black_box(15))])
+                        .unwrap(),
+                )
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    // Linear recursion to 50 — isolates per-call overhead from the
+    // exponential branching of fib.
+    group.bench_function("sum_to_50", |b| {
+        b.iter_batched(
+            || Evaluator::new(&model, &registry),
+            |mut eval| {
+                black_box(
+                    eval.call("test::sum_to", &[Value::Integer(black_box(50))])
+                        .unwrap(),
+                )
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
 // Entrypoint
 // ---------------------------------------------------------------------------
 
@@ -306,5 +365,6 @@ criterion_group!(
     bench_property_access,
     bench_lambda,
     bench_add_columns,
+    bench_recursion,
 );
 criterion_main!(benches);

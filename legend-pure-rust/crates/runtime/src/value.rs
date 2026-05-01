@@ -227,12 +227,17 @@ pub enum FunctionValue {
 /// Mirrors Java's `LambdaFunction` + captured `VariableContext`.
 /// The `captures` map snapshots the enclosing scope at the point of
 /// lambda creation for lexical scoping.
+///
+/// `parameters` and `body` are `Rc<[T]>` so that propagating a
+/// `LambdaClosure` (e.g. into the heap-side `LambdaFunction` wrapper
+/// the surveyor reads via `expressionSequence`) is an O(1) refcount
+/// bump — not a deep AST clone.
 #[derive(Debug, Clone)]
 pub struct LambdaClosure {
     /// Parameter declarations from the lambda syntax.
-    pub parameters: Vec<legend_pure_parser_pure::types::Parameter>,
+    pub parameters: Rc<[legend_pure_parser_pure::types::Parameter]>,
     /// The lambda body expressions.
-    pub body: Vec<legend_pure_parser_pure::types::ValueSpec>,
+    pub body: Rc<[legend_pure_parser_pure::types::ValueSpec]>,
     /// Captured variable bindings from the enclosing scope.
     pub captures: HashMap<SmolStr, Value>,
 }

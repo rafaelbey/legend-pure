@@ -495,7 +495,24 @@ fn resolve_m3_supertypes(model: &mut PureModel) {
         }
         for qp in &mut c.qualified_properties {
             resolve_in_place(&mut qp.return_type);
-            for param in &mut qp.parameters {
+            // QP parameter list is `Rc<[Parameter]>`. The M3 metamodel
+            // chunk has just been built by `m3_parser`/`bootstrap` and
+            // not yet shared, so `Rc::get_mut` returns `Some`. If a
+            // future change clones a Class/QP between construction and
+            // here, the strong count exceeds 1 and we'd silently
+            // deep-clone every QP's parameter list — defeating the
+            // optimisation. Fail loudly instead.
+            let params_mut = match std::rc::Rc::get_mut(&mut qp.parameters) {
+                Some(slice) => slice,
+                None => panic!(
+                    "M3 QP parameters Rc<[Parameter]> must be uniquely \
+                     owned at resolve time; refcount is \
+                     {} (a Class/QP was cloned between m3_parser/bootstrap \
+                     and resolve_m3_supertypes)",
+                    std::rc::Rc::strong_count(&qp.parameters),
+                ),
+            };
+            for param in params_mut.iter_mut() {
                 resolve_in_place(&mut param.type_expr);
             }
         }
@@ -986,7 +1003,7 @@ fn pass_define_bodies(
         // Seed variable scope with the function's own resolved parameters
         let mut variable_types = HashMap::new();
         if let Element::Function(f) = model.get_element(id) {
-            for param in &f.parameters {
+            for param in f.parameters.iter() {
                 variable_types.insert(
                     param.name.clone(),
                     (param.type_expr.clone(), param.multiplicity.clone()),
@@ -1014,7 +1031,7 @@ fn pass_define_bodies(
         };
         let chunk = &mut model.chunks[chunk_id as usize];
         if let Element::Function(func) = chunk.elements.get_mut(local_idx) {
-            func.body = body;
+            func.body = body.into();
         }
     }
 }
@@ -1169,7 +1186,7 @@ fn patch_qp_bodies(
     new_bodies: Vec<Vec<crate::types::ValueSpec>>,
 ) {
     for (qp, body) in model_qps.iter_mut().zip(new_bodies.into_iter()) {
-        qp.body = body;
+        qp.body = body.into();
     }
 }
 
@@ -1258,14 +1275,14 @@ fn create_shell(element: &ast::Element) -> Element {
             Element::Function(Function {
                 function_name: f.name.value.clone(),
                 is_native: false,
-                parameters: placeholder_params,
+                parameters: placeholder_params.into(),
                 return_type: TypeExpr::Named {
                     element: bootstrap::ANY_ID,
                     type_arguments: vec![],
                     value_arguments: vec![],
                 },
                 return_multiplicity: Multiplicity::PureOne,
-                body: vec![],
+                body: Vec::new().into(),
                 stereotypes: vec![],
                 tagged_values: vec![],
             })
@@ -1288,14 +1305,14 @@ fn create_shell(element: &ast::Element) -> Element {
             Element::Function(Function {
                 function_name: f.name.value.clone(),
                 is_native: true,
-                parameters: placeholder_params,
+                parameters: placeholder_params.into(),
                 return_type: TypeExpr::Named {
                     element: bootstrap::ANY_ID,
                     type_arguments: vec![],
                     value_arguments: vec![],
                 },
                 return_multiplicity: Multiplicity::PureOne,
-                body: vec![],
+                body: Vec::new().into(),
                 stereotypes: vec![],
                 tagged_values: vec![],
             })
@@ -1440,10 +1457,10 @@ fn hydrate_element_signature(
             Element::Function(Function {
                 function_name: func_def.name.value.clone(),
                 is_native: false,
-                parameters,
+                parameters: parameters.into(),
                 return_type,
                 return_multiplicity,
-                body: vec![], // Bodies resolved in Pass 2b
+                body: Vec::new().into(), // Bodies resolved in Pass 2b
                 stereotypes,
                 tagged_values,
             })
@@ -1481,10 +1498,10 @@ fn hydrate_element_signature(
             Element::Function(Function {
                 function_name: func_def.name.value.clone(),
                 is_native: true,
-                parameters,
+                parameters: parameters.into(),
                 return_type,
                 return_multiplicity,
-                body: vec![],
+                body: Vec::new().into(),
                 stereotypes,
                 tagged_values,
             })
@@ -1584,10 +1601,10 @@ fn lower_qualified_property_signatures(
             Some(class::QualifiedProperty {
                 name: qp.name.clone(),
                 source_info: qp.source_info.clone(),
-                parameters,
+                parameters: parameters.into(),
                 return_type,
                 return_multiplicity,
-                body: vec![], // patched in Pass 2b
+                body: Vec::new().into(), // patched in Pass 2b
                 stereotypes,
                 tagged_values,
             })
@@ -1833,8 +1850,8 @@ fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
                     chunk_idx,
                     local_idx,
                     kind: TargetKind::FunctionBody,
-                    params: f.parameters.clone(),
-                    body: f.body.clone(),
+                    params: f.parameters.to_vec(),
+                    body: f.body.to_vec(),
                 });
             }
             Element::Class(c) => {
@@ -1844,8 +1861,8 @@ fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
                             chunk_idx,
                             local_idx,
                             kind: TargetKind::QualifiedProperty(qp_idx),
-                            params: qp.parameters.clone(),
-                            body: qp.body.clone(),
+                            params: qp.parameters.to_vec(),
+                            body: qp.body.to_vec(),
                         });
                     }
                 }
@@ -1867,12 +1884,12 @@ fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
         match target.kind {
             TargetKind::FunctionBody => {
                 if let Element::Function(f) = element {
-                    f.body = target.body;
+                    f.body = target.body.into();
                 }
             }
             TargetKind::QualifiedProperty(qp_idx) => {
                 if let Element::Class(c) = element {
-                    c.qualified_properties[qp_idx].body = target.body;
+                    c.qualified_properties[qp_idx].body = target.body.into();
                 }
             }
         }
