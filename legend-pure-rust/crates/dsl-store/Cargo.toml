@@ -26,6 +26,7 @@ legend-pure-parser-compose = { path = "../compose" }
 legend-pure-parser-lexer = { path = "../lexer" }
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-protocol = { path = "../protocol" }
+legend-pure-parser-pure = { path = "../pure" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smol_str = { workspace = true }
