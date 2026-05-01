@@ -17,6 +17,7 @@
 use crate::annotations::{StereotypeRef, TaggedValueRef};
 use crate::types::{Expression, Multiplicity, Parameter, TypeExpr};
 use smol_str::SmolStr;
+use std::rc::Rc;
 
 /// A compiled top-level function definition.
 #[derive(Debug, Clone, PartialEq)]
@@ -34,14 +35,19 @@ pub struct Function {
     /// Drives metatype: native → `NativeFunctionDefinition`,
     /// concrete → `ConcreteFunctionDefinition`.
     pub is_native: bool,
-    /// Parameters.
-    pub parameters: Vec<Parameter>,
+    /// Parameters. Stored as `Rc<[Parameter]>` so that
+    /// `call_user_function` performs an O(1) refcount bump instead of
+    /// deep-cloning the parameter list on every invocation.
+    pub parameters: Rc<[Parameter]>,
     /// Return type.
     pub return_type: TypeExpr,
     /// Return multiplicity.
     pub return_multiplicity: Multiplicity,
-    /// Body expressions.
-    pub body: Vec<Expression>,
+    /// Body expressions. Stored as `Rc<[Expression]>` so that
+    /// `call_user_function` shares the compiled body across invocations
+    /// instead of deep-cloning the entire AST per call — the largest
+    /// single per-call cost in the tree-walking interpreter.
+    pub body: Rc<[Expression]>,
     /// Stereotypes.
     pub stereotypes: Vec<StereotypeRef>,
     /// Tagged values.

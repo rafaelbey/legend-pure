@@ -899,7 +899,7 @@ fn find_qp_params_for_arity(
                 .filter(|qp| qp.name.as_str() == qp_name && qp.parameters.len() == arity)
                 .collect();
             if matches.len() == 1 {
-                return Some(matches[0].parameters.clone());
+                return Some(matches[0].parameters.to_vec());
             }
             if matches.len() > 1 {
                 // Multiple overloads — the orchestrator can't pick one

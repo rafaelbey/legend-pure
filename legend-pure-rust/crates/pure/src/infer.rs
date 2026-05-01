@@ -1030,7 +1030,7 @@ fn lookup_member_in_class(
                     type_expr: crate::resolve::substitute_type(&qp.return_type, bindings),
                     multiplicity: qp.return_multiplicity.clone(),
                 },
-                parameters: qp.parameters.clone(),
+                parameters: qp.parameters.to_vec(),
                 bindings: bindings.clone(),
                 receiver_type_name: receiver_type_name.clone(),
             })

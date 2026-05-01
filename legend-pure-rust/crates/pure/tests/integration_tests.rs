@@ -1782,7 +1782,7 @@ fn dispatch_target(
     };
     // Walk the body looking for the first FunctionCall with a resolved target.
     // Skip `letFunction` calls, which are the implicit `let x = …` desugaring.
-    for stmt in &f.body {
+    for stmt in f.body.iter() {
         if let legend_pure_parser_pure::types::ExprKind::FunctionCall(FunctionCallData {
             function: Some(fid),
             function_name,

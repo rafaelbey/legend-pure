@@ -49,6 +49,7 @@
 //! - `DebugHooks` (future, in `lsp` crate) — IDE debugging with breakpoints.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use im_rc::Vector as PVector;
 use legend_pure_parser_pure::ids::ElementId;
@@ -1729,8 +1730,8 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             }
         }
         Value::Function(Box::new(FunctionValue::Lambda(LambdaClosure {
-            parameters: parameters.to_vec(),
-            body: body.to_vec(),
+            parameters: Rc::from(parameters),
+            body: Rc::from(body),
             captures,
         })))
     }
@@ -2283,9 +2284,12 @@ impl<H: EvalHooks> std::fmt::Debug for Evaluator<'_, H> {
 /// later `&mut self` borrow on the evaluator. Returned by
 /// [`find_qp_with_generalization`] so the caller can drop the
 /// model-borrow before calling `eval_body` on the cloned body.
+///
+/// `parameters` and `body` are `Rc<[T]>` clones of the QP's compiled
+/// fields — O(1) refcount bumps, not deep copies.
 struct FoundQp {
-    parameters: Vec<legend_pure_parser_pure::types::Parameter>,
-    body: Vec<ValueSpec>,
+    parameters: Rc<[legend_pure_parser_pure::types::Parameter]>,
+    body: Rc<[ValueSpec]>,
     type_var_param_names: Vec<SmolStr>,
 }
 
@@ -2320,8 +2324,8 @@ fn find_qp_with_generalization(
             .find(|q| q.name == name && q.parameters.len() == arity)
         {
             return Some(FoundQp {
-                parameters: qp.parameters.clone(),
-                body: qp.body.clone(),
+                parameters: Rc::clone(&qp.parameters),
+                body: Rc::clone(&qp.body),
                 type_var_param_names: class
                     .type_variable_parameters
                     .iter()
