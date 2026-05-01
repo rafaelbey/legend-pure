@@ -70,7 +70,10 @@ pub fn run(args: CheckArgs) -> Result<(), CliError> {
         .map(legend_pure_parser_parser::source::SourceInput::file_system)
         .collect();
 
-    let outputs = legend_pure_parser_parser::parse_many(&inputs);
+    let outputs = legend_pure_parser_parser::parse_many_with_islands(
+        &inputs,
+        legend_pure_dsl_graph::parser::default_island_parsers,
+    );
 
     // -- Sequential reporting --
     let mut error_count = 0;

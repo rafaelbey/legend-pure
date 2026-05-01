@@ -37,6 +37,7 @@ serde_json = { workspace = true }
 [dev-dependencies]
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-core-platform = { path = "../core-platform-pure" }
+legend-pure-dsl-graph = { path = "../dsl-graph" }
 criterion = { version = "0.5", features = ["html_reports"] }
 tracing-subscriber = { workspace = true }
 

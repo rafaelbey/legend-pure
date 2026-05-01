@@ -33,6 +33,7 @@ legend-pure-parser-pure = { path = "../pure" }
 legend-pure-parser-protocol = { path = "../protocol" }
 legend-pure-runtime = { path = "../runtime" }
 legend-pure-core-platform = { path = "../core-platform-pure" }
+legend-pure-dsl-graph = { path = "../dsl-graph" }
 smol_str = { workspace = true }
 
 # CLI framework

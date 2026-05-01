@@ -50,7 +50,11 @@ fn fixture() -> &'static Fixture {
         let raw = legend_pure_core_platform::sources::platform_sources();
         let mut parsed_files = Vec::new();
         for s in raw {
-            match legend_pure_parser_parser::parse(s.content, s.path) {
+            match legend_pure_parser_parser::parse_with_islands(
+                s.content,
+                s.path,
+                legend_pure_dsl_graph::parser::default_island_parsers(),
+            ) {
                 Ok(sf) => parsed_files.push(sf),
                 Err(partial) => parsed_files.push(partial.source_file),
             }
@@ -71,8 +75,12 @@ fn fixture() -> &'static Fixture {
 /// runtime-test compile-time.
 fn compile_user(source: &str) -> PureModel {
     let fix = fixture();
-    let user_ast =
-        legend_pure_parser_parser::parse(source, "<bench>").expect("user source should parse");
+    let user_ast = legend_pure_parser_parser::parse_with_islands(
+        source,
+        "<bench>",
+        legend_pure_dsl_graph::parser::default_island_parsers(),
+    )
+    .expect("user source should parse");
     let mut all_files = fix.parsed_files.clone();
     all_files.push(user_ast);
     match legend_pure_parser_pure::pipeline::compile(&all_files, &fix.auto_imports) {
