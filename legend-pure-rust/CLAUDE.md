@@ -52,6 +52,8 @@ The `legend` CLI (`crates/cli`) is the primary developer tool: `legend parse`,
 ```bash
 cargo build --workspace
 cargo test --workspace
+cargo nextest run --workspace   # faster local test runner; doesn't run doctests
+                                # (run `cargo test --doc` separately if needed)
 cargo lint-lib          # strict: no unwrap/expect in library code
                         #   (alias → clippy --lib -D unwrap_used -D expect_used)
 cargo lint              # standard clippy on all targets
