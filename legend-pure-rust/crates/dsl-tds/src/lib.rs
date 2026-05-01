@@ -48,8 +48,11 @@
 //!   implementing [`legend_pure_parser_ast::island::IslandContent`].
 //! - [`parser`] — [`parser::TDSIslandParser`] registers as
 //!   [`legend_pure_parser_parser::IslandParser`] with tag `"TDS"`.
-//! - **Composer** (commit #13) — `IslandComposer` with tag `"TDS"`.
-//! - **Protocol** (commit #13) — `IslandProtocol` with tag `"TDS"`.
+//! - [`compose`] — [`compose::TDSIslandComposer`] registers as
+//!   [`legend_pure_parser_compose::island::IslandComposer`] with tag
+//!   `"TDS"`.
+//! - [`protocol`] — [`protocol::TDSIslandProtocol`] registers as
+//!   [`legend_pure_parser_protocol::IslandProtocol`] with tag `"TDS"`.
 //! - **`CompilerExtension`** (commit #14) — validates types referenced
 //!   in column specs against `meta::pure::metamodel::type::Type`
 //!   subclasses and wires the embedded metamodel.
@@ -60,4 +63,6 @@
 #![deny(missing_docs)]
 
 pub mod ast;
+pub mod compose;
 pub mod parser;
+pub mod protocol;
