@@ -1791,7 +1791,7 @@ fn compile_let_bound_untyped_lambda_emits_inference_error() {
         "ambiguity cascade should be suppressed, got: {:?}",
         cascading
             .iter()
-            .map(|e| e.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
     );
 }

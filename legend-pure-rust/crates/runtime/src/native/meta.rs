@@ -571,7 +571,12 @@ impl NativeFunction for Match {
                         .iter()
                         .all(|e| value_matches_type(ctx.model(), e, *type_class_id, ctx.heap())),
                     // Unconstrained generic parameter → always matches.
-                    TypeExpr::Generic(_) => true,
+                    // `Unresolved` (lambda type hole that escaped a
+                    // partially-broken compile — the lambda-level
+                    // `CannotInferLambdaParameterTypes` already fired)
+                    // collapses here too: we don't have a concrete
+                    // class to test against, so accept any value.
+                    TypeExpr::Generic(_) | TypeExpr::Unresolved => true,
                     _ => false,
                 };
             if !type_ok {

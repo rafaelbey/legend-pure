@@ -47,6 +47,7 @@ use crate::ids::{ElementId, RelationId};
 /// | `(a: Integer, b: String)` | `Relation(relation_id)` |
 /// | `T`, `U` | `Generic("T")` |
 /// | `T + V` | `AlgebraUnion(..)` |
+/// | (untyped lambda param, no annotation, no expectation) | `Unresolved` |
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeExpr {
     /// A resolved named type, optionally with type and/or value arguments.
@@ -79,6 +80,41 @@ pub enum TypeExpr {
     Generic(SmolStr),
     /// Algebraic union of two relation types: `T + V`.
     AlgebraUnion(Box<TypeExpr>, Box<TypeExpr>),
+    /// **Type hole** — a sentinel marker for a lambda parameter the
+    /// compiler could not infer: no source annotation AND no caller-side
+    /// expectation flowed in. Unit variant; the parameter's user-visible
+    /// name lives on the surrounding `Variable { name }` /
+    /// `Parameter { name, .. }` and doesn't need to be carried here.
+    ///
+    /// Distinct from `Generic` (which stands for an in-scope, bound type
+    /// variable) and from `Named { element: Any }` (which is what the
+    /// user wrote when they declared `:Any[1]` explicitly). Treating
+    /// these as `Any` would conflate "user said Any" with "compiler gave
+    /// up"; reflective walks of the lambda's parameters
+    /// (`deactivate`/`reactivate`, `genericType.rawType`) would
+    /// mis-report the source. Tooling (LSP hover, formatter, future
+    /// "infer-from-first-use" modes) can render this distinctly.
+    ///
+    /// **Compile-time only.** `lower_lambda_parameters` always pushes a
+    /// `CannotInferLambdaParameterTypes` diagnostic for every lambda
+    /// parameter that lands on this variant, so a clean compile cannot
+    /// produce an IR with `Unresolved`. Downstream type-flow sites
+    /// nonetheless handle it defensively (the diagnostic accumulates
+    /// rather than aborts, so body lowering still walks past the hole):
+    /// - `is_concrete_type` → `false`
+    /// - `bind_type` → skips binding a real generic to an `Unresolved`
+    /// - `substitute_type` → identity (passes through)
+    /// - `is_type_compatible` → permissive (treated as `Any`-like for
+    ///   dispatch checks)
+    /// - `type_lub` → `Any`
+    /// - `narrow_candidates_by_type` → refuses to commit on the
+    ///   declaration-order tiebreaker when any arg reads `Unresolved`
+    /// - `resolve_function_call` → suppresses the redundant
+    ///   "Ambiguous function call" cascade (the lambda already pushed
+    ///   the actionable diagnostic)
+    /// - runtime `match` dispatch → matches any value (same as
+    ///   `Generic(_)`), so partially-broken builds remain inspectable
+    Unresolved,
 }
 
 // ---------------------------------------------------------------------------

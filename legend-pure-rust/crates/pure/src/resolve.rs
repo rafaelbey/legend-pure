@@ -113,6 +113,12 @@ pub(crate) struct ResolutionContext<'a> {
     /// Variable types in scope. Maps variable name → (type, multiplicity).
     /// Populated from function parameters, let bindings, and lambda parameters.
     /// Used by dispatch to infer argument types for variable references.
+    ///
+    /// Lambda parameters whose type the compiler could not infer (no
+    /// source annotation, no caller-side expectation) are stored with
+    /// `TypeExpr::Unresolved`. `resolve_function_call`'s ambiguity branch
+    /// reads this to upgrade "Ambiguous function call" cascades into a
+    /// single `CannotInferLambdaParameterTypes` diagnostic.
     pub variable_types: HashMap<SmolStr, (crate::types::TypeExpr, crate::types::Multiplicity)>,
 }
 
@@ -752,6 +758,19 @@ pub(crate) fn resolve_function_call(
                 from = all_candidates.len(),
                 "AmbiguousImport — narrowing did not yield single candidate"
             );
+            // Suppress the cascade when this ambiguity is caused by
+            // reading lambda parameters typed `TypeExpr::Unresolved`.
+            // `lower_lambda_parameters` already pushed a single
+            // `CannotInferLambdaParameterTypes` at the lambda's source
+            // span; the redundant "Ambiguous function call" diagnostic
+            // would only bury it.
+            if any_arg_reads_unresolved(lowered_args, &ctx.variable_types) {
+                tracing::debug!(
+                    "suppressed AmbiguousImport — caused by Unresolved lambda parameter \
+                     (lambda-level CannotInferLambdaParameterTypes already emitted)"
+                );
+                return None;
+            }
             errors.push(CompilationError {
                 message: format!(
                     "Ambiguous function call '{name}': found {} overloads with {} args \
@@ -768,6 +787,44 @@ pub(crate) fn resolve_function_call(
             });
             None
         }
+    }
+}
+
+/// Recursively collects the names of variables whose stored type is
+/// `TypeExpr::Unresolved` — i.e. lambda parameters that the compiler
+/// could not infer. Operator dispatch lowers `$x + $y` into a
+/// `FunctionCall` whose only argument is a `Collection { elements:
+/// [Variable, Variable] }`, so the walk descends `Collection`s and
+/// `FunctionCall` args. `seen` keeps names unique while preserving
+/// discovery order via `out`.
+fn collect_unresolved_param_reads(
+    vs: &crate::types::ValueSpec,
+    var_types: &VarTypes,
+    out: &mut Vec<SmolStr>,
+    seen: &mut std::collections::HashSet<SmolStr>,
+) {
+    use crate::types::{ExprKind, TypeExpr};
+    match vs.kind.as_ref() {
+        ExprKind::Variable { name } => {
+            if matches!(var_types.get(name), Some((TypeExpr::Unresolved, _)))
+                && seen.insert(name.clone())
+            {
+                out.push(name.clone());
+            }
+        }
+        ExprKind::Collection { elements } => {
+            for e in elements {
+                collect_unresolved_param_reads(e, var_types, out, seen);
+            }
+        }
+        ExprKind::FunctionCall(data)
+        | ExprKind::PropertyCall(data)
+        | ExprKind::QualifiedPropertyCall(data) => {
+            for a in &data.arguments {
+                collect_unresolved_param_reads(a, var_types, out, seen);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1477,6 +1534,13 @@ pub(crate) fn bind_type(
     model: &crate::model::PureModel,
 ) {
     use crate::types::TypeExpr;
+    // Type-hole arguments contribute nothing — binding `T` to an
+    // un-inferred lambda parameter would propagate the hole through
+    // generic substitution. Skip silently; other arguments may still
+    // bind `T`.
+    if matches!(arg_ty, TypeExpr::Unresolved) {
+        return;
+    }
     match param_ty {
         TypeExpr::Generic(name) => {
             use std::collections::hash_map::Entry;
@@ -1600,7 +1664,11 @@ pub(crate) fn substitute_type(
             Box::new(substitute_type(a, bindings)),
             Box::new(substitute_type(b, bindings)),
         ),
-        TypeExpr::Relation(_) => ty.clone(),
+        // Both `Relation` (interned structural type) and `Unresolved`
+        // (type hole) pass through unchanged: substitution has no
+        // bindings that could fill them — only re-lowering with caller-
+        // side expectations could specialise an `Unresolved`.
+        TypeExpr::Relation(_) | TypeExpr::Unresolved => ty.clone(),
     }
 }
 
@@ -2032,6 +2100,17 @@ pub(crate) fn narrow_candidates_by_type(
 
         if unique_best && best_distance < usize::MAX {
             vec![result[best_idx]]
+        } else if any_arg_reads_unresolved(lowered_args, var_types) {
+            // Type-hole guard. When the only reason we got here is that
+            // an argument reads a `TypeExpr::Unresolved` lambda
+            // parameter, the declaration-order tiebreaker would silently
+            // commit to whichever overload happened to be declared
+            // first — masking the real cause (the user didn't annotate
+            // the lambda). Surface the ambiguity instead so
+            // `resolve_function_call` upgrades it to a
+            // `CannotInferLambdaParameterTypes` diagnostic naming the
+            // offending parameters.
+            result
         } else {
             // Phase 5: Declaration-order tiebreaker.
             // When all other disambiguation fails, pick the first-declared
@@ -2042,6 +2121,22 @@ pub(crate) fn narrow_candidates_by_type(
     } else {
         result
     }
+}
+
+/// True if any of `lowered_args` (recursively) reads a variable whose
+/// stored type is `TypeExpr::Unresolved`. Used to short-circuit the
+/// declaration-order tiebreaker so type-hole arguments surface as
+/// ambiguity instead of silently committing to the first overload.
+fn any_arg_reads_unresolved(args: &[crate::types::ValueSpec], var_types: &VarTypes) -> bool {
+    let mut tmp_out: Vec<SmolStr> = Vec::new();
+    let mut tmp_seen: std::collections::HashSet<SmolStr> = std::collections::HashSet::new();
+    for arg in args {
+        collect_unresolved_param_reads(arg, var_types, &mut tmp_out, &mut tmp_seen);
+        if !tmp_out.is_empty() {
+            return true;
+        }
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------

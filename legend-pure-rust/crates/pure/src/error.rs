@@ -131,4 +131,13 @@ pub enum CompilationErrorKind {
         /// Inferred argument type (rendered).
         actual: SmolStr,
     },
+    /// A lambda has parameters with no type annotation and no caller-side
+    /// expectation to bind them — they would silently default to `Any[1]`,
+    /// which then makes operator dispatch in the body ambiguous. Emitted
+    /// eagerly at the lambda so the user sees the real cause instead of a
+    /// cascading "Ambiguous function call" downstream.
+    CannotInferLambdaParameterTypes {
+        /// Names of the parameters that could not be inferred.
+        names: Vec<SmolStr>,
+    },
 }

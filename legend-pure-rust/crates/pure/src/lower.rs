@@ -783,6 +783,146 @@ fn slots_with_placeholders(slots: &[Option<ValueSpec>]) -> Vec<ValueSpec> {
         .collect()
 }
 
+/// Two-phase lowering of QP-call arguments, mirroring
+/// [`lower_args_with_lambda_inference`] but resolving the QP candidate
+/// from the receiver type's `qualified_properties` instead of a free
+/// function name. Returns the receiver as `arguments[0]` followed by
+/// each lowered explicit arg.
+///
+/// The QP-param expectation that flows into a lambda arg is the same
+/// shape used elsewhere: `Function<{T[m]→V[n]}>` (or its
+/// `Named<Function>[FunctionType]` form). When no QP signature is
+/// resolvable (target type unknown, no matching arity, multiple
+/// matches), the lambda lowers without expectations — and the eager
+/// `CannotInferLambdaParameterTypes` diagnostic fires if any param
+/// would land on `TypeExpr::Unresolved`.
+fn lower_qp_call_args(
+    target: &ValueSpec,
+    qp_name: &str,
+    ast_args: &[ast_expr::Expression],
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Vec<ValueSpec> {
+    use crate::types::TypeExpr;
+
+    let arity = ast_args.len();
+    // Receiver in slot 0; explicit args in slots 1..=arity.
+    let total_slots = 1 + arity;
+    let mut slots: Vec<Option<ValueSpec>> = Vec::with_capacity(total_slots);
+    slots.push(Some(target.clone()));
+
+    // Phase 1: lower every non-lambda explicit arg, leaving lambda slots empty.
+    for ast_arg in ast_args {
+        let underlying = unwrap_group(ast_arg);
+        if matches!(underlying, ast_expr::Expression::Lambda(_)) {
+            slots.push(None);
+        } else {
+            slots.push(lower_expression(ast_arg, ctx, errors));
+        }
+    }
+
+    // Resolve the QP candidate from the receiver type. The receiver is
+    // already lowered; read its TypeExpr to find the class.
+    let receiver_eid =
+        resolve::infer_typeexpr_from_valuespec(target, ctx.model, &ctx.variable_types).and_then(
+            |te| match te {
+                TypeExpr::Named { element, .. } => Some(element),
+                _ => None,
+            },
+        );
+    let qp_params: Option<Vec<crate::types::Parameter>> =
+        receiver_eid.and_then(|eid| find_qp_params_for_arity(ctx.model, eid, qp_name, arity));
+
+    let lambda_expectations: LambdaExpectations = if let Some(params) = qp_params {
+        // Build a synthetic param list with the receiver as a leading
+        // pseudo-param typed as the receiver itself — keeps slot
+        // alignment consistent with `expectations_from_callee_params`,
+        // which expects `params.len() == slots.len()`.
+        let mut all_params = Vec::with_capacity(total_slots);
+        let recv_param = crate::types::Parameter {
+            name: SmolStr::new_static("this"),
+            type_expr: resolve::infer_typeexpr_from_valuespec(
+                target,
+                ctx.model,
+                &ctx.variable_types,
+            )
+            .unwrap_or(TypeExpr::Unresolved),
+            multiplicity: crate::types::Multiplicity::PureOne,
+            source_info: target.source_info.clone(),
+        };
+        all_params.push(recv_param);
+        all_params.extend(params);
+        expectations_from_callee_params(&all_params, &slots, ctx)
+    } else {
+        (0..total_slots).map(|_| None).collect()
+    };
+
+    // Phase 2: lower the lambda slots with expected types where available.
+    for (slot_idx, ast_arg) in ast_args.iter().enumerate() {
+        let target_idx = slot_idx + 1; // slot 0 is the receiver
+        if slots[target_idx].is_some() {
+            continue;
+        }
+        let underlying = unwrap_group(ast_arg);
+        if let ast_expr::Expression::Lambda(lam) = underlying {
+            let expected = lambda_expectations
+                .get(target_idx)
+                .and_then(|o| o.as_deref());
+            slots[target_idx] = lower_lambda_with_expected_types(lam, expected, ctx, errors);
+        } else {
+            slots[target_idx] = lower_expression(ast_arg, ctx, errors);
+        }
+    }
+
+    slots.into_iter().flatten().collect()
+}
+
+/// Find a `QualifiedProperty` on `receiver_eid` (its class, walking
+/// supertypes) whose name and parameter count match. Returns the
+/// parameter list when a unique match exists; `None` otherwise (so the
+/// caller falls back to no-expectation lowering, and any resulting
+/// type holes surface via the eager `CannotInferLambdaParameterTypes`
+/// diagnostic).
+fn find_qp_params_for_arity(
+    model: &crate::model::PureModel,
+    receiver_eid: crate::ids::ElementId,
+    qp_name: &str,
+    arity: usize,
+) -> Option<Vec<crate::types::Parameter>> {
+    use crate::model::Element;
+    let mut current_eid = Some(receiver_eid);
+    while let Some(eid) = current_eid {
+        if let Element::Class(c) = model.get_element(eid) {
+            let matches: Vec<&crate::nodes::class::QualifiedProperty> = c
+                .qualified_properties
+                .iter()
+                .filter(|qp| qp.name.as_str() == qp_name && qp.parameters.len() == arity)
+                .collect();
+            if matches.len() == 1 {
+                return Some(matches[0].parameters.clone());
+            }
+            if matches.len() > 1 {
+                // Multiple overloads — the orchestrator can't pick one
+                // without lowered arg types. Defer to the resolution
+                // pass; lambda args lower without expectations.
+                return None;
+            }
+            // Walk a single supertype if there's exactly one named
+            // class supertype. Pure supports multi-inheritance but the
+            // QP lookup walks linearly; keeping the conservative path
+            // for now mirrors how `infer_qualified_property` resolves
+            // through `super_types` until it hits a match.
+            current_eid = c.super_types.iter().find_map(|st| match st {
+                crate::types::TypeExpr::Named { element, .. } => Some(*element),
+                _ => None,
+            });
+        } else {
+            break;
+        }
+    }
+    None
+}
+
 /// For each argument slot, computes the expected lambda parameter
 /// `(TypeExpr, Multiplicity)` list when the slot is a lambda whose matching
 /// callee parameter is `Function<{T[m]->U[n]}>` and the call's generic
@@ -795,12 +935,23 @@ fn compute_lambda_param_expectations(
     slots: &[Option<ValueSpec>],
     ctx: &ResolutionContext<'_>,
 ) -> LambdaExpectations {
-    use crate::types::TypeExpr;
-
     let crate::model::Element::Function(callee_fn) = ctx.model.get_element(callee) else {
         return (0..slots.len()).map(|_| None).collect();
     };
-    let params = &callee_fn.parameters;
+    expectations_from_callee_params(&callee_fn.parameters, slots, ctx)
+}
+
+/// Shared core: given a callee's declared parameter list and the
+/// already-lowered argument slots (with `None` placeholders for lambda
+/// positions), produce per-slot lambda expectations. Used by both the
+/// function-call path (params come from `Function.parameters`) and the
+/// QP-call path (params come from the matched `QualifiedProperty`).
+fn expectations_from_callee_params(
+    params: &[crate::types::Parameter],
+    slots: &[Option<ValueSpec>],
+    ctx: &ResolutionContext<'_>,
+) -> LambdaExpectations {
+    use crate::types::TypeExpr;
     if params.len() != slots.len() {
         return (0..slots.len()).map(|_| None).collect();
     }
@@ -898,12 +1049,17 @@ fn lower_member_access(
         }
         ast_expr::MemberAccess::Qualified(q) => {
             let target = lower_expression(&q.target, ctx, errors)?;
-            let mut arguments: Vec<ValueSpec> = vec![target];
-            arguments.extend(
-                q.arguments
-                    .iter()
-                    .filter_map(|a| lower_expression(a, ctx, errors)),
-            );
+            // Two-phase QP-arg lowering with lambda-parameter type
+            // inference, mirroring `lower_args_with_lambda_inference`'s
+            // shape but resolving the candidate by walking the receiver
+            // type's `qualified_properties` (QPs aren't free-name —
+            // they're class-scoped). A lambda whose matching QP param
+            // is `Function<{T[m]→V[n]}>` is lowered with that
+            // expectation, so e.g. `^M_ThisMapHolder().func(a | 2.0)`
+            // types `a` as `M_ThisMapHolder[1]` instead of falling into
+            // the type-hole guard.
+            let arguments =
+                lower_qp_call_args(&target, q.member.as_str(), &q.arguments, ctx, errors);
             Some(untyped(
                 ExprKind::QualifiedPropertyCall(FunctionCallData {
                     function: None,
@@ -1107,7 +1263,8 @@ pub(crate) fn lower_lambda_with_expected_types(
 ) -> Option<ValueSpec> {
     let parameters = lower_lambda_parameters(&e.parameters, expected_types, ctx, errors);
 
-    // Save outer variable scope, register lambda params
+    // Save outer variable scope, register lambda params (including any
+    // `TypeExpr::Unresolved` entries set for un-inferable params).
     let outer_vars = ctx.variable_types.clone();
     for param in &parameters {
         ctx.variable_types.insert(
@@ -1118,7 +1275,7 @@ pub(crate) fn lower_lambda_with_expected_types(
 
     let body = lower_expression_body(&e.body, ctx, errors);
 
-    // Restore outer scope (lambda params don't leak)
+    // Restore outer scope (lambda params don't leak).
     ctx.variable_types = outer_vars;
 
     Some(untyped(
@@ -1135,13 +1292,32 @@ pub(crate) fn lower_lambda_with_expected_types(
 /// expected type is *concrete* (a `Named { .. }` other than `Any`, with no
 /// remaining `Generic(_)` substructure). This keeps dispatch precise without
 /// overcommitting on still-generic call sites.
+///
+/// **Eager inference-failure diagnostic.** A parameter with no source
+/// annotation AND no caller-side expectation gets `TypeExpr::Unresolved`,
+/// and a `CannotInferLambdaParameterTypes` error is pushed for **all**
+/// such params at the lambda's source span. This is intentionally
+/// eager: even when the body doesn't dispatch on the parameter today,
+/// the lambda may be passed to user code (deactivate / reactivate /
+/// reflective walks) where a type hole would either crash type-element
+/// extraction or surface as a meaningless `Any`-vs-`Unresolved`
+/// ambiguity. Failing at the lambda is the only place where the user
+/// can fix it (annotate the parameter or restructure the call site to
+/// flow an expectation).
+///
+/// `Generic(_)` expectations *don't* trigger the failure — they mean
+/// we're inside a parametric outer context where the type variable is
+/// in scope and may bind at the call site. Annotation isn't required.
 fn lower_lambda_parameters(
     params: &[legend_pure_parser_ast::annotation::Parameter],
     expected_types: Option<&[Option<(crate::types::TypeExpr, crate::types::Multiplicity)>]>,
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Vec<crate::types::Parameter> {
-    params
+    let mut uninferred: Vec<SmolStr> = Vec::new();
+    let mut anchor: Option<SourceInfo> = None;
+
+    let lowered: Vec<crate::types::Parameter> = params
         .iter()
         .enumerate()
         .map(|(idx, p)| {
@@ -1154,16 +1330,23 @@ fn lower_lambda_parameters(
                 .and_then(|s| s.get(idx))
                 .and_then(|o| o.as_ref());
 
-            // Type: declared > expected (when concrete) > Any.
+            let is_uninferred = declared_type.is_none() && expected.is_none();
+            if is_uninferred {
+                uninferred.push(p.name.clone());
+                if anchor.is_none() {
+                    anchor = Some(p.source_info.clone());
+                }
+            }
+
+            // Type: declared > expected (when concrete) > Unresolved.
+            // The `Unresolved` marker is a type hole that the eager
+            // diagnostic below flags; it must NOT be `Any`, which would
+            // mean "user wrote :Any[1]".
             let type_expr = declared_type.unwrap_or_else(|| {
                 expected
                     .map(|(t, _)| t.clone())
                     .filter(is_concrete_type)
-                    .unwrap_or(crate::types::TypeExpr::Named {
-                        element: crate::bootstrap::ANY_ID,
-                        type_arguments: vec![],
-                        value_arguments: vec![],
-                    })
+                    .unwrap_or(crate::types::TypeExpr::Unresolved)
             });
             // Multiplicity: declared > expected (when not Variable) > [1].
             let multiplicity = declared_mult.unwrap_or_else(|| {
@@ -1179,7 +1362,38 @@ fn lower_lambda_parameters(
                 source_info: p.source_info.clone(),
             }
         })
-        .collect()
+        .collect();
+
+    if !uninferred.is_empty() {
+        // `anchor` is set whenever `uninferred` is non-empty — captured
+        // on the first failing parameter on the same iteration.
+        let source_info = anchor.unwrap_or_else(|| SourceInfo::new("<lambda>", 0, 0, 0, 0));
+        errors.push(CompilationError {
+            message: format_uninferred_lambda_message(&uninferred),
+            source_info,
+            kind: crate::error::CompilationErrorKind::CannotInferLambdaParameterTypes {
+                names: uninferred,
+            },
+        });
+    }
+
+    lowered
+}
+
+/// Render the user-facing message for a `CannotInferLambdaParameterTypes`
+/// diagnostic. Single-quoted, comma-separated parameter names plus an
+/// annotation example with `<Type>` placeholders, preserving order so
+/// the suggestion lines up with the source.
+fn format_uninferred_lambda_message(names: &[SmolStr]) -> String {
+    let plural = if names.len() > 1 { "s" } else { "" };
+    let quoted: Vec<String> = names.iter().map(|n| format!("'{n}'")).collect();
+    let example_params: Vec<String> = names.iter().map(|n| format!("{n}: <Type>[1]")).collect();
+    format!(
+        "Cannot infer type{plural} for lambda parameter{plural} {}: \
+         annotate explicitly, e.g. `{{{} | …}}`",
+        quoted.join(", "),
+        example_params.join(", "),
+    )
 }
 
 /// True iff `ty` is a fully resolved, non-`Any` named type. Type-arguments
@@ -1199,7 +1413,10 @@ fn is_concrete_type(ty: &crate::types::TypeExpr) -> bool {
             ..
         } => parameters.iter().all(|(t, _)| is_concrete_type(t)) && is_concrete_type(return_type),
         TypeExpr::Relation(_) => true,
-        TypeExpr::Generic(_) | TypeExpr::AlgebraUnion(_, _) => false,
+        // `Generic` and `AlgebraUnion` are not concrete — they may bind
+        // later. `Unresolved` is by definition not concrete: it's the
+        // type-hole marker for an un-inferred lambda parameter.
+        TypeExpr::Generic(_) | TypeExpr::AlgebraUnion(_, _) | TypeExpr::Unresolved => false,
     }
 }
 

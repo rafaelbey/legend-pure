@@ -135,6 +135,15 @@ fn append_type_signature(builder: &mut String, type_expr: &TypeExpr, model: &Pur
         TypeExpr::AlgebraUnion(_, _) => {
             builder.push_str("Any");
         }
+        TypeExpr::Unresolved => {
+            // Type holes shouldn't reach FQN mangling — that's only
+            // called on `Function`/property/QP signatures, not on
+            // lambda-parameter types. If it does, mangle as `Any` so
+            // the call doesn't blow up; the upstream
+            // `CannotInferLambdaParameterTypes` diagnostic is the real
+            // signal.
+            builder.push_str("Any");
+        }
     }
 }
 
