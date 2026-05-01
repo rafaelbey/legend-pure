@@ -24,7 +24,16 @@ use legend_pure_parser_ast::SourceFile;
 #[allow(dead_code)]
 #[must_use]
 pub fn parse_ok(source: &str) -> SourceFile {
-    legend_pure_parser_parser::parse(source, "test.pure").unwrap_or_else(|e| {
+    // Register the graph-fetch island parser via dev-dep so existing
+    // graph-fetch fixtures (`test_graph_fetch.rs`) continue to parse.
+    // Core's `default_island_parsers()` is empty after the dsl-graph
+    // extraction.
+    legend_pure_parser_parser::parse_with_islands(
+        source,
+        "test.pure",
+        legend_pure_dsl_graph::parser::default_island_parsers(),
+    )
+    .unwrap_or_else(|e| {
         panic!(
             "Expected parse to succeed, but got error(s): {:?}",
             e.errors.iter().map(ToString::to_string).collect::<Vec<_>>()

@@ -22,6 +22,8 @@ repository.workspace = true
 
 [dependencies]
 legend-pure-parser-ast = { path = "../ast" }
+legend-pure-parser-lexer = { path = "../lexer" }
+legend-pure-parser-parser = { path = "../parser" }
 smol_str = { workspace = true }
 
 [dev-dependencies]

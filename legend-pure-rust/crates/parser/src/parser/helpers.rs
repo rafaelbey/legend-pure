@@ -19,12 +19,18 @@ use smol_str::SmolStr;
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-pub(crate) fn split_package_name(pkg: &Package) -> (Option<Package>, SmolStr) {
+/// Split a [`Package`] into its parent package + leaf name. Used by
+/// island/section parser plug-ins that resolve qualified paths.
+pub fn split_package_name(pkg: &Package) -> (Option<Package>, SmolStr) {
     let name = SmolStr::new(pkg.name());
     (pkg.parent().cloned(), name)
 }
 
-pub(crate) fn unquote_string(s: &str) -> String {
+/// Strip the surrounding single quotes from a string literal token's
+/// text and resolve common escape sequences (`\\'`, `\\\\`, `\n`,
+/// `\t`, `\r`). Used by island/section parser plug-ins that consume
+/// `'...'` literals from the cursor.
+pub fn unquote_string(s: &str) -> String {
     let inner = &s[1..s.len() - 1]; // strip surrounding quotes
     let mut result = String::with_capacity(inner.len());
     let mut chars = inner.chars();
