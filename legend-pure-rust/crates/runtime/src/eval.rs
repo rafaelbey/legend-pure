@@ -685,7 +685,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     /// the call's `type_info` becomes `Pair<Integer, String>[1]`. The
     /// body's `^Pair<U,V>(...)` left the heap object's
     /// `__typeArguments` empty (Generic placeholders are filtered at
-    /// the `New` native's type_args collection), so we write
+    /// the `New` native's `type_args` collection), so we write
     /// `[Integer, String]` here.
     ///
     /// Guarded by:
@@ -744,7 +744,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             .heap
             .classifier(&obj_id.clone())
             .map_err(PureException::from)?
-            .to_owned();
+            .clone();
         let classifier_id = crate::m3_paths::resolve(self.model, &classifier_path);
         if classifier_id != Some(*return_outer) {
             return Ok(());
@@ -985,7 +985,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             .heap
             .classifier(&instance_id)
             .map_err(PureException::from)?
-            .to_owned();
+            .clone();
         let Some(class_id) = crate::m3_paths::resolve(self.model, &classifier) else {
             return Ok(Value::Unit);
         };
@@ -1083,7 +1083,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 Ok(Value::from_vec(collected))
             }
             Value::Element(id) => self
-                .eval_element_property(id.clone(), property)
+                .eval_element_property(*id, property)
                 .map_err(PureException::from),
             Value::Function(fv) => self
                 .eval_function_property(fv, property, value)
@@ -1138,9 +1138,9 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             }
             "functionName" | "name" => {
                 let name = match fv {
-                    FunctionValue::Compiled(id) => match self.model.get_element(id.clone()) {
+                    FunctionValue::Compiled(id) => match self.model.get_element(*id) {
                         Element::Function(f) => f.function_name.clone(),
-                        _ => self.model.element_name(id.clone()).clone(),
+                        _ => self.model.element_name(*id).clone(),
                     },
                     FunctionValue::Lambda(_) => SmolStr::new_static("<lambda>"),
                 };
@@ -1827,10 +1827,8 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             // element handle rather than rewrapping it, so we need to
             // promote compiled-function elements to `FunctionValue::Compiled`
             // on the fly. Non-function elements remain a type error.
-            Value::Element(id)
-                if matches!(self.model.get_element(id.clone()), Element::Function(_)) =>
-            {
-                self.eval_function_value(&FunctionValue::Compiled(id.clone()), args)
+            Value::Element(id) if matches!(self.model.get_element(*id), Element::Function(_)) => {
+                self.eval_function_value(&FunctionValue::Compiled(*id), args)
             }
             // Property wrapper objects synthesised by `eval_class_member_collection`
             // become callable here: `$propRef->eval($instance)` reads
@@ -1885,7 +1883,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     /// arg as `this` and the remainder as the QP's declared parameters, then
     /// evaluates the QP body. Mirrors `evaluate_Function_1__List_MANY__Any_MANY_`'s
     /// dispatch path for `LA_Person.qualifiedProperties` entries.
-    #[allow(clippy::result_large_err)]
+    #[allow(clippy::result_large_err, clippy::needless_pass_by_value)]
     fn apply_qualified_property(
         &mut self,
         id: crate::heap::ObjectHandle,
@@ -1961,7 +1959,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
 
     /// Read the `name` slot of a Property / `QualifiedProperty` wrapper as a
     /// plain string, erroring if it is missing or multi-valued.
-    #[allow(clippy::result_large_err)]
+    #[allow(clippy::result_large_err, clippy::needless_pass_by_value)]
     fn read_wrapper_name(&self, id: crate::heap::ObjectHandle) -> Result<SmolStr, PureException> {
         let values = self
             .heap
@@ -2024,14 +2022,14 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 // `^$func()` → `.properties->eval($func)` metamodel-
                 // introspection chain reads the same fields it would off a
                 // `Value::Function` receiver.
-                if matches!(self.model.get_element(id.clone()), Element::Function(_)) {
-                    let fv = FunctionValue::Compiled(id.clone());
+                if matches!(self.model.get_element(*id), Element::Function(_)) {
+                    let fv = FunctionValue::Compiled(*id);
                     let target = Value::Function(Box::new(fv.clone()));
                     if let Ok(v) = self.eval_function_property(&fv, name, &target) {
                         return Ok(v);
                     }
                 }
-                self.eval_element_property(id.clone(), name)
+                self.eval_element_property(*id, name)
                     .map_err(PureException::from)
             }
             other => Err(PureException::from(PureRuntimeError::EvaluationError(
@@ -2054,8 +2052,8 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             FunctionValue::Lambda(closure) => self.eval_lambda_value(closure, args),
             FunctionValue::Compiled(id) => {
                 // self.model has 'model lifetime — no conflict with &mut self for EvalContext.
-                let mangled: SmolStr = self.model.get_node(id.clone()).name.clone();
-                self.dispatch_compiled_function(id.clone(), &mangled, args)
+                let mangled: SmolStr = self.model.get_node(*id).name.clone();
+                self.dispatch_compiled_function(*id, &mangled, args)
             }
         }
     }

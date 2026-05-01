@@ -18,6 +18,10 @@
 //! All M3 identification is by ElementId (`m3_paths::resolve`), never
 //! classifier-string matching — see `feedback_no_classifier_string_compare`.
 
+// Helpers take `ObjectHandle` by value; with `Rc<RefCell<HeapEntry>>`
+// that's an O(1) refcount bump rather than a meaningful copy.
+#![allow(clippy::needless_pass_by_value)]
+
 use legend_pure_parser_pure::types::ValueSpec;
 
 use crate::error::{PureException, PureRuntimeError};
@@ -213,7 +217,7 @@ fn unwrap_instance_value(
             .heap()
             .classifier(&obj)
             .map_err(PureException::from)?
-            .to_owned();
+            .clone();
         let resolved = m3_paths::resolve(ctx.model(), &classifier);
         if resolved == Some(iv_id) {
             let inner = ctx

@@ -206,17 +206,15 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
             crate::diagnostics::print_error(&e);
         }
 
-        if !watcher_setup {
-            if let Some(ref d) = dir {
-                match crate::live::watch_dir(d) {
-                    Ok((debouncer, flag)) => {
-                        _debouncer = Some(debouncer);
-                        rx = Some(flag);
-                        watcher_setup = true;
-                    }
-                    Err(e) => {
-                        return Err(CliError::Custom(format!("Failed to start watcher: {e}")));
-                    }
+        if !watcher_setup && let Some(ref d) = dir {
+            match crate::live::watch_dir(d) {
+                Ok((debouncer, flag)) => {
+                    _debouncer = Some(debouncer);
+                    rx = Some(flag);
+                    watcher_setup = true;
+                }
+                Err(e) => {
+                    return Err(CliError::Custom(format!("Failed to start watcher: {e}")));
                 }
             }
         }
@@ -504,7 +502,7 @@ impl TestReport {
         let total_elapsed_ms = read_int_slot(heap, id, "totalElapsed").unwrap_or(0);
 
         let raw_results = heap
-            .get_property_values(&id, "results")
+            .get_property_values(id, "results")
             .map_err(|e| CliError::Custom(format!("TestReport.results read failed: {e}")))?;
         let mut results = Vec::with_capacity(raw_results.len());
         for v in &raw_results {
@@ -565,7 +563,7 @@ impl TestReport {
 impl TestResult {
     fn read(heap: &RuntimeHeap, id: &ObjectHandle) -> Self {
         let fqn = read_string_slot(heap, id, "fqn").unwrap_or_else(|_| "<unknown>".into());
-        let status = match heap.get_property_values(&id, "status") {
+        let status = match heap.get_property_values(id, "status") {
             Ok(values) => match values.iter().next() {
                 Some(Value::EnumValue { member, .. }) => match member.as_str() {
                     "PASS" => TestStatus::Pass,
@@ -606,12 +604,11 @@ impl TestResult {
 
             let source_str = si.source.as_str();
             let mut real_path = std::path::PathBuf::from(source_str);
-            if source_str.starts_with("/platform/pure/") {
-                if let Ok(dir) = crate::live::resolve_platform_dir(None) {
-                    if let Some(rel_path) = source_str.strip_prefix("/platform/pure/") {
-                        real_path = dir.join(rel_path);
-                    }
-                }
+            if source_str.starts_with("/platform/pure/")
+                && let Ok(dir) = crate::live::resolve_platform_dir(None)
+                && let Some(rel_path) = source_str.strip_prefix("/platform/pure/")
+            {
+                real_path = dir.join(rel_path);
             }
 
             let abs_path = crate::diagnostics::canonical_or_original(&real_path);
@@ -650,7 +647,7 @@ impl TestResult {
 
 fn read_int_slot(heap: &RuntimeHeap, id: &ObjectHandle, slot: &str) -> Result<i64, CliError> {
     let values = heap
-        .get_property_values(&id, slot)
+        .get_property_values(id, slot)
         .map_err(|e| CliError::Custom(format!("read {slot}: {e}")))?;
     match values.iter().next() {
         Some(Value::Integer(n)) => Ok(*n),
@@ -663,7 +660,7 @@ fn read_int_slot(heap: &RuntimeHeap, id: &ObjectHandle, slot: &str) -> Result<i6
 
 fn read_string_slot(heap: &RuntimeHeap, id: &ObjectHandle, slot: &str) -> Result<String, CliError> {
     let values = heap
-        .get_property_values(&id, slot)
+        .get_property_values(id, slot)
         .map_err(|e| CliError::Custom(format!("read {slot}: {e}")))?;
     match values.iter().next() {
         Some(Value::String(s)) => Ok(s.to_string()),

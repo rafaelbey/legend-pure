@@ -15,7 +15,7 @@
 //! Heap-growth benchmark — proves the post-Rc heap reclaims user
 //! allocations as their references drop.
 //!
-//! Pre-change (SlotMap heap, monotonic): allocating 100K objects in a
+//! Pre-change (`SlotMap` heap, monotonic): allocating 100K objects in a
 //! loop and discarding them grew the heap to ~101K rows for the
 //! evaluator's lifetime.
 //!

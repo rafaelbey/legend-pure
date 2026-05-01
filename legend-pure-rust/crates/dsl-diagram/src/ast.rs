@@ -192,9 +192,9 @@ pub struct AssociationView {
     pub line_style: Option<Identifier>,
     /// `points=[(x,y), (x,y), …]`.
     pub points: Vec<Point>,
-    /// `source=` — local TypeView id this edge starts from.
+    /// `source=` — local `TypeView` id this edge starts from.
     pub source: Option<Identifier>,
-    /// `target=` — local TypeView id this edge ends at.
+    /// `target=` — local `TypeView` id this edge ends at.
     pub target: Option<Identifier>,
     /// `sourcePropertyPosition=(x, y)`.
     pub source_prop_position: Option<Point>,
@@ -252,7 +252,7 @@ pub struct PropertyView {
 /// `GeneralizationView identifier(source=…, target=…, …)`.
 ///
 /// Generalization edges have no `type=` / `association=` / `property=`
-/// — the source and target TypeViews fully identify the inheritance.
+/// — the source and target `TypeViews` fully identify the inheritance.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneralizationView {
     /// Local identifier.
@@ -279,7 +279,7 @@ pub struct GeneralizationView {
 // Shared sub-types
 // ---------------------------------------------------------------------------
 
-/// `Class.propertyName` — used as the `property=` value in PropertyView.
+/// `Class.propertyName` — used as the `property=` value in `PropertyView`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PropertyRef {
     /// The class side (`Class` in `Class.propertyName`).

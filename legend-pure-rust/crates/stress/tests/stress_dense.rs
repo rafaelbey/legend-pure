@@ -14,12 +14,6 @@
 
 //! Dense connectivity stress test: 10K classes with ~10 links per hub.
 
-use legend_pure_parser_stress::generate::common::{PhaseTimer, platform_fixture};
-use legend_pure_parser_stress::generate::hub_spoke::{self, HubSpokeConfig};
-
-use legend_pure_parser_pure::model::Element;
-use smol_str::SmolStr;
-
 #[test]
 #[allow(clippy::too_many_lines)]
 #[cfg(feature = "heavy")]

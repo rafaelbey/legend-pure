@@ -66,7 +66,7 @@ pub trait IslandProtocol: Send + Sync {
     /// The island tag this converter handles. Same string the
     /// matching `IslandParser::tag()` and `IslandComposer::tag()`
     /// return — `""` for graph fetch, `">"` for
-    /// RelationStoreAccessor, `"TDS"` for TDS, etc.
+    /// `RelationStoreAccessor`, `"TDS"` for TDS, etc.
     fn tag(&self) -> &str;
 
     /// Convert one [`IslandContent`] (already downcast-ready via

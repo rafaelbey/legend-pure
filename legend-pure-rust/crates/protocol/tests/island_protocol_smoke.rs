@@ -35,7 +35,7 @@ struct MockContent {
 }
 
 impl IslandContent for MockContent {
-    fn tag(&self) -> &str {
+    fn tag(&self) -> &'static str {
         "MOCK"
     }
     fn as_any(&self) -> &dyn Any {
@@ -55,7 +55,7 @@ impl IslandContent for MockContent {
 struct MockProtocol;
 
 impl IslandProtocol for MockProtocol {
-    fn tag(&self) -> &str {
+    fn tag(&self) -> &'static str {
         "MOCK"
     }
     fn convert(

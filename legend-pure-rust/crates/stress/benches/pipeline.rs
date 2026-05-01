@@ -521,7 +521,7 @@ fn bench_compose(c: &mut Criterion) {
 // -----------------------------------------------------------------------------
 
 fn bench_compose_multi_file(c: &mut Criterion) {
-    let mut group = c.benchmark_group("compose_multi_file");
+    let group = c.benchmark_group("compose_multi_file");
 
     #[cfg(feature = "heavy")]
     {

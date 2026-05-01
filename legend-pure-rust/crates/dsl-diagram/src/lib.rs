@@ -30,7 +30,7 @@
 //! 4. **Compiler extension** —
 //!    [`DiagramExtension`](compiler::DiagramExtension) implements
 //!    [`legend_pure_parser_pure::extension::CompilerExtension`] to
-//!    lower DiagramDef AST into compiled `PureModel` elements.
+//!    lower `DiagramDef` AST into compiled `PureModel` elements.
 //!
 //! Core crates (`ast`, `parser`, `pure`, `compose`) carry no
 //! Diagram-specific code — this crate is the only place the word

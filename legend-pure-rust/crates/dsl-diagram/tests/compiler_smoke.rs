@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! End-to-end test of the Diagram CompilerExtension.
+//! End-to-end test of the Diagram `CompilerExtension`.
 //!
 //! Full chain: parse a `###Diagram` section via
 //! `parse_with_sections` + `DiagramSectionParser` → compile via

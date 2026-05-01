@@ -15,8 +15,8 @@
 //! End-to-end test mirroring the upstream
 //! `TestDiagramCompilation.java` fixture: a Pure section declaring
 //! the underlying classes, then a `###Diagram` section with all
-//! four view kinds (TypeView × 2, AssociationView, PropertyView,
-//! GeneralizationView) referencing those classes.
+//! four view kinds (`TypeView` × 2, `AssociationView`, `PropertyView`,
+//! `GeneralizationView`) referencing those classes.
 //!
 //! Validates the full Diagram-DSL stack:
 //!

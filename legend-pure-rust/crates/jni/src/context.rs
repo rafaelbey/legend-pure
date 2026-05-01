@@ -82,6 +82,11 @@ impl JniHandleTable {
 
     /// Drop the strong reference for `h`. After this call, Java should
     /// not reuse the integer; future `lookup` returns `None`.
+    ///
+    /// Currently unused inside Rust — Java is the consumer (via the
+    /// public FFI surface on [`JniContext::release`]). The plan's
+    /// follow-up item is to wire Java's `AutoCloseable` to call this.
+    #[allow(dead_code)]
     pub fn release(&mut self, h: JniHandle) {
         if let Some(handle) = self.live.remove(h) {
             self.by_ptr.remove(&std::rc::Rc::as_ptr(&handle));
@@ -89,11 +94,20 @@ impl JniHandleTable {
     }
 
     /// Encode a `JniHandle` as the `i64` Java holds.
+    ///
+    /// The reinterpret-cast keeps the bit pattern; Java treats it as an
+    /// opaque token, so sign-bit reinterpretation is harmless.
+    #[allow(clippy::cast_possible_wrap)]
+    #[must_use]
     pub fn to_i64(h: JniHandle) -> i64 {
         slotmap::Key::data(&h).as_ffi() as i64
     }
 
     /// Decode an `i64` from Java back into a `JniHandle`.
+    ///
+    /// Inverse of [`Self::to_i64`] — same bit-pattern reinterpretation.
+    #[allow(clippy::cast_sign_loss)]
+    #[must_use]
     pub fn from_i64(v: i64) -> JniHandle {
         let kd = slotmap::KeyData::from_ffi(v as u64);
         JniHandle::from(kd)
@@ -119,7 +133,7 @@ impl JniContext {
         let model_ptr = Box::into_raw(Box::new(model));
         let registry_ptr = Box::into_raw(Box::new(NativeRegistry::standard()));
         let evaluator = Evaluator::new(unsafe { &*model_ptr }, unsafe { &*registry_ptr });
-        let evaluator_ptr = Box::into_raw(Box::new(evaluator)) as *mut Evaluator<'static>;
+        let evaluator_ptr = Box::into_raw(Box::new(evaluator)).cast::<Evaluator<'static>>();
 
         Self {
             model: model_ptr,
@@ -139,7 +153,7 @@ impl JniContext {
             .model()
             .resolve_function_by_path(&segments)
             .or_else(|| evaluator.model().resolve_by_path(&segments))
-            .ok_or_else(|| format!("Function not found: {}", function_path))?;
+            .ok_or_else(|| format!("Function not found: {function_path}"))?;
 
         evaluator
             .apply_callable(&Value::Element(element_id), args)
@@ -176,7 +190,7 @@ impl JniContext {
             .get_property_values(&handle, property_name)
             .map_err(|e| e.to_string())?;
         if values.is_empty() {
-            return Err(format!("Property '{}' not found", property_name));
+            return Err(format!("Property '{property_name}' not found"));
         }
         let collected: Vec<Value> = values.iter().cloned().collect();
         Ok(Value::from_vec(collected))
@@ -220,6 +234,11 @@ impl JniContext {
 
     /// Drop the JNI table's strong reference for `complex_ptr`. Idempotent
     /// — re-releasing a handle is a no-op.
+    ///
+    /// Currently exposed for Java to call via the FFI; not invoked from
+    /// Rust today. Wiring Java's `AutoCloseable`/finalizer to this is a
+    /// follow-up.
+    #[allow(dead_code)]
     pub fn release(&self, complex_ptr: i64) {
         let jh = JniHandleTable::from_i64(complex_ptr);
         self.handles.borrow_mut().release(jh);

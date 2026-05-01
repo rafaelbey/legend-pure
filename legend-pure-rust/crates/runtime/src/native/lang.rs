@@ -19,6 +19,12 @@
 //! provides short-circuiting conditionals; `new` constructs class instances
 //! from the `^Class(prop=val)` syntax; `copy` produces a modified clone.
 
+// Internal helpers in this module routinely take `ObjectHandle` by value
+// for source readability; with `Rc<RefCell<HeapEntry>>` that's an O(1)
+// refcount bump rather than a meaningful copy, so the `&` form would only
+// add call-site noise without any perf benefit.
+#![allow(clippy::needless_pass_by_value)]
+
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
@@ -305,7 +311,7 @@ impl NativeFunction for New {
             .into());
         }
         let class_id = match &values[0] {
-            Value::Element(id) => id.clone(),
+            Value::Element(id) => *id,
             other => {
                 return Err(PureRuntimeError::type_mismatch("Class", other).into());
             }
@@ -425,7 +431,7 @@ impl NativeFunction for NewWithKeyExpressions {
             .into());
         }
         let class_id = match &values[0] {
-            Value::Element(id) => id.clone(),
+            Value::Element(id) => *id,
             other => return Err(PureRuntimeError::type_mismatch("Class", other).into()),
         };
         let _id = &values[1];
@@ -520,7 +526,7 @@ fn decode_key_expressions(
         // KeyExpression. Non-KeyExpression objects in the collection
         // are silently skipped so the helper composes with mixed
         // payloads.
-        let classifier = ctx.heap().classifier(&obj_id.clone())?.to_owned();
+        let classifier = ctx.heap().classifier(&obj_id.clone())?.clone();
         let resolved = crate::m3_paths::resolve(ctx.model(), &classifier);
         if resolved != key_expr_id {
             continue;
@@ -1163,11 +1169,11 @@ impl NativeFunction for DynamicNew {
         // Resolve the target class — accept a direct Class Element or a
         // `GenericType` heap wrapper whose `rawType` points at one.
         let class_id = match &values[0] {
-            Value::Element(id) => id.clone(),
+            Value::Element(id) => *id,
             Value::Object(obj_id) => {
                 let raw_type_vals = ctx.heap().get_property_values(&obj_id.clone(), "rawType")?;
                 match raw_type_vals.iter().next() {
-                    Some(Value::Element(id)) => id.clone(),
+                    Some(Value::Element(id)) => *id,
                     _ => {
                         return Err(PureRuntimeError::EvaluationError(
                             "dynamicNew: GenericType wrapper has no resolved rawType".into(),
@@ -1214,14 +1220,14 @@ impl NativeFunction for DynamicNew {
                 ))
                 .into());
             };
-            let key_vals = ctx.heap().get_property_values(&*kv_id, "key")?;
+            let key_vals = ctx.heap().get_property_values(kv_id, "key")?;
             let Some(Value::String(key)) = key_vals.iter().next() else {
                 return Err(PureRuntimeError::EvaluationError(
                     "dynamicNew: KeyValue.key is missing or not a String".into(),
                 )
                 .into());
             };
-            let value_vals = ctx.heap().get_property_values(&*kv_id, "value")?;
+            let value_vals = ctx.heap().get_property_values(kv_id, "value")?;
             let flat: Vec<Value> = value_vals.iter().cloned().collect();
             supplied_keys.insert(key.clone());
             supplied.push((key.clone(), flat));
@@ -1940,7 +1946,7 @@ fn clone_heap_object(
     ctx: &mut dyn EvalContextTrait,
     source_id: ObjectHandle,
 ) -> Result<ObjectHandle, PureException> {
-    let classifier = ctx.heap().classifier(&source_id)?.to_owned();
+    let classifier = ctx.heap().classifier(&source_id)?.clone();
     let names = ctx.heap().property_names(&source_id)?;
     let mut snapshot: Vec<(SmolStr, Vec<Value>)> = Vec::with_capacity(names.len());
     for name in names {

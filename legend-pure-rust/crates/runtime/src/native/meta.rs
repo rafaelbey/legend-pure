@@ -21,6 +21,10 @@
 //! They are the foundation the Pure-native test orchestrator
 //! (`surveyor.pure`) uses to discover and run tests.
 
+// Helpers in this module take `ObjectHandle` by value for source clarity;
+// with `Rc<RefCell<HeapEntry>>` that's an O(1) refcount bump.
+#![allow(clippy::needless_pass_by_value)]
+
 use legend_pure_parser_pure::bootstrap;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
@@ -132,7 +136,7 @@ impl NativeFunction for ElementToPath {
         let include_root = values[2].as_boolean()?;
         let path = match &values[0] {
             Value::Element(id) => {
-                build_element_path(ctx.model(), id.clone(), separator.as_str(), include_root)
+                build_element_path(ctx.model(), *id, separator.as_str(), include_root)
             }
             Value::Object(obj_id) => {
                 build_ephemeral_path(ctx.heap(), obj_id.clone(), separator.as_str(), include_root)
@@ -194,7 +198,7 @@ impl NativeFunction for SourceInformation {
         let ElementId::InstanceId { .. } = id else {
             return Ok(Evaluated::new(Value::Unit));
         };
-        let node = ctx.model().get_node(id.clone());
+        let node = ctx.model().get_node(*id);
         let source = node.source_info.clone();
         let name_source = node.name_source_info.clone();
         let obj = ctx
@@ -702,7 +706,7 @@ impl NativeFunction for GenericTypeOf {
         // `valueCount == 0` (else branch). Identification is by M3
         // ElementId of the InstanceValue classifier, never by string.
         if let Value::Object(obj_id) = &values[0] {
-            let classifier = ctx.heap().classifier(&obj_id.clone())?.to_owned();
+            let classifier = ctx.heap().classifier(&obj_id.clone())?.clone();
             let iv_id = crate::m3_paths::resolve(ctx.model(), crate::m3_paths::INSTANCE_VALUE);
             if iv_id.is_some() && crate::m3_paths::resolve(ctx.model(), &classifier) == iv_id {
                 let inner_values = ctx.heap().get_property_values(&obj_id.clone(), "values")?;
@@ -820,7 +824,7 @@ pub(crate) fn build_function_type_wrapper(
     let (params, return_type, return_mult) = match fv {
         crate::value::FunctionValue::Lambda(closure) => (closure.parameters.clone(), None, None),
         crate::value::FunctionValue::Compiled(id) => {
-            if let Element::Function(f) = ctx.model().get_element(id.clone()) {
+            if let Element::Function(f) = ctx.model().get_element(*id) {
                 (
                     f.parameters.clone(),
                     Some(f.return_type.clone()),
@@ -1112,7 +1116,7 @@ impl NativeFunction for SubTypeOf {
 /// Extract an `ElementId` from a [`Value::Element`].
 pub(crate) fn as_element_id(v: &Value) -> Result<ElementId, PureException> {
     match v {
-        Value::Element(id) => Ok(id.clone()),
+        Value::Element(id) => Ok(*id),
         other => Err(PureRuntimeError::type_mismatch("PackageableElement", other).into()),
     }
 }
@@ -1227,31 +1231,31 @@ fn value_matches_type(
         "Package" => matches!(value, Value::Element(id) if id.is_package()),
         "ConcreteFunctionDefinition" => {
             matches!(value, Value::Element(id)
-                if matches!(model.get_element(id.clone()), Element::Function(f) if !f.is_native))
+                if matches!(model.get_element(*id), Element::Function(f) if !f.is_native))
         }
         "NativeFunctionDefinition" => {
             matches!(value, Value::Element(id)
-                if matches!(model.get_element(id.clone()), Element::Function(f) if f.is_native))
+                if matches!(model.get_element(*id), Element::Function(f) if f.is_native))
         }
         "FunctionDefinition" | "Function" => {
             matches!(value, Value::Function(_))
                 || matches!(value, Value::Element(id)
-                    if matches!(model.get_element(id.clone()), Element::Function(_)))
+                    if matches!(model.get_element(*id), Element::Function(_)))
         }
         "Class" => matches!(value, Value::Element(id)
-            if matches!(model.get_element(id.clone()), Element::Class(_))),
+            if matches!(model.get_element(*id), Element::Class(_))),
         "Enumeration" => matches!(value, Value::Element(id)
-            if matches!(model.get_element(id.clone()), Element::Enumeration(_))),
+            if matches!(model.get_element(*id), Element::Enumeration(_))),
         "Enum" => matches!(value, Value::EnumValue { .. }),
         "Profile" => matches!(value, Value::Element(id)
-            if matches!(model.get_element(id.clone()), Element::Profile(_))),
+            if matches!(model.get_element(*id), Element::Profile(_))),
         "Association" => matches!(value, Value::Element(id)
-            if matches!(model.get_element(id.clone()), Element::Association(_))),
+            if matches!(model.get_element(*id), Element::Association(_))),
         "Measure" => matches!(value, Value::Element(id)
-            if matches!(model.get_element(id.clone()), Element::Measure(_))),
+            if matches!(model.get_element(*id), Element::Measure(_))),
         "PackageableElement" => matches!(value, Value::Element(_)),
         "Type" => matches!(value, Value::Element(id) if matches!(
-            model.get_element(id.clone()),
+            model.get_element(*id),
             Element::Class(_)
                 | Element::Enumeration(_)
                 | Element::PrimitiveType(_)
@@ -1345,10 +1349,8 @@ fn linearize_c3(model: &PureModel, id: ElementId) -> Vec<ElementId> {
             return cached.clone();
         }
         let parents = direct_parents(model, id);
-        let parent_lines: Vec<Vec<ElementId>> = parents
-            .iter()
-            .map(|p| walk(model, p.clone(), cache))
-            .collect();
+        let parent_lines: Vec<Vec<ElementId>> =
+            parents.iter().map(|p| walk(model, *p, cache)).collect();
         let mut lists: Vec<std::collections::VecDeque<ElementId>> = parent_lines
             .into_iter()
             .map(|v| v.into_iter().collect())
@@ -1510,13 +1512,12 @@ fn resolve_value_type(
             // the element-kind → M3 metaclass lookup for the compiler; we
             // reuse it here so `type(...)` / `genericType(...)` agree with
             // dispatch.
-            if let Some(meta_id) = legend_pure_parser_pure::bootstrap::metatype_of(
-                model,
-                model.get_element(id.clone()),
-            ) {
+            if let Some(meta_id) =
+                legend_pure_parser_pure::bootstrap::metatype_of(model, model.get_element(*id))
+            {
                 return Ok(meta_id);
             }
-            Ok(id.clone())
+            Ok(*id)
         }
         Value::Object(obj_id) => {
             let classifier = heap.classifier(&obj_id.clone())?;
@@ -1601,9 +1602,7 @@ fn render_id(value: &Value, model: &PureModel) -> String {
         Value::Object(obj_id) => {
             format!("Anonymous_{:p}", std::rc::Rc::as_ptr(obj_id))
         }
-        Value::Element(id) => {
-            crate::model_utils::element_simple_name(model, id.clone()).to_string()
-        }
+        Value::Element(id) => crate::model_utils::element_simple_name(model, *id).to_string(),
         Value::String(s) => s.to_string(),
         Value::Boolean(b) => b.to_string(),
         Value::Integer(i) => i.to_string(),
@@ -1648,7 +1647,7 @@ fn render_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -
         Value::Decimal(d) => d.to_string(),
         Value::Date(d) => format!("%{d}"),
         Value::StrictTime(t) => format!("%{t}"),
-        Value::Element(id) => render_element_representation(model, id.clone()),
+        Value::Element(id) => render_element_representation(model, *id),
         Value::Object(obj_id) => {
             // Java Pure renders object instances as `<Anonymous_{id}>` with
             // no classifier prefix. `testClassInstanceToRepresentation`
@@ -2351,8 +2350,8 @@ enum DeactivateCallShape {
 /// Reify a call-shaped IR variant into a `SimpleFunctionExpression`
 /// heap object. Shape-dependent slot population:
 ///   `Function`           → `_functionName` (bare String)
-///   `Property`           → `_propertyName` (InstanceValue wrapping String)
-///   `QualifiedProperty`  → `_qualifiedPropertyName` (InstanceValue wrapping String)
+///   `Property`           → `_propertyName` (`InstanceValue` wrapping String)
+///   `QualifiedProperty`  → `_qualifiedPropertyName` (`InstanceValue` wrapping String)
 ///
 /// For Property/QP without a resolved `func` element, synthesizes a
 /// `Property` / `QualifiedProperty` heap wrapper so reflection like
@@ -2496,9 +2495,7 @@ impl NativeFunction for OpenVariableValues {
                     .collect(),
                 FunctionValue::Compiled(_) => Vec::new(),
             },
-            Value::Element(id)
-                if matches!(ctx.model().get_element(id.clone()), Element::Function(_)) =>
-            {
+            Value::Element(id) if matches!(ctx.model().get_element(*id), Element::Function(_)) => {
                 Vec::new()
             }
             other => {
