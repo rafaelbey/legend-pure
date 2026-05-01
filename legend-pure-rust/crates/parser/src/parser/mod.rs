@@ -34,7 +34,7 @@ mod class;
 mod enum_def;
 mod expression;
 mod function;
-mod helpers;
+pub mod helpers;
 mod measure;
 mod primitive;
 mod profile;

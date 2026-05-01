@@ -31,8 +31,7 @@ use legend_pure_parser_compose::compose_source_file;
 /// 3. Assert composed == original
 /// 4. Also verify idempotency: compose(parse(composed)) == composed
 fn round_trip(source: &str) {
-    let ast = legend_pure_parser_parser::parse(source, "test.pure")
-        .unwrap_or_else(|e| panic!("Parse failed:\n{e}\n\nSource:\n{source}"));
+    let ast = parse_with_dsl_graph(source);
 
     let composed = compose_source_file(&ast);
     assert_eq!(
@@ -41,14 +40,24 @@ fn round_trip(source: &str) {
     );
 
     // Idempotency: compose(parse(composed)) == composed
-    let ast2 = legend_pure_parser_parser::parse(&composed, "test.pure").unwrap_or_else(|e| {
-        panic!("Re-parse of composed output failed:\n{e}\n\nComposed:\n{composed}")
-    });
+    let ast2 = parse_with_dsl_graph(&composed);
     let composed2 = compose_source_file(&ast2);
     assert_eq!(
         composed, composed2,
         "\n=== IDEMPOTENCY FAILURE ===\n\n--- First compose ---\n{composed}\n\n--- Second compose ---\n{composed2}\n"
     );
+}
+
+/// Parse with the graph-fetch island plug-in registered. The
+/// graph-fetch grammar (`#{ … }#`) lives in the `dsl-graph` crate;
+/// core's `parse()` no longer registers it by default.
+fn parse_with_dsl_graph(source: &str) -> legend_pure_parser_ast::SourceFile {
+    legend_pure_parser_parser::parse_with_islands(
+        source,
+        "test.pure",
+        legend_pure_dsl_graph::parser::default_island_parsers(),
+    )
+    .unwrap_or_else(|e| panic!("Parse failed:\n{e}\n\nSource:\n{source}"))
 }
 
 // ---------------------------------------------------------------------------

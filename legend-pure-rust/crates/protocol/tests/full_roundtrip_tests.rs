@@ -156,7 +156,12 @@ function my::func(): Any[*] {
     }#
 }
 ";
-    let sf = legend_pure_parser_parser::parse(source, "test.pure").expect("parse failed");
+    let sf = legend_pure_parser_parser::parse_with_islands(
+        source,
+        "test.pure",
+        legend_pure_dsl_graph::parser::default_island_parsers(),
+    )
+    .expect("parse failed");
     let ast_elem = sf.all_elements().next().unwrap();
     let p_elem = v1::convert::convert_element(ast_elem)
         .expect("Failed to convert Graph Fetch AST to Protocol");
