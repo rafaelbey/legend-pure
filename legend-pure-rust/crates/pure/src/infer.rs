@@ -553,9 +553,9 @@ fn infer_property_or_qp_call(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Op
     let is_qualified = matches!(&*expr.kind, ExprKind::QualifiedPropertyCall(_));
     let placeholder = ExprKind::IntegerLiteral(0);
     let kind = std::mem::replace(&mut *expr.kind, placeholder);
-    let mut data = match kind {
-        ExprKind::PropertyCall(d) | ExprKind::QualifiedPropertyCall(d) => d,
-        _ => unreachable!("matched on PropertyCall/QualifiedPropertyCall above"),
+    let (ExprKind::PropertyCall(mut data) | ExprKind::QualifiedPropertyCall(mut data)) = kind
+    else {
+        unreachable!("matched on PropertyCall/QualifiedPropertyCall above")
     };
 
     // Step 2: infer argument types (bottom-up, mutates the args).
@@ -625,14 +625,14 @@ fn infer_property_or_qp_call(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Op
 /// any non-unit `Range` all return `false`. Mirrors Java's
 /// `Multiplicity.isToOne(mult, true)` strict check.
 fn is_strictly_to_one(m: &Multiplicity) -> bool {
-    match m {
-        Multiplicity::PureOne => true,
-        Multiplicity::Range {
-            lower: 1,
-            upper: Some(1),
-        } => true,
-        _ => false,
-    }
+    matches!(
+        m,
+        Multiplicity::PureOne
+            | Multiplicity::Range {
+                lower: 1,
+                upper: Some(1),
+            }
+    )
 }
 
 /// Multiplies two multiplicities to produce the result of `map(coll: T[m], λ: T[1] → U[n]): U[m*n]`.
@@ -641,10 +641,9 @@ fn multiply_multiplicities(a: &Multiplicity, b: &Multiplicity) -> Multiplicity {
         match m {
             Multiplicity::PureOne => (1, 1),
             Multiplicity::ZeroOrOne => (0, 1),
-            Multiplicity::ZeroOrMany => (0, u32::MAX),
+            Multiplicity::ZeroOrMany | Multiplicity::Variable(_) => (0, u32::MAX),
             Multiplicity::OneOrMany => (1, u32::MAX),
             Multiplicity::Range { lower, upper } => (*lower, upper.unwrap_or(u32::MAX)),
-            Multiplicity::Variable(_) => (0, u32::MAX),
         }
     };
     let (a_lo, a_hi) = bounds(a);
@@ -674,6 +673,7 @@ fn multiply_multiplicities(a: &Multiplicity, b: &Multiplicity) -> Multiplicity {
 /// Builds the `map(receiver, λ{v_automap | property_call(v_automap, ...)})`
 /// expression that replaces a property/QP call on a non-toOne receiver.
 /// Mirrors Java's `FunctionExpressionProcessor.buildLambdaForMapWithProperty`.
+#[allow(clippy::needless_pass_by_value)] // SourceInfo is small but not Copy; consumed below
 fn build_automap_rewrite(
     model: &PureModel,
     mut data: FunctionCallData,

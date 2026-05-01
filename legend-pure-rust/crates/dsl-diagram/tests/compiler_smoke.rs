@@ -43,6 +43,7 @@ fn parse(source: &str) -> SourceFile {
     }
 }
 
+#[allow(clippy::needless_pass_by_value)] // tests pass Vec<SourceFile> directly for ergonomics
 fn compile_with_diagram(sources: Vec<SourceFile>, extension: &DiagramExtension) -> Vec<String> {
     let exts: [&dyn CompilerExtension; 1] = [extension];
     let result = legend_pure_parser_pure::pipeline::compile_with_extensions(&sources, &[], &exts);

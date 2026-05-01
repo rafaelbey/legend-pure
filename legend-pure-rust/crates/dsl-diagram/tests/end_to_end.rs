@@ -178,6 +178,8 @@ fn full_fixture_compiles_without_diagram_errors_and_registers_diagram() {
 
 #[test]
 fn full_fixture_round_trips_through_composer() {
+    use legend_pure_dsl_diagram::compose::compose_diagram;
+
     // Parse → compose → parse a second time → assert structural
     // equality between the two parsed `DiagramDef`s. Anchors the
     // composer-parser bidirectional contract on the full fixture.
@@ -189,7 +191,6 @@ fn full_fixture_round_trips_through_composer() {
     let diagram_second = extract_diagram(&file_second);
 
     // Compare via composed-text equality (ignores source spans).
-    use legend_pure_dsl_diagram::compose::compose_diagram;
     assert_eq!(
         compose_diagram(diagram_first),
         compose_diagram(diagram_second),

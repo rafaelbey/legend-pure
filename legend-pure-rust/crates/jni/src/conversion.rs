@@ -17,6 +17,7 @@ use jni::objects::JObject;
 use legend_pure_runtime::value::Value;
 
 /// Convert a Rust Value into a Java `RustResult` object
+#[allow(clippy::too_many_lines)] // dispatch table over every Value variant
 pub fn rust_to_java_result<'local>(
     env: &mut JNIEnv<'local>,
     value: &Value,

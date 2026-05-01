@@ -1222,6 +1222,7 @@ fn build_import_scope(
 // ---------------------------------------------------------------------------
 
 /// Creates an empty shell for an AST element.
+#[allow(clippy::too_many_lines)] // dispatch table over every Element variant
 fn create_shell(element: &ast::Element) -> Element {
     match element {
         ast::Element::Class(_) => Element::Class(Class {

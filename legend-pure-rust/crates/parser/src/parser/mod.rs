@@ -409,46 +409,73 @@ impl ParserContext<'_> {
     }
 
     /// Parse a full expression using the host parser's expression grammar.
+    ///
+    /// # Errors
+    /// Propagates any [`ParseError`] raised by the underlying expression parser.
     pub fn parse_expression(&mut self) -> R<Expression> {
         self.parser.parse_expression()
     }
 
     /// Parse a package path: `my::pkg::Name`.
+    ///
+    /// # Errors
+    /// Propagates any [`ParseError`] raised by the underlying package-path parser.
     pub fn parse_package_path(&mut self) -> R<Package> {
         self.parser.parse_package_path()
     }
 
     /// Parse a qualified name, returning (package, name, `source_info`).
+    ///
+    /// # Errors
+    /// Propagates any [`ParseError`] raised by the underlying qualified-name parser.
     pub fn parse_qualified_name(&mut self) -> R<(Option<Package>, SmolStr, SourceInfo)> {
         self.parser.parse_qualified_name()
     }
 
     /// Parse a type reference: `my::Class[1]`.
+    ///
+    /// # Errors
+    /// Propagates any [`ParseError`] raised by the underlying type-reference parser.
     pub fn parse_type_reference(&mut self) -> R<TypeReference> {
         self.parser.parse_type_reference()
     }
 
     /// Parse a multiplicity: `[1]`, `[1..*]`.
+    ///
+    /// # Errors
+    /// Propagates any [`ParseError`] raised by the underlying multiplicity parser.
     pub fn parse_multiplicity(&mut self) -> R<Multiplicity> {
         self.parser.parse_multiplicity()
     }
 
     /// Parse stereotypes: `<<profile.stereotype>>`.
+    ///
+    /// # Errors
+    /// Propagates any [`ParseError`] raised by the underlying stereotype parser.
     pub fn parse_stereotypes(&mut self) -> R<Vec<StereotypePtr>> {
         self.parser.parse_stereotypes()
     }
 
     /// Parse tagged values: `{profile.tag = 'value'}`.
+    ///
+    /// # Errors
+    /// Propagates any [`ParseError`] raised by the underlying tagged-value parser.
     pub fn parse_tagged_values(&mut self) -> R<Vec<TaggedValue>> {
         self.parser.parse_tagged_values()
     }
 
     /// Parse constraints: `[name: expr]`.
+    ///
+    /// # Errors
+    /// Propagates any [`ParseError`] raised by the underlying constraint parser.
     pub fn parse_constraints(&mut self) -> R<Vec<Constraint>> {
         self.parser.parse_constraints()
     }
 
     /// Parse a parameter: `name: Type[1]`.
+    ///
+    /// # Errors
+    /// Propagates any [`ParseError`] raised by the underlying parameter parser.
     pub fn parse_parameter(&mut self) -> R<Parameter> {
         self.parser.parse_parameter()
     }

@@ -234,11 +234,6 @@ impl JniContext {
 
     /// Drop the JNI table's strong reference for `complex_ptr`. Idempotent
     /// — re-releasing a handle is a no-op.
-    ///
-    /// Currently exposed for Java to call via the FFI; not invoked from
-    /// Rust today. Wiring Java's `AutoCloseable`/finalizer to this is a
-    /// follow-up.
-    #[allow(dead_code)]
     pub fn release(&self, complex_ptr: i64) {
         let jh = JniHandleTable::from_i64(complex_ptr);
         self.handles.borrow_mut().release(jh);

@@ -91,7 +91,7 @@ fn convert_root_graph_fetch_tree(tree: &RootGraphFetchTree) -> ValueSpecificatio
             "subTrees": sub_trees,
             "subTypeTrees": sub_type_trees,
         }),
-        source_information: source_information(&tree.source_info),
+        source_information: Some(source_information(&tree.source_info)),
     })
 }
 
@@ -161,6 +161,6 @@ fn convert_sub_type_graph_fetch_tree(sub: &SubTypeGraphFetchTree) -> serde_json:
 
 fn source_information(
     si: &legend_pure_parser_ast::source_info::SourceInfo,
-) -> Option<legend_pure_parser_protocol::v1::source_info::SourceInformation> {
-    Some(legend_pure_parser_protocol::v1::source_info::SourceInformation::from(si))
+) -> legend_pure_parser_protocol::v1::source_info::SourceInformation {
+    legend_pure_parser_protocol::v1::source_info::SourceInformation::from(si)
 }
