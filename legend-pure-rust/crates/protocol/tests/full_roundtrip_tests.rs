@@ -162,10 +162,33 @@ function my::func(): Any[*] {
         legend_pure_dsl_graph::parser::default_island_parsers(),
     )
     .expect("parse failed");
+
+    // Find the island expression inside the function body and
+    // dispatch via the IslandProtocol trait + dsl-graph's protocol
+    // converter. After the protocol extraction, core's
+    // `convert_island_expression` emits a `unknownIsland_*`
+    // placeholder unless the caller routes through
+    // `dispatch_island_convert`.
     let ast_elem = sf.all_elements().next().unwrap();
-    let p_elem = v1::convert::convert_element(ast_elem)
-        .expect("Failed to convert Graph Fetch AST to Protocol");
-    // Verify it converts to ClassInstance
-    let json = serde_json::to_string(&p_elem).unwrap();
-    assert!(json.contains("rootGraphFetchTree"));
+    let legend_pure_parser_ast::element::Element::Function(f) = ast_elem else {
+        panic!("expected function");
+    };
+    let legend_pure_parser_ast::expression::Expression::Island(island) =
+        f.body.first().expect("body")
+    else {
+        panic!("expected island expression");
+    };
+
+    let protocols = legend_pure_dsl_graph::protocol::default_island_protocols();
+    let refs: Vec<&dyn legend_pure_parser_protocol::IslandProtocol> =
+        protocols.iter().map(std::convert::AsRef::as_ref).collect();
+    let value = legend_pure_parser_protocol::dispatch_island_convert(island, &refs)
+        .expect("convert ok")
+        .expect("converter matched");
+
+    let json = serde_json::to_string(&value).unwrap();
+    assert!(
+        json.contains("rootGraphFetchTree"),
+        "expected rootGraphFetchTree in output; got {json}"
+    );
 }

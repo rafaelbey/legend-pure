@@ -21,7 +21,6 @@
 //! The test naming follows the Java test method names for easy cross-referencing.
 
 use indoc::indoc;
-use legend_pure_parser_compose::compose_source_file;
 
 /// Parse source text, compose it back, and assert roundtrip equality.
 ///
@@ -33,7 +32,7 @@ use legend_pure_parser_compose::compose_source_file;
 fn round_trip(source: &str) {
     let ast = parse_with_dsl_graph(source);
 
-    let composed = compose_source_file(&ast);
+    let composed = compose_with_dsl_graph(&ast);
     assert_eq!(
         source, composed,
         "\n=== ROUNDTRIP MISMATCH ===\n\n--- Expected ---\n{source}\n\n--- Got ---\n{composed}\n"
@@ -41,11 +40,21 @@ fn round_trip(source: &str) {
 
     // Idempotency: compose(parse(composed)) == composed
     let ast2 = parse_with_dsl_graph(&composed);
-    let composed2 = compose_source_file(&ast2);
+    let composed2 = compose_with_dsl_graph(&ast2);
     assert_eq!(
         composed, composed2,
         "\n=== IDEMPOTENCY FAILURE ===\n\n--- First compose ---\n{composed}\n\n--- Second compose ---\n{composed2}\n"
     );
+}
+
+/// Compose with the graph-fetch island composer registered. The
+/// graph-fetch composer (`#{…}#`) lives in `dsl-graph`; core's
+/// `compose_source_file` no longer registers it by default.
+fn compose_with_dsl_graph(sf: &legend_pure_parser_ast::SourceFile) -> String {
+    legend_pure_parser_compose::section::compose_source_file_with(
+        sf,
+        legend_pure_dsl_graph::compose::default_island_composers(),
+    )
 }
 
 /// Parse with the graph-fetch island plug-in registered. The

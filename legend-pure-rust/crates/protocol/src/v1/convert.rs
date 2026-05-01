@@ -761,126 +761,18 @@ fn convert_column(e: &ast::expression::ColumnBuilderExpr) -> v1::value_spec::Val
 
 /// Converts an island grammar expression into a `ValueSpecification`.
 ///
-/// Dispatches based on the content's concrete type via `downcast_ref`.
-/// Graph fetch trees are converted to `ClassInstance { type: "rootGraphFetchTree" }`.
+/// Without a registered [`IslandProtocol`](crate::IslandProtocol)
+/// converter for the island's tag, falls back to a placeholder JSON
+/// shape. Callers that need concrete graph-fetch / TDS / store JSON
+/// register the matching DSL crate's protocol converter and call
+/// [`crate::dispatch_island_convert`] directly.
 fn convert_island_expression(
     island: &ast::island::IslandExpression,
 ) -> v1::value_spec::ValueSpecification {
-    if let Some(tree) = island
-        .content
-        .as_any()
-        .downcast_ref::<legend_pure_dsl_graph::ast::RootGraphFetchTree>()
-    {
-        convert_root_graph_fetch_tree(tree)
-    } else {
-        // Unknown island type — produce a placeholder.
-        // This path is unreachable for well-formed ASTs produced by
-        // registered island parsers.
-        v1::value_spec::ValueSpecification::ClassInstance(v1::value_spec::ClassInstance {
-            type_name: format!("unknownIsland_{}", island.tag()),
-            value: serde_json::json!({}),
-            source_information: source_information(&island.source_info),
-        })
-    }
-}
-
-/// Converts a `RootGraphFetchTree` into a `ClassInstance` value specification.
-fn convert_root_graph_fetch_tree(
-    tree: &legend_pure_dsl_graph::ast::RootGraphFetchTree,
-) -> v1::value_spec::ValueSpecification {
-    use v1::value_spec::{ClassInstance, ValueSpecification};
-
-    let sub_trees: Vec<serde_json::Value> = tree
-        .sub_trees
-        .iter()
-        .map(convert_property_graph_fetch_tree)
-        .collect();
-
-    let sub_type_trees: Vec<serde_json::Value> = tree
-        .sub_type_trees
-        .iter()
-        .map(convert_sub_type_graph_fetch_tree)
-        .collect();
-
-    ValueSpecification::ClassInstance(ClassInstance {
-        type_name: "rootGraphFetchTree".to_string(),
-        value: serde_json::json!({
-            "_type": "rootGraphFetchTree",
-            "class": tree.class.to_string(),
-            "subTrees": sub_trees,
-            "subTypeTrees": sub_type_trees,
-        }),
-        source_information: source_information(&tree.source_info),
-    })
-}
-
-/// Converts a `PropertyGraphFetchTree` into a JSON value.
-fn convert_property_graph_fetch_tree(
-    prop: &legend_pure_dsl_graph::ast::PropertyGraphFetchTree,
-) -> serde_json::Value {
-    let sub_trees: Vec<serde_json::Value> = prop
-        .sub_trees
-        .iter()
-        .map(convert_property_graph_fetch_tree)
-        .collect();
-
-    let sub_type_trees: Vec<serde_json::Value> = prop
-        .sub_type_trees
-        .iter()
-        .map(convert_sub_type_graph_fetch_tree)
-        .collect();
-
-    let mut obj = serde_json::json!({
-        "_type": "propertyGraphFetchTree",
-        "property": prop.property.to_string(),
-        "subTrees": sub_trees,
-        "subTypeTrees": sub_type_trees,
-    });
-
-    if !prop.parameters.is_empty() {
-        let params: Vec<serde_json::Value> = prop
-            .parameters
-            .iter()
-            .map(|e| {
-                let vs = convert_expression_typed(e);
-                serde_json::to_value(&vs).unwrap_or_default()
-            })
-            .collect();
-        obj["parameters"] = serde_json::json!(params);
-    }
-
-    if let Some(alias) = &prop.alias {
-        obj["alias"] = serde_json::json!(alias.to_string());
-    }
-
-    if let Some(sub_type) = &prop.sub_type {
-        obj["subType"] = serde_json::json!(sub_type.to_string());
-    }
-
-    obj
-}
-
-/// Converts a `SubTypeGraphFetchTree` into a JSON value.
-fn convert_sub_type_graph_fetch_tree(
-    sub: &legend_pure_dsl_graph::ast::SubTypeGraphFetchTree,
-) -> serde_json::Value {
-    let sub_trees: Vec<serde_json::Value> = sub
-        .sub_trees
-        .iter()
-        .map(convert_property_graph_fetch_tree)
-        .collect();
-
-    let sub_type_trees: Vec<serde_json::Value> = sub
-        .sub_type_trees
-        .iter()
-        .map(convert_sub_type_graph_fetch_tree)
-        .collect();
-
-    serde_json::json!({
-        "_type": "subTypeGraphFetchTree",
-        "subTypeClass": sub.sub_type_class.to_string(),
-        "subTrees": sub_trees,
-        "subTypeTrees": sub_type_trees,
+    v1::value_spec::ValueSpecification::ClassInstance(v1::value_spec::ClassInstance {
+        type_name: format!("unknownIsland_{}", island.tag()),
+        value: serde_json::json!({}),
+        source_information: source_information(&island.source_info),
     })
 }
 
