@@ -27,7 +27,6 @@ legend-pure-core-platform = { path = "../core-platform-pure" }
 smol_str = { workspace = true }
 thiserror = { workspace = true }
 im-rc = { workspace = true }
-slotmap = { workspace = true }
 rust_decimal = { workspace = true }
 jiff = { workspace = true }
 tracing = { workspace = true }
@@ -47,4 +46,8 @@ harness = false
 
 [[bench]]
 name = "runtime_eval"
+harness = false
+
+[[bench]]
+name = "heap_growth"
 harness = false
