@@ -21,18 +21,8 @@ use legend_pure_parser_pure::model::Element;
 use legend_pure_parser_pure::types::{Multiplicity, TypeExpr};
 
 /// Helper: parse a `.pure` string into a `SourceFile`.
-///
-/// Registers the graph-fetch island plug-in via the dev-dep on
-/// `legend-pure-dsl-graph` so existing fixtures that use `#{…}#`
-/// continue to parse. Core's `parse()` is empty by default after
-/// the graph-fetch extraction.
 fn parse(source: &str) -> SourceFile {
-    legend_pure_parser_parser::parse_with_islands(
-        source,
-        "test.pure",
-        legend_pure_dsl_graph::parser::default_island_parsers(),
-    )
-    .expect("parse failed")
+    legend_pure_parser_parser::parse(source, "test.pure").expect("parse failed")
 }
 
 /// Helper: compile a single Pure source string.
@@ -337,35 +327,9 @@ fn unresolved_type_error() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Island Expression Lowering (Error Case)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn island_expression_error() {
-    // A structurally valid island expression that passes the lexer/parser
-    // but gets rejected during lowering
-    let result = compile_one("function x(): Any[1] { #{some::Class{}}# }");
-    assert!(result.is_err(), "island expression should fail lowering");
-    let errors = &result.unwrap_err().errors;
-
-    let island_errors: Vec<_> = errors
-        .iter()
-        .filter(|e| {
-            matches!(
-                &e.kind,
-                legend_pure_parser_pure::error::CompilationErrorKind::UnsupportedExpression { .. }
-            )
-        })
-        .collect();
-
-    assert_eq!(
-        island_errors.len(),
-        1,
-        "should have UnsupportedExpression error"
-    );
-    assert!(island_errors[0].message.contains("Island"));
-}
+// Island-expression lowering rejection (the `#{…}#` grammar) lives in
+// `crates/dsl-graph/tests/compiler_smoke.rs`. The pure crate carries
+// no graph-fetch references.
 
 // ---------------------------------------------------------------------------
 // Invalid Decimal Literal (Error Case)

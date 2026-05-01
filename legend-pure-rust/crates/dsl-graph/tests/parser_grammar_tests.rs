@@ -12,11 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Graph fetch tree parsing tests — snapshot-based AST validation.
+//! Graph-fetch grammar parsing — snapshot-based AST validation.
+//!
+//! Moved from `crates/parser/tests/test_graph_fetch.rs` so the core parser
+//! crate carries zero graph-fetch identifiers. The plug-in is registered
+//! via `default_island_parsers()` for every fixture below.
 
-mod helpers;
+use legend_pure_parser_ast::SourceFile;
 
-use helpers::parse_ok;
+fn parse_ok(source: &str) -> SourceFile {
+    legend_pure_parser_parser::parse_with_islands(
+        source,
+        "test.pure",
+        legend_pure_dsl_graph::parser::default_island_parsers(),
+    )
+    .unwrap_or_else(|e| {
+        panic!(
+            "Expected parse to succeed, but got error(s): {:?}",
+            e.errors.iter().map(ToString::to_string).collect::<Vec<_>>()
+        )
+    })
+}
 
 #[test]
 fn basic_with_qualifier() {

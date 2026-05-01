@@ -30,8 +30,3 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
-# dev-only — graph-fetch test fixtures register the plug-in via
-# `legend_pure_dsl_graph::parser::GraphFetchIslandParser`. The
-# regular dep direction is dsl-graph → parser; the dev-dep here
-# is acyclic because dev-deps don't participate in non-test builds.
-legend-pure-dsl-graph = { path = "../dsl-graph" }

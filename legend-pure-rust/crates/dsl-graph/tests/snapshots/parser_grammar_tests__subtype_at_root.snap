@@ -1,5 +1,5 @@
 ---
-source: crates/parser/tests/test_graph_fetch.rs
+source: crates/dsl-graph/tests/parser_grammar_tests.rs
 expression: file
 ---
 SourceFile {

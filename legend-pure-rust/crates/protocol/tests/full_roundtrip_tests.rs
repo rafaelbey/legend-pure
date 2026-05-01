@@ -141,54 +141,6 @@ Enum meta::pure::other::MyEnum {
     assert_eq!(sf2.element_count(), 6, "Should have 6 elements");
 }
 
-#[test]
-fn test_graph_fetch_ast_to_protocol() {
-    let source = r"
-###Pure
-function my::func(): Any[*] {
-    #{
-        meta::pure::domain::Person {
-            name,
-            details {
-                address
-            }
-        }
-    }#
-}
-";
-    let sf = legend_pure_parser_parser::parse_with_islands(
-        source,
-        "test.pure",
-        legend_pure_dsl_graph::parser::default_island_parsers(),
-    )
-    .expect("parse failed");
-
-    // Find the island expression inside the function body and
-    // dispatch via the IslandProtocol trait + dsl-graph's protocol
-    // converter. After the protocol extraction, core's
-    // `convert_island_expression` emits a `unknownIsland_*`
-    // placeholder unless the caller routes through
-    // `dispatch_island_convert`.
-    let ast_elem = sf.all_elements().next().unwrap();
-    let legend_pure_parser_ast::element::Element::Function(f) = ast_elem else {
-        panic!("expected function");
-    };
-    let legend_pure_parser_ast::expression::Expression::Island(island) =
-        f.body.first().expect("body")
-    else {
-        panic!("expected island expression");
-    };
-
-    let protocols = legend_pure_dsl_graph::protocol::default_island_protocols();
-    let refs: Vec<&dyn legend_pure_parser_protocol::IslandProtocol> =
-        protocols.iter().map(std::convert::AsRef::as_ref).collect();
-    let value = legend_pure_parser_protocol::dispatch_island_convert(island, &refs)
-        .expect("convert ok")
-        .expect("converter matched");
-
-    let json = serde_json::to_string(&value).unwrap();
-    assert!(
-        json.contains("rootGraphFetchTree"),
-        "expected rootGraphFetchTree in output; got {json}"
-    );
-}
+// Graph-fetch protocol-conversion test (the `#{ … }#` island) lives in
+// `crates/dsl-graph/tests/protocol_roundtrip_tests.rs`. The core
+// protocol crate carries no graph-fetch identifiers.

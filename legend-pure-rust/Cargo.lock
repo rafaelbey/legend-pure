@@ -935,11 +935,13 @@ name = "legend-pure-dsl-graph"
 version = "0.1.0"
 dependencies = [
  "indoc",
+ "insta",
  "legend-pure-parser-ast",
  "legend-pure-parser-compose",
  "legend-pure-parser-lexer",
  "legend-pure-parser-parser",
  "legend-pure-parser-protocol",
+ "legend-pure-parser-pure",
  "serde",
  "serde_json",
  "smol_str",
@@ -968,7 +970,6 @@ version = "0.1.0"
 dependencies = [
  "indoc",
  "insta",
- "legend-pure-dsl-graph",
  "legend-pure-parser-ast",
  "legend-pure-parser-parser",
  "legend-pure-parser-protocol",
@@ -1010,7 +1011,6 @@ name = "legend-pure-parser-parser"
 version = "0.1.0"
 dependencies = [
  "insta",
- "legend-pure-dsl-graph",
  "legend-pure-parser-ast",
  "legend-pure-parser-lexer",
  "rayon",
@@ -1024,7 +1024,6 @@ name = "legend-pure-parser-protocol"
 version = "0.1.0"
 dependencies = [
  "insta",
- "legend-pure-dsl-graph",
  "legend-pure-parser-ast",
  "legend-pure-parser-parser",
  "serde",
@@ -1039,7 +1038,6 @@ name = "legend-pure-parser-pure"
 version = "0.1.0"
 dependencies = [
  "legend-pure-core-platform",
- "legend-pure-dsl-graph",
  "legend-pure-parser-ast",
  "legend-pure-parser-parser",
  "rust_decimal",

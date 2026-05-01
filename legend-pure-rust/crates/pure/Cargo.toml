@@ -30,5 +30,4 @@ tracing = { workspace = true }
 [dev-dependencies]
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-core-platform = { path = "../core-platform-pure" }
-legend-pure-dsl-graph = { path = "../dsl-graph" }
 tracing-subscriber = { workspace = true }
