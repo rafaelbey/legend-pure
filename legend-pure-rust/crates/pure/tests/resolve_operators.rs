@@ -28,25 +28,28 @@ fn load_platform_model() -> (
 #[test]
 fn platform_parse_recovery() {
     // Verify that error recovery works by checking element counts from partial parses.
-    let platform_sources = legend_pure_core_platform::sources::platform_sources();
-    let total = platform_sources.len();
+    let repos = legend_pure_core_platform::repo::Repo::default_embedded();
+    let mut total = 0;
     let mut clean = 0;
     let mut partial = 0;
     let mut total_errors = 0;
     let mut total_elements = 0;
 
-    for s in platform_sources {
-        match legend_pure_parser_parser::parse(s.content, s.path) {
-            Ok(ast) => {
-                total_elements += ast.element_count();
-                clean += 1;
-            }
-            Err(p) => {
-                total_elements += p.source_file.element_count();
-                total_errors += p.errors.len();
-                partial += 1;
-                for e in &p.errors {
-                    eprintln!("  PARTIAL: {} -> {}", s.path, e);
+    for repo in &repos {
+        for (content, path) in repo.sources() {
+            total += 1;
+            match legend_pure_parser_parser::parse(content, path) {
+                Ok(ast) => {
+                    total_elements += ast.element_count();
+                    clean += 1;
+                }
+                Err(p) => {
+                    total_elements += p.source_file.element_count();
+                    total_errors += p.errors.len();
+                    partial += 1;
+                    for e in &p.errors {
+                        eprintln!("  PARTIAL: {path} -> {e}");
+                    }
                 }
             }
         }

@@ -1,3 +1,17 @@
+// Copyright 2026 Goldman Sachs
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //! JNI Evaluator Bridge
 //!
 //! Provides the Rust implementation of the JNI endpoints for the Java `PureRustEvaluator`.
@@ -12,8 +26,7 @@ use jni::objects::{JClass, JObjectArray, JString};
 use jni::sys::jlong;
 
 use crate::context::JniContext;
-use legend_pure_core_platform::platform::parse_and_compile;
-use legend_pure_core_platform::sources;
+use legend_pure_core_platform::repo::{self, Repo};
 
 /// Initializes the `JniContext` by loading the platform models.
 #[unsafe(no_mangle)]
@@ -24,15 +37,13 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeI
     _class: JClass<'local>,
 ) -> jlong {
     let result = std::panic::catch_unwind(|| {
-        let platform = sources::platform_sources();
-        let pairs: Vec<(&str, &str)> = platform.iter().map(|s| (s.content, s.path)).collect();
-
+        let repos = Repo::default_embedded();
         let auto_imports: Vec<smol_str::SmolStr> =
             legend_pure_core_platform::platform::PLATFORM_AUTO_IMPORTS
                 .iter()
                 .map(|s| smol_str::SmolStr::new(*s))
                 .collect();
-        let model = match parse_and_compile(pairs.into_iter(), &auto_imports) {
+        let model = match repo::load(&repos, &auto_imports) {
             Ok(model) => model,
             Err(partial) => {
                 let msg = partial

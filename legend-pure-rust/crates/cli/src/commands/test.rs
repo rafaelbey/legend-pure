@@ -48,7 +48,8 @@ use std::rc::Rc;
 use owo_colors::OwoColorize;
 
 use super::coverage::{CoverageHooks, CoverageMap};
-use legend_pure_core_platform::platform::load_platform;
+use legend_pure_core_platform::platform::{PLATFORM_AUTO_IMPORTS, load_platform};
+use legend_pure_core_platform::repo;
 use legend_pure_parser_pure::model::PureModel;
 use legend_pure_runtime::error::PureException;
 use legend_pure_runtime::eval::Evaluator;
@@ -183,8 +184,8 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
     } else {
         String::new()
     };
-    let dir = if args.live || args.watch {
-        Some(crate::live::resolve_platform_dir(
+    let descriptor = if args.live || args.watch {
+        Some(crate::live::resolve_platform_descriptor(
             args.platform_dir.as_deref(),
         )?)
     } else {
@@ -196,7 +197,7 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
     let mut _debouncer = None;
 
     loop {
-        let res = run_once(&args, &mode_label, &pct_via, dir.as_deref());
+        let res = run_once(&args, &mode_label, &pct_via, descriptor.as_deref());
 
         if !args.watch {
             return res;
@@ -206,8 +207,9 @@ pub fn run(args: TestArgs) -> Result<(), CliError> {
             crate::diagnostics::print_error(&e);
         }
 
-        if !watcher_setup && let Some(ref d) = dir {
-            match crate::live::watch_dir(d) {
+        if !watcher_setup && let Some(ref d) = descriptor {
+            let watch_root = crate::live::platform_source_root(d)?;
+            match crate::live::watch_dir(&watch_root) {
                 Ok((debouncer, flag)) => {
                     _debouncer = Some(debouncer);
                     rx = Some(flag);
@@ -242,7 +244,7 @@ fn run_once(
     args: &TestArgs,
     mode_label: &str,
     pct_via: &str,
-    live_dir: Option<&std::path::Path>,
+    live_descriptor: Option<&std::path::Path>,
 ) -> Result<(), CliError> {
     eprintln!(
         "{} {} in {}{}{}",
@@ -256,17 +258,13 @@ fn run_once(
         pct_via,
     );
 
-    let model = if let Some(dir) = live_dir {
-        let owned = crate::live::load_from_disk(dir)?;
-        let auto_imports: Vec<smol_str::SmolStr> =
-            legend_pure_core_platform::platform::PLATFORM_AUTO_IMPORTS
-                .iter()
-                .map(|&s| smol_str::SmolStr::new(s))
-                .collect();
-        match legend_pure_core_platform::platform::parse_and_compile(
-            owned.iter().map(|s| (s.content.as_str(), s.path.as_str())),
-            &auto_imports,
-        ) {
+    let model = if let Some(descriptor) = live_descriptor {
+        let repos = crate::live::live_repos(descriptor)?;
+        let auto_imports: Vec<smol_str::SmolStr> = PLATFORM_AUTO_IMPORTS
+            .iter()
+            .map(|&s| smol_str::SmolStr::new(s))
+            .collect();
+        match repo::load(&repos, &auto_imports) {
             Ok(m) => m,
             Err(partial) => {
                 eprintln!(
@@ -604,11 +602,11 @@ impl TestResult {
 
             let source_str = si.source.as_str();
             let mut real_path = std::path::PathBuf::from(source_str);
-            if source_str.starts_with("/platform/pure/")
-                && let Ok(dir) = crate::live::resolve_platform_dir(None)
-                && let Some(rel_path) = source_str.strip_prefix("/platform/pure/")
+            if let Some(rel_path) = source_str.strip_prefix("/platform/")
+                && let Ok(descriptor) = crate::live::resolve_platform_descriptor(None)
+                && let Ok(source_root) = crate::live::platform_source_root(&descriptor)
             {
-                real_path = dir.join(rel_path);
+                real_path = source_root.join(rel_path);
             }
 
             let abs_path = crate::diagnostics::canonical_or_original(&real_path);

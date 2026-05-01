@@ -14,35 +14,16 @@
 
 //! Platform source loading and compilation.
 //!
-//! Provides [`load_platform()`] to parse and compile the standard library
-//! into a [`PureModel`]. The same [`parse_and_compile()`] function can be
-//! used by any Pure repository — it is not platform-specific.
+//! [`load_platform()`] is the canonical no-arg entry point: it builds
+//! [`crate::repo::Repo::default_embedded`] and runs it through
+//! [`crate::repo::load`]. Callers needing different repo shapes (live
+//! filesystem, future `.purem` snapshots, hybrid) should call
+//! [`crate::repo::load`] directly with a hand-built `Vec<Repo>`.
 //!
-//! # Loading Strategy
-//!
-//! Currently, `load_platform()` always parses from embedded `.pure` source
-//! files and compiles on the fly (`from-source`). A future `from-binary`
-//! feature flag will load a pre-compiled `.purem` (`FlatBuffers`) artifact
-//! instead, bypassing the parser and compiler entirely.
-//!
-//! ```text
-//! ┌─────────────────────────────────────────────────┐
-//! │             load_platform()                     │
-//! │                                                 │
-//! │  #[cfg(feature = "from-source")]                │
-//! │  ┌──────────────────────────┐                   │
-//! │  │ .pure → parse → compile │ → PureModel       │
-//! │  └──────────────────────────┘                   │
-//! │                                                 │
-//! │  #[cfg(feature = "from-binary")]                │
-//! │  ┌──────────────────────────┐                   │
-//! │  │ .purem → deserialize    │ → PureModel       │
-//! │  └──────────────────────────┘                   │
-//! └─────────────────────────────────────────────────┘
-//! ```
-//!
-//! The `from-binary` path will be the default for release builds; the
-//! `from-source` path remains for development iteration.
+//! [`parse_and_compile()`] is the lower-level engine, source-shape
+//! agnostic — it takes any `Iterator<Item = (content, name)>` and
+//! returns a [`PureModel`]. Reused for ad-hoc compile flows like the
+//! REPL prepending a synthetic `<repl>` source.
 
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_pure::error::{CompilationError, CompilationErrorKind};
@@ -50,7 +31,7 @@ use legend_pure_parser_pure::model::PureModel;
 use legend_pure_parser_pure::pipeline::{self, PartialPureModel};
 use smol_str::SmolStr;
 
-use crate::sources;
+use crate::repo;
 
 /// The auto-imports for platform Pure code.
 /// Only includes packages that exist from the Pure files we actually compile.
@@ -85,17 +66,11 @@ pub const PLATFORM_AUTO_IMPORTS: &[&str] = &[
 /// Callers must inspect `errors` to decide whether to proceed.
 #[allow(clippy::result_large_err)]
 pub fn load_platform() -> Result<PureModel, PartialPureModel> {
-    let raw_sources = sources::platform_sources();
-
     let auto_imports: Vec<SmolStr> = PLATFORM_AUTO_IMPORTS
         .iter()
         .map(|&s| SmolStr::new(s))
         .collect();
-
-    parse_and_compile(
-        raw_sources.iter().map(|s| (s.content, s.path)),
-        &auto_imports,
-    )
+    repo::load(&repo::Repo::default_embedded(), &auto_imports)
 }
 
 /// Parse and compile any set of Pure sources.

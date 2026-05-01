@@ -18,13 +18,36 @@ version.workspace = true
 edition.workspace = true
 publish = false
 
+# Each repo points at its existing Java descriptor JSON; everything else
+# (name, source directory, canonical URL prefix, dependency graph, package
+# pattern) is derived from the JSON. See `build.rs` and `src/repo.rs`.
+[[package.metadata.legend-pure.repos]]
+descriptor = "../../../legend-pure-core/legend-pure-m3-core/src/main/resources/platform.json"
+shape = "embedded"
+
+[[package.metadata.legend-pure.repos]]
+descriptor = "../../../legend-pure-dsl/legend-pure-dsl-store/legend-pure-m2-dsl-store-pure/src/main/resources/platform_dsl_store.definition.json"
+shape = "embedded"
+
+[[package.metadata.legend-pure.repos]]
+descriptor = "../../../legend-pure-dsl/legend-pure-dsl-diagram/legend-pure-m2-dsl-diagram-pure/src/main/resources/platform_dsl_diagram.definition.json"
+shape = "embedded"
+
+[[package.metadata.legend-pure.repos]]
+descriptor = "../../../legend-pure-dsl/legend-pure-dsl-tds/legend-pure-m2-dsl-tds-pure/src/main/resources/platform_dsl_tds.definition.json"
+shape = "embedded"
+
 [dependencies]
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-ast = { path = "../ast" }
 legend-pure-parser-pure = { path = "../pure" }
 legend-pure-dsl-graph = { path = "../dsl-graph" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 smol_str = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
+walkdir = { workspace = true }
 
 [build-dependencies]
-walkdir = { workspace = true }
+legend-pure-build = { path = "../build" }

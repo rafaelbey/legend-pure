@@ -22,33 +22,32 @@
 //!
 //! # Platform Loading
 //!
-//! Use [`platform::load_platform()`] to parse and compile the standard
-//! library into a `PureModel`. This currently reads embedded `.pure` source
-//! files and compiles them on the fly.
+//! Use [`platform::load_platform()`] for the canonical no-arg path —
+//! it loads the embedded platform + DSL repos and parses + compiles
+//! them into a `PureModel`. Under the hood it calls
+//! [`repo::load`] over [`repo::Repo::default_embedded`].
 //!
-//! ## Future: Binary `.purem` Format
+//! For non-default configurations (live filesystem reload, mixing
+//! shapes, future `.purem` snapshots), build a `Vec<Repo>` directly
+//! and call [`repo::load`].
 //!
-//! For release builds, the platform model will be pre-compiled and
-//! serialized into a binary `.purem` file (`FlatBuffers`). Loading from
-//! `.purem` is orders of magnitude faster than parsing + compiling
-//! from source.
+//! # Embedded vs. filesystem vs. `.purem`
 //!
-//! The loading strategy will be controlled by Cargo feature flags:
+//! Each repo is a [`repo::Repo`] in one of three shapes — embedded
+//! (build-time `include_str!`), filesystem (runtime walk), or
+//! pre-compiled `.purem` snapshot (Stage 2; see
+//! `docs/PUREM_FORMAT.md`). The shape is per-repo, so users can mix
+//! embedded DSL repos with a filesystem-backed `platform` repo for
+//! `--live` development.
 //!
-//! | Feature | `load_platform()` behavior |
-//! |---------|---------------------------|
-//! | `from-source` (default) | Parse `.pure` → compile → `PureModel` |
-//! | `from-binary` | Deserialize `.purem` → `PureModel` |
+//! # Embedding utility
 //!
-//! The `from-source` path is essential for development (edit Pure files,
-//! recompile) while `from-binary` is the release path (fast startup,
-//! no parser/compiler dependency needed).
-//!
-//! The same feature-flag pattern applies to any Pure repository, not
-//! just the platform — user repos can pre-compile their `.pure` files
-//! into `.purem` for deployment.
+//! The build-time work is done by [`legend_pure_build`], a
+//! standalone crate that any Rust crate owning Pure repos can use
+//! from its own `build.rs`.
 
 pub mod platform;
+pub mod repo;
 pub mod sources;
 
 #[cfg(test)]
@@ -76,13 +75,13 @@ mod tests {
             }
         }
 
-        // As a baseline check, just ensure we have platform source files
-        let sources = sources::platform_sources();
-        println!("Number of platform files: {}", sources.len());
-        assert!(
-            !sources.is_empty(),
-            "Expected platform sources to be non-empty"
+        // Baseline check: at least one repo with at least one .pure source.
+        let repos = repo::Repo::default_embedded();
+        let total: usize = repos.iter().map(|r| r.sources().count()).sum();
+        println!(
+            "Number of platform .pure files (across {} repos): {total}",
+            repos.len()
         );
-        assert!(sources.len() > 10, "Expected over 10 platform files");
+        assert!(total > 10, "Expected over 10 platform .pure files");
     }
 }
