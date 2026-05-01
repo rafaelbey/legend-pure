@@ -121,7 +121,11 @@ pub fn parse_and_compile<'a>(
     let mut parse_errors: Vec<CompilationError> = Vec::new();
 
     for (content, name) in sources {
-        match legend_pure_parser_parser::parse(content, name) {
+        match legend_pure_parser_parser::parse_with_islands(
+            content,
+            name,
+            legend_pure_dsl_graph::parser::default_island_parsers(),
+        ) {
             Ok(src_file) => parsed_files.push(src_file),
             Err(partial) => {
                 // Recover valid elements

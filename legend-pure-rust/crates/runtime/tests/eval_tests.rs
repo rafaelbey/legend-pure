@@ -70,7 +70,11 @@ fn platform_model() -> &'static PlatformFixture {
         let raw = legend_pure_core_platform::sources::platform_sources();
         let mut parsed_files = Vec::new();
         for s in raw {
-            match legend_pure_parser_parser::parse(s.content, s.path) {
+            match legend_pure_parser_parser::parse_with_islands(
+                s.content,
+                s.path,
+                legend_pure_dsl_graph::parser::default_island_parsers(),
+            ) {
                 Ok(sf) => parsed_files.push(sf),
                 Err(partial) => parsed_files.push(partial.source_file),
             }
@@ -129,7 +133,12 @@ fn compile_with_platform(user_source: &str) -> PureModel {
     let fixture = platform_model();
 
     // Parse user source — user test code should parse cleanly
-    let user_ast = legend_pure_parser_parser::parse(user_source, "<test>").unwrap_or_else(|e| {
+    let user_ast = legend_pure_parser_parser::parse_with_islands(
+        user_source,
+        "<test>",
+        legend_pure_dsl_graph::parser::default_island_parsers(),
+    )
+    .unwrap_or_else(|e| {
         panic!(
             "Parse error: {:?}",
             e.errors
@@ -167,8 +176,12 @@ fn try_compile_with_platform(
     user_source: &str,
 ) -> Result<PureModel, legend_pure_parser_pure::pipeline::PartialPureModel> {
     let fixture = platform_model();
-    let user_ast = legend_pure_parser_parser::parse(user_source, "<test>")
-        .unwrap_or_else(|e| panic!("Parse error: {e:?}"));
+    let user_ast = legend_pure_parser_parser::parse_with_islands(
+        user_source,
+        "<test>",
+        legend_pure_dsl_graph::parser::default_island_parsers(),
+    )
+    .unwrap_or_else(|e| panic!("Parse error: {e:?}"));
     let mut all_files: Vec<_> = fixture.parsed_files.clone();
     all_files.push(user_ast);
     legend_pure_parser_pure::pipeline::compile(&all_files, &fixture.auto_imports)

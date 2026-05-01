@@ -302,6 +302,32 @@ impl ParseOutput {
 /// assert!(outputs[1].is_ok());
 /// ```
 pub fn parse_many<S: SourceProvider>(sources: &[S]) -> Vec<ParseOutput> {
+    parse_many_with_islands(sources, Vec::<Box<dyn IslandParser>>::new)
+}
+
+/// Parses sources in parallel with island grammar plug-ins.
+///
+/// `island_factory` is invoked once per parallel task to build a
+/// fresh `Vec<Box<dyn IslandParser>>` for that task's parse — the
+/// Vec is consumed by the underlying [`parse_with_islands`] call,
+/// so it can't be shared. DSL crates expose
+/// `default_island_parsers()` factory helpers that fit this
+/// signature directly:
+///
+/// ```rust,ignore
+/// parse_many_with_islands(
+///     &sources,
+///     legend_pure_dsl_graph::parser::default_island_parsers,
+/// )
+/// ```
+///
+/// Compose factories by calling several `default_island_parsers()`
+/// helpers and concatenating their results inside the closure.
+pub fn parse_many_with_islands<S, F>(sources: &[S], island_factory: F) -> Vec<ParseOutput>
+where
+    S: SourceProvider,
+    F: Fn() -> Vec<Box<dyn IslandParser>> + Sync,
+{
     use rayon::prelude::*;
 
     sources
@@ -311,7 +337,7 @@ pub fn parse_many<S: SourceProvider>(sources: &[S]) -> Vec<ParseOutput> {
             match source.source_text() {
                 Ok(text) => {
                     let text_str = text.into_owned();
-                    let outcome = match parse(&text_str, &name) {
+                    let outcome = match parse_with_islands(&text_str, &name, island_factory()) {
                         Ok(ast) => ParseOutcome::Success(ast),
                         Err(partial) => ParseOutcome::Partial(partial),
                     };

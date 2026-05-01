@@ -79,8 +79,12 @@ pub fn run(args: EmitArgs) -> Result<(), CliError> {
         legend_pure_parser_protocol::v1::from_protocol::convert_context_to_source_file(&pmcd)
             .map_err(|e| CliError::Protocol(e.to_string()))?;
 
-    // Compose AST → Pure grammar text
-    let grammar = legend_pure_parser_compose::compose_source_file(&source_file);
+    // Compose AST → Pure grammar text. Register the dsl-graph
+    // composer so any `#{ … }#` islands round-trip cleanly.
+    let grammar = legend_pure_parser_compose::section::compose_source_file_with(
+        &source_file,
+        legend_pure_dsl_graph::compose::default_island_composers(),
+    );
 
     // Output
     match args.output {

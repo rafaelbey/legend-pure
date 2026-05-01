@@ -880,6 +880,7 @@ dependencies = [
  "clap_complete",
  "lcov",
  "legend-pure-core-platform",
+ "legend-pure-dsl-graph",
  "legend-pure-parser-ast",
  "legend-pure-parser-compose",
  "legend-pure-parser-lexer",
@@ -907,6 +908,7 @@ dependencies = [
 name = "legend-pure-core-platform"
 version = "0.1.0"
 dependencies = [
+ "legend-pure-dsl-graph",
  "legend-pure-parser-ast",
  "legend-pure-parser-parser",
  "legend-pure-parser-pure",
@@ -1069,6 +1071,7 @@ dependencies = [
  "im-rc",
  "jiff",
  "legend-pure-core-platform",
+ "legend-pure-dsl-graph",
  "legend-pure-parser-ast",
  "legend-pure-parser-parser",
  "legend-pure-parser-pure",

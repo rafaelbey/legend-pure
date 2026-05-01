@@ -22,6 +22,7 @@ publish = false
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-ast = { path = "../ast" }
 legend-pure-parser-pure = { path = "../pure" }
+legend-pure-dsl-graph = { path = "../dsl-graph" }
 smol_str = { workspace = true }
 tracing = { workspace = true }
 
