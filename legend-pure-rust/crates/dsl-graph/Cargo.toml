@@ -32,3 +32,9 @@ smol_str = { workspace = true }
 
 [dev-dependencies]
 indoc = "2"
+insta = { workspace = true }
+# dev-only — `compiler_smoke.rs` invokes the core compile pipeline to
+# verify graph-fetch islands are rejected at lowering until dsl-graph
+# ships its `CompilerExtension`. Cargo permits dev-dep cycles since
+# dev-deps don't participate in lib compilation.
+legend-pure-parser-pure = { path = "../pure" }

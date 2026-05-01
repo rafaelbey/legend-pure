@@ -1,5 +1,5 @@
 ---
-source: crates/parser/tests/test_graph_fetch.rs
+source: crates/dsl-graph/tests/parser_grammar_tests.rs
 expression: file
 ---
 SourceFile {
@@ -75,7 +75,7 @@ SourceFile {
                                                                     },
                                                                 },
                                                             ),
-                                                            name: "Person",
+                                                            name: "Firm",
                                                             source_info: SourceInfo {
                                                                 source: "test.pure",
                                                                 start_line: 4,
@@ -98,9 +98,9 @@ SourceFile {
                                                 source_info: SourceInfo {
                                                     source: "test.pure",
                                                     start_line: 4,
-                                                    start_column: 15,
+                                                    start_column: 13,
                                                     end_line: 4,
-                                                    end_column: 15,
+                                                    end_column: 13,
                                                 },
                                             },
                                         ),
@@ -111,9 +111,9 @@ SourceFile {
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 4,
-                                            start_column: 21,
+                                            start_column: 19,
                                             end_line: 4,
-                                            end_column: 22,
+                                            end_column: 20,
                                         },
                                     },
                                     arguments: [
@@ -135,7 +135,7 @@ SourceFile {
                                                                 },
                                                             },
                                                         ),
-                                                        name: "Person",
+                                                        name: "Firm",
                                                         source_info: SourceInfo {
                                                             source: "test.pure",
                                                             start_line: 6,
@@ -146,7 +146,7 @@ SourceFile {
                                                     },
                                                     sub_trees: [
                                                         PropertyGraphFetchTree {
-                                                            property: "firstName",
+                                                            property: "name",
                                                             parameters: [],
                                                             alias: None,
                                                             sub_type: None,
@@ -157,86 +157,50 @@ SourceFile {
                                                                 start_line: 7,
                                                                 start_column: 17,
                                                                 end_line: 7,
-                                                                end_column: 25,
+                                                                end_column: 20,
                                                             },
                                                         },
-                                                        PropertyGraphFetchTree {
-                                                            property: "lastName",
-                                                            parameters: [],
-                                                            alias: None,
-                                                            sub_type: None,
-                                                            sub_trees: [],
-                                                            sub_type_trees: [],
-                                                            source_info: SourceInfo {
-                                                                source: "test.pure",
-                                                                start_line: 8,
-                                                                start_column: 17,
-                                                                end_line: 8,
-                                                                end_column: 24,
-                                                            },
-                                                        },
-                                                        PropertyGraphFetchTree {
-                                                            property: "employeesByFirstName",
-                                                            parameters: [
-                                                                Collection(
-                                                                    CollectionExpr {
-                                                                        elements: [
-                                                                            Literal(
-                                                                                String(
-                                                                                    StringLiteral {
-                                                                                        value: "Peter",
-                                                                                        source_info: SourceInfo {
-                                                                                            source: "test.pure",
-                                                                                            start_line: 9,
-                                                                                            start_column: 39,
-                                                                                            end_line: 9,
-                                                                                            end_column: 45,
-                                                                                        },
-                                                                                    },
-                                                                                ),
-                                                                            ),
-                                                                        ],
-                                                                        multiplicity: None,
+                                                    ],
+                                                    sub_type_trees: [
+                                                        SubTypeGraphFetchTree {
+                                                            sub_type_class: PackageableElementPtr {
+                                                                package: Some(
+                                                                    Package {
+                                                                        name: "my",
+                                                                        parent: None,
                                                                         source_info: SourceInfo {
                                                                             source: "test.pure",
-                                                                            start_line: 9,
-                                                                            start_column: 38,
-                                                                            end_line: 9,
-                                                                            end_column: 38,
+                                                                            start_line: 8,
+                                                                            start_column: 26,
+                                                                            end_line: 8,
+                                                                            end_column: 27,
                                                                         },
                                                                     },
                                                                 ),
-                                                            ],
-                                                            alias: None,
-                                                            sub_type: None,
+                                                                name: "FirmSubType",
+                                                                source_info: SourceInfo {
+                                                                    source: "test.pure",
+                                                                    start_line: 8,
+                                                                    start_column: 25,
+                                                                    end_line: 8,
+                                                                    end_column: 25,
+                                                                },
+                                                            },
                                                             sub_trees: [
                                                                 PropertyGraphFetchTree {
-                                                                    property: "firstName",
+                                                                    property: "SubTypeName",
                                                                     parameters: [],
-                                                                    alias: None,
+                                                                    alias: Some(
+                                                                        "alias1",
+                                                                    ),
                                                                     sub_type: None,
                                                                     sub_trees: [],
                                                                     sub_type_trees: [],
                                                                     source_info: SourceInfo {
                                                                         source: "test.pure",
-                                                                        start_line: 10,
+                                                                        start_line: 9,
                                                                         start_column: 21,
-                                                                        end_line: 10,
-                                                                        end_column: 29,
-                                                                    },
-                                                                },
-                                                                PropertyGraphFetchTree {
-                                                                    property: "lastName",
-                                                                    parameters: [],
-                                                                    alias: None,
-                                                                    sub_type: None,
-                                                                    sub_trees: [],
-                                                                    sub_type_trees: [],
-                                                                    source_info: SourceInfo {
-                                                                        source: "test.pure",
-                                                                        start_line: 11,
-                                                                        start_column: 21,
-                                                                        end_line: 11,
+                                                                        end_line: 9,
                                                                         end_column: 28,
                                                                     },
                                                                 },
@@ -244,14 +208,13 @@ SourceFile {
                                                             sub_type_trees: [],
                                                             source_info: SourceInfo {
                                                                 source: "test.pure",
-                                                                start_line: 9,
+                                                                start_line: 8,
                                                                 start_column: 17,
-                                                                end_line: 9,
-                                                                end_column: 36,
+                                                                end_line: 8,
+                                                                end_column: 23,
                                                             },
                                                         },
                                                     ],
-                                                    sub_type_trees: [],
                                                     source_info: SourceInfo {
                                                         source: "test.pure",
                                                         start_line: 6,
@@ -273,9 +236,9 @@ SourceFile {
                                     source_info: SourceInfo {
                                         source: "test.pure",
                                         start_line: 4,
-                                        start_column: 21,
+                                        start_column: 19,
                                         end_line: 4,
-                                        end_column: 22,
+                                        end_column: 20,
                                     },
                                 },
                             ),
@@ -287,7 +250,7 @@ SourceFile {
                             source: "test.pure",
                             start_line: 2,
                             start_column: 1,
-                            end_line: 16,
+                            end_line: 14,
                             end_column: 1,
                         },
                     },

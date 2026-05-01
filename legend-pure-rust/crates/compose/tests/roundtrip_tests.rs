@@ -30,43 +30,26 @@ use indoc::indoc;
 /// 3. Assert composed == original
 /// 4. Also verify idempotency: compose(parse(composed)) == composed
 fn round_trip(source: &str) {
-    let ast = parse_with_dsl_graph(source);
+    let ast = parse(source);
 
-    let composed = compose_with_dsl_graph(&ast);
+    let composed = legend_pure_parser_compose::compose_source_file(&ast);
     assert_eq!(
         source, composed,
         "\n=== ROUNDTRIP MISMATCH ===\n\n--- Expected ---\n{source}\n\n--- Got ---\n{composed}\n"
     );
 
     // Idempotency: compose(parse(composed)) == composed
-    let ast2 = parse_with_dsl_graph(&composed);
-    let composed2 = compose_with_dsl_graph(&ast2);
+    let ast2 = parse(&composed);
+    let composed2 = legend_pure_parser_compose::compose_source_file(&ast2);
     assert_eq!(
         composed, composed2,
         "\n=== IDEMPOTENCY FAILURE ===\n\n--- First compose ---\n{composed}\n\n--- Second compose ---\n{composed2}\n"
     );
 }
 
-/// Compose with the graph-fetch island composer registered. The
-/// graph-fetch composer (`#{…}#`) lives in `dsl-graph`; core's
-/// `compose_source_file` no longer registers it by default.
-fn compose_with_dsl_graph(sf: &legend_pure_parser_ast::SourceFile) -> String {
-    legend_pure_parser_compose::section::compose_source_file_with(
-        sf,
-        legend_pure_dsl_graph::compose::default_island_composers(),
-    )
-}
-
-/// Parse with the graph-fetch island plug-in registered. The
-/// graph-fetch grammar (`#{ … }#`) lives in the `dsl-graph` crate;
-/// core's `parse()` no longer registers it by default.
-fn parse_with_dsl_graph(source: &str) -> legend_pure_parser_ast::SourceFile {
-    legend_pure_parser_parser::parse_with_islands(
-        source,
-        "test.pure",
-        legend_pure_dsl_graph::parser::default_island_parsers(),
-    )
-    .unwrap_or_else(|e| panic!("Parse failed:\n{e}\n\nSource:\n{source}"))
+fn parse(source: &str) -> legend_pure_parser_ast::SourceFile {
+    legend_pure_parser_parser::parse(source, "test.pure")
+        .unwrap_or_else(|e| panic!("Parse failed:\n{e}\n\nSource:\n{source}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -1682,167 +1665,9 @@ fn test_instance_with_default_value() {
     "});
 }
 
-// ---------------------------------------------------------------------------
-// Graph Fetch Trees — ported from Java TestDomainGrammarRoundtrip
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_graph_fetch_simple() {
-    round_trip(indoc! {"
-        function my::test(): Any[*]
-        {
-          #{
-            my::Person{
-              firstName,
-              lastName
-            }
-          }#
-        }
-    "});
-}
-
-#[test]
-fn test_graph_fetch_nested() {
-    round_trip(indoc! {"
-        function my::test(): Any[*]
-        {
-          #{
-            my::Person{
-              firstName,
-              address{
-                city,
-                street
-              }
-            }
-          }#
-        }
-    "});
-}
-
-#[test]
-fn test_graph_fetch_with_qualifier() {
-    round_trip(indoc! {"
-        function my::test(): Any[*]
-        {
-          #{
-            test::Firm{
-              legalName,
-              employeeCount,
-              employeesByFirstName([]){
-                firstName,
-                lastName
-              },
-              employeesByFirstName('Peter'){
-                firstName,
-                lastName
-              },
-              employeesByFirstName(['Peter']){
-                firstName,
-                lastName
-              },
-              employeesByFirstName(['Peter', 'John']){
-                firstName,
-                lastName
-              },
-              employeesByFirstNameAndCity(['Peter', 'John'], ['New York']){
-                firstName,
-                lastName
-              }
-            }
-          }#
-        }
-    "});
-}
-
-#[test]
-fn test_graph_fetch_subtype_at_root() {
-    round_trip(indoc! {"
-        function my::test(): Any[*]
-        {
-          #{
-            test::Firm{
-              legalName,
-              subType(@test::FirmSubType){
-                SubTypeName
-              }
-            }
-          }#
-        }
-    "});
-}
-
-#[test]
-fn test_graph_fetch_multiple_subtypes() {
-    round_trip(indoc! {"
-        function my::test(): Any[*]
-        {
-          #{
-            test::Firm{
-              legalName,
-              subType(@test::FirmSubType1){
-                SubTypeName1
-              },
-              subType(@test::FirmSubType2){
-                SubTypeName2
-              }
-            }
-          }#
-        }
-    "});
-}
-
-#[test]
-fn test_graph_fetch_only_subtypes() {
-    round_trip(indoc! {"
-        function my::test(): Any[*]
-        {
-          #{
-            test::Firm{
-              subType(@test::FirmSubType){
-                SubTypeName
-              }
-            }
-          }#
-        }
-    "});
-}
-
-#[test]
-fn test_graph_fetch_subtype_with_alias() {
-    round_trip(indoc! {"
-        function my::test(): Any[*]
-        {
-          #{
-            test::Firm{
-              legalName,
-              subType(@test::FirmSubType1){
-                'alias1':SubTypeName
-              },
-              subType(@test::FirmSubType2){
-                'alias2':SubTypeName
-              }
-            }
-          }#
-        }
-    "});
-}
-
-#[test]
-fn test_graph_fetch_property_subtype() {
-    round_trip(indoc! {"
-        function my::test(): Any[*]
-        {
-          #{
-            test::Firm{
-              legalName,
-              employees->subType(@test::Manager){
-                managerLevel
-              }
-            }
-          }#
-        }
-    "});
-}
+// Graph-fetch round-trip tests (the `#{ … }#` grammar) live in
+// `crates/dsl-graph/tests/compose_roundtrip_tests.rs`. The core compose
+// crate carries no graph-fetch identifiers.
 
 // =========================================================================
 // Native Functions
