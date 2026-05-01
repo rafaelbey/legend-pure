@@ -59,7 +59,7 @@ use smol_str::SmolStr;
 use crate::context::VariableContext;
 use crate::date::PureDate;
 use crate::error::{PureException, PureExceptionKind, PureRuntimeError, StackFrame};
-use crate::heap::{ObjectId, RuntimeHeap};
+use crate::heap::{ObjectHandle, RuntimeHeap};
 use crate::hooks::{EvalHooks, NoOpHooks};
 use crate::native::{Evaluated, NativeFunction, NativeRegistry};
 use crate::value::{FunctionValue, LambdaClosure, Value};
@@ -734,7 +734,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         // Empty-slot guard.
         let existing = self
             .heap
-            .get_property_values(*obj_id, "__typeArguments")
+            .get_property_values(&obj_id.clone(), "__typeArguments")
             .map_err(PureException::from)?;
         if !existing.is_empty() {
             return Ok(());
@@ -742,7 +742,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         // Classifier-match guard.
         let classifier_path = self
             .heap
-            .classifier(*obj_id)
+            .classifier(&obj_id.clone())
             .map_err(PureException::from)?
             .to_owned();
         let classifier_id = crate::m3_paths::resolve(self.model, &classifier_path);
@@ -761,7 +761,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             .collect();
         if !type_args.is_empty() {
             self.heap
-                .mutate_set(*obj_id, "__typeArguments", &type_args)
+                .mutate_set(&obj_id.clone(), "__typeArguments", &type_args)
                 .map_err(PureException::from)?;
         }
         Ok(())
@@ -842,7 +842,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 // not a "property not found" error.
                 let values = self
                     .heap
-                    .get_property_values(*id, property)
+                    .get_property_values(&id.clone(), property)
                     .map_err(PureException::from)?;
                 let collected: Vec<Value> = values.iter().cloned().collect();
                 if !collected.is_empty() {
@@ -861,7 +861,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 {
                     return Ok(Value::Unit);
                 }
-                self.try_getter_override(*id, property)
+                self.try_getter_override(id.clone(), property)
             }
             Value::Element(id) => {
                 let id = *id;
@@ -876,10 +876,10 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 // `eval_function_property` (for Function elements,
                 // matching the existing dispatch) and then
                 // `eval_element_property` for everything else.
-                if let Some(oid) = target_val.as_object_id(&self.heap) {
+                if let Some(oid) = target_val.as_object_handle(&self.heap) {
                     let values = self
                         .heap
-                        .get_property_values(oid, property)
+                        .get_property_values(&oid, property)
                         .map_err(PureException::from)?;
                     let collected: Vec<Value> = values.iter().cloned().collect();
                     if !collected.is_empty() {
@@ -901,10 +901,10 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 // compiled function-element has a metamodel row,
                 // lambdas don't (their slots are computed from the
                 // closure on demand by `eval_function_property`).
-                if let Some(oid) = target_val.as_object_id(&self.heap) {
+                if let Some(oid) = target_val.as_object_handle(&self.heap) {
                     let values = self
                         .heap
-                        .get_property_values(oid, property)
+                        .get_property_values(&oid, property)
                         .map_err(PureException::from)?;
                     let collected: Vec<Value> = values.iter().cloned().collect();
                     if !collected.is_empty() {
@@ -969,12 +969,12 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     #[allow(clippy::result_large_err)]
     fn try_getter_override(
         &mut self,
-        instance_id: ObjectId,
+        instance_id: ObjectHandle,
         property: &str,
     ) -> Result<Value, PureException> {
         let override_vals = self
             .heap
-            .get_property_values(instance_id, "elementOverride")
+            .get_property_values(&instance_id, "elementOverride")
             .map_err(PureException::from)?;
         let Some(Value::Object(override_id)) = override_vals.iter().next().cloned() else {
             return Ok(Value::Unit);
@@ -983,7 +983,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         // instance's classifier so we know which override to call.
         let classifier = self
             .heap
-            .classifier(instance_id)
+            .classifier(&instance_id)
             .map_err(PureException::from)?
             .to_owned();
         let Some(class_id) = crate::m3_paths::resolve(self.model, &classifier) else {
@@ -1027,7 +1027,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         };
         let lambda_vals = self
             .heap
-            .get_property_values(override_id, lambda_slot)
+            .get_property_values(&override_id, lambda_slot)
             .map_err(PureException::from)?;
         let Some(lambda) = lambda_vals.iter().next().cloned() else {
             return Ok(Value::Unit);
@@ -1052,13 +1052,13 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         &mut self,
         owner_class_id: ElementId,
         property: &str,
-    ) -> Result<ObjectId, PureException> {
+    ) -> Result<ObjectHandle, PureException> {
         let obj = self.heap.alloc_dynamic(crate::m3_paths::PROPERTY);
         self.heap
-            .mutate_add(obj, "_owner", &[Value::Element(owner_class_id)])
+            .mutate_add(&obj, "_owner", &[Value::Element(owner_class_id)])
             .map_err(PureException::from)?;
         self.heap
-            .mutate_add(obj, "name", &[Value::String(SmolStr::new(property))])
+            .mutate_add(&obj, "name", &[Value::String(SmolStr::new(property))])
             .map_err(PureException::from)?;
         Ok(obj)
     }
@@ -1077,13 +1077,13 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             Value::Object(id) => {
                 let values = self
                     .heap
-                    .get_property_values(*id, property)
+                    .get_property_values(&id.clone(), property)
                     .map_err(PureException::from)?;
                 let collected: Vec<Value> = values.iter().cloned().collect();
                 Ok(Value::from_vec(collected))
             }
             Value::Element(id) => self
-                .eval_element_property(*id, property)
+                .eval_element_property(id.clone(), property)
                 .map_err(PureException::from),
             Value::Function(fv) => self
                 .eval_function_property(fv, property, value)
@@ -1138,9 +1138,9 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             }
             "functionName" | "name" => {
                 let name = match fv {
-                    FunctionValue::Compiled(id) => match self.model.get_element(*id) {
+                    FunctionValue::Compiled(id) => match self.model.get_element(id.clone()) {
                         Element::Function(f) => f.function_name.clone(),
-                        _ => self.model.element_name(*id).clone(),
+                        _ => self.model.element_name(id.clone()).clone(),
                     },
                     FunctionValue::Lambda(_) => SmolStr::new_static("<lambda>"),
                 };
@@ -1204,7 +1204,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             let result = match bound {
                 Some(b) => {
                     let mv = self.heap.alloc_dynamic(crate::m3_paths::MULTIPLICITY_VALUE);
-                    self.heap.mutate_add(mv, "value", &[Value::Integer(b)])?;
+                    self.heap.mutate_add(&mv, "value", &[Value::Integer(b)])?;
                     vec![Value::Object(mv)]
                 }
                 None => Vec::new(),
@@ -1244,7 +1244,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             };
             let inner_gt = self.heap.alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
             self.heap
-                .mutate_add(inner_gt, "rawType", &[Value::Object(inner_ft_obj)])?;
+                .mutate_add(&inner_gt, "rawType", &[Value::Object(inner_ft_obj)])?;
             let outer_gt = self.heap.alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
             // Outer rawType points to the FunctionType class meta-instance
             // (`meta::pure::metamodel::type::FunctionType`) so cast and
@@ -1257,10 +1257,10 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 crate::m3_paths::resolve(self.model, "meta::pure::metamodel::type::FunctionType")
             {
                 self.heap
-                    .mutate_add(outer_gt, "rawType", &[Value::Element(ft_class_id)])?;
+                    .mutate_add(&outer_gt, "rawType", &[Value::Element(ft_class_id)])?;
             }
             self.heap
-                .mutate_add(outer_gt, "typeArguments", &[Value::Object(inner_gt)])?;
+                .mutate_add(&outer_gt, "typeArguments", &[Value::Object(inner_gt)])?;
             let result = vec![Value::Object(outer_gt)];
             self.member_wrapper_cache.insert(cache_key, result.clone());
             return Ok(Value::from_vec(result));
@@ -1362,9 +1362,9 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 for (profile, value) in stereos {
                     let obj = self.heap.alloc_dynamic(crate::m3_paths::STEREOTYPE);
                     self.heap
-                        .mutate_add(obj, "value", &[Value::String(value)])?;
+                        .mutate_add(&obj, "value", &[Value::String(value)])?;
                     self.heap
-                        .mutate_add(obj, "profile", &[Value::Element(profile)])?;
+                        .mutate_add(&obj, "profile", &[Value::Element(profile)])?;
                     items.push(Value::Object(obj));
                 }
                 self.member_wrapper_cache
@@ -1394,11 +1394,11 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 let mut items: Vec<Value> = Vec::with_capacity(tags.len());
                 for (profile, tag, value) in tags {
                     let obj = self.heap.alloc_dynamic(crate::m3_paths::TAGGED_VALUE);
-                    self.heap.mutate_add(obj, "tag", &[Value::String(tag)])?;
+                    self.heap.mutate_add(&obj, "tag", &[Value::String(tag)])?;
                     self.heap
-                        .mutate_add(obj, "profile", &[Value::Element(profile)])?;
+                        .mutate_add(&obj, "profile", &[Value::Element(profile)])?;
                     self.heap
-                        .mutate_add(obj, "value", &[Value::String(SmolStr::new(value))])?;
+                        .mutate_add(&obj, "value", &[Value::String(SmolStr::new(value))])?;
                     items.push(Value::Object(obj));
                 }
                 self.member_wrapper_cache
@@ -1450,12 +1450,12 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 for super_eid in super_eids {
                     let gt_obj = self.heap.alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
                     self.heap
-                        .mutate_add(gt_obj, "rawType", &[Value::Element(super_eid)])?;
+                        .mutate_add(&gt_obj, "rawType", &[Value::Element(super_eid)])?;
                     let gen_obj = self.heap.alloc_dynamic(crate::m3_paths::GENERALIZATION);
                     self.heap
-                        .mutate_add(gen_obj, "general", &[Value::Object(gt_obj)])?;
+                        .mutate_add(&gen_obj, "general", &[Value::Object(gt_obj)])?;
                     self.heap
-                        .mutate_add(gen_obj, "specific", &[Value::Element(id)])?;
+                        .mutate_add(&gen_obj, "specific", &[Value::Element(id)])?;
                     items.push(Value::Object(gen_obj));
                 }
                 Ok(Value::from_vec(items))
@@ -1602,8 +1602,9 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         let mut items: Vec<Value> = Vec::with_capacity(names.len());
         for name in names {
             let obj = self.heap.alloc_dynamic(classifier);
-            self.heap.mutate_add(obj, "name", &[Value::String(name)])?;
-            self.heap.mutate_add(obj, "_owner", &[Value::Element(id)])?;
+            self.heap.mutate_add(&obj, "name", &[Value::String(name)])?;
+            self.heap
+                .mutate_add(&obj, "_owner", &[Value::Element(id)])?;
             items.push(Value::Object(obj));
         }
         self.member_wrapper_cache.insert((id, kind), items.clone());
@@ -1634,7 +1635,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         if let Value::Object(obj_id) = target_val {
             let classifier = self
                 .heap
-                .classifier(obj_id)
+                .classifier(&obj_id)
                 .map_err(PureException::from)?
                 .to_string();
             let segments: Vec<SmolStr> = if classifier.is_empty() {
@@ -1667,7 +1668,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                     Vec::new()
                 } else {
                     self.heap
-                        .get_property_values(obj_id, "__typeVariableValues")
+                        .get_property_values(&obj_id, "__typeVariableValues")
                         .map(|v| v.iter().cloned().collect())
                         .unwrap_or_default()
                 };
@@ -1826,15 +1827,17 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             // element handle rather than rewrapping it, so we need to
             // promote compiled-function elements to `FunctionValue::Compiled`
             // on the fly. Non-function elements remain a type error.
-            Value::Element(id) if matches!(self.model.get_element(*id), Element::Function(_)) => {
-                self.eval_function_value(&FunctionValue::Compiled(*id), args)
+            Value::Element(id)
+                if matches!(self.model.get_element(id.clone()), Element::Function(_)) =>
+            {
+                self.eval_function_value(&FunctionValue::Compiled(id.clone()), args)
             }
             // Property wrapper objects synthesised by `eval_class_member_collection`
             // become callable here: `$propRef->eval($instance)` reads
             // `$instance.<name>`, where `<name>` is the property name stored
             // on the wrapper. This is the Pure idiom that `testEvaluateOne`
             // exercises: `LA_Person.properties->filter(...)->toOne()->eval($p)`.
-            Value::Object(obj_id) => self.apply_object_callable(*obj_id, args),
+            Value::Object(obj_id) => self.apply_object_callable(obj_id.clone(), args),
             other => Err(PureException::from(PureRuntimeError::EvaluationError(
                 format!("Expected Function, got {}", other.type_name()),
             ))),
@@ -1852,12 +1855,12 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     #[allow(clippy::result_large_err)]
     fn apply_object_callable(
         &mut self,
-        id: crate::heap::ObjectId,
+        id: crate::heap::ObjectHandle,
         args: &[Value],
     ) -> Result<Value, PureException> {
         let classifier = self
             .heap
-            .classifier(id)
+            .classifier(&id)
             .map_err(PureException::from)?
             .to_string();
         match callable_wrapper_kind(self.model, &classifier) {
@@ -1885,13 +1888,13 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     #[allow(clippy::result_large_err)]
     fn apply_qualified_property(
         &mut self,
-        id: crate::heap::ObjectId,
+        id: crate::heap::ObjectHandle,
         args: &[Value],
     ) -> Result<Value, PureException> {
-        let name = self.read_wrapper_name(id)?;
+        let name = self.read_wrapper_name(id.clone())?;
         let owner_vals = self
             .heap
-            .get_property_values(id, "_owner")
+            .get_property_values(&id, "_owner")
             .map_err(PureException::from)?;
         let Some(Value::Element(owner_id)) = owner_vals.front().cloned() else {
             return Err(PureException::from(PureRuntimeError::EvaluationError(
@@ -1932,7 +1935,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         let type_var_values: Vec<Value> = match &args[0] {
             Value::Object(obj_id) if !type_var_param_names.is_empty() => self
                 .heap
-                .get_property_values(*obj_id, "__typeVariableValues")
+                .get_property_values(&obj_id.clone(), "__typeVariableValues")
                 .map(|v| v.iter().cloned().collect())
                 .unwrap_or_default(),
             _ => Vec::new(),
@@ -1959,10 +1962,10 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     /// Read the `name` slot of a Property / `QualifiedProperty` wrapper as a
     /// plain string, erroring if it is missing or multi-valued.
     #[allow(clippy::result_large_err)]
-    fn read_wrapper_name(&self, id: crate::heap::ObjectId) -> Result<SmolStr, PureException> {
+    fn read_wrapper_name(&self, id: crate::heap::ObjectHandle) -> Result<SmolStr, PureException> {
         let values = self
             .heap
-            .get_property_values(id, "name")
+            .get_property_values(&id, "name")
             .map_err(PureException::from)?;
         match values.front() {
             Some(Value::String(s)) => Ok(s.clone()),
@@ -1988,7 +1991,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             Value::Object(obj_id) => {
                 let values = self
                     .heap
-                    .get_property_values(*obj_id, name)
+                    .get_property_values(&obj_id.clone(), name)
                     .map_err(PureException::from)?;
                 let collected: Vec<Value> = values.iter().cloned().collect();
                 if !collected.is_empty() {
@@ -2012,7 +2015,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 {
                     return Ok(Value::Unit);
                 }
-                self.try_getter_override(*obj_id, name)
+                self.try_getter_override(obj_id.clone(), name)
             }
             Value::Element(id) => {
                 // Function elements expose a small set of metamodel fields
@@ -2021,14 +2024,14 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 // `^$func()` → `.properties->eval($func)` metamodel-
                 // introspection chain reads the same fields it would off a
                 // `Value::Function` receiver.
-                if matches!(self.model.get_element(*id), Element::Function(_)) {
-                    let fv = FunctionValue::Compiled(*id);
+                if matches!(self.model.get_element(id.clone()), Element::Function(_)) {
+                    let fv = FunctionValue::Compiled(id.clone());
                     let target = Value::Function(Box::new(fv.clone()));
                     if let Ok(v) = self.eval_function_property(&fv, name, &target) {
                         return Ok(v);
                     }
                 }
-                self.eval_element_property(*id, name)
+                self.eval_element_property(id.clone(), name)
                     .map_err(PureException::from)
             }
             other => Err(PureException::from(PureRuntimeError::EvaluationError(
@@ -2051,8 +2054,8 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             FunctionValue::Lambda(closure) => self.eval_lambda_value(closure, args),
             FunctionValue::Compiled(id) => {
                 // self.model has 'model lifetime — no conflict with &mut self for EvalContext.
-                let mangled: SmolStr = self.model.get_node(*id).name.clone();
-                self.dispatch_compiled_function(*id, &mangled, args)
+                let mangled: SmolStr = self.model.get_node(id.clone()).name.clone();
+                self.dispatch_compiled_function(id.clone(), &mangled, args)
             }
         }
     }
@@ -2218,13 +2221,14 @@ impl<H: EvalHooks> crate::native::EvalContextTrait for EvalContext<'_, '_, H> {
         // shapes (primitives, elements, lambdas) have no per-class
         // toString hook in the platform — Java's `ToString.execute`
         // short-circuits the same way via the primitive-type guard.
-        let Value::Object(obj_id) = *receiver else {
+        let Value::Object(obj_id) = receiver else {
             return Ok(None);
         };
+        let obj_id = obj_id.clone();
         let classifier = self
             .evaluator
             .heap
-            .classifier(obj_id)
+            .classifier(&obj_id)
             .map_err(PureException::from)?
             .to_string();
         if classifier.is_empty() {
@@ -2248,7 +2252,7 @@ impl<H: EvalHooks> crate::native::EvalContextTrait for EvalContext<'_, '_, H> {
         } else {
             self.evaluator
                 .heap
-                .get_property_values(obj_id, "__typeVariableValues")
+                .get_property_values(&obj_id, "__typeVariableValues")
                 .map(|v| v.iter().cloned().collect())
                 .unwrap_or_default()
         };
@@ -2271,7 +2275,7 @@ impl<H: EvalHooks> crate::native::EvalContextTrait for EvalContext<'_, '_, H> {
 impl<H: EvalHooks> std::fmt::Debug for Evaluator<'_, H> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Evaluator")
-            .field("heap_objects", &self.heap.len())
+            .field("heap_objects", &self.heap.metamodel_len())
             .field("context_depth", &self.context.depth())
             .finish()
     }

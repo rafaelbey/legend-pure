@@ -169,7 +169,9 @@ pub fn rust_to_java_result<'local>(
                 )
             }
         }
-        Value::Object(obj_id) => {
+        Value::Object(obj_handle) => {
+            let context = unsafe { &*(context_ptr as *mut crate::context::JniContext) };
+            let ptr_val = context.emit_handle(obj_handle.clone());
             let enum_val = env
                 .get_static_field(
                     &type_cls,
@@ -177,11 +179,10 @@ pub fn rust_to_java_result<'local>(
                     "Lorg/finos/legend/pure/rust/PureRustResult$Type;",
                 )?
                 .l()?;
-            let ptr_val: u64 = slotmap::Key::data(obj_id).as_ffi();
             let val_obj = env.new_object(
                 "java/lang/Long",
                 "(J)V",
-                &[jni::objects::JValue::Long(ptr_val as i64)],
+                &[jni::objects::JValue::Long(ptr_val)],
             )?;
 
             let method_id = env.get_method_id(
@@ -234,7 +235,7 @@ pub fn rust_to_java_result<'local>(
         }
         Value::Element(element_id) => {
             let context = unsafe { &*(context_ptr as *mut crate::context::JniContext) };
-            if let Some(obj_id) = context.object_for_element(*element_id) {
+            if let Some(ptr_val) = context.object_for_element(*element_id) {
                 let enum_val = env
                     .get_static_field(
                         &type_cls,
@@ -242,11 +243,10 @@ pub fn rust_to_java_result<'local>(
                         "Lorg/finos/legend/pure/rust/PureRustResult$Type;",
                     )?
                     .l()?;
-                let ptr_val: u64 = slotmap::Key::data(&obj_id).as_ffi();
                 let val_obj = env.new_object(
                     "java/lang/Long",
                     "(J)V",
-                    &[jni::objects::JValue::Long(ptr_val as i64)],
+                    &[jni::objects::JValue::Long(ptr_val)],
                 )?;
 
                 let method_id = env.get_method_id(
@@ -338,14 +338,23 @@ pub fn java_to_rust_value<'local>(
             let val = env
                 .call_method(obj, "getAsInstancePointer", "()J", &[])?
                 .j()?;
-            let key = slotmap::KeyData::from_ffi(val as u64);
-            let obj_id = legend_pure_runtime::heap::ObjectId::from(key);
 
             let context = unsafe { &*(context_ptr as *mut crate::context::JniContext) };
-            if let Some(element_id) = context.element_for_object(obj_id) {
+            // If the handle is a metamodel row, return the canonical
+            // `Value::Element(eid)` so internal Pure code routes through
+            // its `ElementId` view; otherwise resolve back to the
+            // strong `ObjectHandle`.
+            if let Some(element_id) = context.element_for_object(val) {
                 Ok(Value::Element(element_id))
             } else {
-                Ok(Value::Object(obj_id))
+                let jh = crate::context::JniHandleTable::from_i64(val);
+                let handle = context
+                    .handles
+                    .borrow()
+                    .lookup(jh)
+                    .cloned()
+                    .ok_or_else(|| jni::errors::Error::JavaException)?;
+                Ok(Value::Object(handle))
             }
         }
         "ARRAY" => {

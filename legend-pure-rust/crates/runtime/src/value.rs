@@ -38,7 +38,7 @@ use rust_decimal::Decimal;
 use smol_str::SmolStr;
 
 use crate::date::{PureDate, StrictTime};
-use crate::heap::ObjectId;
+use crate::heap::ObjectHandle;
 
 /// Backing state for a [`Value::Map`].
 ///
@@ -104,13 +104,11 @@ pub enum Value {
     /// Uses `jiff::civil::Time` (`Copy`, nanosecond precision).
     StrictTime(StrictTime),
 
-    /// A reference to a runtime object on the [`RuntimeHeap`](super::heap::RuntimeHeap).
+    /// A reference to a runtime object.
     ///
-    /// This is a lightweight handle — the actual object data (properties,
-    /// classifier) lives in the heap. Multiple `Value::Object` instances
-    /// can point to the same `ObjectId`, enabling identity-preserving
-    /// `mutateAdd` semantics.
-    Object(ObjectId),
+    /// `Rc<RefCell<HeapEntry>>` clones share the same underlying entry —
+    /// identity is `Rc::ptr_eq`, freed when the last clone drops.
+    Object(ObjectHandle),
 
     /// An ordered collection of values — backed by an RRB-tree persistent
     /// vector (`im_rc::Vector`).
@@ -242,10 +240,10 @@ pub struct LambdaClosure {
 /// A hashable key for `Map` entries.
 ///
 /// Only value types that are meaningfully comparable can be map keys.
-/// Objects default to identity (`ObjectId`); Classes that annotate
+/// Objects default to identity (`Rc::ptr_eq`); Classes that annotate
 /// properties with the `<<equality.Key>>` stereotype opt into
 /// value-based equality via `ObjectByEqualityKeys`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub enum ValueKey {
     /// Boolean key.
     Boolean(bool),
@@ -259,9 +257,10 @@ pub enum ValueKey {
     Date(PureDate),
     /// `StrictTime` key.
     StrictTime(StrictTime),
-    /// Object identity key — heap identity; used when the class has no
-    /// `<<equality.Key>>`-annotated properties.
-    Object(ObjectId),
+    /// Object identity key — `Rc::ptr_eq` identity. The map key holds
+    /// a strong clone of the handle, keeping the underlying entry alive
+    /// for as long as the entry is in the map.
+    Object(ObjectHandle),
     /// Value-based object key for classes that annotate one or more
     /// properties with `<<equality.Key>>`. Two instances hash / compare
     /// equal iff every annotated field's key agrees. `class_id` is
@@ -282,6 +281,66 @@ pub enum ValueKey {
         /// Member name.
         member: SmolStr,
     },
+}
+
+impl PartialEq for ValueKey {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Boolean(a), Self::Boolean(b)) => a == b,
+            (Self::Integer(a), Self::Integer(b)) => a == b,
+            (Self::Decimal(a), Self::Decimal(b)) => a == b,
+            (Self::String(a), Self::String(b)) => a == b,
+            (Self::Date(a), Self::Date(b)) => a == b,
+            (Self::StrictTime(a), Self::StrictTime(b)) => a == b,
+            (Self::Object(a), Self::Object(b)) => Rc::ptr_eq(a, b),
+            (
+                Self::ObjectByEqualityKeys {
+                    class_id: c1,
+                    fields: f1,
+                },
+                Self::ObjectByEqualityKeys {
+                    class_id: c2,
+                    fields: f2,
+                },
+            ) => c1 == c2 && f1 == f2,
+            (
+                Self::EnumValue {
+                    enum_id: e1,
+                    member: m1,
+                },
+                Self::EnumValue {
+                    enum_id: e2,
+                    member: m2,
+                },
+            ) => e1 == e2 && m1 == m2,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ValueKey {}
+
+impl std::hash::Hash for ValueKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::Boolean(b) => b.hash(state),
+            Self::Integer(i) => i.hash(state),
+            Self::Decimal(d) => d.hash(state),
+            Self::String(s) => s.hash(state),
+            Self::Date(d) => d.hash(state),
+            Self::StrictTime(t) => t.hash(state),
+            Self::Object(handle) => Rc::as_ptr(handle).hash(state),
+            Self::ObjectByEqualityKeys { class_id, fields } => {
+                class_id.hash(state);
+                fields.hash(state);
+            }
+            Self::EnumValue { enum_id, member } => {
+                enum_id.hash(state);
+                member.hash(state);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -306,7 +365,7 @@ impl PartialEq for Value {
             (Self::String(a), Self::String(b)) => a == b,
             (Self::Date(a), Self::Date(b)) => a == b,
             (Self::StrictTime(a), Self::StrictTime(b)) => a == b,
-            (Self::Object(a), Self::Object(b)) => a == b,
+            (Self::Object(a), Self::Object(b)) => Rc::ptr_eq(a, b),
             (Self::Collection(a), Self::Collection(b)) => a == b,
             // Map equality is structural over entries (Pure semantics):
             // two distinct `Rc<RefCell<MapState>>`s with the same
@@ -407,13 +466,13 @@ impl Value {
         }
     }
 
-    /// Extract an object ID, or return a type error.
+    /// Extract an object handle (cloning the Rc), or return a type error.
     ///
     /// # Errors
     /// Returns `TypeMismatch` if this value is not an `Object`.
-    pub fn as_object(&self) -> Result<ObjectId, crate::error::PureRuntimeError> {
+    pub fn as_object(&self) -> Result<ObjectHandle, crate::error::PureRuntimeError> {
         match self {
-            Self::Object(id) => Ok(*id),
+            Self::Object(handle) => Ok(handle.clone()),
             other => Err(crate::error::PureRuntimeError::type_mismatch(
                 "Object", other,
             )),
@@ -610,9 +669,9 @@ impl Value {
     /// to route every reflection through the same heap accessor (step 3),
     /// and by `assertIs` to compare metamodel references uniformly.
     #[must_use]
-    pub fn as_object_id(&self, heap: &crate::heap::RuntimeHeap) -> Option<crate::heap::ObjectId> {
+    pub fn as_object_handle(&self, heap: &crate::heap::RuntimeHeap) -> Option<ObjectHandle> {
         match self {
-            Self::Object(oid) => Some(*oid),
+            Self::Object(handle) => Some(handle.clone()),
             Self::Element(eid) => heap.object_for_element(*eid),
             Self::Function(fv) => match fv.as_ref() {
                 FunctionValue::Compiled(eid) => heap.object_for_element(*eid),
@@ -623,18 +682,10 @@ impl Value {
     }
 
     /// Project this value to its `ElementId` view, if any.
-    ///
-    /// Inverse of [`Self::as_object_id`]. Returns:
-    /// - `Value::Element(eid)` → `Some(eid)`
-    /// - `Value::Function(Compiled(eid))` → `Some(eid)`
-    /// - `Value::Object(oid)` → reverse-lookup via the `BiMap` when the
-    ///   row was created by `bootstrap_metamodel` (rare; reserved for
-    ///   diagnostics)
-    /// - everything else → `None`
     #[must_use]
     pub fn as_element_id(
         &self,
-        heap: &crate::heap::RuntimeHeap,
+        _heap: &crate::heap::RuntimeHeap,
     ) -> Option<legend_pure_parser_pure::ids::ElementId> {
         match self {
             Self::Element(eid) => Some(*eid),
@@ -642,7 +693,7 @@ impl Value {
                 FunctionValue::Compiled(eid) => Some(*eid),
                 FunctionValue::Lambda(_) => None,
             },
-            Self::Object(oid) => heap.element_for_object(*oid),
+            Self::Object(handle) => crate::heap::RuntimeHeap::element_for_object(handle),
             _ => None,
         }
     }
@@ -662,7 +713,12 @@ impl fmt::Display for Value {
             Self::String(s) => write!(f, "'{s}'"),
             Self::Date(d) => write!(f, "%{d}"),
             Self::StrictTime(t) => write!(f, "%{t}"),
-            Self::Object(id) => write!(f, "<Object@{id}>"),
+            Self::Object(handle) => write!(
+                f,
+                "<Object@{:p}:{}>",
+                Rc::as_ptr(handle),
+                handle.borrow().classifier_str()
+            ),
             Self::Collection(v) => {
                 write!(f, "[")?;
                 for (i, item) in v.iter().enumerate() {

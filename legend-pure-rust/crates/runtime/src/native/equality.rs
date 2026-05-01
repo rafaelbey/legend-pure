@@ -33,7 +33,7 @@ use smol_str::SmolStr;
 
 use std::cell::Cell;
 
-use crate::heap::ObjectId;
+use crate::heap::ObjectHandle;
 use crate::native::EvalContextTrait;
 use crate::value::Value;
 
@@ -89,7 +89,7 @@ impl Drop for DepthGuard {
 /// Primitives compare by value (delegating to `PartialEq for Value`).
 /// Collections compare length then element-wise.
 /// Heap objects compare via `<<equality.Key>>` stereotype if the class
-/// declares any; otherwise fall back to `ObjectId` identity.
+/// declares any; otherwise fall back to `ObjectHandle` identity.
 #[must_use]
 pub fn values_equal(ctx: &dyn EvalContextTrait, a: &Value, b: &Value) -> bool {
     let Some(_guard) = DepthGuard::enter() else {
@@ -103,11 +103,11 @@ pub fn values_equal(ctx: &dyn EvalContextTrait, a: &Value, b: &Value) -> bool {
                     .zip(ys.iter())
                     .all(|(x, y)| values_equal(ctx, x, y))
         }
-        (Value::Object(oa), Value::Object(ob)) => objects_equal(ctx, *oa, *ob),
+        (Value::Object(oa), Value::Object(ob)) => objects_equal(ctx, oa.clone(), ob.clone()),
         // Cross-variant equality for metamodel references — when one
         // side is `Element(eid)` / `Function(Compiled(eid))` and the
         // other is the heap row produced by `bootstrap_metamodel`,
-        // both views point at the same `ObjectId`. Without this
+        // both views point at the same `ObjectHandle`. Without this
         // bridge `assertIs($cls, ^Class<…>(...)->class())` fails
         // because the bare `Element` and the materialised `Object`
         // wouldn't compare equal even though Java treats them as
@@ -118,10 +118,10 @@ pub fn values_equal(ctx: &dyn EvalContextTrait, a: &Value, b: &Value) -> bool {
             Value::Element(_) | Value::Function(_) | Value::Object(_),
             Value::Element(_) | Value::Function(_) | Value::Object(_),
         ) => {
-            let oa = a.as_object_id(ctx.heap());
-            let ob = b.as_object_id(ctx.heap());
+            let oa = a.as_object_handle(ctx.heap());
+            let ob = b.as_object_handle(ctx.heap());
             match (oa, ob) {
-                (Some(la), Some(lb)) if la == lb => true,
+                (Some(la), Some(lb)) if std::rc::Rc::ptr_eq(&la, &lb) => true,
                 (Some(la), Some(lb)) => objects_equal(ctx, la, lb),
                 _ => a == b,
             }
@@ -154,20 +154,20 @@ pub fn values_equal(ctx: &dyn EvalContextTrait, a: &Value, b: &Value) -> bool {
 /// Heap-object structural equality. Walks the classifier, gathers every
 /// `<<equality.Key>>`-annotated property, and recurses. No keys
 /// annotated ⇒ identity equality.
-fn objects_equal(ctx: &dyn EvalContextTrait, a: ObjectId, b: ObjectId) -> bool {
-    if a == b {
+fn objects_equal(ctx: &dyn EvalContextTrait, a: ObjectHandle, b: ObjectHandle) -> bool {
+    if std::rc::Rc::ptr_eq(&a, &b) {
         return true;
     }
-    let Ok(a_classifier) = ctx.heap().classifier(a) else {
+    let Ok(a_classifier) = ctx.heap().classifier(&a) else {
         return false;
     };
-    let Ok(b_classifier) = ctx.heap().classifier(b) else {
+    let Ok(b_classifier) = ctx.heap().classifier(&b) else {
         return false;
     };
     if a_classifier != b_classifier {
         return false;
     }
-    let Some(class_id) = crate::m3_paths::resolve(ctx.model(), a_classifier) else {
+    let Some(class_id) = crate::m3_paths::resolve(ctx.model(), &a_classifier) else {
         return false; // unknown classifier — can't structurally compare
     };
     let keys = equality_key_properties(ctx.model(), class_id);
@@ -175,10 +175,10 @@ fn objects_equal(ctx: &dyn EvalContextTrait, a: ObjectId, b: ObjectId) -> bool {
         return false; // no <<equality.Key>> → identity semantics (already checked above)
     }
     for prop in &keys {
-        let Ok(av) = ctx.heap().get_property_values(a, prop.as_str()) else {
+        let Ok(av) = ctx.heap().get_property_values(&a, prop.as_str()) else {
             return false;
         };
-        let Ok(bv) = ctx.heap().get_property_values(b, prop.as_str()) else {
+        let Ok(bv) = ctx.heap().get_property_values(&b, prop.as_str()) else {
             return false;
         };
         if av.len() != bv.len() {

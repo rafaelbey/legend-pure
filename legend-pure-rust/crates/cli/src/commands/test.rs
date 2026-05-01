@@ -52,7 +52,7 @@ use legend_pure_core_platform::platform::load_platform;
 use legend_pure_parser_pure::model::PureModel;
 use legend_pure_runtime::error::PureException;
 use legend_pure_runtime::eval::Evaluator;
-use legend_pure_runtime::heap::{ObjectId, RuntimeHeap};
+use legend_pure_runtime::heap::{ObjectHandle, RuntimeHeap};
 use legend_pure_runtime::hooks::EvalHooks;
 use legend_pure_runtime::native::NativeRegistry;
 use legend_pure_runtime::native::testing::find_pct_adapter;
@@ -374,7 +374,7 @@ fn run_tests<'m, H: EvalHooks>(
         }
         .map_err(|e| CliError::Custom(format!("Test execution failed: {e}")))?;
 
-        let Value::Object(report_id) = result else {
+        let Value::Object(ref report_id) = result else {
             return Err(CliError::Custom(format!(
                 "Test surveyor returned non-Object: {result:?}"
             )));
@@ -496,7 +496,7 @@ impl TestReport {
         self.results.append(&mut other.results);
     }
 
-    fn read(heap: &RuntimeHeap, id: ObjectId) -> Result<Self, CliError> {
+    fn read(heap: &RuntimeHeap, id: &ObjectHandle) -> Result<Self, CliError> {
         let pass_count = read_int_slot(heap, id, "passCount")?;
         let fail_count = read_int_slot(heap, id, "failCount")?;
         let error_count = read_int_slot(heap, id, "errorCount")?;
@@ -504,12 +504,12 @@ impl TestReport {
         let total_elapsed_ms = read_int_slot(heap, id, "totalElapsed").unwrap_or(0);
 
         let raw_results = heap
-            .get_property_values(id, "results")
+            .get_property_values(&id, "results")
             .map_err(|e| CliError::Custom(format!("TestReport.results read failed: {e}")))?;
         let mut results = Vec::with_capacity(raw_results.len());
         for v in &raw_results {
             if let Value::Object(rid) = v {
-                results.push(TestResult::read(heap, *rid));
+                results.push(TestResult::read(heap, rid));
             }
         }
         Ok(Self {
@@ -563,9 +563,9 @@ impl TestReport {
 }
 
 impl TestResult {
-    fn read(heap: &RuntimeHeap, id: ObjectId) -> Self {
+    fn read(heap: &RuntimeHeap, id: &ObjectHandle) -> Self {
         let fqn = read_string_slot(heap, id, "fqn").unwrap_or_else(|_| "<unknown>".into());
-        let status = match heap.get_property_values(id, "status") {
+        let status = match heap.get_property_values(&id, "status") {
             Ok(values) => match values.iter().next() {
                 Some(Value::EnumValue { member, .. }) => match member.as_str() {
                     "PASS" => TestStatus::Pass,
@@ -648,9 +648,9 @@ impl TestResult {
     }
 }
 
-fn read_int_slot(heap: &RuntimeHeap, id: ObjectId, slot: &str) -> Result<i64, CliError> {
+fn read_int_slot(heap: &RuntimeHeap, id: &ObjectHandle, slot: &str) -> Result<i64, CliError> {
     let values = heap
-        .get_property_values(id, slot)
+        .get_property_values(&id, slot)
         .map_err(|e| CliError::Custom(format!("read {slot}: {e}")))?;
     match values.iter().next() {
         Some(Value::Integer(n)) => Ok(*n),
@@ -661,9 +661,9 @@ fn read_int_slot(heap: &RuntimeHeap, id: ObjectId, slot: &str) -> Result<i64, Cl
     }
 }
 
-fn read_string_slot(heap: &RuntimeHeap, id: ObjectId, slot: &str) -> Result<String, CliError> {
+fn read_string_slot(heap: &RuntimeHeap, id: &ObjectHandle, slot: &str) -> Result<String, CliError> {
     let values = heap
-        .get_property_values(id, slot)
+        .get_property_values(&id, slot)
         .map_err(|e| CliError::Custom(format!("read {slot}: {e}")))?;
     match values.iter().next() {
         Some(Value::String(s)) => Ok(s.to_string()),
