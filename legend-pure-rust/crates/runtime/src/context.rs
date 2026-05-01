@@ -179,6 +179,16 @@ impl VariableContext {
     pub fn depth(&self) -> usize {
         self.undo_stack.len()
     }
+
+    /// Iterate every currently visible binding's value.
+    ///
+    /// Used as a reachability root by `getAll` to discover live user-class
+    /// instances without a global registry. The iterator borrows
+    /// immutably from the context, so callers must finish iterating
+    /// before any subsequent `set`/`push_scope`/`pop_scope`.
+    pub fn iter_values(&self) -> impl Iterator<Item = &Value> + '_ {
+        self.vars.values()
+    }
 }
 
 impl Default for VariableContext {

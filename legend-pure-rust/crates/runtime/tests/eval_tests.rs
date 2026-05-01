@@ -3340,3 +3340,100 @@ fn eval_pct_grammar_functions_strict_pass() {
         panic!("PCT grammar/functions surveyor: fail={fail} error={error}\n{detail}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// getAll reachability walk (Step 6 — frame-scoped instance discovery)
+// ---------------------------------------------------------------------------
+
+/// `Class.all()` invoked from a function whose `let` bindings are still
+/// alive must surface those instances. Pinned because the post-Rc heap
+/// has no global registry — instance enumeration relies on walking the
+/// variable context.
+#[test]
+fn get_all_finds_user_instances_reachable_from_let_bindings() {
+    let model = compile_with_platform(
+        "Class my::pkg::Trade\n\
+         {\n\
+             ticker: String[1];\n\
+         }\n\
+         function my::pkg::countTrades(): Integer[1]\n\
+         {\n\
+             let a = ^my::pkg::Trade(ticker='AAPL');\n\
+             let b = ^my::pkg::Trade(ticker='MSFT');\n\
+             let c = ^my::pkg::Trade(ticker='GOOG');\n\
+             my::pkg::Trade.all()->size()\n\
+         }",
+    );
+    let mut evaluator = legend_pure_runtime::eval::Evaluator::new_default(&model);
+    let result = evaluator
+        .call("my::pkg::countTrades", &[])
+        .expect("countTrades should evaluate");
+    assert_eq!(
+        result,
+        Value::Integer(3),
+        "getAll should report all 3 in-scope Trade instances"
+    );
+}
+
+/// Conversely, when no Trade instance exists in any reachable root,
+/// `Trade.all()` must return empty — RAII has freed them.
+#[test]
+fn get_all_returns_empty_when_no_user_instances_reachable() {
+    let model = compile_with_platform(
+        "Class my::pkg::Widget\n\
+         {\n\
+             id: Integer[1];\n\
+         }\n\
+         function my::pkg::countWidgets(): Integer[1]\n\
+         {\n\
+             my::pkg::Widget.all()->size()\n\
+         }",
+    );
+    let mut evaluator = legend_pure_runtime::eval::Evaluator::new_default(&model);
+    let result = evaluator
+        .call("my::pkg::countWidgets", &[])
+        .expect("countWidgets should evaluate");
+    assert_eq!(
+        result,
+        Value::Integer(0),
+        "getAll should report 0 instances when none are reachable"
+    );
+}
+
+/// Metamodel `.all()` must keep working — e.g. `Class.all()` returns
+/// every compiled class via the metamodel arena.
+#[test]
+fn get_all_class_metamodel_finds_user_classes() {
+    let model = compile_with_platform(
+        "Class my::pkg::Foo {}\n\
+         Class my::pkg::Bar {}\n\
+         function my::pkg::namesOfClasses(): String[*]\n\
+         {\n\
+             meta::pure::metamodel::type::Class.all()->map(c | $c.name)\n\
+         }",
+    );
+    let mut evaluator = legend_pure_runtime::eval::Evaluator::new_default(&model);
+    let result = evaluator
+        .call("my::pkg::namesOfClasses", &[])
+        .expect("namesOfClasses should evaluate");
+    let names: Vec<String> = match result {
+        Value::Collection(items) => items
+            .iter()
+            .filter_map(|v| match v {
+                Value::String(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .collect(),
+        Value::String(s) => vec![s.to_string()],
+        Value::Unit => Vec::new(),
+        other => panic!("expected Collection of String, got {other:?}"),
+    };
+    assert!(
+        names.iter().any(|n| n == "Foo"),
+        "Class.all() should include user-defined Foo; got {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n == "Bar"),
+        "Class.all() should include user-defined Bar; got {names:?}"
+    );
+}
