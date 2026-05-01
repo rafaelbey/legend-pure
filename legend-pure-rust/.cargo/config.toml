@@ -12,18 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-[target.'cfg(all())']
-rustflags = [
-    "-Wclippy::all",
-    "-Wclippy::pedantic",
-]
-
 # Cargo aliases for quality gates.
+# Clippy lint groups live on the aliases (not in [build] rustflags), so plain
+# `cargo build` / `cargo test` don't get clippy lints emitted as unknown-lints
+# by base rustc.
 # Usage:
 #   cargo lint-lib    — strict lint (library code only, no unwrap/expect)
-#   cargo lint        — standard lint (all targets, general clippy)
+#   cargo lint        — standard lint (all targets, general clippy + pedantic)
 #   cargo audit       — full quality check (lint + copyright + build)
 [alias]
 lint-lib = "clippy --lib --all -- -D clippy::unwrap_used -D clippy::expect_used"
-lint     = "clippy --all-targets"
+lint     = "clippy --all-targets -- -W clippy::all -W clippy::pedantic"
 audit    = ["lint-lib", "lint", "test --all"]
