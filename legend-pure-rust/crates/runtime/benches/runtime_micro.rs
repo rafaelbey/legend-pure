@@ -100,7 +100,8 @@ fn bench_property_access(c: &mut Criterion) {
     group.bench_function("dynamic_get", |b| {
         let mut heap = RuntimeHeap::new();
         let id = heap.alloc_dynamic("my::Trade");
-        heap.mutate_add(&id, "price", &[Value::Float(42.0)]).unwrap();
+        heap.mutate_add(&id, "price", &[Value::Float(42.0)])
+            .unwrap();
         heap.mutate_add(&id, "ticker", &[Value::String("AAPL".into())])
             .unwrap();
 

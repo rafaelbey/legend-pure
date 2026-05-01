@@ -540,7 +540,7 @@ struct QpCandidate {
 ///    borrow conflicts.
 /// 2. Infer all argument types bottom-up.
 /// 3. Resolve the property's return type via `infer_simple_property`
-///    or `infer_qualified_property` (handles UnknownProperty errors,
+///    or `infer_qualified_property` (handles `UnknownProperty` errors,
 ///    QP arity + arg-type validation, etc.).
 /// 4. If the receiver multiplicity is non-strictly-toOne, rewrite
 ///    `expr.kind` to a `map(receiver, λ{v_automap | property(v_automap, ...)})`

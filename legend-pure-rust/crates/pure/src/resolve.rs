@@ -826,11 +826,11 @@ fn infer_type_from_valuespec(
                 find_property_with_inheritance(target_eid, &data.function_name, model)?;
             let resolved =
                 substitute_class_generics(&prop_ty_owned, &type_params_owned, &receiver_type_args);
-            return match resolved {
+            match resolved {
                 crate::types::TypeExpr::Named { element, .. } => Some(element),
                 crate::types::TypeExpr::Generic(_) => Some(crate::bootstrap::ANY_ID),
                 _ => None,
-            };
+            }
         }
         ExprKind::FunctionCall(FunctionCallData {
             function,

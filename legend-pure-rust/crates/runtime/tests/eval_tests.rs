@@ -1818,7 +1818,7 @@ fn eval_surveyor_element_to_path_all_tests_pass() {
 
     let heap = evaluator.heap();
     let read = |name: &str| -> i64 {
-        let values = heap.get_property_values(&report_id, name).unwrap();
+        let values = heap.get_property_values(report_id, name).unwrap();
         match values.iter().next() {
             Some(Value::Integer(n)) => *n,
             _ => -1,
@@ -1864,7 +1864,7 @@ fn eval_surveyor_on_element_to_path_tests_has_nonzero_runs() {
 
     let heap = evaluator.heap();
     let read = |name: &str| -> i64 {
-        let values = heap.get_property_values(&report_id, name).unwrap();
+        let values = heap.get_property_values(report_id, name).unwrap();
         match values.iter().next() {
             Some(Value::Integer(n)) => *n,
             _ => -1,
@@ -2109,12 +2109,12 @@ fn eval_pct_load_manifest_essential_resolves() {
 
     let heap = evaluator.heap();
     assert_eq!(
-        heap.classifier(&manifest_id).unwrap(),
+        heap.classifier(manifest_id).unwrap(),
         "meta::pure::test::pct::PCTManifest"
     );
 
     let adapter = heap
-        .get_property_values(&manifest_id, "adapter")
+        .get_property_values(manifest_id, "adapter")
         .expect("adapter slot")
         .iter()
         .next()
@@ -2131,7 +2131,7 @@ fn eval_pct_load_manifest_essential_resolves() {
     );
 
     let exclusions = heap
-        .get_property_values(&manifest_id, "exclusions")
+        .get_property_values(manifest_id, "exclusions")
         .expect("exclusions slot")
         .iter()
         .next()
@@ -3193,7 +3193,7 @@ fn dump_non_pass_results(
         let Value::Object(rid) = v else { continue };
         let status = evaluator
             .heap()
-            .get_property_values(&rid, "status")
+            .get_property_values(rid, "status")
             .ok()
             .and_then(|v| v.iter().next().cloned());
         let bucket = match &status {
@@ -3203,7 +3203,7 @@ fn dump_non_pass_results(
         };
         let fqn = evaluator
             .heap()
-            .get_property_values(&rid, "fqn")
+            .get_property_values(rid, "fqn")
             .ok()
             .and_then(|v| v.iter().next().cloned())
             .and_then(|v| match v {
@@ -3213,7 +3213,7 @@ fn dump_non_pass_results(
             .unwrap_or_default();
         let msg = evaluator
             .heap()
-            .get_property_values(&rid, "message")
+            .get_property_values(rid, "message")
             .ok()
             .and_then(|v| v.iter().next().cloned())
             .and_then(|v| match v {

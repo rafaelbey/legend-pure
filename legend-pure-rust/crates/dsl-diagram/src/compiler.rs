@@ -86,7 +86,7 @@ impl CompilerExtension for DiagramExtension {
 
     fn declare(&self, ctx: &mut DeclareCtx<'_>) {
         let mut registry = self.diagrams.borrow_mut();
-        for source_file in ctx.source_files.iter() {
+        for source_file in ctx.source_files {
             for section in &source_file.sections {
                 if section.kind.as_str() != crate::ast::SECTION_KIND {
                     continue;
@@ -270,22 +270,17 @@ fn check_edge_endpoints(
 }
 
 fn is_class_or_type(model: &PureModel, fqn: &str) -> bool {
-    resolve(model, fqn)
-        .map(|id| {
-            matches!(
-                model.get_element(id),
-                ModelElement::Class(_)
-                    | ModelElement::PrimitiveType(_)
-                    | ModelElement::Enumeration(_)
-            )
-        })
-        .unwrap_or(false)
+    resolve(model, fqn).is_some_and(|id| {
+        matches!(
+            model.get_element(id),
+            ModelElement::Class(_) | ModelElement::PrimitiveType(_) | ModelElement::Enumeration(_)
+        )
+    })
 }
 
 fn is_association(model: &PureModel, fqn: &str) -> bool {
     resolve(model, fqn)
-        .map(|id| matches!(model.get_element(id), ModelElement::Association(_)))
-        .unwrap_or(false)
+        .is_some_and(|id| matches!(model.get_element(id), ModelElement::Association(_)))
 }
 
 fn class_has_property(model: &PureModel, class_fqn: &str, property: &str) -> bool {
@@ -303,7 +298,7 @@ fn class_has_property(model: &PureModel, class_fqn: &str, property: &str) -> boo
 
 fn resolve(model: &PureModel, fqn: &str) -> Option<ElementId> {
     let segments: Vec<SmolStr> = fqn.split("::").map(SmolStr::new).collect();
-    if segments.is_empty() || segments.iter().any(|s| s.is_empty()) {
+    if segments.is_empty() || segments.iter().any(smol_str::SmolStr::is_empty) {
         return None;
     }
     model.resolve_by_path(&segments)

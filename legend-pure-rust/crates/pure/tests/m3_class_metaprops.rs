@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Probes the m3_parser's coverage of Class metamodel properties.
+//! Probes the `m3_parser`'s coverage of Class metamodel properties.
 //!
 //! The platform `Class` metaclass (declared in `m3.pure`) defines many
 //! reflective properties — `properties`, `qualifiedProperties`,

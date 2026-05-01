@@ -69,7 +69,7 @@ impl PackageableElement for MockDSL {
 }
 
 impl DSLElement for MockDSL {
-    fn kind(&self) -> &str {
+    fn kind(&self) -> &'static str {
         "MockDSL"
     }
     fn as_any(&self) -> &dyn std::any::Any {
@@ -94,7 +94,7 @@ impl DSLElement for MockDSL {
 struct MockSectionParser;
 
 impl SectionParser for MockSectionParser {
-    fn kind(&self) -> &str {
+    fn kind(&self) -> &'static str {
         "MockDSL"
     }
 

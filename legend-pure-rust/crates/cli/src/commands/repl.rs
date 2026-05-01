@@ -169,32 +169,32 @@ pub fn run(args: ReplArgs) -> Result<(), CliError> {
 
     loop {
         // Auto-reload check
-        if let Some(flag) = &file_changed_flag {
-            if flag.load(std::sync::atomic::Ordering::SeqCst) {
-                flag.store(false, std::sync::atomic::Ordering::SeqCst);
-                eprintln!(
-                    "  {}",
-                    "File change detected — reloading platform...".dimmed()
-                );
+        if let Some(flag) = &file_changed_flag
+            && flag.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            flag.store(false, std::sync::atomic::Ordering::SeqCst);
+            eprintln!(
+                "  {}",
+                "File change detected — reloading platform...".dimmed()
+            );
 
-                let dir = crate::live::resolve_platform_dir(args.platform_dir.as_deref())?;
-                let t0 = Instant::now();
-                live_sources = crate::live::load_from_disk(&dir)?;
-                platform_pairs = live_sources
-                    .iter()
-                    .map(|s| (s.content.as_str(), s.path.as_str()))
-                    .collect();
-                platform_pairs.push((repl_helper, "<repl_helper>"));
-                eprintln!(
-                    "  {}",
-                    format!(
-                        "Reloaded {} files from disk ({}ms)",
-                        live_sources.len(),
-                        t0.elapsed().as_millis()
-                    )
-                    .dimmed()
-                );
-            }
+            let dir = crate::live::resolve_platform_dir(args.platform_dir.as_deref())?;
+            let t0 = Instant::now();
+            live_sources = crate::live::load_from_disk(&dir)?;
+            platform_pairs = live_sources
+                .iter()
+                .map(|s| (s.content.as_str(), s.path.as_str()))
+                .collect();
+            platform_pairs.push((repl_helper, "<repl_helper>"));
+            eprintln!(
+                "  {}",
+                format!(
+                    "Reloaded {} files from disk ({}ms)",
+                    live_sources.len(),
+                    t0.elapsed().as_millis()
+                )
+                .dimmed()
+            );
         }
 
         let prompt = format!("{} ", "pure>".cyan().bold());
@@ -228,9 +228,7 @@ pub fn run(args: ReplArgs) -> Result<(), CliError> {
                 continue;
             }
             ":reload" => {
-                if !args.live {
-                    eprintln!("  {}", "Error: :reload requires --live mode".red());
-                } else {
+                if args.live {
                     let dir = crate::live::resolve_platform_dir(args.platform_dir.as_deref())?;
                     let t0 = Instant::now();
                     live_sources = crate::live::load_from_disk(&dir)?;
@@ -248,6 +246,8 @@ pub fn run(args: ReplArgs) -> Result<(), CliError> {
                         )
                         .dimmed()
                     );
+                } else {
+                    eprintln!("  {}", "Error: :reload requires --live mode".red());
                 }
                 continue;
             }

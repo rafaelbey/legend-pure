@@ -45,7 +45,7 @@ fn parse(source: &str) -> DiagramDef {
         .clone()
 }
 
-/// Compares two DiagramDefs ignoring source_info — fields are equal
+/// Compares two `DiagramDefs` ignoring `source_info` — fields are equal
 /// when their structural payload matches even if spans differ. We
 /// achieve this cheaply by composing each side and comparing the
 /// emitted text.

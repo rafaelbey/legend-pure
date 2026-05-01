@@ -1,6 +1,6 @@
 //! JNI Evaluator Bridge
 //!
-//! Provides the Rust implementation of the JNI endpoints for the Java PureRustEvaluator.
+//! Provides the Rust implementation of the JNI endpoints for the Java `PureRustEvaluator`.
 
 #![deny(missing_docs)]
 
@@ -15,7 +15,7 @@ use crate::context::JniContext;
 use legend_pure_core_platform::platform::parse_and_compile;
 use legend_pure_core_platform::sources;
 
-/// Initializes the JniContext by loading the platform models.
+/// Initializes the `JniContext` by loading the platform models.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeInitContext<
     'local,

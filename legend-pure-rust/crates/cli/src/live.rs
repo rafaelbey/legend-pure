@@ -159,11 +159,11 @@ pub fn watch_dir(
                 let mut should_reload = false;
                 for event in events {
                     let path = event.path;
-                    if let Some(ext) = path.extension() {
-                        if ext == "pure" || ext == "json" {
-                            should_reload = true;
-                            break;
-                        }
+                    if let Some(ext) = path.extension()
+                        && (ext == "pure" || ext == "json")
+                    {
+                        should_reload = true;
+                        break;
                     }
                 }
                 if should_reload {
@@ -171,7 +171,7 @@ pub fn watch_dir(
                 }
             }
             Err(e) => {
-                eprintln!("Watch error: {:?}", e);
+                eprintln!("Watch error: {e:?}");
             }
         },
     )

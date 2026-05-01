@@ -16,7 +16,7 @@ use jni::JNIEnv;
 use jni::objects::JObject;
 use legend_pure_runtime::value::Value;
 
-/// Convert a Rust Value into a Java RustResult object
+/// Convert a Rust Value into a Java `RustResult` object
 pub fn rust_to_java_result<'local>(
     env: &mut JNIEnv<'local>,
     value: &Value,
@@ -210,10 +210,14 @@ pub fn rust_to_java_result<'local>(
                     "Lorg/finos/legend/pure/rust/PureRustResult$Type;",
                 )?
                 .l()?;
-            let array = env.new_object_array(vec.len() as i32, &cls, JObject::null())?;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            let len_i32 = vec.len() as i32;
+            let array = env.new_object_array(len_i32, &cls, JObject::null())?;
             for (i, v) in vec.iter().enumerate() {
                 let item = rust_to_java_result(env, v, context_ptr)?;
-                env.set_object_array_element(&array, i as i32, &item)?;
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                let idx = i as i32;
+                env.set_object_array_element(&array, idx, &item)?;
             }
 
             let method_id = env.get_method_id(
@@ -268,7 +272,7 @@ pub fn rust_to_java_result<'local>(
             } else {
                 let _ = env.throw_new(
                     "org/finos/legend/pure/rust/PureRustEvaluationException",
-                    format!("Element has no object representation: {:?}", element_id),
+                    format!("Element has no object representation: {element_id:?}"),
                 );
                 Ok(JObject::null())
             }
@@ -276,7 +280,7 @@ pub fn rust_to_java_result<'local>(
         _ => {
             let _ = env.throw_new(
                 "org/finos/legend/pure/rust/PureRustEvaluationException",
-                format!("Unsupported value type: {:?}", value),
+                format!("Unsupported value type: {value:?}"),
             );
             Ok(JObject::null())
         }
@@ -353,7 +357,7 @@ pub fn java_to_rust_value<'local>(
                     .borrow()
                     .lookup(jh)
                     .cloned()
-                    .ok_or_else(|| jni::errors::Error::JavaException)?;
+                    .ok_or(jni::errors::Error::JavaException)?;
                 Ok(Value::Object(handle))
             }
         }
@@ -380,7 +384,7 @@ pub fn java_to_rust_value<'local>(
     }
 }
 
-/// Convert a Java RustResult array into a vector of Rust Values
+/// Convert a Java `RustResult` array into a vector of Rust Values
 pub fn java_to_rust_args<'local>(
     env: &mut JNIEnv<'local>,
     args_array: &jni::objects::JObjectArray<'local>,

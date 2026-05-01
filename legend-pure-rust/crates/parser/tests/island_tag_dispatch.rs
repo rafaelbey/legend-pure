@@ -47,7 +47,7 @@ struct CurlyEcho {
 }
 
 impl IslandContent for CurlyEcho {
-    fn tag(&self) -> &str {
+    fn tag(&self) -> &'static str {
         ">"
     }
     fn as_any(&self) -> &dyn Any {
@@ -67,7 +67,7 @@ impl IslandContent for CurlyEcho {
 struct CurlyEchoParser;
 
 impl IslandParser for CurlyEchoParser {
-    fn tag(&self) -> &str {
+    fn tag(&self) -> &'static str {
         ">"
     }
     fn parse(
@@ -111,7 +111,7 @@ struct RawEcho {
 }
 
 impl IslandContent for RawEcho {
-    fn tag(&self) -> &str {
+    fn tag(&self) -> &'static str {
         "RAW"
     }
     fn as_any(&self) -> &dyn Any {
@@ -131,7 +131,7 @@ impl IslandContent for RawEcho {
 struct RawEchoParser;
 
 impl IslandParser for RawEchoParser {
-    fn tag(&self) -> &str {
+    fn tag(&self) -> &'static str {
         "RAW"
     }
     fn parse(

@@ -32,21 +32,25 @@ pub struct Cursor {
 
 impl Cursor {
     /// Creates a new cursor over the given token stream.
+    #[must_use]
     pub fn new(tokens: Vec<Token>) -> Self {
         Self { tokens, pos: 0 }
     }
 
     /// Returns the current token without advancing.
+    #[must_use]
     pub fn peek(&self) -> &Token {
         &self.tokens[self.pos]
     }
 
     /// Returns the kind of the current token.
+    #[must_use]
     pub fn peek_kind(&self) -> TokenKind {
         self.tokens[self.pos].kind
     }
 
     /// Returns the kind of the token at `offset` positions ahead.
+    #[must_use]
     pub fn peek_kind_at(&self, offset: usize) -> TokenKind {
         let idx = self.pos + offset;
         if idx < self.tokens.len() {
@@ -66,6 +70,7 @@ impl Cursor {
     }
 
     /// Returns true if the current token is of the given kind.
+    #[must_use]
     pub fn check(&self, kind: TokenKind) -> bool {
         self.peek_kind() == kind
     }
@@ -127,6 +132,7 @@ impl Cursor {
     }
 
     /// Returns the source info of the current token.
+    #[must_use]
     pub fn current_source_info(&self) -> SourceInfo {
         self.peek().source_info.clone()
     }

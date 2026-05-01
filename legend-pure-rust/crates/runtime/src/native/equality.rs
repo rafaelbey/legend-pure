@@ -26,6 +26,10 @@
 //! `eq` / `is` stay strictly identity-based — those Pure natives do
 //! *not* route through here.
 
+// `objects_equal` takes both handles by value for symmetry; each is an
+// O(1) Rc clone bump.
+#![allow(clippy::needless_pass_by_value)]
+
 use legend_pure_parser_pure::annotations::StereotypeRef;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};

@@ -24,8 +24,8 @@
 //!   [`legend_pure_parser_ast::island::IslandContent`].
 //! - **Parser** (commit #5) — will land here, registers as
 //!   [`legend_pure_parser_parser::IslandParser`] with tag `""`.
-//! - **Composer** (commit #6) — IslandComposer with tag `""`.
-//! - **Protocol** (commit #7) — IslandProtocol with tag `""`.
+//! - **Composer** (commit #6) — `IslandComposer` with tag `""`.
+//! - **Protocol** (commit #7) — `IslandProtocol` with tag `""`.
 //!
 //! Core crates carry no graph-fetch knowledge — this crate is the
 //! sole owner.
