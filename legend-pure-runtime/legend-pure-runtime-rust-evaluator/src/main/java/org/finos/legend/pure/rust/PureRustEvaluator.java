@@ -15,12 +15,29 @@
 package org.finos.legend.pure.rust;
 
 import org.eclipse.collections.api.LazyIterable;
+import org.eclipse.collections.api.factory.Maps;
 import org.eclipse.collections.impl.factory.Lists;
 import org.eclipse.collections.impl.utility.LazyIterate;
 
+import java.io.Closeable;
 import java.lang.ref.Cleaner;
+import java.util.Map;
 
-public class PureRustEvaluator implements AutoCloseable
+
+/**
+ * A JNI-based evaluator for Pure using the Rust-based execution engine.
+ * <p>
+ * This class is <b>not</b> thread-safe. Concurrent access to the evaluator or its
+ * derived {@link PureRustInstance} objects must be externally synchronized.
+ * <p>
+ * This evaluator manages off-heap memory in the Rust runtime. Explicitly calling {@link #close()}
+ * will immediately free all associated native resources and invalidate any live {@link PureRustInstance}
+ * references returned by this evaluator.
+ * <p>
+ * Explicitly closing the evaluator is optional; if the instance is garbage collected,
+ * the {@link java.lang.ref.Cleaner} will automatically free the off-heap reference Rust manages.
+ */
+public class PureRustEvaluator implements Closeable
 {
     private final static Cleaner cleaner = Cleaner.create();
 
@@ -33,6 +50,8 @@ public class PureRustEvaluator implements AutoCloseable
     // Opaque pointer to the Rust-side compiler/runtime context
     private final long contextPointer;
     private final Cleaner.Cleanable cleanable;
+    private final Map<Long, Cleaner.Cleanable> instanceCleanables = Maps.mutable.empty();
+    private boolean closed;
 
     /**
      * Initialize the Rust evaluator context with the given source repository.
@@ -44,13 +63,24 @@ public class PureRustEvaluator implements AutoCloseable
     }
 
     /**
-     * Execute a Pure function by its fully qualified path.
-     * @param functionPath The full path (e.g., "meta::myFunction__String_1_")
-     * @param args The arguments formatted as an array of RustResult variants
-     * @return The evaluation result, structured as a RustResult
+     * Executes a Pure function by its fully qualified path.
+     * <p>
+     * The arguments can be primitive types (String, Boolean, Long, Integer, Double, Float),
+     * {@link PureRustInstance} objects, or {@link Iterable} collections of these types.
+     *
+     * @param functionPath the fully qualified path of the function to execute (e.g., "meta::myFunction__String_1_")
+     * @param args the arguments to pass to the function
+     * @param <T> the expected return type
+     * @return the result of the evaluation, automatically unwrapped from native types
+     * @throws PureRustEvaluationException if the evaluator is closed or a native execution error occurs
      */
     public <T> T evaluate(String functionPath, Object... args)
     {
+        if (this.closed)
+        {
+            throw new PureRustEvaluationException("Evaluator has been closed");
+        }
+
         PureRustResult pureRustResult = nativeEvaluate(this.contextPointer, functionPath, wrapRustResults(args));
         //noinspection unchecked
         return (T) unwrapRustResult(pureRustResult);
@@ -124,7 +154,9 @@ public class PureRustEvaluator implements AutoCloseable
                 return pureRustResult.getAsFloat();
             case INSTANCE_POINTER:
                 long instancePointer = pureRustResult.getAsInstancePointer();
-                return new PureRustInstance(instancePointer, this);
+                PureRustInstance instance = new PureRustInstance(instancePointer, this);
+                this.instanceCleanables.put(instancePointer, cleaner.register(instance, () -> nativeFreeInstance(this.contextPointer, instancePointer)));
+                return instance;
             case ARRAY:
                 return Lists.mutable.with(pureRustResult.getAsArray()).collect(this::unwrapRustResult);
             default:
@@ -133,32 +165,81 @@ public class PureRustEvaluator implements AutoCloseable
     }
 
     /**
-     * Utility to evaluate a property directly given a complex pointer.
+     * Evaluates a property on a native instance.
+     *
+     * @param instance the instance to evaluate property on
+     * @param propertyName the name of the property to evaluate
+     * @param args additional arguments for the property evaluation (e.g., parameters for a qualified property)
+     * @param <T> the expected return type
+     * @return the result of the property evaluation
+     * @throws PureRustEvaluationException if the evaluator is closed
      */
-    protected <T> T evaluateProperty(long instancePointer, String propertyName, Object... args)
+    protected <T> T evaluateProperty(PureRustInstance instance, String propertyName, Object... args)
     {
-        PureRustResult pureRustResult = nativeGetProperty(this.contextPointer, instancePointer, propertyName, wrapRustResults(args));
+        if (this.closed)
+        {
+            throw new PureRustEvaluationException("Evaluator has been closed");
+        }
+
+        PureRustResult pureRustResult = nativeGetProperty(this.contextPointer, instance.instancePointer, propertyName, wrapRustResults(args));
         //noinspection unchecked
         return (T) unwrapRustResult(pureRustResult);
     }
 
+    /**
+     * Returns the fully qualified classifier path for the given instance.
+     *
+     * @param pureRustInstance the instance to query
+     * @return the classifier path (e.g., "meta::pure::metamodel::type::Class")
+     * @throws PureRustEvaluationException if the evaluator is closed
+     */
     protected String getClassifier(PureRustInstance pureRustInstance)
     {
+        if (this.closed)
+        {
+            throw new PureRustEvaluationException("Evaluator has been closed");
+        }
+
         return nativeGetClassifier(this.contextPointer, pureRustInstance.instancePointer);
     }
 
+    /**
+     * Manually frees a native instance reference.
+     * <p>
+     * While this is called automatically by the GC, it can be invoked explicitly to
+     * release native memory immediately.
+     *
+     * @param pureRustInstance the instance to free
+     */
+    protected void free(PureRustInstance pureRustInstance)
+    {
+        Cleaner.Cleanable cleanabe = this.instanceCleanables.remove(pureRustInstance.instancePointer);
+        if (cleanabe != null)
+        {
+            cleanabe.clean();
+        }
+    }
+
+    /**
+     * Closes the evaluator and releases all associated native resources.
+     * <p>
+     * Once closed, any further calls to this evaluator or its derived instances
+     * will throw a {@link PureRustEvaluationException}.
+     */
     @Override
     public void close()
     {
+        this.closed = true;
+        this.instanceCleanables.values().forEach(Cleaner.Cleanable::clean);
+        this.instanceCleanables.clear();
         this.cleanable.clean();
     }
 
     // --- JNI Native Methods ---
     private native static long nativeInitContext();
     private native static void nativeFreeContext(long contextPtr);
-
+    private native static void nativeFreeInstance(long contextPtr, long instancePointer);
     private native static PureRustResult nativeEvaluate(long contextPtr, String functionPath, PureRustResult[] args);
-
     private native static PureRustResult nativeGetProperty(long contextPtr, long instancePtr, String propertyName, PureRustResult[] args);
     private native static String nativeGetClassifier(long contextPtr, long instancePtr);
 }
