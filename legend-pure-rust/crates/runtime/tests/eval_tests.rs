@@ -172,6 +172,7 @@ fn compile_with_platform(user_source: &str) -> PureModel {
 /// Re-runs platform compile WITHOUT swallowing errors, so the test can
 /// assert on the error set. Mirrors `compile_with_platform` but returns
 /// the `PartialPureModel` directly when compilation produces errors.
+#[allow(clippy::result_large_err)] // PartialPureModel is intentionally rich for diagnostics
 fn try_compile_with_platform(
     user_source: &str,
 ) -> Result<PureModel, legend_pure_parser_pure::pipeline::PartialPureModel> {

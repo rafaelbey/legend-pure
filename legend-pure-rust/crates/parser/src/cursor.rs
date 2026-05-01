@@ -86,7 +86,9 @@ impl Cursor {
     }
 
     /// Expects the current token to be `kind`, advances, and returns the token.
-    /// Returns an error if the current token doesn't match.
+    ///
+    /// # Errors
+    /// Returns `ParseError::expected` when the current token's kind differs.
     pub fn expect(&mut self, kind: TokenKind) -> Result<Token, ParseError> {
         if self.check(kind) {
             Ok(self.advance().clone())
@@ -100,6 +102,11 @@ impl Cursor {
     }
 
     /// Expects the current token to be an identifier, advances, and returns its text.
+    ///
+    /// # Errors
+    /// Returns `ParseError::expected` when the current token is neither an
+    /// `Identifier` nor a `StringLiteral` (which Pure allows as identifiers in
+    /// some contexts).
     pub fn expect_identifier(&mut self) -> Result<(SmolStr, SourceInfo), ParseError> {
         let tok = self.peek().clone();
         // Keywords can also be used as identifiers in certain positions
@@ -117,6 +124,10 @@ impl Cursor {
 
     /// Like `expect_identifier`, but also accepts keywords as identifiers.
     /// This is needed where Pure allows keywords as names (e.g., in qualified paths).
+    ///
+    /// # Errors
+    /// Returns `ParseError::expected` when the current token's kind is not
+    /// identifier-like.
     pub fn expect_identifier_or_keyword(&mut self) -> Result<(SmolStr, SourceInfo), ParseError> {
         let tok = self.peek().clone();
         if tok.kind.is_identifier_like() {
@@ -149,6 +160,10 @@ impl Cursor {
     /// | `>`           | `>`      | (next)    |
     /// | `>>`          | first `>` | `>`      |
     /// | `>>>`         | first `>` | `>>`     |
+    ///
+    /// # Errors
+    /// Returns `ParseError::expected` when the current token is none of the
+    /// three closing-angle-bracket forms.
     pub fn expect_closing_angle_bracket(&mut self) -> Result<(), ParseError> {
         match self.peek_kind() {
             TokenKind::Greater => {

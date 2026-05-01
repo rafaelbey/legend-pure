@@ -65,6 +65,11 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeI
 }
 
 /// Evaluates a function by path.
+///
+/// # Panics
+/// Internal Rust panics are caught and rethrown as `PureRustException`
+/// across the FFI; the Java side never observes a Rust unwind.
+#[allow(clippy::unwrap_used)] // inside catch_unwind — panics translate to Java exceptions
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeEvaluate<'local>(
     mut env: JNIEnv<'local>,
@@ -103,6 +108,11 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeE
 }
 
 /// Evaluates a property on a complex pointer.
+///
+/// # Panics
+/// Internal Rust panics are caught and rethrown as `PureRustException`
+/// across the FFI; the Java side never observes a Rust unwind.
+#[allow(clippy::unwrap_used)] // inside catch_unwind — panics translate to Java exceptions
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeGetProperty<
     'local,
@@ -144,6 +154,11 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeG
 }
 
 /// Evaluates a property on a complex pointer.
+///
+/// # Panics
+/// Internal Rust panics are caught and rethrown as `PureRustException`
+/// across the FFI; the Java side never observes a Rust unwind.
+#[allow(clippy::unwrap_used)] // inside catch_unwind — panics translate to Java exceptions
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeGetClassifier<
     'local,
@@ -191,6 +206,24 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeF
     if context_ptr != 0 {
         let _ = std::panic::catch_unwind(|| unsafe {
             drop(Box::from_raw(context_ptr as *mut JniContext));
+        });
+    }
+}
+
+/// Frees a given instance from Evaluator heap.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeFreeInstance<
+    'local,
+>(
+    mut _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    context_ptr: jlong,
+    complex_ptr: jlong,
+) {
+    if context_ptr != 0 {
+        let _ = std::panic::catch_unwind(|| {
+            let context = unsafe { &mut *(context_ptr as *mut JniContext) };
+            context.release(complex_ptr);
         });
     }
 }
