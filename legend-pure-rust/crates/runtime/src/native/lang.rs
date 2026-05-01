@@ -2122,15 +2122,79 @@ impl NativeFunction for GetAll {
 
         let target_path =
             crate::model_utils::build_element_path(ctx.model(), class_id, "::", false);
-        let heap = ctx.heap();
-        let projected: Vec<Value> = heap
-            .iter_classifiers()
-            .filter(|(_, cls)| cls.as_str() == target_path)
-            .map(|(oid, _)| match RuntimeHeap::element_for_object(&oid) {
+
+        // Two sources, deduped by Rc::as_ptr:
+        //   1. Metamodel arena — every bootstrapped element row whose
+        //      classifier matches. Covers the common case `Class.all()`,
+        //      `ConcreteFunctionDefinition.all()`, etc. in O(metamodel).
+        //   2. Reachability walk from the current variable context.
+        //      Covers user-class queries like `Trade.all()` against
+        //      instances reachable from the live evaluator state. No
+        //      global registry — once a binding drops, the instance is
+        //      no longer reachable and is correctly excluded.
+        let mut seen: std::collections::HashSet<*const std::cell::RefCell<crate::heap::HeapEntry>> =
+            std::collections::HashSet::new();
+        let mut projected: Vec<Value> = Vec::new();
+
+        // Source 1: metamodel arena.
+        for (handle, cls) in ctx.heap().iter_classifiers() {
+            if cls.as_str() != target_path {
+                continue;
+            }
+            if !seen.insert(std::rc::Rc::as_ptr(&handle)) {
+                continue;
+            }
+            projected.push(match RuntimeHeap::element_for_object(&handle) {
                 Some(eid) => Value::Element(eid),
-                None => Value::Object(oid),
-            })
-            .collect();
+                None => Value::Object(handle),
+            });
+        }
+
+        // Source 2: reachability walk from VariableContext roots.
+        // Cost is paid only on getAll calls, not on the hot allocation
+        // path. Walks Collection / Map / Object properties depth-first.
+        let roots: Vec<Value> = ctx.context().iter_values().cloned().collect();
+        let mut worklist: Vec<Value> = roots;
+        while let Some(value) = worklist.pop() {
+            match value {
+                Value::Object(handle) => {
+                    let key = std::rc::Rc::as_ptr(&handle);
+                    if !seen.insert(key) {
+                        continue;
+                    }
+                    let (cls, prop_values): (smol_str::SmolStr, Vec<Value>) = {
+                        let entry = handle.borrow();
+                        let cls = entry.classifier();
+                        let prop_values: Vec<Value> = entry
+                            .property_names()
+                            .iter()
+                            .flat_map(|name| entry.get_property_values(name.as_str()).into_iter())
+                            .collect();
+                        (cls, prop_values)
+                    };
+                    if cls.as_str() == target_path
+                        && RuntimeHeap::element_for_object(&handle).is_none()
+                    {
+                        // Only emit user-allocated objects here; metamodel
+                        // rows were emitted in Source 1.
+                        projected.push(Value::Object(handle));
+                    }
+                    worklist.extend(prop_values);
+                }
+                Value::Collection(items) => {
+                    for v in items.iter() {
+                        worklist.push(v.clone());
+                    }
+                }
+                Value::Map(state) => {
+                    for v in state.borrow().entries.values() {
+                        worklist.push(v.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+
         Ok(Evaluated::new(Value::from_vec(projected)))
     }
 
