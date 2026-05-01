@@ -21,8 +21,18 @@ use legend_pure_parser_pure::model::Element;
 use legend_pure_parser_pure::types::{Multiplicity, TypeExpr};
 
 /// Helper: parse a `.pure` string into a `SourceFile`.
+///
+/// Registers the graph-fetch island plug-in via the dev-dep on
+/// `legend-pure-dsl-graph` so existing fixtures that use `#{…}#`
+/// continue to parse. Core's `parse()` is empty by default after
+/// the graph-fetch extraction.
 fn parse(source: &str) -> SourceFile {
-    legend_pure_parser_parser::parse(source, "test.pure").expect("parse failed")
+    legend_pure_parser_parser::parse_with_islands(
+        source,
+        "test.pure",
+        legend_pure_dsl_graph::parser::default_island_parsers(),
+    )
+    .expect("parse failed")
 }
 
 /// Helper: compile a single Pure source string.
@@ -410,6 +420,232 @@ fn duplicate_element_error() {
         err.source_info.start_line, 2,
         "duplicate should be on line 2"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Duplicate Element — every element kind must produce DuplicateElement
+// ---------------------------------------------------------------------------
+
+/// Helper: compile `source`, expect failure, and return the
+/// `DuplicateElement` errors filtered out of the result.
+#[allow(clippy::result_large_err)]
+fn duplicate_errors(source: &str) -> Vec<legend_pure_parser_pure::error::CompilationError> {
+    let result = compile_one(source);
+    assert!(result.is_err(), "duplicate element should fail");
+    result
+        .unwrap_err()
+        .errors
+        .into_iter()
+        .filter(|e| {
+            matches!(
+                &e.kind,
+                legend_pure_parser_pure::error::CompilationErrorKind::DuplicateElement { .. }
+            )
+        })
+        .collect()
+}
+
+/// Two functions with identical name + identical signature in the same
+/// package are TRUE duplicates: their mangled FQNs collide because the
+/// signature is fully encoded in the mangling. Distinct overloads have
+/// distinct mangled names and never reach this check.
+#[test]
+fn duplicate_function_with_identical_signature() {
+    let dupes = duplicate_errors(
+        "function foo::bar(): Boolean[1] { true; }\n\
+         function foo::bar(): Boolean[1] { false; }",
+    );
+    assert_eq!(dupes.len(), 1, "expected exactly 1 DuplicateElement");
+
+    let err = &dupes[0];
+    match &err.kind {
+        legend_pure_parser_pure::error::CompilationErrorKind::DuplicateElement { name } => {
+            assert_eq!(
+                name.as_str(),
+                "foo::bar__Boolean_1_",
+                "duplicate FQN should be the mangled function name"
+            );
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(err.source_info.start_line, 2, "duplicate is the second def");
+}
+
+/// Real-world repro of the sqrt.pure / asin.pure copy-paste bug: two
+/// functions identical down to type parameters, differing only in body.
+#[test]
+fn duplicate_function_with_type_parameters() {
+    let dupes = duplicate_errors(
+        "function <<PCT.test>> meta::demo::tst<Z|y>(f:Function<{->Z[y]}>[1]):Boolean[1] {\n\
+            true;\n\
+         }\n\
+         function <<PCT.test>> meta::demo::tst<Z|y>(f:Function<{->Z[y]}>[1]):Boolean[1] {\n\
+            false;\n\
+         }",
+    );
+    assert_eq!(dupes.len(), 1, "expected exactly 1 DuplicateElement");
+    // Second declaration starts at line 4 (line 1 = first def, line 2-3 = body+brace,
+    // line 4 = second `function ...` head).
+    assert_eq!(dupes[0].source_info.start_line, 4);
+}
+
+/// Negative control — distinct signatures must NOT be flagged as
+/// duplicates. Function overloading is a load-bearing Pure feature.
+#[test]
+fn function_overloads_with_distinct_signatures_are_allowed() {
+    let model = compile_one(
+        "function foo::bar(x:Integer[1]):Boolean[1] { true; }\n\
+         function foo::bar(x:String[1]):Boolean[1] { true; }",
+    )
+    .expect("distinct overloads must compile");
+
+    // Both mangled FQNs must register as separate elements.
+    let int_overload = model
+        .resolve_by_path(&["foo".into(), "bar_Integer_1__Boolean_1_".into()])
+        .expect("Integer overload");
+    let str_overload = model
+        .resolve_by_path(&["foo".into(), "bar_String_1__Boolean_1_".into()])
+        .expect("String overload");
+    assert_ne!(int_overload, str_overload);
+}
+
+/// Native functions also mangle via `f.mangled_name()`, so the same
+/// duplicate-detection path applies.
+#[test]
+fn duplicate_native_function() {
+    let dupes = duplicate_errors(
+        "native function foo::bar(): Boolean[1];\n\
+         native function foo::bar(): Boolean[1];",
+    );
+    assert_eq!(dupes.len(), 1);
+    match &dupes[0].kind {
+        legend_pure_parser_pure::error::CompilationErrorKind::DuplicateElement { name } => {
+            assert_eq!(name.as_str(), "foo::bar__Boolean_1_");
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(dupes[0].source_info.start_line, 2);
+}
+
+#[test]
+fn duplicate_enumeration() {
+    let dupes = duplicate_errors(
+        "Enum foo::Color { RED, GREEN }\n\
+         Enum foo::Color { BLUE }",
+    );
+    assert_eq!(dupes.len(), 1);
+    match &dupes[0].kind {
+        legend_pure_parser_pure::error::CompilationErrorKind::DuplicateElement { name } => {
+            assert_eq!(name.as_str(), "foo::Color");
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(dupes[0].source_info.start_line, 2);
+}
+
+#[test]
+fn duplicate_association() {
+    let dupes = duplicate_errors(
+        "Class A {}\n\
+         Class B {}\n\
+         Association foo::Link { left: A[1]; right: B[1]; }\n\
+         Association foo::Link { left: A[1]; right: B[1]; }",
+    );
+    assert_eq!(dupes.len(), 1);
+    match &dupes[0].kind {
+        legend_pure_parser_pure::error::CompilationErrorKind::DuplicateElement { name } => {
+            assert_eq!(name.as_str(), "foo::Link");
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(dupes[0].source_info.start_line, 4);
+}
+
+#[test]
+fn duplicate_profile() {
+    let dupes = duplicate_errors(
+        "Profile foo::P { stereotypes: [s]; tags: [t]; }\n\
+         Profile foo::P { stereotypes: [s]; tags: [t]; }",
+    );
+    assert_eq!(dupes.len(), 1);
+    match &dupes[0].kind {
+        legend_pure_parser_pure::error::CompilationErrorKind::DuplicateElement { name } => {
+            assert_eq!(name.as_str(), "foo::P");
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(dupes[0].source_info.start_line, 2);
+}
+
+#[test]
+fn duplicate_measure() {
+    let dupes = duplicate_errors(
+        "Measure foo::Distance {\n\
+            *Meter: x -> $x;\n\
+         }\n\
+         Measure foo::Distance {\n\
+            *Foot: x -> $x;\n\
+         }",
+    );
+    assert_eq!(dupes.len(), 1);
+    match &dupes[0].kind {
+        legend_pure_parser_pure::error::CompilationErrorKind::DuplicateElement { name } => {
+            assert_eq!(name.as_str(), "foo::Distance");
+        }
+        _ => unreachable!(),
+    }
+    // First measure: lines 1-3. Second measure starts at line 4.
+    assert_eq!(dupes[0].source_info.start_line, 4);
+}
+
+#[test]
+fn duplicate_class_then_enum() {
+    let dupes = duplicate_errors(
+        "Class foo::X {}\n\
+         Enum foo::X { A }",
+    );
+    assert_eq!(dupes.len(), 1);
+    match &dupes[0].kind {
+        legend_pure_parser_pure::error::CompilationErrorKind::DuplicateElement { name } => {
+            assert_eq!(name.as_str(), "foo::X");
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(dupes[0].source_info.start_line, 2);
+}
+
+#[test]
+fn duplicate_class_then_association() {
+    let dupes = duplicate_errors(
+        "Class foo::X {}\n\
+         Class A {}\n\
+         Class B {}\n\
+         Association foo::X { left: A[1]; right: B[1]; }",
+    );
+    assert_eq!(dupes.len(), 1);
+    match &dupes[0].kind {
+        legend_pure_parser_pure::error::CompilationErrorKind::DuplicateElement { name } => {
+            assert_eq!(name.as_str(), "foo::X");
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(dupes[0].source_info.start_line, 4);
+}
+
+#[test]
+fn duplicate_class_then_profile() {
+    let dupes = duplicate_errors(
+        "Class foo::X {}\n\
+         Profile foo::X { stereotypes: [s]; tags: [t]; }",
+    );
+    assert_eq!(dupes.len(), 1);
+    match &dupes[0].kind {
+        legend_pure_parser_pure::error::CompilationErrorKind::DuplicateElement { name } => {
+            assert_eq!(name.as_str(), "foo::X");
+        }
+        _ => unreachable!(),
+    }
+    assert_eq!(dupes[0].source_info.start_line, 2);
 }
 
 // ---------------------------------------------------------------------------
