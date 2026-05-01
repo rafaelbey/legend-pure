@@ -53,9 +53,9 @@
 //!   `"TDS"`.
 //! - [`protocol`] — [`protocol::TDSIslandProtocol`] registers as
 //!   [`legend_pure_parser_protocol::IslandProtocol`] with tag `"TDS"`.
-//! - **`CompilerExtension`** (commit #14) — validates types referenced
-//!   in column specs against `meta::pure::metamodel::type::Type`
-//!   subclasses and wires the embedded metamodel.
+//! - [`compiler`] — [`compiler::TDSExtension`] validates per-row
+//!   arity and resolves column-spec types in the `define_bodies`
+//!   pass.
 //!
 //! Core crates carry no TDS knowledge — this crate is the sole owner.
 
@@ -63,6 +63,7 @@
 #![deny(missing_docs)]
 
 pub mod ast;
+pub mod compiler;
 pub mod compose;
 pub mod parser;
 pub mod protocol;
