@@ -28,6 +28,7 @@ members = [
     "crates/core-platform-pure",
     "crates/dsl-diagram",
     "crates/dsl-graph",
+    "crates/dsl-store",
     "crates/stress",
 ]
 
