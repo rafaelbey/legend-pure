@@ -27,8 +27,8 @@ import java.util.Map;
 /**
  * A JNI-based evaluator for Pure using the Rust-based execution engine.
  * <p>
- * This class is <b>not</b> thread-safe. Concurrent access to the evaluator or its
- * derived {@link PureRustInstance} objects must be externally synchronized.
+ * This class is <b>thread-safe</b>. Concurrent access to the evaluator or its
+ * derived {@link PureRustInstance} objects is synchronized internally.
  * <p>
  * This evaluator manages off-heap memory in the Rust runtime. Explicitly calling {@link #close()}
  * will immediately free all associated native resources and invalidate any live {@link PureRustInstance}
@@ -74,7 +74,7 @@ public class PureRustEvaluator implements Closeable
      * @return the result of the evaluation, automatically unwrapped from native types
      * @throws PureRustEvaluationException if the evaluator is closed or a native execution error occurs
      */
-    public <T> T evaluate(String functionPath, Object... args)
+    public synchronized <T> T evaluate(String functionPath, Object... args)
     {
         if (this.closed)
         {
@@ -174,7 +174,7 @@ public class PureRustEvaluator implements Closeable
      * @return the result of the property evaluation
      * @throws PureRustEvaluationException if the evaluator is closed
      */
-    protected <T> T evaluateProperty(PureRustInstance instance, String propertyName, Object... args)
+    protected synchronized <T> T evaluateProperty(PureRustInstance instance, String propertyName, Object... args)
     {
         if (this.closed)
         {
@@ -193,7 +193,7 @@ public class PureRustEvaluator implements Closeable
      * @return the classifier path (e.g., "meta::pure::metamodel::type::Class")
      * @throws PureRustEvaluationException if the evaluator is closed
      */
-    protected String getClassifier(PureRustInstance pureRustInstance)
+    protected synchronized String getClassifier(PureRustInstance pureRustInstance)
     {
         if (this.closed)
         {
@@ -211,7 +211,7 @@ public class PureRustEvaluator implements Closeable
      *
      * @param pureRustInstance the instance to free
      */
-    protected void free(PureRustInstance pureRustInstance)
+    protected synchronized void free(PureRustInstance pureRustInstance)
     {
         Cleaner.Cleanable cleanabe = this.instanceCleanables.remove(pureRustInstance.instancePointer);
         if (cleanabe != null)
@@ -227,7 +227,7 @@ public class PureRustEvaluator implements Closeable
      * will throw a {@link PureRustEvaluationException}.
      */
     @Override
-    public void close()
+    public synchronized void close()
     {
         this.closed = true;
         this.instanceCleanables.values().forEach(Cleaner.Cleanable::clean);
