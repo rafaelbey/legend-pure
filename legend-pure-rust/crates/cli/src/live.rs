@@ -12,126 +12,128 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Live-reload platform source loading and file watching.
+//! Live-reload platform descriptor discovery and file watching.
+//!
+//! The `--live` CLI flag swaps the embedded `platform` repo for a
+//! filesystem-backed [`legend_pure_core_platform::repo::Repo`] built
+//! from the on-disk `platform.json` descriptor. The DSL repos remain
+//! embedded.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use legend_pure_core_platform::repo::Repo;
 use notify_debouncer_mini::new_debouncer;
 use notify_debouncer_mini::notify::RecursiveMode;
 
 use crate::diagnostics::CliError;
 
-/// A Pure source file loaded from disk at runtime.
-pub struct LiveSourceFile {
-    /// Relative path within the platform directory (e.g., "essential/tests/assert.pure").
-    /// Matches the canonical `/platform/pure/...` form.
-    pub path: String,
-    /// Source content.
-    pub content: String,
-}
-
-/// Walk `platform_dir`, read all `.pure` files, return them with
-/// canonical `/platform/pure/…` paths. Skips `grammar/m3.pure`.
-pub fn load_from_disk(platform_dir: &Path) -> Result<Vec<LiveSourceFile>, CliError> {
-    if !platform_dir.exists() || !platform_dir.is_dir() {
-        return Err(CliError::Custom(format!(
-            "Platform directory not found or not a directory: {}",
-            platform_dir.display()
-        )));
-    }
-
-    let mut sources = Vec::new();
-
-    for entry in walkdir::WalkDir::new(platform_dir) {
-        let entry = entry.map_err(|e| CliError::Custom(format!("WalkDir error: {e}")))?;
-        let path = entry.path();
-
-        if !path.is_file() {
-            continue;
-        }
-
-        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-            continue;
-        };
-
-        if ext != "pure" && ext != "json" {
-            continue;
-        }
-
-        let relative_path = path.strip_prefix(platform_dir).map_err(|e| {
-            CliError::Custom(format!("strip_prefix failed for {}: {e}", path.display()))
-        })?;
-
-        let relative_path_str = relative_path
-            .to_str()
-            .ok_or_else(|| {
-                CliError::Custom(format!("non-UTF-8 path: {}", relative_path.display()))
-            })?
-            .replace('\\', "/");
-
-        if ext == "pure" && relative_path_str == "grammar/m3.pure" {
-            continue;
-        }
-
-        let canonical_path_str = format!("/platform/pure/{relative_path_str}");
-
-        if ext == "pure" {
-            let content = fs::read_to_string(path).map_err(|e| CliError::Io {
-                path: path.to_path_buf(),
-                source: e,
-            })?;
-
-            sources.push(LiveSourceFile {
-                path: canonical_path_str,
-                content,
-            });
-        }
-    }
-
-    Ok(sources)
-}
-
-/// Resolve the platform dir from explicit --platform-dir or auto-discovery.
-pub fn resolve_platform_dir(explicit: Option<&Path>) -> Result<PathBuf, CliError> {
+/// Resolve the platform descriptor JSON from explicit `--platform-dir`
+/// or auto-discovery.
+///
+/// `--platform-dir` may point at:
+/// - the descriptor JSON itself (`.../platform.json`)
+/// - the resources directory (`.../resources/`) — `platform.json` inside
+///   it is used
+/// - the legacy platform source directory (`.../resources/platform/pure/`
+///   or `.../resources/platform/`) — the `platform.json` two/one levels
+///   up is used
+///
+/// Auto-discovery walks ancestors of the cwd looking for
+/// `legend-pure-core/legend-pure-m3-core/src/main/resources/platform.json`.
+pub fn resolve_platform_descriptor(explicit: Option<&Path>) -> Result<PathBuf, CliError> {
     if let Some(p) = explicit {
-        return Ok(p.to_path_buf());
+        if p.is_file() {
+            return Ok(p.to_path_buf());
+        }
+        // Probe sibling and ancestor `platform.json` for legacy
+        // `--platform-dir <pure-source-dir>` invocations.
+        let mut probe = p.to_path_buf();
+        for _ in 0..3 {
+            let candidate = probe.join("platform.json");
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+            if !probe.pop() {
+                break;
+            }
+        }
+        return Err(CliError::Custom(format!(
+            "could not locate platform.json relative to: {}",
+            p.display()
+        )));
     }
 
     let cwd = std::env::current_dir()
         .map_err(|e| CliError::Custom(format!("Failed to get current directory: {e}")))?;
 
-    if let Some(platform_dir) = discover_platform_dir(&cwd) {
-        Ok(platform_dir)
-    } else {
-        Err(CliError::Custom(
-            "Could not auto-discover platform directory (legend-pure-core/legend-pure-m3-core/src/main/resources/platform/pure). \
-             Try running from within the repository, or use --platform-dir <PATH>.".into()
-        ))
-    }
+    discover_platform_descriptor(&cwd).ok_or_else(|| {
+        CliError::Custom(
+            "Could not auto-discover platform descriptor \
+             (legend-pure-core/legend-pure-m3-core/src/main/resources/platform.json). \
+             Try running from within the repository, or use --platform-dir <PATH>."
+                .into(),
+        )
+    })
 }
 
 /// Walk ancestors of `start_dir` looking for `legend-pure-core/`.
-/// Returns the platform/pure subdirectory if found.
-fn discover_platform_dir(start_dir: &Path) -> Option<PathBuf> {
+/// Returns the platform descriptor JSON if found.
+fn discover_platform_descriptor(start_dir: &Path) -> Option<PathBuf> {
     let mut current = start_dir.to_path_buf();
     loop {
-        let candidate = current.join("legend-pure-core");
-        if candidate.is_dir() {
-            let platform_dir =
-                candidate.join("legend-pure-m3-core/src/main/resources/platform/pure");
-            if platform_dir.is_dir() {
-                return Some(platform_dir);
-            }
+        let candidate = current
+            .join("legend-pure-core")
+            .join("legend-pure-m3-core")
+            .join("src/main/resources/platform.json");
+        if candidate.is_file() {
+            return Some(candidate);
         }
         if !current.pop() {
             break;
         }
     }
     None
+}
+
+/// Build a `Vec<Repo>` mixing a filesystem-backed `platform` repo with
+/// the embedded DSL repos. Used by `legend test --live` and
+/// `legend repl --live`.
+///
+/// # Errors
+///
+/// Returns [`CliError`] if the descriptor or its expected source root
+/// cannot be loaded.
+pub fn live_repos(platform_descriptor: &Path) -> Result<Vec<Repo>, CliError> {
+    let platform = Repo::from_descriptor(platform_descriptor).map_err(|e| {
+        CliError::Custom(format!(
+            "failed to load platform repo from {}: {e}",
+            platform_descriptor.display()
+        ))
+    })?;
+    Ok(vec![
+        platform,
+        Repo::embedded_platform_dsl_store(),
+        Repo::embedded_platform_dsl_diagram(),
+        Repo::embedded_platform_dsl_tds(),
+    ])
+}
+
+/// Filesystem source root for the live `platform` repo — the directory
+/// walked by [`watch_dir`]. Mirrors the descriptor-relative inference
+/// rule used by [`Repo::from_descriptor`]: `<dir_of_descriptor>/platform/`.
+pub fn platform_source_root(descriptor: &Path) -> Result<PathBuf, CliError> {
+    descriptor
+        .parent()
+        .map(|d| d.join("platform"))
+        .ok_or_else(|| {
+            CliError::Custom(format!(
+                "descriptor {} has no parent dir",
+                descriptor.display()
+            ))
+        })
 }
 
 /// Spawns a notify file watcher on `dir`. Returns a shared atomic boolean

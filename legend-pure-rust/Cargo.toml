@@ -17,6 +17,7 @@ resolver = "2"
 members = [
     "crates/ast",
     "crates/ast-derive",
+    "crates/build",
     "crates/compose",
     "crates/lexer",
     "crates/parser",

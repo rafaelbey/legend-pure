@@ -38,12 +38,14 @@ pub struct PlatformFixture {
 pub fn platform_fixture() -> &'static PlatformFixture {
     static FIXTURE: OnceLock<PlatformFixture> = OnceLock::new();
     FIXTURE.get_or_init(|| {
-        let raw = legend_pure_core_platform::sources::platform_sources();
+        let repos = legend_pure_core_platform::repo::Repo::default_embedded();
         let mut parsed_files = Vec::new();
-        for s in raw {
-            match legend_pure_parser_parser::parse(s.content, s.path) {
-                Ok(sf) => parsed_files.push(sf),
-                Err(partial) => parsed_files.push(partial.source_file),
+        for repo in &repos {
+            for (content, path) in repo.sources() {
+                match legend_pure_parser_parser::parse(content, path) {
+                    Ok(sf) => parsed_files.push(sf),
+                    Err(partial) => parsed_files.push(partial.source_file),
+                }
             }
         }
         let auto_imports = legend_pure_core_platform::platform::PLATFORM_AUTO_IMPORTS

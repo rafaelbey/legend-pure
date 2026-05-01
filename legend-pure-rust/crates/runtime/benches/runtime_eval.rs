@@ -47,16 +47,18 @@ struct Fixture {
 fn fixture() -> &'static Fixture {
     static FIX: OnceLock<Fixture> = OnceLock::new();
     FIX.get_or_init(|| {
-        let raw = legend_pure_core_platform::sources::platform_sources();
+        let repos = legend_pure_core_platform::repo::Repo::default_embedded();
         let mut parsed_files = Vec::new();
-        for s in raw {
-            match legend_pure_parser_parser::parse_with_islands(
-                s.content,
-                s.path,
-                legend_pure_dsl_graph::parser::default_island_parsers(),
-            ) {
-                Ok(sf) => parsed_files.push(sf),
-                Err(partial) => parsed_files.push(partial.source_file),
+        for repo in &repos {
+            for (content, path) in repo.sources() {
+                match legend_pure_parser_parser::parse_with_islands(
+                    content,
+                    path,
+                    legend_pure_dsl_graph::parser::default_island_parsers(),
+                ) {
+                    Ok(sf) => parsed_files.push(sf),
+                    Err(partial) => parsed_files.push(partial.source_file),
+                }
             }
         }
         let auto_imports = legend_pure_core_platform::platform::PLATFORM_AUTO_IMPORTS

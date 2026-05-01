@@ -52,7 +52,7 @@ use rustyline::{Context, Editor, Helper};
 use smol_str::SmolStr;
 
 use legend_pure_core_platform::platform::{PLATFORM_AUTO_IMPORTS, parse_and_compile};
-use legend_pure_core_platform::sources;
+use legend_pure_core_platform::repo::Repo;
 use legend_pure_runtime::eval::Evaluator;
 use legend_pure_runtime::native::NativeRegistry;
 use legend_pure_runtime::value::Value;
@@ -97,22 +97,14 @@ pub fn run(args: ReplArgs) -> Result<(), CliError> {
     // Collect the platform source pairs for re-use in every compile cycle.
     let repl_helper = "function meta::pure::functions::string::__repl_toString(v: Any[1]): String[1] { $v->toString() }";
 
-    let mut live_sources;
-    let mut platform_pairs: Vec<(&str, &str)> = if args.live {
-        let dir = crate::live::resolve_platform_dir(args.platform_dir.as_deref())?;
-        live_sources = crate::live::load_from_disk(&dir)?;
-        let mut pairs: Vec<(&str, &str)> = live_sources
-            .iter()
-            .map(|s| (s.content.as_str(), s.path.as_str()))
-            .collect();
-        pairs.push((repl_helper, "<repl_helper>"));
-        pairs
+    let mut repos: Vec<Repo> = if args.live {
+        let descriptor = crate::live::resolve_platform_descriptor(args.platform_dir.as_deref())?;
+        crate::live::live_repos(&descriptor)?
     } else {
-        let platform = sources::platform_sources();
-        let mut pairs: Vec<(&str, &str)> = platform.iter().map(|s| (s.content, s.path)).collect();
-        pairs.push((repl_helper, "<repl_helper>"));
-        pairs
+        Repo::default_embedded()
     };
+    let mut platform_pairs: Vec<(&str, &str)> = repos.iter().flat_map(|r| r.sources()).collect();
+    platform_pairs.push((repl_helper, "<repl_helper>"));
 
     print_banner(args.live);
 
@@ -178,19 +170,17 @@ pub fn run(args: ReplArgs) -> Result<(), CliError> {
                 "File change detected — reloading platform...".dimmed()
             );
 
-            let dir = crate::live::resolve_platform_dir(args.platform_dir.as_deref())?;
+            let descriptor =
+                crate::live::resolve_platform_descriptor(args.platform_dir.as_deref())?;
             let t0 = Instant::now();
-            live_sources = crate::live::load_from_disk(&dir)?;
-            platform_pairs = live_sources
-                .iter()
-                .map(|s| (s.content.as_str(), s.path.as_str()))
-                .collect();
+            repos = crate::live::live_repos(&descriptor)?;
+            platform_pairs = repos.iter().flat_map(|r| r.sources()).collect();
             platform_pairs.push((repl_helper, "<repl_helper>"));
             eprintln!(
                 "  {}",
                 format!(
                     "Reloaded {} files from disk ({}ms)",
-                    live_sources.len(),
+                    platform_pairs.len() - 1,
                     t0.elapsed().as_millis()
                 )
                 .dimmed()
@@ -229,19 +219,17 @@ pub fn run(args: ReplArgs) -> Result<(), CliError> {
             }
             ":reload" => {
                 if args.live {
-                    let dir = crate::live::resolve_platform_dir(args.platform_dir.as_deref())?;
+                    let descriptor =
+                        crate::live::resolve_platform_descriptor(args.platform_dir.as_deref())?;
                     let t0 = Instant::now();
-                    live_sources = crate::live::load_from_disk(&dir)?;
-                    platform_pairs = live_sources
-                        .iter()
-                        .map(|s| (s.content.as_str(), s.path.as_str()))
-                        .collect();
+                    repos = crate::live::live_repos(&descriptor)?;
+                    platform_pairs = repos.iter().flat_map(|r| r.sources()).collect();
                     platform_pairs.push((repl_helper, "<repl_helper>"));
                     eprintln!(
                         "  {}",
                         format!(
                             "Reloaded {} files from disk ({}ms)",
-                            live_sources.len(),
+                            platform_pairs.len() - 1,
                             t0.elapsed().as_millis()
                         )
                         .dimmed()
@@ -260,15 +248,18 @@ pub fn run(args: ReplArgs) -> Result<(), CliError> {
                     file_changed_flag = None;
                     eprintln!("  {}", "File watching disabled.".dimmed());
                 } else {
-                    let dir = crate::live::resolve_platform_dir(args.platform_dir.as_deref())?;
-                    match crate::live::watch_dir(&dir) {
+                    let descriptor =
+                        crate::live::resolve_platform_descriptor(args.platform_dir.as_deref())?;
+                    let watch_root = crate::live::platform_source_root(&descriptor)?;
+                    match crate::live::watch_dir(&watch_root) {
                         Ok((debouncer, flag)) => {
                             _debouncer = Some(debouncer);
                             file_changed_flag = Some(flag);
                             is_watching = true;
                             eprintln!(
                                 "  {}",
-                                format!("Watching {} for changes...", dir.display()).dimmed()
+                                format!("Watching {} for changes...", watch_root.display())
+                                    .dimmed()
                             );
                         }
                         Err(e) => {

@@ -518,7 +518,8 @@ pub fn find_pct_adapter(
 ///
 /// # Lookup order
 ///
-/// 1. **Embedded platform manifests** via [`legend_pure_core_platform::sources::find_manifest`].
+/// 1. **Embedded platform manifests** via [`legend_pure_core_platform::repo::find_manifest`]
+///    over [`legend_pure_core_platform::repo::Repo::default_embedded`].
 ///    Both shipped platform manifests
 ///    (`pct_essential_native.json`, `pct_grammar_native.json`) ship inside
 ///    the binary and resolve by suffix match against the canonical
@@ -595,7 +596,9 @@ struct ManifestExclusion {
 }
 
 fn read_manifest_text(path: &str) -> Result<String, PureException> {
-    if let Some(content) = legend_pure_core_platform::sources::find_manifest(path) {
+    use legend_pure_core_platform::repo::{Repo, find_manifest};
+    let repos = Repo::default_embedded();
+    if let Some(content) = find_manifest(&repos, path) {
         return Ok(content.to_string());
     }
     std::fs::read_to_string(path).map_err(|e| {

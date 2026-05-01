@@ -24,7 +24,7 @@
 
 use std::sync::OnceLock;
 
-use legend_pure_core_platform::sources::platform_sources;
+use legend_pure_core_platform::repo::Repo;
 use legend_pure_dsl_tds::compiler::TDSExtension;
 use legend_pure_dsl_tds::parser::default_island_parsers;
 use legend_pure_parser_ast::SourceFile;
@@ -37,16 +37,18 @@ use smol_str::SmolStr;
 fn platform_files() -> &'static [SourceFile] {
     static CACHED: OnceLock<Vec<SourceFile>> = OnceLock::new();
     CACHED.get_or_init(|| {
-        let raw = platform_sources();
-        let mut files = Vec::with_capacity(raw.len());
-        for s in raw {
-            match legend_pure_parser_parser::parse_with_islands(
-                s.content,
-                s.path,
-                default_island_parsers(),
-            ) {
-                Ok(sf) => files.push(sf),
-                Err(partial) => files.push(partial.source_file),
+        let repos = Repo::default_embedded();
+        let mut files = Vec::new();
+        for repo in &repos {
+            for (content, path) in repo.sources() {
+                match legend_pure_parser_parser::parse_with_islands(
+                    content,
+                    path,
+                    default_island_parsers(),
+                ) {
+                    Ok(sf) => files.push(sf),
+                    Err(partial) => files.push(partial.source_file),
+                }
             }
         }
         files

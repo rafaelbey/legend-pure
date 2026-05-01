@@ -67,16 +67,18 @@ fn platform_model() -> &'static PlatformFixture {
     static FIXTURE: OnceLock<PlatformFixture> = OnceLock::new();
     init_test_tracing();
     FIXTURE.get_or_init(|| {
-        let raw = legend_pure_core_platform::sources::platform_sources();
+        let repos = legend_pure_core_platform::repo::Repo::default_embedded();
         let mut parsed_files = Vec::new();
-        for s in raw {
-            match legend_pure_parser_parser::parse_with_islands(
-                s.content,
-                s.path,
-                legend_pure_dsl_graph::parser::default_island_parsers(),
-            ) {
-                Ok(sf) => parsed_files.push(sf),
-                Err(partial) => parsed_files.push(partial.source_file),
+        for repo in &repos {
+            for (content, path) in repo.sources() {
+                match legend_pure_parser_parser::parse_with_islands(
+                    content,
+                    path,
+                    legend_pure_dsl_graph::parser::default_island_parsers(),
+                ) {
+                    Ok(sf) => parsed_files.push(sf),
+                    Err(partial) => parsed_files.push(partial.source_file),
+                }
             }
         }
         let auto_imports = legend_pure_core_platform::platform::PLATFORM_AUTO_IMPORTS
@@ -1714,6 +1716,103 @@ fn eval_lambda_param_inference_narrows_overloads() {
         "f__String_1_",
     );
     assert_eq!(result, Value::String("aX,bX".into()));
+}
+
+#[test]
+fn compile_let_bound_untyped_lambda_emits_inference_error() {
+    // Locks the diagnostic added for "let-bound generic lambdas without
+    // caller-side type inference". Pre-fix: silently typed `x`, `y` as
+    // `Any[1]`, which made the body's `$x + $y` ambiguous across all five
+    // `plus` overloads, surfacing as the unhelpful
+    //   "Ambiguous function call 'plus': found 5 overloads with 1 args …"
+    // Post-fix: `lower_lambda_parameters` flags the missing inference
+    // eagerly with `CannotInferLambdaParameterTypes`, and
+    // `resolve_function_call` suppresses the cascading ambiguity diagnostic
+    // for calls whose args read from those flagged params.
+    use legend_pure_parser_pure::error::CompilationErrorKind;
+    let source = r"
+        function test::f(): Integer[1]
+        {
+            let f = {x, y | $x + $y};
+            $f->eval(1, 2)
+        }
+        ";
+    let partial = try_compile_with_platform(source)
+        .expect_err("untyped let-bound lambda must produce a compile error");
+
+    let inference_failures: Vec<_> = partial
+        .errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                &e.kind,
+                CompilationErrorKind::CannotInferLambdaParameterTypes { .. }
+            )
+        })
+        .collect();
+    assert_eq!(
+        inference_failures.len(),
+        1,
+        "expected exactly one CannotInferLambdaParameterTypes, got errors: {:?}",
+        partial
+            .errors
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+    );
+    let CompilationErrorKind::CannotInferLambdaParameterTypes { names } =
+        &inference_failures[0].kind
+    else {
+        unreachable!("filter above guarantees this variant");
+    };
+    assert_eq!(
+        names.iter().map(SmolStr::as_str).collect::<Vec<_>>(),
+        vec!["x", "y"]
+    );
+    let message = inference_failures[0].to_string();
+    assert!(
+        message.contains("Cannot infer types for lambda parameters 'x', 'y'"),
+        "unexpected message: {message}"
+    );
+    assert!(
+        message.contains("annotate explicitly"),
+        "message should suggest annotation: {message}"
+    );
+
+    // Cascade suppression: no AmbiguousImport / "Ambiguous function call"
+    // line should reach the user. The new diagnostic stands alone.
+    let cascading: Vec<_> = partial
+        .errors
+        .iter()
+        .filter(|e| matches!(e.kind, CompilationErrorKind::AmbiguousImport { .. }))
+        .collect();
+    assert!(
+        cascading.is_empty(),
+        "ambiguity cascade should be suppressed, got: {:?}",
+        cascading
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn eval_let_bound_typed_lambda_still_works() {
+    // Regression guard: annotating the let-bound lambda's parameters
+    // restores normal compilation and evaluation. Locks that the new
+    // inference-failure diagnostic only fires when the user is missing
+    // both annotations and caller-side expectations.
+    let result = eval_pure(
+        r"
+        function test::f(): Integer[1]
+        {
+            let f = {x: Integer[1], y: Integer[1] | $x + $y};
+            $f->eval(1, 2)
+        }
+        ",
+        "f__Integer_1_",
+    );
+    assert_eq!(result, Value::Integer(3));
 }
 
 #[test]
