@@ -65,7 +65,7 @@ fn numeric_cmp(a: &Value, b: &Value) -> Result<std::cmp::Ordering, PureRuntimeEr
 /// Pure `eq(Any[1], Any[1]): Boolean[1]` — identity / primitive equality.
 ///
 /// For primitive values: compares by value.
-/// For objects: compares identity (`ObjectId == ObjectId`), not properties.
+/// For objects: compares identity (`ObjectHandle == ObjectHandle`), not properties.
 /// This is NOT the same as `equal` — two objects with identical properties
 /// are `equal` but not `eq`.
 #[derive(Debug)]
@@ -93,7 +93,7 @@ impl NativeFunction for Eq {
 /// For collections: element-wise equality, recursing via `values_equal`.
 /// For heap objects: if the classifier declares any `<<equality.Key>>`
 /// property, compares those property values recursively; otherwise
-/// falls back to `ObjectId` identity. See [`crate::native::equality`].
+/// falls back to `ObjectHandle` identity. See [`crate::native::equality`].
 #[derive(Debug)]
 pub struct Equal;
 
@@ -242,8 +242,11 @@ pub fn compare_values(a: &Value, b: &Value) -> i64 {
         // reverting to type-ordinal collapsing all Objects to Equal
         // would break sort stability (Phase 5b regression).
         (Value::Object(a), Value::Object(b)) => {
-            let av = slotmap::Key::data(a).as_ffi();
-            let bv = slotmap::Key::data(b).as_ffi();
+            // Use the Rc's pointer address as a stable, arbitrary
+            // ordering key — distinct allocations get distinct
+            // pointers; clones of the same Rc compare Equal.
+            let av = std::rc::Rc::as_ptr(a) as usize;
+            let bv = std::rc::Rc::as_ptr(b) as usize;
             av.cmp(&bv)
         }
         // Element refs: compare by their rendered ElementId string. Same
@@ -361,7 +364,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("eq_Any_1__Any_1__Boolean_1_", Eq);
     registry.register("equal_Any_MANY__Any_MANY__Boolean_1_", Equal);
     // `is(Any[1], Any[1]):Boolean[1]` shares `eq`'s semantics — identity
-    // comparison for primitives, same-ObjectId for heap objects.
+    // comparison for primitives, same-ObjectHandle for heap objects.
     registry.register("is_Any_1__Any_1__Boolean_1_", Eq);
     registry.register("lessThan_Number_1__Number_1__Boolean_1_", LessThan);
     registry.register(

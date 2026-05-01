@@ -29,7 +29,7 @@ use smol_str::SmolStr;
 
 use crate::date::DatePrecision;
 use crate::error::{PureException, PureRuntimeError};
-use crate::heap::{ObjectId, RuntimeHeap};
+use crate::heap::{ObjectHandle, RuntimeHeap};
 use crate::native::{
     EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
 };
@@ -132,10 +132,10 @@ impl NativeFunction for ElementToPath {
         let include_root = values[2].as_boolean()?;
         let path = match &values[0] {
             Value::Element(id) => {
-                build_element_path(ctx.model(), *id, separator.as_str(), include_root)
+                build_element_path(ctx.model(), id.clone(), separator.as_str(), include_root)
             }
             Value::Object(obj_id) => {
-                build_ephemeral_path(ctx.heap(), *obj_id, separator.as_str(), include_root)
+                build_ephemeral_path(ctx.heap(), obj_id.clone(), separator.as_str(), include_root)
             }
             other => {
                 return Err(PureRuntimeError::type_mismatch("PackageableElement", other).into());
@@ -182,7 +182,7 @@ impl NativeFunction for SourceInformation {
         if let Value::Object(obj_id) = &values[0] {
             let slot = ctx
                 .heap()
-                .get_property_values(*obj_id, "sourceInformation")
+                .get_property_values(&obj_id.clone(), "sourceInformation")
                 .ok()
                 .and_then(|vs| vs.iter().next().cloned());
             return Ok(Evaluated::new(slot.unwrap_or(Value::Unit)));
@@ -194,43 +194,43 @@ impl NativeFunction for SourceInformation {
         let ElementId::InstanceId { .. } = id else {
             return Ok(Evaluated::new(Value::Unit));
         };
-        let node = ctx.model().get_node(*id);
+        let node = ctx.model().get_node(id.clone());
         let source = node.source_info.clone();
         let name_source = node.name_source_info.clone();
         let obj = ctx
             .heap_mut()
             .alloc_dynamic(crate::m3_paths::SOURCE_INFORMATION);
         let heap = ctx.heap_mut();
-        heap.mutate_add(obj, "source", &[Value::String(source.source.clone())])?;
+        heap.mutate_add(&obj, "source", &[Value::String(source.source.clone())])?;
         heap.mutate_add(
-            obj,
+            &obj,
             "startLine",
             &[Value::Integer(i64::from(source.start_line))],
         )?;
         heap.mutate_add(
-            obj,
+            &obj,
             "startColumn",
             &[Value::Integer(i64::from(source.start_column))],
         )?;
         // `line`/`column` = name-identifier position, distinct from the
         // declaration start — Java Pure parity for SourceInformation.
         heap.mutate_add(
-            obj,
+            &obj,
             "line",
             &[Value::Integer(i64::from(name_source.start_line))],
         )?;
         heap.mutate_add(
-            obj,
+            &obj,
             "column",
             &[Value::Integer(i64::from(name_source.start_column))],
         )?;
         heap.mutate_add(
-            obj,
+            &obj,
             "endLine",
             &[Value::Integer(i64::from(source.end_line))],
         )?;
         heap.mutate_add(
-            obj,
+            &obj,
             "endColumn",
             &[Value::Integer(i64::from(source.end_column))],
         )?;
@@ -617,7 +617,7 @@ fn mult_bounds(m: &legend_pure_parser_pure::types::Multiplicity) -> (u32, Option
 /// Pure `id(Any[1]):String[1]`
 ///
 /// Returns an identity string for any value. Heap objects are identified by
-/// `Anonymous_<ObjectId>` — matching the Java Pure runtime's convention for
+/// `Anonymous_<ObjectHandle>` — matching the Java Pure runtime's convention for
 /// anonymous instances. Primitives render their canonical textual form
 /// (unquoted for strings). Model-element references render their fully
 /// qualified path.
@@ -702,14 +702,16 @@ impl NativeFunction for GenericTypeOf {
         // `valueCount == 0` (else branch). Identification is by M3
         // ElementId of the InstanceValue classifier, never by string.
         if let Value::Object(obj_id) = &values[0] {
-            let classifier = ctx.heap().classifier(*obj_id)?.to_owned();
+            let classifier = ctx.heap().classifier(&obj_id.clone())?.to_owned();
             let iv_id = crate::m3_paths::resolve(ctx.model(), crate::m3_paths::INSTANCE_VALUE);
             if iv_id.is_some() && crate::m3_paths::resolve(ctx.model(), &classifier) == iv_id {
-                let inner_values = ctx.heap().get_property_values(*obj_id, "values")?;
+                let inner_values = ctx.heap().get_property_values(&obj_id.clone(), "values")?;
                 if inner_values.is_empty() {
-                    let gt_values = ctx.heap().get_property_values(*obj_id, "genericType")?;
+                    let gt_values = ctx
+                        .heap()
+                        .get_property_values(&obj_id.clone(), "genericType")?;
                     if let Some(Value::Object(gt_id)) = gt_values.iter().next() {
-                        return Ok(Evaluated::new(Value::Object(*gt_id)));
+                        return Ok(Evaluated::new(Value::Object(gt_id.clone())));
                     }
                 }
             }
@@ -723,7 +725,7 @@ impl NativeFunction for GenericTypeOf {
         let instance_type_args: Vec<Value> = match &values[0] {
             Value::Object(obj_id) => ctx
                 .heap()
-                .get_property_values(*obj_id, "__typeArguments")
+                .get_property_values(&obj_id.clone(), "__typeArguments")
                 .ok()
                 .map(|v| v.iter().cloned().collect())
                 .unwrap_or_default(),
@@ -731,7 +733,7 @@ impl NativeFunction for GenericTypeOf {
         };
         let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
         ctx.heap_mut()
-            .mutate_add(obj, "rawType", &[Value::Element(type_id)])?;
+            .mutate_add(&obj, "rawType", &[Value::Element(type_id)])?;
 
         // When the value itself is a Class or Enumeration element
         // reference, the genericType is parameterised on that element —
@@ -747,9 +749,9 @@ impl NativeFunction for GenericTypeOf {
             if arg_eligible {
                 let arg_gt = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
                 ctx.heap_mut()
-                    .mutate_add(arg_gt, "rawType", &[Value::Element(*elem_id)])?;
+                    .mutate_add(&arg_gt, "rawType", &[Value::Element(*elem_id)])?;
                 ctx.heap_mut()
-                    .mutate_add(obj, "typeArguments", &[Value::Object(arg_gt)])?;
+                    .mutate_add(&obj, "typeArguments", &[Value::Object(arg_gt)])?;
             }
         }
         // Heap-instance type bindings (`^List<String>(…)` → `[String]`)
@@ -762,11 +764,12 @@ impl NativeFunction for GenericTypeOf {
                 if let Value::Element(arg_id) = arg {
                     let arg_gt = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
                     ctx.heap_mut()
-                        .mutate_add(arg_gt, "rawType", &[Value::Element(arg_id)])?;
+                        .mutate_add(&arg_gt, "rawType", &[Value::Element(arg_id)])?;
                     arg_objs.push(Value::Object(arg_gt));
                 }
             }
-            ctx.heap_mut().mutate_add(obj, "typeArguments", &arg_objs)?;
+            ctx.heap_mut()
+                .mutate_add(&obj, "typeArguments", &arg_objs)?;
         }
         // Lambda + compiled-function values reify as a `FunctionType`
         // heap wrapper inside `typeArguments[0]` — Java parity for
@@ -781,9 +784,9 @@ impl NativeFunction for GenericTypeOf {
             let func_type_obj = build_function_type_wrapper(ctx, fv)?;
             let arg_gt = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
             ctx.heap_mut()
-                .mutate_add(arg_gt, "rawType", &[Value::Object(func_type_obj)])?;
+                .mutate_add(&arg_gt, "rawType", &[Value::Object(func_type_obj)])?;
             ctx.heap_mut()
-                .mutate_add(obj, "typeArguments", &[Value::Object(arg_gt)])?;
+                .mutate_add(&obj, "typeArguments", &[Value::Object(arg_gt)])?;
         }
         Ok(Evaluated::new(Value::Object(obj)))
     }
@@ -812,12 +815,12 @@ impl NativeFunction for GenericTypeOf {
 pub(crate) fn build_function_type_wrapper(
     ctx: &mut dyn EvalContextTrait,
     fv: &crate::value::FunctionValue,
-) -> Result<crate::heap::ObjectId, PureException> {
+) -> Result<crate::heap::ObjectHandle, PureException> {
     let func_type_obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::FUNCTION_TYPE);
     let (params, return_type, return_mult) = match fv {
         crate::value::FunctionValue::Lambda(closure) => (closure.parameters.clone(), None, None),
         crate::value::FunctionValue::Compiled(id) => {
-            if let Element::Function(f) = ctx.model().get_element(*id) {
+            if let Element::Function(f) = ctx.model().get_element(id.clone()) {
                 (
                     f.parameters.clone(),
                     Some(f.return_type.clone()),
@@ -835,22 +838,22 @@ pub(crate) fn build_function_type_wrapper(
             .heap_mut()
             .alloc_dynamic(crate::m3_paths::VARIABLE_EXPRESSION);
         ctx.heap_mut()
-            .mutate_add(var_expr_obj, "name", &[Value::String(p.name.clone())])?;
+            .mutate_add(&var_expr_obj, "name", &[Value::String(p.name.clone())])?;
         if let Some(type_id) = type_expr_to_element(&p.type_expr) {
             let p_gt = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
             ctx.heap_mut()
-                .mutate_add(p_gt, "rawType", &[Value::Element(type_id)])?;
+                .mutate_add(&p_gt, "rawType", &[Value::Element(type_id)])?;
             ctx.heap_mut()
-                .mutate_add(var_expr_obj, "genericType", &[Value::Object(p_gt)])?;
+                .mutate_add(&var_expr_obj, "genericType", &[Value::Object(p_gt)])?;
         }
         let mult_obj = build_multiplicity_wrapper(ctx, &p.multiplicity)?;
         ctx.heap_mut()
-            .mutate_add(var_expr_obj, "multiplicity", &[Value::Object(mult_obj)])?;
+            .mutate_add(&var_expr_obj, "multiplicity", &[Value::Object(mult_obj)])?;
         param_objs.push(Value::Object(var_expr_obj));
     }
     if !param_objs.is_empty() {
         ctx.heap_mut()
-            .mutate_add(func_type_obj, "parameters", &param_objs)?;
+            .mutate_add(&func_type_obj, "parameters", &param_objs)?;
     }
 
     if let Some(rt) = return_type
@@ -858,14 +861,14 @@ pub(crate) fn build_function_type_wrapper(
     {
         let rt_gt = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
         ctx.heap_mut()
-            .mutate_add(rt_gt, "rawType", &[Value::Element(rt_id)])?;
+            .mutate_add(&rt_gt, "rawType", &[Value::Element(rt_id)])?;
         ctx.heap_mut()
-            .mutate_add(func_type_obj, "returnType", &[Value::Object(rt_gt)])?;
+            .mutate_add(&func_type_obj, "returnType", &[Value::Object(rt_gt)])?;
     }
     if let Some(rm) = return_mult {
         let rm_obj = build_multiplicity_wrapper(ctx, &rm)?;
         ctx.heap_mut().mutate_add(
-            func_type_obj,
+            &func_type_obj,
             "returnMultiplicity",
             &[Value::Object(rm_obj)],
         )?;
@@ -892,7 +895,7 @@ fn type_expr_to_element(ty: &legend_pure_parser_pure::types::TypeExpr) -> Option
 fn build_multiplicity_wrapper(
     ctx: &mut dyn EvalContextTrait,
     m: &legend_pure_parser_pure::types::Multiplicity,
-) -> Result<crate::heap::ObjectId, PureException> {
+) -> Result<crate::heap::ObjectHandle, PureException> {
     use legend_pure_parser_pure::types::Multiplicity as M;
     let (lower, upper): (i64, Option<i64>) = match m {
         M::PureOne => (1, Some(1)),
@@ -907,17 +910,17 @@ fn build_multiplicity_wrapper(
         .heap_mut()
         .alloc_dynamic(crate::m3_paths::MULTIPLICITY_VALUE);
     ctx.heap_mut()
-        .mutate_add(lower_value, "value", &[Value::Integer(lower)])?;
+        .mutate_add(&lower_value, "value", &[Value::Integer(lower)])?;
     ctx.heap_mut()
-        .mutate_add(obj, "lowerBound", &[Value::Object(lower_value)])?;
+        .mutate_add(&obj, "lowerBound", &[Value::Object(lower_value)])?;
     if let Some(u) = upper {
         let upper_value = ctx
             .heap_mut()
             .alloc_dynamic(crate::m3_paths::MULTIPLICITY_VALUE);
         ctx.heap_mut()
-            .mutate_add(upper_value, "value", &[Value::Integer(u)])?;
+            .mutate_add(&upper_value, "value", &[Value::Integer(u)])?;
         ctx.heap_mut()
-            .mutate_add(obj, "upperBound", &[Value::Object(upper_value)])?;
+            .mutate_add(&obj, "upperBound", &[Value::Object(upper_value)])?;
     }
     Ok(obj)
 }
@@ -945,7 +948,7 @@ impl NativeFunction for RawType {
         let Value::Object(obj_id) = &values[0] else {
             return Err(PureRuntimeError::type_mismatch("GenericType", &values[0]).into());
         };
-        let heap_values = ctx.heap().get_property_values(*obj_id, "rawType")?;
+        let heap_values = ctx.heap().get_property_values(&obj_id.clone(), "rawType")?;
         match heap_values.head() {
             Some(v) => Ok(Evaluated::new(v.clone())),
             None => Ok(Evaluated::new(Value::Unit)),
@@ -1109,7 +1112,7 @@ impl NativeFunction for SubTypeOf {
 /// Extract an `ElementId` from a [`Value::Element`].
 pub(crate) fn as_element_id(v: &Value) -> Result<ElementId, PureException> {
     match v {
-        Value::Element(id) => Ok(*id),
+        Value::Element(id) => Ok(id.clone()),
         other => Err(PureRuntimeError::type_mismatch("PackageableElement", other).into()),
     }
 }
@@ -1136,27 +1139,27 @@ use crate::model_utils::{build_element_path, resolve_path};
 /// the empty string.
 fn build_ephemeral_path(
     heap: &RuntimeHeap,
-    obj_id: ObjectId,
+    obj_id: ObjectHandle,
     separator: &str,
     include_root: bool,
 ) -> String {
-    let name_of = |oid: ObjectId| -> Option<SmolStr> {
-        let values = heap.get_property_values(oid, "name").ok()?;
+    let name_of = |oid: ObjectHandle| -> Option<SmolStr> {
+        let values = heap.get_property_values(&oid, "name").ok()?;
         values.iter().next().and_then(|v| match v {
             Value::String(s) => Some(s.clone()),
             _ => None,
         })
     };
-    let package_of = |oid: ObjectId| -> Option<ObjectId> {
-        let values = heap.get_property_values(oid, "package").ok()?;
+    let package_of = |oid: ObjectHandle| -> Option<ObjectHandle> {
+        let values = heap.get_property_values(&oid, "package").ok()?;
         values.iter().next().and_then(|v| match v {
-            Value::Object(p) => Some(*p),
+            Value::Object(p) => Some(p.clone()),
             _ => None,
         })
     };
 
     // Leaf name — empty string if the ephemeral has no name at all.
-    let Some(leaf_name) = name_of(obj_id) else {
+    let Some(leaf_name) = name_of(obj_id.clone()) else {
         return String::new();
     };
 
@@ -1166,7 +1169,7 @@ fn build_ephemeral_path(
     let mut cursor = package_of(obj_id);
     let mut outermost_root_name: Option<SmolStr> = None;
     while let Some(pkg_id) = cursor {
-        let next = package_of(pkg_id);
+        let next = package_of(pkg_id.clone());
         if next.is_none() {
             // Outermost package — don't emit its name unconditionally;
             // leave inclusion to the root-prefix rule below.
@@ -1224,31 +1227,31 @@ fn value_matches_type(
         "Package" => matches!(value, Value::Element(id) if id.is_package()),
         "ConcreteFunctionDefinition" => {
             matches!(value, Value::Element(id)
-                if matches!(model.get_element(*id), Element::Function(f) if !f.is_native))
+                if matches!(model.get_element(id.clone()), Element::Function(f) if !f.is_native))
         }
         "NativeFunctionDefinition" => {
             matches!(value, Value::Element(id)
-                if matches!(model.get_element(*id), Element::Function(f) if f.is_native))
+                if matches!(model.get_element(id.clone()), Element::Function(f) if f.is_native))
         }
         "FunctionDefinition" | "Function" => {
             matches!(value, Value::Function(_))
                 || matches!(value, Value::Element(id)
-                    if matches!(model.get_element(*id), Element::Function(_)))
+                    if matches!(model.get_element(id.clone()), Element::Function(_)))
         }
         "Class" => matches!(value, Value::Element(id)
-            if matches!(model.get_element(*id), Element::Class(_))),
+            if matches!(model.get_element(id.clone()), Element::Class(_))),
         "Enumeration" => matches!(value, Value::Element(id)
-            if matches!(model.get_element(*id), Element::Enumeration(_))),
+            if matches!(model.get_element(id.clone()), Element::Enumeration(_))),
         "Enum" => matches!(value, Value::EnumValue { .. }),
         "Profile" => matches!(value, Value::Element(id)
-            if matches!(model.get_element(*id), Element::Profile(_))),
+            if matches!(model.get_element(id.clone()), Element::Profile(_))),
         "Association" => matches!(value, Value::Element(id)
-            if matches!(model.get_element(*id), Element::Association(_))),
+            if matches!(model.get_element(id.clone()), Element::Association(_))),
         "Measure" => matches!(value, Value::Element(id)
-            if matches!(model.get_element(*id), Element::Measure(_))),
+            if matches!(model.get_element(id.clone()), Element::Measure(_))),
         "PackageableElement" => matches!(value, Value::Element(_)),
         "Type" => matches!(value, Value::Element(id) if matches!(
-            model.get_element(*id),
+            model.get_element(id.clone()),
             Element::Class(_)
                 | Element::Enumeration(_)
                 | Element::PrimitiveType(_)
@@ -1269,7 +1272,7 @@ fn value_matches_type(
         _ => {
             // Fallback 1: heap-object classifier exact-name match.
             if let Value::Object(obj_id) = value
-                && let Ok(classifier) = heap.classifier(*obj_id)
+                && let Ok(classifier) = heap.classifier(&obj_id.clone())
                 && classifier
                     .rsplit("::")
                     .next()
@@ -1342,8 +1345,10 @@ fn linearize_c3(model: &PureModel, id: ElementId) -> Vec<ElementId> {
             return cached.clone();
         }
         let parents = direct_parents(model, id);
-        let parent_lines: Vec<Vec<ElementId>> =
-            parents.iter().map(|p| walk(model, *p, cache)).collect();
+        let parent_lines: Vec<Vec<ElementId>> = parents
+            .iter()
+            .map(|p| walk(model, p.clone(), cache))
+            .collect();
         let mut lists: Vec<std::collections::VecDeque<ElementId>> = parent_lines
             .into_iter()
             .map(|v| v.into_iter().collect())
@@ -1505,15 +1510,16 @@ fn resolve_value_type(
             // the element-kind → M3 metaclass lookup for the compiler; we
             // reuse it here so `type(...)` / `genericType(...)` agree with
             // dispatch.
-            if let Some(meta_id) =
-                legend_pure_parser_pure::bootstrap::metatype_of(model, model.get_element(*id))
-            {
+            if let Some(meta_id) = legend_pure_parser_pure::bootstrap::metatype_of(
+                model,
+                model.get_element(id.clone()),
+            ) {
                 return Ok(meta_id);
             }
-            Ok(*id)
+            Ok(id.clone())
         }
         Value::Object(obj_id) => {
-            let classifier = heap.classifier(*obj_id)?;
+            let classifier = heap.classifier(&obj_id.clone())?;
             let segments: Vec<SmolStr> = if classifier.is_empty() {
                 Vec::new()
             } else {
@@ -1592,8 +1598,12 @@ fn resolve_value_type(
 /// Qualified-path rendering is the job of `elementToPath`.
 fn render_id(value: &Value, model: &PureModel) -> String {
     match value {
-        Value::Object(obj_id) => format!("Anonymous_{obj_id}"),
-        Value::Element(id) => crate::model_utils::element_simple_name(model, *id).to_string(),
+        Value::Object(obj_id) => {
+            format!("Anonymous_{:p}", std::rc::Rc::as_ptr(obj_id))
+        }
+        Value::Element(id) => {
+            crate::model_utils::element_simple_name(model, id.clone()).to_string()
+        }
         Value::String(s) => s.to_string(),
         Value::Boolean(b) => b.to_string(),
         Value::Integer(i) => i.to_string(),
@@ -1638,14 +1648,14 @@ fn render_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -
         Value::Decimal(d) => d.to_string(),
         Value::Date(d) => format!("%{d}"),
         Value::StrictTime(t) => format!("%{t}"),
-        Value::Element(id) => render_element_representation(model, *id),
+        Value::Element(id) => render_element_representation(model, id.clone()),
         Value::Object(obj_id) => {
             // Java Pure renders object instances as `<Anonymous_{id}>` with
             // no classifier prefix. `testClassInstanceToRepresentation`
             // checks `startsWith('<Anonymous_')`; the classifier belongs
             // on `type()`, not on the instance's textual identity.
             let _ = heap;
-            format!("<Anonymous_{obj_id}>")
+            format!("<Anonymous_{:p}>", std::rc::Rc::as_ptr(obj_id))
         }
         Value::Collection(v) => {
             let parts: Vec<String> = v
@@ -1946,7 +1956,7 @@ impl NativeFunction for EvaluateAndDeactivate {
                 .heap_mut()
                 .alloc_dynamic(crate::m3_paths::LAMBDA_FUNCTION);
             ctx.heap_mut()
-                .mutate_add(obj, "expressionSequence", &deactivated_body)?;
+                .mutate_add(&obj, "expressionSequence", &deactivated_body)?;
             // Populate `.multiplicity` on the deactivated lambda from
             // its body's declared return multiplicity. Pure semantics:
             // a lambda's return multiplicity is the multiplicity of its
@@ -1961,7 +1971,7 @@ impl NativeFunction for EvaluateAndDeactivate {
                 && let Some(mult_id) = resolve_multiplicity_constant(ctx.model(), name)
             {
                 ctx.heap_mut()
-                    .mutate_add(obj, "multiplicity", &[Value::Element(mult_id)])?;
+                    .mutate_add(&obj, "multiplicity", &[Value::Element(mult_id)])?;
             }
             return Ok(Evaluated::new(Value::Object(obj)));
         }
@@ -2014,11 +2024,11 @@ fn is_already_deactivated(ctx: &dyn EvalContextTrait, v: &Value) -> bool {
     let Value::Object(obj_id) = v else {
         return false;
     };
-    let Ok(classifier) = ctx.heap().classifier(*obj_id) else {
+    let Ok(classifier) = ctx.heap().classifier(&obj_id.clone()) else {
         return false;
     };
     let model = ctx.model();
-    let Some(class_id) = crate::m3_paths::resolve(model, classifier) else {
+    let Some(class_id) = crate::m3_paths::resolve(model, &classifier) else {
         return false;
     };
     classifier_extends_m3(model, class_id, crate::m3_paths::INSTANCE_VALUE)
@@ -2051,9 +2061,9 @@ fn instance_value_wrap(v: Value, ctx: &mut dyn EvalContextTrait) -> Result<Value
     };
     if let Some(mult_id) = resolve_multiplicity_constant(ctx.model(), multiplicity_name) {
         ctx.heap_mut()
-            .mutate_add(obj, "multiplicity", &[Value::Element(mult_id)])?;
+            .mutate_add(&obj, "multiplicity", &[Value::Element(mult_id)])?;
     }
-    ctx.heap_mut().mutate_add(obj, "values", &values)?;
+    ctx.heap_mut().mutate_add(&obj, "values", &values)?;
     Ok(Value::Object(obj))
 }
 
@@ -2270,7 +2280,7 @@ fn deactivate_spec(
                 .heap_mut()
                 .alloc_dynamic(crate::m3_paths::VARIABLE_EXPRESSION);
             ctx.heap_mut()
-                .mutate_add(obj, "name", &[Value::String(name.clone())])?;
+                .mutate_add(&obj, "name", &[Value::String(name.clone())])?;
             Ok(Value::Object(obj))
         }
         ExprKind::Collection { elements } => {
@@ -2281,7 +2291,7 @@ fn deactivate_spec(
             let obj = ctx
                 .heap_mut()
                 .alloc_dynamic(crate::m3_paths::INSTANCE_VALUE);
-            ctx.heap_mut().mutate_add(obj, "values", &deactivated)?;
+            ctx.heap_mut().mutate_add(&obj, "values", &deactivated)?;
             Ok(Value::Object(obj))
         }
         ExprKind::FunctionCall(data) => deactivate_call(ctx, data, DeactivateCallShape::Function),
@@ -2315,13 +2325,13 @@ fn deactivate_spec(
                 Value::Unit => Vec::new(),
                 other => vec![other],
             };
-            ctx.heap_mut().mutate_add(obj, "values", &values)?;
+            ctx.heap_mut().mutate_add(&obj, "values", &values)?;
             if let Some(type_id) = runtime_type {
                 let gt = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
                 ctx.heap_mut()
-                    .mutate_add(gt, "rawType", &[Value::Element(type_id)])?;
+                    .mutate_add(&gt, "rawType", &[Value::Element(type_id)])?;
                 ctx.heap_mut()
-                    .mutate_add(obj, "genericType", &[Value::Object(gt)])?;
+                    .mutate_add(&obj, "genericType", &[Value::Object(gt)])?;
             }
             Ok(Value::Object(obj))
         }
@@ -2375,7 +2385,7 @@ fn deactivate_call(
     match shape {
         DeactivateCallShape::Function => {
             ctx.heap_mut().mutate_add(
-                obj,
+                &obj,
                 property_slot,
                 &[Value::String(data.function_name.clone())],
             )?;
@@ -2387,17 +2397,17 @@ fn deactivate_call(
                 .heap_mut()
                 .alloc_dynamic(crate::m3_paths::INSTANCE_VALUE);
             ctx.heap_mut().mutate_add(
-                iv,
+                &iv,
                 "values",
                 &[Value::String(data.function_name.clone())],
             )?;
             ctx.heap_mut()
-                .mutate_add(obj, property_slot, &[Value::Object(iv)])?;
+                .mutate_add(&obj, property_slot, &[Value::Object(iv)])?;
         }
     }
     if let Some(fn_id) = data.function {
         ctx.heap_mut()
-            .mutate_add(obj, "func", &[Value::Element(fn_id)])?;
+            .mutate_add(&obj, "func", &[Value::Element(fn_id)])?;
         // Populate `multiplicity` from the resolved function's declared
         // return multiplicity (testToOneMultiplicity reads this slot).
         let mult_name = match ctx.model().get_element(fn_id) {
@@ -2408,7 +2418,7 @@ fn deactivate_call(
             && let Some(mult_id) = resolve_multiplicity_constant(ctx.model(), name)
         {
             ctx.heap_mut()
-                .mutate_add(obj, "multiplicity", &[Value::Element(mult_id)])?;
+                .mutate_add(&obj, "multiplicity", &[Value::Element(mult_id)])?;
         }
     } else if matches!(
         shape,
@@ -2429,24 +2439,24 @@ fn deactivate_call(
             };
             let prop_obj = ctx.heap_mut().alloc_dynamic(prop_classifier);
             ctx.heap_mut()
-                .mutate_add(prop_obj, "_owner", &[Value::Element(*cls)])?;
+                .mutate_add(&prop_obj, "_owner", &[Value::Element(*cls)])?;
             ctx.heap_mut().mutate_add(
-                prop_obj,
+                &prop_obj,
                 "name",
                 &[Value::String(data.function_name.clone())],
             )?;
             ctx.heap_mut()
-                .mutate_add(obj, "func", &[Value::Object(prop_obj)])?;
+                .mutate_add(&obj, "func", &[Value::Object(prop_obj)])?;
         }
     }
     ctx.heap_mut()
-        .mutate_add(obj, "parametersValues", &deactivated_args)?;
+        .mutate_add(&obj, "parametersValues", &deactivated_args)?;
     if let Some(type_id) = static_type {
         let gt = ctx.heap_mut().alloc_dynamic(crate::m3_paths::GENERIC_TYPE);
         ctx.heap_mut()
-            .mutate_add(gt, "rawType", &[Value::Element(type_id)])?;
+            .mutate_add(&gt, "rawType", &[Value::Element(type_id)])?;
         ctx.heap_mut()
-            .mutate_add(obj, "genericType", &[Value::Object(gt)])?;
+            .mutate_add(&obj, "genericType", &[Value::Object(gt)])?;
     }
     Ok(Value::Object(obj))
 }
@@ -2486,7 +2496,9 @@ impl NativeFunction for OpenVariableValues {
                     .collect(),
                 FunctionValue::Compiled(_) => Vec::new(),
             },
-            Value::Element(id) if matches!(ctx.model().get_element(*id), Element::Function(_)) => {
+            Value::Element(id)
+                if matches!(ctx.model().get_element(id.clone()), Element::Function(_)) =>
+            {
                 Vec::new()
             }
             other => {
@@ -2499,7 +2511,7 @@ impl NativeFunction for OpenVariableValues {
             // object so `$map->get(name).values` round-trips through the
             // Java-shaped List container the platform tests expect.
             let list_id = ctx.heap_mut().alloc_dynamic(crate::m3_paths::LIST);
-            ctx.heap_mut().mutate_add(list_id, "values", &[value])?;
+            ctx.heap_mut().mutate_add(&list_id, "values", &[value])?;
             entries.insert(crate::value::ValueKey::String(name), Value::Object(list_id));
         }
         Ok(Evaluated::new(Value::Map(std::rc::Rc::new(
@@ -2541,7 +2553,7 @@ impl NativeFunction for GenericTypeClass {
         let Value::Object(obj_id) = &values[0] else {
             return Err(PureRuntimeError::type_mismatch("GenericType", &values[0]).into());
         };
-        let raw_type_vals = ctx.heap().get_property_values(*obj_id, "rawType")?;
+        let raw_type_vals = ctx.heap().get_property_values(&obj_id.clone(), "rawType")?;
         let Some(first) = raw_type_vals.iter().next() else {
             return Ok(Evaluated::new(Value::Unit));
         };
@@ -2593,27 +2605,31 @@ impl NativeFunction for ElementPath {
         // `[root, ..., self]` shape the Element path produces, matching
         // `testEphemeralPackageableElement`.
         if let Value::Object(obj_id) = &values[0] {
-            let mut chain: Vec<Value> = vec![Value::Object(*obj_id)];
-            let mut cursor: Option<crate::heap::ObjectId> = {
-                let pkg_vals = ctx.heap().get_property_values(*obj_id, "package")?;
+            let mut chain: Vec<Value> = vec![Value::Object(obj_id.clone())];
+            let mut cursor: Option<crate::heap::ObjectHandle> = {
+                let pkg_vals = ctx.heap().get_property_values(obj_id, "package")?;
                 match pkg_vals.iter().next() {
-                    Some(Value::Object(pid)) => Some(*pid),
+                    Some(Value::Object(pid)) => Some(pid.clone()),
                     _ => None,
                 }
             };
-            let mut visited = std::collections::HashSet::new();
+            // Dedup by Rc::as_ptr — stable for the lifetime of the strong refs we hold.
+            let mut visited: std::collections::HashSet<
+                *const std::cell::RefCell<crate::heap::HeapEntry>,
+            > = std::collections::HashSet::new();
             while let Some(step) = cursor {
-                if !visited.insert(step) {
+                if !visited.insert(std::rc::Rc::as_ptr(&step)) {
                     break;
                 }
-                chain.push(Value::Object(step));
-                cursor = {
-                    let pkg_vals = ctx.heap().get_property_values(step, "package")?;
+                let next = {
+                    let pkg_vals = ctx.heap().get_property_values(&step, "package")?;
                     match pkg_vals.iter().next() {
-                        Some(Value::Object(pid)) => Some(*pid),
+                        Some(Value::Object(pid)) => Some(pid.clone()),
                         _ => None,
                     }
                 };
+                chain.push(Value::Object(step));
+                cursor = next;
             }
             chain.reverse();
             return Ok(Evaluated::new(Value::from_vec(chain)));
@@ -2749,7 +2765,7 @@ fn reactivate_value(value: &Value, ctx: &mut dyn EvalContextTrait) -> Result<Val
         );
         return Ok(value.clone());
     };
-    let classifier = ctx.heap().classifier(*obj_id)?.to_string();
+    let classifier = ctx.heap().classifier(&obj_id.clone())?.to_string();
     tracing::debug!(?obj_id, %classifier, "reactivate: classifier dispatch");
     let Some(classifier_id) = crate::m3_paths::resolve(ctx.model(), &classifier) else {
         // Unknown classifier — not a spec wrapper we know how to walk.
@@ -2766,15 +2782,15 @@ fn reactivate_value(value: &Value, ctx: &mut dyn EvalContextTrait) -> Result<Val
     let model = ctx.model();
     if classifier_extends_m3(model, classifier_id, crate::m3_paths::INSTANCE_VALUE) {
         tracing::debug!("reactivate: → instance_value handler");
-        return reactivate_instance_value(*obj_id, ctx);
+        return reactivate_instance_value(obj_id.clone(), ctx);
     }
     if classifier_extends_m3(model, classifier_id, crate::m3_paths::VARIABLE_EXPRESSION) {
         tracing::debug!("reactivate: → variable_expression handler");
-        return reactivate_variable_expression(*obj_id, ctx);
+        return reactivate_variable_expression(obj_id.clone(), ctx);
     }
     if classifier_extends_m3(model, classifier_id, crate::m3_paths::FUNCTION_EXPRESSION) {
         tracing::debug!("reactivate: → function_expression handler");
-        return reactivate_function_expression(*obj_id, ctx);
+        return reactivate_function_expression(obj_id.clone(), ctx);
     }
 
     // Any other heap object — not a deactivated spec we know about; pass
@@ -2789,10 +2805,10 @@ fn reactivate_value(value: &Value, ctx: &mut dyn EvalContextTrait) -> Result<Val
 /// `Value::Unit` via [`Value::from_vec`].
 #[allow(clippy::result_large_err)]
 fn reactivate_instance_value(
-    obj_id: crate::heap::ObjectId,
+    obj_id: crate::heap::ObjectHandle,
     ctx: &mut dyn EvalContextTrait,
 ) -> Result<Value, PureException> {
-    let vals = ctx.heap().get_property_values(obj_id, "values")?;
+    let vals = ctx.heap().get_property_values(&obj_id, "values")?;
     let raw: Vec<Value> = vals.iter().cloned().collect();
     let mut out: Vec<Value> = Vec::with_capacity(raw.len());
     for v in raw {
@@ -2818,10 +2834,10 @@ fn reactivate_instance_value(
 /// reactivate failures are diagnosable separately.
 #[allow(clippy::result_large_err)]
 fn reactivate_variable_expression(
-    obj_id: crate::heap::ObjectId,
+    obj_id: crate::heap::ObjectHandle,
     ctx: &mut dyn EvalContextTrait,
 ) -> Result<Value, PureException> {
-    let name_vals = ctx.heap().get_property_values(obj_id, "name")?;
+    let name_vals = ctx.heap().get_property_values(&obj_id, "name")?;
     let Some(Value::String(name)) = name_vals.iter().next() else {
         return Err(PureRuntimeError::EvaluationError(
             "reactivate: VariableExpression is missing its 'name' slot".into(),
@@ -2854,20 +2870,22 @@ fn reactivate_variable_expression(
 ///    "Reactivate inner-call dispatch" in BACKLOG.
 #[allow(clippy::result_large_err)]
 fn reactivate_function_expression(
-    obj_id: crate::heap::ObjectId,
+    obj_id: crate::heap::ObjectHandle,
     ctx: &mut dyn EvalContextTrait,
 ) -> Result<Value, PureException> {
-    let params = ctx.heap().get_property_values(obj_id, "parametersValues")?;
+    let params = ctx
+        .heap()
+        .get_property_values(&obj_id, "parametersValues")?;
     let raw_params: Vec<Value> = params.iter().cloned().collect();
     let mut reactivated_params: Vec<Value> = Vec::with_capacity(raw_params.len());
     for p in raw_params {
         reactivated_params.push(reactivate_value(&p, ctx)?);
     }
-    let func_vals = ctx.heap().get_property_values(obj_id, "func")?;
+    let func_vals = ctx.heap().get_property_values(&obj_id, "func")?;
     if let Some(func_val) = func_vals.iter().next() {
         return ctx.call_function(&func_val.clone(), &reactivated_params);
     }
-    let name_vals = ctx.heap().get_property_values(obj_id, "functionName")?;
+    let name_vals = ctx.heap().get_property_values(&obj_id, "functionName")?;
     if let Some(Value::String(name)) = name_vals.iter().next().cloned()
         && let Some(fn_id) =
             find_function_by_simple_name(ctx.model(), &name, reactivated_params.len())

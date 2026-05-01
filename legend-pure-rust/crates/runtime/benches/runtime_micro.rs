@@ -100,11 +100,11 @@ fn bench_property_access(c: &mut Criterion) {
     group.bench_function("dynamic_get", |b| {
         let mut heap = RuntimeHeap::new();
         let id = heap.alloc_dynamic("my::Trade");
-        heap.mutate_add(id, "price", &[Value::Float(42.0)]).unwrap();
-        heap.mutate_add(id, "ticker", &[Value::String("AAPL".into())])
+        heap.mutate_add(&id, "price", &[Value::Float(42.0)]).unwrap();
+        heap.mutate_add(&id, "ticker", &[Value::String("AAPL".into())])
             .unwrap();
 
-        b.iter(|| black_box(heap.get_property(id, "price").unwrap()));
+        b.iter(|| black_box(heap.get_property(&id, "price").unwrap()));
     });
 
     // Dynamic object: mutateAdd single value
@@ -113,7 +113,7 @@ fn bench_property_access(c: &mut Criterion) {
         let id = heap.alloc_dynamic("my::Account");
 
         b.iter(|| {
-            heap.mutate_add(id, "values", &[Value::Integer(black_box(1))])
+            heap.mutate_add(&id, "values", &[Value::Integer(black_box(1))])
                 .unwrap();
         });
     });

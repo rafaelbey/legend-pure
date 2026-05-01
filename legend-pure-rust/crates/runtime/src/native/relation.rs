@@ -21,7 +21,7 @@
 use legend_pure_parser_pure::types::ValueSpec;
 
 use crate::error::{PureException, PureRuntimeError};
-use crate::heap::ObjectId;
+use crate::heap::ObjectHandle;
 use crate::m3_paths;
 use crate::native::{EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args};
 use crate::value::Value;
@@ -79,10 +79,10 @@ impl NativeFunction for AddColumns {
         let source_obj = unwrap_instance_value(&source_value, instance_value_id, ctx)?;
         let source_classifier_id = ctx
             .heap()
-            .classifier(source_obj)
+            .classifier(&source_obj)
             .map_err(PureException::from)
             .and_then(|c| {
-                m3_paths::resolve(ctx.model(), c).ok_or_else(|| {
+                m3_paths::resolve(ctx.model(), &c).ok_or_else(|| {
                     PureException::from(PureRuntimeError::EvaluationError(format!(
                         "addColumns: source classifier '{c}' not resolvable"
                     )))
@@ -95,7 +95,7 @@ impl NativeFunction for AddColumns {
         }
         let source_cols = ctx
             .heap()
-            .get_property_values(source_obj, "columns")
+            .get_property_values(&source_obj, "columns")
             .map_err(PureException::from)?;
         let mut merged: Vec<Value> = source_cols.iter().cloned().collect();
 
@@ -104,10 +104,10 @@ impl NativeFunction for AddColumns {
         let cs_obj = unwrap_instance_value(&cs_value, instance_value_id, ctx)?;
         let cs_classifier_id = ctx
             .heap()
-            .classifier(cs_obj)
+            .classifier(&cs_obj)
             .map_err(PureException::from)
             .and_then(|c| {
-                m3_paths::resolve(ctx.model(), c).ok_or_else(|| {
+                m3_paths::resolve(ctx.model(), &c).ok_or_else(|| {
                     PureException::from(PureRuntimeError::EvaluationError(format!(
                         "addColumns: colSpec classifier '{c}' not resolvable"
                     )))
@@ -125,7 +125,7 @@ impl NativeFunction for AddColumns {
         let new_rt = ctx.heap_mut().alloc_dynamic(m3_paths::RELATION_TYPE);
         if !merged.is_empty() {
             ctx.heap_mut()
-                .mutate_add(new_rt, "columns", &merged)
+                .mutate_add(&new_rt, "columns", &merged)
                 .map_err(PureException::from)?;
         }
         Ok(Evaluated::new(Value::Object(new_rt)))
@@ -142,18 +142,18 @@ impl NativeFunction for AddColumns {
 ///   .getFirst()._rawType()._columns()` chain.
 #[allow(clippy::result_large_err)]
 fn read_col_spec_array_columns(
-    cs_obj: ObjectId,
+    cs_obj: ObjectHandle,
     ctx: &mut dyn EvalContextTrait,
 ) -> Result<Vec<Value>, PureException> {
     let cgt = single_object_slot(cs_obj, "classifierGenericType", ctx)?;
     let type_args = ctx
         .heap()
-        .get_property_values(cgt, "typeArguments")
+        .get_property_values(&cgt, "typeArguments")
         .map_err(PureException::from)?;
     let first_ta = type_args
         .iter()
         .find_map(|v| match v {
-            Value::Object(id) => Some(*id),
+            Value::Object(id) => Some(id.clone()),
             _ => None,
         })
         .ok_or_else(|| {
@@ -165,7 +165,7 @@ fn read_col_spec_array_columns(
     let raw = single_object_slot(first_ta, "rawType", ctx)?;
     let cols = ctx
         .heap()
-        .get_property_values(raw, "columns")
+        .get_property_values(&raw, "columns")
         .map_err(PureException::from)?;
     Ok(cols.iter().cloned().collect())
 }
@@ -173,18 +173,18 @@ fn read_col_spec_array_columns(
 /// Read a single Object out of `obj.<slot>`.
 #[allow(clippy::result_large_err)]
 fn single_object_slot(
-    obj: ObjectId,
+    obj: ObjectHandle,
     slot: &str,
     ctx: &mut dyn EvalContextTrait,
-) -> Result<ObjectId, PureException> {
+) -> Result<ObjectHandle, PureException> {
     let values = ctx
         .heap()
-        .get_property_values(obj, slot)
+        .get_property_values(&obj, slot)
         .map_err(PureException::from)?;
     values
         .iter()
         .find_map(|v| match v {
-            Value::Object(id) => Some(*id),
+            Value::Object(id) => Some(id.clone()),
             _ => None,
         })
         .ok_or_else(|| {
@@ -201,27 +201,27 @@ fn unwrap_instance_value(
     value: &Value,
     instance_value_id: Option<legend_pure_parser_pure::ids::ElementId>,
     ctx: &mut dyn EvalContextTrait,
-) -> Result<ObjectId, PureException> {
+) -> Result<ObjectHandle, PureException> {
     let Value::Object(obj) = value else {
         return Err(PureException::from(PureRuntimeError::type_mismatch(
             "Object", value,
         )));
     };
-    let obj = *obj;
+    let obj = obj.clone();
     if let Some(iv_id) = instance_value_id {
         let classifier = ctx
             .heap()
-            .classifier(obj)
+            .classifier(&obj)
             .map_err(PureException::from)?
             .to_owned();
         let resolved = m3_paths::resolve(ctx.model(), &classifier);
         if resolved == Some(iv_id) {
             let inner = ctx
                 .heap()
-                .get_property_values(obj, "values")
+                .get_property_values(&obj, "values")
                 .map_err(PureException::from)?;
             if let Some(Value::Object(unwrapped)) = inner.iter().next() {
-                return Ok(*unwrapped);
+                return Ok(unwrapped.clone());
             }
         }
     }

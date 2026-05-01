@@ -419,7 +419,7 @@ pub(crate) fn pure_to_string(
         Value::Object(obj_id) => match ctx.invoke_qualified_property(value, "toString", &[])? {
             Some(Value::String(s)) => Ok(s.to_string()),
             Some(other) => pure_to_string(&other, ctx),
-            None => Ok(format!("Anonymous_{obj_id}")),
+            None => Ok(format!("Anonymous_{:p}", std::rc::Rc::as_ptr(obj_id))),
         },
         // Element ref (Class, Function, Enumeration, …): simple-leaf
         // name. testClassToString and testEnumerationToString assert

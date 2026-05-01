@@ -20,7 +20,7 @@ use legend_pure_parser_pure::types::ValueSpec;
 use smol_str::SmolStr;
 
 use crate::error::{PureException, PureRuntimeError};
-use crate::heap::ObjectId;
+use crate::heap::ObjectHandle;
 use crate::native::{
     EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
 };
@@ -284,8 +284,9 @@ impl NativeFunction for Zip {
         let mut out: Vec<Value> = Vec::with_capacity(n);
         for i in 0..n {
             let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::PAIR);
-            ctx.heap_mut().mutate_add(obj, "first", &[xs[i].clone()])?;
-            ctx.heap_mut().mutate_add(obj, "second", &[ys[i].clone()])?;
+            ctx.heap_mut().mutate_add(&obj, "first", &[xs[i].clone()])?;
+            ctx.heap_mut()
+                .mutate_add(&obj, "second", &[ys[i].clone()])?;
             out.push(Value::Object(obj));
         }
         Ok(Evaluated::new(Value::from_vec(out)))
@@ -1284,11 +1285,11 @@ impl NativeFunction for RemoveAllOptimized {
 /// Coerce a runtime [`Value`] into a hashable [`ValueKey`].
 ///
 /// Primitives + dates map to their direct `ValueKey` variant. Heap objects
-/// default to identity (`ValueKey::Object(ObjectId)`) unless the owning
+/// default to identity (`ValueKey::Object(ObjectHandle)`) unless the owning
 /// class annotates one or more properties with `<<equality.Key>>` — in
 /// that case the key extracts those properties' values and becomes
 /// `ValueKey::ObjectByEqualityKeys`, so instances with equal annotated
-/// fields collide in the same bucket even across distinct `ObjectId`s.
+/// fields collide in the same bucket even across distinct `ObjectHandle`s.
 /// Collections, maps, and functions never compare meaningfully and raise
 /// an explicit error.
 #[allow(clippy::result_large_err)]
@@ -1304,7 +1305,7 @@ fn value_to_key(v: &Value, ctx: &dyn EvalContextTrait) -> Result<ValueKey, PureE
             enum_id: *enum_id,
             member: member.clone(),
         }),
-        Value::Object(id) => object_equality_key(*id, ctx),
+        Value::Object(id) => object_equality_key(id.clone(), ctx),
         other => Err(PureRuntimeError::EvaluationError(format!(
             "Map key must be a hashable primitive or object identity, got {}",
             other.type_name()
@@ -1318,13 +1319,13 @@ fn value_to_key(v: &Value, ctx: &dyn EvalContextTrait) -> Result<ValueKey, PureE
 /// Walks the object's classifier to its owning Class, then looks for
 /// `<<equality.Key>>`-annotated properties. If any exist, extract their
 /// current values and build `ObjectByEqualityKeys`; otherwise fall back
-/// to identity equality via `ValueKey::Object(ObjectId)`.
+/// to identity equality via `ValueKey::Object(ObjectHandle)`.
 #[allow(clippy::result_large_err)]
 fn object_equality_key(
-    id: ObjectId,
+    id: ObjectHandle,
     ctx: &dyn EvalContextTrait,
 ) -> Result<ValueKey, PureException> {
-    let classifier = ctx.heap().classifier(id)?.to_string();
+    let classifier = ctx.heap().classifier(&id)?.to_string();
     let Some(class_id) = crate::m3_paths::resolve(ctx.model(), &classifier) else {
         return Ok(ValueKey::Object(id));
     };
@@ -1339,7 +1340,7 @@ fn object_equality_key(
 
     let mut fields: Vec<(SmolStr, ValueKey)> = Vec::with_capacity(equality_props.len());
     for prop_name in equality_props {
-        let values = ctx.heap().get_property_values(id, prop_name.as_str())?;
+        let values = ctx.heap().get_property_values(&id, prop_name.as_str())?;
         let field_key = match values.iter().next() {
             Some(v) => value_to_key(v, ctx)?,
             // Absent annotated field — represent as a sentinel string so
@@ -1361,7 +1362,7 @@ fn key_to_value(k: &ValueKey) -> Value {
         ValueKey::String(s) => Value::String(s.clone()),
         ValueKey::Date(d) => Value::Date(*d),
         ValueKey::StrictTime(t) => Value::StrictTime(*t),
-        ValueKey::Object(id) => Value::Object(*id),
+        ValueKey::Object(id) => Value::Object(id.clone()),
         ValueKey::ObjectByEqualityKeys { .. } => {
             // No reified heap instance corresponds uniquely to a
             // value-keyed entry; callers that need the original object
@@ -1413,8 +1414,8 @@ impl NativeFunction for NewMap {
                 ))
                 .into());
             };
-            let first_vals = ctx.heap().get_property_values(*obj_id, "first")?;
-            let second_vals = ctx.heap().get_property_values(*obj_id, "second")?;
+            let first_vals = ctx.heap().get_property_values(&obj_id.clone(), "first")?;
+            let second_vals = ctx.heap().get_property_values(&obj_id.clone(), "second")?;
             let Some(k) = first_vals.iter().next() else {
                 return Err(PureRuntimeError::EvaluationError(
                     "newMap: Pair.first is empty".into(),
@@ -1591,9 +1592,9 @@ impl NativeFunction for KeyValues {
         for (k, v) in &snapshot {
             let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::PAIR);
             ctx.heap_mut()
-                .mutate_add(obj, "first", &[key_to_value(k)])?;
+                .mutate_add(&obj, "first", &[key_to_value(k)])?;
             ctx.heap_mut()
-                .mutate_add(obj, "second", std::slice::from_ref(v))?;
+                .mutate_add(&obj, "second", std::slice::from_ref(v))?;
             items.push(Value::Object(obj));
         }
         Ok(Evaluated::new(Value::from_vec(items)))
@@ -1792,7 +1793,7 @@ impl NativeFunction for GetMapStats {
         let counter = m.borrow().get_if_absent_counter;
         let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::MAP_STATS);
         ctx.heap_mut()
-            .mutate_add(obj, "getIfAbsentCounter", &[Value::Integer(counter)])?;
+            .mutate_add(&obj, "getIfAbsentCounter", &[Value::Integer(counter)])?;
         Ok(Evaluated::new(Value::Object(obj)))
     }
 
@@ -1849,7 +1850,7 @@ impl NativeFunction for GroupBy {
             let list_obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::LIST);
             for v in &bucket {
                 ctx.heap_mut()
-                    .mutate_add(list_obj, "values", std::slice::from_ref(v))?;
+                    .mutate_add(&list_obj, "values", std::slice::from_ref(v))?;
             }
             map.insert(key, Value::Object(list_obj));
         }
@@ -1877,8 +1878,8 @@ fn pair_first_second(
         ))
         .into());
     };
-    let first_vals = ctx.heap().get_property_values(*obj_id, "first")?;
-    let second_vals = ctx.heap().get_property_values(*obj_id, "second")?;
+    let first_vals = ctx.heap().get_property_values(&obj_id.clone(), "first")?;
+    let second_vals = ctx.heap().get_property_values(&obj_id.clone(), "second")?;
     let Some(k) = first_vals.iter().next() else {
         return Err(PureRuntimeError::EvaluationError(format!(
             "{native_name}: Pair.first is empty"

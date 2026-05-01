@@ -12,83 +12,84 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Runtime Heap — mutable storage for Pure object instances.
+//! Runtime Heap — Rc-managed storage for Pure object instances.
 //!
-//! Objects created by `^Class(...)` or `new` expressions live on the
-//! [`RuntimeHeap`]. Each object is identified by an [`ObjectId`]
-//! (a generational index from `slotmap`), ensuring safe identity-preserving
-//! semantics for `mutateAdd`.
+//! Objects created by `^Class(...)` or `new` expressions are allocated as
+//! [`ObjectHandle`]s — `Rc<RefCell<HeapEntry>>` clones. Identity is `Rc::ptr_eq`,
+//! mutation is `borrow_mut`, and deallocation is automatic when the last
+//! `Value::Object(handle)` clone drops.
 //!
-//! # Object Representations
+//! # Object lifecycles
 //!
-//! The heap supports two representations for objects:
+//! Objects are NOT tracked in any global registry. A handle's lifetime is the
+//! lifetime of the strong references that hold it: the variable context, the
+//! return chain, captured closures, the memoization cache, or properties of
+//! escaped objects. When the last strong reference drops, the entry is freed.
 //!
-//! - **Dynamic** (`RuntimeObject`): Properties stored in a
-//!   `HashMap<SmolStr, im_rc::Vector<Value>>`. Used by the interpreter for
-//!   all classes. Supports arbitrary property access by name.
-//!
-//! - **Typed** (`Box<dyn TypedObject>`): Generated Rust structs with direct
-//!   field access. Created by compiled code for hot-path classes. Also
-//!   supports dynamic property access via the [`TypedObject`] trait.
-//!
-//! Both representations produce the same `Value::Object(ObjectId)` — callers
-//! never need to know which representation is used.
+//! The [`RuntimeHeap`] keeps strong refs only for **metamodel bootstrap rows**,
+//! one per compiled `PureModel` element. These exist for the evaluator's
+//! lifetime so reflection (`Value::Element` ↔ `Value::Object` projection)
+//! stays stable.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fmt;
+use std::rc::Rc;
 
 use im_rc::Vector as PVector;
 use legend_pure_parser_pure::ids::{ElementId, PackageId};
 use legend_pure_parser_pure::model::PureModel;
-use slotmap::{SlotMap, new_key_type};
 use smol_str::SmolStr;
 
 use crate::error::PureRuntimeError;
 use crate::value::Value;
 
 // ---------------------------------------------------------------------------
-// ObjectId — generational handle
+// ObjectHandle — strong Rc into a RefCell<HeapEntry>
 // ---------------------------------------------------------------------------
 
-new_key_type! {
-    /// A generational index into the [`RuntimeHeap`].
-    ///
-    /// `ObjectId` is `Copy`, `Eq`, `Hash` — safe to store in collections
-    /// and use as map keys. The generational design means stale IDs are
-    /// detected at runtime (slotmap returns `None`).
-    pub struct ObjectId;
-}
-
-impl fmt::Display for ObjectId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
+/// A strong reference to a heap entry.
+///
+/// `Rc<RefCell<HeapEntry>>` clones share the same underlying entry — identity
+/// is `Rc::ptr_eq`. Mutation goes through `borrow_mut()` and panics on
+/// re-entrant borrow conflicts at runtime, so callers must keep borrow scopes
+/// short and never hold a borrow across a recursive `eval()` call.
+pub type ObjectHandle = Rc<RefCell<HeapEntry>>;
 
 // ---------------------------------------------------------------------------
 // RuntimeObject — dynamic property storage
 // ---------------------------------------------------------------------------
 
 /// An object instance with dynamic property storage.
-///
-/// Properties are stored as `HashMap<SmolStr, PVector<Value>>` where:
-/// - The key is the property name
-/// - The value is a persistent vector (supports multiplicity `[*]`)
-/// - Single-valued properties `[1]` have a vector of length 1
-/// - Optional properties `[0..1]` have a vector of length 0 or 1
+#[derive(Debug)]
 pub struct RuntimeObject {
     /// The class that this object is an instance of.
     pub classifier: SmolStr,
     /// Property values, keyed by property name.
     pub properties: HashMap<SmolStr, PVector<Value>>,
+    /// When this row was created by [`RuntimeHeap::bootstrap_metamodel`],
+    /// the [`ElementId`] of the corresponding compiled element.
+    /// `None` for user-allocated objects.
+    pub bootstrap_element: Option<ElementId>,
 }
 
 impl RuntimeObject {
-    /// Create a new object with no properties set.
+    /// Create a new object with no properties set and no metamodel binding.
+    #[must_use]
     pub fn new(classifier: impl Into<SmolStr>) -> Self {
         Self {
             classifier: classifier.into(),
             properties: HashMap::new(),
+            bootstrap_element: None,
+        }
+    }
+
+    /// Create a metamodel bootstrap row bound to `element_id`.
+    #[must_use]
+    pub fn new_bootstrap(classifier: impl Into<SmolStr>, element_id: ElementId) -> Self {
+        Self {
+            classifier: classifier.into(),
+            properties: HashMap::new(),
+            bootstrap_element: Some(element_id),
         }
     }
 }
@@ -98,39 +99,11 @@ impl RuntimeObject {
 // ---------------------------------------------------------------------------
 
 /// Trait implemented by generated Rust structs for Pure classes.
-///
-/// This bridges the gap between statically-typed compiled code (direct field
-/// access) and dynamically-typed interpreted code (property name lookup).
-///
-/// # Example (generated code)
-///
-/// ```ignore
-/// pub struct Trade {
-///     pub ticker: SmolStr,
-///     pub price: f64,
-///     pub quantity: i64,
-/// }
-///
-/// impl TypedObject for Trade {
-///     fn classifier_path(&self) -> &str { "my::trading::Trade" }
-///
-///     fn get_property(&self, name: &str) -> Option<Value> {
-///         match name {
-///             "ticker"   => Some(Value::String(self.ticker.clone())),
-///             "price"    => Some(Value::Float(self.price)),
-///             "quantity" => Some(Value::Integer(self.quantity)),
-///             _ => None,
-///         }
-///     }
-///     // ...
-/// }
-/// ```
-pub trait TypedObject: Send + Sync + 'static {
+pub trait TypedObject: 'static {
     /// The Pure class path (e.g., `"my::trading::Trade"`).
     fn classifier_path(&self) -> &str;
 
     /// Dynamic property access by name.
-    /// Returns `None` if the property name is not recognized.
     fn get_property(&self, name: &str) -> Option<Value>;
 
     /// Dynamic property mutation (for `mutateAdd` support).
@@ -151,9 +124,6 @@ pub trait TypedObject: Send + Sync + 'static {
 // ---------------------------------------------------------------------------
 
 /// The storage representation for a single heap object.
-///
-/// The interpreter doesn't need to know which variant is active —
-/// all access goes through `RuntimeHeap` methods which handle both.
 pub enum HeapEntry {
     /// Dynamic object — interpreter-created, HashMap-based property storage.
     Dynamic(RuntimeObject),
@@ -161,117 +131,43 @@ pub enum HeapEntry {
     Typed(Box<dyn TypedObject>),
 }
 
-// ---------------------------------------------------------------------------
-// RuntimeHeap
-// ---------------------------------------------------------------------------
-
-/// Mutable runtime storage for Pure object instances.
-///
-/// Objects are allocated with [`alloc_dynamic`](Self::alloc_dynamic) (interpreter
-/// path) or [`alloc_typed`](Self::alloc_typed) (compiled code path) and
-/// accessed via [`ObjectId`] handles.
-///
-/// # Thread Safety
-///
-/// `RuntimeHeap` is **not** `Send` or `Sync` — it contains `im_rc` types
-/// (which use `Rc`). Each thread/executor gets its own heap. The compiled
-/// `PureModel` (which contains no `Rc` types) is shared across threads
-/// via `Arc`.
-pub struct RuntimeHeap {
-    objects: SlotMap<ObjectId, HeapEntry>,
-    /// `BiMap` between compiled `ElementId`s and the heap rows that
-    /// represent them as M3 metamodel `CoreInstances`. Populated by
-    /// [`Self::bootstrap_metamodel`] at Evaluator construction;
-    /// drives the unified-reflection refactor where every metamodel
-    /// reference is reachable as both an `ElementId` (compiled-model
-    /// view) and an `ObjectId` (runtime heap view) — see plan
-    /// `the-project-has-a-buzzing-creek.md` step 1.
-    ///
-    /// Read direction (`element_to_object`) is the hot path —
-    /// `Value::Element(eid)` projects to its heap row in O(1) for
-    /// reflective property access. The reverse direction
-    /// (`object_to_element`) is now also O(1): `getAll` against an
-    /// M3 metaclass like `ConcreteFunctionDefinition` returns one
-    /// match per model element row, and each match needs to flip
-    /// back to its `ElementId` so model-aware property dispatch
-    /// (`eval_property_access` `Value::Element` branch) can answer
-    /// `.name`/`.package`/etc. without the bootstrap rows being
-    /// pre-populated. Two parallel `HashMap`s — kept in sync by
-    /// the only writer, `bootstrap_metamodel`.
-    element_to_object: HashMap<ElementId, ObjectId>,
-    object_to_element: HashMap<ObjectId, ElementId>,
+impl std::fmt::Debug for HeapEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HeapEntry::Dynamic(obj) => f.debug_tuple("Dynamic").field(obj).finish(),
+            HeapEntry::Typed(obj) => f
+                .debug_tuple("Typed")
+                .field(&obj.classifier_path())
+                .finish(),
+        }
+    }
 }
 
-impl RuntimeHeap {
-    /// Create an empty heap.
+impl HeapEntry {
+    /// The classifier (class path) of this entry as an owned [`SmolStr`].
     #[must_use]
-    pub fn new() -> Self {
-        Self {
-            objects: SlotMap::with_key(),
-            element_to_object: HashMap::new(),
-            object_to_element: HashMap::new(),
+    pub fn classifier(&self) -> SmolStr {
+        match self {
+            HeapEntry::Dynamic(obj) => obj.classifier.clone(),
+            HeapEntry::Typed(obj) => SmolStr::new(obj.classifier_path()),
         }
     }
 
-    /// Create an empty heap with pre-allocated capacity.
+    /// Borrow the classifier as a `&str`.
     #[must_use]
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            objects: SlotMap::with_capacity_and_key(capacity),
-            element_to_object: HashMap::with_capacity(capacity),
-            object_to_element: HashMap::with_capacity(capacity),
+    pub fn classifier_str(&self) -> &str {
+        match self {
+            HeapEntry::Dynamic(obj) => obj.classifier.as_str(),
+            HeapEntry::Typed(obj) => obj.classifier_path(),
         }
     }
-
-    /// Look up the metamodel heap row for a compiled element. Returns
-    /// `None` when `bootstrap_metamodel` hasn't run for this
-    /// element's chunk (e.g. the bootstrap chunk loaded but a user
-    /// chunk hasn't), or when the element kind isn't materialised
-    /// (currently every kind is, but kept lenient for future
-    /// extensions like compile-only synthetic elements).
-    #[must_use]
-    pub fn object_for_element(&self, eid: ElementId) -> Option<ObjectId> {
-        self.element_to_object.get(&eid).copied()
-    }
-
-    /// Reverse lookup — find the `ElementId` whose metamodel row
-    /// is `oid`, or `None` if `oid` isn't a bootstrapped element row.
-    /// O(1) via `object_to_element`.
-    #[must_use]
-    pub fn element_for_object(&self, oid: ObjectId) -> Option<ElementId> {
-        self.object_to_element.get(&oid).copied()
-    }
-
-    // -- Allocation --
-
-    /// Allocate a dynamic object (interpreter path).
-    pub fn alloc_dynamic(&mut self, classifier: impl Into<SmolStr>) -> ObjectId {
-        self.objects
-            .insert(HeapEntry::Dynamic(RuntimeObject::new(classifier)))
-    }
-
-    /// Allocate a typed object (compiled code path).
-    pub fn alloc_typed(&mut self, obj: Box<dyn TypedObject>) -> ObjectId {
-        self.objects.insert(HeapEntry::Typed(obj))
-    }
-
-    // -- Property Access (works for both Dynamic and Typed) --
 
     /// Get a single property value by name.
     ///
-    /// For dynamic objects: `HashMap` lookup + first element.
-    /// For typed objects: `TypedObject::get_property` (match on name).
-    ///
     /// # Errors
-    /// Returns `InvalidObjectId` if the ID is stale or invalid.
     /// Returns `PropertyNotFound` if the property does not exist.
-    pub fn get_property(&self, id: ObjectId, name: &str) -> Result<Value, PureRuntimeError> {
-        let entry = self
-            .objects
-            .get(id)
-            .ok_or(PureRuntimeError::InvalidObjectId(id))?;
-
-        match entry {
+    pub fn get_property(&self, name: &str) -> Result<Value, PureRuntimeError> {
+        match self {
             HeapEntry::Dynamic(obj) => obj
                 .properties
                 .get(name)
@@ -291,87 +187,42 @@ impl RuntimeHeap {
         }
     }
 
-    /// Get all values for a multi-valued property.
-    ///
-    /// # Errors
-    /// Returns `InvalidObjectId` if the ID is stale or invalid.
-    pub fn get_property_values(
-        &self,
-        id: ObjectId,
-        name: &str,
-    ) -> Result<PVector<Value>, PureRuntimeError> {
-        let entry = self
-            .objects
-            .get(id)
-            .ok_or(PureRuntimeError::InvalidObjectId(id))?;
-
-        match entry {
-            HeapEntry::Dynamic(obj) => Ok(obj.properties.get(name).cloned().unwrap_or_default()),
-            HeapEntry::Typed(obj) => {
-                // TypedObject returns a single Value; wrap in a vector
-                match obj.get_property(name) {
-                    Some(v) => Ok(PVector::unit(v)),
-                    None => Ok(PVector::new()),
-                }
-            }
+    /// Get all values for a multi-valued property, or an empty vector.
+    #[must_use]
+    pub fn get_property_values(&self, name: &str) -> PVector<Value> {
+        match self {
+            HeapEntry::Dynamic(obj) => obj.properties.get(name).cloned().unwrap_or_default(),
+            HeapEntry::Typed(obj) => match obj.get_property(name) {
+                Some(v) => PVector::unit(v),
+                None => PVector::new(),
+            },
         }
     }
 
-    /// List the property names currently populated on a dynamic heap object.
-    ///
-    /// Typed objects have a fixed schema and return an empty list — typed
-    /// property enumeration belongs to the compiled-code path.
-    ///
-    /// # Errors
-    /// Returns `InvalidObjectId` if the ID is stale or invalid.
-    pub fn property_names(&self, id: ObjectId) -> Result<Vec<SmolStr>, PureRuntimeError> {
-        let entry = self
-            .objects
-            .get(id)
-            .ok_or(PureRuntimeError::InvalidObjectId(id))?;
-        Ok(match entry {
+    /// List the property names currently populated on a dynamic entry.
+    #[must_use]
+    pub fn property_names(&self) -> Vec<SmolStr> {
+        match self {
             HeapEntry::Dynamic(obj) => obj.properties.keys().cloned().collect(),
             HeapEntry::Typed(_) => Vec::new(),
-        })
-    }
-
-    /// Get the classifier (class path) of an object.
-    ///
-    /// # Errors
-    /// Returns `InvalidObjectId` if the ID is stale or invalid.
-    pub fn classifier(&self, id: ObjectId) -> Result<&str, PureRuntimeError> {
-        let entry = self
-            .objects
-            .get(id)
-            .ok_or(PureRuntimeError::InvalidObjectId(id))?;
-
-        match entry {
-            HeapEntry::Dynamic(obj) => Ok(&obj.classifier),
-            HeapEntry::Typed(obj) => Ok(obj.classifier_path()),
         }
     }
 
-    // -- Mutation --
+    /// The metamodel `ElementId` this entry was bootstrapped from, if any.
+    #[must_use]
+    pub fn bootstrap_element(&self) -> Option<ElementId> {
+        match self {
+            HeapEntry::Dynamic(obj) => obj.bootstrap_element,
+            HeapEntry::Typed(_) => None,
+        }
+    }
 
-    /// Add values to a property (in-place mutation).
-    ///
-    /// This is the core operation for `mutateAdd` — it preserves the
-    /// `ObjectId` while modifying the object's property values.
+    /// Append values to a property (`mutateAdd` semantics).
     ///
     /// # Errors
-    /// Returns `InvalidObjectId` if the ID is stale or invalid.
-    pub fn mutate_add(
-        &mut self,
-        id: ObjectId,
-        property: &str,
-        values: &[Value],
-    ) -> Result<(), PureRuntimeError> {
-        let entry = self
-            .objects
-            .get_mut(id)
-            .ok_or(PureRuntimeError::InvalidObjectId(id))?;
-
-        match entry {
+    /// Returns an error if a typed entry rejects the property name or value type.
+    pub fn mutate_add(&mut self, property: &str, values: &[Value]) -> Result<(), PureRuntimeError> {
+        match self {
             HeapEntry::Dynamic(obj) => {
                 let prop_vec = obj
                     .properties
@@ -391,28 +242,12 @@ impl RuntimeHeap {
         }
     }
 
-    /// Replace every value stored at `property` with `values` in one step.
-    ///
-    /// `mutate_add` appends; this resets the slot. Used by `new` / `copy`
-    /// overrides where Pure's semantics is "the caller's value IS the new
-    /// value", not "append to whatever was there". Without this, copying a
-    /// Pure instance and overriding a property via `^$src(prop='new')`
-    /// would leave `['old', 'new']` in the slot.
+    /// Replace every value at `property` with `values`.
     ///
     /// # Errors
-    /// Returns `InvalidObjectId` if the ID is stale or invalid.
-    pub fn mutate_set(
-        &mut self,
-        id: ObjectId,
-        property: &str,
-        values: &[Value],
-    ) -> Result<(), PureRuntimeError> {
-        let entry = self
-            .objects
-            .get_mut(id)
-            .ok_or(PureRuntimeError::InvalidObjectId(id))?;
-
-        match entry {
+    /// Returns an error if a typed entry rejects the property name or value type.
+    pub fn mutate_set(&mut self, property: &str, values: &[Value]) -> Result<(), PureRuntimeError> {
+        match self {
             HeapEntry::Dynamic(obj) => {
                 let mut pv = PVector::new();
                 for v in values {
@@ -422,9 +257,6 @@ impl RuntimeHeap {
                 Ok(())
             }
             HeapEntry::Typed(obj) => {
-                // Typed objects don't support slot-reset — fall back to
-                // overwriting via repeated set_property. `TypedObject` has
-                // its own semantic for property shape.
                 for v in values {
                     obj.set_property(property, v.clone())?;
                 }
@@ -433,26 +265,12 @@ impl RuntimeHeap {
         }
     }
 
-    // -- Typed Access (compiled code fast path) --
-
-    /// Downcast a heap entry to a concrete typed struct.
-    ///
-    /// This is the fast path for compiled code: direct struct field
-    /// access instead of `heap.get_property(id, "price")`.
+    /// Downcast a typed entry to a concrete struct.
     ///
     /// # Errors
-    /// Returns `InvalidObjectId` if the ID is stale or invalid.
-    /// Returns `DowncastFailed` if the object is dynamic or a different concrete type.
-    pub fn downcast_ref<T: TypedObject + 'static>(
-        &self,
-        id: ObjectId,
-    ) -> Result<&T, PureRuntimeError> {
-        let entry = self
-            .objects
-            .get(id)
-            .ok_or(PureRuntimeError::InvalidObjectId(id))?;
-
-        match entry {
+    /// Returns `DowncastFailed` on mismatch.
+    pub fn downcast_ref<T: TypedObject + 'static>(&self) -> Result<&T, PureRuntimeError> {
+        match self {
             HeapEntry::Typed(obj) => {
                 obj.as_any()
                     .downcast_ref::<T>()
@@ -467,32 +285,72 @@ impl RuntimeHeap {
             }),
         }
     }
+}
 
-    /// Pre-populate the heap with one row per compiled `PureModel`
-    /// element, mirroring what Java Pure's M4 does — every metamodel
-    /// entity (Class, Function, Enum, Property, Package, …) is a
-    /// `CoreInstance` reachable through the same property-access
-    /// surface as a user-class instance. Stores the
-    /// `ElementId → ObjectId` mapping in [`Self::element_to_object`]
-    /// so subsequent lookups (`object_for_element`) flip between the
-    /// two views in O(1).
-    ///
-    /// Each row's classifier is the M3 metatype (`Class` element gets
-    /// classifier `meta::pure::metamodel::type::Class`, a Function
-    /// gets `ConcreteFunctionDefinition` or `NativeFunctionDefinition`,
-    /// etc. via `bootstrap::metatype_of`). Reflective slots are
-    /// **not** populated in this initial pass — that's deferred to
-    /// the per-step incremental fills (steps 3–5 of the
-    /// unified-reflection plan), so callers don't see partial state.
-    /// The empty rows still enable `Value::Element(eid)` ↔
-    /// `Value::Object(oid)` projection (step 2) and serve as the
-    /// destination for property writes in subsequent steps.
-    ///
-    /// Idempotent: re-running the bootstrap (e.g. across multiple
-    /// `Evaluator::new` calls) skips elements already mapped, so
-    /// model-extension flows (`pure --watch` future) remain safe.
+// ---------------------------------------------------------------------------
+// RuntimeHeap — metamodel arena
+// ---------------------------------------------------------------------------
+
+/// Per-evaluator metamodel storage.
+///
+/// `RuntimeHeap` is a strong-reference arena for the bootstrap metamodel rows
+/// only. User objects are NOT tracked here — they live wherever a strong `Rc`
+/// holds them. When all those references drop, the object is freed.
+///
+/// `RuntimeHeap` is **not** `Send` or `Sync` — `Rc` keeps it thread-local.
+pub struct RuntimeHeap {
+    /// Strong references to bootstrap metamodel rows.
+    element_to_object: HashMap<ElementId, ObjectHandle>,
+}
+
+impl RuntimeHeap {
+    /// Create an empty heap.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            element_to_object: HashMap::new(),
+        }
+    }
+
+    /// Create an empty heap with pre-allocated capacity.
+    #[must_use]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            element_to_object: HashMap::with_capacity(capacity),
+        }
+    }
+
+    /// Look up the metamodel handle for a compiled element.
+    #[must_use]
+    pub fn object_for_element(&self, eid: ElementId) -> Option<ObjectHandle> {
+        self.element_to_object.get(&eid).cloned()
+    }
+
+    /// Reverse lookup — find the `ElementId` whose metamodel row is `handle`.
+    /// O(1) via `RuntimeObject::bootstrap_element`.
+    #[must_use]
+    pub fn element_for_object(handle: &ObjectHandle) -> Option<ElementId> {
+        handle.borrow().bootstrap_element()
+    }
+
+    // -- Allocation --
+
+    /// Allocate a fresh dynamic handle.
+    #[must_use]
+    pub fn alloc_dynamic(&mut self, classifier: impl Into<SmolStr>) -> ObjectHandle {
+        Rc::new(RefCell::new(HeapEntry::Dynamic(RuntimeObject::new(
+            classifier,
+        ))))
+    }
+
+    /// Allocate a fresh typed handle.
+    #[must_use]
+    pub fn alloc_typed(&mut self, obj: Box<dyn TypedObject>) -> ObjectHandle {
+        Rc::new(RefCell::new(HeapEntry::Typed(obj)))
+    }
+
+    /// Pre-populate the heap with one row per compiled `PureModel` element.
     pub fn bootstrap_metamodel(&mut self, model: &PureModel) {
-        // Walk every chunk's element table.
         for chunk in &model.chunks {
             for local_idx in 0..chunk.elements.len() {
                 let eid = ElementId::InstanceId {
@@ -508,20 +366,14 @@ impl RuntimeHeap {
                         Some(meta_id) => {
                             crate::model_utils::build_element_path(model, meta_id, "::", false)
                         }
-                        // Elements with no resolvable M3 metatype (e.g.
-                        // bootstrap-only sentinel slots before m3.pure
-                        // parses) classify as `Any` — generic enough to
-                        // still allow property reads to surface their
-                        // canonical `name`/`package` slots.
                         None => "meta::pure::metamodel::type::Any".to_owned(),
                     };
-                let obj_id = self.alloc_dynamic(classifier);
-                self.element_to_object.insert(eid, obj_id);
-                self.object_to_element.insert(obj_id, eid);
+                let handle = Rc::new(RefCell::new(HeapEntry::Dynamic(
+                    RuntimeObject::new_bootstrap(classifier, eid),
+                )));
+                self.element_to_object.insert(eid, handle);
             }
         }
-        // Walk the package table separately — Packages live in
-        // `global_packages`, not in element chunks.
         for raw_pkg_idx in 0..model.global_packages.len() {
             #[allow(clippy::cast_possible_truncation)]
             let pkg_id = PackageId(raw_pkg_idx);
@@ -529,34 +381,104 @@ impl RuntimeHeap {
             if self.element_to_object.contains_key(&eid) {
                 continue;
             }
-            let obj_id = self.alloc_dynamic("meta::pure::metamodel::type::Package");
-            self.element_to_object.insert(eid, obj_id);
+            let handle = Rc::new(RefCell::new(HeapEntry::Dynamic(
+                RuntimeObject::new_bootstrap("meta::pure::metamodel::type::Package", eid),
+            )));
+            self.element_to_object.insert(eid, handle);
         }
     }
 
-    /// Iterator over `(ObjectId, classifier)` pairs for every live heap
-    /// object. Used by the universal `.all` qualified property to scan for
-    /// instances of a given class (honouring subtype chains at the caller).
-    pub fn iter_classifiers(&self) -> impl Iterator<Item = (ObjectId, &str)> {
-        self.objects.iter().map(|(id, entry)| {
-            let classifier = match entry {
-                HeapEntry::Dynamic(d) => d.classifier.as_str(),
-                HeapEntry::Typed(t) => t.classifier_path(),
-            };
-            (id, classifier)
+    /// Iterator over every metamodel handle.
+    pub fn iter_metamodel(&self) -> impl Iterator<Item = ObjectHandle> + '_ {
+        self.element_to_object.values().cloned()
+    }
+
+    /// Iterator over `(handle, classifier)` pairs for every metamodel row.
+    pub fn iter_classifiers(&self) -> impl Iterator<Item = (ObjectHandle, SmolStr)> + '_ {
+        self.iter_metamodel().map(|h| {
+            let cls = h.borrow().classifier();
+            (h, cls)
         })
     }
 
-    /// Number of objects currently on the heap.
+    /// Number of metamodel rows held by this heap.
     #[must_use]
-    pub fn len(&self) -> usize {
-        self.objects.len()
+    pub fn metamodel_len(&self) -> usize {
+        self.element_to_object.len()
     }
 
-    /// Whether the heap is empty.
+    /// Whether the metamodel arena is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.objects.is_empty()
+        self.element_to_object.is_empty()
+    }
+
+    // -- Convenience methods that forward to HeapEntry through a handle --
+
+    /// Get a single property value from the entry behind `handle`.
+    ///
+    /// # Errors
+    /// Returns `PropertyNotFound` if the property does not exist.
+    pub fn get_property(
+        &self,
+        handle: &ObjectHandle,
+        name: &str,
+    ) -> Result<Value, PureRuntimeError> {
+        handle.borrow().get_property(name)
+    }
+
+    /// Get all values for a multi-valued property.
+    ///
+    /// # Errors
+    /// Currently never returns `Err` — signature preserved for source compatibility.
+    pub fn get_property_values(
+        &self,
+        handle: &ObjectHandle,
+        name: &str,
+    ) -> Result<PVector<Value>, PureRuntimeError> {
+        Ok(handle.borrow().get_property_values(name))
+    }
+
+    /// List the property names currently populated.
+    ///
+    /// # Errors
+    /// Currently never returns `Err`.
+    pub fn property_names(&self, handle: &ObjectHandle) -> Result<Vec<SmolStr>, PureRuntimeError> {
+        Ok(handle.borrow().property_names())
+    }
+
+    /// The classifier of the entry behind `handle`.
+    ///
+    /// # Errors
+    /// Currently never returns `Err`.
+    pub fn classifier(&self, handle: &ObjectHandle) -> Result<SmolStr, PureRuntimeError> {
+        Ok(handle.borrow().classifier())
+    }
+
+    /// Append values to a property on the entry behind `handle`.
+    ///
+    /// # Errors
+    /// Returns an error if a typed entry rejects the property name or value.
+    pub fn mutate_add(
+        &self,
+        handle: &ObjectHandle,
+        property: &str,
+        values: &[Value],
+    ) -> Result<(), PureRuntimeError> {
+        handle.borrow_mut().mutate_add(property, values)
+    }
+
+    /// Replace every value at `property` with `values`.
+    ///
+    /// # Errors
+    /// Returns an error if a typed entry rejects the property name or value.
+    pub fn mutate_set(
+        &self,
+        handle: &ObjectHandle,
+        property: &str,
+        values: &[Value],
+    ) -> Result<(), PureRuntimeError> {
+        handle.borrow_mut().mutate_set(property, values)
     }
 }
 
@@ -577,81 +499,44 @@ mod tests {
     #[test]
     fn alloc_and_get_property() {
         let mut heap = RuntimeHeap::new();
-        let id = heap.alloc_dynamic("my::Trade");
-
-        heap.mutate_add(id, "price", &[Value::Float(42.0)]).unwrap();
-        heap.mutate_add(id, "ticker", &[Value::String("AAPL".into())])
+        let h = heap.alloc_dynamic("my::Trade");
+        h.borrow_mut()
+            .mutate_add("price", &[Value::Float(42.0)])
             .unwrap();
-
-        assert_eq!(heap.get_property(id, "price").unwrap(), Value::Float(42.0));
         assert_eq!(
-            heap.get_property(id, "ticker").unwrap(),
-            Value::String("AAPL".into())
+            h.borrow().get_property("price").unwrap(),
+            Value::Float(42.0)
         );
     }
 
     #[test]
-    fn mutate_add_accumulates() {
+    fn handle_identity_preserved_across_mutations() {
         let mut heap = RuntimeHeap::new();
-        let id = heap.alloc_dynamic("my::Account");
-
-        heap.mutate_add(id, "trades", &[Value::Integer(1)]).unwrap();
-        heap.mutate_add(id, "trades", &[Value::Integer(2)]).unwrap();
-        heap.mutate_add(id, "trades", &[Value::Integer(3)]).unwrap();
-
-        let values = heap.get_property_values(id, "trades").unwrap();
-        assert_eq!(values.len(), 3);
+        let h = heap.alloc_dynamic("my::Trade");
+        let h_clone = h.clone();
+        h.borrow_mut()
+            .mutate_add("price", &[Value::Float(1.0)])
+            .unwrap();
+        assert!(Rc::ptr_eq(&h, &h_clone));
+        assert_eq!(h_clone.borrow().get_property_values("price").len(), 1);
     }
 
     #[test]
-    fn property_not_found() {
+    fn distinct_allocations_have_distinct_identity() {
         let mut heap = RuntimeHeap::new();
-        let id = heap.alloc_dynamic("my::Trade");
-
-        let result = heap.get_property(id, "nonexistent");
-        assert!(result.is_err());
+        let a = heap.alloc_dynamic("my::Trade");
+        let b = heap.alloc_dynamic("my::Trade");
+        assert!(!Rc::ptr_eq(&a, &b));
     }
 
     #[test]
-    fn invalid_object_id() {
-        let heap = RuntimeHeap::new();
-        let fake_id = ObjectId::default();
-
-        let result = heap.get_property(fake_id, "price");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn classifier_returns_class_path() {
+    fn user_objects_freed_when_no_references_remain() {
         let mut heap = RuntimeHeap::new();
-        let id = heap.alloc_dynamic("my::trading::Trade");
-
-        assert_eq!(heap.classifier(id).unwrap(), "my::trading::Trade");
-    }
-
-    #[test]
-    fn object_identity_preserved() {
-        let mut heap = RuntimeHeap::new();
-        let id = heap.alloc_dynamic("my::Trade");
-
-        // mutateAdd preserves the ObjectId
-        heap.mutate_add(id, "price", &[Value::Float(1.0)]).unwrap();
-        heap.mutate_add(id, "price", &[Value::Float(2.0)]).unwrap();
-
-        // Same id still works
-        assert_eq!(heap.classifier(id).unwrap(), "my::Trade");
-    }
-
-    #[test]
-    fn invalid_id_operations() {
-        let mut heap = RuntimeHeap::new();
-        let fake_id = ObjectId::default();
-
-        assert!(heap.classifier(fake_id).is_err());
-        assert!(
-            heap.mutate_add(fake_id, "price", &[Value::Float(1.0)])
-                .is_err()
-        );
-        assert!(heap.get_property_values(fake_id, "price").is_err());
+        let weak = {
+            let h = heap.alloc_dynamic("my::Trade");
+            Rc::downgrade(&h)
+        };
+        assert!(weak.upgrade().is_none());
+        assert_eq!(heap.metamodel_len(), 0);
     }
 }

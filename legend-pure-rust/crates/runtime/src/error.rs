@@ -32,7 +32,6 @@ use legend_pure_parser_ast::SourceInfo;
 use smol_str::SmolStr;
 use thiserror::Error;
 
-use crate::heap::ObjectId;
 use crate::value::Value;
 
 // ---------------------------------------------------------------------------
@@ -66,10 +65,6 @@ pub enum PureRuntimeError {
     /// Variable not found in the current scope.
     #[error("Variable '{0}' not found")]
     VariableNotFound(SmolStr),
-
-    /// Invalid object ID (stale or never existed).
-    #[error("Invalid object ID: {0}")]
-    InvalidObjectId(ObjectId),
 
     /// Downcast failed (compiled code expected a specific struct type).
     #[error("Downcast failed: expected {expected}, object is {actual}")]

@@ -34,7 +34,7 @@ use legend_pure_parser_pure::model::PureModel;
 use legend_pure_parser_pure::types::{Multiplicity, RelationColumnLowered};
 
 use crate::error::PureException;
-use crate::heap::{ObjectId, RuntimeHeap};
+use crate::heap::{ObjectHandle, RuntimeHeap};
 use crate::m3_paths;
 use crate::value::Value;
 
@@ -47,12 +47,12 @@ use crate::value::Value;
 ///
 /// # Errors
 /// Returns `PureException` if heap mutation fails (only on a stale
-/// `ObjectId`, which the freshly-allocated objects below cannot produce).
+/// `ObjectHandle`, which the freshly-allocated objects below cannot produce).
 #[allow(clippy::result_large_err)]
 pub fn alloc_multiplicity(
     heap: &mut RuntimeHeap,
     m: &Multiplicity,
-) -> Result<ObjectId, PureException> {
+) -> Result<ObjectHandle, PureException> {
     let (lower, upper): (i64, Option<i64>) = match m {
         Multiplicity::PureOne => (1, Some(1)),
         Multiplicity::ZeroOrOne => (0, Some(1)),
@@ -62,15 +62,15 @@ pub fn alloc_multiplicity(
     };
     let mult = heap.alloc_dynamic(m3_paths::MULTIPLICITY);
     let lower_value = heap.alloc_dynamic(m3_paths::MULTIPLICITY_VALUE);
-    heap.mutate_add(lower_value, "value", &[Value::Integer(lower)])
+    heap.mutate_add(&lower_value, "value", &[Value::Integer(lower)])
         .map_err(PureException::from)?;
-    heap.mutate_add(mult, "lowerBound", &[Value::Object(lower_value)])
+    heap.mutate_add(&mult, "lowerBound", &[Value::Object(lower_value)])
         .map_err(PureException::from)?;
     if let Some(u) = upper {
         let upper_value = heap.alloc_dynamic(m3_paths::MULTIPLICITY_VALUE);
-        heap.mutate_add(upper_value, "value", &[Value::Integer(u)])
+        heap.mutate_add(&upper_value, "value", &[Value::Integer(u)])
             .map_err(PureException::from)?;
-        heap.mutate_add(mult, "upperBound", &[Value::Object(upper_value)])
+        heap.mutate_add(&mult, "upperBound", &[Value::Object(upper_value)])
             .map_err(PureException::from)?;
     }
     Ok(mult)
@@ -88,12 +88,12 @@ pub fn alloc_column(
     heap: &mut RuntimeHeap,
     model: &PureModel,
     col: &RelationColumnLowered,
-) -> Result<ObjectId, PureException> {
+) -> Result<ObjectHandle, PureException> {
     let mult_obj = alloc_multiplicity(heap, &col.multiplicity)?;
 
     // Inner GenericType wrapping the column's type element.
     let inner_gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
-    heap.mutate_add(inner_gt, "rawType", &[Value::Element(col.type_element)])
+    heap.mutate_add(&inner_gt, "rawType", &[Value::Element(col.type_element)])
         .map_err(PureException::from)?;
 
     // Outer Column GenericType: typeArguments=[null, inner_gt],
@@ -101,30 +101,30 @@ pub fn alloc_column(
     let outer_gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
     let column_raw_type =
         m3_paths::resolve(model, m3_paths::COLUMN).map_or(Value::Unit, Value::Element);
-    heap.mutate_add(outer_gt, "rawType", &[column_raw_type])
+    heap.mutate_add(&outer_gt, "rawType", &[column_raw_type])
         .map_err(PureException::from)?;
     // typeArguments[0] is the implicit "source" RelationType slot left
     // null until `_Column.updateSource` runs (test surface doesn't need
     // it). We populate slot[1] with the column's type GenericType.
     heap.mutate_add(
-        outer_gt,
+        &outer_gt,
         "typeArguments",
         &[Value::Unit, Value::Object(inner_gt)],
     )
     .map_err(PureException::from)?;
     heap.mutate_add(
-        outer_gt,
+        &outer_gt,
         "multiplicityArguments",
         &[Value::Object(mult_obj)],
     )
     .map_err(PureException::from)?;
 
     let column = heap.alloc_dynamic(m3_paths::COLUMN);
-    heap.mutate_add(column, "name", &[Value::String(col.name.clone())])
+    heap.mutate_add(&column, "name", &[Value::String(col.name.clone())])
         .map_err(PureException::from)?;
-    heap.mutate_add(column, "nameWildCard", &[Value::Boolean(false)])
+    heap.mutate_add(&column, "nameWildCard", &[Value::Boolean(false)])
         .map_err(PureException::from)?;
-    heap.mutate_add(column, "classifierGenericType", &[Value::Object(outer_gt)])
+    heap.mutate_add(&column, "classifierGenericType", &[Value::Object(outer_gt)])
         .map_err(PureException::from)?;
     Ok(column)
 }
@@ -136,12 +136,12 @@ pub fn alloc_column(
 #[allow(clippy::result_large_err)]
 pub fn alloc_relation_type_with_columns(
     heap: &mut RuntimeHeap,
-    columns: &[ObjectId],
-) -> Result<ObjectId, PureException> {
+    columns: &[ObjectHandle],
+) -> Result<ObjectHandle, PureException> {
     let rt = heap.alloc_dynamic(m3_paths::RELATION_TYPE);
     if !columns.is_empty() {
-        let payload: Vec<Value> = columns.iter().map(|c| Value::Object(*c)).collect();
-        heap.mutate_add(rt, "columns", &payload)
+        let payload: Vec<Value> = columns.iter().cloned().map(Value::Object).collect();
+        heap.mutate_add(&rt, "columns", &payload)
             .map_err(PureException::from)?;
     }
     Ok(rt)
@@ -157,8 +157,8 @@ pub fn alloc_relation_literal(
     heap: &mut RuntimeHeap,
     model: &PureModel,
     columns: &[RelationColumnLowered],
-) -> Result<ObjectId, PureException> {
-    let column_ids: Vec<ObjectId> = columns
+) -> Result<ObjectHandle, PureException> {
+    let column_ids: Vec<ObjectHandle> = columns
         .iter()
         .map(|c| alloc_column(heap, model, c))
         .collect::<Result<_, _>>()?;
@@ -186,13 +186,13 @@ pub fn alloc_relation_literal_at_expression_position(
     heap: &mut RuntimeHeap,
     model: &PureModel,
     columns: &[RelationColumnLowered],
-) -> Result<ObjectId, PureException> {
+) -> Result<ObjectHandle, PureException> {
     let rt = alloc_relation_literal(heap, model, columns)?;
     let gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
-    heap.mutate_add(gt, "rawType", &[Value::Object(rt)])
+    heap.mutate_add(&gt, "rawType", &[Value::Object(rt)])
         .map_err(PureException::from)?;
     let iv = heap.alloc_dynamic(m3_paths::INSTANCE_VALUE);
-    heap.mutate_add(iv, "genericType", &[Value::Object(gt)])
+    heap.mutate_add(&iv, "genericType", &[Value::Object(gt)])
         .map_err(PureException::from)?;
     // multiplicity = PureOne so consumers reading `iv.multiplicity` get the
     // expected `[1]` shape (Java sets `getPureOne()` at line 1099). We rely
@@ -205,7 +205,7 @@ pub fn alloc_relation_literal_at_expression_position(
         smol_str::SmolStr::new("multiplicity"),
         smol_str::SmolStr::new("PureOne"),
     ]) {
-        heap.mutate_add(iv, "multiplicity", &[Value::Element(pure_one_id)])
+        heap.mutate_add(&iv, "multiplicity", &[Value::Element(pure_one_id)])
             .map_err(PureException::from)?;
     }
     Ok(iv)
@@ -222,14 +222,14 @@ pub fn alloc_col_spec_array_literal(
     heap: &mut RuntimeHeap,
     model: &PureModel,
     columns: &[RelationColumnLowered],
-) -> Result<ObjectId, PureException> {
+) -> Result<ObjectHandle, PureException> {
     let inner_relation = alloc_relation_literal(heap, model, columns)?;
 
     // Wrap the inner RelationType in a GenericType so the native can
     // navigate `csa.classifierGenericType.typeArguments[0].rawType._columns()`.
     let inner_relation_gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
     heap.mutate_add(
-        inner_relation_gt,
+        &inner_relation_gt,
         "rawType",
         &[Value::Object(inner_relation)],
     )
@@ -238,10 +238,10 @@ pub fn alloc_col_spec_array_literal(
     let outer_gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
     let csa_raw_type =
         m3_paths::resolve(model, m3_paths::COL_SPEC_ARRAY).map_or(Value::Unit, Value::Element);
-    heap.mutate_add(outer_gt, "rawType", &[csa_raw_type])
+    heap.mutate_add(&outer_gt, "rawType", &[csa_raw_type])
         .map_err(PureException::from)?;
     heap.mutate_add(
-        outer_gt,
+        &outer_gt,
         "typeArguments",
         &[Value::Object(inner_relation_gt)],
     )
@@ -253,10 +253,10 @@ pub fn alloc_col_spec_array_literal(
         .map(|c| Value::String(c.name.clone()))
         .collect();
     if !names.is_empty() {
-        heap.mutate_add(csa, "names", &names)
+        heap.mutate_add(&csa, "names", &names)
             .map_err(PureException::from)?;
     }
-    heap.mutate_add(csa, "classifierGenericType", &[Value::Object(outer_gt)])
+    heap.mutate_add(&csa, "classifierGenericType", &[Value::Object(outer_gt)])
         .map_err(PureException::from)?;
     Ok(csa)
 }

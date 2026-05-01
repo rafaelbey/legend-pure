@@ -344,11 +344,11 @@ fn build_test_result(
 
     let heap = ctx.heap_mut();
     let id = heap.alloc_dynamic(crate::m3_paths::TEST_RESULT);
-    heap.mutate_add(id, "fqn", &[Value::String(SmolStr::new(fqn))])?;
-    heap.mutate_add(id, "status", &[status_value])?;
-    heap.mutate_add(id, "elapsed", &[Value::Integer(elapsed)])?;
+    heap.mutate_add(&id, "fqn", &[Value::String(SmolStr::new(fqn))])?;
+    heap.mutate_add(&id, "status", &[status_value])?;
+    heap.mutate_add(&id, "elapsed", &[Value::Integer(elapsed)])?;
     if let Some(msg) = message {
-        heap.mutate_add(id, "message", &[Value::String(SmolStr::new(msg))])?;
+        heap.mutate_add(&id, "message", &[Value::String(SmolStr::new(msg))])?;
     }
     Ok(Evaluated::new(Value::Object(id)))
 }
@@ -648,8 +648,8 @@ fn build_pct_manifest(
 
     let heap = ctx.heap_mut();
     let id = heap.alloc_dynamic(crate::m3_paths::PCT_MANIFEST);
-    heap.mutate_add(id, "adapter", &[adapter_value])?;
-    heap.mutate_add(id, "exclusions", &[exclusions_value])?;
+    heap.mutate_add(&id, "adapter", &[adapter_value])?;
+    heap.mutate_add(&id, "exclusions", &[exclusions_value])?;
     Ok(Evaluated::new(Value::Object(id)))
 }
 

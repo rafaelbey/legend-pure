@@ -26,7 +26,7 @@ use legend_pure_parser_pure::types::{ExprKind, TypeExpr, ValueSpec};
 use smol_str::SmolStr;
 
 use crate::error::{PureException, PureRuntimeError};
-use crate::heap::ObjectId;
+use crate::heap::{ObjectHandle, RuntimeHeap};
 use crate::native::{
     EvalContextTrait, Evaluated, NativeFunction, NativeRegistry, expect_args, force_all,
 };
@@ -197,7 +197,7 @@ fn push_list_values(
 ) -> Result<(), PureException> {
     match v {
         Value::Object(id) => {
-            let values = ctx.heap().get_property_values(*id, "values")?;
+            let values = ctx.heap().get_property_values(&id.clone(), "values")?;
             // A List<Any>.values of multiplicity [*] reduces to a single
             // bound positional parameter: the collection itself (or the
             // scalar, if single). This matches Java Pure's List-packing
@@ -305,7 +305,7 @@ impl NativeFunction for New {
             .into());
         }
         let class_id = match &values[0] {
-            Value::Element(id) => *id,
+            Value::Element(id) => id.clone(),
             other => {
                 return Err(PureRuntimeError::type_mismatch("Class", other).into());
             }
@@ -425,7 +425,7 @@ impl NativeFunction for NewWithKeyExpressions {
             .into());
         }
         let class_id = match &values[0] {
-            Value::Element(id) => *id,
+            Value::Element(id) => id.clone(),
             other => return Err(PureRuntimeError::type_mismatch("Class", other).into()),
         };
         let _id = &values[1];
@@ -520,18 +520,20 @@ fn decode_key_expressions(
         // KeyExpression. Non-KeyExpression objects in the collection
         // are silently skipped so the helper composes with mixed
         // payloads.
-        let classifier = ctx.heap().classifier(*obj_id)?.to_owned();
+        let classifier = ctx.heap().classifier(&obj_id.clone())?.to_owned();
         let resolved = crate::m3_paths::resolve(ctx.model(), &classifier);
         if resolved != key_expr_id {
             continue;
         }
-        let key_vals = ctx.heap().get_property_values(*obj_id, "key")?;
+        let key_vals = ctx.heap().get_property_values(&obj_id.clone(), "key")?;
         let key_str =
             unwrap_instance_value_string(&key_vals.iter().cloned().collect::<Vec<_>>(), ctx)?;
-        let expr_vals = ctx.heap().get_property_values(*obj_id, "expression")?;
+        let expr_vals = ctx
+            .heap()
+            .get_property_values(&obj_id.clone(), "expression")?;
         let expr_payload: Vec<Value> = expr_vals.iter().cloned().collect();
         let expression_values = unwrap_instance_value_list(&expr_payload, ctx)?;
-        let add_vals = ctx.heap().get_property_values(*obj_id, "add")?;
+        let add_vals = ctx.heap().get_property_values(&obj_id.clone(), "add")?;
         let add = matches!(add_vals.iter().next(), Some(Value::Boolean(true)));
         out.push((key_str, expression_values, add));
     }
@@ -555,7 +557,7 @@ fn unwrap_instance_value_string(
     match first {
         Value::String(s) => Ok(s.clone()),
         Value::Object(obj_id) => {
-            let inner = ctx.heap().get_property_values(*obj_id, "values")?;
+            let inner = ctx.heap().get_property_values(&obj_id.clone(), "values")?;
             match inner.iter().next() {
                 Some(Value::String(s)) => Ok(s.clone()),
                 _ => Err(PureRuntimeError::EvaluationError(
@@ -582,7 +584,7 @@ fn unwrap_instance_value_list(
     }
     // Single InstanceValue wrapper — unwrap to its `values` payload.
     if let [Value::Object(obj_id)] = payload {
-        let inner = ctx.heap().get_property_values(*obj_id, "values")?;
+        let inner = ctx.heap().get_property_values(&obj_id.clone(), "values")?;
         if !inner.is_empty() {
             return Ok(inner.iter().cloned().collect());
         }
@@ -636,7 +638,7 @@ fn triples_from_flat_kv_stream(
 // during nested calls; drain + validate when depth returns to 0.
 thread_local! {
     static CONSTRUCTION_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static PENDING_VALIDATIONS: std::cell::RefCell<Vec<(ObjectId, ElementId)>> =
+    static PENDING_VALIDATIONS: std::cell::RefCell<Vec<(ObjectHandle, ElementId)>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -680,13 +682,13 @@ fn finish_construction(
     let obj = ctx.heap_mut().alloc_dynamic(classifier);
     if !type_args.is_empty() {
         ctx.heap_mut()
-            .mutate_set(obj, "__typeArguments", type_args)?;
+            .mutate_set(&obj, "__typeArguments", type_args)?;
     }
     if !type_var_values.is_empty() {
         ctx.heap_mut()
-            .mutate_set(obj, "__typeVariableValues", type_var_values)?;
+            .mutate_set(&obj, "__typeVariableValues", type_var_values)?;
     }
-    apply_property_triples(ctx, obj, triples)?;
+    apply_property_triples(ctx, obj.clone(), triples)?;
     // Re-flatten triples back to the kv-stream shape that
     // `populate_association_inverses` consumes — the helper drives
     // its inverse walk off `(key, value, augmented)` triples already,
@@ -697,13 +699,13 @@ fn finish_construction(
         flat.push(Value::from_vec(v.clone()));
         flat.push(Value::Boolean(*a));
     }
-    populate_association_inverses(ctx, obj, class_id, &flat)?;
+    populate_association_inverses(ctx, obj.clone(), class_id, &flat)?;
     // Defer property-cardinality validation to the outermost level —
     // depth tracking lives in `New::execute` / `NewWithKeyExpressions::
     // execute` / `DynamicNew::execute`, which wrap the entire arg-
     // evaluation + construction call. See CONSTRUCTION_DEPTH comment.
-    PENDING_VALIDATIONS.with(|p| p.borrow_mut().push((obj, class_id)));
-    evaluate_class_constraints(ctx, class_id, obj, type_var_values)?;
+    PENDING_VALIDATIONS.with(|p| p.borrow_mut().push((obj.clone(), class_id)));
+    evaluate_class_constraints(ctx, class_id, obj.clone(), type_var_values)?;
     Ok(Evaluated::new(Value::Object(obj)))
 }
 
@@ -734,7 +736,7 @@ impl ConstructionFrame {
     fn drain_if_outermost(ctx: &mut dyn EvalContextTrait) -> Result<(), PureException> {
         let depth = CONSTRUCTION_DEPTH.with(std::cell::Cell::get);
         if depth == 1 {
-            let pending: Vec<(ObjectId, ElementId)> =
+            let pending: Vec<(ObjectHandle, ElementId)> =
                 PENDING_VALIDATIONS.with(|p| std::mem::take(&mut *p.borrow_mut()));
             for (obj, cid) in pending {
                 validate_required_properties(ctx, obj, cid)?;
@@ -813,7 +815,7 @@ fn format_mult_text(m: &legend_pure_parser_pure::types::Multiplicity) -> String 
 #[allow(clippy::result_large_err)]
 fn validate_required_properties(
     ctx: &mut dyn EvalContextTrait,
-    obj: ObjectId,
+    obj: ObjectHandle,
     class_id: ElementId,
 ) -> Result<(), PureException> {
     use legend_pure_parser_pure::types::{Multiplicity, TypeExpr};
@@ -866,7 +868,7 @@ fn validate_required_properties(
         }
         let count = ctx
             .heap()
-            .get_property_values(obj, name.as_str())
+            .get_property_values(&obj, name.as_str())
             .map(|vs| u32::try_from(vs.len()).unwrap_or(u32::MAX))
             .unwrap_or(0);
         if count < lower {
@@ -900,14 +902,14 @@ fn validate_required_properties(
 #[allow(clippy::result_large_err)]
 fn apply_property_triples(
     ctx: &mut dyn EvalContextTrait,
-    obj: ObjectId,
+    obj: ObjectHandle,
     triples: &[(SmolStr, Vec<Value>, bool)],
 ) -> Result<(), PureException> {
     for (key, values, augmented) in triples {
         if *augmented {
-            ctx.heap_mut().mutate_add(obj, key.as_str(), values)?;
+            ctx.heap_mut().mutate_add(&obj, key.as_str(), values)?;
         } else {
-            ctx.heap_mut().mutate_set(obj, key.as_str(), values)?;
+            ctx.heap_mut().mutate_set(&obj, key.as_str(), values)?;
         }
     }
     Ok(())
@@ -976,21 +978,21 @@ impl NativeFunction for Copy {
             let classifier =
                 crate::model_utils::build_element_path(ctx.model(), meta_id, "::", false);
             let obj = ctx.heap_mut().alloc_dynamic(classifier);
-            hydrate_element_to_heap(ctx, *elem_id, meta_id, obj)?;
-            apply_key_value_triples(ctx, obj, &values[1..])?;
+            hydrate_element_to_heap(ctx, *elem_id, meta_id, obj.clone())?;
+            apply_key_value_triples(ctx, obj.clone(), &values[1..])?;
             return Ok(Evaluated::new(Value::Object(obj)));
         }
 
         let source_id = values[0].as_object()?;
 
         // Snapshot classifier + properties before we take a mutable heap borrow.
-        let classifier: String = ctx.heap().classifier(source_id)?.to_owned();
-        let names = ctx.heap().property_names(source_id)?;
+        let classifier: String = ctx.heap().classifier(&source_id)?.to_string();
+        let names = ctx.heap().property_names(&source_id)?;
         let mut original_props: Vec<(SmolStr, Vec<Value>)> = Vec::with_capacity(names.len());
         for name in names {
             let prop_values: Vec<Value> = ctx
                 .heap()
-                .get_property_values(source_id, name.as_str())?
+                .get_property_values(&source_id, name.as_str())?
                 .iter()
                 .cloned()
                 .collect();
@@ -1039,7 +1041,8 @@ impl NativeFunction for Copy {
         // freshly-cloned nested object.
         let mut carried_kvs: Vec<Value> = Vec::with_capacity(original_props.len() * 3);
         for (name, prop_values) in &original_props {
-            ctx.heap_mut().mutate_add(obj, name.as_str(), prop_values)?;
+            ctx.heap_mut()
+                .mutate_add(&obj, name.as_str(), prop_values)?;
             if path_overrides.contains(name) {
                 continue;
             }
@@ -1048,15 +1051,15 @@ impl NativeFunction for Copy {
             carried_kvs.push(Value::Boolean(false));
         }
 
-        apply_key_value_triples(ctx, obj, &plain_kvs)?;
+        apply_key_value_triples(ctx, obj.clone(), &plain_kvs)?;
         // Path-property updates clone every nested object whose
-        // first segment is overridden, returning each clone's ObjectId
+        // first segment is overridden, returning each clone's ObjectHandle
         // so the end-of-Copy inverse walk below visits them too. The
         // clones inherit every association slot from their source
         // (e.g. a cloned LA_Division parent carries `firm=$firmX`),
         // so their inverses (`$firmX.organizations`) need to be
         // populated separately from the outer `obj`'s.
-        let cloned_objs = apply_path_property_updates(ctx, source_id, obj, &path_kvs)?;
+        let cloned_objs = apply_path_property_updates(ctx, source_id, obj.clone(), &path_kvs)?;
 
         // Single end-of-Copy inverse walk per affected object —
         // matches Java Pure's `Copy.java:236` (`updateReverseProperties(
@@ -1072,10 +1075,10 @@ impl NativeFunction for Copy {
         // `firm=$firmX` flows into `$firmX.organizations`, fixing
         // testDeepCopyWithAssociation2).
         if let Some(class_id) = crate::m3_paths::resolve(ctx.model(), &classifier) {
-            sync_object_inverses(ctx, obj, class_id)?;
+            sync_object_inverses(ctx, obj.clone(), class_id)?;
         }
         for clone_obj in cloned_objs {
-            let clone_classifier = ctx.heap().classifier(clone_obj)?.to_owned();
+            let clone_classifier = ctx.heap().classifier(&clone_obj)?.to_string();
             if let Some(clone_class_id) = crate::m3_paths::resolve(ctx.model(), &clone_classifier) {
                 sync_object_inverses(ctx, clone_obj, clone_class_id)?;
             }
@@ -1106,9 +1109,9 @@ impl NativeFunction for Copy {
                 .heap_mut()
                 .alloc_dynamic(crate::m3_paths::SOURCE_INFORMATION);
             ctx.heap_mut()
-                .mutate_set(si_obj, "source", &[Value::String("<copy>".into())])?;
+                .mutate_set(&si_obj, "source", &[Value::String("<copy>".into())])?;
             ctx.heap_mut()
-                .mutate_set(obj, "sourceInformation", &[Value::Object(si_obj)])?;
+                .mutate_set(&obj, "sourceInformation", &[Value::Object(si_obj)])?;
         }
 
         Ok(Evaluated::new(Value::Object(obj)))
@@ -1160,11 +1163,11 @@ impl NativeFunction for DynamicNew {
         // Resolve the target class — accept a direct Class Element or a
         // `GenericType` heap wrapper whose `rawType` points at one.
         let class_id = match &values[0] {
-            Value::Element(id) => *id,
+            Value::Element(id) => id.clone(),
             Value::Object(obj_id) => {
-                let raw_type_vals = ctx.heap().get_property_values(*obj_id, "rawType")?;
+                let raw_type_vals = ctx.heap().get_property_values(&obj_id.clone(), "rawType")?;
                 match raw_type_vals.iter().next() {
-                    Some(Value::Element(id)) => *id,
+                    Some(Value::Element(id)) => id.clone(),
                     _ => {
                         return Err(PureRuntimeError::EvaluationError(
                             "dynamicNew: GenericType wrapper has no resolved rawType".into(),
@@ -1211,14 +1214,14 @@ impl NativeFunction for DynamicNew {
                 ))
                 .into());
             };
-            let key_vals = ctx.heap().get_property_values(*kv_id, "key")?;
+            let key_vals = ctx.heap().get_property_values(&*kv_id, "key")?;
             let Some(Value::String(key)) = key_vals.iter().next() else {
                 return Err(PureRuntimeError::EvaluationError(
                     "dynamicNew: KeyValue.key is missing or not a String".into(),
                 )
                 .into());
             };
-            let value_vals = ctx.heap().get_property_values(*kv_id, "value")?;
+            let value_vals = ctx.heap().get_property_values(&*kv_id, "value")?;
             let flat: Vec<Value> = value_vals.iter().cloned().collect();
             supplied_keys.insert(key.clone());
             supplied.push((key.clone(), flat));
@@ -1266,7 +1269,7 @@ impl NativeFunction for DynamicNew {
                 Value::Unit => Vec::new(),
                 other => vec![other],
             };
-            ctx.heap_mut().mutate_set(obj, name.as_str(), &flat)?;
+            ctx.heap_mut().mutate_set(&obj, name.as_str(), &flat)?;
         }
 
         // Overlay caller-supplied bindings. Build a flat
@@ -1277,12 +1280,12 @@ impl NativeFunction for DynamicNew {
         // the caller — every overlay is replace-semantics here.
         let mut assoc_kvs: Vec<Value> = Vec::with_capacity(supplied.len() * 3);
         for (key, flat) in supplied {
-            ctx.heap_mut().mutate_set(obj, key.as_str(), &flat)?;
+            ctx.heap_mut().mutate_set(&obj, key.as_str(), &flat)?;
             assoc_kvs.push(Value::String(key));
             assoc_kvs.push(Value::from_vec(flat));
             assoc_kvs.push(Value::Boolean(false));
         }
-        populate_association_inverses(ctx, obj, class_id, &assoc_kvs)?;
+        populate_association_inverses(ctx, obj.clone(), class_id, &assoc_kvs)?;
 
         // Override-bearing overloads land here as
         // `dynamicNew(class|gt, kvs, getterToOne, getterToMany,
@@ -1306,27 +1309,27 @@ impl NativeFunction for DynamicNew {
                     .alloc_dynamic(crate::m3_paths::GETTER_OVERRIDE);
                 if !matches!(getter_to_one, Value::Unit) {
                     ctx.heap_mut().mutate_add(
-                        override_obj,
+                        &override_obj,
                         "getterOverrideToOne",
                         std::slice::from_ref(getter_to_one),
                     )?;
                 }
                 if !matches!(getter_to_many, Value::Unit) {
                     ctx.heap_mut().mutate_add(
-                        override_obj,
+                        &override_obj,
                         "getterOverrideToMany",
                         std::slice::from_ref(getter_to_many),
                     )?;
                 }
                 if !matches!(hidden_payload, Value::Unit) {
                     ctx.heap_mut().mutate_add(
-                        override_obj,
+                        &override_obj,
                         "hiddenPayload",
                         std::slice::from_ref(hidden_payload),
                     )?;
                 }
                 ctx.heap_mut().mutate_add(
-                    obj,
+                    &obj,
                     "elementOverride",
                     &[Value::Object(override_obj)],
                 )?;
@@ -1340,7 +1343,7 @@ impl NativeFunction for DynamicNew {
         // No type-variable values flow through this path; we pass
         // an empty slice (matches the `^Class(...)` codepath when no
         // `<T|m>` arguments are supplied).
-        evaluate_class_constraints(ctx, class_id, obj, &[])?;
+        evaluate_class_constraints(ctx, class_id, obj.clone(), &[])?;
 
         // NOTE: `dynamicNew` is intentionally permissive about missing
         // required properties — `testCyclicalReferencesAreNotImplicit`
@@ -1421,7 +1424,7 @@ fn try_lambda_shortcut(kvs: &[Value]) -> Option<Value> {
 #[allow(clippy::result_large_err)]
 fn populate_association_inverses(
     ctx: &mut dyn EvalContextTrait,
-    obj: ObjectId,
+    obj: ObjectHandle,
     class_id: ElementId,
     kvs: &[Value],
 ) -> Result<(), PureException> {
@@ -1468,12 +1471,12 @@ fn populate_association_inverses(
                 .multiplicity
                 .clone();
 
-            let targets: Vec<ObjectId> = match &assigned {
-                Value::Object(id) => vec![*id],
+            let targets: Vec<ObjectHandle> = match &assigned {
+                Value::Object(id) => vec![id.clone()],
                 Value::Collection(v) => v
                     .iter()
                     .filter_map(|x| match x {
-                        Value::Object(id) => Some(*id),
+                        Value::Object(id) => Some(id.clone()),
                         _ => None,
                     })
                     .collect(),
@@ -1488,16 +1491,17 @@ fn populate_association_inverses(
                 // synthetic) would double-bind the inverse on every shared
                 // target. Read the target's current inverse-slot values
                 // and skip the `mutate_add` if `obj` is already present
-                // by ObjectId. This is also a precondition for Lane A's
+                // by ObjectHandle. This is also a precondition for Lane A's
                 // Step 3 — the end-of-Copy single re-walk would otherwise
                 // regress `testDeepCopyWithAssociation1` (`gsNYC.employees`
                 // would receive `$bob` twice).
                 let already_present = ctx
                     .heap()
-                    .get_property_values(target, inverse_name.as_str())
+                    .get_property_values(&target, inverse_name.as_str())
                     .map(|vs| {
-                        vs.iter()
-                            .any(|v| matches!(v, Value::Object(id) if *id == obj))
+                        vs.iter().any(
+                            |v| matches!(v, Value::Object(id) if std::rc::Rc::ptr_eq(id, &obj)),
+                        )
                     })
                     .unwrap_or(false);
                 if already_present {
@@ -1512,15 +1516,15 @@ fn populate_association_inverses(
                 if let Some(upper) = mult_upper_bound(&inverse_mult) {
                     let current_count = ctx
                         .heap()
-                        .get_property_values(target, inverse_name.as_str())
+                        .get_property_values(&target, inverse_name.as_str())
                         .map(|vs| u32::try_from(vs.len()).unwrap_or(u32::MAX))
                         .unwrap_or(0);
                     let new_count = current_count + 1;
                     if new_count > upper {
-                        let target_class = ctx
+                        let target_class: String = ctx
                             .heap()
-                            .classifier(target)
-                            .map(std::string::ToString::to_string)
+                            .classifier(&target)
+                            .map(|s| s.to_string())
                             .unwrap_or_default();
                         let target_simple =
                             target_class.rsplit("::").next().unwrap_or(&target_class);
@@ -1533,8 +1537,11 @@ fn populate_association_inverses(
                         .into());
                     }
                 }
-                ctx.heap_mut()
-                    .mutate_add(target, inverse_name.as_str(), &[Value::Object(obj)])?;
+                ctx.heap_mut().mutate_add(
+                    &target,
+                    inverse_name.as_str(),
+                    &[Value::Object(obj.clone())],
+                )?;
             }
         }
         i += 3;
@@ -1566,7 +1573,7 @@ fn hydrate_element_to_heap(
     ctx: &mut dyn EvalContextTrait,
     elem_id: ElementId,
     meta_id: ElementId,
-    obj: ObjectId,
+    obj: ObjectHandle,
 ) -> Result<(), PureException> {
     // Collect every (de-duplicated, declaration-order) property name
     // declared on the metatype Class or any of its supertypes. Walks
@@ -1631,7 +1638,7 @@ fn hydrate_element_to_heap(
         if values.is_empty() {
             continue;
         }
-        ctx.heap_mut().mutate_set(obj, prop.as_str(), &values)?;
+        ctx.heap_mut().mutate_set(&obj, prop.as_str(), &values)?;
     }
     Ok(())
 }
@@ -1649,7 +1656,7 @@ fn hydrate_element_to_heap(
 /// compiler still threads the flag through for symmetry.
 fn apply_key_value_triples(
     ctx: &mut dyn EvalContextTrait,
-    obj: ObjectId,
+    obj: ObjectHandle,
     kvs: &[Value],
 ) -> Result<(), PureException> {
     if !kvs.len().is_multiple_of(3) {
@@ -1670,9 +1677,9 @@ fn apply_key_value_triples(
             other => vec![other],
         };
         if augmented {
-            ctx.heap_mut().mutate_add(obj, key.as_str(), &values)?;
+            ctx.heap_mut().mutate_add(&obj, key.as_str(), &values)?;
         } else {
-            ctx.heap_mut().mutate_set(obj, key.as_str(), &values)?;
+            ctx.heap_mut().mutate_set(&obj, key.as_str(), &values)?;
         }
         i += 3;
     }
@@ -1724,10 +1731,10 @@ fn partition_path_kvs(kvs: &[Value]) -> Result<(Vec<Value>, Vec<Value>), PureExc
 #[allow(clippy::result_large_err)]
 fn apply_path_property_updates(
     ctx: &mut dyn EvalContextTrait,
-    source_id: ObjectId,
-    target_id: ObjectId,
+    source_id: ObjectHandle,
+    target_id: ObjectHandle,
     kvs: &[Value],
-) -> Result<Vec<ObjectId>, PureException> {
+) -> Result<Vec<ObjectHandle>, PureException> {
     use std::collections::BTreeMap;
 
     // Group `(first_segment → [(rest_path, value, augmented), …])` so
@@ -1763,9 +1770,9 @@ fn apply_path_property_updates(
     // that, a cloned nested object's carried-over association slot (e.g.
     // `firm=$firmX` on the cloned LA_Division parent) never appears in
     // the inverse-side collection (e.g. `$firmX.organizations`).
-    let mut all_clones: Vec<ObjectId> = Vec::new();
+    let mut all_clones: Vec<ObjectHandle> = Vec::new();
     for (head, updates) in groups {
-        let nested = ctx.heap().get_property_values(source_id, head.as_str())?;
+        let nested = ctx.heap().get_property_values(&source_id, head.as_str())?;
         let mut cloned: Vec<Value> = Vec::with_capacity(nested.len());
         for v in &nested {
             let Value::Object(inner_id) = v else {
@@ -1774,8 +1781,8 @@ fn apply_path_property_updates(
                 ))
                 .into());
             };
-            let clone_id = clone_heap_object(ctx, *inner_id)?;
-            all_clones.push(clone_id);
+            let clone_id = clone_heap_object(ctx, inner_id.clone())?;
+            all_clones.push(clone_id.clone());
             // Group updates between leaf-set ('name = "X"') and
             // further-nested path-set ('address.name = "X"' against this
             // clone). Multi-level paths recurse via
@@ -1792,16 +1799,20 @@ fn apply_path_property_updates(
                 bucket.push(val.clone());
                 bucket.push(Value::Boolean(*augmented));
             }
-            apply_key_value_triples(ctx, clone_id, &leaf_kvs)?;
+            apply_key_value_triples(ctx, clone_id.clone(), &leaf_kvs)?;
             if !nested_path_kvs.is_empty() {
-                let nested_clones =
-                    apply_path_property_updates(ctx, *inner_id, clone_id, &nested_path_kvs)?;
+                let nested_clones = apply_path_property_updates(
+                    ctx,
+                    inner_id.clone(),
+                    clone_id.clone(),
+                    &nested_path_kvs,
+                )?;
                 all_clones.extend(nested_clones);
             }
             cloned.push(Value::Object(clone_id));
         }
         ctx.heap_mut()
-            .mutate_set(target_id, head.as_str(), &cloned)?;
+            .mutate_set(&target_id, head.as_str(), &cloned)?;
     }
     Ok(all_clones)
 }
@@ -1866,7 +1877,7 @@ fn collect_inherited_association_properties(
 #[allow(clippy::result_large_err)]
 fn sync_object_inverses(
     ctx: &mut dyn EvalContextTrait,
-    obj: ObjectId,
+    obj: ObjectHandle,
     class_id: ElementId,
 ) -> Result<(), PureException> {
     let entries: Vec<(ElementId, usize)> =
@@ -1885,13 +1896,13 @@ fn sync_object_inverses(
         let injected_name = assoc.properties[injected_idx].name.clone();
         let inverse_name = assoc.properties[prop_idx_pointing_to_self].name.clone();
 
-        let targets: Vec<ObjectId> = ctx
+        let targets: Vec<ObjectHandle> = ctx
             .heap()
-            .get_property_values(obj, injected_name.as_str())
+            .get_property_values(&obj, injected_name.as_str())
             .map(|vs| {
                 vs.iter()
                     .filter_map(|v| match v {
-                        Value::Object(id) => Some(*id),
+                        Value::Object(id) => Some(id.clone()),
                         _ => None,
                     })
                     .collect()
@@ -1901,17 +1912,20 @@ fn sync_object_inverses(
         for target in targets {
             let already_present = ctx
                 .heap()
-                .get_property_values(target, inverse_name.as_str())
+                .get_property_values(&target, inverse_name.as_str())
                 .map(|vs| {
                     vs.iter()
-                        .any(|v| matches!(v, Value::Object(id) if *id == obj))
+                        .any(|v| matches!(v, Value::Object(id) if std::rc::Rc::ptr_eq(id, &obj)))
                 })
                 .unwrap_or(false);
             if already_present {
                 continue;
             }
-            ctx.heap_mut()
-                .mutate_add(target, inverse_name.as_str(), &[Value::Object(obj)])?;
+            ctx.heap_mut().mutate_add(
+                &target,
+                inverse_name.as_str(),
+                &[Value::Object(obj.clone())],
+            )?;
         }
     }
     Ok(())
@@ -1924,15 +1938,15 @@ fn sync_object_inverses(
 #[allow(clippy::result_large_err)]
 fn clone_heap_object(
     ctx: &mut dyn EvalContextTrait,
-    source_id: ObjectId,
-) -> Result<ObjectId, PureException> {
-    let classifier = ctx.heap().classifier(source_id)?.to_owned();
-    let names = ctx.heap().property_names(source_id)?;
+    source_id: ObjectHandle,
+) -> Result<ObjectHandle, PureException> {
+    let classifier = ctx.heap().classifier(&source_id)?.to_owned();
+    let names = ctx.heap().property_names(&source_id)?;
     let mut snapshot: Vec<(SmolStr, Vec<Value>)> = Vec::with_capacity(names.len());
     for name in names {
         let prop_values: Vec<Value> = ctx
             .heap()
-            .get_property_values(source_id, name.as_str())?
+            .get_property_values(&source_id, name.as_str())?
             .iter()
             .cloned()
             .collect();
@@ -1940,7 +1954,7 @@ fn clone_heap_object(
     }
     let clone_id = ctx.heap_mut().alloc_dynamic(classifier);
     for (name, vs) in snapshot {
-        ctx.heap_mut().mutate_set(clone_id, name.as_str(), &vs)?;
+        ctx.heap_mut().mutate_set(&clone_id, name.as_str(), &vs)?;
     }
     Ok(clone_id)
 }
@@ -1961,7 +1975,7 @@ fn clone_heap_object(
 fn evaluate_class_constraints(
     ctx: &mut dyn EvalContextTrait,
     class_id: ElementId,
-    obj: ObjectId,
+    obj: ObjectHandle,
     type_var_values: &[Value],
 ) -> Result<(), PureException> {
     let (constraints, param_names, class_name) = match ctx.model().get_element(class_id) {
@@ -2111,8 +2125,8 @@ impl NativeFunction for GetAll {
         let heap = ctx.heap();
         let projected: Vec<Value> = heap
             .iter_classifiers()
-            .filter(|(_, cls)| *cls == target_path)
-            .map(|(oid, _)| match heap.element_for_object(oid) {
+            .filter(|(_, cls)| cls.as_str() == target_path)
+            .map(|(oid, _)| match RuntimeHeap::element_for_object(&oid) {
                 Some(eid) => Value::Element(eid),
                 None => Value::Object(oid),
             })
