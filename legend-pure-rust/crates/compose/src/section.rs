@@ -22,9 +22,31 @@ use crate::element::compose_element;
 use crate::expression::compose_package;
 use crate::writer::IndentWriter;
 
+/// Composes a full `SourceFile` to Pure grammar text using the
+/// supplied island composers (if any).
+///
+/// Use this entry point when the source contains island expressions
+/// (`#{ … }#`, `#>{ … }#`, `#TDS\n…\n#`) that need a registered
+/// composer to round-trip cleanly. DSL crates export
+/// `default_island_composers()` helpers (e.g.
+/// [`legend_pure_dsl_graph::compose::default_island_composers`])
+/// which callers concatenate into the slice they pass here.
+#[must_use]
+pub fn compose_source_file_with(
+    sf: &SourceFile,
+    island_composers: Vec<Box<dyn crate::island::IslandComposer>>,
+) -> String {
+    crate::island::with_island_composers(island_composers, || compose_source_file(sf))
+}
+
 /// Composes a full `SourceFile` to Pure grammar text.
 ///
-/// This is the main entry point for the compose crate.
+/// This is the main entry point for the compose crate. Call sites
+/// containing island expressions should prefer
+/// [`compose_source_file_with`] which takes a slice of registered
+/// island composers; this entry point dispatches islands through
+/// the per-thread composer registry, which is empty unless an
+/// outer call configured one.
 ///
 /// # Output Format
 ///

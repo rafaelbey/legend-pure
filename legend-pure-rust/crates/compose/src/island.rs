@@ -17,13 +17,8 @@
 //! Each island grammar provides an [`IslandComposer`] implementation that
 //! renders island content back to Pure grammar text.
 
-use legend_pure_dsl_graph::ast::{
-    PropertyGraphFetchTree, RootGraphFetchTree, SubTypeGraphFetchTree,
-};
 use legend_pure_parser_ast::island::{IslandContent, IslandExpression};
 
-use crate::expression::{compose_element_ptr, compose_expression};
-use crate::identifier::maybe_quote;
 use crate::writer::IndentWriter;
 
 /// Trait for island grammar composers.
@@ -39,19 +34,47 @@ pub trait IslandComposer {
 }
 
 /// Returns the default set of built-in island composers.
+///
+/// Empty by default — DSL crates that own island grammars
+/// (`dsl-graph`, `dsl-store`, `dsl-tds`) export their own helpers
+/// (e.g. [`legend_pure_dsl_graph::compose::default_island_composers`])
+/// which callers concatenate into the slice they pass to
+/// [`compose_island_with`]. Core carries no DSL-specific composers.
 #[must_use]
 pub fn default_island_composers() -> Vec<Box<dyn IslandComposer>> {
-    vec![Box::new(GraphFetchIslandComposer)]
+    Vec::new()
 }
 
-/// Compose an island grammar expression by dispatching to the right composer.
+/// Compose an island grammar expression by dispatching to the right
+/// composer.
 ///
-/// Falls back to a `/* unknown island */` comment if no composer matches.
+/// Reads the active composer set from the per-thread registry
+/// populated by [`with_island_composers`]. If no registry was set
+/// up, falls back to the empty default and emits a placeholder
+/// comment for the island.
+///
+/// This indirection is what lets `compose_source_file` continue to
+/// take just `&SourceFile` while DSL crates (`dsl-graph`,
+/// `dsl-store`, `dsl-tds`) own the concrete composers — callers
+/// wrap their `compose_source_file` call in
+/// [`compose::section::compose_source_file_with`](crate::section::compose_source_file_with),
+/// which sets the thread-local for the duration.
 pub fn compose_island(w: &mut IndentWriter, island: &IslandExpression) {
-    compose_island_with(w, island, &default_island_composers());
+    let tag = island.tag();
+    THREAD_COMPOSERS.with(|cell| {
+        let registry = cell.borrow();
+        if let Some(composer) = registry.iter().find(|c| c.tag() == tag) {
+            composer.compose(w, island.content.as_ref());
+        } else {
+            w.write(&format!("/* unknown island tag: '{tag}' */"));
+        }
+    });
 }
 
-/// Compose an island grammar expression using a custom set of composers.
+/// Compose an island grammar expression using an explicit composer
+/// list. Bypasses the thread-local registry — useful for DSL crate
+/// tests that compose a single island without setting up a full
+/// `compose_source_file_with` call.
 pub fn compose_island_with(
     w: &mut IndentWriter,
     island: &IslandExpression,
@@ -66,158 +89,28 @@ pub fn compose_island_with(
 }
 
 // ---------------------------------------------------------------------------
-// Graph Fetch Island Composer
+// Per-thread composer registry — populated by `with_island_composers`
+// during a `compose_source_file_with` call so the deep `compose_island`
+// dispatcher can read it without threading the list through every layer.
 // ---------------------------------------------------------------------------
 
-/// Composer for graph fetch tree syntax.
-///
-/// Produces multi-line, indented output matching the Java engine's
-/// pretty-rendering mode:
-///
-/// ```text
-/// #{
-///   my::Person{
-///     firstName,
-///     lastName,
-///     address{
-///       city,
-///       street
-///     }
-///   }
-/// }#
-/// ```
-pub struct GraphFetchIslandComposer;
-
-impl IslandComposer for GraphFetchIslandComposer {
-    #[allow(clippy::unnecessary_literal_bound)]
-    fn tag(&self) -> &str {
-        ""
-    }
-
-    fn compose(&self, w: &mut IndentWriter, content: &dyn IslandContent) {
-        if let Some(tree) = content.as_any().downcast_ref::<RootGraphFetchTree>() {
-            compose_graph_fetch_tree(w, tree);
-        }
-    }
+thread_local! {
+    static THREAD_COMPOSERS: std::cell::RefCell<Vec<Box<dyn IslandComposer>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// Compose a root graph fetch tree with multi-line indented formatting.
-///
-/// Output format:
-/// ```text
-/// #{
-///   Type{
-///     field1,
-///     field2{
-///       sub1
-///     },
-///     ->subType(@SubType){
-///       subField
-///     }
-///   }
-/// }#
-/// ```
-fn compose_graph_fetch_tree(w: &mut IndentWriter, tree: &RootGraphFetchTree) {
-    w.write_line("#{");
-    w.push_indent();
-
-    compose_element_ptr(w, &tree.class);
-    w.write_line("{");
-    w.push_indent();
-
-    compose_graph_fetch_children(w, &tree.sub_trees, &tree.sub_type_trees);
-
-    w.pop_indent();
-    w.write_line("}");
-
-    w.pop_indent();
-    w.write("}#");
-}
-
-/// Compose the children (property trees + subtype trees) of a graph fetch node.
-///
-/// Each child is rendered on its own line, separated by commas.
-fn compose_graph_fetch_children(
-    w: &mut IndentWriter,
-    sub_trees: &[PropertyGraphFetchTree],
-    sub_type_trees: &[SubTypeGraphFetchTree],
-) {
-    let total = sub_trees.len() + sub_type_trees.len();
-    let mut idx = 0;
-
-    for prop in sub_trees {
-        compose_property_tree(w, prop);
-        idx += 1;
-        if idx < total {
-            w.write(",");
-        }
-        w.newline();
-    }
-
-    for sub in sub_type_trees {
-        compose_sub_type_tree(w, sub);
-        idx += 1;
-        if idx < total {
-            w.write(",");
-        }
-        w.newline();
-    }
-}
-
-/// Compose a property field: `name`, `'alias':name`, `name(args)`, or `name{subs}`.
-fn compose_property_tree(w: &mut IndentWriter, prop: &PropertyGraphFetchTree) {
-    // Optional alias: 'alias':
-    if let Some(alias) = &prop.alias {
-        w.write("'");
-        w.write(alias);
-        w.write("':");
-    }
-
-    w.write(&maybe_quote(&prop.property));
-
-    // Optional qualified property parameters: (args)
-    if !prop.parameters.is_empty() {
-        w.write("(");
-        for (i, arg) in prop.parameters.iter().enumerate() {
-            if i > 0 {
-                w.write(", ");
-            }
-            compose_expression(w, arg);
-        }
-        w.write(")");
-    }
-
-    // Optional subtype cast: ->subType(@Type)
-    if let Some(sub_type) = &prop.sub_type {
-        w.write("->subType(@");
-        compose_element_ptr(w, sub_type);
-        w.write(")");
-    }
-
-    // Optional sub-tree: {children} — multi-line indented
-    if !prop.sub_trees.is_empty() || !prop.sub_type_trees.is_empty() {
-        w.write_line("{");
-        w.push_indent();
-        compose_graph_fetch_children(w, &prop.sub_trees, &prop.sub_type_trees);
-        w.pop_indent();
-        w.write("}");
-    }
-}
-
-/// Compose a class-level subtype tree: `subType(@Type){children}`.
-///
-/// This is the polymorphic narrowing form — no arrow prefix.
-/// The arrow form `property->subType(@Type)` is rendered by the property composer.
-fn compose_sub_type_tree(w: &mut IndentWriter, sub: &SubTypeGraphFetchTree) {
-    w.write("subType(@");
-    compose_element_ptr(w, &sub.sub_type_class);
-    w.write(")");
-
-    if !sub.sub_trees.is_empty() || !sub.sub_type_trees.is_empty() {
-        w.write_line("{");
-        w.push_indent();
-        compose_graph_fetch_children(w, &sub.sub_trees, &sub.sub_type_trees);
-        w.pop_indent();
-        w.write("}");
-    }
+/// Run `f` with `composers` registered as the active per-thread
+/// composer set. Replaces any previous registration on entry and
+/// restores it on exit. Used by
+/// [`compose::section::compose_source_file_with`](crate::section::compose_source_file_with).
+pub fn with_island_composers<F, R>(composers: Vec<Box<dyn IslandComposer>>, f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let prev = THREAD_COMPOSERS.with(|cell| cell.replace(composers));
+    let result = f();
+    THREAD_COMPOSERS.with(|cell| {
+        let _ = cell.replace(prev);
+    });
+    result
 }

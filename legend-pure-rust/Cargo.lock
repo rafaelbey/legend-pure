@@ -934,8 +934,12 @@ version = "0.1.0"
 dependencies = [
  "indoc",
  "legend-pure-parser-ast",
+ "legend-pure-parser-compose",
  "legend-pure-parser-lexer",
  "legend-pure-parser-parser",
+ "legend-pure-parser-protocol",
+ "serde",
+ "serde_json",
  "smol_str",
 ]
 

@@ -22,7 +22,6 @@ repository.workspace = true
 
 [dependencies]
 legend-pure-parser-ast = { path = "../ast" }
-legend-pure-dsl-graph = { path = "../dsl-graph" }
 rayon = { workspace = true }
 legend-pure-parser-protocol = { path = "../protocol", optional = true }
 serde_json = { workspace = true, optional = true }
@@ -33,4 +32,9 @@ protocol = ["dep:legend-pure-parser-protocol", "dep:serde_json"]
 [dev-dependencies]
 indoc = "2"
 insta = { workspace = true }
+# dev-only: the round-trip tests register the graph-fetch composer
+# (and parser) via `legend-pure-dsl-graph`. The regular dep
+# direction is dsl-graph → compose; the dev-dep here is acyclic
+# because dev-deps don't participate in non-test builds.
+legend-pure-dsl-graph = { path = "../dsl-graph" }
 legend-pure-parser-parser = { path = "../parser" }
