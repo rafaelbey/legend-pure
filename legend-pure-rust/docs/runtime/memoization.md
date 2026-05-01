@@ -116,7 +116,7 @@ pub enum ValueHash {
     Float(u64),          // f64.to_bits()
     Boolean(bool),
     String(SmolStr),
-    Object(ObjectId),    // identity-based
+    Object(*const RefCell<HeapEntry>),  // identity-based via Rc::as_ptr
     Unit,
 }
 ```

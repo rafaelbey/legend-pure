@@ -1,5 +1,17 @@
 # Persistent Data Structures in the Rust Pure Interpreter
 
+> [!NOTE]
+> **Heap design has evolved.** The `SlotMap<ObjectId, RuntimeObject>`
+> design described later in this document was replaced by
+> `ObjectHandle = Rc<RefCell<HeapEntry>>` (see plan
+> `~/.claude/plans/the-fact-that-the-peaceful-goblet.md` and the
+> commit log under `feat(runtime): replace SlotMap heap`). The
+> *trade-offs* below are still accurate — identity preservation,
+> persistent collections for value types, distinct treatment of
+> objects vs. collections — only the object handle's *implementation*
+> moved from a slotmap key to an `Rc<RefCell<…>>`. Read the code
+> blocks as design rationale, not current API.
+
 ## Critical Context: TDS vs Relation
 
 > [!IMPORTANT]

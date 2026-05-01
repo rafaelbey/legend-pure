@@ -1,5 +1,14 @@
 # Hybrid Interpreter + Compiled Rust Architecture
 
+> [!NOTE]
+> **Heap representation has evolved.** Code blocks below show
+> `SlotMap<ObjectId, HeapEntry>` for narrative continuity, but the
+> shipping runtime uses `ObjectHandle = Rc<RefCell<HeapEntry>>`. The
+> [`TypedObject`] trait, the dispatch story, and the alloc/get_property/
+> mutate_add APIs are all unchanged in spirit — the handle just no
+> longer goes through a slotmap. See plan
+> `~/.claude/plans/the-fact-that-the-peaceful-goblet.md`.
+
 ## The Idea
 
 The Rust interpreter always works. But for **hot Pure functions**, a separate codegen tool generates **native Rust code** into a crate. If that crate is linked in, the interpreter delegates to it — direct Rust function calls, zero interpretation overhead. If not, it falls back to interpreting.

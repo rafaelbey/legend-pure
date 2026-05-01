@@ -69,24 +69,41 @@ pub struct Model {
 This is what we need to build. It stores instances created by `^Class(...)`:
 
 ```rust
-use slotmap::SlotMap;
+use std::cell::RefCell;
+use std::rc::Rc;
 
-slotmap::new_key_type! { pub struct ObjectId; }
+/// A strong handle to a heap entry. `Rc::ptr_eq` is identity;
+/// `borrow_mut` is in-place mutation. The entry is freed automatically
+/// when the last clone drops.
+pub type ObjectHandle = Rc<RefCell<HeapEntry>>;
 
 /// A runtime instance of a Pure class
 pub struct RuntimeObject {
-    /// Which class this is an instance of (points into the Model Arena)
-    classifier: ElementId,
-    /// Property values, keyed by property name
-    /// This is the thing mutateAdd modifies
-    properties: HashMap<SmolStr, Vec<Value>>,
+    classifier: SmolStr,
+    properties: HashMap<SmolStr, PVector<Value>>,
+    bootstrap_element: Option<ElementId>,  // Some for metamodel rows
 }
 
-/// The runtime heap — stores all objects created during execution
+pub enum HeapEntry {
+    Dynamic(RuntimeObject),
+    Typed(Box<dyn TypedObject>),
+}
+
+/// `RuntimeHeap` is the metamodel arena only — user objects are NOT
+/// tracked here. They live wherever a strong `Rc` holds them
+/// (variable context, return chain, captures, memoization cache,
+/// properties of escaped objects). When all those drop, RAII reclaims.
 pub struct RuntimeHeap {
-    objects: SlotMap<ObjectId, RuntimeObject>,
+    element_to_object: HashMap<ElementId, ObjectHandle>,
 }
 ```
+
+Earlier drafts of this doc described a `SlotMap<ObjectId, …>` design.
+That model was replaced because the slotmap had no removal API and
+grew monotonically for the evaluator's lifetime. The current
+`Rc<RefCell<HeapEntry>>` design ties object lifecycles to the
+references that hold them — see plan
+`~/.claude/plans/the-fact-that-the-peaceful-goblet.md`.
 
 ---
 
@@ -136,41 +153,39 @@ pub enum Value {
     Float(f64),
     String(SmolStr),
     Date(PureDate),
-    
-    // Collections
-    Collection(Vec<Value>),
-    
-    // Object reference — points into the RuntimeHeap
-    // This is the key insight: objects are handles, not inline data
-    Object(ObjectId),
-    
-    // ... Expression, Lambda, Meta variants for metaprogramming ...
+
+    // Collections (persistent — O(1) clone via structural sharing)
+    Collection(Box<PVector<Value>>),
+
+    // Object reference — Rc<RefCell<HeapEntry>> clone.
+    // Identity is `Rc::ptr_eq`; mutation is `borrow_mut`; freed when
+    // the last clone drops. This preserves the "all references see
+    // the change instantly" property without a global registry.
+    Object(ObjectHandle),
+
+    // ... Function, Map, Element, EnumValue, UnitInstance, Unit ...
+}
+
+impl HeapEntry {
+    /// Append values to a property — `mutateAdd` semantics.
+    pub fn mutate_add(
+        &mut self,
+        property: &str,
+        values: &[Value],
+    ) -> Result<(), PureRuntimeError> {
+        // Dynamic entry: extend the persistent vector at `property`.
+        // (Typed entry: forwards to TypedObject::set_property.)
+    }
 }
 
 impl RuntimeHeap {
-    /// Create a new object (the `^Class(...)` operator)
-    pub fn new_object(&mut self, classifier: ElementId, 
-                      initial_props: HashMap<SmolStr, Vec<Value>>) -> ObjectId {
-        self.objects.insert(RuntimeObject {
-            classifier,
-            properties: initial_props,
-        })
-    }
-    
-    /// Get a property value (the `.property` accessor)
-    pub fn get_property(&self, obj: ObjectId, name: &str) -> &[Value] {
-        self.objects[obj].properties
-            .get(name)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
-    }
-    
-    /// THE mutateAdd implementation  
-    pub fn mutate_add(&mut self, obj: ObjectId, property: &str, values: Vec<Value>) {
-        self.objects[obj].properties
-            .entry(SmolStr::from(property))
-            .or_insert_with(Vec::new)
-            .extend(values);
+    /// Allocate a fresh handle. The heap does NOT retain it; the
+    /// caller wraps it in `Value::Object(handle)` and the entry stays
+    /// alive only as long as some strong `Rc` holds it.
+    pub fn alloc_dynamic(&mut self, classifier: impl Into<SmolStr>) -> ObjectHandle {
+        Rc::new(RefCell::new(HeapEntry::Dynamic(
+            RuntimeObject::new(classifier),
+        )))
     }
 }
 ```
