@@ -14,7 +14,19 @@
 
 package org.finos.legend.pure.rust;
 
-public class PureRustInstance
+import java.io.Closeable;
+import java.lang.ref.Cleaner;
+
+/**
+ * A handle to a native Pure instance managed by the Rust execution engine.
+ * <p>
+ * This object is a proxy to an off-heap resource. It is <b>not</b> thread-safe
+ * and must be used in conjunction with the {@link PureRustEvaluator} that created it.
+ * <p>
+ * Closing this instance will release the native reference. If not closed explicitly,
+ * the native reference will be released when this object is garbage collected.
+ */
+public class PureRustInstance implements Closeable
 {
     protected final long instancePointer;
     private final PureRustEvaluator owner;
@@ -25,13 +37,37 @@ public class PureRustInstance
         this.owner = owner;
     }
 
+    /**
+     * Returns the fully qualified classifier path of this instance.
+     *
+     * @return the classifier path
+     */
     public String getClassifier()
     {
         return this.owner.getClassifier(this);
     }
 
+    /**
+     * Retrieves a property value from this instance.
+     *
+     * @param propertyName the name of the property
+     * @param args optional arguments for the property (e.g., for qualified properties)
+     * @param <T> the expected return type
+     * @return the property value
+     */
     public <T> T getProperty(String propertyName, Object... args)
     {
-        return this.owner.evaluateProperty(this.instancePointer, propertyName, args);
+        return this.owner.evaluateProperty(this, propertyName, args);
+    }
+
+    /**
+     * Manually releases the native reference for this instance.
+     * <p>
+     * After calling this, the instance should no longer be used.
+     */
+    @Override
+    public void close()
+    {
+        this.owner.free(this);
     }
 }

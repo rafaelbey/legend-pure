@@ -22,6 +22,8 @@ public class TestRustEvaluation
         if (pureRustEvaluator != null)
         {
             pureRustEvaluator.close();
+            PureRustEvaluationException excp = Assertions.assertThrows(PureRustEvaluationException.class, () -> pureRustEvaluator.evaluate(""));
+            Assertions.assertEquals("Evaluator has been closed", excp.getMessage());
         }
     }
 
@@ -57,7 +59,26 @@ public class TestRustEvaluation
         Assertions.assertEquals("Integer", rawTypeToString);
 
         // throws error when property does not exist.
-        Assertions.assertThrows(PureRustEvaluationException.class, () -> result.getProperty("notExistent"));
+        PureRustEvaluationException excp = Assertions.assertThrows(PureRustEvaluationException.class, () -> result.getProperty("notExistent"));
+        Assertions.assertEquals("Property 'notExistent' not found", excp.getMessage(), "Message was:" + excp.getMessage());
+    }
 
+    @Test
+    void testInstanceEvaluationReferenceCleanup()
+    {
+        PureRustInstance result = pureRustEvaluator.evaluate("meta::pure::functions::meta::genericType_Any_MANY__GenericType_1_", 123);
+        // force the "GC"
+        result.close();
+        Assertions.assertThrows(PureRustEvaluationException.class, () -> result.getProperty("rawType"));
+    }
+
+    @Test
+    void testEvaluationReferenceCleanup()
+    {
+        PureRustInstance result = pureRustEvaluator.evaluate("meta::pure::functions::meta::genericType_Any_MANY__GenericType_1_", 123);
+        // force the "GC"
+        result.close();
+        PureRustEvaluationException excp = Assertions.assertThrows(PureRustEvaluationException.class, () -> result.getProperty("rawType"));
+        Assertions.assertTrue(excp.getMessage().startsWith("Stale or unknown JNI handle:"), "Message was:" + excp.getMessage());
     }
 }
