@@ -22,8 +22,12 @@ repository.workspace = true
 
 [dependencies]
 legend-pure-parser-ast = { path = "../ast" }
+legend-pure-parser-compose = { path = "../compose" }
 legend-pure-parser-lexer = { path = "../lexer" }
 legend-pure-parser-parser = { path = "../parser" }
+legend-pure-parser-protocol = { path = "../protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 smol_str = { workspace = true }
 
 [dev-dependencies]

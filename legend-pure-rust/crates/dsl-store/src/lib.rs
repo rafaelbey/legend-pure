@@ -36,8 +36,12 @@
 //!   [`legend_pure_parser_ast::island::IslandContent`].
 //! - [`parser`] — [`parser::RelationStoreAccessorParser`] registers as
 //!   [`legend_pure_parser_parser::IslandParser`] with tag `">"`.
-//! - **Composer** (commit #10) — `IslandComposer` with tag `">"`.
-//! - **Protocol** (commit #10) — `IslandProtocol` with tag `">"`.
+//! - [`compose`] — [`compose::RelationStoreAccessorComposer`] registers
+//!   as [`legend_pure_parser_compose::island::IslandComposer`] with
+//!   tag `">"`.
+//! - [`protocol`] — [`protocol::RelationStoreAccessorProtocol`]
+//!   registers as
+//!   [`legend_pure_parser_protocol::IslandProtocol`] with tag `">"`.
 //! - **`CompilerExtension`** (commit #11) — resolves `path[0]` against
 //!   `meta::pure::store::Store` subclasses.
 //!
@@ -47,4 +51,6 @@
 #![deny(missing_docs)]
 
 pub mod ast;
+pub mod compose;
 pub mod parser;
+pub mod protocol;
