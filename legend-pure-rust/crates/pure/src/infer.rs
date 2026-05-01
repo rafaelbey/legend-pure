@@ -1223,6 +1223,7 @@ fn render_type_expr(model: &PureModel, type_expr: &TypeExpr, out: &mut String) {
             render_type_expr(model, b, out);
         }
         TypeExpr::Relation(_) => out.push_str("<Relation>"),
+        TypeExpr::Unresolved => out.push_str("<unresolved>"),
     }
 }
 

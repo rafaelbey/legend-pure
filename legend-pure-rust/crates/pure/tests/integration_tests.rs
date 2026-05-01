@@ -1741,10 +1741,18 @@ fn compile_multiple_let_same_variable() {
 fn compile_lambda_let_shadows_outer_let() {
     // Operator lowering needs `plus` in scope (variadic_op routes through
     // resolve_function_call); declare both natives the source uses.
+    //
+    // `map`'s second param is declared `Any[1]` — a deliberately-loose
+    // synthetic signature for this test. That doesn't carry a
+    // `Function<{T→V}>` shape for the orchestrator to flow expectations
+    // into the lambda's `y`, so `y` would land at the type-hole guard
+    // (`CannotInferLambdaParameterTypes`). Annotate `y` explicitly:
+    // the test's purpose is verifying lambda-`let` shadowing of outer
+    // `let x`, which the annotation doesn't change.
     let source = r"
         native function map(col: Any[*], fn: Any[1]): Any[*];
         native function plus(ints: Integer[*]): Integer[1];
-        function test::f(): Integer[*] { let x = 42; [1, 2]->map(y | let x = 43; $x + $y); }
+        function test::f(): Integer[*] { let x = 42; [1, 2]->map(y: Integer[1] | let x = 43; $x + $y); }
     ";
     let Ok(_) = compile_one(source) else {
         let partial = compile_one(source).unwrap_err();
