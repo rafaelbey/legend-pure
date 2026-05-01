@@ -42,8 +42,9 @@
 //! - [`protocol`] — [`protocol::RelationStoreAccessorProtocol`]
 //!   registers as
 //!   [`legend_pure_parser_protocol::IslandProtocol`] with tag `">"`.
-//! - **`CompilerExtension`** (commit #11) — resolves `path[0]` against
-//!   `meta::pure::store::Store` subclasses.
+//! - [`compiler`] — [`compiler::RelationStoreExtension`] resolves
+//!   `path[0]` against `meta::pure::store::Store` subclasses in the
+//!   `define_bodies` pass.
 //!
 //! Core crates carry no store knowledge — this crate is the sole owner.
 
@@ -51,6 +52,7 @@
 #![deny(missing_docs)]
 
 pub mod ast;
+pub mod compiler;
 pub mod compose;
 pub mod parser;
 pub mod protocol;
