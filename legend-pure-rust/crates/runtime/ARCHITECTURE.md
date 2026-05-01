@@ -54,9 +54,11 @@ flowchart TD
 ├─────────────────────────────────────────────────────────┤
 │ Layer 2: Runtime Heap (RuntimeHeap)                     │
 │ ──────────────────────────────────                      │
-│ Mutable object storage. SlotMap<ObjectId, HeapEntry>.   │
-│ Each entry is Dynamic (HashMap) or Typed (struct).      │
-│ Per-executor, not shared across threads.                │
+│ Metamodel-only arena: HashMap<ElementId, ObjectHandle>. │
+│ User objects are Rc<RefCell<HeapEntry>> clones held in  │
+│ the variable context, return chain, captures, and the   │
+│ memoization cache — freed automatically when the last   │
+│ reference drops.                                        │
 ├─────────────────────────────────────────────────────────┤
 │ Layer 3: Value Stack (VariableContext)                   │
 │ ─────────────────────────────────────                   │
@@ -84,7 +86,7 @@ pub enum Value {
     String(SmolStr),                  // inline ≤24 bytes, shared heap for longer
     Date(PureDate),                   // jiff-backed variable-precision temporal
     StrictTime(StrictTime),           // jiff::civil::Time wrapper (4 bytes, Copy)
-    Object(ObjectId),                 // handle into RuntimeHeap
+    Object(ObjectHandle),             // Rc<RefCell<HeapEntry>>
     Collection(PVector<Value>),       // RRB-tree persistent vector
     Map(PMap<ValueKey, Value>),       // HAMT persistent hash map
     Unit,                             // empty/void
@@ -97,13 +99,19 @@ pub enum Value {
 - `Date` uses `PureDate` (backed by `jiff::civil::DateTime`) — variable-precision, native calendar arithmetic
 - `StrictTime` uses `jiff::civil::Time` — 4 bytes, `Copy`, nanosecond precision
 - Collections use `im_rc` persistent structures — O(log N) structural sharing
-- Objects are **handles** (`ObjectId`) — not ownership, just identity reference
+- Objects are `Rc<RefCell<HeapEntry>>` clones — identity via `Rc::ptr_eq`,
+  freed automatically when the last clone drops
 
 ### RuntimeHeap (`heap.rs`)
 
 ```rust
+pub type ObjectHandle = Rc<RefCell<HeapEntry>>;
+
 pub struct RuntimeHeap {
-    objects: SlotMap<ObjectId, HeapEntry>,
+    /// Strong refs to bootstrap metamodel rows — these exist for the
+    /// evaluator's lifetime so reflection projection stays stable.
+    /// User objects are NOT tracked here.
+    element_to_object: HashMap<ElementId, ObjectHandle>,
 }
 
 pub enum HeapEntry {
@@ -112,10 +120,22 @@ pub enum HeapEntry {
 }
 ```
 
+**Lifecycle model:**
+- Bootstrap metamodel rows (~1338 for the platform) live in
+  `element_to_object` for the evaluator's lifetime.
+- User objects (`^Class(...)`, `copy`, etc.) live wherever a strong `Rc`
+  holds them — variable context, return chain, captured closures,
+  memoization cache, properties of escaped objects. When all those drop,
+  the entry is reclaimed by RAII.
+- `getAll(UserClass)` is implemented as a reachability walk from the
+  variable context (paid only on call, not on the hot allocation path).
+- No reference cycles: every back-edge (`_owner`, `rawType`, `profile`)
+  is a `Value::Element(eid)`, not a heap pointer.
+
 **Dual representation:**
 - `Dynamic`: Interpreter-created objects with property-name-based access (~13ns lookup)
-- `Typed`: Compiled-code objects with direct field access (~1ns)
-- Both produce `Value::Object(ObjectId)` — callers don't know which is active
+- `Typed`: Compiled-code objects with direct field access (~1ns; currently no codegen)
+- Both produce `Value::Object(ObjectHandle)` — callers don't know which is active
 
 ### VariableContext (`context.rs`)
 
