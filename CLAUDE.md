@@ -24,8 +24,8 @@ is the canonical platform definition consumed by **both** stacks.
 - **Compiler** — ✅ Platform compile clean. 0 errors on 236 files / 1338 elements.
   Five-phase dispatch engine with generic type+multiplicity substitution.
 - **Runtime** — 🚧 Active. Tree-walking interpreter with ~50 native functions,
-  persistent data structures (`im-rc`), `SlotMap` heap, lazy call stack.
-  Passing platform PCT subset.
+  persistent data structures (`im-rc`), RAII-driven `Rc<RefCell<HeapEntry>>`
+  heap, lazy call stack. Passing platform PCT subset.
 - **CLI** — 🚧 Partial. 6 of 11 commands implemented (`parse`, `check`, `init`,
   `version`, `completions`, `emit`). Stubs: `compile`, `test`, `plan`, `package`, `publish`.
 

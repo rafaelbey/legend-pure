@@ -173,9 +173,13 @@ The higher-level derive generates the lower-level impls automatically.
 
 Four-layer storage model:
 1. Immutable `Arc<PureModel>` — shared across threads; class/function defs + type hierarchy.
-2. Per-executor `RuntimeHeap` — `SlotMap<ObjectId, HeapEntry>` where entries are
-   `Dynamic(HashMap)` or `Typed(struct)`. Generational `ObjectId` preserves identity
-   across `mutateAdd`.
+2. Per-executor `RuntimeHeap` — metamodel-only arena, `HashMap<ElementId,
+   ObjectHandle>`. User objects are `Value::Object(ObjectHandle)` clones
+   (`ObjectHandle = Rc<RefCell<HeapEntry>>`), tracked by the variable
+   context, return chain, captures, and memoization cache — freed by RAII
+   when the last reference drops. Identity via `Rc::ptr_eq`; mutation via
+   `borrow_mut`. `getAll(UserClass)` is a reachability walk from the
+   variable context (paid only on call).
 3. Persistent collections via `im-rc` (HAMT/RRB) — O(log N) fold+put, no GC.
 4. Memoization is **purity-gated** — transitive `SideEffectFunction` analysis at compile
    time, then a bool check at runtime.

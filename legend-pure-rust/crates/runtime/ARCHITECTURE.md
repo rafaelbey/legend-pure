@@ -215,6 +215,8 @@ First measured numbers (criterion.rs, release mode):
 | Property access (dynamic) | 13.5 ns |
 | Object allocation | 13.5 ns |
 | mutateAdd | 29.4 ns |
+| Alloc + mutate + drop (Rc heap) | ~62 ns — auto-reclaimed |
+| Bulk alloc 1k + drop (Rc heap) | ~70 µs — all reclaimed |
 | HAMT put (10K items) | 1.05 ms |
 | std HashMap clone-per-put (1K) | 2.67 ms — 25x slower than HAMT |
 
@@ -223,7 +225,7 @@ First measured numbers (criterion.rs, release mode):
 | Crate | Purpose |
 |---|---|
 | `im-rc` | Persistent collections (HAMT HashMap, RRB Vector) |
-| `slotmap` | Generational arena for RuntimeHeap (ObjectId) |
+| `slotmap` | Generational arena (used only by `legend-pure-parser-jni` for the FFI handle table; runtime no longer depends on it) |
 | `rust_decimal` | 128-bit fixed-point decimal arithmetic (financial precision) |
 | `jiff` | Calendar/time arithmetic for `PureDate` and `StrictTime` |
 | `smol_str` | Inline strings (≤24 bytes, no allocation) |
