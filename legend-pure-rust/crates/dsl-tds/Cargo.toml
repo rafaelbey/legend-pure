@@ -26,9 +26,14 @@ legend-pure-parser-compose = { path = "../compose" }
 legend-pure-parser-lexer = { path = "../lexer" }
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-protocol = { path = "../protocol" }
+legend-pure-parser-pure = { path = "../pure" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smol_str = { workspace = true }
 
 [dev-dependencies]
 indoc = "2"
+# Used by the end-to-end test to load the embedded platform Pure
+# sources (including platform_dsl_tds) and verify
+# `meta::pure::metamodel::relation::TDS` resolves at compile time.
+legend-pure-core-platform = { path = "../core-platform-pure" }

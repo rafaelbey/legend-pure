@@ -968,11 +968,13 @@ name = "legend-pure-dsl-tds"
 version = "0.1.0"
 dependencies = [
  "indoc",
+ "legend-pure-core-platform",
  "legend-pure-parser-ast",
  "legend-pure-parser-compose",
  "legend-pure-parser-lexer",
  "legend-pure-parser-parser",
  "legend-pure-parser-protocol",
+ "legend-pure-parser-pure",
  "serde",
  "serde_json",
  "smol_str",
