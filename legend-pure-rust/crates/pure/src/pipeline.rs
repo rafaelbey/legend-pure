@@ -312,8 +312,6 @@ struct Declaration {
     section_idx: usize,
     /// Index of the element within the section.
     element_idx: usize,
-    /// Whether this declaration is a function (overloads allowed).
-    is_function: bool,
 }
 
 /// Tracks unit `ElementId`s allocated for a measure during Pass 1.
@@ -549,11 +547,6 @@ fn pass_declare(
 
                 // For functions, compute the mangled name at declaration time.
                 // This is the element name (like a class name is its element name).
-                let is_function_like = matches!(
-                    element,
-                    ast::Element::Function(_) | ast::Element::NativeFunction(_)
-                );
-
                 let element_name = match element {
                     ast::Element::Function(f) => {
                         use legend_pure_parser_ast::element::FunctionSignature;
@@ -569,11 +562,10 @@ fn pass_declare(
                 // Build fully qualified name
                 let fqn = build_fqn(&pkg_path, &element_name);
 
-                // Check for duplicates — allow function overloads
-                if let Some(existing) = declarations.get(&fqn)
-                    && (!is_function_like || !existing.iter().all(|d| d.is_function))
-                {
-                    // Non-function duplicate, or mixing function with non-function
+                // Same mangled FQN ⇒ same signature ⇒ true duplicate.
+                // Distinct overloads have distinct mangled names and never
+                // collide here.
+                if declarations.contains_key(&fqn) {
                     errors.push(CompilationError {
                         message: format!("Duplicate element: '{fqn}'"),
                         source_info: source_info.clone(),
@@ -581,7 +573,6 @@ fn pass_declare(
                     });
                     continue;
                 }
-                // Function overload — fall through to allocate
 
                 // Allocate shell
                 let shell = create_shell(element);
@@ -609,7 +600,6 @@ fn pass_declare(
                         file_idx,
                         section_idx,
                         element_idx,
-                        is_function: is_function_like,
                     });
 
                 // For Measures: allocate Unit shells now
@@ -694,7 +684,6 @@ fn allocate_unit_shells(
             file_idx,
             section_idx,
             element_idx,
-            is_function: false,
         });
 
         unit_id
