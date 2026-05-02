@@ -51,7 +51,7 @@ pub mod error;
 pub mod extension;
 pub mod fqn;
 pub mod ids;
-pub(crate) mod infer;
+pub mod infer;
 pub(crate) mod lower;
 pub(crate) mod m3_parser;
 pub mod model;
