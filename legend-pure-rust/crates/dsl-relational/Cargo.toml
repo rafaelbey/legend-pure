@@ -32,3 +32,7 @@ smol_str = { workspace = true }
 
 [dev-dependencies]
 indoc = "2"
+# end_to_end.rs loads the embedded platform repos and exercises the
+# section parser against a real Java fixture's relational source.
+legend-pure-core-platform = { path = "../core-platform-pure" }
+legend-pure-parser-pure = { path = "../pure" }
