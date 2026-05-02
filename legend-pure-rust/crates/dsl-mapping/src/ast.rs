@@ -255,9 +255,14 @@ pub struct PurePropertyMapping {
     /// stores it raw; Stage 3 wraps it as a `Lambda<{src}>` and
     /// validates the return type against the property's declared type.
     pub transform: Expression,
-    /// Optional value transformer FQN (`+pkg::EnumMap`). Reserved for
-    /// Stage 4 (enumeration mappings); Stage 2 always parses as `None`.
-    pub transformer: Option<PackageableElementPtr>,
+    /// Optional inline `EnumerationMapping <name>` transformer prefix
+    /// — e.g. `state : EnumerationMapping StateMapping : $src.state`.
+    /// The name is the *local* `mapping_name` (not an FQN) of an
+    /// EnumerationMapping declared elsewhere in this Mapping (or a
+    /// transitively included one). Mirrors Java's M3 grammar
+    /// `(ENUMERATION_MAPPING identifier COLON)?` between the
+    /// property colon and the transform expression.
+    pub transformer: Option<SmolStr>,
     /// `+` modifier marking the transform as exploding into multiple
     /// values. Reserved; Stage 2 always parses as `false`.
     pub explode: bool,

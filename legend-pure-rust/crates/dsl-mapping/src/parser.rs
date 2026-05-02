@@ -320,11 +320,33 @@ fn parse_pure_body(ctx: &mut ParserContext<'_>) -> Result<PureClassMappingBody, 
             // Optional comma between ~clauses and following entries.
             ctx.cursor().eat(TokenKind::Comma);
         } else {
-            // `propertyName : transform`
+            // `propertyName : (EnumerationMapping <name> :)? transform`
             let prop_tok = ctx.cursor().expect(TokenKind::Identifier)?;
             let prop_si = prop_tok.source_info.clone();
             let prop_name = SmolStr::new(prop_tok.text.clone());
             ctx.cursor().expect(TokenKind::Colon)?;
+
+            // Optional `EnumerationMapping <name> :` transformer
+            // prefix. Mirrors the M3 grammar's
+            // `(ENUMERATION_MAPPING identifier COLON)?` between the
+            // property colon and the combinedExpression. Two-token
+            // lookahead resolves the ambiguity vs. a transform that
+            // happens to start with the bare identifier
+            // `EnumerationMapping`: the prefix is only consumed when
+            // followed by another identifier *and* a colon.
+            let transformer = if ctx.cursor().check(TokenKind::Identifier)
+                && ctx.cursor().peek().text == "EnumerationMapping"
+                && ctx.cursor().peek_kind_at(1) == TokenKind::Identifier
+                && ctx.cursor().peek_kind_at(2) == TokenKind::Colon
+            {
+                ctx.cursor().advance(); // EnumerationMapping
+                let name_tok = ctx.cursor().expect(TokenKind::Identifier)?;
+                ctx.cursor().expect(TokenKind::Colon)?;
+                Some(SmolStr::new(name_tok.text.clone()))
+            } else {
+                None
+            };
+
             let transform = ctx.parse_expression()?;
             // Capture span up to the end of the transform — for the
             // entry-level source_info.
@@ -332,7 +354,7 @@ fn parse_pure_body(ctx: &mut ParserContext<'_>) -> Result<PureClassMappingBody, 
             property_mappings.push(PurePropertyMapping {
                 property_name: prop_name,
                 transform,
-                transformer: None,
+                transformer,
                 explode: false,
                 source_info: merge_si(&prop_si, &end_si),
             });

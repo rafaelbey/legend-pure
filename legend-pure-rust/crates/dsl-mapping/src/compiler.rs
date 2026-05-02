@@ -192,8 +192,17 @@ fn validate_mapping(
     // exist on the target class (or its supertypes), super-id resolves
     // against the visible class-mapping ID set.
     let visible_ids = visible_class_mapping_ids(m, registry);
+    let visible_enum_mappings = visible_enum_mapping_targets(m, registry);
     for cm in &m.class_mappings {
-        validate_class_mapping(cm, m, &visible_ids, model, auto_imports, errors);
+        validate_class_mapping(
+            cm,
+            m,
+            &visible_ids,
+            &visible_enum_mappings,
+            model,
+            auto_imports,
+            errors,
+        );
     }
 
     // Class-mapping IDs must be unique within a single mapping. The
@@ -268,6 +277,7 @@ fn validate_class_mapping(
     cm: &ClassMapping,
     owner: &MappingDef,
     visible_ids: &HashSet<SmolStr>,
+    visible_enum_mappings: &HashMap<SmolStr, SmolStr>,
     model: &PureModel,
     auto_imports: &[SmolStr],
     errors: &mut Vec<CompilationError>,
@@ -307,7 +317,15 @@ fn validate_class_mapping(
                     },
                 });
             }
-            validate_pure_body(body, &target_fqn, class_id, model, auto_imports, errors);
+            validate_pure_body(
+                body,
+                &target_fqn,
+                class_id,
+                visible_enum_mappings,
+                model,
+                auto_imports,
+                errors,
+            );
         }
         ClassMappingBody::Enumeration(body) => {
             let enum_id = resolve_enumeration(model, &target_fqn);
@@ -362,6 +380,7 @@ fn validate_class_mapping(
                 &target_fqn,
                 class_id,
                 visible_ids,
+                visible_enum_mappings,
                 model,
                 auto_imports,
                 errors,
@@ -394,6 +413,7 @@ fn validate_pure_body(
     body: &PureClassMappingBody,
     target_class_fqn: &str,
     target_class_id: Option<ElementId>,
+    visible_enum_mappings: &HashMap<SmolStr, SmolStr>,
     model: &PureModel,
     auto_imports: &[SmolStr],
     errors: &mut Vec<CompilationError>,
@@ -468,6 +488,7 @@ fn validate_pure_body(
                 pm,
                 target_class_fqn,
                 class_id,
+                visible_enum_mappings,
                 model,
                 auto_imports,
                 &src_binding,
@@ -477,10 +498,12 @@ fn validate_pure_body(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_property_mapping(
     pm: &PurePropertyMapping,
     target_class_fqn: &str,
     target_class_id: ElementId,
+    visible_enum_mappings: &HashMap<SmolStr, SmolStr>,
     model: &PureModel,
     auto_imports: &[SmolStr],
     src_binding: &[(SmolStr, TypeExpr, Multiplicity)],
@@ -502,6 +525,65 @@ fn validate_property_mapping(
         });
         return;
     };
+
+    // Inline `EnumerationMapping <name>` transformer rule. Mirrors
+    // Java's TestModelMapping.testM2MMappingWithInvalidEnumerationMapping:
+    //
+    //   "Property : [state] is of type : [my::State] but enumeration
+    //    mapping : [OptionMapping] is defined on enumeration : [my::Option]."
+    //
+    // Rules:
+    //   1. The transformer name must reference an EnumerationMapping
+    //      with a matching `mapping_name` somewhere in this Mapping
+    //      or transitively included mappings.
+    //   2. The property's declared type must be that EnumerationMapping's
+    //      target enumeration. (When the property is typed as something
+    //      other than the transformer's target enum, error.)
+    //
+    // We don't enforce that the property type IS an Enumeration as a
+    // separate rule — the matching check subsumes it: if the property
+    // type doesn't match the transformer's enum target, we error
+    // regardless of whether the property is an Enum or a Class.
+    if let Some(transformer_name) = &pm.transformer {
+        match visible_enum_mappings.get(transformer_name) {
+            None => {
+                errors.push(CompilationError {
+                    message: format!(
+                        "EnumerationMapping '{transformer_name}' referenced from property \
+                         '{}.{}' is not declared in this mapping or any included mapping",
+                        target_class_fqn, pm.property_name
+                    ),
+                    source_info: pm.source_info.clone(),
+                    kind: CompilationErrorKind::UnresolvedElement {
+                        path: transformer_name.clone(),
+                    },
+                });
+            }
+            Some(target_enum_fqn) => {
+                let prop_type_fqn = match &prop_type {
+                    TypeExpr::Named { element, .. } => Some(element_fqn(model, *element)),
+                    _ => None,
+                };
+                if prop_type_fqn.as_deref() != Some(target_enum_fqn.as_str()) {
+                    let prop_type_str = prop_type_fqn.as_deref().unwrap_or("<non-named-type>");
+                    errors.push(CompilationError {
+                        message: format!(
+                            "Property : [{}] is of type : [{prop_type_str}] but enumeration \
+                             mapping : [{transformer_name}] is defined on enumeration : \
+                             [{target_enum_fqn}].",
+                            pm.property_name
+                        ),
+                        source_info: pm.source_info.clone(),
+                        // TODO(error-kinds): same TypeMismatch refactor
+                        // as the Stage-3.5 rules — wants its own kind.
+                        kind: CompilationErrorKind::UnsupportedExpression {
+                            kind: SmolStr::new_static("EnumerationMappingTypeMismatch"),
+                        },
+                    });
+                }
+            }
+        }
+    }
 
     // Lower + infer the transform with `src` bound.
     let Some(transform_ty) =
@@ -591,6 +673,79 @@ fn visible_class_mapping_ids(
             out.insert(default_id);
             if let Some(id) = &cm.id {
                 out.insert(id.clone());
+            }
+        }
+        for inc in &cur.includes {
+            let fqn = ptr_fqn(&inc.included);
+            if visited.contains(&fqn) {
+                continue;
+            }
+            if let Some(reg) = registry.get(&fqn) {
+                visited.insert(fqn);
+                queue.push_back(&reg.def);
+            }
+        }
+    }
+
+    out
+}
+
+/// Walk an element's parent-package chain to build its FQN as a
+/// double-colon-joined string (e.g. `"my::test::State"`). Used by
+/// the inline `EnumerationMapping` transformer rule to compare
+/// against the user-written enumeration FQN. Skips the unnamed
+/// root package.
+fn element_fqn(model: &PureModel, id: ElementId) -> String {
+    let ElementId::InstanceId { .. } = id else {
+        // Packages don't appear in TypeExpr::Named.element in
+        // practice (those are types, not packages); fall through
+        // to the simple name on the off-chance a caller passes one.
+        return model.element_name(id).to_string();
+    };
+    let node = model.get_node(id);
+    let mut segments: Vec<SmolStr> = vec![node.name.clone()];
+    let mut current = Some(node.parent_package);
+    while let Some(pkg_id) = current {
+        let pkg = model.get_package(pkg_id);
+        if pkg.parent.is_none() {
+            break; // root package has no name to contribute
+        }
+        segments.push(pkg.name.clone());
+        current = pkg.parent;
+    }
+    segments.reverse();
+    segments
+        .iter()
+        .map(SmolStr::as_str)
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+/// Build a `mapping_name → target enum FQN` lookup for every
+/// EnumerationMapping reachable from `m` via own class_mappings +
+/// transitively included mappings. Used by the inline
+/// `EnumerationMapping <name>` transformer rule on Pure property
+/// mappings to resolve the local name into a target enumeration.
+fn visible_enum_mapping_targets(
+    m: &MappingDef,
+    registry: &HashMap<SmolStr, RegisteredMapping>,
+) -> HashMap<SmolStr, SmolStr> {
+    let mut out: HashMap<SmolStr, SmolStr> = HashMap::new();
+    let mut visited: HashSet<SmolStr> = HashSet::new();
+    let mut queue: VecDeque<&MappingDef> = VecDeque::new();
+    queue.push_back(m);
+    visited.insert(build_fqn(m));
+
+    while let Some(cur) = queue.pop_front() {
+        for cm in &cur.class_mappings {
+            if matches!(cm.body, ClassMappingBody::Enumeration(_))
+                && let Some(name) = &cm.mapping_name
+            {
+                // First-write-wins: if two mappings (one direct, one
+                // included) declare the same name, the directly-defined
+                // one is queued first and takes precedence.
+                out.entry(name.clone())
+                    .or_insert_with(|| ptr_fqn(&cm.class));
             }
         }
         for inc in &cur.includes {
@@ -893,11 +1048,13 @@ fn validate_operation_body(
 // Stage-6 — AggregationAware body validation
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn validate_aggregation_aware_body(
     body: &AggregationAwareClassMappingBody,
     target_class_fqn: &str,
     target_class_id: Option<ElementId>,
     visible_ids: &HashSet<SmolStr>,
+    visible_enum_mappings: &HashMap<SmolStr, SmolStr>,
     model: &PureModel,
     auto_imports: &[SmolStr],
     errors: &mut Vec<CompilationError>,
@@ -925,6 +1082,7 @@ fn validate_aggregation_aware_body(
             target_class_fqn,
             target_class_id,
             visible_ids,
+            visible_enum_mappings,
             model,
             auto_imports,
             errors,
@@ -936,6 +1094,7 @@ fn validate_aggregation_aware_body(
         target_class_fqn,
         target_class_id,
         visible_ids,
+        visible_enum_mappings,
         model,
         auto_imports,
         errors,
@@ -1043,11 +1202,13 @@ fn validate_aggregate_value(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_nested_class_mapping(
     nested: &NestedClassMapping,
     target_class_fqn: &str,
     target_class_id: Option<ElementId>,
     visible_ids: &HashSet<SmolStr>,
+    visible_enum_mappings: &HashMap<SmolStr, SmolStr>,
     model: &PureModel,
     auto_imports: &[SmolStr],
     errors: &mut Vec<CompilationError>,
@@ -1060,6 +1221,7 @@ fn validate_nested_class_mapping(
                 body,
                 target_class_fqn,
                 target_class_id,
+                visible_enum_mappings,
                 model,
                 auto_imports,
                 errors,
@@ -1085,6 +1247,7 @@ fn validate_nested_class_mapping(
                 target_class_fqn,
                 target_class_id,
                 visible_ids,
+                visible_enum_mappings,
                 model,
                 auto_imports,
                 errors,
