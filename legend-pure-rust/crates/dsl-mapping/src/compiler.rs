@@ -1126,6 +1126,18 @@ fn validate_model_operation(
         Multiplicity::PureOne,
     )];
 
+    // Lower each ~groupByFunctions expression with `this` bound.
+    // Mirrors Java's
+    // testAggregationAwareMappingErrorInAggregateViewModelOperationGroupByFunction:
+    // an unknown property reference inside a groupBy lambda must
+    // surface as a diagnostic, not silently slip through. We don't
+    // assert a specific return type here — Java doesn't either at
+    // this layer; the routing engine consumes whatever shape the
+    // group-by produces.
+    for expr in &spec.group_by_functions {
+        let _ = lower_and_infer_expression(model, auto_imports, expr, &this_binding, errors);
+    }
+
     for av in &spec.aggregate_values {
         validate_aggregate_value(
             av,
