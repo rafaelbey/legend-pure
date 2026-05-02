@@ -342,8 +342,22 @@ fn write_pure_body(out: &mut String, body: &PureClassMappingBody) {
 
 fn write_property_mapping(out: &mut String, pm: &PurePropertyMapping) {
     out.push_str("    ");
+    if pm.local_property.is_some() {
+        out.push('+');
+    }
     out.push_str(pm.property_name.as_str());
     out.push_str(" : ");
+    if let Some(local) = &pm.local_property {
+        // Reuse the parser-compose crate's existing
+        // type-reference and multiplicity composers so generics
+        // (e.g. `Pair<String, Integer>[1]`) survive the round-trip
+        // verbatim.
+        let mut w = legend_pure_parser_compose::writer::IndentWriter::new();
+        legend_pure_parser_compose::type_ref::compose_type_reference(&mut w, &local.type_ref);
+        out.push_str(&w.finish());
+        out.push_str(&format!("{}", local.multiplicity));
+        out.push_str(" : ");
+    }
     if let Some(name) = &pm.transformer {
         out.push_str("EnumerationMapping ");
         out.push_str(name.as_str());

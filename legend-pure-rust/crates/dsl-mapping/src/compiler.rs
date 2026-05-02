@@ -509,21 +509,60 @@ fn validate_property_mapping(
     src_binding: &[(SmolStr, TypeExpr, Multiplicity)],
     errors: &mut Vec<CompilationError>,
 ) {
-    // Look up the target property by name (with supertype walk).
-    let prop_meta = find_property_type(model, target_class_id, pm.property_name.as_str());
-    let Some((prop_type, prop_mult)) = prop_meta else {
-        errors.push(CompilationError {
-            message: format!(
-                "Class '{target_class_fqn}' has no property '{}'",
-                pm.property_name
-            ),
-            source_info: pm.source_info.clone(),
-            kind: CompilationErrorKind::UnknownProperty {
-                type_name: SmolStr::new(target_class_fqn),
-                property_name: pm.property_name.clone(),
-            },
-        });
-        return;
+    // Resolve the property's (type, multiplicity). Two paths:
+    //
+    //   - Regular property mapping: look up by name on the target
+    //     class (with supertype walk). Unknown name → error.
+    //   - Local property declaration (`+name : Type[mult] : expr`):
+    //     the user is *declaring* a new property, not looking one
+    //     up — resolve the declared type/multiplicity instead.
+    //     Unresolved type → error mirroring Java's
+    //     "Strixng has not been defined!" diagnostic shape.
+    let (prop_type, prop_mult) = if let Some(local) = &pm.local_property {
+        let type_fqn = type_reference_fqn(&local.type_ref);
+        let resolved = resolve_class(model, &type_fqn)
+            .or_else(|| resolve_enumeration(model, &type_fqn))
+            .or_else(|| {
+                // Primitive/data types live in `meta::pure::metamodel::type::*`
+                // but users write them bare (`String`, `Integer`).
+                // Try the bare name as well as the FQN.
+                let segments: Vec<SmolStr> = type_fqn.split("::").map(SmolStr::new).collect();
+                model.resolve_by_path(&segments)
+            });
+        let Some(elem) = resolved else {
+            errors.push(CompilationError {
+                message: format!("{type_fqn} has not been defined!"),
+                source_info: local.source_info.clone(),
+                kind: CompilationErrorKind::UnresolvedElement {
+                    path: SmolStr::new(&type_fqn),
+                },
+            });
+            return;
+        };
+        let prop_mult = ast_multiplicity_to_resolved(&local.multiplicity);
+        let prop_type = TypeExpr::Named {
+            element: elem,
+            type_arguments: Vec::new(),
+            value_arguments: Vec::new(),
+        };
+        (prop_type, prop_mult)
+    } else {
+        let prop_meta = find_property_type(model, target_class_id, pm.property_name.as_str());
+        let Some(meta) = prop_meta else {
+            errors.push(CompilationError {
+                message: format!(
+                    "Class '{target_class_fqn}' has no property '{}'",
+                    pm.property_name
+                ),
+                source_info: pm.source_info.clone(),
+                kind: CompilationErrorKind::UnknownProperty {
+                    type_name: SmolStr::new(target_class_fqn),
+                    property_name: pm.property_name.clone(),
+                },
+            });
+            return;
+        };
+        meta
     };
 
     // Inline `EnumerationMapping <name>` transformer rule. Mirrors
@@ -688,6 +727,38 @@ fn visible_class_mapping_ids(
     }
 
     out
+}
+
+/// Render a `TypeReference`'s FQN as a `pkg::Name` string.
+/// Drops type arguments — for property-type-resolution the bare
+/// name is what `resolve_by_path` looks up.
+fn type_reference_fqn(tr: &legend_pure_parser_ast::type_ref::TypeReference) -> String {
+    match &tr.package {
+        Some(pkg) => format!("{pkg}::{}", tr.name),
+        None => tr.name.to_string(),
+    }
+}
+
+/// Translate the AST's `Multiplicity` (which carries source spans
+/// and a `Variable` form for `<T|m>` parameters) into the resolved
+/// `Multiplicity` used by `is_multiplicity_compatible`. Unresolved
+/// `Variable` falls back to `ZeroOrMany` since the comparison
+/// can't be made meaningfully without binding.
+fn ast_multiplicity_to_resolved(
+    m: &legend_pure_parser_ast::type_ref::Multiplicity,
+) -> Multiplicity {
+    use legend_pure_parser_ast::type_ref::Multiplicity as A;
+    match m {
+        A::PureOne => Multiplicity::PureOne,
+        A::ZeroOrOne => Multiplicity::ZeroOrOne,
+        A::ZeroOrMany => Multiplicity::ZeroOrMany,
+        A::OneOrMany => Multiplicity::OneOrMany,
+        A::Range { lower, upper } => Multiplicity::Range {
+            lower: *lower,
+            upper: *upper,
+        },
+        A::Variable(name) => Multiplicity::Variable(name.clone()),
+    }
 }
 
 /// Walk an element's parent-package chain to build its FQN as a
