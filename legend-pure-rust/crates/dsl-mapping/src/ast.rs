@@ -25,14 +25,16 @@
 //! (model-to-model, `PureInstanceSetImplementation`),
 //! [`ClassMappingBody::Enumeration`] (Stage 4),
 //! [`ClassMappingBody::Operation`] (Stage 5, simple parameters
-//! form — merge form deferred), and
+//! form — merge form deferred),
 //! [`ClassMappingBody::AggregationAware`] (Stage 6 — `Views`,
 //! `~modelOperation`, `~mainMapping`; nested mapping bodies recurse
-//! into `ClassMappingBody`). Remaining variants (`XStore`,
-//! `Relation`) arrive in Stages 7–8; the enum is `#[non_exhaustive]`
-//! so adding a variant is non-breaking. Hitting an unknown
-//! `parserName` at parse time produces an `UnsupportedSubParser`
-//! error pointing at the roadmap.
+//! into `ClassMappingBody`), and [`ClassMappingBody::XStore`]
+//! (Stage 7 — per-association-property cross-store join
+//! expressions binding `$this`/`$that`). Remaining variant
+//! (`Relation`) arrives in Stage 8; the enum is
+//! `#[non_exhaustive]` so adding a variant is non-breaking.
+//! Hitting an unknown `parserName` at parse time produces an
+//! `UnsupportedSubParser` error pointing at the roadmap.
 
 use std::any::Any;
 
@@ -171,9 +173,8 @@ pub struct ClassMapping {
 /// Class-mapping body sub-grammars.
 ///
 /// Each variant corresponds to a `parserName` keyword in the Java
-/// grammar. Remaining variants (`XStore`, `Relation`) arrive in
-/// Stages 7–8. Marked `#[non_exhaustive]` so adding variants is
-/// non-breaking.
+/// grammar. Remaining variant (`Relation`) arrives in Stage 8.
+/// Marked `#[non_exhaustive]` so adding variants is non-breaking.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum ClassMappingBody {
@@ -201,6 +202,14 @@ pub enum ClassMappingBody {
     /// `~aggregateMapping`) plus several nested expression lists,
     /// so the variant is by far the largest.
     AggregationAware(Box<AggregationAwareClassMappingBody>),
+    /// `parserName == "XStore"` — bridges two pure-instance set
+    /// implementations across stores via per-association-property
+    /// cross expressions binding `$this` (source set-impl class) and
+    /// `$that` (target set-impl class). Maps onto
+    /// `XStoreAssociationImplementation` in the metamodel — note
+    /// the outer class-mapping FQN is reinterpreted as an
+    /// `Association` FQN, not a `Class` FQN, by the validator.
+    XStore(XStoreClassMappingBody),
 }
 
 // ---------------------------------------------------------------------------
@@ -441,6 +450,53 @@ pub struct NestedClassMapping {
     pub body: ClassMappingBody,
     /// Span of the entire `~mainMapping : <parserName> { … }` (or
     /// `~aggregateMapping : <parserName> { … }`) clause.
+    pub source_info: SourceInfo,
+}
+
+// ---------------------------------------------------------------------------
+// XStoreClassMappingBody — Stage 7
+// ---------------------------------------------------------------------------
+
+/// Body of an `XStore` association mapping.
+///
+/// Shape:
+/// ```text
+/// {
+///   firm[employee_set, firm_set]    : $this.firmId == $that.id,
+///   employees[firm_set, employee_set] : $this.id == $that.firmId
+/// }
+/// ```
+///
+/// The outer class-mapping FQN (`Firm_Person` in tests) is
+/// reinterpreted as an [`Association`](legend_pure_parser_pure::nodes::association::Association)
+/// FQN by the validator. Each entry binds one association property
+/// to a cross-store join expression where `$this` resolves to the
+/// source set-implementation's class and `$that` to the target's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct XStoreClassMappingBody {
+    /// Per-association-property cross mappings, in source order.
+    pub property_mappings: Vec<XStorePropertyMapping>,
+}
+
+/// One `propName[srcId, tgtId]? : crossExpression` entry inside an
+/// [`XStoreClassMappingBody`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct XStorePropertyMapping {
+    /// Target association property name.
+    pub property_name: SmolStr,
+    /// Optional source set-implementation ID
+    /// (the `[srcId, ...]` form). When absent the cross-expression
+    /// has no `$this` binding — Java treats this as an error during
+    /// processing, but parsing accepts the shape.
+    pub source_set_impl_id: Option<SmolStr>,
+    /// Optional target set-implementation ID
+    /// (the `[..., tgtId]` form). Same parse-vs-validate split as
+    /// the source ID.
+    pub target_set_impl_id: Option<SmolStr>,
+    /// `$this`/`$that` cross-store join expression. Stored raw;
+    /// downstream lowering wraps it as a `Lambda<{this, that}>`.
+    pub cross_expression: Expression,
+    /// Span of the entire entry.
     pub source_info: SourceInfo,
 }
 
