@@ -65,6 +65,8 @@ legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-ast = { path = "../ast" }
 legend-pure-parser-pure = { path = "../pure" }
 legend-pure-dsl-graph = { path = "../dsl-graph" }
+legend-pure-dsl-store = { path = "../dsl-store" }
+legend-pure-dsl-tds = { path = "../dsl-tds" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smol_str = { workspace = true }
