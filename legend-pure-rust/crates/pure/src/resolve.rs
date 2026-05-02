@@ -719,6 +719,18 @@ pub(crate) fn resolve_function_call(
                 }
             }
         }
+        // Dedup: the same function ElementId can be discovered through
+        // multiple import scopes (e.g. an explicit `import pkg::*` plus
+        // an auto-import covering the same package). Without this, a
+        // single overload becomes N candidates and trips the
+        // multi-overload narrowing path even though there's nothing to
+        // disambiguate. ElementId doesn't implement Ord, so dedup using
+        // a HashSet-style pass that preserves insertion order.
+        {
+            let mut seen: std::collections::HashSet<ElementId> =
+                std::collections::HashSet::with_capacity(all_candidates.len());
+            all_candidates.retain(|eid| seen.insert(*eid));
+        }
         tracing::debug!(
             n_candidates = all_candidates.len(),
             packages = ?contributing_packages,
