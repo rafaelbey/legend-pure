@@ -20,16 +20,21 @@ version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-# Stage 1 (this crate) is metamodel-only: the `platform_dsl_mapping`
-# repo embeds without a section parser or processor. The deps below are
-# the minimum needed for `MappingExtension` to satisfy the
-# `CompilerExtension` trait. Stages 2+ will pull in `parser` (for the
-# `###Mapping` SectionParser), `compose`, `lexer`, `protocol`.
+# Stage 2 dependencies:
+# - parser-ast: AST node types (Lambda, Expression, SourceInfo, …)
+# - parser-parser: SectionParser trait + ParserContext for body grammar
+# - parser-lexer: TokenKind enum
+# - parser-pure: CompilerExtension trait
 [dependencies]
+legend-pure-parser-ast = { path = "../ast" }
+legend-pure-parser-parser = { path = "../parser" }
+legend-pure-parser-lexer = { path = "../lexer" }
 legend-pure-parser-pure = { path = "../pure" }
+legend-pure-parser-compose = { path = "../compose" }
+smol_str = { workspace = true }
 
 [dev-dependencies]
-# end_to_end.rs loads the embedded platform repos to assert that the
-# mapping metamodel resolves once Stage 1 has wired the descriptor.
+indoc = "2"
+# end_to_end.rs loads the embedded platform repos and exercises the
+# section parser end-to-end.
 legend-pure-core-platform = { path = "../core-platform-pure" }
-smol_str = { workspace = true }

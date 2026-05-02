@@ -12,35 +12,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # Legend Pure — Mapping DSL (Stage 1 scaffold)
+//! # Legend Pure — Mapping DSL (Stage 2)
 //!
-//! Stage 1 ships only:
+//! Stage 2 ships parser + AST + composer + a `declare`-only compiler
+//! extension that registers parsed `MappingDef`s under their FQN.
+//! Users can now write `###Mapping` blocks and have them parse,
+//! round-trip, and resolve through `MappingExtension::mappings()` —
+//! but **filter and transform lambdas are not lowered or validated
+//! yet**. Stage 3 adds the `PureInstanceSetImplementation` processor
+//! + validator + `MappingValidator` (DAG check).
 //!
-//! - The `platform_dsl_mapping` repo embedded by `core-platform-pure`
-//!   (descriptor in that crate's `Cargo.toml`).
-//! - A no-op [`compiler::MappingExtension`] so the `CompilerExtension`
-//!   registration site exists for future stages.
+//! Module map:
 //!
-//! The metamodel `.pure` files (`mapping.pure`, `functions_*.pure`,
-//! `result.pure`) are plain Pure and resolve as part of the regular
-//! platform compile. There is no `###Mapping` section parser yet, no
-//! processors, no validators, and no composer.
+//! - [`ast`] — `MappingDef`, `MappingInclude`, `ClassMapping`,
+//!   `ClassMappingBody` enum (Pure variant only), `PureClassMappingBody`,
+//!   `PurePropertyMapping`. `MappingDef` implements
+//!   [`legend_pure_parser_ast::dsl::DSLElement`] so it rides on the
+//!   core `Element::DSLElement` variant.
+//! - [`parser`] — `MappingSectionParser` plugs into
+//!   [`legend_pure_parser_parser::SectionParser`] and consumes
+//!   `###Mapping` section bodies. Sub-grammar dispatch by `parserName`
+//!   token; only `Pure` is supported in Stage 2 (others raise
+//!   `UnsupportedSubParser`).
+//! - [`compose`] — `compose_mapping` round-trips a `MappingDef` back to
+//!   canonical Pure source.
+//! - [`compiler`] — `MappingExtension` registers `MappingDef`s under
+//!   their FQN during `declare()`. No `define_signatures` /
+//!   `define_bodies` / `validate` work yet — Stage 3.
 //!
-//! Stages 2+ (separate sessions) will add:
-//!
-//! - `crates/dsl-mapping/src/parser.rs` — `###Mapping` `SectionParser`.
-//! - `crates/dsl-mapping/src/compiler.rs` (extended) — port of
-//!   `MappingValidator`, `PureInstanceSetImplementationProcessor`/
-//!   `Validator`, `EnumerationMappingProcessor`,
-//!   `OperationSetImplementationProcessor`,
-//!   `AggregationAwareProcessor`, `XStoreProcessor`/`Validator`,
-//!   `RelationFunctionInstanceSetImplementationProcessor`/`Validator`.
-//! - `crates/dsl-mapping/src/compose.rs` — round-trip composer.
-//!
-//! See `~/.claude/plans/what-is-left-to-iterative-sunrise.md` for the
+//! Stages 4–8 (separate sessions) extend the `ClassMappingBody` enum
+//! with `Enumeration`, `Operation`, `AggregationAware`, `XStore`,
+//! `Relation` variants and their processors. See
+//! `~/.claude/plans/what-is-left-to-iterative-sunrise.md` for the
 //! staged roadmap.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod ast;
 pub mod compiler;
+pub mod compose;
+pub mod parser;

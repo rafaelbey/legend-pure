@@ -967,7 +967,12 @@ dependencies = [
 name = "legend-pure-dsl-mapping"
 version = "0.1.0"
 dependencies = [
+ "indoc",
  "legend-pure-core-platform",
+ "legend-pure-parser-ast",
+ "legend-pure-parser-compose",
+ "legend-pure-parser-lexer",
+ "legend-pure-parser-parser",
  "legend-pure-parser-pure",
  "smol_str",
 ]

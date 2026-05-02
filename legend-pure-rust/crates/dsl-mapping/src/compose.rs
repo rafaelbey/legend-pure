@@ -1,0 +1,170 @@
+// Copyright 2026 Goldman Sachs
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Composer: emit `###Mapping` source from [`MappingDef`] AST.
+//!
+//! Round-trip contract: `parse(compose(m)) == m` modulo `source_info`
+//! fields. Verified by `tests/compose_smoke.rs`.
+
+use legend_pure_parser_ast::annotation::PackageableElementPtr;
+use legend_pure_parser_ast::expression::Expression;
+
+use crate::ast::{
+    ClassMapping, ClassMappingBody, MappingDef, MappingInclude, PureClassMappingBody,
+    PurePropertyMapping, StoreSubstitution,
+};
+
+/// Compose a single [`MappingDef`] back to its `Mapping pkg::M ( … )`
+/// source. Does not include the `###Mapping` section header — use
+/// [`compose_mapping_section`] for that.
+#[must_use]
+pub fn compose_mapping(m: &MappingDef) -> String {
+    let mut out = String::new();
+    write_mapping(&mut out, m);
+    out
+}
+
+/// Compose a list of mappings as a complete `###Mapping` section.
+#[must_use]
+pub fn compose_mapping_section(mappings: &[&MappingDef]) -> String {
+    let mut out = String::from("###Mapping\n");
+    for m in mappings {
+        write_mapping(&mut out, m);
+        out.push('\n');
+    }
+    out
+}
+
+fn write_mapping(out: &mut String, m: &MappingDef) {
+    out.push_str("Mapping ");
+    write_fqn(out, m.package.as_ref(), m.name.value.as_str());
+    out.push_str("\n(\n");
+    for inc in &m.includes {
+        write_include(out, inc);
+    }
+    for cm in &m.class_mappings {
+        write_class_mapping(out, cm);
+    }
+    out.push_str(")\n");
+}
+
+fn write_include(out: &mut String, inc: &MappingInclude) {
+    out.push_str("  include ");
+    write_ptr(out, &inc.included);
+    if !inc.store_substitutions.is_empty() {
+        out.push_str(" [");
+        for (i, sub) in inc.store_substitutions.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            write_substitution(out, sub);
+        }
+        out.push(']');
+    }
+    out.push('\n');
+}
+
+fn write_substitution(out: &mut String, sub: &StoreSubstitution) {
+    write_ptr(out, &sub.source);
+    out.push_str(" -> ");
+    write_ptr(out, &sub.target);
+}
+
+fn write_class_mapping(out: &mut String, cm: &ClassMapping) {
+    out.push_str("  ");
+    if cm.is_root {
+        out.push('*');
+    }
+    write_ptr(out, &cm.class);
+    if let Some(id) = &cm.id {
+        out.push('[');
+        out.push_str(id.as_str());
+        out.push(']');
+    }
+    if let Some(sup) = &cm.extends {
+        out.push_str(" extends [");
+        out.push_str(sup.as_str());
+        out.push(']');
+    }
+    out.push_str(" : ");
+    match &cm.body {
+        ClassMappingBody::Pure(body) => {
+            out.push_str("Pure");
+            if let Some(name) = &cm.mapping_name {
+                out.push(' ');
+                out.push_str(name.as_str());
+            }
+            out.push_str("\n  {\n");
+            write_pure_body(out, body);
+            out.push_str("  }\n");
+        }
+    }
+}
+
+fn write_pure_body(out: &mut String, body: &PureClassMappingBody) {
+    if let Some(src) = &body.src_class {
+        out.push_str("    ~src ");
+        write_ptr(out, src);
+        out.push('\n');
+    }
+    if let Some(filter) = &body.filter {
+        out.push_str("    ~filter ");
+        write_expression(out, filter);
+        out.push('\n');
+    }
+    for (i, pm) in body.property_mappings.iter().enumerate() {
+        write_property_mapping(out, pm);
+        if i + 1 < body.property_mappings.len() {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+}
+
+fn write_property_mapping(out: &mut String, pm: &PurePropertyMapping) {
+    out.push_str("    ");
+    out.push_str(pm.property_name.as_str());
+    out.push_str(" : ");
+    write_expression(out, &pm.transform);
+}
+
+fn write_ptr(out: &mut String, ptr: &PackageableElementPtr) {
+    if let Some(pkg) = &ptr.package {
+        out.push_str(&format!("{pkg}"));
+        out.push_str("::");
+    }
+    out.push_str(ptr.name.as_str());
+}
+
+fn write_fqn(
+    out: &mut String,
+    package: Option<&legend_pure_parser_ast::type_ref::Package>,
+    name: &str,
+) {
+    if let Some(pkg) = package {
+        out.push_str(&format!("{pkg}"));
+        out.push_str("::");
+    }
+    out.push_str(name);
+}
+
+/// Emit a Pure expression via the existing compose crate. Round-trip
+/// equality is asserted via re-parse in `tests/compose_smoke.rs`, so
+/// any unhandled shape manifests as a failing test rather than silent
+/// corruption.
+fn write_expression(out: &mut String, expr: &Expression) {
+    let mut w = legend_pure_parser_compose::writer::IndentWriter::new();
+    legend_pure_parser_compose::expression::compose_expression(&mut w, expr);
+    out.push_str(&w.finish());
+}
