@@ -84,6 +84,7 @@ fn embedded_and_filesystem_produce_equivalent_models() {
         fs_platform,
         Repo::embedded_platform_precise_primitives(),
         Repo::embedded_platform_dsl_store(),
+        Repo::embedded_platform_dsl_mapping(),
         Repo::embedded_platform_dsl_diagram(),
         Repo::embedded_platform_dsl_graph(),
         Repo::embedded_platform_dsl_tds(),

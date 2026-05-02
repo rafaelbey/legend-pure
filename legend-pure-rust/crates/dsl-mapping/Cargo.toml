@@ -1,0 +1,35 @@
+# Copyright 2026 Goldman Sachs
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[package]
+name = "legend-pure-dsl-mapping"
+description = "Mapping DSL scaffold for Legend Pure (`###Mapping` section + processors land in stages 2+)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Stage 1 (this crate) is metamodel-only: the `platform_dsl_mapping`
+# repo embeds without a section parser or processor. The deps below are
+# the minimum needed for `MappingExtension` to satisfy the
+# `CompilerExtension` trait. Stages 2+ will pull in `parser` (for the
+# `###Mapping` SectionParser), `compose`, `lexer`, `protocol`.
+[dependencies]
+legend-pure-parser-pure = { path = "../pure" }
+
+[dev-dependencies]
+# end_to_end.rs loads the embedded platform repos to assert that the
+# mapping metamodel resolves once Stage 1 has wired the descriptor.
+legend-pure-core-platform = { path = "../core-platform-pure" }
+smol_str = { workspace = true }

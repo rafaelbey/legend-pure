@@ -964,6 +964,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "legend-pure-dsl-mapping"
+version = "0.1.0"
+dependencies = [
+ "legend-pure-core-platform",
+ "legend-pure-parser-pure",
+ "smol_str",
+]
+
+[[package]]
 name = "legend-pure-dsl-store"
 version = "0.1.0"
 dependencies = [
