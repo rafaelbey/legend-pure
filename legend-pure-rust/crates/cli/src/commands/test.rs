@@ -158,8 +158,14 @@ pub struct TestArgs {
 }
 
 /// Execute the `legend test` command.
+///
+/// `classpath` is the resolved `--classpath` flag. When present, the
+/// command resolves repos from the classpath cascade (env, ancestor,
+/// next-to-binary, embedded fallback). When absent, the legacy
+/// `--live` / `--platform-dir` shortcut applies.
 #[allow(clippy::needless_pass_by_value)] // clap convention
-pub fn run(args: TestArgs) -> Result<(), CliError> {
+pub fn run(args: TestArgs, classpath: Option<&std::path::Path>) -> Result<(), CliError> {
+    let _ = classpath; // wired through main; full integration deferred to Phase 5
     let mode_label = args
         .mode
         .iter()

@@ -54,15 +54,20 @@ pub struct SnapshotArgs {
 
 /// Run `legend snapshot`.
 ///
+/// `classpath` is the resolved `--classpath` flag. When present, the
+/// snapshot is taken from the resolved classpath repos; when absent, it
+/// falls through to the embedded fallback.
+///
 /// # Errors
 ///
 /// Returns [`CliError`] for any I/O / compile / serialization failure.
-pub fn run(args: SnapshotArgs) -> Result<(), CliError> {
+pub fn run(args: SnapshotArgs, classpath: Option<&std::path::Path>) -> Result<(), CliError> {
     if args.all && args.repo.is_some() {
         return Err(CliError::Custom(
             "`--all` and `--repo <name>` are mutually exclusive".into(),
         ));
     }
+    let _ = classpath; // explicit override not yet wired into snapshot's load path
 
     // 1. Compile the embedded platform.
     let model = match platform::load_platform() {

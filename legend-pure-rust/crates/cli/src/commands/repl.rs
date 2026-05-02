@@ -86,8 +86,13 @@ pub struct ReplArgs {
 // ---------------------------------------------------------------------------
 
 /// Execute the `legend repl` command.
+///
+/// `classpath` is the resolved `--classpath` flag (currently a
+/// thread-through; full integration with the REPL's reload loop is
+/// deferred to a follow-up).
 #[allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
-pub fn run(args: ReplArgs) -> Result<(), CliError> {
+pub fn run(args: ReplArgs, classpath: Option<&std::path::Path>) -> Result<(), CliError> {
+    let _ = classpath;
     // Build the auto-import list once.
     let auto_imports: Vec<SmolStr> = PLATFORM_AUTO_IMPORTS
         .iter()

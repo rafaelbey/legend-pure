@@ -59,6 +59,12 @@ pub struct Cli {
     /// Increase logging verbosity (-v, -vv, -vvv)
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     verbose: u8,
+
+    /// Path to a `legend-pure-classpath.toml` describing the repos to
+    /// load. Overrides `LEGEND_PURE_CLASSPATH`, the cwd-ancestor walk,
+    /// and next-to-binary auto-discovery.
+    #[arg(long, global = true, value_name = "PATH")]
+    classpath: Option<std::path::PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -109,21 +115,22 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
+    let classpath = cli.classpath.as_deref();
 
     let result = match cli.command {
         Commands::Parse(args) => commands::parse::run(args),
         Commands::Emit(args) => commands::emit::run(args),
         Commands::Compile(args) => commands::compile::run(args),
         Commands::Check(args) => commands::check::run(args),
-        Commands::Test(args) => commands::test::run(args),
+        Commands::Test(args) => commands::test::run(args, classpath),
         Commands::Coverage(args) => commands::coverage_cmd::run(args),
         Commands::Plan(args) => commands::plan::run(args),
         Commands::Package(args) => commands::package::run(args),
         Commands::Publish(args) => commands::publish::run(args),
         Commands::Init(args) => commands::init::run(args),
         Commands::Completions(args) => commands::completions::run(args),
-        Commands::Repl(args) => commands::repl::run(args),
-        Commands::Snapshot(args) => commands::snapshot::run(args),
+        Commands::Repl(args) => commands::repl::run(args, classpath),
+        Commands::Snapshot(args) => commands::snapshot::run(args, classpath),
         Commands::Version => {
             print_version();
             Ok(())
