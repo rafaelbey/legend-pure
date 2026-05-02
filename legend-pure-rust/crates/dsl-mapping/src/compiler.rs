@@ -406,6 +406,27 @@ fn validate_class_mapping(
             }
             validate_xstore_body(body, &target_fqn, assoc_id, visible_ids, model, errors);
         }
+        ClassMappingBody::Foreign(_) => {
+            // Foreign DSL bodies are validated by the foreign DSL's
+            // own CompilerExtension (e.g. RelationalExtension), which
+            // downcasts via `as_any()`. dsl-mapping's responsibility
+            // ends at "the class FQN resolves" — most foreign DSLs
+            // are class-targeted; if a future DSL needs association
+            // targeting like XStore, the class-vs-association choice
+            // should live in a `ForeignClassMappingBody::target_kind()`
+            // method (deferred until a second foreign DSL exists).
+            if resolve_class(model, &target_fqn).is_none() {
+                errors.push(CompilationError {
+                    message: format!(
+                        "Class mapping target '{target_fqn}' does not resolve to a Class"
+                    ),
+                    source_info: cm.source_info.clone(),
+                    kind: CompilationErrorKind::UnresolvedElement {
+                        path: target_fqn.clone(),
+                    },
+                });
+            }
+        }
     }
 }
 
@@ -1354,6 +1375,12 @@ fn validate_nested_class_mapping(
                     kind: SmolStr::new_static("XStoreNestedUnderAggregationAware"),
                 },
             });
+        }
+        ClassMappingBody::Foreign(_) => {
+            // Foreign nested bodies (e.g. Relational under
+            // AggregationAware ~aggregateMapping) are validated by
+            // the foreign DSL's own CompilerExtension via downcast.
+            // dsl-mapping has nothing to add here.
         }
     }
 }

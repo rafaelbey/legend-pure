@@ -47,7 +47,7 @@ fn parse(name: &str, source: &str) -> SourceFile {
         source,
         name,
         legend_pure_parser_parser::island::default_island_parsers(),
-        vec![Box::new(MappingSectionParser)],
+        vec![Box::new(MappingSectionParser::new())],
     );
     match result {
         Ok(f) => f,

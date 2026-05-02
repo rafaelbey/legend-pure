@@ -45,7 +45,7 @@ fn parse(name: &str, source: &str) -> SourceFile {
         source,
         name,
         legend_pure_parser_parser::island::default_island_parsers(),
-        vec![Box::new(MappingSectionParser)],
+        vec![Box::new(MappingSectionParser::new())],
     );
     match result {
         Ok(f) => f,
@@ -61,7 +61,7 @@ fn try_parse(name: &str, source: &str) -> Result<SourceFile, Vec<String>> {
         source,
         name,
         legend_pure_parser_parser::island::default_island_parsers(),
-        vec![Box::new(MappingSectionParser)],
+        vec![Box::new(MappingSectionParser::new())],
     )
     .map_err(|p| p.errors.iter().map(ToString::to_string).collect())
 }

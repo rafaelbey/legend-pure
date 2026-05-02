@@ -26,7 +26,7 @@ fn parse(source: &str) -> SourceFile {
         source,
         "parser_smoke.pure",
         legend_pure_parser_parser::island::default_island_parsers(),
-        vec![Box::new(MappingSectionParser)],
+        vec![Box::new(MappingSectionParser::new())],
     );
     match result {
         Ok(f) => f,
@@ -131,10 +131,11 @@ fn parses_mapping_with_includes_and_root_marker() {
 }
 
 #[test]
-fn unknown_parser_name_errors_with_roadmap_hint() {
-    // `Relation` is reserved for Stage 8 and not yet supported —
-    // exercising the dispatch fallthrough that rejects unknown
-    // sub-parser names with a roadmap-pointing message.
+fn unknown_parser_name_errors_with_registration_hint() {
+    // `Relation` (note: not `Relational` — that's the registered
+    // foreign body parser kind) is not a built-in, exercising the
+    // dispatch fallthrough that rejects unknown sub-parser names
+    // and points at the registration mechanism.
     let source = indoc! {r"
         ###Mapping
         Mapping pkg::M
@@ -149,13 +150,14 @@ fn unknown_parser_name_errors_with_roadmap_hint() {
         source,
         "unknown_subparser.pure",
         legend_pure_parser_parser::island::default_island_parsers(),
-        vec![Box::new(MappingSectionParser)],
+        vec![Box::new(MappingSectionParser::new())],
     );
     let partial = result.expect_err("expected parse error for unsupported sub-parser");
     let msgs: Vec<String> = partial.errors.iter().map(ToString::to_string).collect();
     assert!(
         msgs.iter()
-            .any(|m| m.contains("Relation") && m.contains("Stage")),
-        "expected error mentioning the unsupported sub-parser name and roadmap; got {msgs:?}"
+            .any(|m| m.contains("Relation") && m.contains("with_body_parsers")),
+        "expected error mentioning the unsupported sub-parser name and the registration \
+         mechanism; got {msgs:?}"
     );
 }

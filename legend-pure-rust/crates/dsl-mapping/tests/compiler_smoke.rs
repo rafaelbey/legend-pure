@@ -27,7 +27,7 @@ fn parse(source: &str) -> SourceFile {
         source,
         "compiler_smoke.pure",
         legend_pure_parser_parser::island::default_island_parsers(),
-        vec![Box::new(MappingSectionParser)],
+        vec![Box::new(MappingSectionParser::new())],
     );
     match result {
         Ok(f) => f,

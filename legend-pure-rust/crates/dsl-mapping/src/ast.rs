@@ -173,8 +173,13 @@ pub struct ClassMapping {
 /// Class-mapping body sub-grammars.
 ///
 /// Each variant corresponds to a `parserName` keyword in the Java
-/// grammar. Remaining variant (`Relation`) arrives in Stage 8.
-/// Marked `#[non_exhaustive]` so adding variants is non-breaking.
+/// grammar. Marked `#[non_exhaustive]` so adding variants is
+/// non-breaking. The five built-in variants cover the M2 mapping
+/// surface; foreign DSLs (Relational, future stores) plug in via the
+/// [`Foreign`](Self::Foreign) variant by implementing
+/// [`ForeignClassMappingBody`] and registering a
+/// [`ClassMappingBodyParser`](crate::parser::ClassMappingBodyParser)
+/// — see `tests/foreign_body_parser.rs` for the registration shape.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum ClassMappingBody {
@@ -210,6 +215,74 @@ pub enum ClassMappingBody {
     /// the outer class-mapping FQN is reinterpreted as an
     /// `Association` FQN, not a `Class` FQN, by the validator.
     XStore(XStoreClassMappingBody),
+    /// Body produced by a foreign [`ClassMappingBodyParser`] —
+    /// e.g. Relational's `: Relational { ~mainTable [db]schema.tbl … }`
+    /// shape — registered with [`MappingSectionParser`] via
+    /// [`with_body_parsers`](crate::parser::MappingSectionParser::with_body_parsers).
+    /// dsl-mapping never inspects the inner content; the foreign DSL's
+    /// own [`CompilerExtension`](legend_pure_parser_pure::extension::CompilerExtension)
+    /// downcasts it via
+    /// [`ForeignClassMappingBody::as_any`] during validation.
+    Foreign(Box<dyn ForeignClassMappingBody>),
+}
+
+// ---------------------------------------------------------------------------
+// ForeignClassMappingBody — plug-in trait for store-DSL bodies
+// ---------------------------------------------------------------------------
+
+/// Plug-in trait for class-mapping body sub-grammars contributed by
+/// store DSLs (e.g. Relational's `: Relational { … }`,
+/// future BigQuery / Delta / etc.).
+///
+/// Mirrors the existing [`DSLElement`] trait shape used for
+/// section-level plug-ins. Built-in body sub-grammars (Pure,
+/// Enumeration, Operation, AggregationAware, XStore) live as enum
+/// variants on [`ClassMappingBody`]; foreign bodies travel through
+/// the [`ClassMappingBody::Foreign`] variant.
+///
+/// Implementations should be lightweight (parsed AST only — no
+/// validators). Validation belongs in the foreign DSL's
+/// [`CompilerExtension`](legend_pure_parser_pure::extension::CompilerExtension)
+/// implementation, which downcasts the `Foreign` variant back to its
+/// concrete type via [`as_any`](Self::as_any).
+pub trait ForeignClassMappingBody: std::fmt::Debug + Send + Sync {
+    /// The `parserName` token that produced this body (e.g. `"Relational"`).
+    /// Must match the [`kind()`](crate::parser::ClassMappingBodyParser::kind)
+    /// of the registered body parser.
+    fn kind(&self) -> &str;
+
+    /// Downcast support. Foreign DSL validators use this to recover
+    /// the concrete body type from a [`ClassMappingBody::Foreign`].
+    fn as_any(&self) -> &dyn std::any::Any;
+
+    /// Clone this body into a fresh `Box<dyn …>`. Required because
+    /// [`ClassMappingBody`] derives `Clone` and trait objects don't
+    /// implement `Clone` directly.
+    fn clone_box(&self) -> Box<dyn ForeignClassMappingBody>;
+
+    /// Structural equality against another body. Required because
+    /// [`ClassMappingBody`] derives `PartialEq` and trait objects
+    /// don't implement it directly. Implementations should downcast
+    /// `other` to their own concrete type and compare field-wise.
+    fn eq_content(&self, other: &dyn ForeignClassMappingBody) -> bool;
+
+    /// Append this body's grammar text — including the surrounding
+    /// `{ … }` braces — to `out`. Used by the composer's
+    /// round-trip path. The composer prints `: <kind> ` immediately
+    /// before this call, so the body itself owns only the body block.
+    fn compose(&self, out: &mut String);
+}
+
+impl Clone for Box<dyn ForeignClassMappingBody> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
+}
+
+impl PartialEq for Box<dyn ForeignClassMappingBody> {
+    fn eq(&self, other: &Self) -> bool {
+        self.eq_content(other.as_ref())
+    }
 }
 
 // ---------------------------------------------------------------------------
