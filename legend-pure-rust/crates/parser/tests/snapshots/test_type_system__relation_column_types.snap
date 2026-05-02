@@ -233,6 +233,7 @@ SourceFile {
                             },
                         ),
                         return_multiplicity: PureOne,
+                        constraints: [],
                         body: [
                             Variable(
                                 Variable {

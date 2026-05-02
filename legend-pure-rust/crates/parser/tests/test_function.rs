@@ -163,3 +163,23 @@ native function meta::pure::functions::date::now(): DateTime[1];",
     );
     insta::assert_debug_snapshot!(file);
 }
+
+#[test]
+fn function_with_constraint_block() {
+    // Real shape from
+    // `core_functions_standard/date/extract/dayOfWeekNumber.pure` —
+    // an optional `[name : expr, ...]` block sits between the return-
+    // multiplicity `]` and the body `{`. Mirrors the constraint slot
+    // already supported on `Class` definitions.
+    let file = parse_ok(
+        r"###Pure
+function my::test(x: Integer[1]): Integer[1]
+[
+   nonNegative : $x >= 0
+]
+{
+   $x + 1
+}",
+    );
+    insta::assert_debug_snapshot!(file);
+}

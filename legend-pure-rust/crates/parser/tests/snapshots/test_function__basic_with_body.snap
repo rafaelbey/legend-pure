@@ -83,6 +83,7 @@ SourceFile {
                             },
                         ),
                         return_multiplicity: PureOne,
+                        constraints: [],
                         body: [
                             Arithmetic(
                                 ArithmeticExpr {

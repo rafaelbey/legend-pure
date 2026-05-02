@@ -478,6 +478,22 @@ fn compose_function(w: &mut IndentWriter, f: &FunctionDef) {
     compose_function_params_and_return(w, f);
     w.newline();
 
+    // Constraints — same `[name : expr, ...]` block shape used by
+    // `compose_class`. Sits between the return type and the body.
+    if !f.constraints.is_empty() {
+        w.write_line("[");
+        w.push_indent();
+        for (i, con) in f.constraints.iter().enumerate() {
+            compose_constraint(w, con);
+            if i < f.constraints.len() - 1 {
+                w.write(",");
+            }
+            w.newline();
+        }
+        w.pop_indent();
+        w.write_line("]");
+    }
+
     // Body
     w.write_line("{");
     w.push_indent();
