@@ -99,10 +99,8 @@ fn write_single_blob(
     }
     let slice = slice_by_repo(model, user_range);
     let bytes = write_repo(&slice).map_err(|e| CliError::Custom(format!("write_repo: {e}")))?;
-    std::fs::write(&args.output, &bytes).map_err(|e| CliError::Custom(format!(
-        "writing {}: {e}",
-        args.output.display()
-    )))?;
+    std::fs::write(&args.output, &bytes)
+        .map_err(|e| CliError::Custom(format!("writing {}: {e}", args.output.display())))?;
     eprintln!(
         "wrote {} bytes ({} chunks, {} external refs) to {}",
         bytes.len(),

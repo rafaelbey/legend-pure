@@ -169,11 +169,7 @@ pub fn load_classpath(toml_path: &Path) -> Result<Classpath, ClasspathError> {
         None => parent.clone(),
         Some(r) => {
             let p = PathBuf::from(r);
-            if p.is_absolute() {
-                p
-            } else {
-                parent.join(p)
-            }
+            if p.is_absolute() { p } else { parent.join(p) }
         }
     };
 
