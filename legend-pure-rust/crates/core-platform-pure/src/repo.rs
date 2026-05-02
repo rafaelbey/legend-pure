@@ -145,6 +145,16 @@ impl Repo {
         }
     }
 
+    /// The default embedded `platform_dsl_mapping` repo.
+    #[must_use]
+    pub fn embedded_platform_dsl_mapping() -> Self {
+        Self::Embedded {
+            prefix: "/platform_dsl_mapping",
+            files: sources::REPO_PLATFORM_DSL_MAPPING_FILES,
+            meta: &sources::REPO_PLATFORM_DSL_MAPPING_META,
+        }
+    }
+
     /// The default embedded `platform_dsl_diagram` repo.
     #[must_use]
     pub fn embedded_platform_dsl_diagram() -> Self {
@@ -526,6 +536,7 @@ mod tests {
         assert!(names.contains(&"platform"));
         assert!(names.contains(&"platform_precise_primitives"));
         assert!(names.contains(&"platform_dsl_store"));
+        assert!(names.contains(&"platform_dsl_mapping"));
         assert!(names.contains(&"platform_dsl_diagram"));
         assert!(names.contains(&"platform_dsl_graph"));
         assert!(names.contains(&"platform_dsl_tds"));
@@ -542,6 +553,20 @@ mod tests {
             "pattern should constrain to graphFetch / functions::meta, got: {}",
             meta.pattern
         );
+    }
+
+    #[test]
+    fn embedded_platform_dsl_mapping_dependencies() {
+        let repo = Repo::embedded_platform_dsl_mapping();
+        let meta = repo.meta().expect("embedded repo carries meta");
+        assert_eq!(meta.name, "platform_dsl_mapping");
+        assert_eq!(meta.dependencies, &["platform", "platform_dsl_store"]);
+        assert!(
+            meta.pattern.contains("mapping") || meta.pattern.contains("metamodel"),
+            "pattern should constrain to meta::pure::mapping / metamodel, got: {}",
+            meta.pattern
+        );
+        assert_eq!(repo.prefix(), "/platform_dsl_mapping");
     }
 
     #[test]

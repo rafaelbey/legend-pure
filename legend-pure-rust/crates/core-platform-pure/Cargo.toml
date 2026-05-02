@@ -33,6 +33,13 @@ shape = "embedded"
 descriptor = "../../../legend-pure-dsl/legend-pure-dsl-store/legend-pure-m2-dsl-store-pure/src/main/resources/platform_dsl_store.definition.json"
 shape = "embedded"
 
+# Mapping depends on platform_dsl_store, so it must be embedded after it.
+# Manual ordering reinforces the descriptor's `dependencies` field; once
+# topological repo-load ordering lands (see backlog), this comment can go.
+[[package.metadata.legend-pure.repos]]
+descriptor = "../../../legend-pure-dsl/legend-pure-dsl-mapping/legend-pure-m2-dsl-mapping-pure/src/main/resources/platform_dsl_mapping.definition.json"
+shape = "embedded"
+
 [[package.metadata.legend-pure.repos]]
 descriptor = "../../../legend-pure-dsl/legend-pure-dsl-diagram/legend-pure-m2-dsl-diagram-pure/src/main/resources/platform_dsl_diagram.definition.json"
 shape = "embedded"
