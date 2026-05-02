@@ -51,6 +51,10 @@ use crate::types::TypeExpr;
 pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
     let mut errors = Vec::new();
 
+    // Repo-boundary visibility runs across every non-bootstrap chunk —
+    // cross-repo refs are inherently a multi-chunk concern.
+    errors.extend(validate_repo_visibility(model));
+
     // Only validate the current compilation chunk (the last one).
     // Bootstrap chunk (0) is compiler-trusted.
     let Some(chunk) = model.chunks.last() else {
@@ -412,6 +416,54 @@ fn validate_duplicate_properties(
             });
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Repo-boundary Visibility Validation
+// ---------------------------------------------------------------------------
+
+/// Walks every cross-repo `ElementId` reference and emits `NotVisible`
+/// errors for each target whose home repo is not in the use-site repo's
+/// declared dependencies. No-op when `model.repo_visibility` is empty,
+/// so existing tests that build a model without going through a real
+/// loader stay green.
+fn validate_repo_visibility(model: &PureModel) -> Vec<CompilationError> {
+    use crate::purem::walk::walk_element_ids;
+    use crate::visibility::{check_element_visible, source_repo_name};
+
+    let mut errors = Vec::new();
+    if model.repo_visibility.is_empty() {
+        return errors;
+    }
+
+    // Skip chunk 0 (bootstrap) — its source has no repo prefix.
+    for chunk in model.chunks.iter().skip(1) {
+        for (local_idx, _element) in chunk.elements.iter() {
+            let node = chunk.nodes.get(local_idx);
+            let use_site = &node.source_info.source;
+            if source_repo_name(use_site).is_none() {
+                continue;
+            }
+
+            // Clone the element so we can drive the mutable visitor
+            // read-only. Element clone is O(its refs) so this is fine
+            // at validate time.
+            let mut owned = chunk.elements.get(local_idx).clone();
+            walk_element_ids(&mut owned, |target| {
+                if let Some(violation) = check_element_visible(model, use_site, *target) {
+                    errors.push(CompilationError {
+                        message: violation.message(),
+                        source_info: node.source_info.clone(),
+                        kind: CompilationErrorKind::NotVisible {
+                            target_fqn: violation.target_fqn,
+                            source_id: violation.use_site_source,
+                        },
+                    });
+                }
+            });
+        }
+    }
+    errors
 }
 
 // ---------------------------------------------------------------------------
