@@ -54,11 +54,16 @@
 //! whose elements carry executable bodies (e.g. Mapping property
 //! mappings) also overrides `define_bodies`.
 
+use std::collections::HashMap;
+
+use legend_pure_parser_ast::SourceInfo;
+use legend_pure_parser_ast::expression::Expression;
 use legend_pure_parser_ast::section::SourceFile;
 use smol_str::SmolStr;
 
 use crate::error::CompilationError;
 use crate::model::PureModel;
+use crate::types::{Multiplicity, Parameter, ResolvedType, TypeExpr};
 
 /// Context passed to [`CompilerExtension::declare`].
 ///
@@ -98,6 +103,13 @@ pub struct DefineCtx<'a> {
 pub struct ValidateCtx<'a> {
     /// The frozen model.
     pub model: &'a PureModel,
+    /// Auto-imports applied to every section in this compilation. The
+    /// list is the same one supplied to the `compile_with_extensions`
+    /// caller; extensions need it to drive
+    /// [`lower_and_infer_expression`] over user-supplied AST that
+    /// references unqualified bootstrap identifiers (`String`,
+    /// `Boolean`, `isEmpty`, …).
+    pub auto_imports: &'a [SmolStr],
     /// Accumulated compilation errors.
     pub errors: &'a mut Vec<CompilationError>,
 }
@@ -122,4 +134,108 @@ pub trait CompilerExtension {
 
     /// Pass 3 — validate. Default no-op.
     fn validate(&self, _ctx: &mut ValidateCtx<'_>) {}
+}
+
+// ---------------------------------------------------------------------------
+// Lower-and-infer wrapper
+// ---------------------------------------------------------------------------
+
+/// Lower an AST [`Expression`] to a `ValueSpec`, then run type
+/// inference against `model` with the supplied variable `bindings` in
+/// scope. Returns the inferred [`ResolvedType`] of the expression, or
+/// `None` if lowering or inference produced no usable type.
+///
+/// Designed for compiler-extension consumers (Mapping DSL filter and
+/// transform expressions; future Function-DSL bodies; Relational
+/// derived columns) that own AST `Expression` nodes outside the main
+/// pipeline and need to validate them against the model. Internally
+/// constructs a `ResolutionContext` (private to the `pure` crate)
+/// from the public inputs — extensions never see that type.
+///
+/// # Arguments
+///
+/// - `model` — the frozen [`PureModel`] containing the elements that
+///   the expression may reference. Pass `ctx.model` from
+///   [`ValidateCtx`].
+/// - `auto_imports` — package paths whose elements resolve unqualified
+///   inside `expr` (e.g. `meta::pure::metamodel::type` for primitive
+///   types). Use the same list passed to
+///   [`crate::pipeline::compile_with_extensions`].
+/// - `expr` — the AST expression to lower and infer.
+/// - `bindings` — variables visible at the start of the expression
+///   (`(name, type, multiplicity)` triples). For Mapping bodies this
+///   is `[("src", srcClass, Multiplicity::PureOne)]`.
+/// - `errors` — accumulator. Lowering and inference both push here on
+///   failure; partial results are still observable.
+///
+/// # Returns
+///
+/// `Some(ResolvedType)` when the expression lowered cleanly and
+/// inference produced a top-level type; `None` if either step failed
+/// (errors are still appended to `errors`).
+///
+/// # Limitations
+///
+/// - **Type parameters**: this wrapper passes an empty
+///   `type_parameters: &[]` to the resolver. Expressions whose
+///   surrounding context binds generic type parameters (e.g. a Mapping
+///   over `pkg::List<X>` whose body refers to `X`) will report `X` as
+///   "unresolved generic" rather than honoring the declared
+///   parameter. When that case becomes load-bearing (likely Stage 4 —
+///   `EnumerationMapping<T>` — or later when generic Mappings appear),
+///   add a `type_parameters: &[SmolStr]` argument and thread it into
+///   `ResolutionContext::type_parameters`. The fix is local to this
+///   function.
+#[allow(clippy::implicit_hasher)] // public API; HashMap default hasher is fine
+pub fn lower_and_infer_expression(
+    model: &PureModel,
+    auto_imports: &[SmolStr],
+    expr: &Expression,
+    bindings: &[(SmolStr, TypeExpr, Multiplicity)],
+    errors: &mut Vec<CompilationError>,
+) -> Option<ResolvedType> {
+    // Build the import scopes the resolver needs. We don't hold the
+    // pub(crate) `ImportScope` type in the public surface — it's
+    // constructed inside this function and dropped at return.
+    let import_scopes: Vec<crate::resolve::ImportScope> = auto_imports
+        .iter()
+        .map(|p| crate::resolve::ImportScope::from_path_str(p.as_str()))
+        .collect();
+    let mut resolve_cache = HashMap::new();
+    let variable_types: HashMap<SmolStr, (TypeExpr, Multiplicity)> = bindings
+        .iter()
+        .map(|(name, t, m)| (name.clone(), (t.clone(), m.clone())))
+        .collect();
+    let type_parameters: Vec<SmolStr> = Vec::new();
+
+    let mut ctx = crate::resolve::ResolutionContext {
+        model,
+        import_scopes: &import_scopes,
+        resolve_cache: &mut resolve_cache,
+        type_parameters: &type_parameters,
+        variable_types,
+    };
+
+    // Lower AST → ValueSpec.
+    let value_spec = crate::lower::lower_expression(expr, &mut ctx, errors)?;
+
+    // Build the parameter list for inference. The `source_info` here
+    // is synthetic — the binding originates from the consumer
+    // (e.g. an injected `src` for a mapping body), not from real
+    // source tokens.
+    let synthetic_si = SourceInfo::new("<lower_and_infer_expression>", 0, 0, 0, 0);
+    let params: Vec<Parameter> = bindings
+        .iter()
+        .map(|(name, t, m)| Parameter {
+            name: name.clone(),
+            type_expr: t.clone(),
+            multiplicity: m.clone(),
+            source_info: synthetic_si.clone(),
+        })
+        .collect();
+
+    let mut body = vec![value_spec];
+    crate::infer::infer_function_body(model, &params, &mut body, errors);
+
+    body.into_iter().next()?.type_info.map(|t| *t)
 }
