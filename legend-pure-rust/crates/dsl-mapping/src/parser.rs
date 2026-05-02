@@ -16,8 +16,9 @@
 //!
 //! Recognises a stream of `Mapping pkg::M ( includes* classMappings* )`
 //! declarations whose class-mapping bodies are dispatched by
-//! `parserName` token. Currently supports `Pure` (model-to-model) and
-//! `EnumerationMapping` (Stage 4). Other parser names produce an
+//! `parserName` token. Currently supports `Pure` (model-to-model),
+//! `EnumerationMapping` (Stage 4), and `Operation` (Stage 5, simple
+//! parameters form). Other parser names produce an
 //! `UnsupportedSubParser` error pointing at the staged roadmap.
 //!
 //! Mirrors `legend-pure-dsl-mapping/.../MappingParser.g4` for the
@@ -38,8 +39,8 @@ use smol_str::SmolStr;
 
 use crate::ast::{
     ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping, EnumerationClassMappingBody,
-    MappingDef, MappingInclude, PureClassMappingBody, PurePropertyMapping, SECTION_KIND,
-    StoreSubstitution,
+    MappingDef, MappingInclude, OperationClassMappingBody, OperationParameter,
+    PureClassMappingBody, PurePropertyMapping, SECTION_KIND, StoreSubstitution,
 };
 
 fn err_unexpected(expected: &str, found: &str, source_info: SourceInfo) -> ParseError {
@@ -220,12 +221,14 @@ fn parse_class_mapping(ctx: &mut ParserContext<'_>) -> Result<ClassMapping, Pars
     let body = match parser_name.as_str() {
         "Pure" => ClassMappingBody::Pure(Box::new(parse_pure_body(ctx)?)),
         "EnumerationMapping" => ClassMappingBody::Enumeration(parse_enumeration_body(ctx)?),
+        "Operation" => ClassMappingBody::Operation(parse_operation_body(ctx)?),
         other => {
             return Err(ParseError::Unexpected {
                 message: format!(
-                    "Mapping sub-parser '{other}' is not supported yet (Stages 2/4 ship 'Pure' \
-                     and 'EnumerationMapping'; Operation/AggregationAware/XStore/Relation arrive \
-                     in Stages 5–8 — see ~/.claude/plans/what-is-left-to-iterative-sunrise.md)"
+                    "Mapping sub-parser '{other}' is not supported yet (Stages 2/4/5 ship \
+                     'Pure', 'EnumerationMapping', and 'Operation'; AggregationAware/XStore/\
+                     Relation arrive in Stages 6–8 — see \
+                     ~/.claude/plans/what-is-left-to-iterative-sunrise.md)"
                 ),
                 source_info: parser_name_si,
             });
@@ -423,6 +426,58 @@ fn parse_enum_source_value(ctx: &mut ParserContext<'_>) -> Result<EnumSourceValu
             source_info: tok.source_info,
         }),
     }
+}
+
+// ---------------------------------------------------------------------------
+// OperationClassMappingBody — Stage 5 (simple parameters form)
+// ---------------------------------------------------------------------------
+
+fn parse_operation_body(
+    ctx: &mut ParserContext<'_>,
+) -> Result<OperationClassMappingBody, ParseError> {
+    ctx.cursor().expect(TokenKind::LBrace)?;
+
+    let operation = parse_packageable_ptr(ctx)?;
+    ctx.cursor().expect(TokenKind::LParen)?;
+
+    let mut parameters = Vec::new();
+    if !ctx.cursor().check(TokenKind::RParen) {
+        // Reject the `mergeParameters` form (`[id, ...], { lambda }`)
+        // up-front rather than mis-parsing it as an empty parameter
+        // list. The simple form's first token is an identifier
+        // (parameter ID); the merge form's first token is `[`.
+        if ctx.cursor().check(TokenKind::LBracket) {
+            let tok = ctx.cursor().peek().clone();
+            return Err(ParseError::Unexpected {
+                message:
+                    "Operation `mergeParameters` form (`[id, …], { lambda }`) is not supported \
+                     yet — Stage 5 ships only the simple `(id, …)` parameter form; merge \
+                     arrives in a follow-up sub-stage."
+                        .to_string(),
+                source_info: tok.source_info,
+            });
+        }
+        loop {
+            let id_tok = ctx.cursor().expect(TokenKind::Identifier)?;
+            parameters.push(OperationParameter {
+                id: SmolStr::new(id_tok.text.clone()),
+                source_info: id_tok.source_info,
+            });
+            if !ctx.cursor().eat(TokenKind::Comma) {
+                break;
+            }
+        }
+    }
+    ctx.cursor().expect(TokenKind::RParen)?;
+    // Optional `;` line terminator (matches Java `END_LINE?` in the
+    // grammar). Some users write it, some don't.
+    ctx.cursor().eat(TokenKind::Semicolon);
+    ctx.cursor().expect(TokenKind::RBrace)?;
+
+    Ok(OperationClassMappingBody {
+        operation,
+        parameters,
+    })
 }
 
 // ---------------------------------------------------------------------------

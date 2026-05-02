@@ -21,13 +21,15 @@
 //! in the Java grammar) and contains a [`ClassMappingBody`] whose
 //! variants correspond to the sub-parsers.
 //!
-//! Stage 2 ships only the [`ClassMappingBody::Pure`] variant
-//! (model-to-model, `PureInstanceSetImplementation`). Other variants
-//! (Enumeration, Operation, AggregationAware, XStore, Relation) are
-//! added in Stages 4+; the enum is `#[non_exhaustive]` so adding a
-//! variant is non-breaking. Hitting an unknown `parserName` at parse
-//! time produces an `UnsupportedSubParser` error pointing at the
-//! roadmap.
+//! Currently supported variants: [`ClassMappingBody::Pure`]
+//! (model-to-model, `PureInstanceSetImplementation`),
+//! [`ClassMappingBody::Enumeration`] (Stage 4), and
+//! [`ClassMappingBody::Operation`] (Stage 5, simple parameters
+//! form — merge form deferred). Remaining variants
+//! (`AggregationAware`, `XStore`, `Relation`) arrive in Stages 6–8;
+//! the enum is `#[non_exhaustive]` so adding a variant is
+//! non-breaking. Hitting an unknown `parserName` at parse time
+//! produces an `UnsupportedSubParser` error pointing at the roadmap.
 
 use std::any::Any;
 
@@ -166,8 +168,8 @@ pub struct ClassMapping {
 /// Class-mapping body sub-grammars.
 ///
 /// Each variant corresponds to a `parserName` keyword in the Java
-/// grammar. Stages 5+ add the remaining variants
-/// (`Operation`, `AggregationAware`, `XStore`, `Relation`).
+/// grammar. Remaining variants (`AggregationAware`, `XStore`,
+/// `Relation`) arrive in Stages 6–8.
 /// Marked `#[non_exhaustive]` so adding variants is non-breaking.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -183,6 +185,10 @@ pub enum ClassMappingBody {
     /// (strings / integers / external enum values) onto target enum
     /// values (`EnumerationMapping<T>` in the metamodel).
     Enumeration(EnumerationClassMappingBody),
+    /// `parserName == "Operation"` — function-driven combinator that
+    /// composes other set implementations (e.g. union, inheritance).
+    /// Maps onto `OperationSetImplementation` in the metamodel.
+    Operation(OperationClassMappingBody),
 }
 
 // ---------------------------------------------------------------------------
@@ -273,6 +279,49 @@ pub struct EnumValueMapping {
     /// produce a multi-element vec.
     pub source_values: Vec<EnumSourceValue>,
     /// Span of the entire `enumValueName : …` entry.
+    pub source_info: SourceInfo,
+}
+
+// ---------------------------------------------------------------------------
+// OperationClassMappingBody — Stage 5
+// ---------------------------------------------------------------------------
+
+/// Body of an `Operation` class mapping.
+///
+/// Shape:
+/// ```text
+/// {
+///   pkg::operations::union_OperationSetImplementation_1__SetImplementation_MANY_(rel1, rel2)
+/// }
+/// ```
+///
+/// The function path is typically a mangled FQN (Java's exact-FQN
+/// dispatch convention) of a function whose signature is
+/// `OperationSetImplementation[1] -> SetImplementation[*]`. Each
+/// parameter is a sibling class-mapping ID (whether explicit `[id]`
+/// or implicit class-name default).
+///
+/// This Stage-5 variant covers the simple `parameters` form; the
+/// `mergeParameters` form (with a validation lambda) is reserved for
+/// a follow-up sub-stage and would extend this struct (or split into
+/// a sibling `Merge` variant) when added.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OperationClassMappingBody {
+    /// FQN of the operation function.
+    pub operation: PackageableElementPtr,
+    /// Set-implementation IDs combined by the operation, in source
+    /// order. Empty allowed (matches Java grammar's `()` form).
+    pub parameters: Vec<OperationParameter>,
+}
+
+/// One set-implementation-ID parameter inside an
+/// [`OperationClassMappingBody`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct OperationParameter {
+    /// The referenced class-mapping ID.
+    pub id: SmolStr,
+    /// Span of the ID token, used to pin per-parameter validator
+    /// diagnostics back to source.
     pub source_info: SourceInfo,
 }
 
