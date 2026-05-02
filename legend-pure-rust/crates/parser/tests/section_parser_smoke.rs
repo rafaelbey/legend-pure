@@ -30,7 +30,6 @@ use legend_pure_parser_ast::element::{Annotated, Element, PackageableElement};
 use legend_pure_parser_ast::source_info::{SourceInfo, Spanned};
 use legend_pure_parser_ast::type_ref::{Identifier, Package};
 use legend_pure_parser_lexer::TokenKind;
-use legend_pure_parser_parser::cursor::Cursor;
 use legend_pure_parser_parser::error::ParseError;
 use legend_pure_parser_parser::section_parser::SectionParser;
 
@@ -100,9 +99,10 @@ impl SectionParser for MockSectionParser {
 
     fn parse_body(
         &self,
-        cursor: &mut Cursor,
+        ctx: &mut legend_pure_parser_parser::ParserContext<'_>,
         _errors: &mut Vec<ParseError>,
     ) -> Vec<Box<dyn DSLElement>> {
+        let cursor = ctx.cursor();
         let mut out: Vec<Box<dyn DSLElement>> = Vec::new();
         while !cursor.check(TokenKind::SectionHeader) && !cursor.check(TokenKind::Eof) {
             if cursor.check(TokenKind::Identifier) {

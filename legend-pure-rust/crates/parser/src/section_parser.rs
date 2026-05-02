@@ -44,7 +44,7 @@
 
 use legend_pure_parser_ast::dsl::DSLElement;
 
-use crate::cursor::Cursor;
+use crate::ParserContext;
 use crate::error::ParseError;
 
 /// Plug-in for parsing the body of a non-`Pure` section (e.g. `###Diagram`).
@@ -52,24 +52,32 @@ use crate::error::ParseError;
 /// The core parser handles section detection, header parsing, and
 /// import statements. Once the body begins, dispatch delegates to a
 /// matching `SectionParser` if one is registered for the section
-/// kind. The plug-in consumes tokens through the supplied [`Cursor`]
-/// up to the next section boundary or EOF and returns the parsed
-/// [`DSLElement`]s.
+/// kind. The plug-in consumes tokens through the supplied
+/// [`ParserContext`] up to the next section boundary or EOF and
+/// returns the parsed [`DSLElement`]s.
+///
+/// `ParserContext` is the same handle that island parsers receive —
+/// it gives both raw cursor access (`ctx.cursor()`) and high-level
+/// helpers (`ctx.parse_expression()`, `ctx.parse_qualified_name()`,
+/// …). DSLs whose body grammar embeds Pure expressions (Mapping's
+/// filter and transform lambdas, future Function-DSL bodies) need
+/// `parse_expression`; lower-level DSLs (Diagram) can ignore the
+/// helpers and just use the cursor.
 pub trait SectionParser: Send + Sync {
     /// Section header that this parser handles, without the leading
     /// `###`. For example, `"Diagram"` matches `###Diagram`.
     fn kind(&self) -> &str;
 
     /// Parse the body of a section of [`kind`](Self::kind). Consumes
-    /// from `cursor` up to (but not past) the next section header or
-    /// EOF.
+    /// from `ctx.cursor()` up to (but not past) the next section
+    /// header or EOF.
     ///
     /// Element-level errors are pushed onto `errors`; the parser is
     /// expected to recover and continue rather than abort the whole
     /// section.
     fn parse_body(
         &self,
-        cursor: &mut Cursor,
+        ctx: &mut ParserContext<'_>,
         errors: &mut Vec<ParseError>,
     ) -> Vec<Box<dyn DSLElement>>;
 }

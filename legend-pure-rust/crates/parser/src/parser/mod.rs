@@ -193,9 +193,12 @@ impl Parser {
             .position(|p| p.kind() == kind.as_str())
         {
             // Take the parser out of the Vec to avoid an aliasing
-            // borrow on `self`. The plug-in only needs the cursor.
+            // borrow on `self` while constructing the ParserContext.
             let plug_in = self.section_parsers.swap_remove(idx);
-            let dsl_elements = plug_in.parse_body(&mut self.cursor, errors);
+            let dsl_elements = {
+                let mut ctx = ParserContext { parser: self };
+                plug_in.parse_body(&mut ctx, errors)
+            };
             // Restore the parser; order doesn't matter since lookup
             // is by kind, not index.
             self.section_parsers.push(plug_in);

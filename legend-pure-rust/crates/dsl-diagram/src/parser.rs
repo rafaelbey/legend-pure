@@ -31,6 +31,7 @@ use legend_pure_parser_ast::annotation::SpannedString;
 use legend_pure_parser_ast::dsl::DSLElement;
 use legend_pure_parser_ast::type_ref::{Identifier, Package, TypeReference};
 use legend_pure_parser_lexer::TokenKind;
+use legend_pure_parser_parser::ParserContext;
 use legend_pure_parser_parser::cursor::Cursor;
 use legend_pure_parser_parser::error::ParseError;
 use legend_pure_parser_parser::section_parser::SectionParser;
@@ -64,9 +65,10 @@ impl SectionParser for DiagramSectionParser {
 
     fn parse_body(
         &self,
-        cursor: &mut Cursor,
+        ctx: &mut ParserContext<'_>,
         errors: &mut Vec<ParseError>,
     ) -> Vec<Box<dyn DSLElement>> {
+        let cursor = ctx.cursor();
         let mut out: Vec<Box<dyn DSLElement>> = Vec::new();
         while !cursor.check(TokenKind::SectionHeader) && !cursor.check(TokenKind::Eof) {
             // Each iteration must make progress on either Ok or Err to
