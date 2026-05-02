@@ -58,8 +58,7 @@ fn manifest() -> Option<&'static serde_json::Value> {
 #[must_use]
 pub fn rust_native_adapter_id(model: &PureModel) -> Option<ElementId> {
     let path = manifest()?.get("adapter")?.as_str()?;
-    let segments: Vec<SmolStr> = path.split("::").map(SmolStr::new).collect();
-    model.resolve_by_path(&segments)
+    model.resolve_fqn_str(path)
 }
 
 /// Build the `exclusions` argument expected by

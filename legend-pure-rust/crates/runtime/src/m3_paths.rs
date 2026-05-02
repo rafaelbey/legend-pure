@@ -30,7 +30,6 @@
 
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::PureModel;
-use smol_str::SmolStr;
 
 type Classifier = str;
 
@@ -208,11 +207,10 @@ pub const EQUALITY_PROFILE: &Classifier = "meta::pure::profiles::equality";
 /// any segment doesn't resolve. Used alongside the constants above to
 /// compare heap-object classifiers by structural identity instead of
 /// textual suffix matching.
+///
+/// Delegates to [`PureModel::resolve_fqn_str`] which walks segments
+/// inline — no per-call `Vec<SmolStr>` allocation.
 #[must_use]
 pub fn resolve(model: &PureModel, fqn: &Classifier) -> Option<ElementId> {
-    if fqn.is_empty() {
-        return None;
-    }
-    let segments: Vec<SmolStr> = fqn.split("::").map(SmolStr::new).collect();
-    model.resolve_by_path(&segments)
+    model.resolve_fqn_str(fqn)
 }

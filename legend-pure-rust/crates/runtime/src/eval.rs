@@ -1647,13 +1647,8 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 .heap
                 .classifier(&obj_id)
                 .map_err(PureException::from)?
-                .to_string();
-            let segments: Vec<SmolStr> = if classifier.is_empty() {
-                Vec::new()
-            } else {
-                classifier.split("::").map(SmolStr::new).collect()
-            };
-            if let Some(class_id) = self.model.resolve_by_path(&segments)
+                .clone();
+            if let Some(class_id) = self.model.resolve_fqn_str(classifier.as_str())
                 && let Element::Class(class) = self.model.get_element(class_id)
                 && let Some(qp) = class
                     .qualified_properties
@@ -2238,12 +2233,8 @@ impl<H: EvalHooks> crate::native::EvalContextTrait for EvalContext<'_, '_, H> {
             .heap
             .classifier(&obj_id)
             .map_err(PureException::from)?
-            .to_string();
-        if classifier.is_empty() {
-            return Ok(None);
-        }
-        let segments: Vec<SmolStr> = classifier.split("::").map(SmolStr::new).collect();
-        let Some(class_id) = self.evaluator.model.resolve_by_path(&segments) else {
+            .clone();
+        let Some(class_id) = self.evaluator.model.resolve_fqn_str(classifier.as_str()) else {
             return Ok(None);
         };
         let Some(found) =
