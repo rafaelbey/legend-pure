@@ -255,34 +255,56 @@ fn parse_column_type(ctx: &mut ParserContext<'_>) -> Result<TDSColumnType, Parse
 // ---------------------------------------------------------------------------
 
 fn parse_cell(ctx: &mut ParserContext<'_>) -> Result<TDSCell, ParseError> {
-    // A cell is one token in the simple grammar — a literal or a
-    // bare identifier. Future versions may concatenate multi-token
-    // values (e.g. quoted strings with embedded commas keep their
-    // single-token shape because the lexer treats them atomically).
-    let tok = ctx.cursor().peek().clone();
-    if !is_cell_token(tok.kind) {
+    // CSV semantics: a TDS cell is the sequence of tokens on a single
+    // row line between two commas (or between row-start/`#` and a
+    // comma). Most cells collapse to one token — `1`, `aa`, `'foo'` —
+    // but several real shapes span tokens:
+    //
+    //  - Negatives: `-3` is `[Minus, IntegerLiteral]`.
+    //  - Decimals: `99.99D` is one `DecimalLiteral`, but `-99.99D` is
+    //    `[Minus, DecimalLiteral]`.
+    //  - Unquoted datetimes: `2024-01-29T00:32:34.000+0000` arrives as
+    //    many tokens (identifier `T00`, `:`, integers, `+`, …).
+    //
+    // The Java side delegates to Deephaven CSV which is character-
+    // delimited, not token-delimited; we mirror that by gathering every
+    // token on the same source line until we hit `,`, `#`, EOF, or a
+    // newline. Concatenating `text` reconstructs the source-form value
+    // since the lexer eats whitespace and TDS cells don't have
+    // meaningful internal whitespace outside of quoted strings (which
+    // arrive atomically as `StringLiteral`).
+    let first = ctx.cursor().peek().clone();
+    if matches!(
+        first.kind,
+        TokenKind::Comma | TokenKind::Hash | TokenKind::Eof
+    ) {
         return Err(ParseError::Unexpected {
             message: format!(
-                "Expected TDS cell value (literal or identifier), found {}",
-                tok.kind.description()
+                "Expected TDS cell value, found {}",
+                first.kind.description()
             ),
-            source_info: tok.source_info,
+            source_info: first.source_info,
         });
     }
-    ctx.cursor().advance();
-    Ok(TDSCell {
-        raw: tok.text,
-        source_info: tok.source_info,
-    })
-}
+    let start_si = first.source_info.clone();
+    let start_line = first.source_info.start_line;
+    let mut raw = String::new();
 
-fn is_cell_token(kind: TokenKind) -> bool {
-    matches!(
-        kind,
-        TokenKind::IntegerLiteral
-            | TokenKind::FloatLiteral
-            | TokenKind::StringLiteral
-            | TokenKind::True
-            | TokenKind::False
-    ) || kind.is_identifier_like()
+    loop {
+        let cur = ctx.cursor().peek();
+        if matches!(
+            cur.kind,
+            TokenKind::Comma | TokenKind::Hash | TokenKind::Eof
+        ) || cur.source_info.start_line != start_line
+        {
+            break;
+        }
+        let tok = ctx.cursor().advance().clone();
+        raw.push_str(tok.text.as_str());
+    }
+
+    Ok(TDSCell {
+        raw: SmolStr::new(raw),
+        source_info: start_si,
+    })
 }

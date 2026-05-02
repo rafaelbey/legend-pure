@@ -139,3 +139,56 @@ fn empty_rows_section_parses_with_only_header() {
     assert_eq!(col_names, vec!["a", "b", "c"]);
     assert_eq!(tds.rows.len(), 0);
 }
+
+#[test]
+fn cells_accept_unquoted_datetime_literals() {
+    // Real shape from `core_functions_relation/relation/functions/olap/reduce.pure`.
+    // The lexer breaks `2024-01-29T00:32:34.000000000+0000` into many tokens
+    // (identifier `T00`, `:`, integers, `.`, `+`, …); CSV-style cell parsing
+    // collects them all into one `TDSCell.raw` until the next `,` or row end.
+    let expr = parse_first_expression(indoc! {"
+        #TDS
+          p, o, i
+          0, 2024-01-29T00:32:34.000000000+0000, 10
+          100, 2024-01-31T00:32:34.000000000+0000, 30
+        #
+    "});
+    let tds = assert_tds(&expr);
+
+    assert_eq!(tds.rows.len(), 2);
+    assert_eq!(tds.rows[0][0].raw.as_str(), "0");
+    assert_eq!(
+        tds.rows[0][1].raw.as_str(),
+        "2024-01-29T00:32:34.000000000+0000"
+    );
+    assert_eq!(tds.rows[0][2].raw.as_str(), "10");
+    assert_eq!(
+        tds.rows[1][1].raw.as_str(),
+        "2024-01-31T00:32:34.000000000+0000"
+    );
+}
+
+#[test]
+fn cells_accept_negative_integers_and_decimals() {
+    // Real shape from `core_dataquality_test/dataquality_relation_helper_test.pure`
+    // (negatives) and several `core_functions_standard/math/aggregator/*.pure`
+    // (decimals/floats). The lexer emits `-3` as `[Minus, IntegerLiteral]` —
+    // `parse_cell` must consume both and concatenate into a single
+    // `TDSCell.raw`.
+    let expr = parse_first_expression(indoc! {"
+        #TDS
+          v: Integer, f: Float, d: Decimal
+          -3, -3.14, 99.99D
+          42, 0.5, -10.0D
+        #
+    "});
+    let tds = assert_tds(&expr);
+
+    assert_eq!(tds.rows.len(), 2);
+    assert_eq!(tds.rows[0][0].raw.as_str(), "-3");
+    assert_eq!(tds.rows[0][1].raw.as_str(), "-3.14");
+    assert_eq!(tds.rows[0][2].raw.as_str(), "99.99D");
+    assert_eq!(tds.rows[1][0].raw.as_str(), "42");
+    assert_eq!(tds.rows[1][1].raw.as_str(), "0.5");
+    assert_eq!(tds.rows[1][2].raw.as_str(), "-10.0D");
+}
