@@ -1531,13 +1531,8 @@ fn resolve_value_type(
             Ok(*id)
         }
         Value::Object(obj_id) => {
-            let classifier = heap.classifier(&obj_id.clone())?;
-            let segments: Vec<SmolStr> = if classifier.is_empty() {
-                Vec::new()
-            } else {
-                classifier.split("::").map(SmolStr::new).collect()
-            };
-            model.resolve_by_path(&segments).ok_or_else(|| {
+            let classifier = heap.classifier(obj_id)?;
+            model.resolve_fqn_str(classifier.as_str()).ok_or_else(|| {
                 PureRuntimeError::EvaluationError(format!(
                     "type: classifier '{classifier}' does not resolve to a known Type"
                 ))

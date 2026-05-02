@@ -472,6 +472,45 @@ impl PureModel {
             .push(element);
     }
 
+    /// Resolves a `::`-qualified FQN string directly to an [`ElementId`].
+    ///
+    /// Equivalent to `resolve_by_path` but walks the segments inline,
+    /// without allocating a `Vec<SmolStr>` or per-segment `SmolStr`s.
+    /// Use this on hot paths that already have the FQN as a `&str`
+    /// (classifier dispatch, m3 path constants).
+    ///
+    /// Returns `None` for the empty string or when any segment doesn't
+    /// resolve.
+    #[must_use]
+    pub fn resolve_fqn_str(&self, fqn: &str) -> Option<ElementId> {
+        if fqn.is_empty() {
+            return None;
+        }
+        // Iterate `::`-separated segments without materialising them
+        // into a `Vec`. Hold the previous segment in a local until we
+        // see the next, so the loop body always operates on an
+        // intermediate (package) segment and the final segment falls
+        // out at the end as the leaf name.
+        let mut iter = fqn.split("::");
+        let mut prev = iter.next()?;
+        let mut current = self.root_package;
+        for next in iter {
+            // `prev` is an intermediate package segment.
+            let pkg = self.get_package(current);
+            current = *pkg
+                .children_packages
+                .iter()
+                .find(|&&child_id| self.global_packages.get(child_id.0).name.as_str() == prev)?;
+            prev = next;
+        }
+        // `prev` is the leaf (element) name.
+        let pkg = self.get_package(current);
+        pkg.children_elements
+            .iter()
+            .find(|&&eid| self.get_node(eid).name.as_str() == prev)
+            .copied()
+    }
+
     /// Resolves a fully qualified name to an `ElementId` by walking the package tree.
     ///
     /// Returns `None` if the name doesn't resolve.

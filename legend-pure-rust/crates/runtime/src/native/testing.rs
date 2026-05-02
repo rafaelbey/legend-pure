@@ -616,8 +616,7 @@ fn resolve_function_fqn(
     role: &str,
     manifest_path: &str,
 ) -> Result<legend_pure_parser_pure::ids::ElementId, PureException> {
-    let segments: Vec<SmolStr> = fqn.split("::").map(SmolStr::new).collect();
-    ctx.model().resolve_by_path(&segments).ok_or_else(|| {
+    ctx.model().resolve_fqn_str(fqn).ok_or_else(|| {
         PureRuntimeError::EvaluationError(format!(
             "loadPCTManifest: {role} '{fqn}' from '{manifest_path}' did not resolve in the model"
         ))
