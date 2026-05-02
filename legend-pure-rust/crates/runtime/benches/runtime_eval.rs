@@ -47,9 +47,16 @@ struct Fixture {
 fn fixture() -> &'static Fixture {
     static FIX: OnceLock<Fixture> = OnceLock::new();
     FIX.get_or_init(|| {
-        let repos = legend_pure_core_platform::repo::Repo::default_embedded();
+        // Phase 3b: source files no longer embedded. Walk the live
+        // platform tree via `Repo::from_descriptor`.
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let descriptor = manifest.join(
+            "../../../legend-pure-core/legend-pure-m3-core/src/main/resources/platform.json",
+        );
         let mut parsed_files = Vec::new();
-        for repo in &repos {
+        if let Ok(canonical) = descriptor.canonicalize()
+            && let Ok(repo) = legend_pure_core_platform::repo::Repo::from_descriptor(&canonical)
+        {
             for (content, path) in repo.sources() {
                 match legend_pure_parser_parser::parse_with_islands(
                     content,

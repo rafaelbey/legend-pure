@@ -34,20 +34,38 @@ use smol_str::SmolStr;
 
 // Cache the parsed platform sources across tests to avoid re-parsing
 // the ~1300-element platform per test invocation.
+//
+// Phase 3b: source files are no longer embedded; the TDS metamodel
+// lives in `platform_dsl_tds.purem` (a build-emitted artifact). We
+// re-parse from the live source tree via `Repo::from_descriptor` so
+// `compile_with_extensions` still sees `SourceFile`s.
 fn platform_files() -> &'static [SourceFile] {
     static CACHED: OnceLock<Vec<SourceFile>> = OnceLock::new();
     CACHED.get_or_init(|| {
-        let repos = Repo::default_embedded();
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let descriptors = [
+            manifest.join(
+                "../../../legend-pure-core/legend-pure-m3-core/src/main/resources/platform.json",
+            ),
+            manifest.join(
+                "../../../legend-pure-dsl/legend-pure-dsl-tds/legend-pure-m2-dsl-tds-pure/src/main/resources/platform_dsl_tds.definition.json",
+            ),
+        ];
         let mut files = Vec::new();
-        for repo in &repos {
-            for (content, path) in repo.sources() {
-                match legend_pure_parser_parser::parse_with_islands(
-                    content,
-                    path,
-                    default_island_parsers(),
-                ) {
-                    Ok(sf) => files.push(sf),
-                    Err(partial) => files.push(partial.source_file),
+        for desc in descriptors {
+            let Ok(canonical) = desc.canonicalize() else {
+                continue;
+            };
+            if let Ok(repo) = Repo::from_descriptor(&canonical) {
+                for (content, path) in repo.sources() {
+                    match legend_pure_parser_parser::parse_with_islands(
+                        content,
+                        path,
+                        default_island_parsers(),
+                    ) {
+                        Ok(sf) => files.push(sf),
+                        Err(partial) => files.push(partial.source_file),
+                    }
                 }
             }
         }

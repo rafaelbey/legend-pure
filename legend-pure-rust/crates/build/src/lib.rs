@@ -357,6 +357,7 @@ impl Embedder {
 
         let mut out = String::new();
         let mut default_repo_calls = Vec::<EmittedRepo>::new();
+        let mut artifact_repo_calls = Vec::<EmittedRepo>::new();
         let mut artifact_emitted = false;
 
         // Pre-resolve every repo's descriptor path so purem shapes can
@@ -407,6 +408,7 @@ impl Embedder {
                         &all_descriptors,
                         &mut out,
                         &mut artifact_emitted,
+                        &mut artifact_repo_calls,
                     )?;
                 }
                 other => {
@@ -420,6 +422,7 @@ impl Embedder {
 
         if self.emit_default_aggregator {
             self.emit_default_aggregator_fn(&default_repo_calls, &mut out)?;
+            self.emit_artifact_aggregator_fn(&artifact_repo_calls, &mut out)?;
         }
 
         fs::write(&output, out).map_err(|source| BuildError::Io {
@@ -637,7 +640,56 @@ impl Embedder {
         )
         .ok();
 
+        // Walk source root for .json manifests (PCT exclusion lists,
+        // grammar docs, etc.) and emit them as static (path, content)
+        // pairs. The .purem itself doesn't carry these; manifests are
+        // data files consumed by `find_manifest`.
+        let descriptor_dir = descriptor_canonical
+            .parent()
+            .ok_or_else(|| BuildError::DescriptorNoParent(descriptor_canonical.clone()))?;
+        let source_root = descriptor_dir.join(&descriptor.name);
         let prefix = format!("/{}", descriptor.name);
+        writeln!(
+            out,
+            "/// Embedded `.json` manifests for the `{name}` repo, surfaced via `Repo::manifests()`.",
+            name = descriptor.name
+        )
+        .ok();
+        writeln!(
+            out,
+            "pub static REPO_{const_suffix}_MANIFESTS: &[(&'static str, &'static str)] = &["
+        )
+        .ok();
+        for walk_entry in WalkDir::new(&source_root).sort_by_file_name() {
+            let walk_entry = walk_entry.map_err(|e| BuildError::Walk(e.to_string()))?;
+            let path = walk_entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+                continue;
+            };
+            if ext != "json" {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(&source_root)
+                .map_err(|e| BuildError::Walk(e.to_string()))?;
+            let rel_str = path_to_str(relative)?;
+            let canonical_url = format!("{prefix}/{rel_str}");
+            let abs = fs::canonicalize(path).map_err(|source| BuildError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            let abs_str = path_to_str(&abs)?;
+            writeln!(
+                out,
+                "    (\"{canonical_url}\", include_str!(\"{abs_str}\")),"
+            )
+            .ok();
+        }
+        writeln!(out, "];\n").ok();
+
         default_repo_calls.push(EmittedRepo {
             const_suffix,
             prefix,
@@ -659,6 +711,7 @@ impl Embedder {
         all_descriptors: &[PathBuf],
         out: &mut String,
         artifact_emitted: &mut bool,
+        artifact_repo_calls: &mut Vec<EmittedRepo>,
     ) -> Result<(), BuildError> {
         let (descriptor_canonical, descriptor) = self.read_descriptor(entry, manifest_dir)?;
         self.emit_rerun_directives(&descriptor_canonical, &descriptor)?;
@@ -673,7 +726,10 @@ impl Embedder {
         // block the build, since users can still point a classpath at
         // the live source. Emit a cargo warning and remove any stale
         // file so callers don't pick up a previous build's blob.
-        if let Err(source) = self.run_snapshot_builder(&descriptor.name, all_descriptors, &purem_path) {
+        let mut produced = true;
+        if let Err(source) =
+            self.run_snapshot_builder(&descriptor.name, all_descriptors, &purem_path)
+        {
             println!(
                 "cargo:warning=snapshot-builder failed for `{name}`: {source}. \
                  The .purem artifact was not produced; load from sources via \
@@ -682,10 +738,19 @@ impl Embedder {
             );
             // Best-effort cleanup of any prior stale blob.
             let _ = fs::remove_file(&purem_path);
+            produced = false;
         }
 
         let const_suffix = sanitize_const(&descriptor.name);
         self.emit_meta_const(&descriptor, &const_suffix, out);
+
+        if produced {
+            artifact_repo_calls.push(EmittedRepo {
+                const_suffix,
+                prefix: format!("/{}", descriptor.name),
+                shape: EmittedShape::Artifact,
+            });
+        }
 
         // Emit the side-band env var the consumer's runtime can read to
         // discover the build-time-emitted snapshots dir. Only once.
@@ -810,6 +875,50 @@ impl Embedder {
         writeln!(out, "}};\n").ok();
     }
 
+    /// Generate `default_artifact_repos(snapshots_dir: &Path) -> Vec<Repo>`,
+    /// which materializes a `Repo::Purem` for every `purem-artifact`
+    /// shape declared in `Cargo.toml`. Each entry uses the
+    /// generated `REPO_<NAME>_META` so dependency edges are real and
+    /// `repo::load`'s topo sort works.
+    ///
+    /// Empty (no-op function body) when there are no artifact entries.
+    fn emit_artifact_aggregator_fn(
+        &self,
+        emitted: &[EmittedRepo],
+        out: &mut String,
+    ) -> Result<(), BuildError> {
+        let cp = &self.crate_path;
+        out.push_str("\n/// Build-script-emitted `.purem` artifact repos in declaration order.\n");
+        out.push_str(
+            "/// Loads every artifact found at `<snapshots_dir>/<name>.purem`,\n\
+             /// silently skipping any that are missing (a DSL whose compile\n\
+             /// failed during `cargo build` may not have produced an\n\
+             /// artifact).\n",
+        );
+        out.push_str("#[must_use]\n");
+        writeln!(
+            out,
+            "pub fn default_artifact_repos(snapshots_dir: &std::path::Path) -> Vec<{cp}::repo::Repo> {{"
+        )
+        .ok();
+        out.push_str("    let mut out = Vec::new();\n");
+        for repo in emitted {
+            writeln!(
+                out,
+                "    if let Ok(r) = {cp}::repo::Repo::from_purem_file(\
+                 &snapshots_dir.join(\"{name}.purem\"), \"{p}\".to_string(), REPO_{s}_META) \
+                 {{ out.push(r); }}",
+                name = &repo.prefix.trim_start_matches('/'),
+                p = repo.prefix,
+                s = repo.const_suffix
+            )
+            .ok();
+        }
+        out.push_str("    out\n");
+        out.push_str("}\n");
+        Ok(())
+    }
+
     fn emit_default_aggregator_fn(
         &self,
         emitted: &[EmittedRepo],
@@ -847,12 +956,18 @@ impl Embedder {
                 EmittedShape::Purem => {
                     writeln!(
                         out,
-                        "        {cp}::repo::Repo::from_purem_static(\"{p}\", \
-                         &REPO_{s}_META, REPO_{s}_PUREM),",
+                        "        {cp}::repo::Repo::from_purem_static_with_manifests(\"{p}\", \
+                         &REPO_{s}_META, REPO_{s}_PUREM, REPO_{s}_MANIFESTS),",
                         p = repo.prefix,
                         s = repo.const_suffix
                     )
                     .ok();
+                }
+                EmittedShape::Artifact => {
+                    // Artifact-shape repos aren't part of the
+                    // default-embedded set — they ship as files next
+                    // to the binary and are loaded via classpath.
+                    // They land in `default_artifact_repos()` instead.
                 }
             }
         }
@@ -880,14 +995,18 @@ struct EmittedRepo {
     shape: EmittedShape,
 }
 
-/// Whether an emitted repo is source-embedded (legacy `include_str!`)
-/// or `.purem`-embedded (`include_bytes!`).
+/// Whether an emitted repo is source-embedded (legacy `include_str!`),
+/// `.purem`-embedded (`include_bytes!`), or `.purem`-artifact (sibling
+/// to the binary, loaded at runtime).
 #[derive(Debug, Clone, Copy)]
 enum EmittedShape {
     /// Legacy `include_str!` source embedding.
     Embedded,
     /// `.purem` blob via `include_bytes!`.
     Purem,
+    /// `.purem` artifact discovered at runtime from
+    /// `target/<profile>/snapshots/`.
+    Artifact,
 }
 
 fn resolve_target_snapshots_dir() -> Result<PathBuf, BuildError> {

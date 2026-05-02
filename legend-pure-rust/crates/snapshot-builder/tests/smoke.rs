@@ -36,9 +36,7 @@ fn workspace_root() -> PathBuf {
 }
 
 fn platform_descriptor() -> PathBuf {
-    workspace_root().join(
-        "legend-pure-core/legend-pure-m3-core/src/main/resources/platform.json",
-    )
+    workspace_root().join("legend-pure-core/legend-pure-m3-core/src/main/resources/platform.json")
 }
 
 fn platform_dsl_store_descriptor() -> PathBuf {
@@ -119,7 +117,10 @@ fn build_is_byte_deterministic() {
 
     let a = std::fs::read(&out_a).expect("read a");
     let b = std::fs::read(&out_b).expect("read b");
-    assert_eq!(a, b, "two builds of the same platform must be byte-identical");
+    assert_eq!(
+        a, b,
+        "two builds of the same platform must be byte-identical"
+    );
 }
 
 #[test]

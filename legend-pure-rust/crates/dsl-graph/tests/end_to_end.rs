@@ -39,19 +39,40 @@ use legend_pure_parser_pure::model::Element as ModelElement;
 use smol_str::SmolStr;
 
 fn platform_files() -> &'static [SourceFile] {
+    // Phase 3b: source files are no longer embedded in the binary.
+    // For tests that need to compile the platform from source (rather
+    // than load it from .purem), point at the live source trees for
+    // both `platform` and `platform_dsl_graph` via
+    // `Repo::from_descriptor`. The two descriptors live in adjacent
+    // Java module dirs; we resolve them relative to
+    // CARGO_MANIFEST_DIR. If missing (slim checkout), the returned
+    // slice is empty and the test asserts will fail loudly.
     static CACHED: OnceLock<Vec<SourceFile>> = OnceLock::new();
     CACHED.get_or_init(|| {
-        let repos = Repo::default_embedded();
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let descriptors = [
+            manifest.join(
+                "../../../legend-pure-core/legend-pure-m3-core/src/main/resources/platform.json",
+            ),
+            manifest.join(
+                "../../../legend-pure-dsl/legend-pure-dsl-graph/legend-pure-m2-dsl-graph-pure/src/main/resources/platform_dsl_graph.definition.json",
+            ),
+        ];
         let mut files = Vec::new();
-        for repo in &repos {
-            for (content, path) in repo.sources() {
-                match legend_pure_parser_parser::parse_with_islands(
-                    content,
-                    path,
-                    default_island_parsers(),
-                ) {
-                    Ok(sf) => files.push(sf),
-                    Err(partial) => files.push(partial.source_file),
+        for desc in descriptors {
+            let Ok(canonical) = desc.canonicalize() else {
+                continue;
+            };
+            if let Ok(repo) = Repo::from_descriptor(&canonical) {
+                for (content, path) in repo.sources() {
+                    match legend_pure_parser_parser::parse_with_islands(
+                        content,
+                        path,
+                        default_island_parsers(),
+                    ) {
+                        Ok(sf) => files.push(sf),
+                        Err(partial) => files.push(partial.source_file),
+                    }
                 }
             }
         }

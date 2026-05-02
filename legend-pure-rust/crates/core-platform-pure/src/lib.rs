@@ -76,13 +76,18 @@ mod tests {
             }
         }
 
-        // Baseline check: at least one repo with at least one .pure source.
+        // Baseline check: the embedded `platform` repo is now a
+        // `.purem` blob (no `.pure` sources). Verify we have it and
+        // it surfaces at least one manifest (e.g. PCT exclusion
+        // lists) so `find_manifest` keeps working.
         let repos = repo::Repo::default_embedded();
-        let total: usize = repos.iter().map(|r| r.sources().count()).sum();
-        println!(
-            "Number of platform .pure files (across {} repos): {total}",
-            repos.len()
+        assert_eq!(
+            repos.len(),
+            1,
+            "default_embedded() should return only the platform after Phase 3b"
         );
-        assert!(total > 10, "Expected over 10 platform .pure files");
+        let manifest_count: usize = repos.iter().map(|r| r.manifests().count()).sum();
+        println!("Number of platform .json manifests: {manifest_count}");
+        assert!(manifest_count > 0, "expected at least one platform manifest");
     }
 }

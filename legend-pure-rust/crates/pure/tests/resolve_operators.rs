@@ -28,28 +28,37 @@ fn load_platform_model() -> (
 #[test]
 fn platform_parse_recovery() {
     // Verify that error recovery works by checking element counts from partial parses.
-    let repos = legend_pure_core_platform::repo::Repo::default_embedded();
+    // Phase 3b: source files are no longer embedded. Walk the live
+    // platform source tree via `Repo::from_descriptor` so the parser
+    // sees real `.pure` content.
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let descriptor = manifest
+        .join("../../../legend-pure-core/legend-pure-m3-core/src/main/resources/platform.json");
+    let Ok(canonical) = descriptor.canonicalize() else {
+        eprintln!("skipping platform_parse_recovery: descriptor missing (slim checkout)");
+        return;
+    };
+    let repo = legend_pure_core_platform::repo::Repo::from_descriptor(&canonical)
+        .expect("from_descriptor on platform.json");
     let mut total = 0;
     let mut clean = 0;
     let mut partial = 0;
     let mut total_errors = 0;
     let mut total_elements = 0;
 
-    for repo in &repos {
-        for (content, path) in repo.sources() {
-            total += 1;
-            match legend_pure_parser_parser::parse(content, path) {
-                Ok(ast) => {
-                    total_elements += ast.element_count();
-                    clean += 1;
-                }
-                Err(p) => {
-                    total_elements += p.source_file.element_count();
-                    total_errors += p.errors.len();
-                    partial += 1;
-                    for e in &p.errors {
-                        eprintln!("  PARTIAL: {path} -> {e}");
-                    }
+    for (content, path) in repo.sources() {
+        total += 1;
+        match legend_pure_parser_parser::parse(content, path) {
+            Ok(ast) => {
+                total_elements += ast.element_count();
+                clean += 1;
+            }
+            Err(p) => {
+                total_elements += p.source_file.element_count();
+                total_errors += p.errors.len();
+                partial += 1;
+                for e in &p.errors {
+                    eprintln!("  PARTIAL: {path} -> {e}");
                 }
             }
         }

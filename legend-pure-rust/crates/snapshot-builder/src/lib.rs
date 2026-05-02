@@ -45,9 +45,7 @@ use std::path::{Path, PathBuf};
 use legend_pure_parser_ast::section::SourceFile;
 use legend_pure_parser_pure::error::CompilationError;
 use legend_pure_parser_pure::model::PureModel;
-use legend_pure_parser_pure::pipeline::{
-    compile_repo_slice, finalize_model, init_bootstrap_model,
-};
+use legend_pure_parser_pure::pipeline::{compile_repo_slice, finalize_model, init_bootstrap_model};
 use legend_pure_parser_pure::purem::{slice_by_repo, write_repo};
 use serde::Deserialize;
 use smol_str::SmolStr;
@@ -152,12 +150,7 @@ pub fn compile_to_purem(req: CompileRequest<'_>) -> Result<(), BuildError> {
     let descriptors = transitively_reachable(&all_descriptors, req.target)?;
     let order = topo_sort(&descriptors)?;
 
-    let auto_imports: Vec<SmolStr> = req
-        .auto_imports
-        .iter()
-        .copied()
-        .map(SmolStr::new)
-        .collect();
+    let auto_imports: Vec<SmolStr> = req.auto_imports.iter().copied().map(SmolStr::new).collect();
 
     let mut model = init_bootstrap_model();
     populate_repo_visibility(&mut model, &descriptors);
@@ -298,8 +291,11 @@ fn transitively_reachable(
 }
 
 fn topo_sort(descs: &[LoadedDescriptor]) -> Result<Vec<usize>, BuildError> {
-    let name_to_idx: HashMap<&str, usize> =
-        descs.iter().enumerate().map(|(i, d)| (d.name.as_str(), i)).collect();
+    let name_to_idx: HashMap<&str, usize> = descs
+        .iter()
+        .enumerate()
+        .map(|(i, d)| (d.name.as_str(), i))
+        .collect();
 
     // Kahn's algorithm with stable tie-breaking by name.
     let mut indegree = vec![0usize; descs.len()];
@@ -436,4 +432,3 @@ fn parse_repo_sources(desc: &LoadedDescriptor) -> Result<Vec<SourceFile>, BuildE
     }
     Ok(parsed)
 }
-

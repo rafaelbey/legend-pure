@@ -56,6 +56,15 @@ pub const PLATFORM_AUTO_IMPORTS: &[&str] = &[
 
 /// Load all platform Pure sources: parse → compile → return model.
 ///
+/// After Phase 3b only the `platform` repo is embedded in the binary;
+/// every other repo (precise primitives, DSLs, store-relational) ships
+/// as a `.purem` artifact next to the binary. This entry point uses
+/// [`repo::Repo::default_with_build_snapshots`] so the build-time
+/// emitted artifacts (`target/<profile>/snapshots/`) are picked up
+/// automatically during `cargo run` / `cargo test`. Deployed binaries
+/// without `LEGEND_PURE_BUILD_SNAPSHOTS_DIR` set load just the embedded
+/// platform — callers needing DSLs should configure a classpath.
+///
 /// Returns `Ok(PureModel)` if everything parsed and compiled cleanly, or
 /// `Err(PartialPureModel)` if any parse or compilation errors occurred.
 /// The partial model still contains all successfully resolved elements.
@@ -70,7 +79,7 @@ pub fn load_platform() -> Result<PureModel, PartialPureModel> {
         .iter()
         .map(|&s| SmolStr::new(s))
         .collect();
-    repo::load(&repo::Repo::default_embedded(), &auto_imports)
+    repo::load(&repo::Repo::default_with_build_snapshots(), &auto_imports)
 }
 
 /// Parse and compile any set of Pure sources.
