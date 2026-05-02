@@ -66,6 +66,12 @@ impl Parser {
                         source_info: col.source_info,
                     });
                 }
+                // Subtype constraint can also follow a column-spec form,
+                // e.g. `ColSpec<(?:Z)⊆T>` in eval.pure. Same drop-the-
+                // bound treatment as in the non-column branch below.
+                if self.cursor.eat(TokenKind::Subset) {
+                    let _bound = self.parse_type_reference()?;
+                }
             } else {
                 loop {
                     args.push(self.parse_type_reference()?);
@@ -80,6 +86,16 @@ impl Parser {
                     // opaque shapes.
                     while self.cursor.eat(TokenKind::Plus) {
                         let _discarded = self.parse_type_reference()?;
+                    }
+                    // Subtype-constraint operator `X⊆T` (U+2286): the
+                    // type to the right is a *bound* on the type-arg
+                    // (`X` must be a subtype of `T`). The AST has no
+                    // bounds slot today; we accept the syntax and drop
+                    // the bound — Stage-1 resolution doesn't enforce
+                    // it. Real shape: `ColSpec<(?:Z)⊆T>` in
+                    // `core_functions_relation/relation/functions/eval.pure`.
+                    if self.cursor.eat(TokenKind::Subset) {
+                        let _bound = self.parse_type_reference()?;
                     }
                     if !self.cursor.eat(TokenKind::Comma) {
                         break;
@@ -194,7 +210,16 @@ impl Parser {
         let mut cols = Vec::new();
         loop {
             let col_si = self.cursor.current_source_info();
-            let (col_name, _) = self.cursor.expect_identifier_or_keyword()?;
+            // `?` is the wildcard column-name placeholder (e.g.
+            // `ColSpec<(?:Type)>` in eval.pure) — it stands for "any
+            // column with this type, name unspecified". Capture as `?`
+            // verbatim; the resolver treats wildcard names as positional.
+            let col_name = if self.cursor.eat(TokenKind::Question) {
+                SmolStr::new("?")
+            } else {
+                let (n, _) = self.cursor.expect_identifier_or_keyword()?;
+                n
+            };
             self.cursor.expect(TokenKind::Colon)?;
             let col_type = self.parse_type_reference()?;
             let multiplicity = if self.cursor.check(TokenKind::LBracket) {

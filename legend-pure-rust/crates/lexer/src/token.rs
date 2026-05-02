@@ -166,6 +166,11 @@ pub enum TokenKind {
     Tilde,
     /// `~~~` (bitwise NOT, F#-style — reserved for future use)
     TildeTildeTilde,
+    /// `?` (wildcard column-name placeholder in `ColSpec<(?:Type)>`)
+    Question,
+    /// `⊆` (U+2286, subtype-constraint operator: `<X⊆T>` reads as
+    /// "X is a subtype of T" — used in generic-type-arg bounds)
+    Subset,
 
     // -- Special operators --
     /// `->`
@@ -293,6 +298,8 @@ impl TokenKind {
             TokenKind::Caret => "'^'",
             TokenKind::Tilde => "'~'",
             TokenKind::TildeTildeTilde => "'~~~'",
+            TokenKind::Question => "'?'",
+            TokenKind::Subset => "'\u{2286}'",
             TokenKind::Arrow => "'->'",
             TokenKind::FatArrow => "'=>'",
             TokenKind::PathSep => "'::'",
