@@ -105,7 +105,13 @@ pub struct Evaluator<'model, H: EvalHooks = NoOpHooks> {
     /// holds. The wrappers are functionally pure (they read class metadata,
     /// not heap state), so no invalidation is needed for the evaluator's
     /// lifetime.
-    member_wrapper_cache: HashMap<(ElementId, &'static str), Vec<Value>>,
+    ///
+    /// The value is the already-collapsed `Value::from_vec(items)` form
+    /// (`Unit` / single `Value` / `Value::Collection`); cache hits clone
+    /// the cached `Value` rather than rebuilding it from a `Vec<Value>`
+    /// per access. For `Value::Collection`, that clone is O(1) — the
+    /// inner `im_rc::Vector` is structurally shared.
+    member_wrapper_cache: HashMap<(ElementId, &'static str), Value>,
 
     /// Instrumentation hooks (zero-cost for `NoOpHooks`).
     hooks: H,
@@ -1195,7 +1201,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 },
             );
             if let Some(cached) = self.member_wrapper_cache.get(&cache_key) {
-                return Ok(Value::from_vec(cached.clone()));
+                return Ok(cached.clone());
             }
             let bound = if property == "upperBound" {
                 bounds.1
@@ -1206,12 +1212,12 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 Some(b) => {
                     let mv = self.heap.alloc_dynamic(crate::m3_paths::MULTIPLICITY_VALUE);
                     self.heap.mutate_add(&mv, "value", &[Value::Integer(b)])?;
-                    vec![Value::Object(mv)]
+                    Value::from_vec(vec![Value::Object(mv)])
                 }
-                None => Vec::new(),
+                None => Value::from_vec(Vec::new()),
             };
             self.member_wrapper_cache.insert(cache_key, result.clone());
-            return Ok(Value::from_vec(result));
+            return Ok(result);
         }
 
         // classifierGenericType shim for Function elements: Java Pure
@@ -1231,7 +1237,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         {
             let cache_key = (id, "_func_classifierGenericType");
             if let Some(cached) = self.member_wrapper_cache.get(&cache_key) {
-                return Ok(Value::from_vec(cached.clone()));
+                return Ok(cached.clone());
             }
             let fv = FunctionValue::Compiled(id);
             let inner_ft_obj = {
@@ -1262,9 +1268,9 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             }
             self.heap
                 .mutate_add(&outer_gt, "typeArguments", &[Value::Object(inner_gt)])?;
-            let result = vec![Value::Object(outer_gt)];
+            let result = Value::from_vec(vec![Value::Object(outer_gt)]);
             self.member_wrapper_cache.insert(cache_key, result.clone());
-            return Ok(Value::from_vec(result));
+            return Ok(result);
         }
 
         match property {
@@ -1344,7 +1350,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 // (Stereotype declares no `<<equality.Key>>`) flips the
                 // comparison to false.
                 if let Some(cached) = self.member_wrapper_cache.get(&(id, "stereotypes")) {
-                    return Ok(Value::from_vec(cached.clone()));
+                    return Ok(cached.clone());
                 }
                 let stereos: Vec<(ElementId, SmolStr)> = match self.model.get_element(id) {
                     Element::Function(f) => f
@@ -1368,16 +1374,17 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                         .mutate_add(&obj, "profile", &[Value::Element(profile)])?;
                     items.push(Value::Object(obj));
                 }
+                let result = Value::from_vec(items);
                 self.member_wrapper_cache
-                    .insert((id, "stereotypes"), items.clone());
-                Ok(Value::from_vec(items))
+                    .insert((id, "stereotypes"), result.clone());
+                Ok(result)
             }
             "taggedValues" => {
                 // See `stereotypes` — same memoisation rationale (stable
                 // identity across calls so `^$f1()` carries shared
                 // references to the same TaggedValue wrappers).
                 if let Some(cached) = self.member_wrapper_cache.get(&(id, "taggedValues")) {
-                    return Ok(Value::from_vec(cached.clone()));
+                    return Ok(cached.clone());
                 }
                 let tags: Vec<(ElementId, SmolStr, String)> = match self.model.get_element(id) {
                     Element::Function(f) => f
@@ -1402,9 +1409,10 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                         .mutate_add(&obj, "value", &[Value::String(SmolStr::new(value))])?;
                     items.push(Value::Object(obj));
                 }
+                let result = Value::from_vec(items);
                 self.member_wrapper_cache
-                    .insert((id, "taggedValues"), items.clone());
-                Ok(Value::from_vec(items))
+                    .insert((id, "taggedValues"), result.clone());
+                Ok(result)
             }
             "properties" | "qualifiedProperties" | "propertiesFromAssociations" => {
                 self.eval_class_member_collection(id, property)
@@ -1553,7 +1561,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         // what `assertIs($class.properties->at(0), $class.properties->at(0))`
         // relies on.
         if let Some(cached) = self.member_wrapper_cache.get(&(id, kind)) {
-            return Ok(Value::from_vec(cached.clone()));
+            return Ok(cached.clone());
         }
 
         // Snapshot names before we take the mutable heap borrow — reading
@@ -1608,8 +1616,9 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 .mutate_add(&obj, "_owner", &[Value::Element(id)])?;
             items.push(Value::Object(obj));
         }
-        self.member_wrapper_cache.insert((id, kind), items.clone());
-        Ok(Value::from_vec(items))
+        let result = Value::from_vec(items);
+        self.member_wrapper_cache.insert((id, kind), result.clone());
+        Ok(result)
     }
 
     // -----------------------------------------------------------------------
