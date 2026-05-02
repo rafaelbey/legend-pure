@@ -26,6 +26,7 @@ legend-pure-parser-compose = { path = "../compose" }
 legend-pure-parser-lexer = { path = "../lexer" }
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-protocol = { path = "../protocol" }
+legend-pure-parser-pure = { path = "../pure" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smol_str = { workspace = true }
@@ -33,8 +34,7 @@ smol_str = { workspace = true }
 [dev-dependencies]
 indoc = "2"
 insta = { workspace = true }
-# dev-only — `compiler_smoke.rs` invokes the core compile pipeline to
-# verify graph-fetch islands are rejected at lowering until dsl-graph
-# ships its `CompilerExtension`. Cargo permits dev-dep cycles since
-# dev-deps don't participate in lib compilation.
-legend-pure-parser-pure = { path = "../pure" }
+# end_to_end.rs loads the embedded platform repos to assert that
+# graph.pure resolves and that the GraphFetchExtension validates
+# islands against real platform classes.
+legend-pure-core-platform = { path = "../core-platform-pure" }
