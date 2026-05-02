@@ -582,7 +582,8 @@ pub struct SliceExpr {
     pub source_info: SourceInfo,
 }
 
-/// A new instance expression: `^MyClass(prop1='val', prop2=42)`.
+/// A new instance expression: `^MyClass(prop1='val', prop2=42)` or
+/// the named form `^MyClass name(prop1='val')`.
 #[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct NewInstanceExpr {
     /// The class being instantiated (a packageable element reference).
@@ -591,6 +592,9 @@ pub struct NewInstanceExpr {
     pub type_arguments: Vec<crate::type_ref::TypeReference>,
     /// Optional type variable values: `^Ext(10)()`.
     pub type_variable_values: Vec<crate::type_ref::TypeVariableValue>,
+    /// Optional instance name: `^MyClass myName(props)`. Java-side this
+    /// becomes a distinguishing key the test runtime can look up by.
+    pub instance_name: Option<Identifier>,
     /// Property value assignments.
     pub assignments: Vec<KeyValuePair>,
     /// Source location.
@@ -928,6 +932,7 @@ mod tests {
             class: elem_ptr("MyClass"),
             type_arguments: vec![],
             type_variable_values: vec![],
+            instance_name: None,
             assignments: vec![],
             source_info: src(),
         });

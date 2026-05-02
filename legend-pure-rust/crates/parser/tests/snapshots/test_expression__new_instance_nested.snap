@@ -69,6 +69,7 @@ SourceFile {
                                     },
                                     type_arguments: [],
                                     type_variable_values: [],
+                                    instance_name: None,
                                     assignments: [
                                         KeyValuePair {
                                             key: "v2",
@@ -87,6 +88,7 @@ SourceFile {
                                                     },
                                                     type_arguments: [],
                                                     type_variable_values: [],
+                                                    instance_name: None,
                                                     assignments: [
                                                         KeyValuePair {
                                                             key: "v",

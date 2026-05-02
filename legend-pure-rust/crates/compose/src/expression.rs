@@ -459,6 +459,10 @@ fn compose_slice(w: &mut IndentWriter, e: &SliceExpr) {
 fn compose_new_instance(w: &mut IndentWriter, e: &NewInstanceExpr) {
     w.write("^");
     compose_element_ptr(w, &e.class);
+    if let Some(name) = &e.instance_name {
+        w.write(" ");
+        w.write(&maybe_quote(name));
+    }
     w.write("(");
     for (i, kv) in e.assignments.iter().enumerate() {
         if i > 0 {
