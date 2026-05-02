@@ -132,16 +132,16 @@ fn parses_mapping_with_includes_and_root_marker() {
 
 #[test]
 fn unknown_parser_name_errors_with_roadmap_hint() {
-    // `XStore` is reserved for Stage 7 and not yet supported —
+    // `Relation` is reserved for Stage 8 and not yet supported —
     // exercising the dispatch fallthrough that rejects unknown
     // sub-parser names with a roadmap-pointing message.
     let source = indoc! {r"
         ###Mapping
         Mapping pkg::M
         (
-          pkg::Firm : XStore
+          pkg::Firm : Relation
           {
-            owner[employee_set, firm_set]: $this.firmId == $that.id
+            ~func pkg::tdsFunction(): meta::pure::metamodel::relation::Relation<Any>[1]
           }
         )
     "};
@@ -155,7 +155,7 @@ fn unknown_parser_name_errors_with_roadmap_hint() {
     let msgs: Vec<String> = partial.errors.iter().map(ToString::to_string).collect();
     assert!(
         msgs.iter()
-            .any(|m| m.contains("XStore") && m.contains("Stage")),
+            .any(|m| m.contains("Relation") && m.contains("Stage")),
         "expected error mentioning the unsupported sub-parser name and roadmap; got {msgs:?}"
     );
 }
