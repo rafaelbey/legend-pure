@@ -735,7 +735,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         // Empty-slot guard.
         let existing = self
             .heap
-            .get_property_values(&obj_id.clone(), "__typeArguments")
+            .get_property_values(obj_id, "__typeArguments")
             .map_err(PureException::from)?;
         if !existing.is_empty() {
             return Ok(());
@@ -743,7 +743,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         // Classifier-match guard.
         let classifier_path = self
             .heap
-            .classifier(&obj_id.clone())
+            .classifier(obj_id)
             .map_err(PureException::from)?
             .clone();
         let classifier_id = crate::m3_paths::resolve(self.model, &classifier_path);
@@ -762,7 +762,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             .collect();
         if !type_args.is_empty() {
             self.heap
-                .mutate_set(&obj_id.clone(), "__typeArguments", &type_args)
+                .mutate_set(obj_id, "__typeArguments", &type_args)
                 .map_err(PureException::from)?;
         }
         Ok(())
@@ -1934,7 +1934,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         let type_var_values: Vec<Value> = match &args[0] {
             Value::Object(obj_id) if !type_var_param_names.is_empty() => self
                 .heap
-                .get_property_values(&obj_id.clone(), "__typeVariableValues")
+                .get_property_values(obj_id, "__typeVariableValues")
                 .map(|v| v.iter().cloned().collect())
                 .unwrap_or_default(),
             _ => Vec::new(),
@@ -1990,7 +1990,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             Value::Object(obj_id) => {
                 let values = self
                     .heap
-                    .get_property_values(&obj_id.clone(), name)
+                    .get_property_values(obj_id, name)
                     .map_err(PureException::from)?;
                 let collected: Vec<Value> = values.iter().cloned().collect();
                 if !collected.is_empty() {
