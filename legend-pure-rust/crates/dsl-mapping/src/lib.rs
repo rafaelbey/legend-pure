@@ -49,10 +49,18 @@
 //!   validate the nested mappings and check that each
 //!   `~mapFn`/`~aggregateFn` returns a `DataType` (primitive type or
 //!   enumeration), per Java's `AggregationAwareValidator`.
+//! - **`XStore`** (Stage 7): `propName[srcId, tgtId] : crossExpr`
+//!   per-association-property cross-store join expressions binding
+//!   `$this`/`$that`. The outer class-mapping FQN is reinterpreted
+//!   as an `Association` FQN — the only sub-grammar where the
+//!   target is not a `Class`. Validators check that the association
+//!   resolves, that each property name exists on it, and that the
+//!   referenced source/target set-implementation IDs are visible in
+//!   the mapping (its own + transitively included).
 //!
-//! Stages 7+ extend `ClassMappingBody` with `XStore`, `Relation`
-//! variants. See `~/.claude/plans/what-is-left-to-iterative-sunrise.md`
-//! for the staged roadmap.
+//! Stage 8 extends `ClassMappingBody` with the `Relation` variant.
+//! See `~/.claude/plans/what-is-left-to-iterative-sunrise.md` for
+//! the staged roadmap.
 //!
 //! Module map:
 //!

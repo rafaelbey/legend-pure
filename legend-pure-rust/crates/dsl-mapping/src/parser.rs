@@ -18,11 +18,12 @@
 //! declarations whose class-mapping bodies are dispatched by
 //! `parserName` token. Currently supports `Pure` (model-to-model),
 //! `EnumerationMapping` (Stage 4), `Operation` (Stage 5, simple
-//! parameters form), and `AggregationAware` (Stage 6 — recurses
-//! into `Pure`/`Operation` bodies for the nested
-//! `~mainMapping`/`~aggregateMapping` clauses). Other parser names
-//! produce an `UnsupportedSubParser` error pointing at the staged
-//! roadmap.
+//! parameters form), `AggregationAware` (Stage 6 — recurses into
+//! `Pure`/`Operation` bodies for the nested
+//! `~mainMapping`/`~aggregateMapping` clauses), and `XStore`
+//! (Stage 7 — per-association-property cross expressions binding
+//! `$this`/`$that`). Other parser names produce an
+//! `UnsupportedSubParser` error pointing at the staged roadmap.
 //!
 //! Mirrors `legend-pure-dsl-mapping/.../MappingParser.g4` for the
 //! top-level rule shape; the body grammar is hand-coded rather than
@@ -46,7 +47,7 @@ use crate::ast::{
     AggregationFunctionSpec, ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping,
     EnumerationClassMappingBody, MappingDef, MappingInclude, NestedClassMapping,
     OperationClassMappingBody, OperationParameter, PureClassMappingBody, PurePropertyMapping,
-    SECTION_KIND, StoreSubstitution,
+    SECTION_KIND, StoreSubstitution, XStoreClassMappingBody, XStorePropertyMapping,
 };
 
 fn err_unexpected(expected: &str, found: &str, source_info: SourceInfo) -> ParseError {
@@ -256,12 +257,13 @@ fn parse_class_mapping_body(
         "AggregationAware" => {
             ClassMappingBody::AggregationAware(Box::new(parse_aggregation_aware_body(ctx)?))
         }
+        "XStore" => ClassMappingBody::XStore(parse_xstore_body(ctx)?),
         other => {
             return Err(ParseError::Unexpected {
                 message: format!(
-                    "Mapping sub-parser '{other}' is not supported yet (Stages 2/4/5/6 ship \
-                     'Pure', 'EnumerationMapping', 'Operation', and 'AggregationAware'; \
-                     XStore/Relation arrive in Stages 7–8 — see \
+                    "Mapping sub-parser '{other}' is not supported yet (Stages 2/4/5/6/7 ship \
+                     'Pure', 'EnumerationMapping', 'Operation', 'AggregationAware', and \
+                     'XStore'; Relation arrives in Stage 8 — see \
                      ~/.claude/plans/what-is-left-to-iterative-sunrise.md)"
                 ),
                 source_info: parser_name_si.clone(),
@@ -717,6 +719,57 @@ fn expect_keyword(ctx: &mut ParserContext<'_>, expected: &str) -> Result<(), Par
 fn expect_tilde_keyword(ctx: &mut ParserContext<'_>, expected: &str) -> Result<(), ParseError> {
     ctx.cursor().expect(TokenKind::Tilde)?;
     expect_keyword(ctx, expected)
+}
+
+// ---------------------------------------------------------------------------
+// XStoreClassMappingBody — Stage 7
+// ---------------------------------------------------------------------------
+
+fn parse_xstore_body(ctx: &mut ParserContext<'_>) -> Result<XStoreClassMappingBody, ParseError> {
+    ctx.cursor().expect(TokenKind::LBrace)?;
+    let mut property_mappings = Vec::new();
+    while !ctx.cursor().check(TokenKind::RBrace) && !ctx.cursor().check(TokenKind::Eof) {
+        property_mappings.push(parse_xstore_property_mapping(ctx)?);
+        // Comma-separated, trailing comma OK.
+        ctx.cursor().eat(TokenKind::Comma);
+    }
+    ctx.cursor().expect(TokenKind::RBrace)?;
+    Ok(XStoreClassMappingBody { property_mappings })
+}
+
+fn parse_xstore_property_mapping(
+    ctx: &mut ParserContext<'_>,
+) -> Result<XStorePropertyMapping, ParseError> {
+    let prop_tok = ctx.cursor().expect(TokenKind::Identifier)?;
+    let start_si = prop_tok.source_info.clone();
+    let property_name = SmolStr::new(prop_tok.text.clone());
+
+    let (source_set_impl_id, target_set_impl_id) = if ctx.cursor().eat(TokenKind::LBracket) {
+        let src_tok = ctx.cursor().expect(TokenKind::Identifier)?;
+        let src = Some(SmolStr::new(src_tok.text.clone()));
+        let tgt = if ctx.cursor().eat(TokenKind::Comma) {
+            let t = ctx.cursor().expect(TokenKind::Identifier)?;
+            Some(SmolStr::new(t.text.clone()))
+        } else {
+            None
+        };
+        ctx.cursor().expect(TokenKind::RBracket)?;
+        (src, tgt)
+    } else {
+        (None, None)
+    };
+
+    ctx.cursor().expect(TokenKind::Colon)?;
+    let cross_expression = ctx.parse_expression()?;
+    let end_si = ctx.cursor().current_source_info();
+
+    Ok(XStorePropertyMapping {
+        property_name,
+        source_set_impl_id,
+        target_set_impl_id,
+        cross_expression,
+        source_info: merge_si(&start_si, &end_si),
+    })
 }
 
 // ---------------------------------------------------------------------------

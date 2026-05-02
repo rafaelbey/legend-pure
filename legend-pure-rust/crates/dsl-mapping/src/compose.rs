@@ -25,6 +25,7 @@ use crate::ast::{
     AggregationFunctionSpec, ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping,
     EnumerationClassMappingBody, MappingDef, MappingInclude, NestedClassMapping,
     OperationClassMappingBody, PureClassMappingBody, PurePropertyMapping, StoreSubstitution,
+    XStoreClassMappingBody, XStorePropertyMapping,
 };
 
 /// Compose a single [`MappingDef`] back to its `Mapping pkg::M ( … )`
@@ -141,7 +142,43 @@ fn write_class_mapping(out: &mut String, cm: &ClassMapping) {
             write_aggregation_aware_body(out, body);
             out.push_str("  }\n");
         }
+        ClassMappingBody::XStore(body) => {
+            out.push_str("XStore");
+            if let Some(name) = &cm.mapping_name {
+                out.push(' ');
+                out.push_str(name.as_str());
+            }
+            out.push_str("\n  {\n");
+            write_xstore_body(out, body);
+            out.push_str("  }\n");
+        }
     }
+}
+
+fn write_xstore_body(out: &mut String, body: &XStoreClassMappingBody) {
+    for (i, pm) in body.property_mappings.iter().enumerate() {
+        write_xstore_property_mapping(out, pm);
+        if i + 1 < body.property_mappings.len() {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+}
+
+fn write_xstore_property_mapping(out: &mut String, pm: &XStorePropertyMapping) {
+    out.push_str("    ");
+    out.push_str(pm.property_name.as_str());
+    if let Some(src) = &pm.source_set_impl_id {
+        out.push('[');
+        out.push_str(src.as_str());
+        if let Some(tgt) = &pm.target_set_impl_id {
+            out.push_str(", ");
+            out.push_str(tgt.as_str());
+        }
+        out.push(']');
+    }
+    out.push_str(" : ");
+    write_expression(out, &pm.cross_expression);
 }
 
 fn write_aggregation_aware_body(out: &mut String, body: &AggregationAwareClassMappingBody) {
@@ -211,6 +248,7 @@ fn write_nested_class_mapping(out: &mut String, keyword: &str, n: &NestedClassMa
         ClassMappingBody::Enumeration(b) => write_enumeration_body(out, b),
         ClassMappingBody::Operation(b) => write_operation_body(out, b),
         ClassMappingBody::AggregationAware(b) => write_aggregation_aware_body(out, b),
+        ClassMappingBody::XStore(b) => write_xstore_body(out, b),
     }
     out.push_str("    }\n");
 }
