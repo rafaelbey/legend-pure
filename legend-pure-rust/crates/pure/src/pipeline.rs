@@ -1180,21 +1180,58 @@ fn pass_define_class_bodies(
         // Per-element variable scope: seeded with type-variable parameters
         // from parametric Classes / Primitives so `$x` inside a constraint
         // resolves against the class's declared `(x:Integer[1])`.
+        //
+        // Also seed `$this` for Class / Association / Primitive bodies —
+        // constraints, QP bodies, and property defaults all reference the
+        // owning instance via `$this`. Without this, dispatch on
+        // `$this.foo->bar()` chains can't infer the receiver type, and
+        // generic-overloaded functions (e.g. `elementToPath`) collapse to
+        // an `Any` arg and become ambiguous.
         let mut variable_types = HashMap::new();
-        if let Element::Class(c) = model.get_element(id) {
-            for tvp in &c.type_variable_parameters {
-                variable_types.insert(
-                    tvp.name.clone(),
-                    (tvp.type_expr.clone(), tvp.multiplicity.clone()),
-                );
+        let this_type: Option<crate::types::TypeExpr> = match model.get_element(id) {
+            Element::Class(c) => {
+                for tvp in &c.type_variable_parameters {
+                    variable_types.insert(
+                        tvp.name.clone(),
+                        (tvp.type_expr.clone(), tvp.multiplicity.clone()),
+                    );
+                }
+                let type_arguments: Vec<crate::types::TypeExpr> = c
+                    .type_parameters
+                    .iter()
+                    .map(|name| crate::types::TypeExpr::Generic(name.clone()))
+                    .collect();
+                Some(crate::types::TypeExpr::Named {
+                    element: id,
+                    type_arguments,
+                    value_arguments: Vec::new(),
+                })
             }
-        } else if let Element::PrimitiveType(p) = model.get_element(id) {
-            for tvp in &p.type_variable_parameters {
-                variable_types.insert(
-                    tvp.name.clone(),
-                    (tvp.type_expr.clone(), tvp.multiplicity.clone()),
-                );
+            Element::Association(_) => Some(crate::types::TypeExpr::Named {
+                element: id,
+                type_arguments: Vec::new(),
+                value_arguments: Vec::new(),
+            }),
+            Element::PrimitiveType(p) => {
+                for tvp in &p.type_variable_parameters {
+                    variable_types.insert(
+                        tvp.name.clone(),
+                        (tvp.type_expr.clone(), tvp.multiplicity.clone()),
+                    );
+                }
+                Some(crate::types::TypeExpr::Named {
+                    element: id,
+                    type_arguments: Vec::new(),
+                    value_arguments: Vec::new(),
+                })
             }
+            _ => None,
+        };
+        if let Some(this_te) = this_type {
+            variable_types.insert(
+                SmolStr::new("this"),
+                (this_te, crate::types::Multiplicity::PureOne),
+            );
         }
 
         // Lower body-shape items into owned locals. This temporarily
