@@ -71,12 +71,23 @@
 //!
 //! # `.purem` snapshot generation
 //!
-//! Stage 2 will add support for `shape = "purem"` (consume a
-//! pre-compiled snapshot) and an `Embedder::emit_purem(true)` flag
-//! (also produce a `.purem` snapshot alongside the source embed).
-//! Both are recognised by the parser today but produce no output —
-//! see `legend-pure-core-platform/docs/PUREM_FORMAT.md` for the
-//! design.
+//! Two `shape` values produce binary `.purem` artifacts at build time
+//! by invoking the [`legend_pure_snapshot_builder`] helper:
+//!
+//! - `shape = "purem-embedded"` — compiles the repo (with its declared
+//!   transitive deps), writes `OUT_DIR/<name>.purem`, and emits an
+//!   `include_bytes!` constant + a `Repo::from_purem_static` entry in
+//!   `default_embedded_repos()`. Suitable for the bare-minimum bootstrap
+//!   that every binary always carries (today: just `platform`).
+//!
+//! - `shape = "purem-artifact"` — compiles + writes the blob to
+//!   `<target>/snapshots/<name>.purem` (sibling to the produced
+//!   binaries) but does NOT include it in the binary. The CLI's
+//!   classpath auto-discovery picks it up at runtime. Suitable for
+//!   DSLs and any other repo that should ship as an external file.
+//!
+//! `shape = "embedded"` (legacy `include_str!`) is still supported for
+//! ad-hoc test fixtures but is no longer the recommended path.
 
 use std::env;
 use std::fmt::Write as _;
@@ -154,6 +165,26 @@ pub enum BuildError {
     /// Walk over a source root failed.
     #[error("walk failed: {0}")]
     Walk(String),
+    /// `snapshot-builder` returned an error while compiling a repo.
+    #[error("snapshot-builder failed for repo `{name}`: {source}")]
+    Snapshot {
+        /// Repo name being built.
+        name: String,
+        /// Underlying snapshot-builder error.
+        #[source]
+        source: legend_pure_snapshot_builder::BuildError,
+    },
+    /// `Cargo.toml` declared a repo with an unrecognized `shape`.
+    #[error("unsupported shape `{shape}` for repo (descriptor: {descriptor})")]
+    UnsupportedShape {
+        /// The unrecognized shape string.
+        shape: String,
+        /// Descriptor path that referenced it.
+        descriptor: String,
+    },
+    /// Could not resolve the workspace target dir from `OUT_DIR`.
+    #[error("could not resolve target dir from OUT_DIR={0}")]
+    NoTargetDir(PathBuf),
 }
 
 #[derive(Deserialize)]
@@ -326,13 +357,53 @@ impl Embedder {
 
         let mut out = String::new();
         let mut default_repo_calls = Vec::<EmittedRepo>::new();
+        let mut artifact_emitted = false;
+
+        // Pre-resolve every repo's descriptor path so purem shapes can
+        // pass the full descriptor list to snapshot-builder for topo-sort
+        // + dependency resolution.
+        let all_descriptors: Vec<PathBuf> = repos
+            .iter()
+            .map(|e| {
+                fs::canonicalize(manifest_dir.join(&e.descriptor)).map_err(|source| {
+                    BuildError::Io {
+                        path: manifest_dir.join(&e.descriptor),
+                        source,
+                    }
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         for entry in repos {
-            if entry.shape != "embedded" {
-                // Stage 2: dispatch to .purem snapshot generation here.
-                continue;
+            match entry.shape.as_str() {
+                "embedded" => {
+                    self.emit_repo(entry, &manifest_dir, &mut out, &mut default_repo_calls)?;
+                }
+                "purem-embedded" => {
+                    self.emit_purem_embedded_repo(
+                        entry,
+                        &manifest_dir,
+                        &all_descriptors,
+                        &mut out,
+                        &mut default_repo_calls,
+                    )?;
+                }
+                "purem-artifact" => {
+                    self.emit_purem_artifact_repo(
+                        entry,
+                        &manifest_dir,
+                        &all_descriptors,
+                        &mut out,
+                        &mut artifact_emitted,
+                    )?;
+                }
+                other => {
+                    return Err(BuildError::UnsupportedShape {
+                        shape: other.to_string(),
+                        descriptor: entry.descriptor.clone(),
+                    });
+                }
             }
-            self.emit_repo(entry, &manifest_dir, &mut out, &mut default_repo_calls)?;
         }
 
         if self.emit_default_aggregator {
@@ -475,8 +546,214 @@ impl Embedder {
         default_repo_calls.push(EmittedRepo {
             const_suffix,
             prefix,
+            shape: EmittedShape::Embedded,
         });
         Ok(())
+    }
+
+    fn emit_purem_embedded_repo(
+        &self,
+        entry: &RepoEntry,
+        manifest_dir: &Path,
+        all_descriptors: &[PathBuf],
+        out: &mut String,
+        default_repo_calls: &mut Vec<EmittedRepo>,
+    ) -> Result<(), BuildError> {
+        let (descriptor_canonical, descriptor) = self.read_descriptor(entry, manifest_dir)?;
+        self.emit_rerun_directives(&descriptor_canonical, &descriptor)?;
+
+        let out_dir = env::var_os("OUT_DIR").ok_or(BuildError::Env("OUT_DIR"))?;
+        let purem_path = PathBuf::from(&out_dir).join(format!("{}.purem", descriptor.name));
+        self.run_snapshot_builder(&descriptor.name, all_descriptors, &purem_path)?;
+
+        let const_suffix = sanitize_const(&descriptor.name);
+        self.emit_meta_const(&descriptor, &const_suffix, out);
+
+        let cp = &self.crate_path;
+        let purem_path_str = path_to_str(&purem_path)?;
+        writeln!(
+            out,
+            "/// Embedded `.purem` blob for the `{name}` repo (compiled at build time).",
+            name = descriptor.name
+        )
+        .ok();
+        writeln!(
+            out,
+            "pub static REPO_{const_suffix}_PUREM: &[u8] = include_bytes!(\"{purem_path_str}\");\n"
+        )
+        .ok();
+
+        let prefix = format!("/{}", descriptor.name);
+        default_repo_calls.push(EmittedRepo {
+            const_suffix,
+            prefix,
+            shape: EmittedShape::Purem,
+        });
+
+        // Hint to dependent crates that they can find the snapshots
+        // directory via this env var. Even though purem-embedded repos
+        // are baked in, the side-band signal is harmless and allows
+        // mixed pipelines to discover artifacts.
+        let _ = cp;
+        Ok(())
+    }
+
+    fn emit_purem_artifact_repo(
+        &self,
+        entry: &RepoEntry,
+        manifest_dir: &Path,
+        all_descriptors: &[PathBuf],
+        out: &mut String,
+        artifact_emitted: &mut bool,
+    ) -> Result<(), BuildError> {
+        let (descriptor_canonical, descriptor) = self.read_descriptor(entry, manifest_dir)?;
+        self.emit_rerun_directives(&descriptor_canonical, &descriptor)?;
+
+        let target_snapshots_dir = resolve_target_snapshots_dir()?;
+        fs::create_dir_all(&target_snapshots_dir).map_err(|source| BuildError::Io {
+            path: target_snapshots_dir.clone(),
+            source,
+        })?;
+        let purem_path = target_snapshots_dir.join(format!("{}.purem", descriptor.name));
+        // Artifacts are advisory: a compile failure for one DSL doesn't
+        // block the build, since users can still point a classpath at
+        // the live source. Emit a cargo warning and remove any stale
+        // file so callers don't pick up a previous build's blob.
+        if let Err(source) = self.run_snapshot_builder(&descriptor.name, all_descriptors, &purem_path) {
+            println!(
+                "cargo:warning=snapshot-builder failed for `{name}`: {source}. \
+                 The .purem artifact was not produced; load from sources via \
+                 --classpath kind=filesystem until the underlying compile error is fixed.",
+                name = descriptor.name,
+            );
+            // Best-effort cleanup of any prior stale blob.
+            let _ = fs::remove_file(&purem_path);
+        }
+
+        let const_suffix = sanitize_const(&descriptor.name);
+        self.emit_meta_const(&descriptor, &const_suffix, out);
+
+        // Emit the side-band env var the consumer's runtime can read to
+        // discover the build-time-emitted snapshots dir. Only once.
+        if !*artifact_emitted {
+            let dir_str = path_to_str(&target_snapshots_dir)?;
+            println!("cargo:rustc-env=LEGEND_PURE_BUILD_SNAPSHOTS_DIR={dir_str}");
+            *artifact_emitted = true;
+        }
+        Ok(())
+    }
+
+    fn read_descriptor(
+        &self,
+        entry: &RepoEntry,
+        manifest_dir: &Path,
+    ) -> Result<(PathBuf, DescriptorJson), BuildError> {
+        let descriptor_path = manifest_dir.join(&entry.descriptor);
+        let descriptor_canonical =
+            fs::canonicalize(&descriptor_path).map_err(|source| BuildError::Io {
+                path: descriptor_path.clone(),
+                source,
+            })?;
+        let descriptor_str =
+            fs::read_to_string(&descriptor_canonical).map_err(|source| BuildError::Io {
+                path: descriptor_canonical.clone(),
+                source,
+            })?;
+        let descriptor: DescriptorJson =
+            serde_json::from_str(&descriptor_str).map_err(|source| BuildError::Json {
+                path: descriptor_canonical.clone(),
+                source,
+            })?;
+        Ok((descriptor_canonical, descriptor))
+    }
+
+    fn emit_rerun_directives(
+        &self,
+        descriptor_canonical: &Path,
+        descriptor: &DescriptorJson,
+    ) -> Result<(), BuildError> {
+        let descriptor_str_path = path_to_str(descriptor_canonical)?;
+        println!("cargo:rerun-if-changed={descriptor_str_path}");
+
+        let descriptor_dir = descriptor_canonical
+            .parent()
+            .ok_or_else(|| BuildError::DescriptorNoParent(descriptor_canonical.to_path_buf()))?;
+        let source_root = descriptor_dir.join(&descriptor.name);
+        if !source_root.exists() {
+            return Err(BuildError::SourceRootMissing {
+                name: descriptor.name.clone(),
+                path: source_root,
+            });
+        }
+        let source_root_str = path_to_str(&source_root)?;
+        println!("cargo:rerun-if-changed={source_root_str}");
+
+        // Also emit per-file rerun directives so any source change
+        // re-triggers the build script. Reuses the same WalkDir pass as
+        // the legacy embed path.
+        for walk_entry in WalkDir::new(&source_root).sort_by_file_name() {
+            let walk_entry = walk_entry.map_err(|e| BuildError::Walk(e.to_string()))?;
+            let path = walk_entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+                continue;
+            };
+            if ext != "pure" && ext != "json" {
+                continue;
+            }
+            let abs = fs::canonicalize(path).map_err(|source| BuildError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            let abs_str = path_to_str(&abs)?;
+            println!("cargo:rerun-if-changed={abs_str}");
+        }
+        Ok(())
+    }
+
+    fn run_snapshot_builder(
+        &self,
+        target: &str,
+        all_descriptors: &[PathBuf],
+        output: &Path,
+    ) -> Result<(), BuildError> {
+        legend_pure_snapshot_builder::compile_to_purem(
+            legend_pure_snapshot_builder::CompileRequest {
+                descriptors: all_descriptors,
+                target,
+                output,
+                auto_imports: legend_pure_snapshot_builder::DEFAULT_PLATFORM_AUTO_IMPORTS,
+            },
+        )
+        .map_err(|source| BuildError::Snapshot {
+            name: target.to_string(),
+            source,
+        })
+    }
+
+    fn emit_meta_const(&self, descriptor: &DescriptorJson, const_suffix: &str, out: &mut String) {
+        let cp = &self.crate_path;
+        writeln!(
+            out,
+            "/// Descriptor metadata read from the Java JSON for the `{name}` repo.",
+            name = descriptor.name
+        )
+        .ok();
+        writeln!(
+            out,
+            "pub const REPO_{const_suffix}_META: {cp}::repo::RepoMeta = {cp}::repo::RepoMeta {{",
+        )
+        .ok();
+        writeln!(out, "    name: \"{}\",", descriptor.name).ok();
+        writeln!(out, "    pattern: r#\"{}\"#,", descriptor.pattern).ok();
+        write!(out, "    dependencies: &[").ok();
+        for dep in &descriptor.dependencies {
+            write!(out, "\"{dep}\", ").ok();
+        }
+        writeln!(out, "],").ok();
+        writeln!(out, "}};\n").ok();
     }
 
     fn emit_default_aggregator_fn(
@@ -495,21 +772,35 @@ impl Embedder {
         .ok();
         out.push_str("    vec![\n");
         for repo in emitted {
-            writeln!(out, "        {cp}::repo::Repo::Embedded {{").ok();
-            writeln!(out, "            prefix: \"{p}\",", p = repo.prefix).ok();
-            writeln!(
-                out,
-                "            files: REPO_{s}_FILES,",
-                s = repo.const_suffix
-            )
-            .ok();
-            writeln!(
-                out,
-                "            meta: &REPO_{s}_META,",
-                s = repo.const_suffix
-            )
-            .ok();
-            out.push_str("        },\n");
+            match repo.shape {
+                EmittedShape::Embedded => {
+                    writeln!(out, "        {cp}::repo::Repo::Embedded {{").ok();
+                    writeln!(out, "            prefix: \"{p}\",", p = repo.prefix).ok();
+                    writeln!(
+                        out,
+                        "            files: REPO_{s}_FILES,",
+                        s = repo.const_suffix
+                    )
+                    .ok();
+                    writeln!(
+                        out,
+                        "            meta: &REPO_{s}_META,",
+                        s = repo.const_suffix
+                    )
+                    .ok();
+                    out.push_str("        },\n");
+                }
+                EmittedShape::Purem => {
+                    writeln!(
+                        out,
+                        "        {cp}::repo::Repo::from_purem_static(\"{p}\", \
+                         &REPO_{s}_META, REPO_{s}_PUREM),",
+                        p = repo.prefix,
+                        s = repo.const_suffix
+                    )
+                    .ok();
+                }
+            }
         }
         out.push_str("    ]\n");
         out.push_str("}\n");
@@ -532,6 +823,29 @@ pub fn run() -> Result<(), BuildError> {
 struct EmittedRepo {
     const_suffix: String,
     prefix: String,
+    shape: EmittedShape,
+}
+
+/// Whether an emitted repo is source-embedded (legacy `include_str!`)
+/// or `.purem`-embedded (`include_bytes!`).
+#[derive(Debug, Clone, Copy)]
+enum EmittedShape {
+    /// Legacy `include_str!` source embedding.
+    Embedded,
+    /// `.purem` blob via `include_bytes!`.
+    Purem,
+}
+
+fn resolve_target_snapshots_dir() -> Result<PathBuf, BuildError> {
+    let out_dir = env::var_os("OUT_DIR").ok_or(BuildError::Env("OUT_DIR"))?;
+    let out_dir = PathBuf::from(out_dir);
+    // OUT_DIR == target/<profile>/build/<crate>-<hash>/out
+    // Walk three ancestors up to reach target/<profile>/.
+    let target_dir = out_dir
+        .ancestors()
+        .nth(3)
+        .ok_or_else(|| BuildError::NoTargetDir(out_dir.clone()))?;
+    Ok(target_dir.join("snapshots"))
 }
 
 fn manifest_dir() -> Result<PathBuf, BuildError> {
