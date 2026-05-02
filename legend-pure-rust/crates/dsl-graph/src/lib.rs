@@ -22,10 +22,16 @@
 //! - [`ast`] — `RootGraphFetchTree`, `PropertyGraphFetchTree`,
 //!   `SubTypeGraphFetchTree` — implements
 //!   [`legend_pure_parser_ast::island::IslandContent`].
-//! - **Parser** (commit #5) — will land here, registers as
+//! - [`parser`] — registers `GraphFetchIslandParser` as an
 //!   [`legend_pure_parser_parser::IslandParser`] with tag `""`.
-//! - **Composer** (commit #6) — `IslandComposer` with tag `""`.
-//! - **Protocol** (commit #7) — `IslandProtocol` with tag `""`.
+//! - [`compose`] — `IslandComposer` with tag `""` (round-trip back to
+//!   Pure source).
+//! - [`protocol`] — `IslandProtocol` with tag `""` (AST ↔ Legend
+//!   Protocol JSON).
+//! - [`compiler`] — `GraphFetchExtension` (`CompilerExtension`)
+//!   resolves root classes, validates property names, and recurses
+//!   into sub-trees / sub-type trees during the compile pipeline's
+//!   `define_bodies` pass.
 //!
 //! Core crates carry no graph-fetch knowledge — this crate is the
 //! sole owner.
@@ -34,6 +40,7 @@
 #![deny(missing_docs)]
 
 pub mod ast;
+pub mod compiler;
 pub mod compose;
 pub mod parser;
 pub mod protocol;

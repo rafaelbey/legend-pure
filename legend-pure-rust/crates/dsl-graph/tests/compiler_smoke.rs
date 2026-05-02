@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Compiler-side behaviour for graph-fetch islands.
+//! Compiler-side behaviour for graph-fetch islands when no extension
+//! is registered.
 //!
-//! Until dsl-graph ships its `CompilerExtension`, the core compiler must
-//! reject any island expression at lowering time with a clear
-//! `UnsupportedExpression`. This test pins that behaviour using the
-//! graph-fetch grammar (`#{ … }#`) registered through the dsl-graph
-//! parser plug-in. Moved from `crates/pure/tests/integration_tests.rs`
-//! so the pure crate carries no graph-fetch references.
+//! When `compile()` is invoked without `GraphFetchExtension`, the core
+//! lowering pass must reject any island expression with a clear
+//! `UnsupportedExpression { kind: "Island" }`. End-to-end tests in
+//! `tests/end_to_end.rs` exercise the opposite path — running
+//! `compile_with_extensions` with `GraphFetchExtension` — and assert
+//! that graph-fetch-specific diagnostics surface instead.
 
 use legend_pure_parser_ast::section::SourceFile;
 use legend_pure_parser_pure::compile;

@@ -38,6 +38,10 @@ descriptor = "../../../legend-pure-dsl/legend-pure-dsl-diagram/legend-pure-m2-ds
 shape = "embedded"
 
 [[package.metadata.legend-pure.repos]]
+descriptor = "../../../legend-pure-dsl/legend-pure-dsl-graph/legend-pure-m2-dsl-graph-pure/src/main/resources/platform_dsl_graph.definition.json"
+shape = "embedded"
+
+[[package.metadata.legend-pure.repos]]
 descriptor = "../../../legend-pure-dsl/legend-pure-dsl-tds/legend-pure-m2-dsl-tds-pure/src/main/resources/platform_dsl_tds.definition.json"
 shape = "embedded"
 
