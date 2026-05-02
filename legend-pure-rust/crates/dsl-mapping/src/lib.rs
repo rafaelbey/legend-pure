@@ -31,9 +31,17 @@
 //!   `Enumeration`, that target value names exist on it, that
 //!   referenced source enum values resolve, and that all source
 //!   values across one mapping share the same kind.
+//! - **`Operation`** (Stage 5, simple parameters form):
+//!   `pkg::operations::union(setImplA, setImplB)` — a function-driven
+//!   combinator that composes other set implementations. Validators
+//!   check that the operation function path resolves to a Function
+//!   and that each parameter references a class-mapping ID visible
+//!   in this mapping (its own + transitively included). The merge
+//!   form (`[ids], { lambda }`) is reserved for a follow-up
+//!   sub-stage.
 //!
-//! Stages 5+ extend `ClassMappingBody` with `Operation`,
-//! `AggregationAware`, `XStore`, `Relation` variants. See
+//! Stages 6+ extend `ClassMappingBody` with `AggregationAware`,
+//! `XStore`, `Relation` variants. See
 //! `~/.claude/plans/what-is-left-to-iterative-sunrise.md` for the
 //! staged roadmap.
 //!

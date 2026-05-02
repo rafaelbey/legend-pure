@@ -22,7 +22,8 @@ use legend_pure_parser_ast::expression::Expression;
 
 use crate::ast::{
     ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping, EnumerationClassMappingBody,
-    MappingDef, MappingInclude, PureClassMappingBody, PurePropertyMapping, StoreSubstitution,
+    MappingDef, MappingInclude, OperationClassMappingBody, PureClassMappingBody,
+    PurePropertyMapping, StoreSubstitution,
 };
 
 /// Compose a single [`MappingDef`] back to its `Mapping pkg::M ( … )`
@@ -119,7 +120,30 @@ fn write_class_mapping(out: &mut String, cm: &ClassMapping) {
             write_enumeration_body(out, body);
             out.push_str("  }\n");
         }
+        ClassMappingBody::Operation(body) => {
+            out.push_str("Operation");
+            if let Some(name) = &cm.mapping_name {
+                out.push(' ');
+                out.push_str(name.as_str());
+            }
+            out.push_str("\n  {\n");
+            write_operation_body(out, body);
+            out.push_str("  }\n");
+        }
     }
+}
+
+fn write_operation_body(out: &mut String, body: &OperationClassMappingBody) {
+    out.push_str("    ");
+    write_ptr(out, &body.operation);
+    out.push('(');
+    for (i, p) in body.parameters.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(p.id.as_str());
+    }
+    out.push_str(")\n");
 }
 
 fn write_enumeration_body(out: &mut String, body: &EnumerationClassMappingBody) {
