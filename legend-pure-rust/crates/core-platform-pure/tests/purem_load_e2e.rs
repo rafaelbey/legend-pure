@@ -26,10 +26,6 @@ use legend_pure_parser_pure::purem::{slice_by_repo, write_repo};
 use smol_str::SmolStr;
 
 #[test]
-#[ignore = "blocked: purem slice loses generic-type binding for ^$x(prop = $xs.prop) in \
-            meta::relational::metamodel::schema (functions.pure:232) — re-enable once \
-            slice serializer preserves Schema[*].tables → Table[*] inference. Tracked in \
-            BACKLOG.md under 'Purem slice generic-type-binding preservation'."]
 fn purem_repo_loads_into_fresh_model() {
     // Step 1: compile the embedded platform.
     let model = match platform::load_platform() {
