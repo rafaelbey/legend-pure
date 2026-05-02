@@ -166,15 +166,23 @@ pub struct ClassMapping {
 /// Class-mapping body sub-grammars.
 ///
 /// Each variant corresponds to a `parserName` keyword in the Java
-/// grammar. Stage 2 ships only [`ClassMappingBody::Pure`]; Stages 4+
-/// add the rest. Marked `#[non_exhaustive]` so adding variants is
-/// non-breaking.
+/// grammar. Stages 5+ add the remaining variants
+/// (`Operation`, `AggregationAware`, `XStore`, `Relation`).
+/// Marked `#[non_exhaustive]` so adding variants is non-breaking.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum ClassMappingBody {
     /// `parserName == "Pure"` — model-to-model
     /// (`PureInstanceSetImplementation` in the metamodel).
-    Pure(PureClassMappingBody),
+    /// Boxed because `PureClassMappingBody` is materially larger
+    /// than the other variants (filter `Expression` + per-property
+    /// `Lambda` bodies); keeping the enum compact avoids paying the
+    /// largest-variant cost on every `ClassMapping`.
+    Pure(Box<PureClassMappingBody>),
+    /// `parserName == "EnumerationMapping"` — maps source values
+    /// (strings / integers / external enum values) onto target enum
+    /// values (`EnumerationMapping<T>` in the metamodel).
+    Enumeration(EnumerationClassMappingBody),
 }
 
 // ---------------------------------------------------------------------------
@@ -228,4 +236,72 @@ pub struct PurePropertyMapping {
     pub explode: bool,
     /// Span of the entire `propertyName : transform` entry.
     pub source_info: SourceInfo,
+}
+
+// ---------------------------------------------------------------------------
+// EnumerationClassMappingBody — Stage 4
+// ---------------------------------------------------------------------------
+
+/// Body of an `EnumerationMapping` class mapping.
+///
+/// Shape:
+/// ```text
+/// {
+///   TARGET_VAL_1 : 'sourceString',
+///   TARGET_VAL_2 : 42,
+///   TARGET_VAL_3 : pkg::OtherEnum.VAL,
+///   TARGET_VAL_4 : ['multi', 'value']
+/// }
+/// ```
+///
+/// The enclosing [`ClassMapping::class`] field carries the FQN of
+/// the target enumeration; this body holds only the per-target-value
+/// source mappings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumerationClassMappingBody {
+    /// One entry per target enum value, in source order.
+    pub value_mappings: Vec<EnumValueMapping>,
+}
+
+/// One `targetEnumValue : sourceValue(s)` entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumValueMapping {
+    /// Target enum value name on the enumeration being mapped.
+    pub enum_value_name: SmolStr,
+    /// Source values that map to this target. Single-value entries
+    /// produce a one-element vec; bracketed `[a, b, c]` entries
+    /// produce a multi-element vec.
+    pub source_values: Vec<EnumSourceValue>,
+    /// Span of the entire `enumValueName : …` entry.
+    pub source_info: SourceInfo,
+}
+
+/// One source-value form inside an [`EnumValueMapping`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum EnumSourceValue {
+    /// `'literal'` — source value is a string literal.
+    String {
+        /// The string contents (already stripped of surrounding quotes).
+        value: SmolStr,
+        /// Span of the literal token.
+        source_info: SourceInfo,
+    },
+    /// `42` — source value is an integer literal.
+    Integer {
+        /// The integer value.
+        value: i64,
+        /// Span of the literal token.
+        source_info: SourceInfo,
+    },
+    /// `pkg::OtherEnum.VALUE` — source value is a reference to an
+    /// enum value in some other enumeration (typically the source
+    /// model's enum that maps onto this target).
+    EnumRef {
+        /// FQN of the source enumeration.
+        enumeration: PackageableElementPtr,
+        /// Name of the source enum value.
+        value_name: SmolStr,
+        /// Span of the entire `pkg::Enum.VAL` reference.
+        source_info: SourceInfo,
+    },
 }

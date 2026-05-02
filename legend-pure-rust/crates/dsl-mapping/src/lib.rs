@@ -12,39 +12,47 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! # Legend Pure — Mapping DSL (Stage 2)
+//! # Legend Pure — Mapping DSL
 //!
-//! Stage 2 ships parser + AST + composer + a `declare`-only compiler
-//! extension that registers parsed `MappingDef`s under their FQN.
-//! Users can now write `###Mapping` blocks and have them parse,
-//! round-trip, and resolve through `MappingExtension::mappings()` —
-//! but **filter and transform lambdas are not lowered or validated
-//! yet**. Stage 3 adds the `PureInstanceSetImplementation` processor
-//! + validator + `MappingValidator` (DAG check).
+//! Implements the `###Mapping` section grammar plus its compiler
+//! extension. Sub-grammar coverage (selected at parse time by the
+//! `parserName` token after `:`):
+//!
+//! - **`Pure`** (model-to-model): `~src`, `~filter`,
+//!   `propertyName : transformExpression`. Validators check class /
+//!   property resolution, filter return type (`Boolean[1]`),
+//!   transform-vs-property type and multiplicity compatibility,
+//!   include-graph DAG, super-mapping ID resolution, and
+//!   class-mapping ID uniqueness.
+//! - **`EnumerationMapping`**: `targetEnumValue : sourceValue`
+//!   entries where `sourceValue` is one of `'literal'`, integer, or
+//!   `pkg::OtherEnum.VAL`, optionally bracketed `[v1, v2]` for
+//!   multi-source. Validators check that the target resolves to an
+//!   `Enumeration`, that target value names exist on it, that
+//!   referenced source enum values resolve, and that all source
+//!   values across one mapping share the same kind.
+//!
+//! Stages 5+ extend `ClassMappingBody` with `Operation`,
+//! `AggregationAware`, `XStore`, `Relation` variants. See
+//! `~/.claude/plans/what-is-left-to-iterative-sunrise.md` for the
+//! staged roadmap.
 //!
 //! Module map:
 //!
 //! - [`ast`] — `MappingDef`, `MappingInclude`, `ClassMapping`,
-//!   `ClassMappingBody` enum (Pure variant only), `PureClassMappingBody`,
-//!   `PurePropertyMapping`. `MappingDef` implements
+//!   `ClassMappingBody` enum, body structs for each variant.
+//!   `MappingDef` implements
 //!   [`legend_pure_parser_ast::dsl::DSLElement`] so it rides on the
 //!   core `Element::DSLElement` variant.
 //! - [`parser`] — `MappingSectionParser` plugs into
 //!   [`legend_pure_parser_parser::SectionParser`] and consumes
-//!   `###Mapping` section bodies. Sub-grammar dispatch by `parserName`
-//!   token; only `Pure` is supported in Stage 2 (others raise
-//!   `UnsupportedSubParser`).
-//! - [`compose`] — `compose_mapping` round-trips a `MappingDef` back to
-//!   canonical Pure source.
-//! - [`compiler`] — `MappingExtension` registers `MappingDef`s under
-//!   their FQN during `declare()`. No `define_signatures` /
-//!   `define_bodies` / `validate` work yet — Stage 3.
-//!
-//! Stages 4–8 (separate sessions) extend the `ClassMappingBody` enum
-//! with `Enumeration`, `Operation`, `AggregationAware`, `XStore`,
-//! `Relation` variants and their processors. See
-//! `~/.claude/plans/what-is-left-to-iterative-sunrise.md` for the
-//! staged roadmap.
+//!   `###Mapping` section bodies. Unknown `parserName` tokens raise
+//!   `UnsupportedSubParser` pointing at the staged roadmap.
+//! - [`compose`] — `compose_mapping` / `compose_mapping_section`
+//!   round-trip a `MappingDef` back to canonical Pure source.
+//! - [`compiler`] — `MappingExtension` registers `MappingDef`s
+//!   during `declare()` and runs the structural + type-check
+//!   validators during `validate()`.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]

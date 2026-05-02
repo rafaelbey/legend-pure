@@ -21,8 +21,8 @@ use legend_pure_parser_ast::annotation::PackageableElementPtr;
 use legend_pure_parser_ast::expression::Expression;
 
 use crate::ast::{
-    ClassMapping, ClassMappingBody, MappingDef, MappingInclude, PureClassMappingBody,
-    PurePropertyMapping, StoreSubstitution,
+    ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping, EnumerationClassMappingBody,
+    MappingDef, MappingInclude, PureClassMappingBody, PurePropertyMapping, StoreSubstitution,
 };
 
 /// Compose a single [`MappingDef`] back to its `Mapping pkg::M ( … )`
@@ -108,6 +108,70 @@ fn write_class_mapping(out: &mut String, cm: &ClassMapping) {
             out.push_str("\n  {\n");
             write_pure_body(out, body);
             out.push_str("  }\n");
+        }
+        ClassMappingBody::Enumeration(body) => {
+            out.push_str("EnumerationMapping");
+            if let Some(name) = &cm.mapping_name {
+                out.push(' ');
+                out.push_str(name.as_str());
+            }
+            out.push_str("\n  {\n");
+            write_enumeration_body(out, body);
+            out.push_str("  }\n");
+        }
+    }
+}
+
+fn write_enumeration_body(out: &mut String, body: &EnumerationClassMappingBody) {
+    for (i, vm) in body.value_mappings.iter().enumerate() {
+        write_enum_value_mapping(out, vm);
+        if i + 1 < body.value_mappings.len() {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+}
+
+fn write_enum_value_mapping(out: &mut String, vm: &EnumValueMapping) {
+    out.push_str("    ");
+    out.push_str(vm.enum_value_name.as_str());
+    out.push_str(" : ");
+    if vm.source_values.len() == 1 {
+        write_enum_source_value(out, &vm.source_values[0]);
+    } else {
+        out.push('[');
+        for (i, sv) in vm.source_values.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            write_enum_source_value(out, sv);
+        }
+        out.push(']');
+    }
+}
+
+fn write_enum_source_value(out: &mut String, sv: &EnumSourceValue) {
+    match sv {
+        EnumSourceValue::String { value, .. } => {
+            out.push('\'');
+            out.push_str(value.as_str());
+            out.push('\'');
+        }
+        EnumSourceValue::Integer { value, .. } => {
+            out.push_str(&value.to_string());
+        }
+        EnumSourceValue::EnumRef {
+            enumeration,
+            value_name,
+            ..
+        } => {
+            if let Some(pkg) = &enumeration.package {
+                out.push_str(&format!("{pkg}"));
+                out.push_str("::");
+            }
+            out.push_str(enumeration.name.as_str());
+            out.push('.');
+            out.push_str(value_name.as_str());
         }
     }
 }
