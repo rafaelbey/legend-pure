@@ -378,6 +378,18 @@ impl Embedder {
             match entry.shape.as_str() {
                 "embedded" => {
                     self.emit_repo(entry, &manifest_dir, &mut out, &mut default_repo_calls)?;
+                    // Side-effect: also emit a `.purem` artifact next to
+                    // the produced binaries so classpath auto-discovery
+                    // can pick it up. Failures are advisory (warning
+                    // only) — the embedded source path is the
+                    // authoritative source-of-truth, and a broken DSL
+                    // compile shouldn't block the binary build.
+                    self.emit_artifact_side_effect(
+                        entry,
+                        &manifest_dir,
+                        &all_descriptors,
+                        &mut artifact_emitted,
+                    )?;
                 }
                 "purem-embedded" => {
                     self.emit_purem_embedded_repo(
@@ -548,6 +560,48 @@ impl Embedder {
             prefix,
             shape: EmittedShape::Embedded,
         });
+        Ok(())
+    }
+
+    /// Side-effect emission for the legacy `shape = "embedded"` path:
+    /// also writes a `.purem` blob to `target/<profile>/snapshots/` so
+    /// classpath-driven consumers can pick it up. Compile failures are
+    /// degraded to `cargo:warning=` because the source `include_str!`
+    /// path is the authoritative load path for embedded repos and
+    /// shouldn't be blocked by a downstream compile bug.
+    fn emit_artifact_side_effect(
+        &self,
+        entry: &RepoEntry,
+        manifest_dir: &Path,
+        all_descriptors: &[PathBuf],
+        artifact_emitted: &mut bool,
+    ) -> Result<(), BuildError> {
+        let (_descriptor_canonical, descriptor) = self.read_descriptor(entry, manifest_dir)?;
+
+        let target_snapshots_dir = resolve_target_snapshots_dir()?;
+        fs::create_dir_all(&target_snapshots_dir).map_err(|source| BuildError::Io {
+            path: target_snapshots_dir.clone(),
+            source,
+        })?;
+        let purem_path = target_snapshots_dir.join(format!("{}.purem", descriptor.name));
+
+        if let Err(source) =
+            self.run_snapshot_builder(&descriptor.name, all_descriptors, &purem_path)
+        {
+            println!(
+                "cargo:warning=snapshot-builder failed for `{name}`: {source}. \
+                 The .purem artifact was not produced; embedded source path \
+                 is unaffected.",
+                name = descriptor.name,
+            );
+            let _ = fs::remove_file(&purem_path);
+        }
+
+        if !*artifact_emitted {
+            let dir_str = path_to_str(&target_snapshots_dir)?;
+            println!("cargo:rustc-env=LEGEND_PURE_BUILD_SNAPSHOTS_DIR={dir_str}");
+            *artifact_emitted = true;
+        }
         Ok(())
     }
 
