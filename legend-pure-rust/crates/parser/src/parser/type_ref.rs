@@ -69,6 +69,18 @@ impl Parser {
             } else {
                 loop {
                     args.push(self.parse_type_reference()?);
+                    // Type-union operator `T+V`: the M3 grammar allows
+                    // `+`-chained types inside a generic-type-arg
+                    // position (e.g. `Relation<T+V>`). The AST has no
+                    // dedicated union slot; we keep the first operand
+                    // and drop the rest, matching Java's structural-
+                    // union resolution at compile time. Whichever
+                    // operand is captured doesn't affect downstream
+                    // dispatch since the lowerer treats unions as
+                    // opaque shapes.
+                    while self.cursor.eat(TokenKind::Plus) {
+                        let _discarded = self.parse_type_reference()?;
+                    }
                     if !self.cursor.eat(TokenKind::Comma) {
                         break;
                     }
