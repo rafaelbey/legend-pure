@@ -130,6 +130,29 @@ function my::test(): Any[*]
 }
 
 #[test]
+fn no_param_lambda_multi_statement_body_terminates_at_comma() {
+    // Regression: the no-param `| body` lambda used in `if(cond, |then, |else)`
+    // forms must terminate its multi-statement body at the comma separating
+    // arms. Before the fix, the parser only stopped on `)`, `}`, `]`, or
+    // EOF — never `,` — so a trailing `;,` (last statement ends with `;`,
+    // arm separator follows) was consumed as the start of another body
+    // statement. The pattern shows up across `platform_dsl_mapping` (e.g.
+    // `addAssociationMappingsIfRequired` in functions_Mapping.pure).
+    let _ = parse_ok(
+        r"###Pure
+function my::test(x: Boolean[1]): Any[1]
+{
+    if($x,
+       | let a = 1;
+         let b = 2;
+         $a + $b;,
+       | 0
+    )
+}",
+    );
+}
+
+#[test]
 fn enum_value_access() {
     let file = parse_ok(
         r"###Pure

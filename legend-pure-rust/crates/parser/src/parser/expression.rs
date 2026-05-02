@@ -371,10 +371,14 @@ impl Parser {
                 self.cursor.advance();
                 let mut body = vec![self.parse_expression()?];
                 while self.cursor.eat(TokenKind::Semicolon) {
-                    // Stop if we hit a closing delimiter
+                    // Stop if we hit a closing delimiter — `Comma` covers
+                    // the case `if(cond, | then; , | else)` where a
+                    // multi-statement no-param lambda body ends with `;,`
+                    // before the next `if`/`match` arm.
                     if self.cursor.check(TokenKind::RParen)
                         || self.cursor.check(TokenKind::RBrace)
                         || self.cursor.check(TokenKind::RBracket)
+                        || self.cursor.check(TokenKind::Comma)
                         || self.cursor.check(TokenKind::Eof)
                     {
                         break;
