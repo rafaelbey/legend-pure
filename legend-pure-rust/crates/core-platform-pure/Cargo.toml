@@ -26,6 +26,10 @@ descriptor = "../../../legend-pure-core/legend-pure-m3-core/src/main/resources/p
 shape = "embedded"
 
 [[package.metadata.legend-pure.repos]]
+descriptor = "../../../legend-pure-core/legend-pure-m3-precisePrimitives/src/main/resources/platform_precise_primitives.definition.json"
+shape = "embedded"
+
+[[package.metadata.legend-pure.repos]]
 descriptor = "../../../legend-pure-dsl/legend-pure-dsl-store/legend-pure-m2-dsl-store-pure/src/main/resources/platform_dsl_store.definition.json"
 shape = "embedded"
 
