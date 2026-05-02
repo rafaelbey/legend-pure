@@ -70,8 +70,9 @@ use legend_pure_parser_pure::types::{Multiplicity, ResolvedType, TypeExpr};
 use smol_str::SmolStr;
 
 use crate::ast::{
+    AggregateSpecification, AggregationAwareClassMappingBody, AggregationFunctionSpec,
     ClassMapping, ClassMappingBody, EnumSourceValue, EnumerationClassMappingBody, MappingDef,
-    OperationClassMappingBody, PureClassMappingBody, PurePropertyMapping,
+    NestedClassMapping, OperationClassMappingBody, PureClassMappingBody, PurePropertyMapping,
 };
 
 /// Compiler extension for the `###Mapping` DSL.
@@ -292,6 +293,32 @@ fn validate_class_mapping(
                 });
             }
             validate_operation_body(body, visible_ids, model, errors);
+        }
+        ClassMappingBody::AggregationAware(body) => {
+            // AggregationAware bodies also want a Class target —
+            // each nested mapping (main + per-view aggregate)
+            // inherits this class.
+            let class_id = resolve_class(model, &target_fqn);
+            if class_id.is_none() {
+                errors.push(CompilationError {
+                    message: format!(
+                        "Class mapping target '{target_fqn}' does not resolve to a Class"
+                    ),
+                    source_info: cm.source_info.clone(),
+                    kind: CompilationErrorKind::UnresolvedElement {
+                        path: target_fqn.clone(),
+                    },
+                });
+            }
+            validate_aggregation_aware_body(
+                body,
+                &target_fqn,
+                class_id,
+                visible_ids,
+                model,
+                auto_imports,
+                errors,
+            );
         }
     }
 }
@@ -793,6 +820,220 @@ fn validate_operation_body(
             });
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Stage-6 — AggregationAware body validation
+// ---------------------------------------------------------------------------
+
+fn validate_aggregation_aware_body(
+    body: &AggregationAwareClassMappingBody,
+    target_class_fqn: &str,
+    target_class_id: Option<ElementId>,
+    visible_ids: &HashSet<SmolStr>,
+    model: &PureModel,
+    auto_imports: &[SmolStr],
+    errors: &mut Vec<CompilationError>,
+) {
+    // 1. Java's AggregationAwareValidator iterates per
+    //    `aggregateValues` entry and rejects mapFn/aggregateFn whose
+    //    return type isn't a DataType (primitive type / enumeration).
+    //    Mirror that here: lower each function with `this` bound to
+    //    the outer class, infer its return type, then check it's a
+    //    DataType. The aggregateFn additionally has `mapped` bound
+    //    to the mapFn's return shape (Java wraps the mapped value
+    //    into a synthesized `mapped` parameter — same idea here).
+    for view in &body.views {
+        validate_model_operation(
+            &view.model_operation,
+            target_class_fqn,
+            target_class_id,
+            model,
+            auto_imports,
+            errors,
+        );
+        // 2. Recursively validate the per-view aggregate mapping.
+        validate_nested_class_mapping(
+            &view.aggregate_mapping,
+            target_class_fqn,
+            target_class_id,
+            visible_ids,
+            model,
+            auto_imports,
+            errors,
+        );
+    }
+    // 3. Recursively validate the main mapping fall-through.
+    validate_nested_class_mapping(
+        &body.main_mapping,
+        target_class_fqn,
+        target_class_id,
+        visible_ids,
+        model,
+        auto_imports,
+        errors,
+    );
+}
+
+fn validate_model_operation(
+    spec: &AggregateSpecification,
+    target_class_fqn: &str,
+    target_class_id: Option<ElementId>,
+    model: &PureModel,
+    auto_imports: &[SmolStr],
+    errors: &mut Vec<CompilationError>,
+) {
+    // Without a resolved target class we can't bind `this`; the
+    // outer "target doesn't resolve" diagnostic already fired, so
+    // just skip the type-check follow-up here to avoid a $this-not-
+    // found cascade.
+    let Some(class_id) = target_class_id else {
+        return;
+    };
+    let this_binding: Vec<(SmolStr, TypeExpr, Multiplicity)> = vec![(
+        SmolStr::new("this"),
+        TypeExpr::Named {
+            element: class_id,
+            type_arguments: Vec::new(),
+            value_arguments: Vec::new(),
+        },
+        Multiplicity::PureOne,
+    )];
+
+    for av in &spec.aggregate_values {
+        validate_aggregate_value(
+            av,
+            target_class_fqn,
+            model,
+            auto_imports,
+            &this_binding,
+            errors,
+        );
+    }
+}
+
+fn validate_aggregate_value(
+    av: &AggregationFunctionSpec,
+    target_class_fqn: &str,
+    model: &PureModel,
+    auto_imports: &[SmolStr],
+    this_binding: &[(SmolStr, TypeExpr, Multiplicity)],
+    errors: &mut Vec<CompilationError>,
+) {
+    // mapFn: must return a DataType (primitive / enumeration).
+    let mapped_ty =
+        lower_and_infer_expression(model, auto_imports, &av.map_fn, this_binding, errors);
+    if let Some(ty) = &mapped_ty
+        && !is_data_type(model, ty)
+    {
+        errors.push(CompilationError {
+            message: format!(
+                "AggregationAware ~mapFn for class '{target_class_fqn}' must return a DataType \
+                 (primitive type / enumeration), got {}",
+                describe_type(ty, model)
+            ),
+            source_info: av.map_fn.source_info().clone(),
+            // TODO(error-kinds): see the same TypeMismatch TODO at
+            // the Stage-3.5 filter rule — wants its own variant.
+            kind: CompilationErrorKind::UnsupportedExpression {
+                kind: SmolStr::new_static("AggregateMapFnReturnType"),
+            },
+        });
+    }
+
+    // aggregateFn: bound `mapped` is the mapFn's return shape (or
+    // `Any[*]` if mapFn inference failed). Java synthesises the
+    // bound from the mapFn's return type.
+    let mapped_binding: Vec<(SmolStr, TypeExpr, Multiplicity)> = match mapped_ty {
+        Some(ref ty) => vec![(
+            SmolStr::new("mapped"),
+            ty.type_expr.clone(),
+            Multiplicity::ZeroOrMany,
+        )],
+        None => Vec::new(),
+    };
+    let agg_ty = lower_and_infer_expression(
+        model,
+        auto_imports,
+        &av.aggregate_fn,
+        &mapped_binding,
+        errors,
+    );
+    if let Some(ty) = &agg_ty
+        && !is_data_type(model, ty)
+    {
+        errors.push(CompilationError {
+            message: format!(
+                "AggregationAware ~aggregateFn for class '{target_class_fqn}' must return a \
+                 DataType (primitive type / enumeration), got {}",
+                describe_type(ty, model)
+            ),
+            source_info: av.aggregate_fn.source_info().clone(),
+            kind: CompilationErrorKind::UnsupportedExpression {
+                kind: SmolStr::new_static("AggregateAggregateFnReturnType"),
+            },
+        });
+    }
+}
+
+fn validate_nested_class_mapping(
+    nested: &NestedClassMapping,
+    target_class_fqn: &str,
+    target_class_id: Option<ElementId>,
+    visible_ids: &HashSet<SmolStr>,
+    model: &PureModel,
+    auto_imports: &[SmolStr],
+    errors: &mut Vec<CompilationError>,
+) {
+    // Reuse the body-kind-specific validators. The nested mapping
+    // inherits the outer class FQN/id so we don't re-resolve it.
+    match &nested.body {
+        ClassMappingBody::Pure(body) => {
+            validate_pure_body(
+                body,
+                target_class_fqn,
+                target_class_id,
+                model,
+                auto_imports,
+                errors,
+            );
+        }
+        ClassMappingBody::Enumeration(body) => {
+            // Enumeration nested under AggregationAware doesn't make
+            // sense (the outer target is a Class, not an Enumeration)
+            // — Java's grammar accepts it textually but the validator
+            // would reject the outer target shape elsewhere. Nothing
+            // useful to add here beyond what the Stage-4 validator
+            // already does.
+            validate_enumeration_body(body, target_class_fqn, None, model, errors);
+        }
+        ClassMappingBody::Operation(body) => {
+            validate_operation_body(body, visible_ids, model, errors);
+        }
+        ClassMappingBody::AggregationAware(body) => {
+            // Recursive case: AggregationAware nested under
+            // AggregationAware. Unusual but the grammar allows it.
+            validate_aggregation_aware_body(
+                body,
+                target_class_fqn,
+                target_class_id,
+                visible_ids,
+                model,
+                auto_imports,
+                errors,
+            );
+        }
+    }
+}
+
+fn is_data_type(model: &PureModel, ty: &ResolvedType) -> bool {
+    let TypeExpr::Named { element, .. } = ty.type_expr else {
+        return false;
+    };
+    matches!(
+        model.get_element(element),
+        ModelElement::PrimitiveType(_) | ModelElement::Enumeration(_)
+    )
 }
 
 // ---------------------------------------------------------------------------
