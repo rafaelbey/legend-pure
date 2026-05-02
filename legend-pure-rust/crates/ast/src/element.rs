@@ -565,6 +565,9 @@ pub struct FunctionDef {
     pub return_type: TypeSpec,
     /// Return multiplicity.
     pub return_multiplicity: Multiplicity,
+    /// Optional constraint block: `[name : expr, ...]` between the
+    /// return type and the body. Mirrors `ClassDef.constraints`.
+    pub constraints: Vec<Constraint>,
     /// Body expressions.
     pub body: Vec<Expression>,
     /// Stereotypes.

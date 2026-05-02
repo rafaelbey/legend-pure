@@ -91,6 +91,7 @@ SourceFile {
                         return_multiplicity: Variable(
                             "y",
                         ),
+                        constraints: [],
                         body: [
                             Variable(
                                 Variable {

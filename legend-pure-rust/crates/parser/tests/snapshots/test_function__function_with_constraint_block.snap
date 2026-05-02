@@ -1,5 +1,5 @@
 ---
-source: crates/parser/tests/test_expression.rs
+source: crates/parser/tests/test_function.rs
 expression: file
 ---
 SourceFile {
@@ -41,7 +41,7 @@ SourceFile {
                                 type_ref: Some(
                                     TypeReference {
                                         package: None,
-                                        name: "Any",
+                                        name: "Integer",
                                         type_arguments: [],
                                         multiplicity_arguments: [],
                                         type_variable_values: [],
@@ -50,7 +50,7 @@ SourceFile {
                                             start_line: 2,
                                             start_column: 22,
                                             end_line: 2,
-                                            end_column: 24,
+                                            end_column: 28,
                                         },
                                     },
                                 ),
@@ -69,82 +69,111 @@ SourceFile {
                         return_type: Type(
                             TypeReference {
                                 package: None,
-                                name: "Float",
+                                name: "Integer",
                                 type_arguments: [],
                                 multiplicity_arguments: [],
                                 type_variable_values: [],
                                 source_info: SourceInfo {
                                     source: "test.pure",
                                     start_line: 2,
-                                    start_column: 31,
+                                    start_column: 35,
                                     end_line: 2,
-                                    end_column: 35,
+                                    end_column: 41,
                                 },
                             },
                         ),
                         return_multiplicity: PureOne,
-                        constraints: [],
+                        constraints: [
+                            Constraint {
+                                name: Some(
+                                    "nonNegative",
+                                ),
+                                function_definition: Comparison(
+                                    ComparisonExpr {
+                                        left: Variable(
+                                            Variable {
+                                                name: "x",
+                                                source_info: SourceInfo {
+                                                    source: "test.pure",
+                                                    start_line: 4,
+                                                    start_column: 18,
+                                                    end_line: 4,
+                                                    end_column: 18,
+                                                },
+                                            },
+                                        ),
+                                        op: GreaterThanOrEqual,
+                                        right: Literal(
+                                            Integer(
+                                                IntegerLiteral {
+                                                    value: 0,
+                                                    source_info: SourceInfo {
+                                                        source: "test.pure",
+                                                        start_line: 4,
+                                                        start_column: 24,
+                                                        end_line: 4,
+                                                        end_column: 24,
+                                                    },
+                                                },
+                                            ),
+                                        ),
+                                        source_info: SourceInfo {
+                                            source: "test.pure",
+                                            start_line: 4,
+                                            start_column: 21,
+                                            end_line: 4,
+                                            end_column: 22,
+                                        },
+                                    },
+                                ),
+                                enforcement_level: None,
+                                external_id: None,
+                                message: None,
+                                source_info: SourceInfo {
+                                    source: "test.pure",
+                                    start_line: 4,
+                                    start_column: 4,
+                                    end_line: 4,
+                                    end_column: 14,
+                                },
+                            },
+                        ],
                         body: [
-                            ArrowFunction(
-                                ArrowFunction {
-                                    target: Variable(
+                            Arithmetic(
+                                ArithmeticExpr {
+                                    left: Variable(
                                         Variable {
                                             name: "x",
                                             source_info: SourceInfo {
                                                 source: "test.pure",
-                                                start_line: 4,
-                                                start_column: 5,
-                                                end_line: 4,
-                                                end_column: 5,
+                                                start_line: 7,
+                                                start_column: 4,
+                                                end_line: 7,
+                                                end_column: 4,
                                             },
                                         },
                                     ),
-                                    function: PackageableElementPtr {
-                                        package: None,
-                                        name: "cast",
-                                        source_info: SourceInfo {
-                                            source: "test.pure",
-                                            start_line: 4,
-                                            start_column: 7,
-                                            end_line: 4,
-                                            end_column: 8,
-                                        },
-                                    },
-                                    arguments: [
-                                        TypeReferenceExpr(
-                                            TypeReferenceExpr {
-                                                type_ref: Type(
-                                                    TypeReference {
-                                                        package: None,
-                                                        name: "Float",
-                                                        type_arguments: [],
-                                                        multiplicity_arguments: [],
-                                                        type_variable_values: [],
-                                                        source_info: SourceInfo {
-                                                            source: "test.pure",
-                                                            start_line: 4,
-                                                            start_column: 15,
-                                                            end_line: 4,
-                                                            end_column: 19,
-                                                        },
-                                                    },
-                                                ),
+                                    op: Plus,
+                                    right: Literal(
+                                        Integer(
+                                            IntegerLiteral {
+                                                value: 1,
                                                 source_info: SourceInfo {
                                                     source: "test.pure",
-                                                    start_line: 4,
-                                                    start_column: 14,
-                                                    end_line: 4,
-                                                    end_column: 14,
+                                                    start_line: 7,
+                                                    start_column: 9,
+                                                    end_line: 7,
+                                                    end_column: 9,
                                                 },
                                             },
                                         ),
-                                    ],
+                                    ),
                                     source_info: SourceInfo {
                                         source: "test.pure",
-                                        start_line: 4,
+                                        start_line: 7,
                                         start_column: 7,
-                                        end_line: 4,
-                                        end_column: 8,
+                                        end_line: 7,
+                                        end_column: 7,
                                     },
                                 },
                             ),
@@ -156,7 +185,7 @@ SourceFile {
                             source: "test.pure",
                             start_line: 2,
                             start_column: 1,
-                            end_line: 5,
+                            end_line: 8,
                             end_column: 1,
                         },
                     },

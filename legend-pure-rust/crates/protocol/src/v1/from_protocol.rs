@@ -867,6 +867,7 @@ fn convert_function(f: &v1::element::ProtocolFunction) -> Result<ast::element::F
         parameters: parameters?,
         return_type: ast::type_ref::TypeSpec::Type(convert_generic_type(&f.return_generic_type)?),
         return_multiplicity: (&f.return_multiplicity).into(),
+        constraints: vec![],
         body: body?,
         stereotypes: stereotypes?,
         tagged_values: tagged_values?,

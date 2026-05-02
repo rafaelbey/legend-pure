@@ -53,6 +53,7 @@ SourceFile {
                             },
                         ),
                         return_multiplicity: ZeroOrMany,
+                        constraints: [],
                         body: [
                             Literal(
                                 Decimal(

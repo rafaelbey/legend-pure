@@ -53,6 +53,7 @@ SourceFile {
                             },
                         ),
                         return_multiplicity: PureOne,
+                        constraints: [],
                         body: [
                             Literal(
                                 StrictDate(
@@ -126,6 +127,7 @@ SourceFile {
                             },
                         ),
                         return_multiplicity: PureOne,
+                        constraints: [],
                         body: [
                             Literal(
                                 DateTime(

@@ -53,6 +53,7 @@ SourceFile {
                             },
                         ),
                         return_multiplicity: PureOne,
+                        constraints: [],
                         body: [
                             Let(
                                 LetExpr {

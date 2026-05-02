@@ -219,6 +219,7 @@ SourceFile {
                             },
                         ),
                         return_multiplicity: PureOne,
+                        constraints: [],
                         body: [
                             Literal(
                                 Boolean(

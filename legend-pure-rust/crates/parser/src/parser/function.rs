@@ -46,6 +46,14 @@ impl Parser {
         self.cursor.expect(TokenKind::LBracket)?;
         let return_multiplicity = self.parse_multiplicity()?;
         self.cursor.expect(TokenKind::RBracket)?;
+        // Optional constraint block: `[name : expr, ...]` between the
+        // return-multiplicity and the body. Reuses `parse_constraints`
+        // from `class.rs` — same shape as `ClassDef.constraints`.
+        let constraints = if self.cursor.check(TokenKind::LBracket) {
+            self.parse_constraints()?
+        } else {
+            vec![]
+        };
         self.cursor.expect(TokenKind::LBrace)?;
         let body = self.parse_expression_list()?;
         let body_close = self.cursor.expect(TokenKind::RBrace)?;
@@ -73,6 +81,7 @@ impl Parser {
             parameters,
             return_type,
             return_multiplicity,
+            constraints,
             body,
             stereotypes: header.stereotypes,
             tagged_values: header.tagged_values,

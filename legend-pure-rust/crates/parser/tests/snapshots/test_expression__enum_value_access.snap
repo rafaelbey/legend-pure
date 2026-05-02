@@ -65,6 +65,7 @@ SourceFile {
                             },
                         ),
                         return_multiplicity: PureOne,
+                        constraints: [],
                         body: [
                             MemberAccess(
                                 Simple(

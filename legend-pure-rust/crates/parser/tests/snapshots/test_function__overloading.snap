@@ -83,6 +83,7 @@ SourceFile {
                             },
                         ),
                         return_multiplicity: PureOne,
+                        constraints: [],
                         body: [
                             Variable(
                                 Variable {
@@ -213,6 +214,7 @@ SourceFile {
                             },
                         ),
                         return_multiplicity: PureOne,
+                        constraints: [],
                         body: [
                             Arithmetic(
                                 ArithmeticExpr {
