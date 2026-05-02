@@ -99,7 +99,7 @@ fn user_mapping_block_registers_against_loaded_platform() {
         user_src,
         "<end_to_end>",
         legend_pure_parser_parser::island::default_island_parsers(),
-        vec![Box::new(MappingSectionParser)],
+        vec![Box::new(MappingSectionParser::new())],
     )
     .expect("user source should parse");
 

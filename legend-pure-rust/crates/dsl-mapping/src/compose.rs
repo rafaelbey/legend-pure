@@ -152,6 +152,20 @@ fn write_class_mapping(out: &mut String, cm: &ClassMapping) {
             write_xstore_body(out, body);
             out.push_str("  }\n");
         }
+        ClassMappingBody::Foreign(body) => {
+            // Foreign body owns its own grammar text; print the
+            // `parserName` and optional mapping name, then delegate.
+            // The body's `compose` emits the surrounding `{ … }`
+            // braces (matches the trait contract).
+            out.push_str(body.kind());
+            if let Some(name) = &cm.mapping_name {
+                out.push(' ');
+                out.push_str(name.as_str());
+            }
+            out.push('\n');
+            body.compose(out);
+            out.push('\n');
+        }
     }
 }
 
@@ -242,15 +256,39 @@ fn write_nested_class_mapping(out: &mut String, keyword: &str, n: &NestedClassMa
     out.push_str(keyword);
     out.push_str(" : ");
     out.push_str(n.parser_name.as_str());
-    out.push_str("\n    {\n");
     match &n.body {
-        ClassMappingBody::Pure(b) => write_pure_body(out, b),
-        ClassMappingBody::Enumeration(b) => write_enumeration_body(out, b),
-        ClassMappingBody::Operation(b) => write_operation_body(out, b),
-        ClassMappingBody::AggregationAware(b) => write_aggregation_aware_body(out, b),
-        ClassMappingBody::XStore(b) => write_xstore_body(out, b),
+        ClassMappingBody::Pure(b) => {
+            out.push_str("\n    {\n");
+            write_pure_body(out, b);
+            out.push_str("    }\n");
+        }
+        ClassMappingBody::Enumeration(b) => {
+            out.push_str("\n    {\n");
+            write_enumeration_body(out, b);
+            out.push_str("    }\n");
+        }
+        ClassMappingBody::Operation(b) => {
+            out.push_str("\n    {\n");
+            write_operation_body(out, b);
+            out.push_str("    }\n");
+        }
+        ClassMappingBody::AggregationAware(b) => {
+            out.push_str("\n    {\n");
+            write_aggregation_aware_body(out, b);
+            out.push_str("    }\n");
+        }
+        ClassMappingBody::XStore(b) => {
+            out.push_str("\n    {\n");
+            write_xstore_body(out, b);
+            out.push_str("    }\n");
+        }
+        ClassMappingBody::Foreign(b) => {
+            // Foreign body owns its `{ … }` braces.
+            out.push('\n');
+            b.compose(out);
+            out.push('\n');
+        }
     }
-    out.push_str("    }\n");
 }
 
 fn write_operation_body(out: &mut String, body: &OperationClassMappingBody) {

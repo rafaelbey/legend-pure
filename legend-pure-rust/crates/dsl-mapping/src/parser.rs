@@ -45,9 +45,10 @@ use smol_str::SmolStr;
 use crate::ast::{
     AggregateSpecification, AggregateView, AggregationAwareClassMappingBody,
     AggregationFunctionSpec, ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping,
-    EnumerationClassMappingBody, LocalPropertyDecl, MappingDef, MappingInclude, NestedClassMapping,
-    OperationClassMappingBody, OperationParameter, PureClassMappingBody, PurePropertyMapping,
-    SECTION_KIND, StoreSubstitution, XStoreClassMappingBody, XStorePropertyMapping,
+    EnumerationClassMappingBody, ForeignClassMappingBody, LocalPropertyDecl, MappingDef,
+    MappingInclude, NestedClassMapping, OperationClassMappingBody, OperationParameter,
+    PureClassMappingBody, PurePropertyMapping, SECTION_KIND, StoreSubstitution,
+    XStoreClassMappingBody, XStorePropertyMapping,
 };
 
 fn err_unexpected(expected: &str, found: &str, source_info: SourceInfo) -> ParseError {
@@ -57,11 +58,75 @@ fn err_unexpected(expected: &str, found: &str, source_info: SourceInfo) -> Parse
     }
 }
 
+/// Plug-in trait for foreign class-mapping body sub-grammars (Stage 0b).
+///
+/// Mirrors the [`SectionParser`] / `IslandParser` plug-in pattern at the
+/// class-mapping body level. Built-in body sub-grammars (Pure,
+/// Enumeration, Operation, AggregationAware, XStore) are dispatched
+/// inside `dsl-mapping`; foreign DSLs (Relational, future stores)
+/// register a parser here whose [`kind()`](Self::kind) matches the
+/// `parserName` token in `Class : <parserName> { … }` and whose
+/// [`parse()`](Self::parse) consumes the surrounding braces and body
+/// content, returning a [`ForeignClassMappingBody`] trait object that
+/// lands in [`ClassMappingBody::Foreign`](crate::ast::ClassMappingBody::Foreign).
+///
+/// Implementations must be `Send + Sync` so they can be shared across
+/// parallel file parsers.
+pub trait ClassMappingBodyParser: Send + Sync {
+    /// The `parserName` token this parser handles (e.g. `"Relational"`).
+    /// Compared verbatim against the user-source token; case-sensitive.
+    fn kind(&self) -> &str;
+
+    /// Parse the body block — the cursor is positioned **at** the
+    /// opening `{`. Implementations consume through the matching `}`
+    /// and return the parsed AST.
+    fn parse(
+        &self,
+        ctx: &mut ParserContext<'_>,
+    ) -> Result<Box<dyn ForeignClassMappingBody>, ParseError>;
+}
+
 /// Plug-in that owns the `###Mapping` section grammar.
+///
+/// Built-in body sub-grammars (Pure / Enumeration / Operation /
+/// AggregationAware / XStore) are always available. Foreign body
+/// sub-grammars (e.g. Relational) plug in via
+/// [`with_body_parsers`](Self::with_body_parsers); see
+/// `tests/foreign_body_parser.rs` for the registration shape.
 ///
 /// Register with the core parser via
 /// [`legend_pure_parser_parser::parse_with_sections`].
-pub struct MappingSectionParser;
+pub struct MappingSectionParser {
+    foreign_body_parsers: Vec<Box<dyn ClassMappingBodyParser>>,
+}
+
+impl MappingSectionParser {
+    /// Construct an empty registration — built-in body sub-grammars
+    /// only, no foreign DSLs.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            foreign_body_parsers: Vec::new(),
+        }
+    }
+
+    /// Construct with foreign body parsers registered. Pass one parser
+    /// per `parserName` token your DSL contributes; the section parser
+    /// dispatches on [`ClassMappingBodyParser::kind()`] before falling
+    /// through to the built-in switch.
+    #[must_use]
+    pub fn with_body_parsers(parsers: Vec<Box<dyn ClassMappingBodyParser>>) -> Self {
+        Self {
+            foreign_body_parsers: parsers,
+        }
+    }
+}
+
+impl Default for MappingSectionParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl SectionParser for MappingSectionParser {
     fn kind(&self) -> &str {
@@ -78,7 +143,7 @@ impl SectionParser for MappingSectionParser {
             // Each iteration must make progress on either Ok or Err to
             // avoid an infinite loop on malformed input.
             let pos_before = ctx.cursor().peek().source_info.clone();
-            match parse_mapping(ctx) {
+            match parse_mapping(ctx, &self.foreign_body_parsers) {
                 Ok(m) => out.push(Box::new(m)),
                 Err(e) => {
                     errors.push(e);
@@ -97,7 +162,10 @@ impl SectionParser for MappingSectionParser {
 // Mapping
 // ---------------------------------------------------------------------------
 
-fn parse_mapping(ctx: &mut ParserContext<'_>) -> Result<MappingDef, ParseError> {
+fn parse_mapping(
+    ctx: &mut ParserContext<'_>,
+    foreign_parsers: &[Box<dyn ClassMappingBodyParser>],
+) -> Result<MappingDef, ParseError> {
     let start = ctx.cursor().current_source_info();
     let kw = ctx.cursor().expect(TokenKind::Identifier)?;
     if kw.text != "Mapping" {
@@ -114,7 +182,7 @@ fn parse_mapping(ctx: &mut ParserContext<'_>) -> Result<MappingDef, ParseError> 
         if is_include_keyword(ctx.cursor()) {
             includes.push(parse_include(ctx)?);
         } else {
-            class_mappings.push(parse_class_mapping(ctx)?);
+            class_mappings.push(parse_class_mapping(ctx, foreign_parsers)?);
         }
     }
     let close = ctx.cursor().expect(TokenKind::RParen)?;
@@ -185,7 +253,10 @@ fn parse_store_substitution(ctx: &mut ParserContext<'_>) -> Result<StoreSubstitu
 // ClassMapping
 // ---------------------------------------------------------------------------
 
-fn parse_class_mapping(ctx: &mut ParserContext<'_>) -> Result<ClassMapping, ParseError> {
+fn parse_class_mapping(
+    ctx: &mut ParserContext<'_>,
+    foreign_parsers: &[Box<dyn ClassMappingBodyParser>],
+) -> Result<ClassMapping, ParseError> {
     let start = ctx.cursor().current_source_info();
 
     let is_root = ctx.cursor().eat(TokenKind::Star);
@@ -225,7 +296,8 @@ fn parse_class_mapping(ctx: &mut ParserContext<'_>) -> Result<ClassMapping, Pars
             None
         };
 
-    let body = parse_class_mapping_body(ctx, parser_name.as_str(), &parser_name_si)?;
+    let body =
+        parse_class_mapping_body(ctx, parser_name.as_str(), &parser_name_si, foreign_parsers)?;
 
     let end_si = ctx.cursor().current_source_info();
 
@@ -249,25 +321,31 @@ fn parse_class_mapping_body(
     ctx: &mut ParserContext<'_>,
     parser_name: &str,
     parser_name_si: &SourceInfo,
+    foreign_parsers: &[Box<dyn ClassMappingBodyParser>],
 ) -> Result<ClassMappingBody, ParseError> {
     Ok(match parser_name {
         "Pure" => ClassMappingBody::Pure(Box::new(parse_pure_body(ctx)?)),
         "EnumerationMapping" => ClassMappingBody::Enumeration(parse_enumeration_body(ctx)?),
         "Operation" => ClassMappingBody::Operation(parse_operation_body(ctx)?),
-        "AggregationAware" => {
-            ClassMappingBody::AggregationAware(Box::new(parse_aggregation_aware_body(ctx)?))
-        }
+        "AggregationAware" => ClassMappingBody::AggregationAware(Box::new(
+            parse_aggregation_aware_body(ctx, foreign_parsers)?,
+        )),
         "XStore" => ClassMappingBody::XStore(parse_xstore_body(ctx)?),
         other => {
-            return Err(ParseError::Unexpected {
-                message: format!(
-                    "Mapping sub-parser '{other}' is not supported yet (Stages 2/4/5/6/7 ship \
-                     'Pure', 'EnumerationMapping', 'Operation', 'AggregationAware', and \
-                     'XStore'; Relation arrives in Stage 8 — see \
-                     ~/.claude/plans/what-is-left-to-iterative-sunrise.md)"
-                ),
-                source_info: parser_name_si.clone(),
-            });
+            // Foreign body parser registered for this `parserName`?
+            if let Some(p) = foreign_parsers.iter().find(|p| p.kind() == other) {
+                ClassMappingBody::Foreign(p.parse(ctx)?)
+            } else {
+                return Err(ParseError::Unexpected {
+                    message: format!(
+                        "Mapping sub-parser '{other}' is not supported \
+                         (built-ins: 'Pure', 'EnumerationMapping', 'Operation', \
+                         'AggregationAware', 'XStore'; foreign DSLs register via \
+                         `MappingSectionParser::with_body_parsers`)"
+                    ),
+                    source_info: parser_name_si.clone(),
+                });
+            }
         }
     })
 }
@@ -560,6 +638,7 @@ fn parse_operation_body(
 
 fn parse_aggregation_aware_body(
     ctx: &mut ParserContext<'_>,
+    foreign_parsers: &[Box<dyn ClassMappingBodyParser>],
 ) -> Result<AggregationAwareClassMappingBody, ParseError> {
     ctx.cursor().expect(TokenKind::LBrace)?;
 
@@ -570,7 +649,7 @@ fn parse_aggregation_aware_body(
     let mut views = Vec::new();
     if !ctx.cursor().check(TokenKind::RBracket) {
         loop {
-            views.push(parse_aggregate_view(ctx)?);
+            views.push(parse_aggregate_view(ctx, foreign_parsers)?);
             if !ctx.cursor().eat(TokenKind::Comma) {
                 break;
             }
@@ -583,7 +662,7 @@ fn parse_aggregation_aware_body(
     ctx.cursor().eat(TokenKind::Comma);
 
     // `~mainMapping : <parserName> { ... }`
-    let main_mapping = parse_nested_class_mapping(ctx, "mainMapping")?;
+    let main_mapping = parse_nested_class_mapping(ctx, "mainMapping", foreign_parsers)?;
     ctx.cursor().expect(TokenKind::RBrace)?;
 
     Ok(AggregationAwareClassMappingBody {
@@ -592,12 +671,15 @@ fn parse_aggregation_aware_body(
     })
 }
 
-fn parse_aggregate_view(ctx: &mut ParserContext<'_>) -> Result<AggregateView, ParseError> {
+fn parse_aggregate_view(
+    ctx: &mut ParserContext<'_>,
+    foreign_parsers: &[Box<dyn ClassMappingBodyParser>],
+) -> Result<AggregateView, ParseError> {
     let start = ctx.cursor().current_source_info();
     ctx.cursor().expect(TokenKind::LParen)?;
     let model_operation = parse_model_operation(ctx)?;
     ctx.cursor().expect(TokenKind::Comma)?;
-    let aggregate_mapping = parse_nested_class_mapping(ctx, "aggregateMapping")?;
+    let aggregate_mapping = parse_nested_class_mapping(ctx, "aggregateMapping", foreign_parsers)?;
     let close = ctx.cursor().expect(TokenKind::RParen)?;
     Ok(AggregateView {
         model_operation,
@@ -742,6 +824,7 @@ fn parse_aggregate_value(
 fn parse_nested_class_mapping(
     ctx: &mut ParserContext<'_>,
     expected_keyword: &str,
+    foreign_parsers: &[Box<dyn ClassMappingBodyParser>],
 ) -> Result<NestedClassMapping, ParseError> {
     let start = ctx.cursor().current_source_info();
     expect_tilde_keyword(ctx, expected_keyword)?;
@@ -749,7 +832,7 @@ fn parse_nested_class_mapping(
     let pn_tok = ctx.cursor().expect(TokenKind::Identifier)?;
     let parser_name = SmolStr::new(pn_tok.text.clone());
     let pn_si = pn_tok.source_info.clone();
-    let body = parse_class_mapping_body(ctx, parser_name.as_str(), &pn_si)?;
+    let body = parse_class_mapping_body(ctx, parser_name.as_str(), &pn_si, foreign_parsers)?;
     let end_si = ctx.cursor().current_source_info();
     Ok(NestedClassMapping {
         parser_name,
