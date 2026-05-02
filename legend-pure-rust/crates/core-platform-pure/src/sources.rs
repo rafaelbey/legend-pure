@@ -26,6 +26,7 @@
 //! constants reference it.
 
 /// A single embedded Pure source file with its canonical URL.
+#[derive(Debug)]
 pub struct PureSourceFile {
     /// Canonical URL of the form `/{repo_name}/{rel_path}` — matches
     /// the form used by `SourceInformation.source` everywhere else.

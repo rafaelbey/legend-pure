@@ -17,6 +17,7 @@
 //! At the Pure semantic level, annotation references point to resolved
 //! `ElementId`s (the Profile element) rather than string paths.
 
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 use crate::ids::ElementId;
@@ -29,7 +30,7 @@ use crate::ids::ElementId;
 ///
 /// Unlike `ast::StereotypePtr` which uses string paths, this points to the
 /// resolved Profile element via `ElementId`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StereotypeRef {
     /// The resolved Profile element this stereotype belongs to.
     pub profile: ElementId,
@@ -45,7 +46,7 @@ pub struct StereotypeRef {
 ///
 /// Unlike `ast::TaggedValue` which uses string paths, this points to the
 /// resolved Profile element via `ElementId`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaggedValueRef {
     /// The resolved Profile element this tag belongs to.
     pub profile: ElementId,

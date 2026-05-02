@@ -30,6 +30,7 @@ use std::collections::HashMap;
 
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::type_ref::Package as AstPackage;
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 use crate::arena::Arena;
@@ -52,7 +53,7 @@ use crate::types::PrimitiveType;
 /// This is the equivalent of Java's `PackageableElement` — it provides
 /// the fields needed for generic traversal (package tree, name resolution)
 /// without knowing the concrete element type.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElementNode {
     /// The element's unique name.
     ///
@@ -92,7 +93,7 @@ pub struct ElementNode {
 /// types (`FunctionType`, `RelationType`) live in `TypeExpr`, not here.
 ///
 /// See `DESIGN.md` §5 for the Element vs Type distinction.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Element {
     /// A class with properties, constraints, and type parameters.
     Class(Class),
@@ -156,7 +157,7 @@ pub struct Package {
 /// The `nodes` and `elements` arenas are **parallel** — `nodes[i]` and
 /// `elements[i]` describe the same element. `nodes` holds common metadata,
 /// `elements` holds the typed payload.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelChunk {
     /// The chunk's unique identifier (0 = bootstrap).
     pub chunk_id: u16,

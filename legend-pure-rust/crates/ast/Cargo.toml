@@ -21,5 +21,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-smol_str = { workspace = true }
+smol_str = { workspace = true, features = ["serde"] }
 legend-pure-parser-ast-derive = { workspace = true }
+serde = { workspace = true }

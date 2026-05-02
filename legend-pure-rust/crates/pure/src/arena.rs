@@ -23,6 +23,8 @@
 
 use std::ops::Index;
 
+use serde::{Deserialize, Serialize};
+
 // ---------------------------------------------------------------------------
 // Arena
 // ---------------------------------------------------------------------------
@@ -46,7 +48,8 @@ use std::ops::Index;
 /// assert_eq!(arena.get(idx), &"hello".to_string());
 /// assert_eq!(arena.len(), 1);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Arena<T> {
     items: Vec<T>,
 }

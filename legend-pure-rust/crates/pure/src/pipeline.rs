@@ -116,6 +116,34 @@ pub fn compile_with_extensions(
     auto_imports: &[SmolStr],
     extensions: &[&dyn crate::extension::CompilerExtension],
 ) -> Result<PureModel, PartialPureModel> {
+    let mut model = init_bootstrap_model();
+    let mut errors = Vec::new();
+
+    let (_chunks, slice_errors) =
+        compile_repo_slice(&mut model, source_files, auto_imports, extensions);
+    errors.extend(slice_errors);
+
+    errors.extend(finalize_model(&mut model, auto_imports, extensions));
+
+    if errors.is_empty() {
+        Ok(model)
+    } else {
+        Err(PartialPureModel { model, errors })
+    }
+}
+
+/// Initialize a fresh `PureModel` with the bootstrap chunk + M3 metamodel.
+///
+/// This is the one-time setup step that must run before any
+/// [`compile_repo_slice`] calls. Allocates Chunk 0 (primitives), registers
+/// the M3 metamodel stubs, resolves M3 supertype strings to `ElementId`s,
+/// and wires `Any`'s reflective properties.
+///
+/// Repo-driven loading should call this once, then call
+/// [`compile_repo_slice`] for each repo's sources, then call
+/// [`finalize_model`] once at the end.
+#[must_use]
+pub fn init_bootstrap_model() -> PureModel {
     let mut model = PureModel::new();
 
     // Chunk 0 — bootstrap primitives
@@ -151,10 +179,39 @@ pub fn compile_with_extensions(
     // two slots the count ran short.
     wire_any_reflective_properties(&mut model);
 
+    model
+}
+
+/// Compile one repo's sources against an existing `PureModel` (which must
+/// already contain the bootstrap chunk and any prior repos' chunks).
+///
+/// Runs Pass 1 (declaration) through Pass 2b' (class/association bodies) plus
+/// every registered extension hook for those phases. Inference (Pass 2.5)
+/// and validation (Pass 3) are deferred to [`finalize_model`] — they walk
+/// the whole model and only need to run once after all repos have loaded.
+///
+/// Returns the range of newly-allocated chunk indices (`chunk_id` values
+/// from `before` to `after`) plus any compilation errors. The chunk range
+/// identifies "this repo's chunks" for later slice serialization.
+///
+/// Cross-repo references are resolved naturally: the resolver consults the
+/// model's package tree, which already contains earlier repos' elements.
+/// Such references are stored as ordinary `ElementId`s in memory; encoding
+/// to FQN strings happens only at slice-serialization time (see Phase A's
+/// `slice_by_repo`).
+#[must_use]
+#[allow(clippy::result_large_err)]
+pub fn compile_repo_slice(
+    model: &mut PureModel,
+    source_files: &[SourceFile],
+    auto_imports: &[SmolStr],
+    extensions: &[&dyn crate::extension::CompilerExtension],
+) -> (std::ops::Range<usize>, Vec<CompilationError>) {
+    let chunks_before = model.chunks.len();
     let mut errors = Vec::new();
 
     // ---- Pass 1: Declaration ----
-    let (declarations, unit_mappings) = pass_declare(source_files, &mut model, &mut errors);
+    let (declarations, unit_mappings) = pass_declare(source_files, model, &mut errors);
 
     // ---- Pass 1: Extension declare hooks ----
     // Extensions allocate shells for any DSL-specific element variants
@@ -163,7 +220,7 @@ pub fn compile_with_extensions(
     for ext in extensions {
         let mut ctx = DeclareCtx {
             source_files,
-            model: &mut model,
+            model,
             auto_imports,
             errors: &mut errors,
         };
@@ -171,7 +228,7 @@ pub fn compile_with_extensions(
     }
 
     // ---- Pass 1.5: Topological Sort ----
-    let sorted = pass_topo_sort(&declarations, source_files, &model, &mut errors);
+    let sorted = pass_topo_sort(&declarations, source_files, model, &mut errors);
 
     // ---- Pass 2a: Signatures & Non-Function Elements ----
     // Resolve everything EXCEPT function expression bodies.
@@ -183,7 +240,7 @@ pub fn compile_with_extensions(
         &declarations,
         &unit_mappings,
         auto_imports,
-        &mut model,
+        model,
         &mut errors,
     );
 
@@ -191,7 +248,7 @@ pub fn compile_with_extensions(
     for ext in extensions {
         let mut ctx = DefineCtx {
             source_files,
-            model: &mut model,
+            model,
             auto_imports,
             errors: &mut errors,
         };
@@ -210,7 +267,7 @@ pub fn compile_with_extensions(
         &mut import_scope_cache,
         &mut resolve_caches,
         auto_imports,
-        &mut model,
+        model,
         &mut errors,
     );
 
@@ -229,7 +286,7 @@ pub fn compile_with_extensions(
         &mut import_scope_cache,
         &mut resolve_caches,
         auto_imports,
-        &mut model,
+        model,
         &mut errors,
     );
 
@@ -237,46 +294,59 @@ pub fn compile_with_extensions(
     for ext in extensions {
         let mut ctx = DefineCtx {
             source_files,
-            model: &mut model,
+            model,
             auto_imports,
             errors: &mut errors,
         };
         ext.define_bodies(&mut ctx);
     }
 
-    // NOTE: Function name mangling happens at declaration time (Pass 1).
-    // Elements are registered with their mangled names from the start.
+    // Rebuild derived indexes so a subsequent compile_repo_slice call sees
+    // association-injected properties + specializations from this slice.
+    // Cheap (O(N) over the new chunks) and keeps the resolver/property
+    // lookup correct across the chain of repo compilations.
+    model.rebuild_derived_indexes();
 
-    // ---- Freeze (early) ----
-    // Rebuild derived indexes BEFORE inference so the
-    // association-injected property index is visible to
-    // property-access lookup. Inference only writes
-    // `expr.type_info` and never mutates the structural data the
-    // indexes are derived from, so a single rebuild here covers
-    // both inference and validation.
+    let chunks_after = model.chunks.len();
+    (chunks_before..chunks_after, errors)
+}
+
+/// Final pass: type inference (Pass 2.5) + validation (Pass 3) over the
+/// whole model.
+///
+/// Call once after all [`compile_repo_slice`] invocations have completed.
+/// Walks every element regardless of which repo it came from — older repos'
+/// elements are already valid but inference still needs a single pass to
+/// populate `expr.type_info` for newly-added expressions.
+#[must_use]
+pub fn finalize_model(
+    model: &mut PureModel,
+    auto_imports: &[SmolStr],
+    extensions: &[&dyn crate::extension::CompilerExtension],
+) -> Vec<CompilationError> {
+    let mut errors = Vec::new();
+
+    // Defensive rebuild: cheap and ensures finalize is robust to callers
+    // who skipped intermediate compile_repo_slice rebuilds.
     model.rebuild_derived_indexes();
 
     // ---- Pass 2.5: Type Inference ----
-    pass_infer(&mut model, &mut errors);
+    pass_infer(model, &mut errors);
 
     // ---- Pass 3: Validation ----
-    errors.extend(crate::validate::validate(&model));
+    errors.extend(crate::validate::validate(model));
 
     // ---- Pass 3: Extension validate hooks ----
     for ext in extensions {
         let mut ctx = ValidateCtx {
-            model: &model,
+            model,
             auto_imports,
             errors: &mut errors,
         };
         ext.validate(&mut ctx);
     }
 
-    if errors.is_empty() {
-        Ok(model)
-    } else {
-        Err(PartialPureModel { model, errors })
-    }
+    errors
 }
 
 /// Convenience macro for `compile()` with optional auto-imports.
@@ -641,7 +711,12 @@ fn pass_declare(
         }
     }
 
-    model.chunks.push(chunk);
+    // Only push when the chunk actually carries declarations. An empty
+    // source list (e.g. an empty repo in a classpath) should be a no-op,
+    // not a stray empty chunk in the model.
+    if chunk.nodes.len() > 0 {
+        model.chunks.push(chunk);
+    }
     (declarations, unit_mappings)
 }
 
@@ -1925,7 +2000,8 @@ mod tests {
         let result = compile!(&[]);
         assert!(result.is_ok());
         let model = result.unwrap();
-        // Should have bootstrap chunk only
-        assert_eq!(model.chunks.len(), 2); // bootstrap + empty user chunk
+        // Bootstrap chunk only — empty source list no longer allocates
+        // a stray empty user chunk (per-repo composition contract).
+        assert_eq!(model.chunks.len(), 1);
     }
 }

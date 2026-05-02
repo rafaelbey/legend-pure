@@ -1,8 +1,16 @@
-# `.purem` — Pre-Compiled Pure Snapshot Format (Design)
+# `.purem` — Pre-Compiled Pure Snapshot Format
 
-> **Status:** Design only. Not yet implemented. This document scopes the
-> open design questions a `.purem` implementation must answer; it does
-> *not* commit to specific encodings.
+> **Status: v0 implemented (May 2026).** Per-repo slices, hand-rolled
+> magic-header + Postcard-encoded payload, topo-sorted load, CLI
+> snapshot subcommand, classpath TOML — all shipping. FlatBuffers + lazy
+> Tier-2 mmap deferred to v1 (see "Wire format choice" below). Today's
+> CLI: `legend snapshot --output platform.purem` produces a
+> byte-deterministic 3 MB blob; `Repo::Purem` + topo-sorted `repo::load`
+> merge it back into a fresh `PureModel` with no parse + compile cost.
+>
+> This document records the design as shipped; sections describing
+> deferred decisions retain their original "open question" framing for
+> historical context.
 
 ## Why
 
@@ -245,30 +253,58 @@ surface. **Recommended for v1: whole-platform Purem only.** A single
 `Repo::Purem` variant in the list short-circuits compile-from-source
 entirely; mixing isn't supported until the merge story is clear.
 
-## Open questions (consolidated)
+## Decisions (as shipped — v0)
 
-These need resolution *before* any implementation lands. The
-recommended starting position above is in **bold**; this list is the
-review punch-card.
+1. **Wire format: hand-rolled magic header + Postcard-encoded payload.**
+   FlatBuffers / planus deferred to v1; the wire format is private to
+   `write_repo` / `read_repo` so swapping is contained. Postcard's
+   non-self-describing encoding is deterministic by construction —
+   zero field reordering, fixed varint discipline. Determinism gate
+   asserts `write_repo(slice) == write_repo(slice)` and the byte-stable
+   round-trip; both pass on the real platform (3 MB blob).
+   - **Rust-decimal note:** `rust_decimal` defaults to a lenient
+     `deserialize_any`-driven serde impl that postcard rejects. Use
+     `rust_decimal = { features = ["serde-str"] }` instead.
+2. **Java compatibility.** No — operates on the post-compilation
+   `PureModel`, not the Java unresolved CoreInstance graph.
+3. **Per-repo not whole-platform.** `slice_by_repo(model, chunk_range)`
+   carves any chunk-id range; `merge_slice(running_model, slice)`
+   resolves cross-range refs via FQN strings against the running
+   model. Per-repo is the composition primitive: `repo::load`
+   topo-sorts every repo by its declared dependencies and processes
+   each one in dep order.
+4. **Anonymous nodes.** Serialized (whatever appears in the chunk
+   range, including synthetic types).
+5. **M3 chunk.** Always re-derived at load time via
+   `init_bootstrap_model()` — no benefit to serializing the bootstrap
+   chunk since it's deterministic given the embedded `m3.pure`.
+6. **Format-version policy on mismatch.** Strict refusal — bad magic /
+   wrong `format_version` / wrong `schema_hash` are all hard errors at
+   read time. Migration tooling deferred.
+7. **`im-rc` rebuild strategy.** Canonicalize-then-rebuild via Postcard's
+   default `Vec<T>` encoding for `Rc<[T]>` (with serde's `rc` feature).
+   Wire-level dedup deferred.
+8. **Producer surfaces.** Library:
+   `legend_pure_parser_pure::purem::{write_repo, read_repo}`. CLI:
+   `legend snapshot --output …`. Both ship in v0.
+9. **Classpath TOML.** `legend-pure-classpath.toml` with `[[repo]]`
+   entries (`kind = "purem"` / `"filesystem"`); parsed by
+   `legend_cli::classpath::load_classpath`. Full per-command
+   `--classpath` wiring deferred to a follow-up.
 
-1. **Format choice.** postcard / bincode 2 / flatbuffers / rkyv /
-   custom? Decision criteria: deterministic bytes, mmap-friendly,
-   schema-evolution policy, dependency footprint.
-2. **Java compatibility.** Read Java's `.par`? **No** in v1 — too much
-   coupling.
-3. **Per-repo vs whole-platform snapshot.** **Whole-platform only** in
-   v1 — defer the merge story.
-4. **Anonymous nodes.** Serialize, or recompute? **Serialize** for
-   determinism.
-5. **M3 chunk.** Serialize with the rest, or always recompute from the
-   embedded `m3.pure`? **Serialize** — keeps load time deterministic.
-6. **Format-version policy on mismatch.** Strict refusal in v1;
-   migration tooling deferred.
-7. **`im-rc` rebuild strategy.** Canonicalize-then-rebuild in v1;
-   wire-level dedup as a future optimization.
-8. **Producer surface.** A new CLI subcommand (`legend snapshot`)?
-   A build-script option? A library function? — TBD; not blocking the
-   format itself.
+## Crate layout (as shipped)
+
+- `crates/pure/src/purem/header.rs` — magic + version + schema_hash +
+  payload_len.
+- `crates/pure/src/purem/{slice,walk,fqn_path}.rs` — in-memory slice +
+  ElementId visitor + canonical FQN computation.
+- `crates/pure/src/purem/{writer,reader}.rs` — bytes ↔ slice.
+- `crates/core-platform-pure/src/topo.rs` — topo_sort_repos + cycle
+  detection.
+- `crates/core-platform-pure/src/repo.rs` — `Repo::Purem` variant +
+  `repo::load` rework (topo-sort + per-repo + finalize).
+- `crates/cli/src/commands/snapshot.rs` — `legend snapshot`.
+- `crates/cli/src/classpath.rs` — TOML parser + `Repo` builder.
 
 ## Producer
 

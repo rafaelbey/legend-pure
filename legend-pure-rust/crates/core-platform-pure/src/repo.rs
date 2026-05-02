@@ -34,9 +34,13 @@
 //!   `docs/PUREM_FORMAT.md`.
 
 use std::path::Path;
+use std::sync::Arc;
 
+use legend_pure_parser_ast::SourceInfo;
+use legend_pure_parser_pure::error::{CompilationError, CompilationErrorKind};
 use legend_pure_parser_pure::model::PureModel;
-use legend_pure_parser_pure::pipeline::PartialPureModel;
+use legend_pure_parser_pure::pipeline::{self, PartialPureModel, init_bootstrap_model};
+use legend_pure_parser_pure::purem::{ReadError, header::read_header, merge_slice, read_repo};
 use serde::Deserialize;
 use smol_str::SmolStr;
 use thiserror::Error;
@@ -89,6 +93,7 @@ pub struct OwnedSourceFile {
 /// A Pure repository — a set of `.pure` sources and `.json` manifests
 /// sharing a canonical-URL prefix.
 #[non_exhaustive]
+#[derive(Debug)]
 pub enum Repo {
     /// Files baked into the binary at build time.
     Embedded {
@@ -111,6 +116,24 @@ pub enum Repo {
         /// Descriptor metadata, populated when the repo was built from
         /// a descriptor JSON; `None` when built via [`Repo::from_filesystem`].
         meta: Option<RepoMeta>,
+    },
+    /// Pre-compiled `.purem` snapshot. The blob is the output of
+    /// [`legend_pure_parser_pure::purem::write_repo`]; loading is a
+    /// `read_repo` + `merge_slice` pair that skips parse + compile
+    /// entirely.
+    ///
+    /// Constructed by [`Repo::from_purem_bytes`] /
+    /// [`Repo::from_purem_file`]. `meta` is required because the
+    /// dependency-driven topo sort needs it.
+    Purem {
+        /// Canonical URL prefix, of the form `/{name}`.
+        prefix: String,
+        /// Descriptor metadata.
+        meta: RepoMeta,
+        /// The serialized [`PureModelSlice`] blob, including its 22-byte
+        /// header. `Arc<[u8]>` so multiple consumers (e.g. JNI + CLI)
+        /// can share without cloning.
+        blob: Arc<[u8]>,
     },
 }
 
@@ -257,42 +280,106 @@ impl Repo {
         })
     }
 
+    /// Construct a `Purem` repo from an in-memory `.purem` blob.
+    ///
+    /// Accepts the bytes produced by
+    /// [`legend_pure_parser_pure::purem::write_repo`] (including the
+    /// 22-byte magic header). The blob is stored as-is and read on
+    /// demand by the merge-driven loader.
+    #[must_use]
+    pub fn from_purem_bytes(prefix: impl Into<String>, meta: RepoMeta, blob: Arc<[u8]>) -> Self {
+        Self::Purem {
+            prefix: prefix.into(),
+            meta,
+            blob,
+        }
+    }
+
+    /// Construct a `Purem` repo by reading bytes from a file on disk.
+    ///
+    /// Validates the header eagerly (so a corrupt/wrong-version blob
+    /// fails at construction, not at first use) but defers payload
+    /// parsing to merge time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RepoError`] for I/O failures or header validation
+    /// failures (bad magic / wrong format_version / wrong schema_hash).
+    pub fn from_purem_file(
+        path: &Path,
+        prefix: impl Into<String>,
+        meta: RepoMeta,
+    ) -> Result<Self, RepoError> {
+        let bytes = std::fs::read(path).map_err(|source| RepoError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        // Header-only validation: catches magic / format_version /
+        // schema_hash mismatches at construction without paying the
+        // payload-deserialization cost. Full parse is deferred to
+        // merge time.
+        read_header(&bytes).map_err(|e| RepoError::PuremRead {
+            path: path.to_path_buf(),
+            source: ReadError::Header(e),
+        })?;
+        Ok(Self::Purem {
+            prefix: prefix.into(),
+            meta,
+            blob: Arc::from(bytes.into_boxed_slice()),
+        })
+    }
+
     /// Canonical URL prefix (e.g. `/platform`).
     #[must_use]
     pub fn prefix(&self) -> &str {
         match self {
             Self::Embedded { prefix, .. } => prefix,
             Self::Filesystem { prefix, .. } => prefix.as_str(),
+            Self::Purem { prefix, .. } => prefix.as_str(),
         }
     }
 
-    /// Descriptor metadata if available — always `Some` for embedded
-    /// repos and for filesystem repos built via [`Repo::from_descriptor`].
+    /// Descriptor metadata if available — always `Some` for embedded,
+    /// `Purem`, and filesystem repos built via [`Repo::from_descriptor`].
     #[must_use]
     pub fn meta(&self) -> Option<&RepoMeta> {
         match self {
             Self::Embedded { meta, .. } => Some(*meta),
             Self::Filesystem { meta, .. } => meta.as_ref(),
+            Self::Purem { meta, .. } => Some(meta),
+        }
+    }
+
+    /// `.purem` blob bytes for a [`Repo::Purem`] variant; `None` for
+    /// source-based repos.
+    #[must_use]
+    pub fn purem_blob(&self) -> Option<&Arc<[u8]>> {
+        match self {
+            Self::Purem { blob, .. } => Some(blob),
+            Self::Embedded { .. } | Self::Filesystem { .. } => None,
         }
     }
 
     /// All files in the repo (mixed `.pure` + `.json`), each as
-    /// `(content, canonical_url)`.
+    /// `(content, canonical_url)`. Empty for [`Repo::Purem`] — purem
+    /// repos carry no source files.
     pub fn files(&self) -> Box<dyn Iterator<Item = (&str, &str)> + '_> {
         match self {
             Self::Embedded { files, .. } => Box::new(files.iter().map(|f| (f.content, f.path))),
             Self::Filesystem { files, .. } => {
                 Box::new(files.iter().map(|f| (f.content.as_str(), f.path.as_str())))
             }
+            Self::Purem { .. } => Box::new(std::iter::empty()),
         }
     }
 
     /// `.pure` files only — feeds [`crate::platform::parse_and_compile`].
+    /// Empty for [`Repo::Purem`].
     pub fn sources(&self) -> Box<dyn Iterator<Item = (&str, &str)> + '_> {
         Box::new(self.files().filter(|(_, path)| path.ends_with(".pure")))
     }
 
-    /// `.json` manifests only.
+    /// `.json` manifests only. Empty for [`Repo::Purem`].
     pub fn manifests(&self) -> Box<dyn Iterator<Item = (&str, &str)> + '_> {
         Box::new(self.files().filter(|(_, path)| path.ends_with(".json")))
     }
@@ -351,6 +438,15 @@ pub enum RepoError {
     /// Encountered a file path that isn't valid UTF-8.
     #[error("non-UTF-8 path: {0}")]
     NonUtf8Path(std::path::PathBuf),
+    /// `.purem` blob failed header validation.
+    #[error("invalid .purem at {path}: {source}")]
+    PuremRead {
+        /// File path that failed.
+        path: std::path::PathBuf,
+        /// Underlying read error (header / payload / version mismatch).
+        #[source]
+        source: ReadError,
+    },
 }
 
 /// Walk `root`, skipping `<repo_name>/pure/grammar/m3.pure` (the
@@ -410,23 +506,138 @@ fn walk_files_with_skip(
     Ok(out)
 }
 
-/// Parse and compile every repo's `.pure` sources into a single
-/// [`PureModel`].
+/// Parse, compile, and merge every repo into a single [`PureModel`].
 ///
-/// Repos contribute their `.pure` files in declaration order; manifests
-/// are not parsed and are accessed separately via [`find_manifest`].
+/// Composition contract:
+/// 1. Topologically sort repos by their declared dependencies (see
+///    [`crate::topo::topo_sort_repos`]).
+/// 2. Bootstrap a fresh model.
+/// 3. For each repo in dep order:
+///    - [`Repo::Embedded`] / [`Repo::Filesystem`]: parse + compile this
+///      repo's sources via [`pipeline::compile_repo_slice`]. Cross-repo
+///      references resolve naturally against earlier repos.
+///    - [`Repo::Purem`]: deserialize the blob and merge into the running
+///      model — no parse, no compile.
+/// 4. Finalize: rebuild derived indexes, run inference + validation.
 ///
-/// Delegates to [`crate::platform::parse_and_compile`].
+/// Each repo lands in its own chunk(s), partitioning the model in a way
+/// that downstream slice serialization (Phase A) can recover.
 ///
 /// # Errors
 ///
-/// Returns [`PartialPureModel`] if any parse or compilation errors
-/// occur. The partial model still contains all successfully resolved
-/// elements.
+/// Returns [`PartialPureModel`] if any parse / compile / topo / merge
+/// errors occur. The partial model still contains all successfully
+/// resolved elements.
 #[allow(clippy::result_large_err)]
 pub fn load(repos: &[Repo], auto_imports: &[SmolStr]) -> Result<PureModel, PartialPureModel> {
-    let pairs: Vec<(&str, &str)> = repos.iter().flat_map(|r| r.sources()).collect();
-    crate::platform::parse_and_compile(pairs.into_iter(), auto_imports)
+    let sorted = match crate::topo::topo_sort_repos(repos) {
+        Ok(s) => s,
+        Err(topo_err) => {
+            // Surface the topo failure as a single PartialPureModel error
+            // and bail before doing any compile work.
+            let model = init_bootstrap_model();
+            return Err(PartialPureModel {
+                model,
+                errors: vec![mk_synthetic_error(
+                    "<repo-topo>",
+                    topo_err.to_string(),
+                )],
+            });
+        }
+    };
+
+    let mut model = init_bootstrap_model();
+    let mut errors: Vec<CompilationError> = Vec::new();
+
+    for repo in sorted {
+        match repo {
+            Repo::Embedded { .. } | Repo::Filesystem { .. } => {
+                let (parsed_files, parse_errs) = parse_repo_sources(repo);
+                errors.extend(parse_errs);
+                let (_range, slice_errs) = pipeline::compile_repo_slice(
+                    &mut model,
+                    &parsed_files,
+                    auto_imports,
+                    &[],
+                );
+                errors.extend(slice_errs);
+            }
+            Repo::Purem { blob, meta, .. } => match read_repo(blob) {
+                Ok(slice) => {
+                    if let Err(e) = merge_slice(&mut model, slice) {
+                        errors.push(mk_synthetic_error(
+                            &format!("<purem:{}>", meta.name),
+                            format!("merge failed: {e}"),
+                        ));
+                    }
+                }
+                Err(e) => {
+                    errors.push(mk_synthetic_error(
+                        &format!("<purem:{}>", meta.name),
+                        format!("deserialize failed: {e}"),
+                    ));
+                }
+            },
+        }
+    }
+
+    errors.extend(pipeline::finalize_model(&mut model, auto_imports, &[]));
+
+    if errors.is_empty() {
+        Ok(model)
+    } else {
+        Err(PartialPureModel { model, errors })
+    }
+}
+
+/// Parse one repo's `.pure` sources into [`SourceFile`]s.
+///
+/// Translates parse errors into [`CompilationError`]s so the merged
+/// `load` accumulator handles every error class uniformly.
+fn parse_repo_sources(
+    repo: &Repo,
+) -> (
+    Vec<legend_pure_parser_ast::section::SourceFile>,
+    Vec<CompilationError>,
+) {
+    let mut parsed_files = Vec::new();
+    let mut errors = Vec::new();
+    for (content, name) in repo.sources() {
+        match legend_pure_parser_parser::parse_with_islands(
+            content,
+            name,
+            legend_pure_dsl_graph::parser::default_island_parsers(),
+        ) {
+            Ok(sf) => parsed_files.push(sf),
+            Err(partial) => {
+                parsed_files.push(partial.source_file);
+                for e in partial.errors {
+                    let source_info = e
+                        .source_info()
+                        .cloned()
+                        .unwrap_or_else(|| SourceInfo::new(name, 0, 0, 0, 0));
+                    errors.push(CompilationError {
+                        message: e.message(),
+                        source_info,
+                        kind: CompilationErrorKind::ParseFailure {
+                            source: SmolStr::new(name),
+                        },
+                    });
+                }
+            }
+        }
+    }
+    (parsed_files, errors)
+}
+
+fn mk_synthetic_error(source: &str, message: String) -> CompilationError {
+    CompilationError {
+        message,
+        source_info: SourceInfo::new(source, 0, 0, 0, 0),
+        kind: CompilationErrorKind::ParseFailure {
+            source: SmolStr::new(source),
+        },
+    }
 }
 
 /// Suffix-match a manifest path across every repo's `.json` files.
