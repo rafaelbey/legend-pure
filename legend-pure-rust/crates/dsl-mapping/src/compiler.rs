@@ -73,6 +73,7 @@ use crate::ast::{
     AggregateSpecification, AggregationAwareClassMappingBody, AggregationFunctionSpec,
     ClassMapping, ClassMappingBody, EnumSourceValue, EnumerationClassMappingBody, MappingDef,
     NestedClassMapping, OperationClassMappingBody, PureClassMappingBody, PurePropertyMapping,
+    XStoreClassMappingBody, XStorePropertyMapping,
 };
 
 /// Compiler extension for the `###Mapping` DSL.
@@ -319,6 +320,26 @@ fn validate_class_mapping(
                 auto_imports,
                 errors,
             );
+        }
+        ClassMappingBody::XStore(body) => {
+            // XStore reinterprets the outer FQN as an *Association*,
+            // not a Class — that's the only point in the dispatch
+            // where the Java's `classMapping` rule produces a
+            // non-class set-implementation. The validator looks
+            // properties up against the association's `properties`.
+            let assoc_id = resolve_association(model, &target_fqn);
+            if assoc_id.is_none() {
+                errors.push(CompilationError {
+                    message: format!(
+                        "XStore mapping target '{target_fqn}' does not resolve to an Association"
+                    ),
+                    source_info: cm.source_info.clone(),
+                    kind: CompilationErrorKind::UnresolvedElement {
+                        path: target_fqn.clone(),
+                    },
+                });
+            }
+            validate_xstore_body(body, &target_fqn, assoc_id, visible_ids, model, errors);
         }
     }
 }
@@ -1023,6 +1044,25 @@ fn validate_nested_class_mapping(
                 errors,
             );
         }
+        ClassMappingBody::XStore(_) => {
+            // XStore nested under AggregationAware is semantically
+            // unreachable: the outer target is a Class (validated
+            // up-front in validate_aggregation_aware_body) and
+            // XStore expects an Association. Emit a single pointed
+            // diagnostic rather than running the XStore body rules
+            // with a Class FQN they'd misuse in their messages.
+            errors.push(CompilationError {
+                message: format!(
+                    "XStore body is not valid inside an AggregationAware ~mainMapping or \
+                     ~aggregateMapping (target '{target_class_fqn}' is a Class, not an \
+                     Association)"
+                ),
+                source_info: nested.source_info.clone(),
+                kind: CompilationErrorKind::UnsupportedExpression {
+                    kind: SmolStr::new_static("XStoreNestedUnderAggregationAware"),
+                },
+            });
+        }
     }
 }
 
@@ -1034,6 +1074,161 @@ fn is_data_type(model: &PureModel, ty: &ResolvedType) -> bool {
         model.get_element(element),
         ModelElement::PrimitiveType(_) | ModelElement::Enumeration(_)
     )
+}
+
+// ---------------------------------------------------------------------------
+// Stage-7 — XStore body validation
+// ---------------------------------------------------------------------------
+
+fn validate_xstore_body(
+    body: &XStoreClassMappingBody,
+    target_assoc_fqn: &str,
+    target_assoc_id: Option<ElementId>,
+    visible_ids: &HashSet<SmolStr>,
+    model: &PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    // Collect the association's property names once. When the
+    // outer target didn't resolve, treat the property set as empty
+    // so the per-entry property-existence check still emits a
+    // pointed diagnostic per entry rather than silently passing.
+    let property_names: HashSet<String> = target_assoc_id
+        .map(|id| association_property_names(model, id))
+        .unwrap_or_default();
+
+    for pm in &body.property_mappings {
+        validate_xstore_property_mapping(
+            pm,
+            target_assoc_fqn,
+            &property_names,
+            target_assoc_id,
+            visible_ids,
+            errors,
+        );
+    }
+}
+
+fn validate_xstore_property_mapping(
+    pm: &XStorePropertyMapping,
+    target_assoc_fqn: &str,
+    property_names: &HashSet<String>,
+    target_assoc_id: Option<ElementId>,
+    visible_ids: &HashSet<SmolStr>,
+    errors: &mut Vec<CompilationError>,
+) {
+    // Property name must exist on the association — only when the
+    // association resolved. Without a resolved association the
+    // outer "doesn't resolve" diagnostic already fired, so skip
+    // the cascade.
+    if target_assoc_id.is_some() && !property_names.contains(pm.property_name.as_str()) {
+        errors.push(CompilationError {
+            message: format!(
+                "Association '{target_assoc_fqn}' has no property '{}'",
+                pm.property_name
+            ),
+            source_info: pm.source_info.clone(),
+            kind: CompilationErrorKind::UnknownProperty {
+                type_name: SmolStr::new(target_assoc_fqn),
+                property_name: pm.property_name.clone(),
+            },
+        });
+    }
+
+    // Source / target set-impl IDs are required at validate time
+    // even though the parser accepts the bare `propName : expr`
+    // form. Mirrors Java's split: M3Parser.g4 makes
+    // `sourceAndTargetMappingId` optional syntactically, but
+    // XStoreProcessor's `MappingValidator.validateId(...
+    // ._sourceSetImplementationId(), ...)` throws when the id is
+    // null. Without the IDs the crossExpression has nothing to bind
+    // `$this`/`$that` to, so the structural problem belongs at
+    // validate time, not later.
+    match (&pm.source_set_impl_id, &pm.target_set_impl_id) {
+        (None, None) => {
+            errors.push(CompilationError {
+                message: format!(
+                    "XStore property mapping '{}.{}' requires source and target \
+                     set-implementation IDs (`propName[srcId, tgtId] : crossExpr`)",
+                    target_assoc_fqn, pm.property_name
+                ),
+                source_info: pm.source_info.clone(),
+                kind: CompilationErrorKind::UnresolvedElement {
+                    path: pm.property_name.clone(),
+                },
+            });
+        }
+        (None, Some(_)) | (Some(_), None) => {
+            errors.push(CompilationError {
+                message: format!(
+                    "XStore property mapping '{}.{}' requires both source and target \
+                     set-implementation IDs (`propName[srcId, tgtId] : crossExpr`); only one \
+                     was supplied",
+                    target_assoc_fqn, pm.property_name
+                ),
+                source_info: pm.source_info.clone(),
+                kind: CompilationErrorKind::UnresolvedElement {
+                    path: pm.property_name.clone(),
+                },
+            });
+        }
+        (Some(_), Some(_)) => {} // both present — fall through to visibility check
+    }
+
+    // Each present ID must reference a class-mapping ID visible in
+    // this mapping or its (transitive) includes. Mirrors
+    // `MappingValidator.validateId` which the Java XStoreProcessor
+    // invokes per property mapping.
+    if let Some(src_id) = &pm.source_set_impl_id
+        && !visible_ids.contains(src_id)
+    {
+        errors.push(CompilationError {
+            message: format!(
+                "XStore source set-implementation '{src_id}' on '{}.{}' is not declared in \
+                 this mapping or any included mapping",
+                target_assoc_fqn, pm.property_name
+            ),
+            source_info: pm.source_info.clone(),
+            kind: CompilationErrorKind::UnresolvedElement {
+                path: src_id.clone(),
+            },
+        });
+    }
+    if let Some(tgt_id) = &pm.target_set_impl_id
+        && !visible_ids.contains(tgt_id)
+    {
+        errors.push(CompilationError {
+            message: format!(
+                "XStore target set-implementation '{tgt_id}' on '{}.{}' is not declared in \
+                 this mapping or any included mapping",
+                target_assoc_fqn, pm.property_name
+            ),
+            source_info: pm.source_info.clone(),
+            kind: CompilationErrorKind::UnresolvedElement {
+                path: tgt_id.clone(),
+            },
+        });
+    }
+    // TODO(stage-7+): once src/tgt set-impls are resolved, lower the
+    // crossExpression with `this`/`that` bindings derived from each
+    // referenced set-impl's class. Java's XStoreProcessor builds
+    // those VariableExpressions and lowers the lambda; this Rust
+    // port intentionally stops at structural validation for Stage 7.
+}
+
+fn association_property_names(model: &PureModel, assoc_id: ElementId) -> HashSet<String> {
+    let ModelElement::Association(a) = model.get_element(assoc_id) else {
+        return HashSet::new();
+    };
+    a.properties.iter().map(|p| p.name.to_string()).collect()
+}
+
+fn resolve_association(model: &PureModel, fqn: &str) -> Option<ElementId> {
+    let segments: Vec<SmolStr> = fqn.split("::").map(SmolStr::new).collect();
+    if segments.is_empty() || segments.iter().any(smol_str::SmolStr::is_empty) {
+        return None;
+    }
+    let id = model.resolve_by_path(&segments)?;
+    matches!(model.get_element(id), ModelElement::Association(_)).then_some(id)
 }
 
 // ---------------------------------------------------------------------------
