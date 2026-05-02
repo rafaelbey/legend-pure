@@ -18,13 +18,15 @@
 //! (see `nodes/unit.rs`). The Measure stores references to its units
 //! by `ElementId` rather than embedding them.
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::ElementId;
 
 /// A compiled measure definition.
 ///
 /// A measure defines a system of units with a canonical unit and
 /// zero or more non-canonical units, each with conversion functions.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Measure {
     /// The canonical unit (`*` marked), referenced by `ElementId`.
     pub canonical_unit: Option<ElementId>,

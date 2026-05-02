@@ -15,12 +15,13 @@
 //! Compiled Enumeration node.
 
 use legend_pure_parser_ast::SourceInfo;
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 use crate::annotations::{StereotypeRef, TaggedValueRef};
 
 /// A compiled enumeration definition.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Enumeration {
     /// Enum values (members).
     pub values: Vec<EnumValue>,
@@ -31,7 +32,7 @@ pub struct Enumeration {
 }
 
 /// A single value (member) in an enumeration.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnumValue {
     /// The value name.
     pub name: SmolStr,

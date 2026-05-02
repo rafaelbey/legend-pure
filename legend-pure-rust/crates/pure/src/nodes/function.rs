@@ -16,11 +16,12 @@
 
 use crate::annotations::{StereotypeRef, TaggedValueRef};
 use crate::types::{Expression, Multiplicity, Parameter, TypeExpr};
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use std::rc::Rc;
 
 /// A compiled top-level function definition.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Function {
     /// The function's simple name (e.g., `"plus"`, `"toOne"`).
     ///

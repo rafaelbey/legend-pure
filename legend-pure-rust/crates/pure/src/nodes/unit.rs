@@ -19,6 +19,8 @@
 //!
 //! The parent Measure references its units by `ElementId`.
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::ElementId;
 use crate::types::Expression;
 
@@ -26,7 +28,7 @@ use crate::types::Expression;
 ///
 /// Each unit has its own `ElementId` and `ElementNode` (name, source, package).
 /// The conversion expression converts from this unit to the canonical unit.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Unit {
     /// The parent measure this unit belongs to.
     pub measure: ElementId,

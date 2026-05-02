@@ -14,6 +14,7 @@
 
 //! Compiled Profile node.
 
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 /// A compiled profile definition.
@@ -21,7 +22,7 @@ use smol_str::SmolStr;
 /// A profile declares stereotypes and tags that can be applied to
 /// elements, properties, and enum values via `<<profile.stereo>>`
 /// and `{profile.tag = 'value'}`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Profile {
     /// Stereotype names declared by this profile.
     pub stereotypes: Vec<SmolStr>,

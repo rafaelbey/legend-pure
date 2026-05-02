@@ -22,10 +22,12 @@ repository.workspace = true
 
 [dependencies]
 legend-pure-parser-ast = { path = "../ast" }
-rust_decimal = "1"
-smol_str = { workspace = true }
+rust_decimal = { version = "1", features = ["serde-str"] }
+smol_str = { workspace = true, features = ["serde"] }
 thiserror.workspace = true
 tracing = { workspace = true }
+serde = { workspace = true, features = ["derive", "rc"] }
+postcard = { version = "1", features = ["alloc"] }
 
 [dev-dependencies]
 legend-pure-parser-parser = { path = "../parser" }

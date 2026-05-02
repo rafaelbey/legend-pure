@@ -18,6 +18,7 @@
 //! original source text. This is critical for error messages, IDE integration,
 //! and debugging parsing/compilation problems.
 
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 /// Tracks the source location of an AST node within the original source text.
@@ -40,7 +41,7 @@ use smol_str::SmolStr;
 /// };
 /// assert_eq!(info.start_line, 1);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SourceInfo {
     /// Source identifier (file path or URI).
     pub source: SmolStr,

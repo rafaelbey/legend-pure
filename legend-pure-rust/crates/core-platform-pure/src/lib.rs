@@ -49,6 +49,7 @@
 pub mod platform;
 pub mod repo;
 pub mod sources;
+pub mod topo;
 
 #[cfg(test)]
 mod tests {

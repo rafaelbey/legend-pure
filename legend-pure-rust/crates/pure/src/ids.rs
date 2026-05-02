@@ -20,6 +20,8 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 // ---------------------------------------------------------------------------
 // ElementId — the universal element reference
 // ---------------------------------------------------------------------------
@@ -33,7 +35,7 @@ use std::fmt;
 ///   `(chunk_id, local_idx)`. Enables O(1) model merging.
 /// - **`Package`**: a package in the global `global_packages` arena,
 ///   addressed by [`PackageId`]. Packages span chunks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ElementId {
     /// An element instance in a chunk arena.
     InstanceId {
@@ -96,7 +98,7 @@ impl ElementId {
 ///
 /// Unlike [`ElementId`], packages are not chunked — they live in a single
 /// global arena because a package like `meta::pure` can span multiple chunks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PackageId(pub u32);
 
 impl fmt::Display for PackageId {
@@ -113,7 +115,7 @@ impl fmt::Display for PackageId {
 ///
 /// Relation types are anonymous structural types (column bags) that are
 /// interned for deduplication. This ID is used by `TypeExpr::Relation`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RelationId(pub u32);
 
 impl fmt::Display for RelationId {

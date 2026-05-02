@@ -14,6 +14,8 @@
 
 //! Compiled Association node.
 
+use serde::{Deserialize, Serialize};
+
 use crate::annotations::{StereotypeRef, TaggedValueRef};
 use crate::nodes::class::{Property, QualifiedProperty};
 
@@ -22,7 +24,7 @@ use crate::nodes::class::{Property, QualifiedProperty};
 /// An association declares properties that are injected into the connected
 /// classes. These injected properties are NOT stored on the Class node —
 /// they are computed as a derived index on the frozen model.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Association {
     /// Properties (typically exactly two — one for each end).
     pub properties: Vec<Property>,

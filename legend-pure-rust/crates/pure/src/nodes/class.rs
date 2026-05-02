@@ -20,6 +20,7 @@
 //! synthetic properties are computed as derived indexes on the frozen model.
 
 use legend_pure_parser_ast::SourceInfo;
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use std::rc::Rc;
 
@@ -35,7 +36,7 @@ use crate::types::{Expression, Multiplicity, Parameter, TypeExpr};
 /// Mirrors `ast::ClassDef` with all references resolved to `ElementId`s.
 /// Stores only canonical, unidirectional data — no specializations,
 /// no association-injected properties.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Class {
     /// Type parameters (e.g., `["T", "U"]`).
     pub type_parameters: Vec<SmolStr>,
@@ -68,7 +69,7 @@ pub struct Class {
 /// Aggregation kind for properties.
 ///
 /// Mirrors `ast::AggregationKind`. Most properties have no aggregation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AggregationKind {
     /// No aggregation — `(none)`.
     None,
@@ -81,7 +82,7 @@ pub enum AggregationKind {
 /// A compiled class or association property.
 ///
 /// Reused by both Class and Association.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Property {
     /// Property name.
     pub name: SmolStr,
@@ -108,7 +109,7 @@ pub struct Property {
 /// A compiled qualified (derived) property.
 ///
 /// Reused by both Class and Association.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QualifiedProperty {
     /// Property name.
     pub name: SmolStr,
@@ -137,7 +138,7 @@ pub struct QualifiedProperty {
 // ---------------------------------------------------------------------------
 
 /// A compiled class constraint.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Constraint {
     /// Constraint name (optional — unnamed constraints are allowed).
     pub name: Option<SmolStr>,

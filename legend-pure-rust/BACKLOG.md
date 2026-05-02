@@ -135,7 +135,10 @@ checks; drop the flag for full statistical-strength baselines (~5min).
 | Item | Priority | Notes |
 |------|----------|-------|
 | Navigation path grammar | P2 | See `docs/deferred/navigation_path_grammar.md` |
-| Lazy loading binary format | P2 | See `docs/deferred/lazy_loading_binary_format.md` |
+| `.purem` Tier-2 lazy mmap (FlatBuffers) | P2 | v0 ships eager-load Postcard via `legend snapshot`. Upgrade Tier-2 to per-body lazy mmap (FlatBuffers/planus or rkyv) once profiling justifies it. Wire format is private to `write_repo`/`read_repo` so the upgrade is contained. Original design notes in `docs/deferred/lazy_loading_binary_format.md`. |
+| `--classpath` flag wiring | P2 | `legend_cli::classpath::load_classpath` already builds `Vec<Repo>` from a TOML; thread it through `check`, `compile`, `test`, `repl`, `snapshot` so the CLI accepts `--classpath <PATH>` end-to-end. |
+| `.purem` Tier-2 / DSL extension registry | P2 | `extension_arenas: HashMap<TypeId, Box<dyn Any>>` is currently dropped on slice/merge. Add a `PuremExtension` trait + name-keyed registry so DSL crates (`dsl-tds`/`dsl-graph`/`dsl-store`/`dsl-diagram`) can round-trip their data. |
+| `legend snapshot --release` | P3 | Strip `<<test.Test>>` elements + their referenced classes/associations/mappings/enums from production `.purem` blobs. Tracked in memory `project_purem_release_filter`. |
 | Semantic validations (SV-001..003) | P1 | Compiler-layer responsibility, tracked in `docs/SEMANTIC_VALIDATIONS.md` |
 
 ---

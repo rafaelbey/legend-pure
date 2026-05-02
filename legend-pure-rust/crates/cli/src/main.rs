@@ -25,6 +25,7 @@
 
 #![forbid(unsafe_code)]
 
+mod classpath;
 mod commands;
 mod diagnostics;
 mod discovery;
@@ -98,6 +99,9 @@ enum Commands {
     /// Interactive Pure expression evaluator
     Repl(commands::repl::ReplArgs),
 
+    /// Compile the embedded platform and write a `.purem` snapshot
+    Snapshot(commands::snapshot::SnapshotArgs),
+
     /// Print version information
     Version,
 }
@@ -119,6 +123,7 @@ fn main() {
         Commands::Init(args) => commands::init::run(args),
         Commands::Completions(args) => commands::completions::run(args),
         Commands::Repl(args) => commands::repl::run(args),
+        Commands::Snapshot(args) => commands::snapshot::run(args),
         Commands::Version => {
             print_version();
             Ok(())

@@ -20,6 +20,7 @@
 //! See `DESIGN.md` §6 for full rationale.
 
 use legend_pure_parser_ast::SourceInfo;
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 use crate::ids::{ElementId, RelationId};
@@ -48,7 +49,7 @@ use crate::ids::{ElementId, RelationId};
 /// | `T`, `U` | `Generic("T")` |
 /// | `T + V` | `AlgebraUnion(..)` |
 /// | (untyped lambda param, no annotation, no expectation) | `Unresolved` |
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypeExpr {
     /// A resolved named type, optionally with type and/or value arguments.
     ///
@@ -124,7 +125,7 @@ pub enum TypeExpr {
 /// A compile-time constant value used in type parameterization.
 ///
 /// For example, `Varchar(255)` uses `ConstValue::Integer(255)`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ConstValue {
     /// Integer value, e.g., `200` in `VARCHAR(200)`.
     Integer(i64),
@@ -140,7 +141,7 @@ pub enum ConstValue {
 ///
 /// Mirrors `ast::Multiplicity` but without source location metadata —
 /// at the semantic level, multiplicities are structural values.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Multiplicity {
     /// Exactly one: `[1]` — `lower=1, upper=1`.
     PureOne,
@@ -170,7 +171,7 @@ pub enum Multiplicity {
 // ---------------------------------------------------------------------------
 
 /// A function or qualified property parameter (resolved).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Parameter {
     /// Parameter name.
     pub name: SmolStr,
@@ -194,7 +195,7 @@ pub struct Parameter {
 ///
 /// Field types match `jiff::civil` (and `PureDate`) so the evaluator needs
 /// zero casts.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DateValue {
     /// Strict date: `%2024-01-15`, or a partial date (`%2024`, `%2024-01`).
     ///
@@ -274,7 +275,7 @@ pub enum DateValue {
 ///
 /// After type inference (Pass 2.5), every expression in the model
 /// carries a `ResolvedType` via [`ValueSpec::type_info`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedType {
     /// The inferred type of the expression.
     pub type_expr: TypeExpr,
@@ -305,7 +306,7 @@ pub struct ResolvedType {
 /// This "header + kind" pattern avoids repeating `source_info` and
 /// `type_info` across every variant, and enables O(1) field access
 /// without pattern matching.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ValueSpec {
     /// The expression variant and its data.
     pub kind: Box<ExprKind>,
@@ -322,7 +323,7 @@ pub struct ValueSpec {
 /// `_propertyName` / `_qualifiedPropertyName` slots on
 /// `SimpleFunctionExpression` — and the data is identical across kinds
 /// so dispatch can share helpers without runtime tag fields.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FunctionCallData {
     /// Resolved function element (user-defined functions). `None` for
     /// unresolved built-ins, operators, and property / QP calls — the
@@ -345,7 +346,7 @@ pub struct FunctionCallData {
 /// Each variant contains only the data unique to that expression kind.
 /// The common `source_info` and `type_info` fields live on the parent
 /// [`ValueSpec`] struct.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ExprKind {
     // -- Literals ----------------------------------------------------------
     /// Integer literal: `42`.
@@ -460,7 +461,7 @@ pub enum ExprKind {
 /// `Column` heap shape (`name`, `nameWildCard=false`,
 /// `classifierGenericType` chaining down to `type_element` with
 /// `multiplicity`) without re-resolving names.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RelationColumnLowered {
     /// Column name (e.g. `"x"` in `~[x:String[1]]`).
     pub name: SmolStr,
@@ -506,7 +507,7 @@ pub type Expression = ValueSpec;
 ///
 /// All metadata (name, source, package) lives in the parallel `ElementNode`.
 /// Bootstrapped in Chunk 0.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PrimitiveType {
     /// The single supertype for this primitive.
     ///
