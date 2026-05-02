@@ -3537,3 +3537,192 @@ fn get_all_class_metamodel_finds_user_classes() {
         "Class.all() should include user-defined Bar; got {names:?}"
     );
 }
+
+// ===========================================================================
+// platform_precise_primitives — embed + cast-time constraint enforcement
+// ===========================================================================
+
+/// Locks the `platform_precise_primitives` repo embedding: every type
+/// declared in `precisePrimitives.pure` (sized integer variants,
+/// `Varchar(x)`, `Numeric(p, s)`, `Timestamp`, `Float4`, `Double`)
+/// must resolve to an `Element::PrimitiveType` after platform compile.
+#[test]
+fn precise_primitives_metamodel_resolves_in_platform() {
+    use legend_pure_parser_pure::model::Element;
+    let model = compile_with_platform("");
+    let primitives = [
+        "TinyInt",
+        "UTinyInt",
+        "SmallInt",
+        "USmallInt",
+        "Int",
+        "UInt",
+        "BigInt",
+        "UBigInt",
+        "Varchar",
+        "Timestamp",
+        "Float4",
+        "Double",
+        "Numeric",
+    ];
+    for name in primitives {
+        let segments: Vec<smol_str::SmolStr> = ["meta", "pure", "precisePrimitives", name]
+            .iter()
+            .map(|s| smol_str::SmolStr::new(*s))
+            .collect();
+        let id = model
+            .resolve_by_path(&segments)
+            .unwrap_or_else(|| panic!("precise primitive missing: {name}"));
+        assert!(
+            matches!(model.get_element(id), Element::PrimitiveType(_)),
+            "{name} should be a PrimitiveType element",
+        );
+    }
+}
+
+/// Parametric precise primitives (`Varchar(x:Integer[1])`,
+/// `Numeric(precision:Integer[1], scale:Integer[1])`) must carry their
+/// type-variable parameters through the compile pipeline so that
+/// cast-time constraint evaluation can bind them.
+#[test]
+fn precise_primitives_parametric_carry_type_variable_params() {
+    use legend_pure_parser_pure::model::Element;
+    let model = compile_with_platform("");
+    for (name, expected_param_count) in [
+        ("Varchar", 1usize),
+        ("Numeric", 2usize),
+        ("TinyInt", 0usize),
+    ] {
+        let segments: Vec<smol_str::SmolStr> = ["meta", "pure", "precisePrimitives", name]
+            .iter()
+            .map(|s| smol_str::SmolStr::new(*s))
+            .collect();
+        let id = model
+            .resolve_by_path(&segments)
+            .expect("primitive resolves");
+        match model.get_element(id) {
+            Element::PrimitiveType(p) => {
+                assert_eq!(
+                    p.type_variable_parameters.len(),
+                    expected_param_count,
+                    "{name} should declare {expected_param_count} type-variable parameter(s)",
+                );
+            }
+            other => panic!("{name} is not PrimitiveType: {other:?}"),
+        }
+    }
+}
+
+/// Cast-time happy path: an in-range integer survives `cast(@TinyInt)`
+/// and the same value comes back. Locks that constraint evaluation
+/// reaches the precise-primitive constraint block, calls the platform
+/// `pow` native, and produces a true predicate.
+#[test]
+fn precise_primitives_cast_tinyint_in_range() {
+    let result = eval_pure(
+        r"
+        function test::f(): Integer[1] {
+            42->cast(@meta::pure::precisePrimitives::TinyInt);
+        }
+        ",
+        "f__Integer_1_",
+    );
+    assert_eq!(result, Value::Integer(42));
+}
+
+/// Cast-time negative path: an out-of-range integer must raise a
+/// constraint-violation error from the `[$this >= -pow(2,7) && ...]`
+/// block. Bound is `[-128, 127]`; 200 is well outside.
+#[test]
+fn precise_primitives_cast_tinyint_out_of_range_violates_constraint() {
+    let err = eval_pure_err(
+        r"
+        function test::f(): Integer[1] {
+            200->cast(@meta::pure::precisePrimitives::TinyInt);
+        }
+        ",
+        "f__Integer_1_",
+    );
+    assert!(
+        err.to_lowercase().contains("constraint") || err.to_lowercase().contains("violated"),
+        "expected a constraint-violation error, got: {err}"
+    );
+}
+
+/// Parametric `Varchar(x)` happy path: a string within the supplied
+/// length bound passes the constraint `$this->length() <= $x`.
+#[test]
+fn precise_primitives_cast_varchar_within_length() {
+    let result = eval_pure(
+        r"
+        function test::f(): String[1] {
+            'abc'->cast(@meta::pure::precisePrimitives::Varchar(5));
+        }
+        ",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String(SmolStr::new("abc")));
+}
+
+/// Parametric `Varchar(x)` negative path: a string longer than the
+/// supplied bound must raise a constraint-violation error. Locks both
+/// the parametric type-variable binding (`@Varchar(3)` → `x = 3`) and
+/// the constraint evaluation against the call-site bound.
+#[test]
+fn precise_primitives_cast_varchar_exceeds_length_violates_constraint() {
+    let err = eval_pure_err(
+        r"
+        function test::f(): String[1] {
+            'abcdef'->cast(@meta::pure::precisePrimitives::Varchar(3));
+        }
+        ",
+        "f__String_1_",
+    );
+    assert!(
+        err.to_lowercase().contains("constraint") || err.to_lowercase().contains("violated"),
+        "expected a constraint-violation error, got: {err}"
+    );
+}
+
+/// Parametric `Numeric(precision, scale)` happy path: a Decimal that
+/// fits within the precision/scale bound passes. Notably, this primitive's
+/// constraint body delegates to a *user-defined* helper function
+/// (`meta::pure::precisePrimitives::validate`) which itself calls
+/// `floor`, `toString`, `length`, and `fractionDigits` — so this test
+/// also locks that constraint-body lowering can call user functions
+/// declared in the same repo.
+#[test]
+fn precise_primitives_cast_numeric_within_precision() {
+    let result = eval_pure(
+        r"
+        function test::f(): Decimal[1] {
+            123.45d->cast(@meta::pure::precisePrimitives::Numeric(5, 2));
+        }
+        ",
+        "f__Decimal_1_",
+    );
+    match result {
+        Value::Decimal(_) => {}
+        other => panic!("expected Decimal value, got {other:?}"),
+    }
+}
+
+/// Parametric `Numeric(precision, scale)` negative path: a Decimal
+/// whose precision exceeds the bound must raise a constraint-violation
+/// error. `123.45` has 5 significant digits; `Numeric(3, 1)` permits at
+/// most 3 — so the cast must fail.
+#[test]
+fn precise_primitives_cast_numeric_exceeds_precision_violates_constraint() {
+    let err = eval_pure_err(
+        r"
+        function test::f(): Decimal[1] {
+            123.45d->cast(@meta::pure::precisePrimitives::Numeric(3, 1));
+        }
+        ",
+        "f__Decimal_1_",
+    );
+    assert!(
+        err.to_lowercase().contains("constraint") || err.to_lowercase().contains("violated"),
+        "expected a constraint-violation error, got: {err}"
+    );
+}

@@ -125,6 +125,16 @@ impl Repo {
         }
     }
 
+    /// The default embedded `platform_precise_primitives` repo.
+    #[must_use]
+    pub fn embedded_platform_precise_primitives() -> Self {
+        Self::Embedded {
+            prefix: "/platform_precise_primitives",
+            files: sources::REPO_PLATFORM_PRECISE_PRIMITIVES_FILES,
+            meta: &sources::REPO_PLATFORM_PRECISE_PRIMITIVES_META,
+        }
+    }
+
     /// The default embedded `platform_dsl_store` repo.
     #[must_use]
     pub fn embedded_platform_dsl_store() -> Self {
@@ -462,6 +472,19 @@ mod tests {
     }
 
     #[test]
+    fn embedded_platform_precise_primitives_dependencies() {
+        let repo = Repo::embedded_platform_precise_primitives();
+        let meta = repo.meta().expect("embedded repo carries meta");
+        assert_eq!(meta.name, "platform_precise_primitives");
+        assert_eq!(meta.dependencies, &["platform"]);
+        assert!(
+            meta.pattern.contains("precisePrimitives"),
+            "pattern should constrain to meta::pure::precisePrimitives, got: {}",
+            meta.pattern
+        );
+    }
+
+    #[test]
     fn embedded_platform_files_carry_canonical_urls() {
         let repo = Repo::embedded_platform();
         let any_grammar = repo
@@ -484,13 +507,14 @@ mod tests {
     }
 
     #[test]
-    fn default_embedded_includes_all_four_repos() {
+    fn default_embedded_includes_all_repos() {
         let repos = Repo::default_embedded();
         let names: Vec<_> = repos
             .iter()
             .filter_map(|r| r.meta().map(|m| m.name))
             .collect();
         assert!(names.contains(&"platform"));
+        assert!(names.contains(&"platform_precise_primitives"));
         assert!(names.contains(&"platform_dsl_store"));
         assert!(names.contains(&"platform_dsl_diagram"));
         assert!(names.contains(&"platform_dsl_tds"));

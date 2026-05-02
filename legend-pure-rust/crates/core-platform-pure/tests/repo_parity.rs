@@ -82,6 +82,7 @@ fn embedded_and_filesystem_produce_equivalent_models() {
         .expect("Repo::from_descriptor on real platform.json should succeed");
     let hybrid_repos: Vec<Repo> = vec![
         fs_platform,
+        Repo::embedded_platform_precise_primitives(),
         Repo::embedded_platform_dsl_store(),
         Repo::embedded_platform_dsl_diagram(),
         Repo::embedded_platform_dsl_tds(),

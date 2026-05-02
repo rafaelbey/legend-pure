@@ -951,6 +951,7 @@ version = "0.1.0"
 dependencies = [
  "indoc",
  "insta",
+ "legend-pure-core-platform",
  "legend-pure-parser-ast",
  "legend-pure-parser-compose",
  "legend-pure-parser-lexer",
