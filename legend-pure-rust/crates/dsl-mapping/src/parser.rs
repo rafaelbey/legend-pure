@@ -45,7 +45,7 @@ use smol_str::SmolStr;
 use crate::ast::{
     AggregateSpecification, AggregateView, AggregationAwareClassMappingBody,
     AggregationFunctionSpec, ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping,
-    EnumerationClassMappingBody, MappingDef, MappingInclude, NestedClassMapping,
+    EnumerationClassMappingBody, LocalPropertyDecl, MappingDef, MappingInclude, NestedClassMapping,
     OperationClassMappingBody, OperationParameter, PureClassMappingBody, PurePropertyMapping,
     SECTION_KIND, StoreSubstitution, XStoreClassMappingBody, XStorePropertyMapping,
 };
@@ -320,11 +320,38 @@ fn parse_pure_body(ctx: &mut ParserContext<'_>) -> Result<PureClassMappingBody, 
             // Optional comma between ~clauses and following entries.
             ctx.cursor().eat(TokenKind::Comma);
         } else {
-            // `propertyName : (EnumerationMapping <name> :)? transform`
+            // `(+)? propertyName (: Type[mult])? : (EnumerationMapping <name> :)? transform`
+            //
+            // The `+` prefix marks a *local* property declaration:
+            // the user is adding a new property to the target class
+            // visible only from this mapping. Mirrors the M3 grammar
+            // alternative `(PLUS qualifiedName COLON type multiplicity)`.
+            let local_start = ctx.cursor().current_source_info();
+            let is_local = ctx.cursor().eat(TokenKind::Plus);
             let prop_tok = ctx.cursor().expect(TokenKind::Identifier)?;
             let prop_si = prop_tok.source_info.clone();
             let prop_name = SmolStr::new(prop_tok.text.clone());
             ctx.cursor().expect(TokenKind::Colon)?;
+
+            // Local-property type+mult declaration consumes the
+            // `Type[mult]` chunk before the next `:` separator.
+            // `parse_multiplicity` expects to start *inside* the
+            // brackets — the `[` and `]` are caller-managed.
+            let local_property = if is_local {
+                let type_ref = ctx.parse_type_reference()?;
+                ctx.cursor().expect(TokenKind::LBracket)?;
+                let multiplicity = ctx.parse_multiplicity()?;
+                ctx.cursor().expect(TokenKind::RBracket)?;
+                let local_end = ctx.cursor().current_source_info();
+                ctx.cursor().expect(TokenKind::Colon)?;
+                Some(LocalPropertyDecl {
+                    type_ref,
+                    multiplicity,
+                    source_info: merge_si(&local_start, &local_end),
+                })
+            } else {
+                None
+            };
 
             // Optional `EnumerationMapping <name> :` transformer
             // prefix. Mirrors the M3 grammar's
@@ -356,6 +383,7 @@ fn parse_pure_body(ctx: &mut ParserContext<'_>) -> Result<PureClassMappingBody, 
                 transform,
                 transformer,
                 explode: false,
+                local_property,
                 source_info: merge_si(&prop_si, &end_si),
             });
             // Property entries are comma-separated; trailing comma OK.

@@ -44,7 +44,7 @@ use legend_pure_parser_ast::dsl::DSLElement;
 use legend_pure_parser_ast::element::{Annotated, PackageableElement};
 use legend_pure_parser_ast::expression::Expression;
 use legend_pure_parser_ast::source_info::Spanned;
-use legend_pure_parser_ast::type_ref::{Identifier, Package};
+use legend_pure_parser_ast::type_ref::{Identifier, Multiplicity, Package, TypeReference};
 use smol_str::SmolStr;
 
 /// Section kind string this DSL claims (`###Mapping`).
@@ -266,7 +266,30 @@ pub struct PurePropertyMapping {
     /// `+` modifier marking the transform as exploding into multiple
     /// values. Reserved; Stage 2 always parses as `false`.
     pub explode: bool,
+    /// Optional inline local-property declaration. When present, the
+    /// `+` prefix form was used: `+name : Type[mult] : transform`,
+    /// declaring a *local* property (only visible from this mapping)
+    /// with the given type/multiplicity along with the transform.
+    /// Mirrors the M3 grammar's
+    /// `(PLUS qualifiedName COLON type multiplicity)` alternative
+    /// for `mappingLine`.
+    pub local_property: Option<LocalPropertyDecl>,
     /// Span of the entire `propertyName : transform` entry.
+    pub source_info: SourceInfo,
+}
+
+/// Declared type + multiplicity for an inline local-property
+/// declaration (`+name : Type[mult]`). Java's TestModelMapping
+/// covers the type-validity rule
+/// (`testLocalPropertyWithInvalidType`) and the type-mismatch rule
+/// (`testLocalPropertyTypeError`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalPropertyDecl {
+    /// Declared type reference (e.g. `String`, `pkg::SomeClass`).
+    pub type_ref: TypeReference,
+    /// Declared multiplicity (e.g. `[1]`, `[*]`, `[0..1]`).
+    pub multiplicity: Multiplicity,
+    /// Span covering the whole `Type[mult]` declaration.
     pub source_info: SourceInfo,
 }
 
