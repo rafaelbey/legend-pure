@@ -16,8 +16,8 @@
 //!
 //! Recognises a stream of `Mapping pkg::M ( includes* classMappings* )`
 //! declarations whose class-mapping bodies are dispatched by
-//! `parserName` token. Stage 2 supports only the `Pure` parser
-//! (model-to-model). Other parser names produce an
+//! `parserName` token. Currently supports `Pure` (model-to-model) and
+//! `EnumerationMapping` (Stage 4). Other parser names produce an
 //! `UnsupportedSubParser` error pointing at the staged roadmap.
 //!
 //! Mirrors `legend-pure-dsl-mapping/.../MappingParser.g4` for the
@@ -37,8 +37,9 @@ use legend_pure_parser_parser::section_parser::SectionParser;
 use smol_str::SmolStr;
 
 use crate::ast::{
-    ClassMapping, ClassMappingBody, MappingDef, MappingInclude, PureClassMappingBody,
-    PurePropertyMapping, SECTION_KIND, StoreSubstitution,
+    ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping, EnumerationClassMappingBody,
+    MappingDef, MappingInclude, PureClassMappingBody, PurePropertyMapping, SECTION_KIND,
+    StoreSubstitution,
 };
 
 fn err_unexpected(expected: &str, found: &str, source_info: SourceInfo) -> ParseError {
@@ -217,13 +218,14 @@ fn parse_class_mapping(ctx: &mut ParserContext<'_>) -> Result<ClassMapping, Pars
         };
 
     let body = match parser_name.as_str() {
-        "Pure" => ClassMappingBody::Pure(parse_pure_body(ctx)?),
+        "Pure" => ClassMappingBody::Pure(Box::new(parse_pure_body(ctx)?)),
+        "EnumerationMapping" => ClassMappingBody::Enumeration(parse_enumeration_body(ctx)?),
         other => {
             return Err(ParseError::Unexpected {
                 message: format!(
-                    "Mapping sub-parser '{other}' is not supported yet (Stage 2 ships only \
-                     'Pure'; Enumeration/Operation/AggregationAware/XStore/Relation arrive in \
-                     Stages 4–8 — see ~/.claude/plans/what-is-left-to-iterative-sunrise.md)"
+                    "Mapping sub-parser '{other}' is not supported yet (Stages 2/4 ship 'Pure' \
+                     and 'EnumerationMapping'; Operation/AggregationAware/XStore/Relation arrive \
+                     in Stages 5–8 — see ~/.claude/plans/what-is-left-to-iterative-sunrise.md)"
                 ),
                 source_info: parser_name_si,
             });
@@ -318,6 +320,109 @@ fn parse_pure_body(ctx: &mut ParserContext<'_>) -> Result<PureClassMappingBody, 
         filter,
         property_mappings,
     })
+}
+
+// ---------------------------------------------------------------------------
+// EnumerationClassMappingBody — Stage 4
+// ---------------------------------------------------------------------------
+
+fn parse_enumeration_body(
+    ctx: &mut ParserContext<'_>,
+) -> Result<EnumerationClassMappingBody, ParseError> {
+    ctx.cursor().expect(TokenKind::LBrace)?;
+    let mut value_mappings = Vec::new();
+    while !ctx.cursor().check(TokenKind::RBrace) && !ctx.cursor().check(TokenKind::Eof) {
+        value_mappings.push(parse_enum_value_mapping(ctx)?);
+        // Comma-separated, trailing comma OK.
+        ctx.cursor().eat(TokenKind::Comma);
+    }
+    ctx.cursor().expect(TokenKind::RBrace)?;
+    Ok(EnumerationClassMappingBody { value_mappings })
+}
+
+fn parse_enum_value_mapping(ctx: &mut ParserContext<'_>) -> Result<EnumValueMapping, ParseError> {
+    let name_tok = ctx.cursor().expect(TokenKind::Identifier)?;
+    let start_si = name_tok.source_info.clone();
+    let enum_value_name = SmolStr::new(name_tok.text.clone());
+    ctx.cursor().expect(TokenKind::Colon)?;
+
+    let source_values = if ctx.cursor().eat(TokenKind::LBracket) {
+        // `[v1, v2, …]` multi-value form.
+        let mut values = Vec::new();
+        if !ctx.cursor().check(TokenKind::RBracket) {
+            loop {
+                values.push(parse_enum_source_value(ctx)?);
+                if !ctx.cursor().eat(TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        ctx.cursor().expect(TokenKind::RBracket)?;
+        values
+    } else {
+        // Single-value form.
+        vec![parse_enum_source_value(ctx)?]
+    };
+
+    let end_si = ctx.cursor().current_source_info();
+    Ok(EnumValueMapping {
+        enum_value_name,
+        source_values,
+        source_info: merge_si(&start_si, &end_si),
+    })
+}
+
+fn parse_enum_source_value(ctx: &mut ParserContext<'_>) -> Result<EnumSourceValue, ParseError> {
+    let tok = ctx.cursor().peek().clone();
+    match tok.kind {
+        TokenKind::StringLiteral => {
+            ctx.cursor().advance();
+            // Strip the surrounding single quotes the lexer keeps.
+            let raw = tok.text.as_str();
+            let stripped = raw.strip_prefix('\'').unwrap_or(raw);
+            let stripped = stripped.strip_suffix('\'').unwrap_or(stripped);
+            Ok(EnumSourceValue::String {
+                value: SmolStr::new(stripped),
+                source_info: tok.source_info,
+            })
+        }
+        TokenKind::IntegerLiteral => {
+            ctx.cursor().advance();
+            let value: i64 = tok.text.parse().map_err(|_| ParseError::Unexpected {
+                message: format!("Invalid integer literal '{}'", tok.text),
+                source_info: tok.source_info.clone(),
+            })?;
+            Ok(EnumSourceValue::Integer {
+                value,
+                source_info: tok.source_info,
+            })
+        }
+        TokenKind::Identifier => {
+            // `pkg::Enum.VALUE` reference. parse_qualified_name reads
+            // `pkg::Enum`; then `.VALUE` follows.
+            let (package, name, name_si) = ctx.parse_qualified_name()?;
+            ctx.cursor().expect(TokenKind::Dot)?;
+            let value_tok = ctx.cursor().expect(TokenKind::Identifier)?;
+            let end_si = value_tok.source_info.clone();
+            Ok(EnumSourceValue::EnumRef {
+                enumeration: PackageableElementPtr {
+                    package,
+                    name,
+                    source_info: name_si.clone(),
+                },
+                value_name: SmolStr::new(value_tok.text.clone()),
+                source_info: merge_si(&name_si, &end_si),
+            })
+        }
+        _ => Err(ParseError::Unexpected {
+            message: format!(
+                "Expected enum source value (string literal, integer literal, or qualified \
+                 enum-value reference), found '{}'",
+                tok.text
+            ),
+            source_info: tok.source_info,
+        }),
+    }
 }
 
 // ---------------------------------------------------------------------------
