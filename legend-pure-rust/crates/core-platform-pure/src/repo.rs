@@ -208,6 +208,16 @@ impl Repo {
         }
     }
 
+    /// The default embedded `platform_store_relational` repo.
+    #[must_use]
+    pub fn embedded_platform_store_relational() -> Self {
+        Self::Embedded {
+            prefix: "/platform_store_relational",
+            files: sources::REPO_PLATFORM_STORE_RELATIONAL_FILES,
+            meta: &sources::REPO_PLATFORM_STORE_RELATIONAL_META,
+        }
+    }
+
     /// All embedded repos in Cargo.toml declaration order.
     #[must_use]
     pub fn default_embedded() -> Vec<Repo> {
@@ -544,6 +554,7 @@ pub fn load(repos: &[Repo], auto_imports: &[SmolStr]) -> Result<PureModel, Parti
     };
 
     let mut model = init_bootstrap_model();
+    populate_repo_visibility(&mut model, repos);
     let mut errors: Vec<CompilationError> = Vec::new();
 
     for repo in sorted {
@@ -621,6 +632,28 @@ fn parse_repo_sources(
         }
     }
     (parsed_files, errors)
+}
+
+/// Populate `model.repo_visibility` from the repo list's descriptor
+/// metadata. Each repo with a [`RepoMeta`] contributes one entry mapping
+/// its name to `{ self } ∪ { each direct dep }`. Repos without metadata
+/// (test fixtures via [`Repo::from_filesystem`]) are skipped — sources
+/// in those repos won't have any rules to enforce, matching Java's
+/// `getSourceRepoName` returning null for unrecognised repos.
+fn populate_repo_visibility(model: &mut PureModel, repos: &[Repo]) {
+    for repo in repos {
+        let Some(meta) = repo.meta() else {
+            continue;
+        };
+        let mut visible: std::collections::BTreeSet<SmolStr> = std::collections::BTreeSet::new();
+        visible.insert(SmolStr::new(meta.name));
+        for dep in meta.dependencies {
+            visible.insert(SmolStr::new(*dep));
+        }
+        model
+            .repo_visibility
+            .insert(SmolStr::new(meta.name), visible);
+    }
 }
 
 fn mk_synthetic_error(source: &str, message: String) -> CompilationError {

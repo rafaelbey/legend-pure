@@ -52,6 +52,14 @@ shape = "embedded"
 descriptor = "../../../legend-pure-dsl/legend-pure-dsl-tds/legend-pure-m2-dsl-tds-pure/src/main/resources/platform_dsl_tds.definition.json"
 shape = "embedded"
 
+# Relational store metamodel. Depends on platform_dsl_store + platform_dsl_mapping
+# (extends SetBasedStore, InstanceSetImplementation, EmbeddedSetImplementation,
+# Connection, Activity, etc.) and on platform (DurationUnit, Date, Pair, etc.).
+# Embed last among the M2 DSLs.
+[[package.metadata.legend-pure.repos]]
+descriptor = "../../../legend-pure-store/legend-pure-store-relational/legend-pure-m2-store-relational-pure/src/main/resources/platform_store_relational.definition.json"
+shape = "embedded"
+
 [dependencies]
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-ast = { path = "../ast" }
@@ -63,6 +71,9 @@ smol_str = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 walkdir = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [build-dependencies]
 legend-pure-build = { path = "../build" }

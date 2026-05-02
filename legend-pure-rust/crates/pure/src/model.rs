@@ -238,6 +238,14 @@ pub struct PureModel {
     /// Extension arenas for plugin element types.
     pub extension_arenas: HashMap<TypeId, Box<dyn Any>>,
 
+    /// Per-repo visibility table: repo name → its visible-set (direct
+    /// dependencies plus itself). Empty by default — populated by
+    /// `core_platform_pure::repo::load` from descriptor metadata.
+    /// Visibility checks are no-ops when this map is empty, which
+    /// preserves every existing test that builds a model without going
+    /// through a real loader.
+    pub repo_visibility: crate::visibility::RepoVisibilityMap,
+
     /// Derived indexes, computed post-freeze.
     derived: DerivedIndexes,
 }
@@ -260,6 +268,7 @@ impl PureModel {
             chunks: Vec::new(),
             package_elements: vec![Element::Package(PackageId(root_idx))],
             extension_arenas: HashMap::new(),
+            repo_visibility: HashMap::new(),
             derived: DerivedIndexes::default(),
         }
     }

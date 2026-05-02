@@ -140,4 +140,14 @@ pub enum CompilationErrorKind {
         /// Names of the parameters that could not be inferred.
         names: Vec<SmolStr>,
     },
+    /// A reference targets a packageable element whose home repo is not
+    /// in the use-site repo's declared dependencies. Java-parity:
+    /// `VisibilityValidation.throwRepoVisibilityException`.
+    NotVisible {
+        /// Fully-qualified path of the target element (e.g.
+        /// `"datamarts::datamt::domain::TestClass2"`).
+        target_fqn: SmolStr,
+        /// Source path of the use site (e.g. `"/system/testFile.pure"`).
+        source_id: SmolStr,
+    },
 }
