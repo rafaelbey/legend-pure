@@ -297,6 +297,62 @@ fn bench_add_columns(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// Member-wrapper reflection — `.stereotypes`, `.taggedValues`,
+// `.properties` etc. on a Class element. Hits `member_wrapper_cache`,
+// which historically deep-cloned a `Vec<Value>` on every cache hit.
+// The B5 refactor stores the collapsed `Value` (Collection / Unit /
+// scalar) directly so cache hits become an O(1) `Value::clone` —
+// the inner `im_rc::Vector` is structurally shared.
+// ---------------------------------------------------------------------------
+
+fn bench_member_wrapper_cache(c: &mut Criterion) {
+    let mut group = c.benchmark_group("eval_member_wrapper");
+
+    let model = compile_user(
+        r"
+        Class test::Person
+        {
+            firstName: String[1];
+            lastName: String[1];
+            age: Integer[1];
+            email: String[0..1];
+        }
+
+        // 20 reads of `.properties` on the same Class element. The
+        // first call is a cache miss; the remaining 19 are hits, where
+        // pre-B5 deep-cloned a `Vec<Value>` per hit and post-B5 does
+        // an O(1) `Value::clone`.
+        function test::count_props(): Integer[1]
+        {
+            let p = test::Person->genericType().rawType->toOne()
+                ->cast(@Class<Any>)->toOne();
+            $p.properties->size() + $p.properties->size() + $p.properties->size()
+              + $p.properties->size() + $p.properties->size()
+              + $p.properties->size() + $p.properties->size()
+              + $p.properties->size() + $p.properties->size()
+              + $p.properties->size() + $p.properties->size()
+              + $p.properties->size() + $p.properties->size()
+              + $p.properties->size() + $p.properties->size()
+              + $p.properties->size() + $p.properties->size()
+              + $p.properties->size() + $p.properties->size()
+              + $p.properties->size()
+        }
+        ",
+    );
+    let registry = NativeRegistry::standard();
+
+    group.bench_function("class_properties_repeat_20", |b| {
+        b.iter_batched(
+            || Evaluator::new(&model, &registry),
+            |mut eval| black_box(eval.call("test::count_props", &[]).unwrap()),
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
 // Recursive function dispatch — exercises `call_user_function`'s
 // per-invocation cost (parameter binding + body evaluation). The
 // review identified body/parameters cloning as the hottest path in
@@ -366,5 +422,6 @@ criterion_group!(
     bench_lambda,
     bench_add_columns,
     bench_recursion,
+    bench_member_wrapper_cache,
 );
 criterion_main!(benches);
