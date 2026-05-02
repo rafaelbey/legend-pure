@@ -344,6 +344,11 @@ fn write_property_mapping(out: &mut String, pm: &PurePropertyMapping) {
     out.push_str("    ");
     out.push_str(pm.property_name.as_str());
     out.push_str(" : ");
+    if let Some(name) = &pm.transformer {
+        out.push_str("EnumerationMapping ");
+        out.push_str(name.as_str());
+        out.push_str(" : ");
+    }
     write_expression(out, &pm.transform);
 }
 
