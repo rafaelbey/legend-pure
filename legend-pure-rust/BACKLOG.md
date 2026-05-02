@@ -82,23 +82,45 @@ in its crate directory; this file provides the high-level view.
   `~/.claude/plans/the-fact-that-the-peaceful-goblet.md`. Bench:
   `crates/runtime/benches/heap_growth.rs` — ~62ns alloc+drop, no
   retention.)
+- **Platform-only binary trim** (commit `47f8e5925f3`): only `platform`
+  is embedded (as a `.purem` blob via `include_bytes!`); every other
+  repo (precise primitives, all DSLs, store-relational) ships as a
+  build-emitted `.purem` artifact next to the binary, loaded via
+  classpath auto-discovery. `load_platform()` deserialises the blob
+  rather than re-parsing 250 `.pure` files, knocking ~70 µs off
+  `evaluator_setup_only` (−18 %) and ~15 % off function-call dispatch
+  vs the prior all-source path. Filesystem override of any embedded
+  repo via classpath `kind = "filesystem"` is the local-dev path.
 
 ### Performance Baselines
 
-Captured 2026-04-26 from `cargo bench --bench runtime_eval -- --quick` on
-M-series macOS, debug+release. Track regressions >20% from these:
+Captured 2026-05-02 from `cargo bench --bench runtime_eval -- --quick` on
+M-series macOS, release. Numbers are running medians from criterion;
+±1 % run-to-run variance is normal. Track regressions >20% from these.
+
+These supersede the 2026-04-26 baselines, which became stale across a
+month of compiler/runtime work (visibility validator, lambda-param
+inference rebinding, the dsl-relational metamodel, parser unblocks for 7
+grammar gaps, plus the platform-only binary trim that picked up a
++15-18 % win on function-call hot paths). See
+`docs/runtime/perf_session_2026-05-01.md` for the
+intermediate session that landed the recursion / classifier-resolve
+wins.
 
 | Benchmark | Time | Notes |
 |---|---|---|
-| `eval_function_call/trivial_return_literal` | ~17 µs | Smallest possible call — `function(): Integer[1] { 42 }` |
-| `eval_function_call/call_with_one_int_arg` | ~18 µs | `add_one(x:Integer[1]):Integer[1] { $x + 1 }` |
-| `eval_function_call/evaluator_setup_only` | **~285 µs** | `Evaluator::new(&model, &registry)` — heap + bootstrap_metamodel walk over 1300+ M3 elements. Dominates every other measurement when calls reuse a model; **the hot fix target** if call-throughput becomes a goal |
-| `eval_property_access/read_property_inline_construct` | ~20 µs | `^Person(...)..firstName` |
-| `eval_property_access/read_via_let_binding` | ~21 µs | `let p = ^Person(...); $p.age` |
-| `eval_lambda/map_double_5` | ~20 µs | `[1..5]->map(x \| $x * 2)` |
-| `eval_lambda/map_concat_typed_lambda_param` | ~20 µs | `['a','b','c']->map(s \| $s + 'X')->joinStrings(',')` — locks lambda-param narrowing fix from b4ff09432a5 |
-| `eval_lambda/filter_then_map` | ~30 µs | 10-element filter+map chain |
-| `eval_relation/addColumns_2cols_to_1col_source` | ~28 µs | The full `@(x:String)->genericType().rawType->cast(@RelationType<Any>)->toOne()->addColumns(~[ab,z])` chain — locks the surveyor-211/0/0 path |
+| `eval_function_call/trivial_return_literal` | ~49 µs | Smallest possible call — `function(): Integer[1] { 42 }`. Floor for every per-call cost |
+| `eval_function_call/call_with_one_int_arg` | ~52 µs | `add_one(x:Integer[1]):Integer[1] { $x + 1 }` |
+| `eval_function_call/evaluator_setup_only` | **~330 µs** | `Evaluator::new(&model, &registry)` — heap + bootstrap_metamodel walk over 1300+ M3 elements. Dominates every other measurement when calls reuse a model; **the hot fix target** if call-throughput becomes a goal. Phase-3b's purem-load path knocks ~70 µs off vs the prior all-source compile. |
+| `eval_property_access/read_property_inline_construct` | ~60 µs | `^Person(...)..firstName` |
+| `eval_property_access/read_via_let_binding` | ~62 µs | `let p = ^Person(...); $p.age` |
+| `eval_lambda/map_double_5` | ~57 µs | `[1..5]->map(x \| $x * 2)` |
+| `eval_lambda/map_concat_typed_lambda_param` | ~54 µs | `['a','b','c']->map(s \| $s + 'X')->joinStrings(',')` — locks lambda-param narrowing fix from `b4ff09432a5` |
+| `eval_lambda/filter_then_map` | ~62 µs | 10-element filter+map chain |
+| `eval_relation/addColumns_2cols_to_1col_source` | ~65 µs | The full `@(x:String)->genericType().rawType->cast(@RelationType<Any>)->toOne()->addColumns(~[ab,z])` chain — locks the surveyor-211/0/0 path |
+| `eval_recursion/fib_15` | ~2.2 ms | 1973 recursive calls to `fib`; sensitive to function-call dispatch cost. The May-1 `Rc<[T]>` body-storage win cut this from ~4.1 ms |
+| `eval_recursion/sum_to_50` | ~122 µs | Tail-style accumulation; same dispatch path |
+| `eval_member_wrapper/class_properties_repeat_20` | ~68 µs | 20 repeated `Person.properties->size()` reads — locks the May-1 cache-collapsed-Value win on `member_wrapper_cache` |
 
 Run with `--quick` (lower variance bound, ~2-3s total) for change-time
 checks; drop the flag for full statistical-strength baselines (~5min).
