@@ -23,13 +23,16 @@
 //!
 //! Currently supported variants: [`ClassMappingBody::Pure`]
 //! (model-to-model, `PureInstanceSetImplementation`),
-//! [`ClassMappingBody::Enumeration`] (Stage 4), and
+//! [`ClassMappingBody::Enumeration`] (Stage 4),
 //! [`ClassMappingBody::Operation`] (Stage 5, simple parameters
-//! form — merge form deferred). Remaining variants
-//! (`AggregationAware`, `XStore`, `Relation`) arrive in Stages 6–8;
-//! the enum is `#[non_exhaustive]` so adding a variant is
-//! non-breaking. Hitting an unknown `parserName` at parse time
-//! produces an `UnsupportedSubParser` error pointing at the roadmap.
+//! form — merge form deferred), and
+//! [`ClassMappingBody::AggregationAware`] (Stage 6 — `Views`,
+//! `~modelOperation`, `~mainMapping`; nested mapping bodies recurse
+//! into `ClassMappingBody`). Remaining variants (`XStore`,
+//! `Relation`) arrive in Stages 7–8; the enum is `#[non_exhaustive]`
+//! so adding a variant is non-breaking. Hitting an unknown
+//! `parserName` at parse time produces an `UnsupportedSubParser`
+//! error pointing at the roadmap.
 
 use std::any::Any;
 
@@ -168,9 +171,9 @@ pub struct ClassMapping {
 /// Class-mapping body sub-grammars.
 ///
 /// Each variant corresponds to a `parserName` keyword in the Java
-/// grammar. Remaining variants (`AggregationAware`, `XStore`,
-/// `Relation`) arrive in Stages 6–8.
-/// Marked `#[non_exhaustive]` so adding variants is non-breaking.
+/// grammar. Remaining variants (`XStore`, `Relation`) arrive in
+/// Stages 7–8. Marked `#[non_exhaustive]` so adding variants is
+/// non-breaking.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum ClassMappingBody {
@@ -189,6 +192,15 @@ pub enum ClassMappingBody {
     /// composes other set implementations (e.g. union, inheritance).
     /// Maps onto `OperationSetImplementation` in the metamodel.
     Operation(OperationClassMappingBody),
+    /// `parserName == "AggregationAware"` — composes a main
+    /// set-implementation with one or more pre-aggregated views,
+    /// each guarded by a `~modelOperation` aggregate-specification
+    /// expression. Maps onto `AggregationAwareSetImplementation`
+    /// in the metamodel. Boxed because the body owns a recursive
+    /// `ClassMappingBody` tree (`~mainMapping` + per-view
+    /// `~aggregateMapping`) plus several nested expression lists,
+    /// so the variant is by far the largest.
+    AggregationAware(Box<AggregationAwareClassMappingBody>),
 }
 
 // ---------------------------------------------------------------------------
@@ -322,6 +334,113 @@ pub struct OperationParameter {
     pub id: SmolStr,
     /// Span of the ID token, used to pin per-parameter validator
     /// diagnostics back to source.
+    pub source_info: SourceInfo,
+}
+
+// ---------------------------------------------------------------------------
+// AggregationAwareClassMappingBody — Stage 6
+// ---------------------------------------------------------------------------
+
+/// Body of an `AggregationAware` class mapping.
+///
+/// Shape:
+/// ```text
+/// {
+///   Views : [
+///     (
+///       ~modelOperation : {
+///         ~canAggregate true,
+///         ~groupByFunctions ( $this.salesDate ),
+///         ~aggregateValues ( ( ~mapFn: $this.revenue, ~aggregateFn: $mapped->sum() ) )
+///       },
+///       ~aggregateMapping : Pure { ~src AggSrc … }
+///     )
+///   ],
+///   ~mainMapping : Pure { ~src MainSrc … }
+/// }
+/// ```
+///
+/// The two nested mappings (`~mainMapping`, per-view
+/// `~aggregateMapping`) recurse into [`ClassMappingBody`]. Both
+/// inherit the outer class-mapping's target class — the nested
+/// shapes themselves carry no class FQN, no `[id]`, no `extends`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AggregationAwareClassMappingBody {
+    /// Per-view aggregate specifications + their aggregate mapping.
+    /// The Java grammar requires at least one entry; this AST does
+    /// not currently enforce that — emptiness is validator-territory.
+    pub views: Vec<AggregateView>,
+    /// The fall-through main mapping used when no view's
+    /// `canAggregate` predicate matches the query shape.
+    pub main_mapping: NestedClassMapping,
+}
+
+/// One `(modelOperation, aggregateMapping)` pair inside an
+/// [`AggregationAwareClassMappingBody`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct AggregateView {
+    /// `~modelOperation : { … }` block describing when this view
+    /// can be used and how its aggregate values map back.
+    pub model_operation: AggregateSpecification,
+    /// `~aggregateMapping : <parserName> { … }` — the nested
+    /// set-implementation used when the model operation matches.
+    pub aggregate_mapping: NestedClassMapping,
+    /// Span of the entire `( ~modelOperation … , ~aggregateMapping … )`
+    /// pair.
+    pub source_info: SourceInfo,
+}
+
+/// A `~modelOperation : { ~canAggregate <bool>, ~groupByFunctions
+/// ( … ), ~aggregateValues ( … ) }` block.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AggregateSpecification {
+    /// `~canAggregate true|false` — declares whether this view
+    /// covers exact aggregation (true) or a pre-aggregated
+    /// approximation (false). Kept as a bool literal at parse time;
+    /// validators downstream may reject other forms.
+    pub can_aggregate: bool,
+    /// `~groupByFunctions ( expr, expr, … )` — one expression per
+    /// grouping key. Stored raw; validators wrap each as a lambda
+    /// with `this` bound to the outer class type.
+    pub group_by_functions: Vec<Expression>,
+    /// `~aggregateValues ( ( ~mapFn: …, ~aggregateFn: … ), … )` —
+    /// one map/aggregate pair per aggregated property.
+    pub aggregate_values: Vec<AggregationFunctionSpec>,
+    /// Span of the entire `~modelOperation : { … }` block.
+    pub source_info: SourceInfo,
+}
+
+/// One `( ~mapFn: <expr>, ~aggregateFn: <expr> )` entry inside an
+/// [`AggregateSpecification`]'s `~aggregateValues` list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AggregationFunctionSpec {
+    /// `~mapFn` — projects a row to the value being aggregated.
+    /// Validator rule: must return a `DataType` (primitive or
+    /// enumeration), per Java's `AggregationAwareValidator`.
+    pub map_fn: Expression,
+    /// `~aggregateFn` — folds many `$mapped` values into one.
+    /// Same DataType-return validator rule applies.
+    pub aggregate_fn: Expression,
+    /// Span of the entire `( ~mapFn: … , ~aggregateFn: … )` pair.
+    pub source_info: SourceInfo,
+}
+
+/// A nested class-mapping inside an
+/// [`AggregationAwareClassMappingBody`] (`~mainMapping` or per-view
+/// `~aggregateMapping`).
+///
+/// Carries only the sub-parser name + body — no class FQN, no
+/// `[id]`, no `extends` — because the nested mapping inherits the
+/// outer class-mapping's target class.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NestedClassMapping {
+    /// `parserName` selecting the body sub-grammar (`Pure`,
+    /// `Operation`, …).
+    pub parser_name: SmolStr,
+    /// The nested body itself.
+    pub body: ClassMappingBody,
+    /// Span of the entire `~mainMapping : <parserName> { … }` (or
+    /// `~aggregateMapping : <parserName> { … }`) clause.
     pub source_info: SourceInfo,
 }
 

@@ -21,9 +21,10 @@ use legend_pure_parser_ast::annotation::PackageableElementPtr;
 use legend_pure_parser_ast::expression::Expression;
 
 use crate::ast::{
-    ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping, EnumerationClassMappingBody,
-    MappingDef, MappingInclude, OperationClassMappingBody, PureClassMappingBody,
-    PurePropertyMapping, StoreSubstitution,
+    AggregateSpecification, AggregateView, AggregationAwareClassMappingBody,
+    AggregationFunctionSpec, ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping,
+    EnumerationClassMappingBody, MappingDef, MappingInclude, NestedClassMapping,
+    OperationClassMappingBody, PureClassMappingBody, PurePropertyMapping, StoreSubstitution,
 };
 
 /// Compose a single [`MappingDef`] back to its `Mapping pkg::M ( … )`
@@ -130,7 +131,88 @@ fn write_class_mapping(out: &mut String, cm: &ClassMapping) {
             write_operation_body(out, body);
             out.push_str("  }\n");
         }
+        ClassMappingBody::AggregationAware(body) => {
+            out.push_str("AggregationAware");
+            if let Some(name) = &cm.mapping_name {
+                out.push(' ');
+                out.push_str(name.as_str());
+            }
+            out.push_str("\n  {\n");
+            write_aggregation_aware_body(out, body);
+            out.push_str("  }\n");
+        }
     }
+}
+
+fn write_aggregation_aware_body(out: &mut String, body: &AggregationAwareClassMappingBody) {
+    out.push_str("    Views : [\n");
+    for (i, v) in body.views.iter().enumerate() {
+        write_aggregate_view(out, v);
+        if i + 1 < body.views.len() {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+    out.push_str("    ],\n");
+    write_nested_class_mapping(out, "mainMapping", &body.main_mapping);
+}
+
+fn write_aggregate_view(out: &mut String, v: &AggregateView) {
+    out.push_str("      (\n");
+    write_model_operation(out, &v.model_operation);
+    out.push_str(",\n");
+    write_nested_class_mapping(out, "aggregateMapping", &v.aggregate_mapping);
+    out.push_str("      )");
+}
+
+fn write_model_operation(out: &mut String, spec: &AggregateSpecification) {
+    out.push_str("        ~modelOperation : {\n");
+    out.push_str("          ~canAggregate ");
+    out.push_str(if spec.can_aggregate { "true" } else { "false" });
+    out.push_str(",\n");
+    out.push_str("          ~groupByFunctions (\n");
+    for (i, e) in spec.group_by_functions.iter().enumerate() {
+        out.push_str("            ");
+        write_expression(out, e);
+        if i + 1 < spec.group_by_functions.len() {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+    out.push_str("          ),\n");
+    out.push_str("          ~aggregateValues (\n");
+    for (i, av) in spec.aggregate_values.iter().enumerate() {
+        write_aggregate_value(out, av);
+        if i + 1 < spec.aggregate_values.len() {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+    out.push_str("          )\n");
+    out.push_str("        }");
+}
+
+fn write_aggregate_value(out: &mut String, av: &AggregationFunctionSpec) {
+    out.push_str("            ( ~mapFn: ");
+    write_expression(out, &av.map_fn);
+    out.push_str(", ~aggregateFn: ");
+    write_expression(out, &av.aggregate_fn);
+    out.push_str(" )");
+}
+
+fn write_nested_class_mapping(out: &mut String, keyword: &str, n: &NestedClassMapping) {
+    out.push_str("    ~");
+    out.push_str(keyword);
+    out.push_str(" : ");
+    out.push_str(n.parser_name.as_str());
+    out.push_str("\n    {\n");
+    match &n.body {
+        ClassMappingBody::Pure(b) => write_pure_body(out, b),
+        ClassMappingBody::Enumeration(b) => write_enumeration_body(out, b),
+        ClassMappingBody::Operation(b) => write_operation_body(out, b),
+        ClassMappingBody::AggregationAware(b) => write_aggregation_aware_body(out, b),
+    }
+    out.push_str("    }\n");
 }
 
 fn write_operation_body(out: &mut String, body: &OperationClassMappingBody) {

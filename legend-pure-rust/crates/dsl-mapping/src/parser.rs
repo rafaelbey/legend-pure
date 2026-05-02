@@ -17,9 +17,12 @@
 //! Recognises a stream of `Mapping pkg::M ( includes* classMappings* )`
 //! declarations whose class-mapping bodies are dispatched by
 //! `parserName` token. Currently supports `Pure` (model-to-model),
-//! `EnumerationMapping` (Stage 4), and `Operation` (Stage 5, simple
-//! parameters form). Other parser names produce an
-//! `UnsupportedSubParser` error pointing at the staged roadmap.
+//! `EnumerationMapping` (Stage 4), `Operation` (Stage 5, simple
+//! parameters form), and `AggregationAware` (Stage 6 — recurses
+//! into `Pure`/`Operation` bodies for the nested
+//! `~mainMapping`/`~aggregateMapping` clauses). Other parser names
+//! produce an `UnsupportedSubParser` error pointing at the staged
+//! roadmap.
 //!
 //! Mirrors `legend-pure-dsl-mapping/.../MappingParser.g4` for the
 //! top-level rule shape; the body grammar is hand-coded rather than
@@ -30,6 +33,7 @@
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::annotation::{PackageableElementPtr, SpannedString};
 use legend_pure_parser_ast::dsl::DSLElement;
+use legend_pure_parser_ast::expression::Expression;
 use legend_pure_parser_lexer::TokenKind;
 use legend_pure_parser_parser::ParserContext;
 use legend_pure_parser_parser::cursor::Cursor;
@@ -38,9 +42,11 @@ use legend_pure_parser_parser::section_parser::SectionParser;
 use smol_str::SmolStr;
 
 use crate::ast::{
-    ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping, EnumerationClassMappingBody,
-    MappingDef, MappingInclude, OperationClassMappingBody, OperationParameter,
-    PureClassMappingBody, PurePropertyMapping, SECTION_KIND, StoreSubstitution,
+    AggregateSpecification, AggregateView, AggregationAwareClassMappingBody,
+    AggregationFunctionSpec, ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping,
+    EnumerationClassMappingBody, MappingDef, MappingInclude, NestedClassMapping,
+    OperationClassMappingBody, OperationParameter, PureClassMappingBody, PurePropertyMapping,
+    SECTION_KIND, StoreSubstitution,
 };
 
 fn err_unexpected(expected: &str, found: &str, source_info: SourceInfo) -> ParseError {
@@ -218,22 +224,7 @@ fn parse_class_mapping(ctx: &mut ParserContext<'_>) -> Result<ClassMapping, Pars
             None
         };
 
-    let body = match parser_name.as_str() {
-        "Pure" => ClassMappingBody::Pure(Box::new(parse_pure_body(ctx)?)),
-        "EnumerationMapping" => ClassMappingBody::Enumeration(parse_enumeration_body(ctx)?),
-        "Operation" => ClassMappingBody::Operation(parse_operation_body(ctx)?),
-        other => {
-            return Err(ParseError::Unexpected {
-                message: format!(
-                    "Mapping sub-parser '{other}' is not supported yet (Stages 2/4/5 ship \
-                     'Pure', 'EnumerationMapping', and 'Operation'; AggregationAware/XStore/\
-                     Relation arrive in Stages 6–8 — see \
-                     ~/.claude/plans/what-is-left-to-iterative-sunrise.md)"
-                ),
-                source_info: parser_name_si,
-            });
-        }
-    };
+    let body = parse_class_mapping_body(ctx, parser_name.as_str(), &parser_name_si)?;
 
     let end_si = ctx.cursor().current_source_info();
 
@@ -245,6 +236,37 @@ fn parse_class_mapping(ctx: &mut ParserContext<'_>) -> Result<ClassMapping, Pars
         mapping_name,
         body,
         source_info: merge_si(&start, &end_si),
+    })
+}
+
+/// Dispatch a `parserName` token to the matching body sub-grammar.
+///
+/// Factored out so the recursive AggregationAware body parsing can
+/// re-use it for `~mainMapping` / `~aggregateMapping` nested clauses
+/// — those re-enter the same dispatch with a fresh `parserName`.
+fn parse_class_mapping_body(
+    ctx: &mut ParserContext<'_>,
+    parser_name: &str,
+    parser_name_si: &SourceInfo,
+) -> Result<ClassMappingBody, ParseError> {
+    Ok(match parser_name {
+        "Pure" => ClassMappingBody::Pure(Box::new(parse_pure_body(ctx)?)),
+        "EnumerationMapping" => ClassMappingBody::Enumeration(parse_enumeration_body(ctx)?),
+        "Operation" => ClassMappingBody::Operation(parse_operation_body(ctx)?),
+        "AggregationAware" => {
+            ClassMappingBody::AggregationAware(Box::new(parse_aggregation_aware_body(ctx)?))
+        }
+        other => {
+            return Err(ParseError::Unexpected {
+                message: format!(
+                    "Mapping sub-parser '{other}' is not supported yet (Stages 2/4/5/6 ship \
+                     'Pure', 'EnumerationMapping', 'Operation', and 'AggregationAware'; \
+                     XStore/Relation arrive in Stages 7–8 — see \
+                     ~/.claude/plans/what-is-left-to-iterative-sunrise.md)"
+                ),
+                source_info: parser_name_si.clone(),
+            });
+        }
     })
 }
 
@@ -478,6 +500,223 @@ fn parse_operation_body(
         operation,
         parameters,
     })
+}
+
+// ---------------------------------------------------------------------------
+// AggregationAwareClassMappingBody — Stage 6
+// ---------------------------------------------------------------------------
+
+fn parse_aggregation_aware_body(
+    ctx: &mut ParserContext<'_>,
+) -> Result<AggregationAwareClassMappingBody, ParseError> {
+    ctx.cursor().expect(TokenKind::LBrace)?;
+
+    // `Views : [ aggSpec (, aggSpec)* ]`
+    expect_keyword(ctx, "Views")?;
+    ctx.cursor().expect(TokenKind::Colon)?;
+    ctx.cursor().expect(TokenKind::LBracket)?;
+    let mut views = Vec::new();
+    if !ctx.cursor().check(TokenKind::RBracket) {
+        loop {
+            views.push(parse_aggregate_view(ctx)?);
+            if !ctx.cursor().eat(TokenKind::Comma) {
+                break;
+            }
+        }
+    }
+    ctx.cursor().expect(TokenKind::RBracket)?;
+    // The `Views: [...]` clause and `~mainMapping` clause are
+    // comma-separated in the Java grammar; some user samples omit
+    // the comma. Accept either.
+    ctx.cursor().eat(TokenKind::Comma);
+
+    // `~mainMapping : <parserName> { ... }`
+    let main_mapping = parse_nested_class_mapping(ctx, "mainMapping")?;
+    ctx.cursor().expect(TokenKind::RBrace)?;
+
+    Ok(AggregationAwareClassMappingBody {
+        views,
+        main_mapping,
+    })
+}
+
+fn parse_aggregate_view(ctx: &mut ParserContext<'_>) -> Result<AggregateView, ParseError> {
+    let start = ctx.cursor().current_source_info();
+    ctx.cursor().expect(TokenKind::LParen)?;
+    let model_operation = parse_model_operation(ctx)?;
+    ctx.cursor().expect(TokenKind::Comma)?;
+    let aggregate_mapping = parse_nested_class_mapping(ctx, "aggregateMapping")?;
+    let close = ctx.cursor().expect(TokenKind::RParen)?;
+    Ok(AggregateView {
+        model_operation,
+        aggregate_mapping,
+        source_info: merge_si(&start, &close.source_info),
+    })
+}
+
+fn parse_model_operation(
+    ctx: &mut ParserContext<'_>,
+) -> Result<AggregateSpecification, ParseError> {
+    let start = ctx.cursor().current_source_info();
+    expect_tilde_keyword(ctx, "modelOperation")?;
+    ctx.cursor().expect(TokenKind::Colon)?;
+    ctx.cursor().expect(TokenKind::LBrace)?;
+
+    // The three slots (~canAggregate, ~groupByFunctions,
+    // ~aggregateValues) are written in fixed source order in every
+    // example we've seen, but the grammar tolerates any order; mirror
+    // that by dispatching on which `~name` we hit next.
+    let mut can_aggregate: Option<bool> = None;
+    let mut group_by_functions: Option<Vec<Expression>> = None;
+    let mut aggregate_values: Option<Vec<AggregationFunctionSpec>> = None;
+    while !ctx.cursor().check(TokenKind::RBrace) && !ctx.cursor().check(TokenKind::Eof) {
+        ctx.cursor().expect(TokenKind::Tilde)?;
+        let name_tok = ctx.cursor().expect(TokenKind::Identifier)?;
+        match name_tok.text.as_str() {
+            "canAggregate" => {
+                let bool_tok = ctx.cursor().peek().clone();
+                let val = match bool_tok.kind {
+                    TokenKind::True => true,
+                    TokenKind::False => false,
+                    _ => {
+                        return Err(err_unexpected(
+                            "true or false (after ~canAggregate)",
+                            &bool_tok.text,
+                            bool_tok.source_info,
+                        ));
+                    }
+                };
+                ctx.cursor().advance();
+                if can_aggregate.replace(val).is_some() {
+                    return Err(err_unexpected(
+                        "single ~canAggregate clause",
+                        "duplicate ~canAggregate",
+                        name_tok.source_info,
+                    ));
+                }
+            }
+            "groupByFunctions" => {
+                if group_by_functions.is_some() {
+                    return Err(err_unexpected(
+                        "single ~groupByFunctions clause",
+                        "duplicate ~groupByFunctions",
+                        name_tok.source_info,
+                    ));
+                }
+                ctx.cursor().expect(TokenKind::LParen)?;
+                let mut exprs = Vec::new();
+                if !ctx.cursor().check(TokenKind::RParen) {
+                    loop {
+                        exprs.push(ctx.parse_expression()?);
+                        if !ctx.cursor().eat(TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+                ctx.cursor().expect(TokenKind::RParen)?;
+                group_by_functions = Some(exprs);
+            }
+            "aggregateValues" => {
+                if aggregate_values.is_some() {
+                    return Err(err_unexpected(
+                        "single ~aggregateValues clause",
+                        "duplicate ~aggregateValues",
+                        name_tok.source_info,
+                    ));
+                }
+                ctx.cursor().expect(TokenKind::LParen)?;
+                let mut entries = Vec::new();
+                if !ctx.cursor().check(TokenKind::RParen) {
+                    loop {
+                        entries.push(parse_aggregate_value(ctx)?);
+                        if !ctx.cursor().eat(TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+                ctx.cursor().expect(TokenKind::RParen)?;
+                aggregate_values = Some(entries);
+            }
+            other => {
+                return Err(err_unexpected(
+                    "canAggregate, groupByFunctions, or aggregateValues",
+                    other,
+                    name_tok.source_info,
+                ));
+            }
+        }
+        // Inter-slot commas (Java grammar requires them between
+        // slots) — accept absent at the very end.
+        ctx.cursor().eat(TokenKind::Comma);
+    }
+    let close = ctx.cursor().expect(TokenKind::RBrace)?;
+
+    let can_aggregate = can_aggregate.ok_or_else(|| ParseError::Unexpected {
+        message: "~modelOperation block missing required ~canAggregate clause".to_string(),
+        source_info: start.clone(),
+    })?;
+    Ok(AggregateSpecification {
+        can_aggregate,
+        group_by_functions: group_by_functions.unwrap_or_default(),
+        aggregate_values: aggregate_values.unwrap_or_default(),
+        source_info: merge_si(&start, &close.source_info),
+    })
+}
+
+fn parse_aggregate_value(
+    ctx: &mut ParserContext<'_>,
+) -> Result<AggregationFunctionSpec, ParseError> {
+    let start = ctx.cursor().current_source_info();
+    ctx.cursor().expect(TokenKind::LParen)?;
+    expect_tilde_keyword(ctx, "mapFn")?;
+    ctx.cursor().expect(TokenKind::Colon)?;
+    let map_fn = ctx.parse_expression()?;
+    ctx.cursor().expect(TokenKind::Comma)?;
+    expect_tilde_keyword(ctx, "aggregateFn")?;
+    ctx.cursor().expect(TokenKind::Colon)?;
+    let aggregate_fn = ctx.parse_expression()?;
+    let close = ctx.cursor().expect(TokenKind::RParen)?;
+    Ok(AggregationFunctionSpec {
+        map_fn,
+        aggregate_fn,
+        source_info: merge_si(&start, &close.source_info),
+    })
+}
+
+/// Parse a `~<keyword> : <parserName> { … }` nested clause used by
+/// `~mainMapping` and per-view `~aggregateMapping`. Re-enters the
+/// dispatch (`parse_class_mapping_body`) so the nested body can be
+/// any supported sub-grammar.
+fn parse_nested_class_mapping(
+    ctx: &mut ParserContext<'_>,
+    expected_keyword: &str,
+) -> Result<NestedClassMapping, ParseError> {
+    let start = ctx.cursor().current_source_info();
+    expect_tilde_keyword(ctx, expected_keyword)?;
+    ctx.cursor().expect(TokenKind::Colon)?;
+    let pn_tok = ctx.cursor().expect(TokenKind::Identifier)?;
+    let parser_name = SmolStr::new(pn_tok.text.clone());
+    let pn_si = pn_tok.source_info.clone();
+    let body = parse_class_mapping_body(ctx, parser_name.as_str(), &pn_si)?;
+    let end_si = ctx.cursor().current_source_info();
+    Ok(NestedClassMapping {
+        parser_name,
+        body,
+        source_info: merge_si(&start, &end_si),
+    })
+}
+
+fn expect_keyword(ctx: &mut ParserContext<'_>, expected: &str) -> Result<(), ParseError> {
+    let tok = ctx.cursor().expect(TokenKind::Identifier)?;
+    if tok.text != expected {
+        return Err(err_unexpected(expected, &tok.text, tok.source_info));
+    }
+    Ok(())
+}
+
+fn expect_tilde_keyword(ctx: &mut ParserContext<'_>, expected: &str) -> Result<(), ParseError> {
+    ctx.cursor().expect(TokenKind::Tilde)?;
+    expect_keyword(ctx, expected)
 }
 
 // ---------------------------------------------------------------------------

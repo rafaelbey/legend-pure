@@ -39,11 +39,20 @@
 //!   in this mapping (its own + transitively included). The merge
 //!   form (`[ids], { lambda }`) is reserved for a follow-up
 //!   sub-stage.
+//! - **`AggregationAware`** (Stage 6): `Views: [(modelOperation,
+//!   aggregateMapping), ...], ~mainMapping` — composes a
+//!   fall-through main set-implementation with one or more
+//!   pre-aggregated views, each guarded by a `~modelOperation`
+//!   `~canAggregate`/`~groupByFunctions`/`~aggregateValues` block.
+//!   Nested `~mainMapping` and per-view `~aggregateMapping` clauses
+//!   recurse into `ClassMappingBody`. Validators recursively
+//!   validate the nested mappings and check that each
+//!   `~mapFn`/`~aggregateFn` returns a `DataType` (primitive type or
+//!   enumeration), per Java's `AggregationAwareValidator`.
 //!
-//! Stages 6+ extend `ClassMappingBody` with `AggregationAware`,
-//! `XStore`, `Relation` variants. See
-//! `~/.claude/plans/what-is-left-to-iterative-sunrise.md` for the
-//! staged roadmap.
+//! Stages 7+ extend `ClassMappingBody` with `XStore`, `Relation`
+//! variants. See `~/.claude/plans/what-is-left-to-iterative-sunrise.md`
+//! for the staged roadmap.
 //!
 //! Module map:
 //!
