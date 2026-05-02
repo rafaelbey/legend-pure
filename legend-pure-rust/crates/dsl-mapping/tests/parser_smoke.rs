@@ -132,13 +132,16 @@ fn parses_mapping_with_includes_and_root_marker() {
 
 #[test]
 fn unknown_parser_name_errors_with_roadmap_hint() {
+    // `AggregationAware` is reserved for Stage 6 and not yet
+    // supported — exercising the dispatch fallthrough that rejects
+    // unknown sub-parser names with a roadmap-pointing message.
     let source = indoc! {r"
         ###Mapping
         Mapping pkg::M
         (
-          pkg::Firm : Operation
+          pkg::Firm : AggregationAware
           {
-            unionMappings(a, b)
+            ~modelOperation { p:pkg::Person[1] | $p }
           }
         )
     "};
@@ -152,7 +155,7 @@ fn unknown_parser_name_errors_with_roadmap_hint() {
     let msgs: Vec<String> = partial.errors.iter().map(ToString::to_string).collect();
     assert!(
         msgs.iter()
-            .any(|m| m.contains("Operation") && m.contains("Stage")),
+            .any(|m| m.contains("AggregationAware") && m.contains("Stage")),
         "expected error mentioning the unsupported sub-parser name and roadmap; got {msgs:?}"
     );
 }

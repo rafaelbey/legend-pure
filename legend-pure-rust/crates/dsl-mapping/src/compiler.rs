@@ -71,7 +71,7 @@ use smol_str::SmolStr;
 
 use crate::ast::{
     ClassMapping, ClassMappingBody, EnumSourceValue, EnumerationClassMappingBody, MappingDef,
-    PureClassMappingBody, PurePropertyMapping,
+    OperationClassMappingBody, PureClassMappingBody, PurePropertyMapping,
 };
 
 /// Compiler extension for the `###Mapping` DSL.
@@ -275,6 +275,23 @@ fn validate_class_mapping(
                 });
             }
             validate_enumeration_body(body, &target_fqn, enum_id, model, errors);
+        }
+        ClassMappingBody::Operation(body) => {
+            // Operation bodies still want a Class target — the
+            // function's job is to produce a SetImplementation[*]
+            // for that class.
+            if resolve_class(model, &target_fqn).is_none() {
+                errors.push(CompilationError {
+                    message: format!(
+                        "Class mapping target '{target_fqn}' does not resolve to a Class"
+                    ),
+                    source_info: cm.source_info.clone(),
+                    kind: CompilationErrorKind::UnresolvedElement {
+                        path: target_fqn.clone(),
+                    },
+                });
+            }
+            validate_operation_body(body, visible_ids, model, errors);
         }
     }
 }
@@ -716,6 +733,66 @@ fn enumeration_value_names(model: &PureModel, enum_id: ElementId) -> HashSet<Str
         return HashSet::new();
     };
     e.values.iter().map(|v| v.name.to_string()).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Stage-5 — Operation body validation
+// ---------------------------------------------------------------------------
+
+fn validate_operation_body(
+    body: &OperationClassMappingBody,
+    visible_ids: &HashSet<SmolStr>,
+    model: &PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    // 1. Operation function path must resolve to a Function in the
+    //    model via *exact-FQN* lookup. Mirrors Java's
+    //    `OperationGraphBuilder.visitMapping` which always emits the
+    //    mangled FQN (e.g. `a__SetImplementation_MANY_`) into the
+    //    `operation` ImportStub. Accepting a simple-name fallback
+    //    here would silently pick the first overload registered in
+    //    the package — possibly the wrong function entirely — so
+    //    we deliberately don't.
+    let fn_fqn = ptr_fqn(&body.operation);
+    let segments: Vec<SmolStr> = fn_fqn.split("::").map(SmolStr::new).collect();
+    let resolved = model
+        .resolve_by_path(&segments)
+        .filter(|id| matches!(model.get_element(*id), ModelElement::Function(_)));
+    if resolved.is_none() {
+        errors.push(CompilationError {
+            message: format!("Operation function '{fn_fqn}' does not resolve to a known function"),
+            source_info: body.operation.source_info.clone(),
+            kind: CompilationErrorKind::UnresolvedElement { path: fn_fqn },
+        });
+    }
+    // TODO(stage-5+): once the function is resolvable, also check its
+    // signature is `OperationSetImplementation[1] -> SetImplementation[*]`.
+    // The metamodel constraint is at mapping.pure:108 — same shape
+    // every operation function must satisfy. Not done here because
+    // the FunctionType-against-target shape comparison overlaps with
+    // the lower-and-infer machinery the Stage-3.5 rules rely on; a
+    // dedicated helper belongs in `legend_pure_parser_pure::resolve`.
+
+    // 2. Each parameter ID must reference a class-mapping ID visible
+    //    in this mapping (its own class mappings + transitively
+    //    included). Mirrors `OperationSetImplementationProcessor.process`
+    //    which throws `"The SetImplementation '<id>' can't be found
+    //    in the mapping '<m>'"` when a parameter doesn't resolve.
+    for param in &body.parameters {
+        if !visible_ids.contains(&param.id) {
+            errors.push(CompilationError {
+                message: format!(
+                    "Operation parameter '{}' does not reference any class-mapping ID in \
+                     this mapping or any included mapping",
+                    param.id
+                ),
+                source_info: param.source_info.clone(),
+                kind: CompilationErrorKind::UnresolvedElement {
+                    path: param.id.clone(),
+                },
+            });
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
