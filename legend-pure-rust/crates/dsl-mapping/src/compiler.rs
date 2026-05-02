@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Stage-3 [`CompilerExtension`] for the Mapping DSL.
+//! Stage-3 (+ 3.5) [`CompilerExtension`] for the Mapping DSL.
 //!
 //! Phases:
 //!
@@ -34,25 +34,22 @@
 //!   7. Class-mapping IDs within a single mapping must be unique
 //!      (whether explicit `[id]` or implicit class-name default).
 //!
-//! Phases not yet wired (`define_signatures` / `define_bodies`):
+//! Type-check rules added in Stage 3.5 (this revision):
 //!
-//! - The Java `PureInstanceSetImplementationProcessor` lowers filter
-//!   and transform expressions with `src` bound to the source class,
-//!   then runs Pass 2 type inference. The Rust analog requires
-//!   exposing both `lower::lower_expression` and a public wrapper
-//!   that builds a `ResolutionContext` from a small input set
-//!   (model + auto-imports + bindings). That plumbing is a separate
-//!   sub-stage (call it Stage 3.5); the public `infer_function_body`
-//!   surface (this stage's other deliverable) provides the inference
-//!   half of the contract once the lowering wrapper lands.
-//! - As a consequence, the following Java validator rules are
-//!   **deferred until 3.5** and do not fire here:
-//!     * "Filter must return Boolean[1]"
-//!     * "Transform return type must be subtype of property type"
-//!     * "Transform multiplicity must subsume property multiplicity"
+//! 8. `~filter` expression must infer to `Boolean[1]` with `src` bound
+//!    to the resolved source class.
+//! 9. Each transform expression must infer to a type compatible with
+//!    its target property's declared type (subtype check).
+//! 10. Each transform's inferred multiplicity must fit within the
+//!     target property's declared multiplicity (range subsumption).
 //!
-//!   The structural rules above still catch the bulk of real user
-//!   errors (unknown property, missing class, cyclic include).
+//! These rules use `legend_pure_parser_pure::extension::lower_and_infer_expression`
+//! and the public `is_subtype` / `is_multiplicity_compatible` helpers
+//! exposed from the `pure` crate's `resolve` module. When inference
+//! fails (e.g. a structurally invalid expression), the wrapper pushes
+//! the underlying lower/infer errors and the rule short-circuits with
+//! no further follow-up — the user already has a primary diagnostic
+//! to act on.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -60,14 +57,20 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use legend_pure_parser_ast::annotation::PackageableElementPtr;
 use legend_pure_parser_ast::element::Element as AstElement;
 use legend_pure_parser_ast::element::PackageableElement;
+use legend_pure_parser_ast::source_info::Spanned;
 use legend_pure_parser_pure::error::{CompilationError, CompilationErrorKind};
-use legend_pure_parser_pure::extension::{CompilerExtension, DeclareCtx, ValidateCtx};
+use legend_pure_parser_pure::extension::{
+    CompilerExtension, DeclareCtx, ValidateCtx, lower_and_infer_expression,
+};
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element as ModelElement, PureModel};
-use legend_pure_parser_pure::types::TypeExpr;
+use legend_pure_parser_pure::resolve::{is_multiplicity_compatible, is_subtype};
+use legend_pure_parser_pure::types::{Multiplicity, ResolvedType, TypeExpr};
 use smol_str::SmolStr;
 
-use crate::ast::{ClassMapping, ClassMappingBody, MappingDef, PureClassMappingBody};
+use crate::ast::{
+    ClassMapping, ClassMappingBody, MappingDef, PureClassMappingBody, PurePropertyMapping,
+};
 
 /// Compiler extension for the `###Mapping` DSL.
 ///
@@ -153,7 +156,7 @@ impl CompilerExtension for MappingExtension {
         let registry = self.mappings.borrow();
         check_include_dag(&registry, ctx.errors);
         for (_, reg) in registry.iter() {
-            validate_mapping(&reg.def, &registry, ctx.model, ctx.errors);
+            validate_mapping(&reg.def, &registry, ctx.model, ctx.auto_imports, ctx.errors);
         }
     }
 }
@@ -166,6 +169,7 @@ fn validate_mapping(
     m: &MappingDef,
     registry: &HashMap<SmolStr, RegisteredMapping>,
     model: &PureModel,
+    auto_imports: &[SmolStr],
     errors: &mut Vec<CompilationError>,
 ) {
     // Includes: each FQN must reference a registered mapping.
@@ -185,7 +189,7 @@ fn validate_mapping(
     // against the visible class-mapping ID set.
     let visible_ids = visible_class_mapping_ids(m, registry);
     for cm in &m.class_mappings {
-        validate_class_mapping(cm, m, &visible_ids, model, errors);
+        validate_class_mapping(cm, m, &visible_ids, model, auto_imports, errors);
     }
 
     // Class-mapping IDs must be unique within a single mapping. The
@@ -215,6 +219,7 @@ fn validate_class_mapping(
     owner: &MappingDef,
     visible_ids: &HashSet<SmolStr>,
     model: &PureModel,
+    auto_imports: &[SmolStr],
     errors: &mut Vec<CompilationError>,
 ) {
     // Target class must resolve to a Class.
@@ -251,7 +256,7 @@ fn validate_class_mapping(
 
     // Body-shape rules.
     let ClassMappingBody::Pure(body) = &cm.body;
-    validate_pure_body(body, &class_fqn, class_id, model, errors);
+    validate_pure_body(body, &class_fqn, class_id, model, auto_imports, errors);
 }
 
 fn validate_pure_body(
@@ -259,37 +264,176 @@ fn validate_pure_body(
     target_class_fqn: &str,
     target_class_id: Option<ElementId>,
     model: &PureModel,
+    auto_imports: &[SmolStr],
     errors: &mut Vec<CompilationError>,
 ) {
     // ~src must resolve to a Class.
-    if let Some(src) = &body.src_class {
+    let src_class_id: Option<ElementId> = body.src_class.as_ref().and_then(|src| {
         let src_fqn = ptr_fqn(src);
-        if resolve_class(model, &src_fqn).is_none() {
+        let resolved = resolve_class(model, &src_fqn);
+        if resolved.is_none() {
             errors.push(CompilationError {
                 message: format!("~src class '{src_fqn}' does not resolve to a Class"),
                 source_info: src.source_info.clone(),
                 kind: CompilationErrorKind::UnresolvedElement { path: src_fqn },
             });
         }
+        resolved
+    });
+
+    // The "src" binding visible to filter / transform expressions —
+    // only built when ~src resolved. Without it the inference would
+    // fail with a "$src not found" cascade for every property
+    // mapping, which would obscure the real diagnostic (the missing
+    // ~src). When ~src is absent, we still type-check expressions
+    // with no bindings.
+    let src_binding: Vec<(SmolStr, TypeExpr, Multiplicity)> = src_class_id
+        .map(|id| {
+            vec![(
+                SmolStr::new("src"),
+                TypeExpr::Named {
+                    element: id,
+                    type_arguments: Vec::new(),
+                    value_arguments: Vec::new(),
+                },
+                Multiplicity::PureOne,
+            )]
+        })
+        .unwrap_or_default();
+
+    // ~filter must return Boolean[1].
+    if let Some(filter) = &body.filter
+        && let Some(filter_ty) =
+            lower_and_infer_expression(model, auto_imports, filter, &src_binding, errors)
+        && !is_boolean_one(model, &filter_ty)
+    {
+        errors.push(CompilationError {
+            message: format!(
+                "~filter must return Boolean[1] for class mapping of '{target_class_fqn}', \
+                 got {}",
+                describe_type(&filter_ty, model)
+            ),
+            source_info: filter.source_info().clone(),
+            // TODO(error-kinds): replace UnsupportedExpression with a
+            // dedicated `TypeMismatch { context, expected, actual }`
+            // variant. UnsupportedExpression means "shape we don't
+            // support yet" — a Boolean-vs-not-Boolean type mismatch
+            // is a typed expression that's wrong, not unsupported.
+            // The variant addition is a cross-crate change touching
+            // error categorizers + surveyor reports; tracked
+            // separately. For now the message string carries the
+            // intent.
+            kind: CompilationErrorKind::UnsupportedExpression {
+                kind: SmolStr::new_static("FilterReturnType"),
+            },
+        });
     }
 
-    // Property names — only checkable if the target class resolved.
+    // Property mappings: name resolution + (when target resolves) type
+    // and multiplicity compatibility for the transform.
     if let Some(class_id) = target_class_id {
         for pm in &body.property_mappings {
-            if !class_has_property(model, class_id, pm.property_name.as_str()) {
-                errors.push(CompilationError {
-                    message: format!(
-                        "Class '{target_class_fqn}' has no property '{}'",
-                        pm.property_name
-                    ),
-                    source_info: pm.source_info.clone(),
-                    kind: CompilationErrorKind::UnknownProperty {
-                        type_name: SmolStr::new(target_class_fqn),
-                        property_name: pm.property_name.clone(),
-                    },
-                });
-            }
+            validate_property_mapping(
+                pm,
+                target_class_fqn,
+                class_id,
+                model,
+                auto_imports,
+                &src_binding,
+                errors,
+            );
         }
+    }
+}
+
+fn validate_property_mapping(
+    pm: &PurePropertyMapping,
+    target_class_fqn: &str,
+    target_class_id: ElementId,
+    model: &PureModel,
+    auto_imports: &[SmolStr],
+    src_binding: &[(SmolStr, TypeExpr, Multiplicity)],
+    errors: &mut Vec<CompilationError>,
+) {
+    // Look up the target property by name (with supertype walk).
+    let prop_meta = find_property_type(model, target_class_id, pm.property_name.as_str());
+    let Some((prop_type, prop_mult)) = prop_meta else {
+        errors.push(CompilationError {
+            message: format!(
+                "Class '{target_class_fqn}' has no property '{}'",
+                pm.property_name
+            ),
+            source_info: pm.source_info.clone(),
+            kind: CompilationErrorKind::UnknownProperty {
+                type_name: SmolStr::new(target_class_fqn),
+                property_name: pm.property_name.clone(),
+            },
+        });
+        return;
+    };
+
+    // Lower + infer the transform with `src` bound.
+    let Some(transform_ty) =
+        lower_and_infer_expression(model, auto_imports, &pm.transform, src_binding, errors)
+    else {
+        // Underlying lower/infer errors were pushed by the wrapper;
+        // skip the type/multiplicity follow-up rules — the user has a
+        // primary diagnostic already.
+        return;
+    };
+
+    // Subtype check (only meaningful for Named type expressions; other
+    // shapes — generic, function-type, relation — are passed through
+    // without complaint, mirroring the Java validator's behaviour for
+    // less-common transform shapes).
+    if let (
+        TypeExpr::Named {
+            element: prop_eid, ..
+        },
+        TypeExpr::Named {
+            element: tx_eid, ..
+        },
+    ) = (&prop_type, &transform_ty.type_expr)
+        && !is_subtype(*tx_eid, *prop_eid, model)
+    {
+        errors.push(CompilationError {
+            message: format!(
+                "Transform for property '{}.{}' has type {} which is not a subtype \
+                 of the property's declared type {}",
+                target_class_fqn,
+                pm.property_name,
+                describe_type(&transform_ty, model),
+                describe_type_expr(&prop_type, model)
+            ),
+            source_info: pm.transform.source_info().clone(),
+            // TODO(error-kinds): same as the filter rule above —
+            // wants a dedicated `TypeMismatch` variant.
+            kind: CompilationErrorKind::UnsupportedExpression {
+                kind: SmolStr::new_static("TransformReturnType"),
+            },
+        });
+    }
+
+    // Multiplicity check: transform's inferred multiplicity must fit
+    // within the property's declared multiplicity range.
+    if !is_multiplicity_compatible(Some(&transform_ty.multiplicity), &prop_mult) {
+        errors.push(CompilationError {
+            message: format!(
+                "Transform for property '{}.{}' has multiplicity {} which is not compatible \
+                 with the property's declared multiplicity {}",
+                target_class_fqn,
+                pm.property_name,
+                describe_multiplicity(&transform_ty.multiplicity),
+                describe_multiplicity(&prop_mult)
+            ),
+            source_info: pm.transform.source_info().clone(),
+            // TODO(error-kinds): a multiplicity mismatch deserves its
+            // own kind (`MultiplicityMismatch` or sibling of
+            // `TypeMismatch`). Same cross-crate refactor as above.
+            kind: CompilationErrorKind::UnsupportedExpression {
+                kind: SmolStr::new_static("TransformMultiplicity"),
+            },
+        });
     }
 }
 
@@ -410,10 +554,17 @@ fn resolve_class(model: &PureModel, fqn: &str) -> Option<ElementId> {
     matches!(model.get_element(id), ModelElement::Class(_)).then_some(id)
 }
 
-/// Walks the class's properties (including supertypes via `super_types`)
-/// looking for `prop_name`. Mirrors the dsl-graph helper at
-/// `crates/dsl-graph/src/compiler.rs::class_has_property`.
-fn class_has_property(model: &PureModel, class_id: ElementId, prop_name: &str) -> bool {
+/// Walks the class (and its supertypes via `super_types`) looking for
+/// a simple property named `prop_name`. Returns the property's
+/// `(type, multiplicity)` for downstream type-compatibility checks.
+/// Qualified properties carry a function-type rather than a direct
+/// type, so they're returned as `None` here — those are skipped in
+/// the type-compatibility rules.
+fn find_property_type(
+    model: &PureModel,
+    class_id: ElementId,
+    prop_name: &str,
+) -> Option<(TypeExpr, Multiplicity)> {
     let mut visited: HashSet<ElementId> = HashSet::new();
     let mut stack: Vec<ElementId> = vec![class_id];
     while let Some(id) = stack.pop() {
@@ -423,10 +574,13 @@ fn class_has_property(model: &PureModel, class_id: ElementId, prop_name: &str) -
         let ModelElement::Class(c) = model.get_element(id) else {
             continue;
         };
-        if c.properties.iter().any(|p| p.name == prop_name)
-            || c.qualified_properties.iter().any(|q| q.name == prop_name)
-        {
-            return true;
+        if let Some(p) = c.properties.iter().find(|p| p.name == prop_name) {
+            return Some((p.type_expr.clone(), p.multiplicity.clone()));
+        }
+        // Qualified properties resolve as "exists" but we don't
+        // type-check transforms against them.
+        if c.qualified_properties.iter().any(|q| q.name == prop_name) {
+            return None;
         }
         for st in &c.super_types {
             if let TypeExpr::Named { element, .. } = st {
@@ -434,7 +588,59 @@ fn class_has_property(model: &PureModel, class_id: ElementId, prop_name: &str) -
             }
         }
     }
-    false
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Type / multiplicity diagnostics
+// ---------------------------------------------------------------------------
+
+fn is_boolean_one(model: &PureModel, ty: &ResolvedType) -> bool {
+    if ty.multiplicity != Multiplicity::PureOne {
+        return false;
+    }
+    let TypeExpr::Named { element, .. } = ty.type_expr else {
+        return false;
+    };
+    matches!(model.get_element(element), ModelElement::PrimitiveType(_))
+        && model.element_name(element) == "Boolean"
+}
+
+fn describe_type(ty: &ResolvedType, model: &PureModel) -> String {
+    format!(
+        "{}[{}]",
+        describe_type_expr(&ty.type_expr, model),
+        describe_multiplicity(&ty.multiplicity)
+    )
+}
+
+fn describe_type_expr(expr: &TypeExpr, model: &PureModel) -> String {
+    match expr {
+        TypeExpr::Named { element, .. } => model.element_name(*element).to_string(),
+        TypeExpr::Generic(name) => name.to_string(),
+        TypeExpr::FunctionType { .. } => "<FunctionType>".to_string(),
+        TypeExpr::Relation(_) => "<RelationType>".to_string(),
+        TypeExpr::AlgebraUnion(a, b) => format!(
+            "{}|{}",
+            describe_type_expr(a, model),
+            describe_type_expr(b, model)
+        ),
+        TypeExpr::Unresolved => "<unresolved>".to_string(),
+    }
+}
+
+fn describe_multiplicity(m: &Multiplicity) -> String {
+    match m {
+        Multiplicity::PureOne => "1".to_string(),
+        Multiplicity::ZeroOrOne => "0..1".to_string(),
+        Multiplicity::ZeroOrMany => "*".to_string(),
+        Multiplicity::OneOrMany => "1..*".to_string(),
+        Multiplicity::Range { lower, upper } => match upper {
+            Some(u) => format!("{lower}..{u}"),
+            None => format!("{lower}..*"),
+        },
+        Multiplicity::Variable(name) => name.to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------
