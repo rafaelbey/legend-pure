@@ -1045,6 +1045,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "legend-pure-dsl-relational"
+version = "0.1.0"
+dependencies = [
+ "indoc",
+ "legend-pure-parser-ast",
+ "legend-pure-parser-lexer",
+ "legend-pure-parser-parser",
+ "smol_str",
+]
+
+[[package]]
 name = "legend-pure-dsl-store"
 version = "0.1.0"
 dependencies = [
@@ -1213,6 +1224,22 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "legend-pure-snapshot-builder"
+version = "0.1.0"
+dependencies = [
+ "legend-pure-dsl-graph",
+ "legend-pure-parser-ast",
+ "legend-pure-parser-parser",
+ "legend-pure-parser-pure",
+ "serde",
+ "serde_json",
+ "smol_str",
+ "tempfile",
+ "thiserror 2.0.18",
+ "walkdir",
 ]
 
 [[package]]
