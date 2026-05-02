@@ -105,9 +105,8 @@ pub fn topo_sort_repos(repos: &[Repo]) -> Result<Vec<&Repo>, TopoError> {
     }
 
     // Initial frontier: zero in-degree, in input order.
-    let mut frontier: std::collections::BTreeSet<usize> = (0..n)
-        .filter(|&i| in_degree[i] == 0)
-        .collect();
+    let mut frontier: std::collections::BTreeSet<usize> =
+        (0..n).filter(|&i| in_degree[i] == 0).collect();
 
     let mut out: Vec<&Repo> = Vec::with_capacity(n);
     while let Some(&i) = frontier.iter().next() {

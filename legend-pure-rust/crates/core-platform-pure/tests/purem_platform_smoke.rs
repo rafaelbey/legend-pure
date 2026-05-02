@@ -58,11 +58,17 @@ fn platform_slice_round_trips_through_wire_format() {
     let recovered = read_repo(&a).expect("read should succeed");
     assert_eq!(slice.chunks.len(), recovered.chunks.len());
     assert_eq!(slice.external_refs, recovered.external_refs);
-    assert_eq!(slice.element_packages.len(), recovered.element_packages.len());
+    assert_eq!(
+        slice.element_packages.len(),
+        recovered.element_packages.len()
+    );
     assert_eq!(slice.source_chunk_range, recovered.source_chunk_range);
 
     let c = write_repo(&recovered).expect("write c should succeed");
-    assert_eq!(a, c, "round-trip through wire format must be byte-identical");
+    assert_eq!(
+        a, c,
+        "round-trip through wire format must be byte-identical"
+    );
 
     // Sanity: the platform .purem blob should not be enormous (a sign of
     // accidental string repetition, missing dedup, etc.). Adjust the

@@ -538,10 +538,7 @@ pub fn load(repos: &[Repo], auto_imports: &[SmolStr]) -> Result<PureModel, Parti
             let model = init_bootstrap_model();
             return Err(PartialPureModel {
                 model,
-                errors: vec![mk_synthetic_error(
-                    "<repo-topo>",
-                    topo_err.to_string(),
-                )],
+                errors: vec![mk_synthetic_error("<repo-topo>", topo_err.to_string())],
             });
         }
     };
@@ -554,12 +551,8 @@ pub fn load(repos: &[Repo], auto_imports: &[SmolStr]) -> Result<PureModel, Parti
             Repo::Embedded { .. } | Repo::Filesystem { .. } => {
                 let (parsed_files, parse_errs) = parse_repo_sources(repo);
                 errors.extend(parse_errs);
-                let (_range, slice_errs) = pipeline::compile_repo_slice(
-                    &mut model,
-                    &parsed_files,
-                    auto_imports,
-                    &[],
-                );
+                let (_range, slice_errs) =
+                    pipeline::compile_repo_slice(&mut model, &parsed_files, auto_imports, &[]);
                 errors.extend(slice_errs);
             }
             Repo::Purem { blob, meta, .. } => match read_repo(blob) {

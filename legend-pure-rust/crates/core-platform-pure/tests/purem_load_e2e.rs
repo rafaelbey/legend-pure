@@ -70,10 +70,7 @@ fn purem_repo_loads_into_fresh_model() {
     let string_id = loaded
         .resolve_by_path(&[SmolStr::new("String")])
         .expect("String primitive should resolve in loaded model");
-    assert!(matches!(
-        loaded.get_node(string_id).name.as_str(),
-        "String"
-    ));
+    assert!(matches!(loaded.get_node(string_id).name.as_str(), "String"));
 
     // The class hierarchy should still be intact: walking up from a Pure
     // class to its supertype must succeed.

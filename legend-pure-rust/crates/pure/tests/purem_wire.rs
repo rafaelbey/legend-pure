@@ -19,9 +19,7 @@
 //! through `write_repo` → `read_repo` → `merge_slice`.
 
 use legend_pure_parser_ast::section::SourceFile;
-use legend_pure_parser_pure::pipeline::{
-    compile_repo_slice, finalize_model, init_bootstrap_model,
-};
+use legend_pure_parser_pure::pipeline::{compile_repo_slice, finalize_model, init_bootstrap_model};
 use legend_pure_parser_pure::purem::{merge_slice, read_repo, slice_by_repo, write_repo};
 use smol_str::SmolStr;
 
@@ -41,7 +39,10 @@ fn write_repo_is_idempotent() {
     let slice = slice_by_repo(&model, 1..2);
     let a = write_repo(&slice).expect("write a");
     let b = write_repo(&slice).expect("write b");
-    assert_eq!(a, b, "two writes of the same slice must produce equal bytes");
+    assert_eq!(
+        a, b,
+        "two writes of the same slice must produce equal bytes"
+    );
 }
 
 #[test]
@@ -56,8 +57,7 @@ fn write_then_read_round_trips() {
 
     let slice = slice_by_repo(&model, 1..2);
     let bytes = write_repo(&slice).expect("write should succeed");
-    let recovered =
-        read_repo(&bytes).expect("read should succeed on freshly-written bytes");
+    let recovered = read_repo(&bytes).expect("read should succeed on freshly-written bytes");
 
     assert_eq!(slice.chunks.len(), recovered.chunks.len());
     assert_eq!(slice.external_refs, recovered.external_refs);
@@ -91,10 +91,7 @@ fn write_read_merge_resolves_in_fresh_model() {
     // every element resolves and external refs are wired up correctly.
     let mut original = init_bootstrap_model();
     let sf_animal = parse("Class zoo::Animal { name: String[1]; }", "a.pure");
-    let sf_dog = parse(
-        "Class kennel::Dog extends zoo::Animal {}",
-        "d.pure",
-    );
+    let sf_dog = parse("Class kennel::Dog extends zoo::Animal {}", "d.pure");
     let (_r1, _e1) = compile_repo_slice(&mut original, &[sf_animal], &[], &[]);
     let (_r2, _e2) = compile_repo_slice(&mut original, &[sf_dog], &[], &[]);
 
@@ -121,8 +118,7 @@ fn write_read_merge_resolves_in_fresh_model() {
         .resolve_by_path(&[SmolStr::new("zoo"), SmolStr::new("Animal")])
         .expect("Animal should resolve in fresh model");
 
-    let legend_pure_parser_pure::model::Element::Class(dog) = fresh.get_element(dog_id)
-    else {
+    let legend_pure_parser_pure::model::Element::Class(dog) = fresh.get_element(dog_id) else {
         panic!("Dog should be a Class");
     };
     assert_eq!(dog.super_types.len(), 1);

@@ -246,7 +246,10 @@ mod tests {
     #[test]
     fn header_rejects_short_blob() {
         let blob = vec![0u8; 10];
-        assert!(matches!(read_header(&blob), Err(HeaderError::TooShort { .. })));
+        assert!(matches!(
+            read_header(&blob),
+            Err(HeaderError::TooShort { .. })
+        ));
     }
 
     #[test]
@@ -255,7 +258,10 @@ mod tests {
         blob.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
         blob.extend_from_slice(&SCHEMA_HASH.to_le_bytes());
         blob.extend_from_slice(&0u64.to_le_bytes());
-        assert!(matches!(read_header(&blob), Err(HeaderError::BadMagic { .. })));
+        assert!(matches!(
+            read_header(&blob),
+            Err(HeaderError::BadMagic { .. })
+        ));
     }
 
     #[test]
