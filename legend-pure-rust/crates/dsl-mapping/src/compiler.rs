@@ -54,6 +54,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::annotation::PackageableElementPtr;
 use legend_pure_parser_ast::element::Element as AstElement;
 use legend_pure_parser_ast::element::PackageableElement;
@@ -69,7 +70,8 @@ use legend_pure_parser_pure::types::{Multiplicity, ResolvedType, TypeExpr};
 use smol_str::SmolStr;
 
 use crate::ast::{
-    ClassMapping, ClassMappingBody, MappingDef, PureClassMappingBody, PurePropertyMapping,
+    ClassMapping, ClassMappingBody, EnumSourceValue, EnumerationClassMappingBody, MappingDef,
+    PureClassMappingBody, PurePropertyMapping,
 };
 
 /// Compiler extension for the `###Mapping` DSL.
@@ -222,23 +224,8 @@ fn validate_class_mapping(
     auto_imports: &[SmolStr],
     errors: &mut Vec<CompilationError>,
 ) {
-    // Target class must resolve to a Class.
-    let class_fqn = ptr_fqn(&cm.class);
-    let class_id = match resolve_class(model, &class_fqn) {
-        Some(id) => Some(id),
-        None => {
-            errors.push(CompilationError {
-                message: format!("Class mapping target '{class_fqn}' does not resolve to a Class"),
-                source_info: cm.source_info.clone(),
-                kind: CompilationErrorKind::UnresolvedElement {
-                    path: class_fqn.clone(),
-                },
-            });
-            None
-        }
-    };
-
     // Super-mapping reference: when present, must match a known ID.
+    // (Independent of body kind — applies to Pure, Enumeration, …)
     if let Some(super_id) = &cm.extends
         && !visible_ids.contains(super_id)
     {
@@ -254,9 +241,42 @@ fn validate_class_mapping(
         });
     }
 
-    // Body-shape rules.
-    let ClassMappingBody::Pure(body) = &cm.body;
-    validate_pure_body(body, &class_fqn, class_id, model, auto_imports, errors);
+    // Target resolution + body-shape rules dispatch on the body kind.
+    // Pure bodies want a Class target; Enumeration bodies want an
+    // Enumeration target.
+    let target_fqn = ptr_fqn(&cm.class);
+    match &cm.body {
+        ClassMappingBody::Pure(body) => {
+            let class_id = resolve_class(model, &target_fqn);
+            if class_id.is_none() {
+                errors.push(CompilationError {
+                    message: format!(
+                        "Class mapping target '{target_fqn}' does not resolve to a Class"
+                    ),
+                    source_info: cm.source_info.clone(),
+                    kind: CompilationErrorKind::UnresolvedElement {
+                        path: target_fqn.clone(),
+                    },
+                });
+            }
+            validate_pure_body(body, &target_fqn, class_id, model, auto_imports, errors);
+        }
+        ClassMappingBody::Enumeration(body) => {
+            let enum_id = resolve_enumeration(model, &target_fqn);
+            if enum_id.is_none() {
+                errors.push(CompilationError {
+                    message: format!(
+                        "EnumerationMapping target '{target_fqn}' does not resolve to an Enumeration"
+                    ),
+                    source_info: cm.source_info.clone(),
+                    kind: CompilationErrorKind::UnresolvedElement {
+                        path: target_fqn.clone(),
+                    },
+                });
+            }
+            validate_enumeration_body(body, &target_fqn, enum_id, model, errors);
+        }
+    }
 }
 
 fn validate_pure_body(
@@ -542,7 +562,164 @@ fn check_include_dag(
 }
 
 // ---------------------------------------------------------------------------
-// Class / property lookup
+// Stage-4 — Enumeration body validation
+// ---------------------------------------------------------------------------
+
+fn validate_enumeration_body(
+    body: &EnumerationClassMappingBody,
+    target_enum_fqn: &str,
+    target_enum_id: Option<ElementId>,
+    model: &PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    // Source-value type homogeneity: across all value mappings, the
+    // source values must share the same kind. Mirrors the Java rule
+    // in `MappingValidator.validateEnumerationMappings` ("only one
+    // source Type is allowed for an Enumeration Mapping").
+    //
+    // `EnumSourceKind` derives `Eq`, so two enum-refs to *different*
+    // source enumerations also count as mismatched (matching the Java
+    // rule which compares source `Type`, not just kind).
+    let mut anchor: Option<EnumSourceKind> = None;
+    'outer: for vm in &body.value_mappings {
+        for sv in &vm.source_values {
+            let kind = source_kind(sv);
+            match &anchor {
+                None => anchor = Some(kind),
+                Some(prev) if prev == &kind => {}
+                Some(prev) => {
+                    errors.push(CompilationError {
+                        message: format!(
+                            "EnumerationMapping for '{target_enum_fqn}' mixes source value \
+                             kinds: {} and {} — all source values must share the same kind",
+                            describe_source_kind(prev),
+                            describe_source_kind(&kind)
+                        ),
+                        source_info: source_value_si(sv).clone(),
+                        // TODO(error-kinds): warrants a dedicated
+                        // `TypeMismatch` variant; same refactor as the
+                        // Stage-3.5 type-check rules.
+                        kind: CompilationErrorKind::UnsupportedExpression {
+                            kind: SmolStr::new_static("EnumSourceKindMismatch"),
+                        },
+                    });
+                    // Stop after the first mismatch to avoid cascade
+                    // noise — the user fixes one source first.
+                    break 'outer;
+                }
+            }
+        }
+    }
+
+    // Per-target-value resolution: each enum_value_name must exist on
+    // the target enumeration. Skip when target didn't resolve.
+    let Some(enum_id) = target_enum_id else {
+        return;
+    };
+    let value_set = enumeration_value_names(model, enum_id);
+    for vm in &body.value_mappings {
+        if !value_set.contains(vm.enum_value_name.as_str()) {
+            errors.push(CompilationError {
+                message: format!(
+                    "Enumeration '{target_enum_fqn}' has no value '{}'",
+                    vm.enum_value_name
+                ),
+                source_info: vm.source_info.clone(),
+                // Reuses UnknownProperty kind — semantically the
+                // closest existing variant. TODO(error-kinds):
+                // see the same TODO sites at the type-mismatch rules.
+                kind: CompilationErrorKind::UnknownProperty {
+                    type_name: SmolStr::new(target_enum_fqn),
+                    property_name: vm.enum_value_name.clone(),
+                },
+            });
+        }
+
+        // Source enum-refs themselves must resolve.
+        for sv in &vm.source_values {
+            if let EnumSourceValue::EnumRef {
+                enumeration,
+                value_name,
+                source_info,
+            } = sv
+            {
+                let src_enum_fqn = ptr_fqn(enumeration);
+                match resolve_enumeration(model, &src_enum_fqn) {
+                    None => {
+                        errors.push(CompilationError {
+                            message: format!(
+                                "Source enum reference '{src_enum_fqn}.{value_name}' does not \
+                                 resolve to an Enumeration"
+                            ),
+                            source_info: source_info.clone(),
+                            kind: CompilationErrorKind::UnresolvedElement { path: src_enum_fqn },
+                        });
+                    }
+                    Some(src_id) => {
+                        let src_values = enumeration_value_names(model, src_id);
+                        if !src_values.contains(value_name.as_str()) {
+                            errors.push(CompilationError {
+                                message: format!(
+                                    "Enumeration '{src_enum_fqn}' has no value '{value_name}'"
+                                ),
+                                source_info: source_info.clone(),
+                                kind: CompilationErrorKind::UnknownProperty {
+                                    type_name: SmolStr::new(src_enum_fqn),
+                                    property_name: value_name.clone(),
+                                },
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Discriminator for source-value kinds used in the homogeneity check.
+/// Derives `Eq` so two enum-refs to different source enumerations
+/// compare unequal (the Java rule treats different source `Type`s as
+/// a mismatch).
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum EnumSourceKind {
+    String,
+    Integer,
+    Enum(SmolStr),
+}
+
+fn source_kind(sv: &EnumSourceValue) -> EnumSourceKind {
+    match sv {
+        EnumSourceValue::String { .. } => EnumSourceKind::String,
+        EnumSourceValue::Integer { .. } => EnumSourceKind::Integer,
+        EnumSourceValue::EnumRef { enumeration, .. } => EnumSourceKind::Enum(ptr_fqn(enumeration)),
+    }
+}
+
+fn describe_source_kind(k: &EnumSourceKind) -> String {
+    match k {
+        EnumSourceKind::String => "String".to_string(),
+        EnumSourceKind::Integer => "Integer".to_string(),
+        EnumSourceKind::Enum(fqn) => format!("enum '{fqn}'"),
+    }
+}
+
+fn source_value_si(sv: &EnumSourceValue) -> &SourceInfo {
+    match sv {
+        EnumSourceValue::String { source_info, .. }
+        | EnumSourceValue::Integer { source_info, .. }
+        | EnumSourceValue::EnumRef { source_info, .. } => source_info,
+    }
+}
+
+fn enumeration_value_names(model: &PureModel, enum_id: ElementId) -> HashSet<String> {
+    let ModelElement::Enumeration(e) = model.get_element(enum_id) else {
+        return HashSet::new();
+    };
+    e.values.iter().map(|v| v.name.to_string()).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Class / Enumeration / property lookup
 // ---------------------------------------------------------------------------
 
 fn resolve_class(model: &PureModel, fqn: &str) -> Option<ElementId> {
@@ -552,6 +729,15 @@ fn resolve_class(model: &PureModel, fqn: &str) -> Option<ElementId> {
     }
     let id = model.resolve_by_path(&segments)?;
     matches!(model.get_element(id), ModelElement::Class(_)).then_some(id)
+}
+
+fn resolve_enumeration(model: &PureModel, fqn: &str) -> Option<ElementId> {
+    let segments: Vec<SmolStr> = fqn.split("::").map(SmolStr::new).collect();
+    if segments.is_empty() || segments.iter().any(smol_str::SmolStr::is_empty) {
+        return None;
+    }
+    let id = model.resolve_by_path(&segments)?;
+    matches!(model.get_element(id), ModelElement::Enumeration(_)).then_some(id)
 }
 
 /// Walks the class (and its supertypes via `super_types`) looking for
