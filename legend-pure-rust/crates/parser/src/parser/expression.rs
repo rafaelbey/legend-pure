@@ -518,6 +518,20 @@ impl Parser {
                     name,
                     source_info: si.clone(),
                 };
+                // Optional instance name: `^Type name(props)`. The Java
+                // grammar accepts a single identifier between the type
+                // (and any `<args>`/`(typeVars)` blocks) and the
+                // property-assignments `(`. The runtime treats the name
+                // as a distinguishing key.
+                let instance_name = if !self.cursor.check(TokenKind::LParen)
+                    && self.cursor.peek_kind().is_identifier_like()
+                    && self.cursor.peek_kind_at(1) == TokenKind::LParen
+                {
+                    let (n, _) = self.cursor.expect_identifier_or_keyword()?;
+                    Some(n)
+                } else {
+                    None
+                };
                 self.cursor.expect(TokenKind::LParen)?;
                 let mut assignments = Vec::new();
                 while !self.cursor.check(TokenKind::RParen) {
@@ -556,6 +570,7 @@ impl Parser {
                     class: class_ref,
                     type_arguments,
                     type_variable_values,
+                    instance_name,
                     assignments,
                     source_info: si,
                 }))
@@ -685,14 +700,11 @@ impl Parser {
             // Must be checked before identifier since both start with an identifier.
             TokenKind::Identifier if self.is_bare_lambda() => self.parse_bare_lambda(),
             // Identifier or element keyword used as a name.
-            // Element keywords (Class, Enum, etc.) are valid identifiers in
-            // expression position — e.g., `Class('arg')` or `my::Enum::VAL`.
-            TokenKind::Identifier
-            | TokenKind::Class
-            | TokenKind::Enum
-            | TokenKind::Profile
-            | TokenKind::Function
-            | TokenKind::PathSep => {
+            // Every identifier-like token (per `TokenKind::is_identifier_like`)
+            // is valid in expression position — e.g., `Class('arg')`,
+            // `my::Enum::VAL`, or `assertInstanceOf($x, Association)`.
+            // The `PathSep` arm covers root-qualified paths (`::pkg::Name`).
+            kind if kind.is_identifier_like() || kind == TokenKind::PathSep => {
                 let path = self.parse_package_path()?;
 
                 // Handle Measure~Unit references: RomanLength~Pes
@@ -887,10 +899,10 @@ impl Parser {
     pub(crate) fn scan_past_type_for_pipe(&self, start_offset: usize) -> bool {
         let mut offset = start_offset;
         // Skip the type path: identifier (:: identifier)*
-        if !matches!(
-            self.cursor.peek_kind_at(offset),
-            TokenKind::Identifier | TokenKind::StringLiteral
-        ) {
+        // Element keywords (`Class`, `Association`, `Profile`, `Measure`,
+        // `Primitive`, etc.) are valid type names, so accept anything
+        // that's identifier-like — not just plain `Identifier`.
+        if !self.cursor.peek_kind_at(offset).is_identifier_like() {
             return false;
         }
         offset += 1;

@@ -81,6 +81,7 @@ SourceFile {
                                     },
                                     type_arguments: [],
                                     type_variable_values: [],
+                                    instance_name: None,
                                     assignments: [
                                         KeyValuePair {
                                             key: "name",
@@ -136,6 +137,7 @@ SourceFile {
                                                     },
                                                     type_arguments: [],
                                                     type_variable_values: [],
+                                                    instance_name: None,
                                                     assignments: [
                                                         KeyValuePair {
                                                             key: "city",

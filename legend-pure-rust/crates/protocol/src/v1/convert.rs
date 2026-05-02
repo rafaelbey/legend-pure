@@ -519,7 +519,11 @@ pub fn convert_expression_typed(
                     source_information: source_information(&e.source_info),
                 });
             let empty_name = ValueSpecification::String(CString {
-                value: String::new(),
+                value: e
+                    .instance_name
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default(),
                 source_information: None,
             });
             let keys_collection = ValueSpecification::Collection(ProtocolCollection {
