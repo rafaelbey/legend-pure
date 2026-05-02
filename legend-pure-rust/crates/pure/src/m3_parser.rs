@@ -357,7 +357,31 @@ impl<'a> M3Parser<'a> {
 
         // Parse body (if present)
         match classifier_tail.as_str() {
-            "Class" => self.parse_class_body(&name, &package_segments),
+            "Class" => {
+                // `Any` and `Nil` already exist as the top/bottom-type
+                // bootstrap classes (slots 0 and 1) and are registered in
+                // `meta::pure::metamodel::type` via `M3_ALIASES`. m3.pure
+                // re-declares them; allocating a second slot here would
+                // create a duplicate registration that wins
+                // `resolve_by_path` over the bootstrap alias and breaks
+                // `is_metatype_carrier` on FQN round-trip (purem reload).
+                // Skip the body so the bootstrap slot stays canonical.
+                let is_metamodel_type_pkg = package_segments.iter().map(SmolStr::as_str).eq([
+                    "meta",
+                    "pure",
+                    "metamodel",
+                    "type",
+                ]
+                .iter()
+                .copied());
+                if is_metamodel_type_pkg && (name.as_str() == "Any" || name.as_str() == "Nil") {
+                    if self.at(&Token::LBrace) {
+                        self.skip_balanced_braces();
+                    }
+                } else {
+                    self.parse_class_body(&name, &package_segments);
+                }
+            }
             "Enumeration" => self.parse_enumeration_body(&name, &package_segments),
             "Profile" => self.parse_profile_body(&name, &package_segments),
             "PackageableMultiplicity" => {
