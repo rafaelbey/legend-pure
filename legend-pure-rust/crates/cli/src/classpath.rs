@@ -313,6 +313,16 @@ fn leak_repo_meta(entry: &RepoEntryToml) -> RepoMeta {
 /// `--classpath` flag is passed.
 pub const DEFAULT_FILENAME: &str = "legend-pure-classpath.toml";
 
+/// Environment variable that, if set, points at a classpath TOML.
+/// Higher priority than ancestor / next-to-binary discovery, lower than
+/// the explicit `--classpath` flag.
+pub const ENV_CLASSPATH: &str = "LEGEND_PURE_CLASSPATH";
+
+/// Build-time-emitted env var that points at the
+/// `target/<profile>/snapshots/` directory the embedder produced. Used
+/// as the lowest-priority discovery hint for `cargo run -p legend-cli`.
+pub const ENV_BUILD_SNAPSHOTS_DIR: &str = "LEGEND_PURE_BUILD_SNAPSHOTS_DIR";
+
 /// Walk up from `start_dir` looking for a [`DEFAULT_FILENAME`] (Cargo
 /// style). Returns the first match, or `None`.
 #[must_use]
@@ -326,6 +336,209 @@ pub fn discover_classpath(start_dir: &Path) -> Option<PathBuf> {
         cur = d.parent();
     }
     None
+}
+
+/// Locate `legend-pure-classpath.toml` next to the running binary, or
+/// fall back to a synthetic classpath derived from `<exe_dir>/snapshots/*.purem`.
+/// Returns `None` if neither is present.
+#[must_use]
+pub fn discover_next_to_binary() -> Option<NextToBinary> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+
+    let toml = dir.join(DEFAULT_FILENAME);
+    if toml.is_file() {
+        return Some(NextToBinary::Toml(toml));
+    }
+    let snapshots = dir.join("snapshots");
+    if snapshots.is_dir() {
+        return Some(NextToBinary::SnapshotsDir(snapshots));
+    }
+    None
+}
+
+/// Result of [`discover_next_to_binary`].
+#[derive(Debug, Clone)]
+pub enum NextToBinary {
+    /// A `legend-pure-classpath.toml` next to the binary.
+    Toml(PathBuf),
+    /// A `snapshots/` directory containing `.purem` files.
+    SnapshotsDir(PathBuf),
+}
+
+/// Build a synthetic [`Classpath`] from every `.purem` file in `dir`.
+/// Reads each blob's header to extract the repo's `RepoMeta`.
+///
+/// # Errors
+///
+/// Returns [`ClasspathError::PathMissing`] if `dir` doesn't exist;
+/// [`ClasspathError::RepoBuild`] for any blob whose header fails to
+/// validate.
+pub fn synthetic_from_snapshots_dir(dir: &Path) -> Result<Classpath, ClasspathError> {
+    if !dir.is_dir() {
+        return Err(ClasspathError::PathMissing {
+            name: "<snapshots>".into(),
+            path: dir.to_path_buf(),
+        });
+    }
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map_err(|source| ClasspathError::Io {
+            path: dir.to_path_buf(),
+            source,
+        })?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "purem"))
+        .collect();
+    entries.sort();
+
+    let mut repos: Vec<Repo> = Vec::new();
+    for path in entries {
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unnamed")
+            .to_string();
+        // Synthesize a meta with empty deps. Topo sort will need real
+        // deps — for now, encoding them in the synthetic classpath
+        // requires the user to write an explicit TOML.
+        let meta = RepoMeta {
+            name: Box::leak(stem.clone().into_boxed_str()),
+            pattern: ".*",
+            dependencies: &[],
+        };
+        let repo = Repo::from_purem_file(&path, format!("/{stem}"), meta).map_err(|source| {
+            ClasspathError::RepoBuild {
+                name: stem.clone(),
+                source,
+            }
+        })?;
+        repos.push(repo);
+    }
+
+    Ok(Classpath {
+        root: dir.to_path_buf(),
+        extra_auto_imports: Vec::new(),
+        repos,
+    })
+}
+
+/// The fully-resolved repo set for a CLI invocation.
+///
+/// Built by [`resolve_classpath`], which walks the discovery cascade
+/// described in `crates/cli/src/classpath.rs`'s module docs.
+#[derive(Debug)]
+pub struct ResolvedClasspath {
+    /// Source path the classpath came from, for diagnostics. `None`
+    /// when the resolver fell back to embedded.
+    pub source: Option<PathBuf>,
+    /// Repos to load, deduped by name (classpath wins over embedded).
+    pub repos: Vec<Repo>,
+    /// Extra auto-imports declared in the classpath TOML, on top of
+    /// the platform defaults.
+    pub extra_auto_imports: Vec<SmolStr>,
+}
+
+/// Resolution cascade for a CLI invocation:
+/// 1. `--classpath <PATH>` flag (highest priority).
+/// 2. `LEGEND_PURE_CLASSPATH` env var.
+/// 3. `legend-pure-classpath.toml` discovered in cwd ancestors.
+/// 4. `<exe_dir>/legend-pure-classpath.toml` next to the binary.
+/// 5. `<exe_dir>/snapshots/*.purem` synthetic classpath.
+/// 6. `LEGEND_PURE_BUILD_SNAPSHOTS_DIR/*.purem` (build-time hint for
+///    `cargo run -p legend-cli`).
+/// 7. `Repo::default_embedded()` — every embedded repo. Source-of-truth
+///    fallback for builds that didn't ship classpath artifacts.
+///
+/// **Shadow-by-name semantics:** when both an embedded repo and a
+/// classpath entry share a `name`, the classpath entry replaces the
+/// embedded copy. Lets local-dev override an embedded `platform` by
+/// declaring a `kind = "filesystem"` entry with the same name.
+///
+/// # Errors
+///
+/// Returns [`ClasspathError`] for explicit-classpath failures (bad
+/// TOML, missing paths, etc.). Auto-discovered classpaths that fail to
+/// load fall through to the next step rather than aborting.
+pub fn resolve_classpath(
+    explicit: Option<&Path>,
+    cwd: &Path,
+) -> Result<ResolvedClasspath, ClasspathError> {
+    // Step 1: explicit flag.
+    if let Some(p) = explicit {
+        let cp = load_classpath(p)?;
+        return Ok(merge_with_embedded(cp, Some(p.to_path_buf())));
+    }
+
+    // Step 2: LEGEND_PURE_CLASSPATH env var.
+    if let Some(env) = std::env::var_os(ENV_CLASSPATH) {
+        let p = PathBuf::from(env);
+        let cp = load_classpath(&p)?;
+        return Ok(merge_with_embedded(cp, Some(p)));
+    }
+
+    // Step 3: ancestor walk for legend-pure-classpath.toml.
+    if let Some(p) = discover_classpath(cwd) {
+        if let Ok(cp) = load_classpath(&p) {
+            return Ok(merge_with_embedded(cp, Some(p)));
+        }
+    }
+
+    // Step 4 + 5: next to binary.
+    if let Some(found) = discover_next_to_binary() {
+        match found {
+            NextToBinary::Toml(p) => {
+                if let Ok(cp) = load_classpath(&p) {
+                    return Ok(merge_with_embedded(cp, Some(p)));
+                }
+            }
+            NextToBinary::SnapshotsDir(dir) => {
+                if let Ok(cp) = synthetic_from_snapshots_dir(&dir) {
+                    return Ok(merge_with_embedded(cp, Some(dir)));
+                }
+            }
+        }
+    }
+
+    // Step 6: build-time hint (cargo run path).
+    if let Some(env) = std::env::var_os(ENV_BUILD_SNAPSHOTS_DIR) {
+        let dir = PathBuf::from(env);
+        if let Ok(cp) = synthetic_from_snapshots_dir(&dir) {
+            return Ok(merge_with_embedded(cp, Some(dir)));
+        }
+    }
+
+    // Step 7: embedded fallback.
+    Ok(ResolvedClasspath {
+        source: None,
+        repos: Repo::default_embedded(),
+        extra_auto_imports: Vec::new(),
+    })
+}
+
+/// Merge a parsed classpath with the embedded fallback: classpath
+/// entries shadow same-name embedded entries.
+fn merge_with_embedded(cp: Classpath, source: Option<PathBuf>) -> ResolvedClasspath {
+    let cp_names: std::collections::HashSet<String> = cp
+        .repos
+        .iter()
+        .filter_map(|r| r.meta().map(|m| m.name.to_string()))
+        .collect();
+    let mut repos = cp.repos;
+    for embedded in Repo::default_embedded() {
+        let Some(meta) = embedded.meta() else {
+            continue;
+        };
+        if cp_names.contains(meta.name) {
+            continue; // shadowed
+        }
+        repos.push(embedded);
+    }
+    ResolvedClasspath {
+        source,
+        repos,
+        extra_auto_imports: cp.extra_auto_imports,
+    }
 }
 
 #[cfg(test)]
