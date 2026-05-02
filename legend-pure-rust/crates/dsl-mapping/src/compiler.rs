@@ -216,6 +216,52 @@ fn validate_mapping(
             });
         }
     }
+
+    // One-root-per-class invariant. When a class is mapped by more
+    // than one set-implementation directly within this mapping,
+    // exactly one of those set-implementations must be marked root
+    // with `*`. Mirrors Java's check (see TestRoot.testRootError):
+    //   "The class 'X' is mapped by N set implementations and has
+    //    M roots. There should be exactly one root set
+    //    implementation for the class, and it should be marked
+    //    with a '*'."
+    //
+    // Per-Mapping, *not* transitive across includes: TestRoot
+    // .testRootWithInclude proves that two distinct included
+    // mappings each contributing their own root is fine — the rule
+    // applies only to the directly-defined class_mappings of one
+    // Mapping. XStore bodies target Associations rather than
+    // Classes, so they're excluded from the count.
+    let mut by_class: HashMap<SmolStr, (usize, usize, &ClassMapping)> = HashMap::new();
+    for cm in &m.class_mappings {
+        if matches!(cm.body, ClassMappingBody::XStore(_)) {
+            continue;
+        }
+        let class_fqn = ptr_fqn(&cm.class);
+        let entry = by_class.entry(class_fqn).or_insert((0, 0, cm));
+        entry.0 += 1;
+        if cm.is_root {
+            entry.1 += 1;
+        }
+    }
+    for (class_fqn, (count, roots, first_cm)) in &by_class {
+        if *count > 1 && *roots != 1 {
+            errors.push(CompilationError {
+                message: format!(
+                    "The class '{class_fqn}' is mapped by {count} set implementations and has \
+                     {roots} roots. There should be exactly one root set implementation for \
+                     the class, and it should be marked with a '*'."
+                ),
+                // Pin the diagnostic to the first class-mapping for
+                // this class — gives the user a stable file:line
+                // hook into the offending block.
+                source_info: first_cm.source_info.clone(),
+                kind: CompilationErrorKind::DuplicateElement {
+                    name: class_fqn.clone(),
+                },
+            });
+        }
+    }
 }
 
 fn validate_class_mapping(

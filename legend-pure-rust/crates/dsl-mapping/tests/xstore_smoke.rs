@@ -71,7 +71,7 @@ fn first_mapping(file: &SourceFile) -> &MappingDef {
     panic!("no MappingDef in parsed source");
 }
 
-fn xstore_body<'a>(m: &'a MappingDef, idx: usize) -> &'a XStoreClassMappingBody {
+fn xstore_body(m: &MappingDef, idx: usize) -> &XStoreClassMappingBody {
     let cm = m
         .class_mappings
         .get(idx)
