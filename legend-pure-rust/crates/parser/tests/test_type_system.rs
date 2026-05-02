@@ -143,3 +143,23 @@ Class my::OnlyMult<|m>
     );
     insta::assert_debug_snapshot!(file);
 }
+
+#[test]
+fn generic_arg_with_type_union() {
+    // `T+V` is the structural type-union operator inside a generic
+    // type argument. Real shape from
+    // `core_functions_relation/.../transformation/asofjoin.pure:18`:
+    //
+    //   native function meta::pure::functions::relation::asOfJoin<T,V>(
+    //       rel1:Relation<T>[1], rel2:Relation<V>[1], ...
+    //   ): Relation<T+V>[1];
+    //
+    // The parser accepts the `+`-chained types in type-arg position
+    // and discards the union (the AST has no slot for it; Java treats
+    // unions as structural types resolved later in compilation).
+    let file = parse_ok(
+        r"###Pure
+native function my::asOfJoin<T,V>(rel:Relation<T+V>[1]): Relation<T+V>[1];",
+    );
+    insta::assert_debug_snapshot!(file);
+}
