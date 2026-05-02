@@ -88,6 +88,7 @@ fn embedded_and_filesystem_produce_equivalent_models() {
         Repo::embedded_platform_dsl_diagram(),
         Repo::embedded_platform_dsl_graph(),
         Repo::embedded_platform_dsl_tds(),
+        Repo::embedded_platform_store_relational(),
     ];
 
     let model_hybrid = match repo::load(&hybrid_repos, &imports) {
