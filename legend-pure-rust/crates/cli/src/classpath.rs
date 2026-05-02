@@ -632,6 +632,89 @@ path = "no-such.purem"
     }
 
     #[test]
+    fn synthetic_from_snapshots_dir_picks_up_purem_files() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("snapshots");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+
+        // Two valid (header-only) blobs.
+        for name in ["one.purem", "two.purem"] {
+            let mut blob = Vec::new();
+            legend_pure_parser_pure::purem::header::write_header(&mut blob, 0);
+            write_file(&dir.join(name), &blob);
+        }
+        // A non-purem file should be ignored.
+        write_file(&dir.join("README.txt"), b"not a purem");
+
+        let cp = synthetic_from_snapshots_dir(&dir).expect("synthetic build");
+        assert_eq!(cp.repos.len(), 2, "should find both .purem files");
+        let names: std::collections::HashSet<_> = cp
+            .repos
+            .iter()
+            .filter_map(|r| r.meta().map(|m| m.name))
+            .collect();
+        assert!(names.contains("one"), "got names: {names:?}");
+        assert!(names.contains("two"), "got names: {names:?}");
+    }
+
+    #[test]
+    fn resolve_classpath_explicit_flag_includes_platform() {
+        // Explicit classpath that doesn't shadow `platform` should
+        // still merge in the embedded platform via shadow-by-name
+        // semantics.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let toml_path = tmp.path().join("legend-pure-classpath.toml");
+        // Empty classpath — no [[repo]] entries.
+        write_file(&toml_path, b"# empty classpath\n");
+        let resolved =
+            resolve_classpath(Some(&toml_path), tmp.path()).expect("resolve explicit");
+        assert!(resolved.source.is_some());
+        assert!(
+            resolved
+                .repos
+                .iter()
+                .any(|r| r.meta().is_some_and(|m| m.name == "platform")),
+            "embedded platform must remain available when classpath doesn't shadow it"
+        );
+    }
+
+    #[test]
+    fn resolve_classpath_explicit_flag_shadows_embedded() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let purem_path = tmp.path().join("platform.purem");
+        let mut blob = Vec::new();
+        legend_pure_parser_pure::purem::header::write_header(&mut blob, 0);
+        write_file(&purem_path, &blob);
+
+        let toml_path = tmp.path().join("legend-pure-classpath.toml");
+        write_file(
+            &toml_path,
+            br#"
+[[repo]]
+name = "platform"
+kind = "purem"
+path = "platform.purem"
+"#,
+        );
+
+        let resolved = resolve_classpath(Some(&toml_path), tmp.path())
+            .expect("explicit classpath should resolve");
+        assert!(resolved.source.is_some(), "source path tracked");
+
+        // Exactly one repo named "platform" — the classpath copy
+        // shadows the embedded one.
+        let platform_count = resolved
+            .repos
+            .iter()
+            .filter(|r| r.meta().is_some_and(|m| m.name == "platform"))
+            .count();
+        assert_eq!(
+            platform_count, 1,
+            "shadow-by-name: classpath platform replaces embedded one"
+        );
+    }
+
+    #[test]
     fn discover_classpath_walks_up() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let nested = tmp.path().join("a").join("b").join("c");
