@@ -141,10 +141,15 @@ pub enum BuildError {
 /// order, slice the target repo's chunks, and write the resulting bytes
 /// to `output`.
 pub fn compile_to_purem(req: CompileRequest<'_>) -> Result<(), BuildError> {
-    let descriptors = load_descriptors(req.descriptors)?;
-    if !descriptors.iter().any(|d| d.name == req.target) {
+    let all_descriptors = load_descriptors(req.descriptors)?;
+    if !all_descriptors.iter().any(|d| d.name == req.target) {
         return Err(BuildError::UnknownTarget(req.target.to_string()));
     }
+    // Restrict to the target + its transitive deps so unrelated repos
+    // (which may be passed in for build-time convenience) don't get
+    // compiled. This makes a build of `platform.purem` independent of
+    // a broken DSL repo's compile errors.
+    let descriptors = transitively_reachable(&all_descriptors, req.target)?;
     let order = topo_sort(&descriptors)?;
 
     let auto_imports: Vec<SmolStr> = req
@@ -249,6 +254,46 @@ fn load_descriptors(paths: &[PathBuf]) -> Result<Vec<LoadedDescriptor>, BuildErr
             source_root,
         });
     }
+    Ok(out)
+}
+
+/// Return the subset of `all` that's transitively reachable from
+/// `target` via the `dependencies` edges, including `target` itself.
+/// Any dep name that isn't in `all` is silently ignored — Java's
+/// resolver does the same and falls back to "external/unknown."
+fn transitively_reachable(
+    all: &[LoadedDescriptor],
+    target: &str,
+) -> Result<Vec<LoadedDescriptor>, BuildError> {
+    let by_name: HashMap<&str, &LoadedDescriptor> =
+        all.iter().map(|d| (d.name.as_str(), d)).collect();
+    let mut keep: BTreeSet<String> = BTreeSet::new();
+    let mut stack = vec![target.to_string()];
+    while let Some(name) = stack.pop() {
+        if !keep.insert(name.clone()) {
+            continue;
+        }
+        if let Some(d) = by_name.get(name.as_str()) {
+            for dep in &d.dependencies {
+                if !keep.contains(dep) {
+                    stack.push(dep.clone());
+                }
+            }
+        }
+    }
+    let mut out: Vec<LoadedDescriptor> = all
+        .iter()
+        .filter(|d| keep.contains(&d.name))
+        .map(|d| LoadedDescriptor {
+            name: d.name.clone(),
+            pattern: d.pattern.clone(),
+            dependencies: d.dependencies.clone(),
+            source_root: d.source_root.clone(),
+        })
+        .collect();
+    // Stable order by name for reproducibility — topo sort runs again
+    // before compile and gives the actual load order.
+    out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
 }
 

@@ -20,6 +20,7 @@ publish = false
 description = "Build-time utilities for embedding Pure repositories into a Rust crate."
 
 [dependencies]
+legend-pure-snapshot-builder = { path = "../snapshot-builder" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
