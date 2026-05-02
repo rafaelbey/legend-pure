@@ -131,7 +131,26 @@ impl InferCtx<'_> {
 ///
 /// Sets `type_info` on every expression node in `body` (in place).
 /// Type errors are appended to `errors`.
-pub(crate) fn infer_function_body(
+///
+/// Public so external compiler extensions (`crates/dsl-mapping`,
+/// future `crates/dsl-relational`, …) can run inference on lambda
+/// bodies they own — the regular pipeline (`Pass 2b'`) calls this for
+/// every M3 function body, and DSL extensions need the same surface
+/// to validate user-supplied expressions (filter clauses, transform
+/// expressions, mapping property bodies). The contract is:
+///
+/// 1. `body` must already be lowered to [`ValueSpec`]s. Use the
+///    extension API in `crates/pure` (Pass 2b' lowering helpers,
+///    promoted as needed in future stages) to lower from AST.
+/// 2. `params` provides the variable bindings visible at the start of
+///    the body (e.g. the lambda's parameters). `Scope::from_params`
+///    builds the root scope.
+/// 3. The function mutates `body` in place — every successfully
+///    inferred expression has `type_info` populated. Read it with
+///    `body[i].type_info.as_ref()` after the call.
+/// 4. Errors append to `errors` rather than aborting; partial
+///    inference results are still observable.
+pub fn infer_function_body(
     model: &PureModel,
     params: &[Parameter],
     body: &mut [ValueSpec],
