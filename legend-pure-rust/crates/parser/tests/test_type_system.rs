@@ -145,6 +145,29 @@ Class my::OnlyMult<|m>
 }
 
 #[test]
+fn generic_arg_with_subtype_bound_and_wildcard_column() {
+    // Real shape from
+    // `core_functions_relation/relation/functions/eval.pure:18`:
+    //
+    //   meta::pure::functions::relation::eval<Z,T>(
+    //       col:ColSpec<(?:Z)⊆T>[1], row:T[1]
+    //   ) : Z[0..1]
+    //
+    // - `(?:Z)` is a relation column whose name is the wildcard `?`
+    //   and whose type is `Z`.
+    // - `⊆T` is a subtype constraint: the column-spec type is a
+    //   subtype of `T`.
+    //
+    // Both syntaxes are accepted at parse time; the constraint and
+    // wildcard semantics are resolved at compile time downstream.
+    let file = parse_ok(
+        "###Pure\n\
+         native function my::eval<Z,T>(col: ColSpec<(?:Z)\u{2286}T>[1], row: T[1]): Z[0..1];",
+    );
+    insta::assert_debug_snapshot!(file);
+}
+
+#[test]
 fn generic_arg_with_type_union() {
     // `T+V` is the structural type-union operator inside a generic
     // type argument. Real shape from

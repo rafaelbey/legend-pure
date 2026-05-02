@@ -370,7 +370,23 @@ impl<'a> Lexer<'a> {
             '/' => TokenKind::Slash,
 
             // -- String literal: 'hello' with \' escapes --
-            '\'' => self.lex_string(start_line, start_col)?,
+            '\'' => self.lex_string(start_line, start_col, '\'')?,
+
+            // -- String literal: "hello" with \" escapes (used by TDS
+            //    cell rows for JSON-like values: `1, "[1,2,3]"`). Both
+            //    quote styles produce the same StringLiteral kind so
+            //    the parser doesn't need to disambiguate; the cell raw
+            //    text preserves whichever quotes were used. --
+            '"' => self.lex_string(start_line, start_col, '"')?,
+
+            // -- Wildcard / subtype-constraint operators in type
+            //    expressions. `?` is the column-name wildcard in
+            //    `ColSpec<(?:Type)>`; `⊆` (U+2286) is the subtype
+            //    constraint in `<X⊆T>`. Both are emitted as their
+            //    own token kinds so the parser dispatches them
+            //    explicitly. --
+            '?' => TokenKind::Question,
+            '\u{2286}' => TokenKind::Subset,
 
             // -- Date literal: %2024-01-15, %10:30:00 --
             '%' => self.lex_date_or_percent(start_line, start_col),
@@ -398,14 +414,19 @@ impl<'a> Lexer<'a> {
 
     // -- Complex token lexers -------------------------------------------------
 
-    fn lex_string(&mut self, start_line: u32, start_col: u32) -> Result<TokenKind, LexError> {
+    fn lex_string(
+        &mut self,
+        start_line: u32,
+        start_col: u32,
+        quote: char,
+    ) -> Result<TokenKind, LexError> {
         loop {
             match self.advance() {
                 Some('\\') => {
                     // Skip escaped character
                     self.advance();
                 }
-                Some('\'') => return Ok(TokenKind::StringLiteral),
+                Some(c) if c == quote => return Ok(TokenKind::StringLiteral),
                 Some(_) => {}
                 Option::None => {
                     return Err(LexError::UnterminatedString {
@@ -1086,5 +1107,29 @@ mod tests {
     fn unexpected_character() {
         let result = tokenize("Class ¿", "test.pure");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn lexes_double_quoted_string() {
+        // TDS bodies use `"..."` for cell strings — both quote styles
+        // produce StringLiteral so the parser treats them uniformly.
+        let tokens = tokenize(r#""[1,2,3]""#, "test.pure").unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::StringLiteral);
+        assert_eq!(tokens[0].text.as_str(), r#""[1,2,3]""#);
+        // Single-quote form continues to work.
+        let tokens = tokenize("'hello'", "test.pure").unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::StringLiteral);
+        assert_eq!(tokens[0].text.as_str(), "'hello'");
+    }
+
+    #[test]
+    fn lexes_question_and_subset_operators() {
+        // `?` is the wildcard column-name placeholder; `⊆` (U+2286) is
+        // the subtype-constraint operator. Real shape:
+        // `ColSpec<(?:Z)⊆T>` in
+        // `core_functions_relation/.../eval.pure:18`.
+        let tokens = tokenize("?\u{2286}", "test.pure").unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::Question);
+        assert_eq!(tokens[1].kind, TokenKind::Subset);
     }
 }
