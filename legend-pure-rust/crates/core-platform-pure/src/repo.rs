@@ -66,8 +66,7 @@ pub const M3_BOOTSTRAP_CANONICAL: &str = "/platform/pure/grammar/m3.pure";
 /// New DSL crates that ship their own `default_island_parsers()` should
 /// be chained here so [`load`] sees them automatically.
 #[must_use]
-pub fn default_island_parsers()
--> Vec<Box<dyn legend_pure_parser_parser::IslandParser>> {
+pub fn default_island_parsers() -> Vec<Box<dyn legend_pure_parser_parser::IslandParser>> {
     let mut parsers = legend_pure_dsl_graph::parser::default_island_parsers();
     parsers.extend(legend_pure_dsl_store::parser::default_island_parsers());
     parsers.extend(legend_pure_dsl_tds::parser::default_island_parsers());
@@ -113,7 +112,7 @@ pub struct OwnedSourceFile {
 /// A Pure repository — a set of `.pure` sources and `.json` manifests
 /// sharing a canonical-URL prefix.
 #[non_exhaustive]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Repo {
     /// Files baked into the binary at build time.
     Embedded {
@@ -154,94 +153,81 @@ pub enum Repo {
         /// header. `Arc<[u8]>` so multiple consumers (e.g. JNI + CLI)
         /// can share without cloning.
         blob: Arc<[u8]>,
+        /// Embedded `.json` manifests `(canonical_url, content)` pairs
+        /// surfaced via [`Repo::manifests`]. Populated by the
+        /// build-script-generated `purem-embedded` shape so
+        /// [`find_manifest`] can find platform-side data files
+        /// (`pct_essential_native.json` etc.) without dragging .pure
+        /// sources into the binary. Empty for runtime-built `Purem`
+        /// repos (`from_purem_bytes` / `from_purem_file`) since they
+        /// load from external `.purem` blobs that don't carry
+        /// manifests.
+        manifests: &'static [(&'static str, &'static str)],
     },
 }
 
 impl Repo {
-    /// The default embedded platform repo (from build.rs).
+    /// The default embedded platform repo, materialised from the
+    /// build-script-generated `.purem` blob.
+    ///
+    /// Equivalent to the first entry of [`Self::default_embedded`].
+    /// Kept as a convenience for callers that want only the platform
+    /// without iterating the default vec.
     #[must_use]
     pub fn embedded_platform() -> Self {
-        Self::Embedded {
-            prefix: "/platform",
-            files: sources::REPO_PLATFORM_FILES,
-            meta: &sources::REPO_PLATFORM_META,
-        }
-    }
-
-    /// The default embedded `platform_precise_primitives` repo.
-    #[must_use]
-    pub fn embedded_platform_precise_primitives() -> Self {
-        Self::Embedded {
-            prefix: "/platform_precise_primitives",
-            files: sources::REPO_PLATFORM_PRECISE_PRIMITIVES_FILES,
-            meta: &sources::REPO_PLATFORM_PRECISE_PRIMITIVES_META,
-        }
-    }
-
-    /// The default embedded `platform_dsl_store` repo.
-    #[must_use]
-    pub fn embedded_platform_dsl_store() -> Self {
-        Self::Embedded {
-            prefix: "/platform_dsl_store",
-            files: sources::REPO_PLATFORM_DSL_STORE_FILES,
-            meta: &sources::REPO_PLATFORM_DSL_STORE_META,
-        }
-    }
-
-    /// The default embedded `platform_dsl_mapping` repo.
-    #[must_use]
-    pub fn embedded_platform_dsl_mapping() -> Self {
-        Self::Embedded {
-            prefix: "/platform_dsl_mapping",
-            files: sources::REPO_PLATFORM_DSL_MAPPING_FILES,
-            meta: &sources::REPO_PLATFORM_DSL_MAPPING_META,
-        }
-    }
-
-    /// The default embedded `platform_dsl_diagram` repo.
-    #[must_use]
-    pub fn embedded_platform_dsl_diagram() -> Self {
-        Self::Embedded {
-            prefix: "/platform_dsl_diagram",
-            files: sources::REPO_PLATFORM_DSL_DIAGRAM_FILES,
-            meta: &sources::REPO_PLATFORM_DSL_DIAGRAM_META,
-        }
-    }
-
-    /// The default embedded `platform_dsl_graph` repo.
-    #[must_use]
-    pub fn embedded_platform_dsl_graph() -> Self {
-        Self::Embedded {
-            prefix: "/platform_dsl_graph",
-            files: sources::REPO_PLATFORM_DSL_GRAPH_FILES,
-            meta: &sources::REPO_PLATFORM_DSL_GRAPH_META,
-        }
-    }
-
-    /// The default embedded `platform_dsl_tds` repo.
-    #[must_use]
-    pub fn embedded_platform_dsl_tds() -> Self {
-        Self::Embedded {
-            prefix: "/platform_dsl_tds",
-            files: sources::REPO_PLATFORM_DSL_TDS_FILES,
-            meta: &sources::REPO_PLATFORM_DSL_TDS_META,
-        }
-    }
-
-    /// The default embedded `platform_store_relational` repo.
-    #[must_use]
-    pub fn embedded_platform_store_relational() -> Self {
-        Self::Embedded {
-            prefix: "/platform_store_relational",
-            files: sources::REPO_PLATFORM_STORE_RELATIONAL_FILES,
-            meta: &sources::REPO_PLATFORM_STORE_RELATIONAL_META,
-        }
+        Self::from_purem_static_with_manifests(
+            "/platform",
+            &sources::REPO_PLATFORM_META,
+            sources::REPO_PLATFORM_PUREM,
+            sources::REPO_PLATFORM_MANIFESTS,
+        )
     }
 
     /// All embedded repos in Cargo.toml declaration order.
+    ///
+    /// After the binary trim, this returns just the `platform` purem
+    /// blob — every other repo (precise primitives, all DSLs,
+    /// store-relational) ships as a `.purem` artifact next to the
+    /// binary and is loaded via classpath. See
+    /// `crates/core-platform-pure/Cargo.toml`'s `[[package.metadata.legend-pure.repos]]`
+    /// table for the full repo set.
     #[must_use]
     pub fn default_embedded() -> Vec<Repo> {
         sources::default_embedded_repos()
+    }
+
+    /// Test-time helper: [`Self::default_embedded`] plus every `.purem`
+    /// artifact emitted by the build script
+    /// (`crates/build`'s `purem-artifact` shape). Returns the embedded
+    /// `platform` plus all DSL artifacts with their real dependency
+    /// metadata so tests can run against a full platform without
+    /// manually configuring a classpath.
+    ///
+    /// The snapshots-dir path is captured at compile time via
+    /// `option_env!("LEGEND_PURE_BUILD_SNAPSHOTS_DIR")` (set by the
+    /// build script's `cargo:rustc-env=` directive). At runtime,
+    /// `LEGEND_PURE_BUILD_SNAPSHOTS_DIR` overrides it if set —
+    /// useful for cargo-installed binaries that ship snapshots in a
+    /// different location.
+    ///
+    /// Silently returns just the embedded set if neither path resolves
+    /// to an existing directory.
+    #[must_use]
+    pub fn default_with_build_snapshots() -> Vec<Repo> {
+        let mut repos = Self::default_embedded();
+        // Runtime override wins.
+        let dir_str: Option<String> = std::env::var("LEGEND_PURE_BUILD_SNAPSHOTS_DIR")
+            .ok()
+            .or_else(|| option_env!("LEGEND_PURE_BUILD_SNAPSHOTS_DIR").map(String::from));
+        let Some(dir_str) = dir_str else {
+            return repos;
+        };
+        let dir = std::path::PathBuf::from(dir_str);
+        if !dir.is_dir() {
+            return repos;
+        }
+        repos.extend(sources::default_artifact_repos(&dir));
+        repos
     }
 
     /// Build a Filesystem repo from an existing Java descriptor JSON
@@ -322,6 +308,7 @@ impl Repo {
             prefix: prefix.into(),
             meta,
             blob,
+            manifests: &[],
         }
     }
 
@@ -341,10 +328,29 @@ impl Repo {
         meta: &'static RepoMeta,
         blob: &'static [u8],
     ) -> Self {
+        Self::from_purem_static_with_manifests(prefix, meta, blob, &[])
+    }
+
+    /// Like [`Self::from_purem_static`] but also takes a static set of
+    /// embedded `(canonical_url, content)` manifest pairs that
+    /// [`Repo::manifests`] (and thus [`find_manifest`]) will surface.
+    ///
+    /// The build script's `purem-embedded` shape uses this to ship
+    /// `.json` data files (PCT manifests, etc.) alongside the compiled
+    /// `.purem` blob without dragging the `.pure` sources into the
+    /// binary.
+    #[must_use]
+    pub fn from_purem_static_with_manifests(
+        prefix: &'static str,
+        meta: &'static RepoMeta,
+        blob: &'static [u8],
+        manifests: &'static [(&'static str, &'static str)],
+    ) -> Self {
         Self::Purem {
             prefix: prefix.to_string(),
             meta: *meta,
             blob: Arc::from(blob.to_vec().into_boxed_slice()),
+            manifests,
         }
     }
 
@@ -379,6 +385,7 @@ impl Repo {
             prefix: prefix.into(),
             meta,
             blob: Arc::from(bytes.into_boxed_slice()),
+            manifests: &[],
         })
     }
 
@@ -414,15 +421,18 @@ impl Repo {
     }
 
     /// All files in the repo (mixed `.pure` + `.json`), each as
-    /// `(content, canonical_url)`. Empty for [`Repo::Purem`] — purem
-    /// repos carry no source files.
+    /// `(content, canonical_url)`. For [`Repo::Purem`] this surfaces
+    /// only the embedded `manifests` — the compiled `.purem` blob is
+    /// not iterated as source.
     pub fn files(&self) -> Box<dyn Iterator<Item = (&str, &str)> + '_> {
         match self {
             Self::Embedded { files, .. } => Box::new(files.iter().map(|f| (f.content, f.path))),
             Self::Filesystem { files, .. } => {
                 Box::new(files.iter().map(|f| (f.content.as_str(), f.path.as_str())))
             }
-            Self::Purem { .. } => Box::new(std::iter::empty()),
+            Self::Purem { manifests, .. } => {
+                Box::new(manifests.iter().map(|(path, content)| (*content, *path)))
+            }
         }
     }
 
@@ -432,7 +442,8 @@ impl Repo {
         Box::new(self.files().filter(|(_, path)| path.ends_with(".pure")))
     }
 
-    /// `.json` manifests only. Empty for [`Repo::Purem`].
+    /// `.json` manifests only. For `Repo::Purem` this surfaces the
+    /// static `manifests` field populated by the build script.
     pub fn manifests(&self) -> Box<dyn Iterator<Item = (&str, &str)> + '_> {
         Box::new(self.files().filter(|(_, path)| path.ends_with(".json")))
     }
@@ -650,11 +661,8 @@ fn parse_repo_sources(
     let mut parsed_files = Vec::new();
     let mut errors = Vec::new();
     for (content, name) in repo.sources() {
-        match legend_pure_parser_parser::parse_with_islands(
-            content,
-            name,
-            default_island_parsers(),
-        ) {
+        match legend_pure_parser_parser::parse_with_islands(content, name, default_island_parsers())
+        {
             Ok(sf) => parsed_files.push(sf),
             Err(partial) => {
                 parsed_files.push(partial.source_file);
@@ -764,89 +772,32 @@ mod tests {
     }
 
     #[test]
-    fn embedded_platform_dsl_store_dependencies() {
-        let repo = Repo::embedded_platform_dsl_store();
-        let meta = repo.meta().expect("embedded repo carries meta");
-        assert_eq!(meta.name, "platform_dsl_store");
-        assert_eq!(meta.dependencies, &["platform"]);
-    }
-
-    #[test]
-    fn embedded_platform_precise_primitives_dependencies() {
-        let repo = Repo::embedded_platform_precise_primitives();
-        let meta = repo.meta().expect("embedded repo carries meta");
-        assert_eq!(meta.name, "platform_precise_primitives");
-        assert_eq!(meta.dependencies, &["platform"]);
-        assert!(
-            meta.pattern.contains("precisePrimitives"),
-            "pattern should constrain to meta::pure::precisePrimitives, got: {}",
-            meta.pattern
-        );
-    }
-
-    #[test]
-    fn embedded_platform_files_carry_canonical_urls() {
+    fn embedded_platform_carries_manifests() {
+        // Phase 3b: source files are no longer embedded; only the
+        // .purem blob + JSON manifests remain. Verify the manifest
+        // surface has at least the PCT exclusion lists the runtime
+        // depends on.
         let repo = Repo::embedded_platform();
-        let any_grammar = repo
-            .files()
-            .any(|(_, path)| path.starts_with("/platform/pure/"));
+        let manifest_paths: Vec<_> = repo.manifests().map(|(_, path)| path).collect();
         assert!(
-            any_grammar,
-            "expected at least one /platform/pure/... file in embedded repo"
+            manifest_paths
+                .iter()
+                .any(|p| p.ends_with("/pct_essential_native.json")),
+            "expected pct_essential_native.json among embedded manifests; got {manifest_paths:?}"
         );
     }
 
     #[test]
-    fn embedded_skips_m3_pure() {
-        let repo = Repo::embedded_platform();
-        let has_m3 = repo.files().any(|(_, path)| path == M3_BOOTSTRAP_CANONICAL);
-        assert!(
-            !has_m3,
-            "m3.pure must remain embedded only via bootstrap.rs"
-        );
-    }
-
-    #[test]
-    fn default_embedded_includes_all_repos() {
+    fn default_embedded_returns_only_platform() {
+        // Phase 3b: every non-platform repo ships as a .purem artifact
+        // next to the binary, not in the binary itself. The only repo
+        // baked into the binary is `platform`.
         let repos = Repo::default_embedded();
         let names: Vec<_> = repos
             .iter()
             .filter_map(|r| r.meta().map(|m| m.name))
             .collect();
-        assert!(names.contains(&"platform"));
-        assert!(names.contains(&"platform_precise_primitives"));
-        assert!(names.contains(&"platform_dsl_store"));
-        assert!(names.contains(&"platform_dsl_mapping"));
-        assert!(names.contains(&"platform_dsl_diagram"));
-        assert!(names.contains(&"platform_dsl_graph"));
-        assert!(names.contains(&"platform_dsl_tds"));
-    }
-
-    #[test]
-    fn embedded_platform_dsl_graph_dependencies() {
-        let repo = Repo::embedded_platform_dsl_graph();
-        let meta = repo.meta().expect("embedded repo carries meta");
-        assert_eq!(meta.name, "platform_dsl_graph");
-        assert_eq!(meta.dependencies, &["platform"]);
-        assert!(
-            meta.pattern.contains("graphFetch"),
-            "pattern should constrain to graphFetch / functions::meta, got: {}",
-            meta.pattern
-        );
-    }
-
-    #[test]
-    fn embedded_platform_dsl_mapping_dependencies() {
-        let repo = Repo::embedded_platform_dsl_mapping();
-        let meta = repo.meta().expect("embedded repo carries meta");
-        assert_eq!(meta.name, "platform_dsl_mapping");
-        assert_eq!(meta.dependencies, &["platform", "platform_dsl_store"]);
-        assert!(
-            meta.pattern.contains("mapping") || meta.pattern.contains("metamodel"),
-            "pattern should constrain to meta::pure::mapping / metamodel, got: {}",
-            meta.pattern
-        );
-        assert_eq!(repo.prefix(), "/platform_dsl_mapping");
+        assert_eq!(names, vec!["platform"], "got names: {names:?}");
     }
 
     #[test]

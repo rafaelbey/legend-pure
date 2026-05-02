@@ -666,8 +666,7 @@ path = "no-such.purem"
         let toml_path = tmp.path().join("legend-pure-classpath.toml");
         // Empty classpath — no [[repo]] entries.
         write_file(&toml_path, b"# empty classpath\n");
-        let resolved =
-            resolve_classpath(Some(&toml_path), tmp.path()).expect("resolve explicit");
+        let resolved = resolve_classpath(Some(&toml_path), tmp.path()).expect("resolve explicit");
         assert!(resolved.source.is_some());
         assert!(
             resolved

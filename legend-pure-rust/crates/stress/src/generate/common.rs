@@ -35,12 +35,23 @@ pub struct PlatformFixture {
 }
 
 /// Returns the singleton platform fixture, parsing on first access.
+///
+/// Phase 3b: source files are no longer embedded. We parse the live
+/// platform source tree via `Repo::from_descriptor`. If the descriptor
+/// can't be canonicalized (slim checkout, e.g. CI artifact-only
+/// builds), the fixture is empty — callers should treat it as a soft
+/// fail rather than asserting on element counts.
 pub fn platform_fixture() -> &'static PlatformFixture {
     static FIXTURE: OnceLock<PlatformFixture> = OnceLock::new();
     FIXTURE.get_or_init(|| {
-        let repos = legend_pure_core_platform::repo::Repo::default_embedded();
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let descriptor = manifest.join(
+            "../../../legend-pure-core/legend-pure-m3-core/src/main/resources/platform.json",
+        );
         let mut parsed_files = Vec::new();
-        for repo in &repos {
+        if let Ok(canonical) = descriptor.canonicalize()
+            && let Ok(repo) = legend_pure_core_platform::repo::Repo::from_descriptor(&canonical)
+        {
             for (content, path) in repo.sources() {
                 match legend_pure_parser_parser::parse(content, path) {
                     Ok(sf) => parsed_files.push(sf),

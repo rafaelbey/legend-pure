@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Parity test: `Repo::default_embedded()` vs. a hybrid configuration
-//! using `Repo::from_descriptor` for the `platform` repo.
+//! Parity test: `Repo::default_embedded()` (just the `platform.purem`
+//! blob after Phase 3b) vs. a `Repo::from_descriptor` filesystem build
+//! of the same platform sources.
 //!
 //! The two configurations must produce semantically equivalent
 //! `PureModel`s — same set of qualified element names, same error
 //! count. ElementId equality is *not* asserted (arena allocation order
-//! can differ across file-iteration orders).
+//! can differ across file-iteration orders, and the .purem path
+//! recovers from FQN-encoded external refs).
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -67,7 +69,8 @@ fn embedded_and_filesystem_produce_equivalent_models() {
 
     let imports = auto_imports();
 
-    // Path A: every repo embedded (the default).
+    // Path A: embedded `platform.purem` (the only repo baked into the
+    // binary after Phase 3b).
     let embedded_repos = Repo::default_embedded();
     let model_embedded = match repo::load(&embedded_repos, &imports) {
         Ok(m) => m,
@@ -77,19 +80,10 @@ fn embedded_and_filesystem_produce_equivalent_models() {
         .err()
         .map_or(0, |p| p.errors.len());
 
-    // Path B: filesystem `platform` + embedded DSL repos.
+    // Path B: filesystem `platform` from the live source tree, no DSLs.
     let fs_platform = Repo::from_descriptor(&descriptor)
         .expect("Repo::from_descriptor on real platform.json should succeed");
-    let hybrid_repos: Vec<Repo> = vec![
-        fs_platform,
-        Repo::embedded_platform_precise_primitives(),
-        Repo::embedded_platform_dsl_store(),
-        Repo::embedded_platform_dsl_mapping(),
-        Repo::embedded_platform_dsl_diagram(),
-        Repo::embedded_platform_dsl_graph(),
-        Repo::embedded_platform_dsl_tds(),
-        Repo::embedded_platform_store_relational(),
-    ];
+    let hybrid_repos: Vec<Repo> = vec![fs_platform];
 
     let model_hybrid = match repo::load(&hybrid_repos, &imports) {
         Ok(m) => m,

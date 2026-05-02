@@ -99,13 +99,18 @@ fn discover_platform_descriptor(start_dir: &Path) -> Option<PathBuf> {
 }
 
 /// Build a `Vec<Repo>` mixing a filesystem-backed `platform` repo with
-/// the embedded DSL repos. Used by `legend test --live` and
-/// `legend repl --live`.
+/// every DSL `.purem` artifact discovered next to the binary (or in
+/// the build-time-emitted snapshots dir, for `cargo run` invocations).
+/// Used by `legend test --live` and `legend repl --live`.
+///
+/// After Phase 3b the binary only embeds `platform`; DSLs ship as
+/// build-script-emitted `.purem` artifacts in
+/// `target/<profile>/snapshots/` (dev) or `<exe_dir>/snapshots/`
+/// (deployed). This helper assembles both ends.
 ///
 /// # Errors
 ///
-/// Returns [`CliError`] if the descriptor or its expected source root
-/// cannot be loaded.
+/// Returns [`CliError`] if the platform descriptor cannot be loaded.
 pub fn live_repos(platform_descriptor: &Path) -> Result<Vec<Repo>, CliError> {
     let platform = Repo::from_descriptor(platform_descriptor).map_err(|e| {
         CliError::Custom(format!(
@@ -113,12 +118,24 @@ pub fn live_repos(platform_descriptor: &Path) -> Result<Vec<Repo>, CliError> {
             platform_descriptor.display()
         ))
     })?;
-    Ok(vec![
-        platform,
-        Repo::embedded_platform_dsl_store(),
-        Repo::embedded_platform_dsl_diagram(),
-        Repo::embedded_platform_dsl_tds(),
-    ])
+    let mut repos = vec![platform];
+
+    // Pull DSL repos from the build-time-emitted snapshots dir.
+    if let Some(env) = std::env::var_os(crate::classpath::ENV_BUILD_SNAPSHOTS_DIR) {
+        let dir = std::path::PathBuf::from(env);
+        if let Ok(synthetic) = crate::classpath::synthetic_from_snapshots_dir(&dir) {
+            for r in synthetic.repos {
+                // Skip a duplicate `platform` — we already have it from
+                // the live filesystem descriptor.
+                if r.meta().is_some_and(|m| m.name == "platform") {
+                    continue;
+                }
+                repos.push(r);
+            }
+        }
+    }
+
+    Ok(repos)
 }
 
 /// Filesystem source root for the live `platform` repo — the directory

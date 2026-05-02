@@ -58,43 +58,64 @@ fn init_test_tracing() {
     });
 }
 
-/// Cached pre-parsed platform ASTs + auto-imports.
+/// Cached platform repos + auto-imports.
 ///
-/// Compiling platform sources is expensive (~200 Pure files), so we parse
-/// them once and cache the ASTs. Each test then clones the ASTs and combines
-/// them with user code for a fresh compilation.
+/// Phase 3b: only `platform` is embedded as `.purem`; DSLs are loaded
+/// from `LEGEND_PURE_BUILD_SNAPSHOTS_DIR` (set by the build script).
+/// We cache the resolved `Vec<Repo>` once; each test clones it,
+/// appends a synthetic user-source repo, and runs `repo::load` for a
+/// fresh model.
 fn platform_model() -> &'static PlatformFixture {
     static FIXTURE: OnceLock<PlatformFixture> = OnceLock::new();
     init_test_tracing();
     FIXTURE.get_or_init(|| {
-        let repos = legend_pure_core_platform::repo::Repo::default_embedded();
-        let mut parsed_files = Vec::new();
-        for repo in &repos {
-            for (content, path) in repo.sources() {
-                match legend_pure_parser_parser::parse_with_islands(
-                    content,
-                    path,
-                    legend_pure_dsl_graph::parser::default_island_parsers(),
-                ) {
-                    Ok(sf) => parsed_files.push(sf),
-                    Err(partial) => parsed_files.push(partial.source_file),
-                }
-            }
-        }
+        let repos = legend_pure_core_platform::repo::Repo::default_with_build_snapshots();
         let auto_imports = legend_pure_core_platform::platform::PLATFORM_AUTO_IMPORTS
             .iter()
             .map(|&s| SmolStr::new(s))
             .collect();
         PlatformFixture {
-            parsed_files,
+            repos,
             auto_imports,
         }
     })
 }
 
 struct PlatformFixture {
-    parsed_files: Vec<legend_pure_parser_ast::SourceFile>,
+    repos: Vec<legend_pure_core_platform::repo::Repo>,
     auto_imports: Vec<SmolStr>,
+}
+
+/// Build a synthetic `Repo::Filesystem` repo carrying the user source
+/// pretended to live at `/user_test/<test>.pure`. Declared dependencies
+/// cover every embedded + artifact repo so cross-repo references in
+/// the user source resolve cleanly.
+fn synthetic_user_repo(user_source: &str) -> legend_pure_core_platform::repo::Repo {
+    use legend_pure_core_platform::repo::{OwnedSourceFile, RepoMeta};
+    // Leak a static deps slice covering every standard repo.
+    static USER_DEPS: &[&str] = &[
+        "platform",
+        "platform_precise_primitives",
+        "platform_dsl_store",
+        "platform_dsl_mapping",
+        "platform_dsl_diagram",
+        "platform_dsl_graph",
+        "platform_dsl_tds",
+        "platform_store_relational",
+    ];
+    let meta = RepoMeta {
+        name: "user_test",
+        pattern: ".*",
+        dependencies: USER_DEPS,
+    };
+    legend_pure_core_platform::repo::Repo::Filesystem {
+        prefix: "/user_test".into(),
+        files: vec![OwnedSourceFile {
+            path: "/user_test/test_source.pure".into(),
+            content: user_source.into(),
+        }],
+        meta: Some(meta),
+    }
 }
 
 /// Compile platform + user Pure source and evaluate a function by its
@@ -133,35 +154,20 @@ fn eval_pure_err(source: &str, fqn: &str) -> String {
 /// Compile user test source together with the platform model.
 fn compile_with_platform(user_source: &str) -> PureModel {
     let fixture = platform_model();
-
-    // Parse user source — user test code should parse cleanly
-    let user_ast = legend_pure_parser_parser::parse_with_islands(
-        user_source,
-        "<test>",
-        legend_pure_dsl_graph::parser::default_island_parsers(),
-    )
-    .unwrap_or_else(|e| {
-        panic!(
-            "Parse error: {:?}",
-            e.errors
-                .iter()
-                .map(std::string::ToString::to_string)
-                .collect::<Vec<_>>()
-        )
-    });
-
-    // Combine platform + user files
-    let mut all_files: Vec<_> = fixture.parsed_files.clone();
-    all_files.push(user_ast);
-
-    // Compile everything together — the compiler resolves operator calls
-    // to platform Function elements, and Pass 2.1 mangles their names
-    match legend_pure_parser_pure::pipeline::compile(&all_files, &fixture.auto_imports) {
+    let mut repos: Vec<_> = fixture.repos.clone();
+    repos.push(synthetic_user_repo(user_source));
+    let result = legend_pure_core_platform::repo::load(&repos, &fixture.auto_imports);
+    match result {
         Ok(model) => model,
         Err(partial) => {
-            // Accept compilation with errors for now — platform files may
-            // have unsupported constructs. As long as our test function
-            // compiled successfully, evaluation will work.
+            // Debug: dump errors so test failures are diagnosable.
+            eprintln!(
+                "compile_with_platform: {} errors during repo::load",
+                partial.errors.len()
+            );
+            for e in partial.errors.iter().take(5) {
+                eprintln!("  - {}", e);
+            }
             partial.model
         }
     }
@@ -179,15 +185,9 @@ fn try_compile_with_platform(
     user_source: &str,
 ) -> Result<PureModel, legend_pure_parser_pure::pipeline::PartialPureModel> {
     let fixture = platform_model();
-    let user_ast = legend_pure_parser_parser::parse_with_islands(
-        user_source,
-        "<test>",
-        legend_pure_dsl_graph::parser::default_island_parsers(),
-    )
-    .unwrap_or_else(|e| panic!("Parse error: {e:?}"));
-    let mut all_files: Vec<_> = fixture.parsed_files.clone();
-    all_files.push(user_ast);
-    legend_pure_parser_pure::pipeline::compile(&all_files, &fixture.auto_imports)
+    let mut repos: Vec<_> = fixture.repos.clone();
+    repos.push(synthetic_user_repo(user_source));
+    legend_pure_core_platform::repo::load(&repos, &fixture.auto_imports)
 }
 
 #[test]

@@ -141,13 +141,33 @@ fn user_mapping_block_registers_against_loaded_platform() {
 }
 
 fn parse_platform_sources() -> Vec<SourceFile> {
-    let repos = Repo::default_embedded();
+    // Phase 3b: source files are no longer embedded. Re-parse from
+    // the live source trees for `platform`, `platform_dsl_store` (a
+    // mapping dep), and `platform_dsl_mapping` (the metamodel under
+    // test).
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let descriptors = [
+        manifest.join(
+            "../../../legend-pure-core/legend-pure-m3-core/src/main/resources/platform.json",
+        ),
+        manifest.join(
+            "../../../legend-pure-dsl/legend-pure-dsl-store/legend-pure-m2-dsl-store-pure/src/main/resources/platform_dsl_store.definition.json",
+        ),
+        manifest.join(
+            "../../../legend-pure-dsl/legend-pure-dsl-mapping/legend-pure-m2-dsl-mapping-pure/src/main/resources/platform_dsl_mapping.definition.json",
+        ),
+    ];
     let mut files = Vec::new();
-    for repo in &repos {
-        for (content, path) in repo.sources() {
-            match legend_pure_parser_parser::parse(content, path) {
-                Ok(sf) => files.push(sf),
-                Err(partial) => files.push(partial.source_file),
+    for desc in descriptors {
+        let Ok(canonical) = desc.canonicalize() else {
+            continue;
+        };
+        if let Ok(repo) = Repo::from_descriptor(&canonical) {
+            for (content, path) in repo.sources() {
+                match legend_pure_parser_parser::parse(content, path) {
+                    Ok(sf) => files.push(sf),
+                    Err(partial) => files.push(partial.source_file),
+                }
             }
         }
     }
