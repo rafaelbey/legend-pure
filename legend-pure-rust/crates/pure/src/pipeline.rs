@@ -266,6 +266,7 @@ pub fn compile_with_extensions(
     for ext in extensions {
         let mut ctx = ValidateCtx {
             model: &model,
+            auto_imports,
             errors: &mut errors,
         };
         ext.validate(&mut ctx);

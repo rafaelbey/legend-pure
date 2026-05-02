@@ -1196,7 +1196,13 @@ pub(crate) fn is_type_compatible(
 }
 
 /// Checks if `child` is a subtype of `parent` by walking the supertype chain.
-fn is_subtype(child: ElementId, parent: ElementId, model: &crate::model::PureModel) -> bool {
+///
+/// `pub` so external compiler extensions (Mapping DSL, future DSLs)
+/// can implement type-compatibility checks without re-implementing
+/// supertype traversal. Returns `true` when `child == parent` or when
+/// `parent` appears anywhere in `child`'s transitive supertypes
+/// (including `PrimitiveType::super_type`).
+pub fn is_subtype(child: ElementId, parent: ElementId, model: &crate::model::PureModel) -> bool {
     if child == parent {
         return true;
     }
@@ -1690,7 +1696,10 @@ pub(crate) fn substitute_mult(
 /// Compatible means: the arg's multiplicity fits within the param's range.
 /// `[1]` fits into `[0..1]`, `[0..1]`, `[1..*]`, `[*]`.
 /// `[*]` only fits into `[*]`.
-pub(crate) fn is_multiplicity_compatible(
+/// `pub` for the same reason as [`is_subtype`] — DSL extensions need
+/// to enforce "transform multiplicity must subsume property
+/// multiplicity"-style rules without duplicating range arithmetic.
+pub fn is_multiplicity_compatible(
     arg_mult: Option<&crate::types::Multiplicity>,
     param_mult: &crate::types::Multiplicity,
 ) -> bool {
