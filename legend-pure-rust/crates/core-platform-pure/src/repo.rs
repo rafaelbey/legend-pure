@@ -54,6 +54,26 @@ use crate::sources;
 /// during runtime filesystem walks.
 pub const M3_BOOTSTRAP_CANONICAL: &str = "/platform/pure/grammar/m3.pure";
 
+/// Composes the standard inline-island parsers shipped by legend-pure-rust.
+///
+/// Today's set covers `#{ … }#` (graph fetch from `dsl-graph`),
+/// `#>{ … }#` (relation-store accessor from `dsl-store`), and
+/// `#TDS\n cols\n rows\n#` (tabular fixtures from `dsl-tds`). All three
+/// are needed so a parser invocation through [`load`] can handle any
+/// `.pure` source that uses these grammars — the platform / engine repos
+/// rely on TDS islands extensively in their relational tests.
+///
+/// New DSL crates that ship their own `default_island_parsers()` should
+/// be chained here so [`load`] sees them automatically.
+#[must_use]
+pub fn default_island_parsers()
+-> Vec<Box<dyn legend_pure_parser_parser::IslandParser>> {
+    let mut parsers = legend_pure_dsl_graph::parser::default_island_parsers();
+    parsers.extend(legend_pure_dsl_store::parser::default_island_parsers());
+    parsers.extend(legend_pure_dsl_tds::parser::default_island_parsers());
+    parsers
+}
+
 /// Descriptor metadata read from the existing Java repo JSON
 /// (`platform.json`, `*.definition.json`).
 ///
@@ -302,6 +322,29 @@ impl Repo {
             prefix: prefix.into(),
             meta,
             blob,
+        }
+    }
+
+    /// Construct a `Purem` repo from a `&'static [u8]` blob — typically
+    /// produced by `include_bytes!` from a build-script-generated
+    /// `.purem` file. Used by `legend-pure-build`'s `purem-embedded`
+    /// shape to generate `default_embedded_repos()` entries that wrap
+    /// build-time-compiled blobs.
+    ///
+    /// The static slice is copied once into an `Arc<[u8]>` at
+    /// construction; for production-scale repos this is a few-MB
+    /// allocation paid once per process. A future `Cow`-based variant
+    /// could eliminate the copy.
+    #[must_use]
+    pub fn from_purem_static(
+        prefix: &'static str,
+        meta: &'static RepoMeta,
+        blob: &'static [u8],
+    ) -> Self {
+        Self::Purem {
+            prefix: prefix.to_string(),
+            meta: *meta,
+            blob: Arc::from(blob.to_vec().into_boxed_slice()),
         }
     }
 
@@ -610,7 +653,7 @@ fn parse_repo_sources(
         match legend_pure_parser_parser::parse_with_islands(
             content,
             name,
-            legend_pure_dsl_graph::parser::default_island_parsers(),
+            default_island_parsers(),
         ) {
             Ok(sf) => parsed_files.push(sf),
             Err(partial) => {

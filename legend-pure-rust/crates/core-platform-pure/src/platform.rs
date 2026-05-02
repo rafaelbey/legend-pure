@@ -99,7 +99,7 @@ pub fn parse_and_compile<'a>(
         match legend_pure_parser_parser::parse_with_islands(
             content,
             name,
-            legend_pure_dsl_graph::parser::default_island_parsers(),
+            crate::repo::default_island_parsers(),
         ) {
             Ok(src_file) => parsed_files.push(src_file),
             Err(partial) => {
