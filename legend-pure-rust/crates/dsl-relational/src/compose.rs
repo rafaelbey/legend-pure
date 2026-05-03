@@ -429,6 +429,22 @@ pub fn write_relational_class_mapping_body(out: &mut String, body: &RelationalCl
         }
         out.push(')');
     }
+    if let Some(lines) = &body.association_mapping {
+        // Stage 7: AssociationMapping body. Mutually exclusive with
+        // the class-mapping headers + mapping_elements above; the
+        // parser ensures only one path produces non-empty content.
+        if wrote_header {
+            out.push(' ');
+        }
+        out.push_str("AssociationMapping(");
+        for (i, line) in lines.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            write_single_mapping_line(out, line);
+        }
+        out.push(')');
+    }
     out.push('}');
 }
 

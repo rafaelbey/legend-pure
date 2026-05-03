@@ -733,6 +733,18 @@ pub struct RelationalClassMappingBody {
     /// Body mapping elements: bare property-mapping lines and / or
     /// `scope(…) (…)` wrappers, in source order.
     pub mapping_elements: Vec<MappingElement>,
+    /// `AssociationMapping ( <singleMappingLines> )` — when present,
+    /// the body is interpreted as a relational association mapping
+    /// rather than a class mapping (Stage 7). Mutually exclusive
+    /// with the regular `mappingBlock` headers + `mapping_elements`
+    /// content, since real fixtures put one OR the other inside the
+    /// body braces. Java grammar:
+    ///
+    /// ```text
+    /// associationMapping : ASSOCIATION_MAPPING '(' propertyMappings ')' ;
+    /// propertyMappings   : mappingElements ;
+    /// ```
+    pub association_mapping: Option<Vec<SingleMappingLine>>,
     /// Span of the entire `{ … }` body.
     pub source_info: SourceInfo,
 }

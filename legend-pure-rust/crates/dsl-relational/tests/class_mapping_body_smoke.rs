@@ -505,3 +505,123 @@ mod embedded {
         );
     }
 }
+
+// ===========================================================================
+// Stage 7: relational AssociationMapping
+// ===========================================================================
+
+mod association {
+    use super::first_relational_body;
+    use indoc::indoc;
+    use legend_pure_dsl_relational::ast::SingleMappingLine;
+
+    #[test]
+    fn parses_association_mapping_body() {
+        let body = first_relational_body(indoc! {r"
+            ###Mapping
+            Mapping pkg::FirmMapping
+            (
+              Firm_Person : Relational
+              {
+                AssociationMapping
+                (
+                  employees[fir1, per1] : [pkg::FirmDb]@firmJoin,
+                  firm[per1, fir1] : [pkg::FirmDb]@firmJoin
+                )
+              }
+            )
+        "});
+        let lines = body
+            .association_mapping
+            .as_ref()
+            .expect("expected AssociationMapping body");
+        assert_eq!(lines.len(), 2);
+        let SingleMappingLine::NonePlus(employees) = &lines[0] else {
+            panic!("expected bare line");
+        };
+        assert_eq!(employees.property.value.as_str(), "employees");
+        assert_eq!(
+            employees
+                .source_id
+                .as_ref()
+                .expect("expected srcId")
+                .value
+                .as_str(),
+            "fir1"
+        );
+        assert_eq!(
+            employees
+                .target_id
+                .as_ref()
+                .expect("expected targetId")
+                .value
+                .as_str(),
+            "per1"
+        );
+        // The other body fields stay empty for an association mapping.
+        assert!(body.main_table.is_none());
+        assert!(body.mapping_elements.is_empty());
+    }
+
+    #[test]
+    fn round_trips_association_mapping() {
+        let source = indoc! {r"
+            ###Mapping
+            Mapping pkg::FirmMapping
+            (
+              Firm_Person : Relational
+              {
+                AssociationMapping
+                (
+                  employees[fir1, per1] : [pkg::FirmDb]@firmJoin,
+                  firm[per1, fir1] : [pkg::FirmDb]@firmJoin
+                )
+              }
+            )
+        "};
+        let body1 = first_relational_body(source);
+        let composed = legend_pure_dsl_mapping::compose::compose_mapping_section(
+            &super::collect_mappings(&super::parse(source)),
+        );
+        let body2 = first_relational_body(&composed);
+        let strip = |s: &str| {
+            let mut out = String::with_capacity(s.len());
+            let mut chars = s.char_indices().peekable();
+            while let Some((i, _)) = chars.peek().copied() {
+                if s[i..].starts_with("source_info:") {
+                    let after_ident = i + "source_info:".len();
+                    let Some(brace) = s[after_ident..].find('{') else {
+                        break;
+                    };
+                    out.push_str("source_info: <stripped>");
+                    let mut depth = 1usize;
+                    let mut idx = after_ident + brace + 1;
+                    while depth > 0 && idx < s.len() {
+                        let c = s.as_bytes()[idx] as char;
+                        if c == '{' {
+                            depth += 1;
+                        } else if c == '}' {
+                            depth -= 1;
+                        }
+                        idx += 1;
+                    }
+                    while let Some(&(j, _)) = chars.peek() {
+                        if j >= idx {
+                            break;
+                        }
+                        chars.next();
+                    }
+                    continue;
+                }
+                let (_, c) = chars.next().expect("checked above");
+                out.push(c);
+            }
+            out
+        };
+        assert_eq!(
+            strip(&format!("{body1:#?}")),
+            strip(&format!("{body2:#?}")),
+            "association round-trip diverged\nsource:\n{source}\ncomposed:\n{composed}"
+        );
+    }
+}

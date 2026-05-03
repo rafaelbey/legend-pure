@@ -1238,13 +1238,39 @@ fn parse_relational_class_mapping_body(
         }
     }
 
+    // Stage 7: `AssociationMapping ( <singleMappingLines> )` as the
+    // body content. Mutually exclusive with the class-mapping
+    // `mappingElements` shape — Java's grammar uses one or the other
+    // inside the `{ … }` braces (real association fixtures embed
+    // `AssociationMapping(...)` standalone; class-mapping fixtures
+    // embed `(prop : col, …)`).
+    let association_mapping: Option<Vec<SingleMappingLine>> =
+        if is_keyword(ctx.cursor(), "AssociationMapping") {
+            ctx.cursor().expect(TokenKind::Identifier)?; // 'AssociationMapping'
+            ctx.cursor().expect(TokenKind::LParen)?;
+            let mut lines: Vec<SingleMappingLine> = Vec::new();
+            if !ctx.cursor().check(TokenKind::RParen) {
+                loop {
+                    lines.push(parse_single_mapping_line(ctx)?);
+                    if !ctx.cursor().eat(TokenKind::Comma) {
+                        break;
+                    }
+                }
+            }
+            ctx.cursor().expect(TokenKind::RParen)?;
+            Some(lines)
+        } else {
+            None
+        };
+
     // mappingElements — wrapped in `(...)` per Java's grammar. The
     // wrapping parens are part of `classMapping`'s outer rule, but
     // the body is delivered to us between the class-mapping `{ … }`
     // braces, so the parens around mapping elements are required
     // when any are present. Empty body is legal (header-only).
+    // Skipped entirely when this is an association-mapping body.
     let mut mapping_elements: Vec<MappingElement> = Vec::new();
-    if ctx.cursor().check(TokenKind::LParen) {
+    if association_mapping.is_none() && ctx.cursor().check(TokenKind::LParen) {
         ctx.cursor().expect(TokenKind::LParen)?;
         if !ctx.cursor().check(TokenKind::RParen) {
             loop {
@@ -1265,6 +1291,7 @@ fn parse_relational_class_mapping_body(
         primary_key,
         main_table,
         mapping_elements,
+        association_mapping,
         source_info: merge_si(&open.source_info, &close.source_info),
     })
 }
