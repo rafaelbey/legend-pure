@@ -802,7 +802,7 @@ fn parse_op_column(
         let mut args = Vec::new();
         if !ctx.cursor().check(TokenKind::RParen) {
             loop {
-                args.push(parse_op_operation(ctx)?);
+                args.push(parse_op_function_arg(ctx)?);
                 if !ctx.cursor().eat(TokenKind::Comma) {
                     break;
                 }
@@ -842,6 +842,63 @@ fn parse_op_column(
         primary_key,
         source_info: merge_si(&start_si, &end_si),
     }))
+}
+
+/// One argument inside an `op_function` call.
+///
+/// Java grammar:
+///
+/// ```text
+/// functionArgument         : colWithDbOrConstant | arrayOfFunctionArguments ;
+/// arrayOfFunctionArguments : '[' (functionArgument (',' functionArgument)*)? ']' ;
+/// ```
+///
+/// Disambiguation between `[v1, v2]` (array) and `[db]col` (column
+/// with db qualifier): if `[` is followed by something that
+/// *cannot* start a `qualifiedName` (StringLit / IntegerLit /
+/// FloatLit / sign / `[` / `]`) we commit to array. Otherwise the
+/// caller's regular op-operation path handles `[db]col`. Real
+/// fixtures (`TestInClauseForJoinsAndFilters`) only ever use array
+/// elements that begin with literals, so this disambiguation is
+/// sufficient in practice; a future case wanting `[[db]col]` as an
+/// array element would need a stronger lookahead.
+fn parse_op_function_arg(ctx: &mut ParserContext<'_>) -> Result<OpExpr, ParseError> {
+    if ctx.cursor().check(TokenKind::LBracket) {
+        let next = ctx.cursor().peek_kind_at(1);
+        let is_array = matches!(
+            next,
+            TokenKind::StringLiteral
+                | TokenKind::IntegerLiteral
+                | TokenKind::FloatLiteral
+                | TokenKind::Plus
+                | TokenKind::Minus
+                | TokenKind::LBracket
+                | TokenKind::RBracket
+        );
+        if is_array {
+            return parse_array_literal(ctx);
+        }
+    }
+    parse_op_operation(ctx)
+}
+
+/// `arrayOfFunctionArguments : '[' (functionArgument (',' functionArgument)*)? ']'`.
+fn parse_array_literal(ctx: &mut ParserContext<'_>) -> Result<OpExpr, ParseError> {
+    let open = ctx.cursor().expect(TokenKind::LBracket)?;
+    let mut elements = Vec::new();
+    if !ctx.cursor().check(TokenKind::RBracket) {
+        loop {
+            elements.push(parse_op_function_arg(ctx)?);
+            if !ctx.cursor().eat(TokenKind::Comma) {
+                break;
+            }
+        }
+    }
+    let close = ctx.cursor().expect(TokenKind::RBracket)?;
+    Ok(OpExpr::Array {
+        elements,
+        source_info: merge_si(&open.source_info, &close.source_info),
+    })
 }
 
 /// `tableAliasColumn: '{target}' '.' relationalIdentifier 'PRIMARY KEY'?`.

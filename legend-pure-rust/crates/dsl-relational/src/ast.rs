@@ -450,6 +450,17 @@ pub enum OpExpr {
     Column(OpColumn),
     /// String / integer / float literal.
     Literal(OpLiteral),
+    /// `[v1, v2, …]` — array literal used as a function argument
+    /// (Java's `arrayOfFunctionArguments`). Most commonly seen as
+    /// the second argument of `in(col, [v1, v2])`. Elements are
+    /// nested op-exprs so arrays can contain columns, literals, or
+    /// nested arrays.
+    Array {
+        /// Array elements, in source order.
+        elements: Vec<OpExpr>,
+        /// Span covering `[ … ]`.
+        source_info: SourceInfo,
+    },
 }
 
 impl OpExpr {
@@ -461,7 +472,8 @@ impl OpExpr {
             | OpExpr::Compare { source_info, .. }
             | OpExpr::IsNull { source_info, .. }
             | OpExpr::Group { source_info, .. }
-            | OpExpr::Function { source_info, .. } => source_info,
+            | OpExpr::Function { source_info, .. }
+            | OpExpr::Array { source_info, .. } => source_info,
             OpExpr::Column(c) => c.source_info(),
             OpExpr::Literal(l) => l.source_info(),
         }
