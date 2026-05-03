@@ -1291,6 +1291,78 @@ pub(crate) fn is_type_compatible(
     is_subtype(arg_eid, param_eid, model)
 }
 
+/// Extract the structural relation columns from a `TypeExpr`, if any.
+///
+/// Recognises both shapes the resolver produces:
+/// - `Relation(cols)` directly.
+/// - `Named { RelationType_id, type_arguments: [Relation(cols)], … }`
+///   (the canonical wrapper form `RelationType<Relation(cols)>`).
+/// - `Named { _, type_arguments: [Named { RelationType_id, …, [Relation(cols)] }], … }`
+///   (e.g. `TDS<RelationType<Relation(cols)>>`).
+///
+/// Returns `None` when no relation columns are reachable in this
+/// type's outer-or-first-type-argument layers.
+fn extract_relation_columns(
+    te: &crate::types::TypeExpr,
+) -> Option<&[crate::types::RelationColumnTypeExpr]> {
+    use crate::types::TypeExpr;
+    match te {
+        TypeExpr::Relation(cols) => Some(cols.as_slice()),
+        TypeExpr::Named {
+            type_arguments, ..
+        } => type_arguments.first().and_then(extract_relation_columns),
+        _ => None,
+    }
+}
+
+/// Checks if `arg_type_expr`'s relation columns are compatible with
+/// `param_type`'s relation columns.
+///
+/// Used as a refinement on top of [`is_type_compatible`]'s outer-element
+/// check: when the param expects a structural relation type with
+/// specific columns and the arg carries different columns, narrow the
+/// candidate out.
+///
+/// Compatible means:
+/// - Param has no specific columns (empty Relation list, or no Relation
+///   layer at all) — accept anything.
+/// - Arg has no extractable columns — accept (can't eliminate).
+/// - Both have columns — every param column must appear in arg with a
+///   compatible type and a satisfiable multiplicity. Extra arg columns
+///   are allowed (subset semantics — `Relation<X⊆T>`).
+fn is_relation_columns_compatible(
+    arg_te: &crate::types::TypeExpr,
+    param: &crate::types::TypeExpr,
+    model: &crate::model::PureModel,
+) -> bool {
+    let Some(param_cols) = extract_relation_columns(param) else {
+        return true; // Param has no specific column requirement
+    };
+    if param_cols.is_empty() {
+        return true; // RelationType<Any> — accepts anything
+    }
+    let Some(arg_cols) = extract_relation_columns(arg_te) else {
+        return true; // Arg's columns unknown — can't eliminate
+    };
+    for pc in param_cols {
+        let Some(ac) = arg_cols.iter().find(|c| c.name == pc.name) else {
+            return false; // param expected a column the arg doesn't carry
+        };
+        // Type compatibility: walk to outer ElementIds for each side.
+        let outer_eid = |t: &crate::types::TypeExpr| match t {
+            crate::types::TypeExpr::Named { element, .. } => Some(*element),
+            _ => None,
+        };
+        if !is_type_compatible(outer_eid(&ac.type_expr), &pc.type_expr, model) {
+            return false;
+        }
+        if !is_multiplicity_compatible(Some(&ac.multiplicity), &pc.multiplicity) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Checks if `child` is a subtype of `parent` by walking the supertype chain.
 ///
 /// `pub` so external compiler extensions (Mapping DSL, future DSLs)
@@ -2012,6 +2084,17 @@ pub(crate) fn narrow_candidates_by_type(
                 // verify the lambda's body return multiplicity matches.
                 if let Some(arg_vs) = lowered_args.get(i)
                     && !is_lambda_compatible(arg_vs, &param.type_expr, model, var_types)
+                {
+                    return false;
+                }
+                // Structural-relation column check: when the param
+                // expects a relation type with specific columns and the
+                // arg's TypeExpr carries differing columns, eliminate.
+                // No-op when either side lacks a Relation inner.
+                if let Some(arg_te) = lowered_args
+                    .get(i)
+                    .and_then(|vs| vs.type_info.as_ref().map(|rt| &rt.type_expr))
+                    && !is_relation_columns_compatible(arg_te, &param.type_expr, model)
                 {
                     return false;
                 }
