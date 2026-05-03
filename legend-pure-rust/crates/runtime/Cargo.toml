@@ -24,6 +24,7 @@ repository.workspace = true
 legend-pure-parser-pure = { path = "../pure" }
 legend-pure-parser-ast = { path = "../ast" }
 legend-pure-core-platform = { path = "../core-platform-pure" }
+legend-pure-dsl-tds = { path = "../dsl-tds" }
 smol_str = { workspace = true }
 thiserror = { workspace = true }
 im-rc = { workspace = true }

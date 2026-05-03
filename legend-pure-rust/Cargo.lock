@@ -1053,6 +1053,7 @@ version = "0.1.0"
 dependencies = [
  "indoc",
  "legend-pure-core-platform",
+ "legend-pure-dsl-mapping",
  "legend-pure-parser-ast",
  "legend-pure-parser-lexer",
  "legend-pure-parser-parser",
@@ -1219,6 +1220,7 @@ dependencies = [
  "jiff",
  "legend-pure-core-platform",
  "legend-pure-dsl-graph",
+ "legend-pure-dsl-tds",
  "legend-pure-parser-ast",
  "legend-pure-parser-parser",
  "legend-pure-parser-pure",

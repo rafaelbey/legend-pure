@@ -120,6 +120,12 @@ pub(crate) struct ResolutionContext<'a> {
     /// reads this to upgrade "Ambiguous function call" cascades into a
     /// single `CannotInferLambdaParameterTypes` diagnostic.
     pub variable_types: HashMap<SmolStr, (crate::types::TypeExpr, crate::types::Multiplicity)>,
+    /// Inline-island lowerers, keyed by `tag()`. Dispatched when
+    /// [`crate::lower::lower_expression`] encounters an
+    /// `Expression::Island(_)` node. Empty slice = no islands lower
+    /// (the historical default — produces the legacy "Island
+    /// expression lowering not yet implemented" diagnostic).
+    pub island_lowerers: &'a [Box<dyn crate::island_lower::IslandLowerer>],
 }
 
 // ---------------------------------------------------------------------------

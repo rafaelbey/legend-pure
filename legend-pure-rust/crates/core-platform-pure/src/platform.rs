@@ -132,7 +132,9 @@ pub fn parse_and_compile<'a>(
         }
     }
 
-    match pipeline::compile(&parsed_files, auto_imports) {
+    let lowerers = crate::repo::default_island_lowerers();
+    match pipeline::compile_with_extensions_and_islands(&parsed_files, auto_imports, &[], &lowerers)
+    {
         Ok(model) if parse_errors.is_empty() => Ok(model),
         Ok(model) => Err(PartialPureModel {
             model,

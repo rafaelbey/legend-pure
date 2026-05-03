@@ -233,6 +233,61 @@ fn unwrap_instance_value(
 }
 
 // ---------------------------------------------------------------------------
+// stringToTDS
+// ---------------------------------------------------------------------------
+
+/// Pure
+/// `stringToTDS(s:String[1]):TDS<Any>[1]`.
+///
+/// Parses a CSV string into a runtime [`TDS`](crate::m3_paths::TDS) heap
+/// instance whose `csv` slot carries the trimmed canonical CSV. The
+/// shared parser and per-column type inference live in
+/// [`legend_pure_dsl_tds::csv::parse_and_infer`] — same call the
+/// compile-time `#TDS\n…\n#` lowerer makes — so a `#TDS#` literal and
+/// a literal `stringToTDS('<csv>')` call produce equivalent runtime
+/// instances. The compile-time difference is only the inferred type
+/// parameter `T`: `#TDS#` lowers to `stringToTDS(csv)->cast(@TDS<…>)`,
+/// supplying a typed `T`; a bare `stringToTDS` call stays at `TDS<Any>`.
+///
+/// The structured per-column / per-cell representation (`ParsedTDS`)
+/// isn't stashed on the heap object yet — relation natives that
+/// consume typed columns (`over`, `extend`, `sort`, …) re-call
+/// `parse_and_infer` on demand. That's deferred work; for now, the
+/// only Pure-observable slot is `csv: String[1]`, which is what the
+/// metaclass declares.
+#[derive(Debug)]
+pub struct StringToTDS;
+
+impl NativeFunction for StringToTDS {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        expect_args("stringToTDS", args, 1)?;
+        let csv_value = ctx.evaluate(&args[0])?.into_value();
+        let csv_str = csv_value.as_string()?.clone();
+
+        let parsed =
+            legend_pure_dsl_tds::csv::parse_and_infer(csv_str.as_str(), &[]).map_err(|e| {
+                PureException::from(PureRuntimeError::EvaluationError(format!(
+                    "stringToTDS: {e}"
+                )))
+            })?;
+
+        let tds_handle = ctx.heap_mut().alloc_dynamic(m3_paths::TDS);
+        ctx.heap_mut()
+            .mutate_add(&tds_handle, "csv", &[Value::String(parsed.csv.into())])
+            .map_err(PureException::from)?;
+        Ok(Evaluated::new(Value::Object(tds_handle)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "stringToTDS(String[1]):TDS<Any>[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -243,4 +298,5 @@ pub fn register(registry: &mut NativeRegistry) {
         "addColumns_RelationType_1__ColSpecArray_1__RelationType_1_",
         AddColumns,
     );
+    registry.register("stringToTDS_String_1__TDS_1_", StringToTDS);
 }

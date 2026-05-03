@@ -105,18 +105,29 @@ pub(crate) fn lower_expression(
         ast_expr::Expression::Let(e) => lower_let(e, ctx, errors),
         ast_expr::Expression::NewInstance(e) => lower_new_instance(e, ctx, errors),
         ast_expr::Expression::Column(e) => lower_column(e, ctx, errors),
-        ast_expr::Expression::Island(_) => {
-            // Island lowering is deferred — the AST node is sufficient
-            // for protocol serialization and composer roundtripping.
-            let source_info = expr.source_info().clone();
-            errors.push(CompilationError {
-                message: "Island expression lowering not yet implemented".to_string(),
-                source_info: source_info.clone(),
-                kind: crate::error::CompilationErrorKind::UnsupportedExpression {
-                    kind: SmolStr::new_static("Island"),
-                },
-            });
-            None
+        ast_expr::Expression::Island(island) => {
+            // Dispatch to a registered IslandLowerer (one per DSL crate
+            // that owns an island grammar). The lowerer returns a
+            // synthetic AST expression we recurse on — keeping this
+            // crate ignorant of any DSL's content shape. Callers that
+            // didn't register lowerers (empty slice) still get the
+            // legacy "Island expression lowering not yet implemented"
+            // diagnostic so untriaged islands stay visible.
+            if let Some(synthetic) =
+                crate::island_lower::dispatch_island_lower(island, ctx.island_lowerers)
+            {
+                lower_expression(&synthetic, ctx, errors)
+            } else {
+                let source_info = expr.source_info().clone();
+                errors.push(CompilationError {
+                    message: "Island expression lowering not yet implemented".to_string(),
+                    source_info: source_info.clone(),
+                    kind: crate::error::CompilationErrorKind::UnsupportedExpression {
+                        kind: SmolStr::new_static("Island"),
+                    },
+                });
+                None
+            }
         }
         ast_expr::Expression::Copy(e) => Some(lower_copy(e, ctx, errors)),
         ast_expr::Expression::Slice(e) => lower_slice(e, ctx, errors),
