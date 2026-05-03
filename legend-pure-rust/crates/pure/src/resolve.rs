@@ -984,13 +984,6 @@ fn infer_type_from_valuespec(
             // post-processor.
             let target = data.arguments.first()?;
 
-            // Structural-relation receiver: when the target's TypeExpr
-            // is (or wraps) a `TypeExpr::Relation(cols)` — e.g. `$x`
-            // bound to a TDS/Relation row tuple — the "property" is a
-            // column name. Look it up in the column list and return the
-            // column's resolved primitive type. Mirrors Java's
-            // relation-row property-access semantics: `$x.value` on a
-            // row of `(value:Integer)` returns `Integer`.
             let target_te = infer_typeexpr_from_valuespec(target, model, var_types);
             if let Some(te) = &target_te
                 && let Some(cols) = extract_relation_columns(te)
@@ -1227,6 +1220,23 @@ pub(crate) fn infer_typeexpr_from_valuespec(
         // lookup, not function dispatch. `arguments[0]` is the receiver.
         ExprKind::PropertyCall(data) | ExprKind::QualifiedPropertyCall(data) => {
             let target = data.arguments.first()?;
+
+            // Structural-relation receiver: when the receiver's TypeExpr
+            // is (or wraps) a `Relation(cols)`, the "property" is a
+            // column name. Returns the column's resolved `TypeExpr`
+            // (full shape, preserving parametric layers). Mirrors the
+            // narrower-side arm in `infer_type_from_valuespec`.
+            let target_te = infer_typeexpr_from_valuespec(target, model, var_types);
+            if let Some(te) = &target_te
+                && let Some(cols) = extract_relation_columns(te)
+            {
+                for col in cols {
+                    if col.name == data.function_name {
+                        return Some(col.type_expr.clone());
+                    }
+                }
+            }
+
             let target_eid = infer_type_from_valuespec(target, model, var_types)?;
             let receiver_type_args = extract_receiver_type_args(target, var_types);
             let (prop_ty_owned, type_params_owned) =
@@ -1906,11 +1916,27 @@ pub(crate) fn substitute_type(
             Box::new(substitute_type(a, bindings)),
             Box::new(substitute_type(b, bindings)),
         ),
-        // Both `Relation` (interned structural type) and `Unresolved`
-        // (type hole) pass through unchanged: substitution has no
-        // bindings that could fill them — only re-lowering with caller-
-        // side expectations could specialise an `Unresolved`.
-        TypeExpr::Relation(_) | TypeExpr::Unresolved => ty.clone(),
+        // Recurse into structural relation columns: each column's
+        // `type_expr` may reference an outer-scope generic
+        // (e.g. `wrapPrimitiveInTDS<T>(…):TDS<(value:T[0..1])>[1]`
+        // resolves to `Named { TDS, [Named { RelationType,
+        // [Relation([{name:"value", type_expr:Generic("T"), …}])] }] }`
+        // — substituting `T=String` at the call site needs to flow
+        // into the column's type_expr or `$x.value` later types as
+        // `Generic("T")` instead of `String`).
+        TypeExpr::Relation(cols) => TypeExpr::Relation(
+            cols.iter()
+                .map(|c| crate::types::RelationColumnTypeExpr {
+                    name: c.name.clone(),
+                    type_expr: substitute_type(&c.type_expr, bindings),
+                    multiplicity: c.multiplicity.clone(),
+                })
+                .collect(),
+        ),
+        // `Unresolved` (type hole) passes through unchanged: substitution
+        // has no bindings that could fill it — only re-lowering with
+        // caller-side expectations could specialise an `Unresolved`.
+        TypeExpr::Unresolved => ty.clone(),
     }
 }
 
