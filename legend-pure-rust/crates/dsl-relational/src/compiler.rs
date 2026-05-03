@@ -546,14 +546,19 @@ fn record_table(out: &mut HashMap<SmolStr, HashSet<SmolStr>>, t: &Table) {
     out.entry(t.name.value.clone()).or_default().extend(cols);
 }
 
-fn record_view(out: &mut HashMap<SmolStr, HashSet<SmolStr>>, _v: &View) {
-    // Views' column lists currently live inside their opaque
-    // `TokenSlice` body — not yet structured. Stage 5 introduces a
-    // structural view-body AST; until then we record an empty
-    // column set so alias references to the view name don't fail
-    // unconditionally, while column-existence checks against view
-    // columns silently pass.
-    out.entry(_v.name.value.clone()).or_default();
+fn record_view(out: &mut HashMap<SmolStr, HashSet<SmolStr>>, v: &View) {
+    // Index a view's declared column names so alias-column refs like
+    // `myView.col` resolve. A view's PK is computed by Java's
+    // post-processor from the underlying `tableAliasColumn`'s
+    // `PRIMARYKEY` flag inside the joinColWithDbOrConstant value — we
+    // index every declared column name regardless of PK status here,
+    // since the post-processor pass is Phase B.
+    let cols: HashSet<SmolStr> = v
+        .columns
+        .iter()
+        .map(|c| c.column_name.value.clone())
+        .collect();
+    out.entry(v.name.value.clone()).or_default().extend(cols);
 }
 
 /// Visible Filter / MultiGrainFilter names from `db`'s body + the

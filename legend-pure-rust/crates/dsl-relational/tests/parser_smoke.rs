@@ -17,7 +17,7 @@
 //! `RelationalSectionParser`.
 
 use indoc::indoc;
-use legend_pure_dsl_relational::ast::{ColumnDef, DatabaseDef, DatabaseElement, Table, View};
+use legend_pure_dsl_relational::ast::{ColumnDef, DatabaseDef, DatabaseElement, Table};
 use legend_pure_dsl_relational::parser::RelationalSectionParser;
 use legend_pure_parser_ast::SourceFile;
 use legend_pure_parser_ast::element::Element as AstElement;
@@ -131,7 +131,14 @@ fn parses_schema_block_with_tables_and_views() {
     assert_eq!(s.tables.len(), 1);
     assert_eq!(s.tables[0].name.value.as_str(), "tradeTable");
     assert_eq!(s.views.len(), 1);
-    assert_view_token_count_at_least(&s.views[0], "activeTrades", 5);
+    let v = &s.views[0];
+    assert_eq!(v.name.value.as_str(), "activeTrades");
+    assert!(v.distinct);
+    assert!(v.filter.is_none());
+    assert!(v.group_by.is_none());
+    assert_eq!(v.columns.len(), 1);
+    assert_eq!(v.columns[0].column_name.value.as_str(), "quantity");
+    assert!(v.columns[0].target_set_id.is_none());
 }
 
 #[test]
@@ -375,15 +382,6 @@ fn assert_column(
     assert_eq!(c.scale, scale, "col[{idx}] scale");
     assert_eq!(c.primary_key, pk, "col[{idx}] PK");
     assert_eq!(c.not_null, nn, "col[{idx}] NOT NULL");
-}
-
-fn assert_view_token_count_at_least(v: &View, expected_name: &str, min_tokens: usize) {
-    assert_eq!(v.name.value.as_str(), expected_name);
-    assert!(
-        v.body.tokens.len() >= min_tokens,
-        "view body should capture at least {min_tokens} tokens; got {}",
-        v.body.tokens.len()
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -727,5 +725,299 @@ mod in_clause {
             panic!("expected array");
         };
         assert!(elements.is_empty());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase A1 — view-body structural fixtures
+// ---------------------------------------------------------------------------
+
+mod view_body {
+    use super::{first_database, parse};
+    use indoc::indoc;
+    use legend_pure_dsl_relational::ast::{DatabaseElement, OpColumn, View};
+
+    /// Extract the first view across all databases / schemas in the
+    /// file (panics if none).
+    fn extract_view(source: &str) -> View {
+        let file = parse(source);
+        for section in &file.sections {
+            for elem in &section.elements {
+                let legend_pure_parser_ast::element::Element::DSLElement(boxed) = elem else {
+                    continue;
+                };
+                let Some(db) = boxed
+                    .as_any()
+                    .downcast_ref::<legend_pure_dsl_relational::ast::DatabaseDef>()
+                else {
+                    continue;
+                };
+                for e in &db.elements {
+                    match e {
+                        DatabaseElement::View(v) => return v.clone(),
+                        DatabaseElement::Schema(s) => {
+                            if let Some(v) = s.views.first() {
+                                return v.clone();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        panic!("expected at least one view in the source")
+    }
+
+    #[test]
+    fn parses_view_with_pk_column() {
+        // PK lives on the inner op_column (`table.col PRIMARY KEY`),
+        // matching Java's `tableAliasColumnWithScopeInfo PRIMARYKEY?`.
+        let v = extract_view(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Schema s
+              (
+                Table t (id INTEGER PRIMARY KEY, qty FLOAT(10, 2))
+                View v (id : t.id PRIMARY KEY, qty : t.qty)
+              )
+            )
+        "});
+        assert!(v.filter.is_none());
+        assert!(v.group_by.is_none());
+        assert!(!v.distinct);
+        assert_eq!(v.columns.len(), 2);
+
+        // Col 0 — id : t.id PRIMARY KEY → primary_key flag on op_column.
+        assert_eq!(v.columns[0].column_name.value.as_str(), "id");
+        let col0 = v.columns[0]
+            .value
+            .column
+            .as_ref()
+            .expect("expected column ref");
+        let OpColumn::Aliased {
+            alias,
+            scope,
+            primary_key,
+            ..
+        } = col0
+        else {
+            panic!("expected Aliased col");
+        };
+        assert_eq!(alias.value.as_str(), "t");
+        assert_eq!(scope.len(), 1);
+        assert_eq!(scope[0].value.as_str(), "id");
+        assert!(*primary_key);
+
+        // Col 1 — qty : t.qty (no PK).
+        let OpColumn::Aliased { primary_key, .. } = v.columns[1]
+            .value
+            .column
+            .as_ref()
+            .expect("expected column ref")
+        else {
+            panic!("expected Aliased col");
+        };
+        assert!(!*primary_key);
+    }
+
+    #[test]
+    fn parses_view_with_distinct_only() {
+        let v = extract_view(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Schema s
+              (
+                Table t (id INTEGER PRIMARY KEY)
+                View v (~distinct id : t.id)
+              )
+            )
+        "});
+        assert!(v.distinct);
+        assert!(v.filter.is_none());
+        assert!(v.group_by.is_none());
+        assert_eq!(v.columns.len(), 1);
+    }
+
+    #[test]
+    fn parses_view_with_group_by() {
+        let v = extract_view(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Schema s
+              (
+                Table t (id INTEGER PRIMARY KEY, region VARCHAR(2))
+                View v (~groupBy(t.region) region : t.region, count : t.id)
+              )
+            )
+        "});
+        let group_by = v.group_by.expect("expected groupBy");
+        assert_eq!(group_by.len(), 1);
+        let col = group_by[0]
+            .column
+            .as_ref()
+            .expect("expected groupBy column");
+        let OpColumn::Aliased { alias, scope, .. } = col else {
+            panic!("expected Aliased col");
+        };
+        assert_eq!(alias.value.as_str(), "t");
+        assert_eq!(scope[0].value.as_str(), "region");
+        assert_eq!(v.columns.len(), 2);
+    }
+
+    #[test]
+    fn parses_view_with_bare_filter() {
+        let v = extract_view(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Schema s
+              (
+                Table t (id INTEGER PRIMARY KEY)
+                View v (~filter activeFilter id : t.id)
+              )
+              Filter activeFilter (t.id > 0)
+            )
+        "});
+        let filter = v.filter.expect("expected ~filter");
+        assert!(filter.db_chain.is_none());
+        assert_eq!(filter.filter_name.value.as_str(), "activeFilter");
+    }
+
+    #[test]
+    fn parses_view_with_join_chained_filter() {
+        let v = extract_view(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Schema s
+              (
+                Table t (id INTEGER PRIMARY KEY, fid INTEGER)
+                View v
+                (
+                  ~filter [pkg::db]@toFilterDb | [pkg::filterDb] activeFilter
+                  id : t.id
+                )
+              )
+              Join toFilterDb (t.fid = {target}.id)
+            )
+
+            Database pkg::filterDb
+            (
+              Table f (id INTEGER PRIMARY KEY)
+              Filter activeFilter (f.id > 0)
+            )
+        "});
+        let filter = v.filter.expect("expected ~filter");
+        let chain = filter.db_chain.expect("expected db chain");
+        assert_eq!(chain.first_db.name.as_str(), "db");
+        assert_eq!(chain.second_db.name.as_str(), "filterDb");
+        assert_eq!(chain.join_sequence.head.name.value.as_str(), "toFilterDb");
+        assert_eq!(filter.filter_name.value.as_str(), "activeFilter");
+    }
+
+    #[test]
+    fn parses_view_with_target_set_id_and_cross_db_column() {
+        // Mirrors `dbWithViewDependentOnTableInOtherDb` from
+        // `TestViewProcessing.java` — `[db]orderTable.id` value with a
+        // bracket-prefixed target-set-id on the column.
+        let v = extract_view(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table orderTable (id INTEGER PRIMARY KEY)
+            )
+
+            ###Relational
+            Database pkg::main
+            (
+              Schema s
+              (
+                Table local (id INTEGER PRIMARY KEY)
+                View v (orderId[OrderSet] : [pkg::db]orderTable.id)
+              )
+            )
+        "});
+        assert_eq!(v.columns.len(), 1);
+        let line = &v.columns[0];
+        assert_eq!(line.column_name.value.as_str(), "orderId");
+        let target = line.target_set_id.as_ref().expect("expected [targetSetId]");
+        assert_eq!(target.value.as_str(), "OrderSet");
+        let db = line.value.db.as_ref().expect("expected [db] qualifier");
+        assert_eq!(db.name.as_str(), "db");
+    }
+
+    #[test]
+    fn parses_view_with_all_headers_combined() {
+        let v = extract_view(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Schema s
+              (
+                Table t (id INTEGER PRIMARY KEY, region VARCHAR(2))
+                View v (~filter f ~groupBy(t.region) ~distinct region : t.region)
+              )
+              Filter f (t.id > 0)
+            )
+        "});
+        assert!(v.filter.is_some());
+        assert!(v.group_by.is_some());
+        assert!(v.distinct);
+        assert_eq!(v.columns.len(), 1);
+    }
+
+    #[test]
+    fn parses_view_with_join_value() {
+        // `id : @join | t.id` — joinSequence-piped column.
+        let v = extract_view(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Schema s
+              (
+                Table src (id INTEGER PRIMARY KEY, fk INTEGER)
+                Table dst (id INTEGER PRIMARY KEY)
+                View v (id : @srcDst | dst.id)
+              )
+              Join srcDst (src.fk = dst.id)
+            )
+        "});
+        assert_eq!(v.columns.len(), 1);
+        let line = &v.columns[0];
+        let seq = line.value.join.as_ref().expect("expected join sequence");
+        assert_eq!(seq.head.name.value.as_str(), "srcDst");
+        assert!(line.value.column.is_some());
+    }
+
+    #[test]
+    fn duplicate_distinct_header_errors() {
+        // Two `~distinct` flags should error rather than silently
+        // combine.
+        let source = indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Schema s
+              (
+                Table t (id INTEGER PRIMARY KEY)
+                View v (~distinct ~distinct id : t.id)
+              )
+            )
+        "};
+        let result = legend_pure_parser_parser::parse_with_sections(
+            source,
+            "parser_smoke.pure",
+            legend_pure_parser_parser::island::default_island_parsers(),
+            vec![Box::new(
+                legend_pure_dsl_relational::parser::RelationalSectionParser,
+            )],
+        );
+        assert!(
+            result.is_err(),
+            "expected duplicate-~distinct parse error; got Ok"
+        );
     }
 }
