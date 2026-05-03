@@ -607,6 +607,11 @@ fn validate_op_columns(
         // when class-mapping bodies plumb the subject's table
         // through.
         OpExpr::Column(OpColumn::Target { .. }) | OpExpr::Literal(_) => {}
+        OpExpr::Array { elements, .. } => {
+            for elem in elements {
+                validate_op_columns(elem, visible, owner_name, owner_kind, errors);
+            }
+        }
     }
 }
 

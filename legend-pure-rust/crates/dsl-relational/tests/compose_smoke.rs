@@ -337,6 +337,35 @@ fn round_trip_op_string_literal_and_negative_integer() {
 }
 
 // ---------------------------------------------------------------------------
+// in() clause round-trip — Java parity (TestInClauseForJoinsAndFilters)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn round_trip_in_clause_with_string_array_filter() {
+    assert_round_trip(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (region VARCHAR(2) PRIMARY KEY)
+          Filter activeRegions (in(t.region, ['US', 'CA']))
+        )
+    "});
+}
+
+#[test]
+fn round_trip_in_clause_with_integer_array_join() {
+    assert_round_trip(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table f (id INTEGER PRIMARY KEY)
+          Table p (firmId INTEGER PRIMARY KEY)
+          Join firm_personNumber (f.id = p.firmId and in(f.id, [1, 2]))
+        )
+    "});
+}
+
+// ---------------------------------------------------------------------------
 // Stage-3 milestoning round-trip fixtures.
 // ---------------------------------------------------------------------------
 
@@ -518,6 +547,9 @@ fn op_expr_structurally_eq(
             }
             _ => false,
         },
+        (OpExpr::Array { elements: a, .. }, OpExpr::Array { elements: b, .. }) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| op_expr_structurally_eq(x, y))
+        }
         _ => false,
     }
 }

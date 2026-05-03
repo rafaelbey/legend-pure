@@ -272,6 +272,16 @@ fn write_op_expr(out: &mut String, expr: &OpExpr) {
         }
         OpExpr::Column(c) => write_op_column(out, c),
         OpExpr::Literal(l) => write_op_literal(out, l),
+        OpExpr::Array { elements, .. } => {
+            out.push('[');
+            for (i, e) in elements.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                write_op_expr(out, e);
+            }
+            out.push(']');
+        }
     }
 }
 

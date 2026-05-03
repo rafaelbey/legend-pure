@@ -616,3 +616,116 @@ mod op_operation {
         assert!(*primary_key);
     }
 }
+
+// ===========================================================================
+// in (col, [...]) — Java parity (TestInClauseForJoinsAndFilters)
+// ===========================================================================
+
+mod in_clause {
+    use super::{first_database, parse};
+    use indoc::indoc;
+    use legend_pure_dsl_relational::ast::{DatabaseElement, OpExpr, OpLiteral};
+
+    fn extract_filter_body(source: &str) -> OpExpr {
+        let file = parse(source);
+        let db = first_database(&file);
+        let DatabaseElement::Filter(f) = db
+            .elements
+            .iter()
+            .find(|e| matches!(e, DatabaseElement::Filter(_)))
+            .expect("expected Filter")
+        else {
+            unreachable!()
+        };
+        f.body.clone()
+    }
+
+    fn extract_join_body(source: &str) -> OpExpr {
+        let file = parse(source);
+        let db = first_database(&file);
+        let DatabaseElement::Join(j) = db
+            .elements
+            .iter()
+            .find(|e| matches!(e, DatabaseElement::Join(_)))
+            .expect("expected Join")
+        else {
+            unreachable!()
+        };
+        j.body.clone()
+    }
+
+    #[test]
+    fn parses_in_clause_with_string_array_in_filter() {
+        let body = extract_filter_body(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (region VARCHAR(2) PRIMARY KEY)
+              Filter activeRegions (in(t.region, ['US', 'CA']))
+            )
+        "});
+        let OpExpr::Function { name, args, .. } = body else {
+            panic!("expected Function at root");
+        };
+        assert_eq!(name.value.as_str(), "in");
+        assert_eq!(args.len(), 2, "in expects (col, [array])");
+        let OpExpr::Array { elements, .. } = &args[1] else {
+            panic!("expected array literal as second arg");
+        };
+        assert_eq!(elements.len(), 2);
+        assert!(matches!(
+            &elements[0],
+            OpExpr::Literal(OpLiteral::String { value, .. }) if value.as_str() == "US"
+        ));
+    }
+
+    #[test]
+    fn parses_in_clause_with_integer_array_in_join() {
+        let body = extract_join_body(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table f (id INTEGER PRIMARY KEY)
+              Table p (firmId INTEGER PRIMARY KEY)
+              Join firm_personNumber (f.id = p.firmId and in(f.id, [1, 2]))
+            )
+        "});
+        // Body is `Bool(and, Compare(=, …), Function(in, …))`.
+        let OpExpr::Bool { rhs, .. } = body else {
+            panic!("expected Bool at root");
+        };
+        let OpExpr::Function { name, args, .. } = rhs.as_ref() else {
+            panic!("expected Function on RHS");
+        };
+        assert_eq!(name.value.as_str(), "in");
+        let OpExpr::Array { elements, .. } = &args[1] else {
+            panic!("expected array literal arg");
+        };
+        assert_eq!(elements.len(), 2);
+        for (i, expected) in [1, 2].iter().enumerate() {
+            let OpExpr::Literal(OpLiteral::Integer { value, .. }) = &elements[i] else {
+                panic!("expected integer literal");
+            };
+            assert_eq!(value, expected);
+        }
+    }
+
+    #[test]
+    fn parses_empty_array_literal() {
+        let body = extract_filter_body(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (id INTEGER PRIMARY KEY)
+              Filter f (in(t.id, []))
+            )
+        "});
+        let OpExpr::Function { args, .. } = body else {
+            panic!("expected Function");
+        };
+        let OpExpr::Array { elements, .. } = &args[1] else {
+            panic!("expected array");
+        };
+        assert!(elements.is_empty());
+    }
+}
