@@ -41,7 +41,8 @@ pub use token::{Token, TokenKind};
 use legend_pure_parser_ast::SourceInfo;
 
 /// Errors produced during lexing.
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum LexError {
     /// An unterminated string literal.
     #[error("Unterminated string literal at {source_info}")]
