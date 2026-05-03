@@ -49,7 +49,6 @@
 //! - `DebugHooks` (future, in `lsp` crate) — IDE debugging with breakpoints.
 
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use im_rc::Vector as PVector;
 use legend_pure_parser_pure::ids::ElementId;
@@ -1777,8 +1776,8 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             }
         }
         Value::Function(Box::new(FunctionValue::Lambda(LambdaClosure {
-            parameters: Rc::from(parameters),
-            body: Rc::from(body),
+            parameters: std::sync::Arc::from(parameters),
+            body: std::sync::Arc::from(body),
             captures,
         })))
     }
@@ -2404,11 +2403,12 @@ impl<H: EvalHooks> std::fmt::Debug for Evaluator<'_, H> {
 /// [`find_qp_with_generalization`] so the caller can drop the
 /// model-borrow before calling `eval_body` on the cloned body.
 ///
-/// `parameters` and `body` are `Rc<[T]>` clones of the QP's compiled
-/// fields — O(1) refcount bumps, not deep copies.
+/// `parameters` and `body` are `Arc<[T]>` clones of the QP's compiled
+/// fields — O(1) refcount bumps, not deep copies. (Arc rather than
+/// Rc: matches the LSP-driven `PureModel: Send + Sync` constraint.)
 struct FoundQp {
-    parameters: Rc<[legend_pure_parser_pure::types::Parameter]>,
-    body: Rc<[ValueSpec]>,
+    parameters: std::sync::Arc<[legend_pure_parser_pure::types::Parameter]>,
+    body: std::sync::Arc<[ValueSpec]>,
     type_var_param_names: Vec<SmolStr>,
 }
 
@@ -2443,8 +2443,8 @@ fn find_qp_with_generalization(
             .find(|q| q.name == name && q.parameters.len() == arity)
         {
             return Some(FoundQp {
-                parameters: Rc::clone(&qp.parameters),
-                body: Rc::clone(&qp.body),
+                parameters: std::sync::Arc::clone(&qp.parameters),
+                body: std::sync::Arc::clone(&qp.body),
                 type_var_param_names: class
                     .type_variable_parameters
                     .iter()

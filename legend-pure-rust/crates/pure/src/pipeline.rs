@@ -619,21 +619,21 @@ fn resolve_m3_supertypes(model: &mut PureModel) {
         }
         for qp in &mut c.qualified_properties {
             resolve_in_place(&mut qp.return_type);
-            // QP parameter list is `Rc<[Parameter]>`. The M3 metamodel
+            // QP parameter list is `Arc<[Parameter]>`. The M3 metamodel
             // chunk has just been built by `m3_parser`/`bootstrap` and
-            // not yet shared, so `Rc::get_mut` returns `Some`. If a
+            // not yet shared, so `Arc::get_mut` returns `Some`. If a
             // future change clones a Class/QP between construction and
             // here, the strong count exceeds 1 and we'd silently
             // deep-clone every QP's parameter list — defeating the
             // optimisation. Fail loudly instead.
-            let params_mut = match std::rc::Rc::get_mut(&mut qp.parameters) {
+            let params_mut = match std::sync::Arc::get_mut(&mut qp.parameters) {
                 Some(slice) => slice,
                 None => panic!(
-                    "M3 QP parameters Rc<[Parameter]> must be uniquely \
+                    "M3 QP parameters Arc<[Parameter]> must be uniquely \
                      owned at resolve time; refcount is \
                      {} (a Class/QP was cloned between m3_parser/bootstrap \
                      and resolve_m3_supertypes)",
-                    std::rc::Rc::strong_count(&qp.parameters),
+                    std::sync::Arc::strong_count(&qp.parameters),
                 ),
             };
             for param in params_mut.iter_mut() {
