@@ -230,10 +230,7 @@ impl CompilerExtension for RelationalExtension {
     }
 
     fn define_bodies(&self, _ctx: &mut legend_pure_parser_pure::extension::DefineCtx<'_>) {
-        // Phase B1: build the per-database resolved snapshot. The
-        // walk is local to each registered database; transitive
-        // include lookups remain a consumer concern (look up the
-        // included DB's snapshot by FQN).
+        // Phase B1: build the per-database resolved snapshot.
         let dbs = self.databases.borrow();
         let mut resolved = self.resolved_databases.borrow_mut();
         resolved.clear();
@@ -241,6 +238,15 @@ impl CompilerExtension for RelationalExtension {
             let snapshot = crate::processor::process_database(&reg.def);
             resolved.insert(fqn.clone(), snapshot);
         }
+
+        // Phase B2: resolve op-body column refs against the snapshot
+        // map. Cross-db resolution requires the full snapshot
+        // population from B1, so this is a second pass.
+        let defs_by_fqn: HashMap<SmolStr, DatabaseDef> = dbs
+            .iter()
+            .map(|(k, v)| (k.clone(), v.def.clone()))
+            .collect();
+        crate::processor::resolve_op_bodies(&mut resolved, &defs_by_fqn);
     }
 
     fn validate(&self, ctx: &mut ValidateCtx<'_>) {
