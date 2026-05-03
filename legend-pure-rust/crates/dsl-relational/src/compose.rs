@@ -22,8 +22,9 @@
 //! original whitespace doesn't). Verified by `tests/compose_smoke.rs`.
 
 use crate::ast::{
-    ColumnDef, DatabaseDef, DatabaseElement, DatabaseInclude, Filter, Join, MultiGrainFilter,
-    OpColumn, OpExpr, OpLiteral, Schema, Table, TokenSlice, View,
+    ColumnDef, DatabaseDef, DatabaseElement, DatabaseInclude, Filter, Join, MilestoneDef,
+    MilestoneField, MilestoneSpec, MilestoneValue, MultiGrainFilter, OpColumn, OpExpr, OpLiteral,
+    Schema, Table, TokenSlice, View,
 };
 use legend_pure_parser_ast::annotation::PackageableElementPtr;
 
@@ -116,6 +117,10 @@ fn write_table(out: &mut String, t: &Table, indent: &str) {
     out.push_str("Table ");
     out.push_str(t.name.value.as_str());
     out.push_str(" (");
+    if let Some(spec) = &t.milestoning {
+        write_milestone_spec(out, spec);
+        out.push(' ');
+    }
     for (i, c) in t.columns.iter().enumerate() {
         if i > 0 {
             out.push_str(", ");
@@ -123,6 +128,41 @@ fn write_table(out: &mut String, t: &Table, indent: &str) {
         write_column(out, c);
     }
     out.push(')');
+}
+
+fn write_milestone_spec(out: &mut String, spec: &MilestoneSpec) {
+    out.push_str("milestoning(");
+    for (i, def) in spec.definitions.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        write_milestone_definition(out, def);
+    }
+    out.push(')');
+}
+
+fn write_milestone_definition(out: &mut String, def: &MilestoneDef) {
+    out.push_str(def.kind.value.as_str());
+    out.push('(');
+    for (i, field) in def.fields.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        write_milestone_field(out, field);
+    }
+    out.push(')');
+}
+
+fn write_milestone_field(out: &mut String, field: &MilestoneField) {
+    out.push_str(field.key.value.as_str());
+    out.push('=');
+    match &field.value {
+        MilestoneValue::Identifier(s) => out.push_str(s.value.as_str()),
+        MilestoneValue::Date { literal, .. } => out.push_str(literal.as_str()),
+        MilestoneValue::Boolean { value, .. } => {
+            out.push_str(if *value { "true" } else { "false" });
+        }
+    }
 }
 
 fn write_column(out: &mut String, c: &ColumnDef) {

@@ -229,31 +229,120 @@ fn rejects_include_after_first_element() {
 }
 
 #[test]
-fn rejects_milestoning_specs_with_stage3_pointer() {
-    // Stage 3 ships milestoning; for now reject early with a pointed
-    // message rather than mis-parsing.
+fn parses_business_milestoning_spec() {
+    use legend_pure_dsl_relational::ast::MilestoneValue;
     let source = indoc! {r"
         ###Relational
         Database pkg::db
         (
           Table tradeTable (
             milestoning ( business (BUS_FROM=fromZ, BUS_THRU=thruZ) )
-            id INT PRIMARY KEY
+            id INT PRIMARY KEY, fromZ DATE, thruZ DATE
           )
         )
     "};
-    let result = legend_pure_parser_parser::parse_with_sections(
-        source,
-        "milestoned.pure",
-        legend_pure_parser_parser::island::default_island_parsers(),
-        vec![Box::new(RelationalSectionParser)],
-    );
-    let partial = result.expect_err("milestoning unsupported in Stage 1");
-    let msgs: Vec<String> = partial.errors.iter().map(ToString::to_string).collect();
+    let file = parse(source);
+    let db = first_database(&file);
+    let DatabaseElement::Table(t) = &db.elements[0] else {
+        panic!("expected Table");
+    };
+    let spec = t
+        .milestoning
+        .as_ref()
+        .expect("expected milestoning spec on table");
+    assert_eq!(spec.definitions.len(), 1, "one definition: business");
+    let def = &spec.definitions[0];
+    assert_eq!(def.kind.value.as_str(), "business");
+    assert_eq!(def.fields.len(), 2);
+    assert_eq!(def.fields[0].key.value.as_str(), "BUS_FROM");
     assert!(
-        msgs.iter()
-            .any(|m| m.contains("milestoning") && m.contains("Stage 3")),
-        "expected milestoning-deferred diagnostic, got {msgs:?}"
+        matches!(&def.fields[0].value, MilestoneValue::Identifier(s) if s.value.as_str() == "fromZ")
+    );
+    assert_eq!(def.fields[1].key.value.as_str(), "BUS_THRU");
+    assert!(
+        matches!(&def.fields[1].value, MilestoneValue::Identifier(s) if s.value.as_str() == "thruZ")
+    );
+}
+
+#[test]
+fn parses_processing_and_business_bi_temporal_spec() {
+    let source = indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table myTable (
+            milestoning (
+              processing (PROCESSING_IN=in_z, PROCESSING_OUT=out_z),
+              business (BUS_FROM=from_z, BUS_THRU=thru_z)
+            )
+            aId INT, in_z DATE, out_z DATE, from_z DATE, thru_z DATE
+          )
+        )
+    "};
+    let file = parse(source);
+    let db = first_database(&file);
+    let DatabaseElement::Table(t) = &db.elements[0] else {
+        panic!("expected Table");
+    };
+    let spec = t.milestoning.as_ref().expect("milestoning spec");
+    assert_eq!(spec.definitions.len(), 2, "bi-temporal definitions");
+    assert_eq!(spec.definitions[0].kind.value.as_str(), "processing");
+    assert_eq!(spec.definitions[1].kind.value.as_str(), "business");
+    assert_eq!(t.columns.len(), 5, "five trailing columns");
+}
+
+#[test]
+fn parses_business_snapshot_date_spec() {
+    let source = indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table snap (
+            milestoning ( business (BUS_SNAPSHOT_DATE=snap_date) )
+            id INT PRIMARY KEY, snap_date DATE
+          )
+        )
+    "};
+    let file = parse(source);
+    let db = first_database(&file);
+    let DatabaseElement::Table(t) = &db.elements[0] else {
+        panic!("expected Table");
+    };
+    let spec = t.milestoning.as_ref().expect("milestoning spec");
+    assert_eq!(spec.definitions[0].fields.len(), 1);
+    assert_eq!(
+        spec.definitions[0].fields[0].key.value.as_str(),
+        "BUS_SNAPSHOT_DATE"
+    );
+}
+
+#[test]
+fn parses_milestoning_with_thru_is_inclusive_and_infinity_date_flags() {
+    use legend_pure_dsl_relational::ast::MilestoneValue;
+    let source = indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (
+            milestoning ( business (BUS_FROM=fromZ, BUS_THRU=thruZ, THRU_IS_INCLUSIVE=true, INFINITY_DATE=%2999-12-31) )
+            id INT PRIMARY KEY, fromZ DATE, thruZ DATE
+          )
+        )
+    "};
+    let file = parse(source);
+    let db = first_database(&file);
+    let DatabaseElement::Table(t) = &db.elements[0] else {
+        panic!("expected Table");
+    };
+    let def = &t.milestoning.as_ref().unwrap().definitions[0];
+    assert_eq!(def.fields.len(), 4);
+    // Boolean and date values.
+    assert!(matches!(
+        &def.fields[2].value,
+        MilestoneValue::Boolean { value: true, .. }
+    ));
+    assert!(
+        matches!(&def.fields[3].value, MilestoneValue::Date { literal, .. } if literal.as_str() == "%2999-12-31")
     );
 }
 

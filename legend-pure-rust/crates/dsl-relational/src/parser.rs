@@ -42,7 +42,8 @@ use smol_str::SmolStr;
 
 use crate::ast::{
     BinOp, BoolOp, ColumnDef, DatabaseDef, DatabaseElement, DatabaseInclude, Filter, Join,
-    MultiGrainFilter, OpColumn, OpExpr, OpLiteral, SECTION_KIND, Schema, Table, TokenSlice, View,
+    MilestoneDef, MilestoneField, MilestoneSpec, MilestoneValue, MultiGrainFilter, OpColumn,
+    OpExpr, OpLiteral, SECTION_KIND, Schema, Table, TokenSlice, View,
 };
 
 fn err(message: String, source_info: SourceInfo) -> ParseError {
@@ -239,26 +240,144 @@ fn parse_table(ctx: &mut ParserContext<'_>) -> Result<Table, ParseError> {
     let name = parse_relational_identifier(ctx)?;
     ctx.cursor().expect(TokenKind::LParen)?;
 
-    // Stage-3-deferred guard: Java grammar allows
-    // `Table x ( milestoning ( … ) col1 INT, col2 VARCHAR(200) )`.
-    // Stage 1 doesn't parse milestoning specs; reject early with a
-    // pointed message rather than failing further down.
-    if is_keyword(ctx.cursor(), "milestoning") {
-        let bad = ctx.cursor().peek().source_info.clone();
-        return Err(err(
-            "Table milestoning specs are not supported in Stage 1 (deferred to Stage 3 — \
-             see ~/.claude/plans/lets-plan-for-implementing-lucky-scott.md)"
-                .into(),
-            bad,
-        ));
-    }
+    // Optional `milestoning ( … )` block (Stage 3) — must precede
+    // the column list per Java's grammar `table` rule.
+    let milestoning = if is_keyword(ctx.cursor(), "milestoning") {
+        Some(parse_milestone_spec(ctx)?)
+    } else {
+        None
+    };
 
     let columns = parse_columns(ctx)?;
     let close = ctx.cursor().expect(TokenKind::RParen)?;
     Ok(Table {
         name,
+        milestoning,
         columns,
         source_info: merge_si(&kw.source_info, &close.source_info),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Milestoning specs (Stage 3)
+//
+// Java grammar (RelationalParser.g4 lines 295-335):
+//
+//   milestoneSpec : MILESTONING '(' milestoningDefinitions? ')' ;
+//   milestoningDefinitions : milestoningDefinition (',' milestoningDefinition)* ;
+//   milestoningDefinition  : identifier '(' milestoningContent ')' ;
+//   milestoningContent     : (… key = value …)*
+//
+// Java's `milestoningContent` is permissive (any token sequence). The
+// validators in Stage 4 enforce per-kind shape (`business` requires
+// `BUS_FROM` + `BUS_THRU` + optional flags; `processing` requires
+// `PROCESSING_IN` + `PROCESSING_OUT` + optional flags; snapshot
+// variants take a single `*_SNAPSHOT_DATE`). Our parser is similarly
+// permissive — accepts any `KEY = value` pair, validates in Stage 4.
+// ---------------------------------------------------------------------------
+
+fn parse_milestone_spec(ctx: &mut ParserContext<'_>) -> Result<MilestoneSpec, ParseError> {
+    let kw = ctx.cursor().expect(TokenKind::Identifier)?; // 'milestoning'
+    debug_assert_eq!(kw.text.as_str(), "milestoning");
+    ctx.cursor().expect(TokenKind::LParen)?;
+
+    let mut definitions = Vec::new();
+    if !ctx.cursor().check(TokenKind::RParen) {
+        loop {
+            definitions.push(parse_milestone_definition(ctx)?);
+            if !ctx.cursor().eat(TokenKind::Comma) {
+                break;
+            }
+        }
+    }
+    let close = ctx.cursor().expect(TokenKind::RParen)?;
+    Ok(MilestoneSpec {
+        definitions,
+        source_info: merge_si(&kw.source_info, &close.source_info),
+    })
+}
+
+fn parse_milestone_definition(ctx: &mut ParserContext<'_>) -> Result<MilestoneDef, ParseError> {
+    let kind_tok = ctx.cursor().expect(TokenKind::Identifier)?;
+    let kind = SpannedString {
+        value: SmolStr::new(kind_tok.text),
+        source_info: kind_tok.source_info.clone(),
+    };
+    ctx.cursor().expect(TokenKind::LParen)?;
+
+    let mut fields = Vec::new();
+    if !ctx.cursor().check(TokenKind::RParen) {
+        loop {
+            fields.push(parse_milestone_field(ctx)?);
+            if !ctx.cursor().eat(TokenKind::Comma) {
+                break;
+            }
+        }
+    }
+    let close = ctx.cursor().expect(TokenKind::RParen)?;
+    Ok(MilestoneDef {
+        kind,
+        fields,
+        source_info: merge_si(&kind_tok.source_info, &close.source_info),
+    })
+}
+
+fn parse_milestone_field(ctx: &mut ParserContext<'_>) -> Result<MilestoneField, ParseError> {
+    let key_tok = ctx.cursor().expect(TokenKind::Identifier)?;
+    let key = SpannedString {
+        value: SmolStr::new(key_tok.text),
+        source_info: key_tok.source_info.clone(),
+    };
+    ctx.cursor().expect(TokenKind::Equals)?;
+    let value_peek = ctx.cursor().peek().clone();
+    let (value, end_si) = match value_peek.kind {
+        TokenKind::DateLiteral => {
+            ctx.cursor().advance();
+            (
+                MilestoneValue::Date {
+                    literal: SmolStr::new(value_peek.text),
+                    source_info: value_peek.source_info.clone(),
+                },
+                value_peek.source_info,
+            )
+        }
+        TokenKind::True => {
+            ctx.cursor().advance();
+            (
+                MilestoneValue::Boolean {
+                    value: true,
+                    source_info: value_peek.source_info.clone(),
+                },
+                value_peek.source_info,
+            )
+        }
+        TokenKind::False => {
+            ctx.cursor().advance();
+            (
+                MilestoneValue::Boolean {
+                    value: false,
+                    source_info: value_peek.source_info.clone(),
+                },
+                value_peek.source_info,
+            )
+        }
+        TokenKind::Identifier => {
+            let id = parse_relational_identifier(ctx)?;
+            let si = id.source_info.clone();
+            (MilestoneValue::Identifier(id), si)
+        }
+        _ => {
+            return Err(err_unexpected(
+                "milestoning field value (identifier, date literal, or boolean)",
+                &value_peek.text,
+                value_peek.source_info,
+            ));
+        }
+    };
+    Ok(MilestoneField {
+        key,
+        value,
+        source_info: merge_si(&key_tok.source_info, &end_si),
     })
 }
 

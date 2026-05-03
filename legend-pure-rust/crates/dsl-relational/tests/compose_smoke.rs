@@ -336,6 +336,69 @@ fn round_trip_op_string_literal_and_negative_integer() {
     "});
 }
 
+// ---------------------------------------------------------------------------
+// Stage-3 milestoning round-trip fixtures.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn round_trip_business_milestoning() {
+    assert_round_trip(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (
+            milestoning ( business (BUS_FROM=fromZ, BUS_THRU=thruZ) )
+            id INT PRIMARY KEY, fromZ DATE, thruZ DATE
+          )
+        )
+    "});
+}
+
+#[test]
+fn round_trip_processing_milestoning() {
+    assert_round_trip(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (
+            milestoning ( processing (PROCESSING_IN=in_z, PROCESSING_OUT=out_z) )
+            id INT PRIMARY KEY, in_z DATE, out_z DATE
+          )
+        )
+    "});
+}
+
+#[test]
+fn round_trip_bi_temporal_with_inclusive_flags() {
+    assert_round_trip(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (
+            milestoning (
+              processing (PROCESSING_IN=in_z, PROCESSING_OUT=out_z, OUT_IS_INCLUSIVE=true),
+              business (BUS_FROM=from_z, BUS_THRU=thru_z, INFINITY_DATE=%2999-12-31)
+            )
+            id INT PRIMARY KEY, in_z DATE, out_z DATE, from_z DATE, thru_z DATE
+          )
+        )
+    "});
+}
+
+#[test]
+fn round_trip_snapshot_milestoning() {
+    assert_round_trip(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table snap (
+            milestoning ( business (BUS_SNAPSHOT_DATE=snap_date) )
+            id INT PRIMARY KEY, snap_date DATE
+          )
+        )
+    "});
+}
+
 /// Structural equality on `OpExpr` ignoring `source_info`. Used by
 /// the Stage-2 round-trip tests where the composed output's source
 /// positions necessarily differ from the original.

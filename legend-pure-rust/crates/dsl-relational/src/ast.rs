@@ -171,20 +171,95 @@ pub struct Schema {
 // Table
 // ---------------------------------------------------------------------------
 
-/// A `Table` declaration: `Table name ( <columns> )`.
+/// A `Table` declaration: `Table name ( <milestoning>? <columns> )`.
 ///
-/// Stage 1 ships only the column-list form. The optional
-/// `milestoning ( … )` block defined in the Java grammar
-/// (`milestoneSpec`) lands in Stage 3 — the parser currently rejects
-/// any Table whose body opens with the `milestoning` keyword.
+/// The optional `milestoning ( … )` block (Java grammar's
+/// `milestoneSpec`) lands inside the parens *before* the column list,
+/// per the upstream grammar (RelationalParser.g4 `table` rule).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Table {
     /// Table name (relational identifier — bare or quoted).
     pub name: SpannedString,
+    /// Optional milestoning block. `None` when the table has no
+    /// `milestoning ( … )` clause.
+    pub milestoning: Option<MilestoneSpec>,
     /// Column definitions, in source order.
     pub columns: Vec<ColumnDef>,
     /// Span of the entire `Table … ( … )` declaration.
     pub source_info: SourceInfo,
+}
+
+/// A `milestoning ( … )` block on a table.
+///
+/// Java grammar: `milestoneSpec: MILESTONING '(' milestoningDefinitions? ')'`,
+/// where `milestoningDefinitions` is one or more comma-separated
+/// `milestoningDefinition: identifier '(' milestoningContent ')'`.
+/// Stage 3 parses every definition but defers per-kind validation
+/// (which keys belong to `business` vs `processing`) to Stage 4.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MilestoneSpec {
+    /// One or more flavour definitions (`business(...)`,
+    /// `processing(...)`, snapshot variants), in source order.
+    pub definitions: Vec<MilestoneDef>,
+    /// Span covering `milestoning ( … )`.
+    pub source_info: SourceInfo,
+}
+
+/// One milestoning flavour definition: `<kind> ( <field>, … )`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MilestoneDef {
+    /// `business`, `processing`, or any extension flavour name —
+    /// stored verbatim and validated against the known set in
+    /// Stage 4. Holding it as a `SpannedString` lets the validator
+    /// emit a precise diagnostic span if the kind is unknown.
+    pub kind: SpannedString,
+    /// Comma-separated `KEY=value` field list, in source order.
+    /// Stage 3 accepts any keys; Stage 4 enforces the per-kind
+    /// expected sets (`BUS_FROM`+`BUS_THRU`+optional flags for
+    /// `business`, etc.).
+    pub fields: Vec<MilestoneField>,
+    /// Span covering the entire `<kind> ( … )` definition.
+    pub source_info: SourceInfo,
+}
+
+/// One `KEY = value` pair inside a [`MilestoneDef`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct MilestoneField {
+    /// Key identifier — `BUS_FROM`, `BUS_THRU`, `BUS_SNAPSHOT_DATE`,
+    /// `THRU_IS_INCLUSIVE`, `INFINITY_DATE`, `PROCESSING_IN`,
+    /// `PROCESSING_OUT`, `OUT_IS_INCLUSIVE`,
+    /// `PROCESSING_SNAPSHOT_DATE`, etc. Stored verbatim.
+    pub key: SpannedString,
+    /// Right-hand-side value.
+    pub value: MilestoneValue,
+    /// Span covering `key = value`.
+    pub source_info: SourceInfo,
+}
+
+/// Right-hand side of a [`MilestoneField`].
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum MilestoneValue {
+    /// Bare identifier — typically a column name on the same table
+    /// (`in_z`, `from_z`, …). Validated against the table's columns
+    /// in Stage 4.
+    Identifier(SpannedString),
+    /// Date literal: `%2999-12-31`, `%2024-01-15T10:30:00`. Stored
+    /// as the literal token text (preserves the leading `%` and the
+    /// canonical spelling for round-trip).
+    Date {
+        /// Literal text including the leading `%`.
+        literal: SmolStr,
+        /// Span of the literal token.
+        source_info: SourceInfo,
+    },
+    /// Boolean literal: `true` / `false`.
+    Boolean {
+        /// Parsed boolean value.
+        value: bool,
+        /// Span of the `true` / `false` token.
+        source_info: SourceInfo,
+    },
 }
 
 /// One column inside a [`Table`].
