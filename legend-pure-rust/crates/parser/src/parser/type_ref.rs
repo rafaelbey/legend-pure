@@ -74,17 +74,53 @@ impl Parser {
                 }
             } else {
                 loop {
-                    args.push(self.parse_type_reference()?);
-                    // Type-union operator `T+V`: the M3 grammar allows
-                    // `+`-chained types inside a generic-type-arg
-                    // position (e.g. `Relation<T+V>`). The AST has no
-                    // dedicated union slot; we keep the first operand
-                    // and drop the rest, matching Java's structural-
-                    // union resolution at compile time. Whichever
-                    // operand is captured doesn't affect downstream
-                    // dispatch since the lowerer treats unions as
-                    // opaque shapes.
-                    while self.cursor.eat(TokenKind::Plus) {
+                    let mut arg = self.parse_type_reference()?;
+                    // Named-binding type-arg: `Name=Type[…]` introduces
+                    // `Name` as a binding for the type that follows.
+                    // Real shape:
+                    // `rename<T,Z,K,V>(…, old:ColSpec<Z=(?:K)⊆T>[1], …)`
+                    // in `core_functions_relation/relation/functions/transformation/rename.pure`
+                    // and `flatten<T,Z>(…, columnWithFlattenedValue: ColSpec<Z=(?:T)>[1])`.
+                    // The AST has no slot for the binding name; we keep
+                    // the bound type (the RHS) and discard the name
+                    // identifier. Stage-1 dispatch doesn't enforce the
+                    // binding either way.
+                    //
+                    // The RHS may be either a regular `TypeReference`
+                    // or a structural relation `(cols)`; for the latter
+                    // we consume the column list and synthesise a `?`
+                    // wildcard placeholder (the resolver maps `?` to
+                    // `TypeExpr::Generic("?")`, permissive on the
+                    // narrower side).
+                    if self.cursor.eat(TokenKind::Equals) {
+                        if self.cursor.check(TokenKind::LParen) {
+                            let qsi = self.cursor.current_source_info();
+                            let _cols = self.parse_relation_columns()?;
+                            arg = TypeReference {
+                                package: None,
+                                name: SmolStr::new("?"),
+                                type_arguments: vec![],
+                                multiplicity_arguments: vec![],
+                                type_variable_values: vec![],
+                                source_info: qsi,
+                            };
+                        } else {
+                            arg = self.parse_type_reference()?;
+                        }
+                    }
+                    // Type-algebra operators `T+V` (union) and `T-Z`
+                    // (difference): the M3 grammar allows them inside a
+                    // generic-type-arg position (e.g. `Relation<T+V>` /
+                    // `Relation<T-Z+V>`). The AST has no dedicated
+                    // algebra slot; we keep the first operand and drop
+                    // the rest, matching Java's structural-algebra
+                    // resolution at compile time. Whichever operand is
+                    // captured doesn't affect downstream dispatch since
+                    // the lowerer treats algebra as opaque shapes.
+                    while self.cursor.check(TokenKind::Plus)
+                        || self.cursor.check(TokenKind::Minus)
+                    {
+                        self.cursor.advance();
                         let _discarded = self.parse_type_reference()?;
                     }
                     // Subtype-constraint operator `X⊆T` (U+2286): the
@@ -97,6 +133,7 @@ impl Parser {
                     if self.cursor.eat(TokenKind::Subset) {
                         let _bound = self.parse_type_reference()?;
                     }
+                    args.push(arg);
                     if !self.cursor.eat(TokenKind::Comma) {
                         break;
                     }
