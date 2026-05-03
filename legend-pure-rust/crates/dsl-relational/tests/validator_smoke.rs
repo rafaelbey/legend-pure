@@ -744,3 +744,277 @@ mod stage9 {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Phase A2: validator (E) — `@joinName` resolution
+// ---------------------------------------------------------------------------
+
+mod join_resolution {
+    use super::{assert_one_kind, run_validator, run_validator_with_mapping};
+    use indoc::indoc;
+    use legend_pure_parser_pure::error::CompilationErrorKind;
+    use smol_str::SmolStr;
+
+    // ---------------------------------------------------------------
+    // E.1 — class-mapping FilterMappingBlock: `~filter [db]@joinSeq | [db2] filterName`
+    // requires the joins to live in `db` (the first qualifier).
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn class_mapping_filter_with_unknown_join_in_chain_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (id INT PRIMARY KEY)
+              Filter active (t.id > 0)
+            )
+
+            ###Pure
+            import pkg::*;
+            Class pkg::Trade { id : Integer[1]; }
+
+            ###Mapping
+            Mapping pkg::TradeMap
+            (
+              pkg::Trade : Relational
+              {
+                ~filter [pkg::db](unknown)@missingJoin | [pkg::db] active
+                (id : t.id)
+              }
+            )
+        "});
+        // Expect the unresolved `@missingJoin` error.
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                CompilationErrorKind::UnresolvedElement { path } if path.as_str() == "missingJoin"
+            )),
+            "expected unresolved @missingJoin error; got {errors:#?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // E.2 — class-mapping body line value with explicit `[db]@unknownJoin`
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn class_mapping_value_with_unknown_join_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table src (id INT PRIMARY KEY, fk INT)
+              Table dst (id INT PRIMARY KEY)
+            )
+
+            ###Pure
+            import pkg::*;
+            Class pkg::Trade { id : Integer[1]; }
+
+            ###Mapping
+            Mapping pkg::TradeMap
+            (
+              pkg::Trade : Relational
+              {
+                (id : [pkg::db]@noSuchJoin | dst.id)
+              }
+            )
+        "});
+        assert_one_kind(
+            &errors,
+            CompilationErrorKind::UnresolvedElement {
+                path: SmolStr::new("noSuchJoin"),
+            },
+        );
+    }
+
+    #[test]
+    fn class_mapping_value_with_unknown_database_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table src (id INT PRIMARY KEY, fk INT)
+              Table dst (id INT PRIMARY KEY)
+              Join sToD (src.fk = dst.id)
+            )
+
+            ###Pure
+            import pkg::*;
+            Class pkg::Trade { id : Integer[1]; }
+
+            ###Mapping
+            Mapping pkg::TradeMap
+            (
+              pkg::Trade : Relational
+              {
+                (id : [pkg::nope]@sToD | dst.id)
+              }
+            )
+        "});
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                CompilationErrorKind::UnresolvedElement { path } if path.as_str() == "pkg::nope"
+            )),
+            "expected unresolved-database error for [pkg::nope]; got {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn class_mapping_value_with_known_join_passes() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table src (id INT PRIMARY KEY, fk INT)
+              Table dst (id INT PRIMARY KEY)
+              Join sToD (src.fk = dst.id)
+            )
+
+            ###Pure
+            import pkg::*;
+            Class pkg::Trade { id : Integer[1]; }
+
+            ###Mapping
+            Mapping pkg::TradeMap
+            (
+              pkg::Trade : Relational
+              {
+                (id : [pkg::db]@sToD | dst.id)
+              }
+            )
+        "});
+        assert!(
+            errors.iter().all(|e| !matches!(
+                &e.kind,
+                CompilationErrorKind::UnresolvedElement { path } if path.as_str() == "sToD"
+            )),
+            "expected no unresolved-join error; got {errors:#?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // E.3 — view body referencing an unknown `@join` (contextual db).
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn view_with_unknown_join_in_value_errors() {
+        let errors = run_validator(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Schema s
+              (
+                Table src (id INT PRIMARY KEY, fk INT)
+                Table dst (id INT PRIMARY KEY)
+                View v (id : @noSuchJoin | dst.id)
+              )
+            )
+        "});
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                CompilationErrorKind::UnresolvedElement { path } if path.as_str() == "noSuchJoin"
+            )),
+            "expected unresolved-join error in view body; got {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn view_with_known_join_passes() {
+        let errors = run_validator(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Schema s
+              (
+                Table src (id INT PRIMARY KEY, fk INT)
+                Table dst (id INT PRIMARY KEY)
+                View v (id : @sToD | dst.id)
+              )
+              Join sToD (src.fk = dst.id)
+            )
+        "});
+        assert!(
+            errors.iter().all(|e| !matches!(
+                &e.kind,
+                CompilationErrorKind::UnresolvedElement { path } if path.as_str() == "sToD"
+            )),
+            "expected no unresolved-join error; got {errors:#?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // E.4 — view filter chain with unknown join; joins live in db1.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn view_with_filter_chain_unknown_join_errors() {
+        let errors = run_validator(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Schema s
+              (
+                Table t (id INT PRIMARY KEY, fid INT)
+                View v
+                (
+                  ~filter [pkg::db]@nope | [pkg::filterDb] activeFilter
+                  id : t.id
+                )
+              )
+            )
+
+            ###Relational
+            Database pkg::filterDb
+            (
+              Table f (id INT PRIMARY KEY)
+              Filter activeFilter (f.id > 0)
+            )
+        "});
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                CompilationErrorKind::UnresolvedElement { path } if path.as_str() == "nope"
+            )),
+            "expected unresolved view-filter chain join error; got {errors:#?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // E.5 — view referencing a join that lives in an INCLUDED db.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn view_join_resolves_via_include() {
+        let errors = run_validator(indoc! {r"
+            ###Relational
+            Database pkg::base
+            (
+              Table t1 (id INT PRIMARY KEY, fk INT)
+              Table t2 (id INT PRIMARY KEY)
+              Join t1t2 (t1.fk = t2.id)
+            )
+
+            ###Relational
+            Database pkg::derived
+            (
+              include pkg::base
+              Schema s
+              (
+                Table local (x INT PRIMARY KEY)
+                View v (id : @t1t2 | t2.id)
+              )
+            )
+        "});
+        assert!(
+            errors.iter().all(|e| !matches!(
+                &e.kind,
+                CompilationErrorKind::UnresolvedElement { path } if path.as_str() == "t1t2"
+            )),
+            "expected join to resolve via include; got {errors:#?}"
+        );
+    }
+}
