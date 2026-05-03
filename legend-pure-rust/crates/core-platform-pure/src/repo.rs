@@ -708,19 +708,46 @@ fn parse_repo_sources(
 
 /// Populate `model.repo_visibility` from the repo list's descriptor
 /// metadata. Each repo with a [`RepoMeta`] contributes one entry mapping
-/// its name to `{ self } ∪ { each direct dep }`. Repos without metadata
-/// (test fixtures via [`Repo::from_filesystem`]) are skipped — sources
-/// in those repos won't have any rules to enforce, matching Java's
-/// `getSourceRepoName` returning null for unrecognised repos.
+/// its name to `{ self } ∪ transitive-closure(deps)`. Repos without
+/// metadata (test fixtures via [`Repo::from_filesystem`]) are skipped
+/// — sources in those repos won't have any rules to enforce, matching
+/// Java's `getSourceRepoName` returning null for unrecognised repos.
+///
+/// Transitive: if `A` depends on `B`, and `B` depends on `C`, sources
+/// in `A` may reference elements in `C` even when `A` doesn't list
+/// `C` directly. This matches Java behaviour (verified against
+/// `core_functions_standard` referencing `meta::pure::metamodel::relation::TDS`
+/// through its `core_functions_relation → platform_dsl_tds` dep
+/// chain — no direct dep on `platform_dsl_tds`).
 fn populate_repo_visibility(model: &mut PureModel, repos: &[Repo]) {
+    use std::collections::{BTreeSet, HashMap, VecDeque};
+
+    let mut direct: HashMap<&str, &[&str]> = HashMap::new();
+    for repo in repos {
+        if let Some(meta) = repo.meta() {
+            direct.insert(meta.name, meta.dependencies);
+        }
+    }
+
     for repo in repos {
         let Some(meta) = repo.meta() else {
             continue;
         };
-        let mut visible: std::collections::BTreeSet<SmolStr> = std::collections::BTreeSet::new();
+        let mut visible: BTreeSet<SmolStr> = BTreeSet::new();
         visible.insert(SmolStr::new(meta.name));
+        let mut queue: VecDeque<&str> = VecDeque::new();
         for dep in meta.dependencies {
-            visible.insert(SmolStr::new(*dep));
+            queue.push_back(dep);
+        }
+        while let Some(dep) = queue.pop_front() {
+            if !visible.insert(SmolStr::new(dep)) {
+                continue;
+            }
+            if let Some(transitive_deps) = direct.get(dep) {
+                for d in *transitive_deps {
+                    queue.push_back(d);
+                }
+            }
         }
         model
             .repo_visibility
