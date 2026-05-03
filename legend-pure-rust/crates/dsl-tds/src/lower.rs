@@ -43,7 +43,10 @@ use legend_pure_parser_ast::expression::{
 };
 use legend_pure_parser_ast::island::IslandContent;
 use legend_pure_parser_ast::source_info::SourceInfo;
-use legend_pure_parser_ast::type_ref::{Package, TypeReference, TypeSpec};
+use legend_pure_parser_ast::type_ref::{
+    MultiplicityArgument, Multiplicity as AstMultiplicity, Package, RELATION_TYPE_SENTINEL,
+    TypeReference, TypeSpec,
+};
 use legend_pure_parser_pure::island_lower::IslandLowerer;
 use smol_str::SmolStr;
 
@@ -255,50 +258,85 @@ fn function_call(
     })
 }
 
-/// Build the synthetic `->cast(@TDS<RelationType<…>>)` arrow call
-/// wrapping `stringToTDS(<csv>)`.
+/// Build the synthetic `->cast(@TDS<RelationType<(col1:T1[m1], …)>>)`
+/// arrow call wrapping `stringToTDS(<csv>)`.
 ///
 /// `TDS<X>` requires `X` to be supplied — bare `cast(@TDS)` would
 /// leave `T` undefined, which is a compile error. The columns
-/// inferred from the CSV become the inner relation's structure;
-/// the AST currently encodes the relation type as a regular
-/// `TypeReference` to `RelationType`, since `TypeReference.
-/// type_arguments` can only hold other `TypeReference`s and not a
-/// structural `(col1:T1, …)` form. Column metadata is preserved
-/// in the source AST via the lowered `ExprKind::RelationLiteral`
-/// flowing alongside, but the cast target's TypeExpr settles for
-/// `TDS<RelationType<…>>` at the type-system level. That keeps the
-/// runtime cast happy (`Value::Element(TDS_id)` is delivered) and
-/// pins the compile-time `T` to a concrete `RelationType` so
-/// downstream dispatch on `TDS<T>` can narrow.
+/// inferred from the CSV become the inner relation's structure.
+///
+/// Encoding shape:
+///
+/// ```text
+/// TypeReference {
+///   name: "TDS", type_arguments: [
+///     TypeReference {
+///       name: "RelationType", type_arguments: [
+///         TypeReference {
+///           name: RELATION_TYPE_SENTINEL,
+///           type_arguments: [
+///             TypeReference { name: col_name,
+///               type_arguments: [<col primitive type>],
+///               multiplicity_arguments: [Concrete(col_mult)] },
+///             …
+///           ]
+///         }
+///       ]
+///     }
+///   ]
+/// }
+/// ```
+///
+/// The resolver decodes the inner sentinel back to
+/// `TypeExpr::Relation(cols)`, yielding the canonical resolved shape
+/// `Named { TDS, [Named { RelationType, [Relation(cols)] }] }`. Column
+/// names + per-column multiplicities survive through to the resolved
+/// `TypeExpr` so downstream consumers (overload narrower, future
+/// stricter type-checking) can read the structural shape.
 fn arrow_cast_to_typed_tds(
     target: Expression,
     parsed: &ParsedTDS,
     source_info: SourceInfo,
 ) -> Expression {
-    // Inner type-arg: `RelationType<col1:T1[m1], …>` rendered as a
-    // regular TypeReference with one type-argument per column. Each
-    // column's own TypeReference uses the column's primitive type
-    // (Integer, Float, String, …). Multiplicities and column names
-    // are encoded under each column's source_info but NOT exposed
-    // through the resolved TypeExpr — the resolver flattens the
-    // type_argument tree to ElementId references.
-    let column_type_args: Vec<TypeReference> = parsed
+    // Each column → a `TypeReference { name=col_name, type_arguments=[col_type],
+    // multiplicity_arguments=[col_mult] }` — the encoding the resolver's
+    // `RELATION_TYPE_SENTINEL` decoder expects.
+    let column_refs: Vec<TypeReference> = parsed
         .columns
         .iter()
         .map(|col| TypeReference {
             package: None,
-            name: SmolStr::new(col.type_tag.pure_type_name()),
-            type_arguments: vec![],
-            multiplicity_arguments: vec![],
+            name: col.name.clone(),
+            type_arguments: vec![TypeReference {
+                package: None,
+                name: SmolStr::new(col.type_tag.pure_type_name()),
+                type_arguments: vec![],
+                multiplicity_arguments: vec![],
+                type_variable_values: vec![],
+                source_info: source_info.clone(),
+            }],
+            multiplicity_arguments: vec![MultiplicityArgument::Concrete(
+                ast_multiplicity(&col.multiplicity),
+                source_info.clone(),
+            )],
             type_variable_values: vec![],
             source_info: source_info.clone(),
         })
         .collect();
+    // The structural relation type (sentinel-encoded).
+    let structural_relation_ref = TypeReference {
+        package: None,
+        name: SmolStr::new(RELATION_TYPE_SENTINEL),
+        type_arguments: column_refs,
+        multiplicity_arguments: vec![],
+        type_variable_values: vec![],
+        source_info: source_info.clone(),
+    };
+    // `RelationType<(cols)>` wrapping the structural relation.
     let relation_type_ref = TypeReference {
         package: build_package(RELATION_PACKAGE, source_info.clone()),
         name: SmolStr::new("RelationType"),
-        type_arguments: column_type_args,
+        type_arguments: vec![structural_relation_ref],
         multiplicity_arguments: vec![],
         type_variable_values: vec![],
         source_info: source_info.clone(),
@@ -323,3 +361,22 @@ fn arrow_cast_to_typed_tds(
     })
 }
 
+/// Translate the runtime [`Multiplicity`](legend_pure_parser_pure::types::Multiplicity)
+/// shape back into the AST's [`Multiplicity`](AstMultiplicity) shape so
+/// it can be embedded in a [`MultiplicityArgument::Concrete`] node.
+fn ast_multiplicity(
+    m: &legend_pure_parser_pure::types::Multiplicity,
+) -> AstMultiplicity {
+    use legend_pure_parser_pure::types::Multiplicity as PureMult;
+    match m {
+        PureMult::PureOne => AstMultiplicity::PureOne,
+        PureMult::ZeroOrOne => AstMultiplicity::ZeroOrOne,
+        PureMult::ZeroOrMany => AstMultiplicity::ZeroOrMany,
+        PureMult::OneOrMany => AstMultiplicity::OneOrMany,
+        PureMult::Range { lower, upper } => AstMultiplicity::Range {
+            lower: *lower,
+            upper: *upper,
+        },
+        PureMult::Variable(name) => AstMultiplicity::Variable(SmolStr::new(name.as_str())),
+    }
+}
