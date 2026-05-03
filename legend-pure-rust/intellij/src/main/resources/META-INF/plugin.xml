@@ -1,0 +1,62 @@
+<!--
+  ~ Copyright 2026 Goldman Sachs
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~      http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+
+<idea-plugin>
+    <id>com.finos.legend.pure.intellij</id>
+    <name>Legend Pure</name>
+    <vendor>FINOS Legend</vendor>
+    <description><![CDATA[
+      Editor support for the Legend Pure language. Diagnostics, hover,
+      go-to-definition, and document outline are served by the
+      <code>legend lsp</code> binary (Rust); the plugin wires that
+      server in via LSP4IJ.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.redhat.devtools.lsp4ij</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <fileType
+            name="LegendPure"
+            language="LegendPure"
+            extensions="pure"
+            implementationClass="com.finos.legend.pure.intellij.LegendPureFileType"
+            fieldName="INSTANCE" />
+
+        <fileType
+            name="LegendPurem"
+            extensions="purem"
+            implementationClass="com.finos.legend.pure.intellij.LegendPuremFileType"
+            fieldName="INSTANCE" />
+    </extensions>
+
+    <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
+        <server
+            id="legend-pure-lsp"
+            name="Legend Pure"
+            factoryClass="com.finos.legend.pure.intellij.lsp.LegendPureLspServerFactory">
+            <description><![CDATA[
+              Language server for Legend Pure. Spawns
+              <code>legend lsp</code> over stdio.
+            ]]></description>
+        </server>
+
+        <fileNamePatternMapping
+            patterns="*.pure"
+            serverId="legend-pure-lsp"
+            languageId="legend-pure" />
+    </extensions>
+</idea-plugin>
