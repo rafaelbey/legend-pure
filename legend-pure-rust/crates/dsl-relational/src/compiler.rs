@@ -88,6 +88,11 @@ pub struct RelationalExtension {
     /// inline target lookup, association arity) without requiring
     /// the model to carry mapping AST.
     relational_class_mappings: RefCell<Vec<RegisteredRelationalClassMapping>>,
+    /// Per-database resolved snapshot built during Pass 2b
+    /// (`define_bodies`). Keyed by database FQN. See
+    /// [`crate::processor::ResolvedDatabase`] for the shape and
+    /// [`Self::resolved_databases`] for the post-compile accessor.
+    resolved_databases: RefCell<HashMap<SmolStr, crate::processor::ResolvedDatabase>>,
 }
 
 /// One registered database, plus the source file it came from
@@ -135,6 +140,14 @@ impl RelationalExtension {
             .iter()
             .map(|(k, v)| (k.clone(), v.def.clone()))
             .collect()
+    }
+
+    /// Snapshot of the per-database resolved state built during Pass 2b.
+    /// Keyed by database FQN. Empty until [`CompilerExtension::define_bodies`]
+    /// runs — call this only post-compile.
+    #[must_use]
+    pub fn resolved_databases(&self) -> HashMap<SmolStr, crate::processor::ResolvedDatabase> {
+        self.resolved_databases.borrow().clone()
     }
 }
 
@@ -213,6 +226,20 @@ impl CompilerExtension for RelationalExtension {
                     _ => {}
                 }
             }
+        }
+    }
+
+    fn define_bodies(&self, _ctx: &mut legend_pure_parser_pure::extension::DefineCtx<'_>) {
+        // Phase B1: build the per-database resolved snapshot. The
+        // walk is local to each registered database; transitive
+        // include lookups remain a consumer concern (look up the
+        // included DB's snapshot by FQN).
+        let dbs = self.databases.borrow();
+        let mut resolved = self.resolved_databases.borrow_mut();
+        resolved.clear();
+        for (fqn, reg) in dbs.iter() {
+            let snapshot = crate::processor::process_database(&reg.def);
+            resolved.insert(fqn.clone(), snapshot);
         }
     }
 
