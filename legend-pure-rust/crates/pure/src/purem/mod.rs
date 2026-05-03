@@ -27,6 +27,7 @@
 //! - `extension` — `PuremExtension` registry for DSL plugin data
 //!   (Phase E).
 
+pub mod filter;
 pub mod fqn_path;
 pub mod header;
 pub mod reader;
@@ -34,6 +35,9 @@ pub mod slice;
 pub mod walk;
 pub mod writer;
 
+pub use filter::{FilterError, TestPartition, assert_no_dangling_refs, collect_test_partition};
 pub use reader::read_repo;
-pub use slice::{PureModelSlice, SliceError, merge_slice, slice_by_repo};
+pub use slice::{
+    PureModelSlice, SliceError, merge_slice, slice_by_repo, slice_by_repo_with_filter,
+};
 pub use writer::{ReadError, WriteError, write_repo};

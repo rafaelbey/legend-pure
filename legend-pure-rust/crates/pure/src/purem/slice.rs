@@ -25,6 +25,7 @@
 //! format (Phase B-D) sits on top of — the file format never sees raw
 //! [`ElementId`]s, only FQN strings + slice-local indices.
 
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
@@ -102,65 +103,104 @@ pub enum SliceError {
 /// produce an empty slice.
 #[must_use]
 pub fn slice_by_repo(model: &PureModel, chunk_range: Range<u16>) -> PureModelSlice {
-    let chunks_in_range: Vec<ModelChunk> = (chunk_range.start..chunk_range.end)
-        .map(|cid| model.chunks[cid as usize].clone())
-        .collect();
+    slice_by_repo_with_filter(model, chunk_range, None)
+}
 
-    // Build chunk-id → slice-local-index map (chunk ids in range are
-    // contiguous, but we keep this explicit for clarity).
-    let in_range = |cid: u16| -> Option<u16> {
-        if cid >= chunk_range.start && cid < chunk_range.end {
-            Some(cid - chunk_range.start)
-        } else {
-            None
-        }
-    };
-
-    // Translate every ElementId in every chunk's elements: internal refs
-    // get rebased to slice-local chunk ids; external refs get replaced
-    // with a sentinel pointing into external_refs.
-    //
-    // Pre-build the FQN index once: O(packages × children) up-front, then
-    // O(1) per external ref. Critical for platform-scale slices with many
-    // hundreds of external refs.
+/// Partition a compiled [`PureModel`] by chunk-id range, optionally
+/// keeping only the elements in `include`.
+///
+/// When `include` is `None`, every element in `chunk_range` is retained
+/// and the slice matches what [`slice_by_repo`] produces. When `include`
+/// is `Some(set)`, only elements whose [`ElementId::InstanceId`] is in
+/// the set survive; everything else is dropped from the slice. References
+/// inside survivors that point at dropped elements get rewritten to
+/// external FQN sentinels — the dual-slice path uses
+/// [`crate::purem::filter::assert_no_dangling_refs`] to confirm the
+/// partition is consistent before writing.
+///
+/// Internal references between survivors are rebased to slice-local
+/// `(chunk_id, local_idx)`. External references (across `chunk_range`)
+/// follow the same FQN-sentinel path as the wide-cover overload.
+#[must_use]
+pub fn slice_by_repo_with_filter(
+    model: &PureModel,
+    chunk_range: Range<u16>,
+    include: Option<&HashSet<ElementId>>,
+) -> PureModelSlice {
     let fqn_index = build_fqn_index(model);
     let mut external_refs: Vec<FqnPath> = Vec::new();
 
-    let mut translated_chunks: Vec<ModelChunk> = Vec::with_capacity(chunks_in_range.len());
-    for (slice_idx, mut chunk) in chunks_in_range.into_iter().enumerate() {
-        // Re-stamp the chunk's own chunk_id to the slice-local index. The
-        // merge step rewrites this again to the model's new numbering.
-        #[allow(clippy::cast_possible_truncation)]
-        let new_chunk_id = slice_idx as u16;
-        chunk.chunk_id = new_chunk_id;
+    // Build the survivor remap (orig ElementId → slice-local ElementId)
+    // as we clone each chunk's nodes/elements. Empty-but-present chunks
+    // are kept so the slice's chunk count matches the source range; this
+    // preserves the existing invariant that `source_chunk_range.len() ==
+    // slice.chunks.len()`.
+    let mut remap: HashMap<ElementId, (u16, u32)> =
+        HashMap::with_capacity(estimate_survivor_count(model, &chunk_range, include));
+    let mut translated_chunks: Vec<ModelChunk> = Vec::with_capacity(chunk_range.len());
 
-        for local_idx in 0..chunk.elements.len() {
+    for source_chunk_id in chunk_range.start..chunk_range.end {
+        let source_chunk = &model.chunks[source_chunk_id as usize];
+        #[allow(clippy::cast_possible_truncation)]
+        let slice_local_chunk_id = (source_chunk_id - chunk_range.start) as u16;
+        let mut new_chunk = ModelChunk::new(slice_local_chunk_id);
+        let len = source_chunk.elements.len();
+        for orig_local_idx in 0..len {
+            let orig_eid = ElementId::InstanceId {
+                chunk_id: source_chunk_id,
+                local_idx: orig_local_idx,
+            };
+            let kept = match include {
+                Some(set) => set.contains(&orig_eid),
+                None => true,
+            };
+            if !kept {
+                continue;
+            }
+            let new_idx = new_chunk.alloc_element(
+                source_chunk.nodes.get(orig_local_idx).clone(),
+                source_chunk.elements.get(orig_local_idx).clone(),
+            );
+            remap.insert(orig_eid, (slice_local_chunk_id, new_idx));
+        }
+        translated_chunks.push(new_chunk);
+    }
+
+    // Translate every ElementId in every survivor. Internal refs get
+    // the (slice_chunk_id, new_local_idx) from `remap`; refs to dropped
+    // elements, refs into chunks outside `chunk_range`, AND every
+    // `ElementId::Package(_)` reference get an external FQN sentinel —
+    // PackageIds are global-arena indices that never survive a slice
+    // round-trip into a different model where the package-allocation
+    // order can drift.
+    //
+    // The merger uses `resolve_package_or_element` to recover the right
+    // variant: an FQN that resolves to an element-in-package becomes
+    // `InstanceId`; an FQN that resolves to a package node becomes
+    // `Package(_)`.
+    for chunk in &mut translated_chunks {
+        let len = chunk.elements.len();
+        for local_idx in 0..len {
             let element = chunk.elements.get_mut(local_idx);
-            walk_element_ids(element, |id: &mut ElementId| {
-                if let ElementId::InstanceId {
+            walk_element_ids(element, |id: &mut ElementId| match *id {
+                ElementId::InstanceId {
                     chunk_id,
-                    local_idx,
-                } = *id
-                {
-                    if let Some(local_chunk) = in_range(chunk_id) {
+                    local_idx: lidx,
+                } => {
+                    let original = ElementId::InstanceId {
+                        chunk_id,
+                        local_idx: lidx,
+                    };
+                    if let Some(&(sc, ni)) = remap.get(&original) {
                         *id = ElementId::InstanceId {
-                            chunk_id: local_chunk,
-                            local_idx,
+                            chunk_id: sc,
+                            local_idx: ni,
                         };
                     } else {
-                        // External: capture FQN from index, replace with
-                        // sentinel.
-                        let original = ElementId::InstanceId {
-                            chunk_id,
-                            local_idx,
-                        };
-                        let fqn = fqn_index.get(&original).cloned().unwrap_or_else(|| {
-                            // Fall back to the per-call walk only when
-                            // the index doesn't have an entry — never
-                            // expected for a well-formed model, but
-                            // defensive against rare edge cases.
-                            super::fqn_path::element_fqn_path(model, original)
-                        });
+                        let fqn = fqn_index
+                            .get(&original)
+                            .cloned()
+                            .unwrap_or_else(|| super::fqn_path::element_fqn_path(model, original));
                         let ref_idx = external_refs.len();
                         external_refs.push(fqn);
                         #[allow(clippy::cast_possible_truncation)]
@@ -171,36 +211,36 @@ pub fn slice_by_repo(model: &PureModel, chunk_range: Range<u16>) -> PureModelSli
                         };
                     }
                 }
-                // Package(_) variants stay as-is here. Per the slice
-                // invariants, we tombstone parent_package in the loop
-                // below; ad-hoc Package(_) refs inside Element data are
-                // not currently produced by the compiler.
+                ElementId::Package(pkg_id) => {
+                    let fqn = package_path(model, pkg_id);
+                    let ref_idx = external_refs.len();
+                    external_refs.push(fqn);
+                    #[allow(clippy::cast_possible_truncation)]
+                    let ref_idx_u32 = ref_idx as u32;
+                    *id = ElementId::InstanceId {
+                        chunk_id: EXTERNAL_REF_SENTINEL,
+                        local_idx: ref_idx_u32,
+                    };
+                }
             });
         }
-
-        translated_chunks.push(chunk);
     }
 
-    // Capture parent_package paths and tombstone the PackageIds. Done in
-    // a second pass so the visitor above doesn't see partially-rewritten
-    // state.
+    // Capture parent_package paths from the source model (the cloned
+    // node still carries the source PackageId), then tombstone. Walks the
+    // survivor's source location via the remap key.
     let mut element_packages: Vec<Vec<FqnPath>> = Vec::with_capacity(translated_chunks.len());
-    for (chunk_idx, chunk) in translated_chunks.iter_mut().enumerate() {
-        #[allow(clippy::cast_possible_truncation)]
-        let source_chunk_id = chunk_range.start + chunk_idx as u16;
-        let original_chunk = &model.chunks[source_chunk_id as usize];
+    for (slice_chunk_idx, chunk) in translated_chunks.iter_mut().enumerate() {
         let n_nodes = chunk.nodes.len();
         let mut paths: Vec<FqnPath> = Vec::with_capacity(n_nodes as usize);
         for local_idx in 0..n_nodes {
-            let original_node = original_chunk.nodes.get(local_idx);
-            let path = package_path(model, original_node.parent_package);
+            let node = chunk.nodes.get_mut(local_idx);
+            let path = package_path(model, node.parent_package);
             paths.push(path);
-            // Tombstone: the merge step always replaces this with a real
-            // PackageId looked up against the merge target. We use
-            // PackageId(0) (the root) as a deterministic sentinel.
-            chunk.nodes.get_mut(local_idx).parent_package = crate::ids::PackageId(0);
+            node.parent_package = crate::ids::PackageId(0);
         }
         element_packages.push(paths);
+        let _ = slice_chunk_idx;
     }
 
     PureModelSlice {
@@ -209,6 +249,52 @@ pub fn slice_by_repo(model: &PureModel, chunk_range: Range<u16>) -> PureModelSli
         external_refs,
         element_packages,
     }
+}
+
+/// Resolve an FQN path, preferring an element-in-package match but
+/// falling back to a pure-package walk if no element with that name
+/// lives in the parent package.
+///
+/// Returns `Some(ElementId::InstanceId(_))` for elements registered in
+/// `pkg.children_elements`, `Some(ElementId::Package(_))` for paths
+/// that name a package node directly (including the root for an empty
+/// path), or `None` if no segment matches.
+fn resolve_package_or_element(model: &PureModel, path: &[smol_str::SmolStr]) -> Option<ElementId> {
+    if path.is_empty() {
+        return Some(ElementId::Package(model.root_package));
+    }
+    if let Some(eid) = model.resolve_by_path(path) {
+        return Some(eid);
+    }
+    // Fall back: walk the package tree exactly, returning the leaf as
+    // an `ElementId::Package`. This is the path the slice writer takes
+    // for `ExprKind::PackageableElementRef { element: Package(_) }`.
+    let mut current = model.root_package;
+    for segment in path {
+        let pkg = model.get_package(current);
+        let next = pkg
+            .children_packages
+            .iter()
+            .find(|&&cid| model.global_packages.get(cid.0).name == *segment)
+            .copied()?;
+        current = next;
+    }
+    Some(ElementId::Package(current))
+}
+
+fn estimate_survivor_count(
+    model: &PureModel,
+    chunk_range: &Range<u16>,
+    include: Option<&HashSet<ElementId>>,
+) -> usize {
+    if let Some(set) = include {
+        return set.len();
+    }
+    let mut total = 0usize;
+    for cid in chunk_range.start..chunk_range.end {
+        total += model.chunks[cid as usize].elements.len() as usize;
+    }
+    total
 }
 
 /// Append a [`PureModelSlice`] to a running [`PureModel`].
@@ -227,23 +313,45 @@ pub fn slice_by_repo(model: &PureModel, chunk_range: Range<u16>) -> PureModelSli
 pub fn merge_slice(model: &mut PureModel, slice: PureModelSlice) -> Result<(), SliceError> {
     #[allow(clippy::cast_possible_truncation)]
     let chunk_offset = model.chunks.len() as u16;
+    let mut chunks = slice.chunks;
+    let element_packages = slice.element_packages;
 
-    // Pre-resolve every external FQN to the running model's ElementId.
-    // Bailing early on the first miss gives the cleanest diagnostic.
+    // Step 1: pre-create every package this slice needs so that
+    // package-typed external refs resolve.
+    //
+    // The slice's `element_packages` lists the parent-package FQN of
+    // every survivor; instantiating those up front guarantees that any
+    // `Package(_)` reference embedded in a body can resolve via
+    // `resolve_package_or_element` even though it's a self-reference
+    // into the slice's own scope (e.g. `meta::pure::functions::meta::tests`
+    // appears in a test body before any element is registered there).
+    for chunk_paths in &element_packages {
+        for path in chunk_paths {
+            if !path.is_empty() {
+                model.get_or_create_package(path);
+            }
+        }
+    }
+
+    // Step 2: pre-resolve every external FQN to the running model's
+    // ElementId. The slice writer collapses element-in-package refs and
+    // pure-package refs into the same `external_refs` table; we try
+    // element resolution first and fall back to a package walk if that
+    // misses. Bailing early on the first miss gives the cleanest
+    // diagnostic.
     let mut resolved_external: Vec<ElementId> = Vec::with_capacity(slice.external_refs.len());
     for path in &slice.external_refs {
-        let id = model
-            .resolve_by_path(path)
-            .ok_or_else(|| SliceError::UnresolvedExternal {
+        let id = resolve_package_or_element(model, path).ok_or_else(|| {
+            SliceError::UnresolvedExternal {
                 fqn: fqn_path_to_string(path),
-            })?;
+            }
+        })?;
         resolved_external.push(id);
     }
 
-    // Rewrite ElementIds in-place: internal chunk ids get bumped by
-    // chunk_offset; external sentinels get swapped for the resolved ID.
-    let mut chunks = slice.chunks;
-    let element_packages = slice.element_packages;
+    // Step 3: rewrite ElementIds in-place — internal chunk ids get
+    // bumped by `chunk_offset`; external sentinels get swapped for the
+    // resolved ID.
 
     for (slice_chunk_idx, chunk) in chunks.iter_mut().enumerate() {
         chunk.chunk_id = chunk_offset + slice_chunk_idx as u16;
@@ -389,6 +497,67 @@ mod tests {
             other => panic!("expected Named, got {other:?}"),
         };
         assert_eq!(super_id, animal_id);
+    }
+
+    #[test]
+    fn slice_with_filter_drops_excluded_elements() {
+        // Compile two classes in one chunk; slice with a filter that
+        // keeps only one. The dropped class must vanish from the slice's
+        // chunks and any reference to it must surface as an external
+        // sentinel (which the dangling-ref gate would later flag).
+        let mut model = init_bootstrap_model();
+        let sf = parse(
+            "Class repo_a::Keep { x: Integer[1]; }\n\
+             Class repo_a::Drop { y: String[1]; }",
+            "two.pure",
+        );
+        let chunks_before = model.chunks.len();
+        let (_range, errs) = compile_repo_slice(&mut model, &[sf], &[], &[]);
+        assert!(errs.is_empty(), "{errs:?}");
+        #[allow(clippy::cast_possible_truncation)]
+        let user_range: Range<u16> = (chunks_before as u16)..(model.chunks.len() as u16);
+        assert_eq!(user_range.end - user_range.start, 1);
+
+        let keep_id = model
+            .resolve_by_path(&[SmolStr::new("repo_a"), SmolStr::new("Keep")])
+            .expect("Keep resolves");
+        let drop_id = model
+            .resolve_by_path(&[SmolStr::new("repo_a"), SmolStr::new("Drop")])
+            .expect("Drop resolves");
+
+        let mut include: HashSet<ElementId> = HashSet::new();
+        include.insert(keep_id);
+        let slice = slice_by_repo_with_filter(&model, user_range.clone(), Some(&include));
+
+        // Slice retains exactly one element across the range's one chunk.
+        let total_elements: u32 = slice.chunks.iter().map(|c| c.elements.len()).sum();
+        assert_eq!(total_elements, 1);
+
+        // Dropped Drop class is not present in the slice's chunks.
+        let mut found_drop_name = false;
+        for chunk in &slice.chunks {
+            for (idx, _) in chunk.nodes.iter() {
+                if chunk.nodes.get(idx).name.as_str() == "Drop" {
+                    found_drop_name = true;
+                }
+            }
+        }
+        assert!(!found_drop_name, "Drop should be excluded from slice");
+
+        // Round-trip the slice into a fresh model — Keep resolves, Drop
+        // does not.
+        let mut fresh = init_bootstrap_model();
+        merge_slice(&mut fresh, slice).expect("merge with filtered slice");
+        assert!(
+            fresh
+                .resolve_by_path(&[SmolStr::new("repo_a"), SmolStr::new("Keep")])
+                .is_some()
+        );
+        assert!(
+            fresh
+                .resolve_by_path(&[SmolStr::new("repo_a"), SmolStr::new("Drop")])
+                .is_none()
+        );
     }
 
     #[test]
