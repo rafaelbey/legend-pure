@@ -23,7 +23,7 @@ use legend_pure_parser_ast::SourceInfo;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
-use crate::ids::{ElementId, RelationId};
+use crate::ids::ElementId;
 
 // ---------------------------------------------------------------------------
 // TypeExpr — the Rust equivalent of Java's GenericType
@@ -73,10 +73,18 @@ pub enum TypeExpr {
         /// Return multiplicity.
         return_multiplicity: Multiplicity,
     },
-    /// Structural relation type (anonymous column bag), interned for deduplication.
+    /// Structural relation type — an anonymous column bag.
     ///
-    /// Not an Element — structural type only.
-    Relation(RelationId),
+    /// Carries the per-column triple `(name, type_expr, multiplicity)`
+    /// inline so callers (overload narrowing, type-checking, deactivate/
+    /// reactivate reflection) can read column metadata directly from
+    /// the type without consulting an external interner. Mirrors what
+    /// Java's `RelationType._columns()` exposes.
+    ///
+    /// Not an Element — structural type only. Two `Relation`s with the
+    /// same column shape (name, type, multiplicity, in declaration
+    /// order) compare equal.
+    Relation(Vec<RelationColumnTypeExpr>),
     /// An unresolved type variable: `T`, `U`.
     Generic(SmolStr),
     /// Algebraic union of two relation types: `T + V`.
@@ -116,6 +124,26 @@ pub enum TypeExpr {
     /// - runtime `match` dispatch → matches any value (same as
     ///   `Generic(_)`), so partially-broken builds remain inspectable
     Unresolved,
+}
+
+// ---------------------------------------------------------------------------
+// RelationColumnTypeExpr — column metadata inside `TypeExpr::Relation`
+// ---------------------------------------------------------------------------
+
+/// One column of a structural relation type.
+///
+/// Carries the per-column metadata that a `(name:Type[mult], …)` syntax
+/// captures, in the resolved form: name as a `SmolStr`, type as a
+/// `TypeExpr` (so parameterised primitives like `Decimal<10,2>` and
+/// nested wrappers round-trip), and the column's `Multiplicity`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RelationColumnTypeExpr {
+    /// Column name (e.g. `"a"`, `"name with space"`). Unquoted.
+    pub name: SmolStr,
+    /// Column type expression.
+    pub type_expr: TypeExpr,
+    /// Column multiplicity.
+    pub multiplicity: Multiplicity,
 }
 
 // ---------------------------------------------------------------------------
