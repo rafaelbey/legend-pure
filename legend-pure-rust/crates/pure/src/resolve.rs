@@ -22,7 +22,9 @@ use std::collections::HashMap;
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::annotation as ast_ann;
 use legend_pure_parser_ast::element::PackageableElement;
-use legend_pure_parser_ast::type_ref::{self as ast_type, FUNCTION_TYPE_SENTINEL, Package};
+use legend_pure_parser_ast::type_ref::{
+    self as ast_type, FUNCTION_TYPE_SENTINEL, Package, RELATION_TYPE_SENTINEL,
+};
 use smol_str::SmolStr;
 
 use crate::annotations::{StereotypeRef, TaggedValueRef};
@@ -152,6 +154,16 @@ pub(crate) fn resolve_type_ref(
         return resolve_function_type_sentinel(type_ref, ctx, errors);
     }
 
+    // Handle the (RelationType) sentinel: the parser encodes structural
+    // relation types like `(a:Integer, b:String)` (when they appear in
+    // parameter type position via `Parameter::type_ref`) as a synthetic
+    // `TypeReference` whose `type_arguments` are per-column pseudo-refs
+    // (`name=col_name, type_arguments=[col_type], multiplicity_arguments[0]=mult`).
+    // Decode them back into `TypeExpr::Relation(columns)`.
+    if type_ref.name == RELATION_TYPE_SENTINEL {
+        return resolve_relation_type_sentinel(type_ref, ctx, errors);
+    }
+
     let element_id = if let Some(pkg) = &type_ref.package {
         // Qualified — resolve directly via the AST Package tree
         if let Some(id) = ctx.model.resolve_in_package(pkg, &type_ref.name) {
@@ -261,6 +273,44 @@ fn resolve_function_type_sentinel(
     })
 }
 
+/// Decodes a `(RelationType)` sentinel `TypeReference` into
+/// `TypeExpr::Relation(columns)`.
+///
+/// The parser encodes a structural relation type
+/// `(name1:Type1[mult1], name2:Type2[mult2], …)` (when it appears in
+/// a parameter type position via `Parameter::type_ref`) as a synthetic
+/// `TypeReference` with name `(RelationType)`. Each column is itself
+/// a `TypeReference` whose `name` is the column name, whose
+/// `type_arguments[0]` is the column's type, and whose
+/// `multiplicity_arguments[0]` is the column's multiplicity.
+fn resolve_relation_type_sentinel(
+    type_ref: &ast_type::TypeReference,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<TypeExpr> {
+    let mut columns = Vec::with_capacity(type_ref.type_arguments.len());
+    for col_ref in &type_ref.type_arguments {
+        let type_expr = col_ref
+            .type_arguments
+            .first()
+            .and_then(|t| resolve_type_ref(t, ctx, errors))
+            .unwrap_or(TypeExpr::Generic("Any".into()));
+        let multiplicity = col_ref.multiplicity_arguments.first().map_or(
+            Multiplicity::ZeroOrOne,
+            |ma| match ma {
+                ast_type::MultiplicityArgument::Concrete(m, _) => lower_multiplicity(m),
+                ast_type::MultiplicityArgument::Identifier(_, _) => Multiplicity::ZeroOrMany,
+            },
+        );
+        columns.push(crate::types::RelationColumnTypeExpr {
+            name: col_ref.name.clone(),
+            type_expr,
+            multiplicity,
+        });
+    }
+    Some(TypeExpr::Relation(columns))
+}
+
 /// Resolves an AST `TypeSpec` (type, unit reference, or relation type) to a Pure `TypeExpr`.
 ///
 /// For regular types, delegates to [`resolve_type_ref`].
@@ -304,14 +354,14 @@ pub(crate) fn resolve_type_spec(
                 None
             }
         }
-        ast_type::TypeSpec::Relation(_rt) => {
-            // Treat `@(cols)` and `Relation<(cols)>` as `RelationType<Any>`
-            // for type-checking. Column metadata flows via the lowered
-            // `ExprKind::RelationLiteral` / `ColSpecArrayLiteral` variants
-            // (set on the ValueSpec at lowering), not through a populated
-            // `RelationId` in the type system. Concretely this lets
-            // `cast(@RelationType<Any>)` and addColumns's `RelationType[1]`
-            // signature line up without a relation interner.
+        ast_type::TypeSpec::Relation(rt) => {
+            // `@(cols)` and `Relation<(cols)>` resolve to
+            // `RelationType<Relation(cols)>`: the outer wrapper is the
+            // M3 `RelationType` Class so dispatch on
+            // `RelationType<Any>[1]`-typed signatures still narrows,
+            // and the inner `TypeExpr::Relation(...)` carries the
+            // column shape (name, type, multiplicity per column) for
+            // consumers that want it.
             let segments: [SmolStr; 5] = [
                 SmolStr::new("meta"),
                 SmolStr::new("pure"),
@@ -319,13 +369,13 @@ pub(crate) fn resolve_type_spec(
                 SmolStr::new("relation"),
                 SmolStr::new("RelationType"),
             ];
-            ctx.model
-                .resolve_by_path(&segments)
-                .map(|element| TypeExpr::Named {
-                    element,
-                    type_arguments: vec![],
-                    value_arguments: vec![],
-                })
+            let rt_element = ctx.model.resolve_by_path(&segments)?;
+            let columns = resolve_relation_columns(&rt.columns, ctx, errors);
+            Some(TypeExpr::Named {
+                element: rt_element,
+                type_arguments: vec![TypeExpr::Relation(columns)],
+                value_arguments: vec![],
+            })
         }
         ast_type::TypeSpec::Function(ft) => {
             // Function types are structural: {ParamType[mult] -> RetType[mult]}.
@@ -350,6 +400,34 @@ pub(crate) fn resolve_type_spec(
             })
         }
     }
+}
+
+/// Resolve AST `RelationColumn`s into the typed
+/// [`RelationColumnTypeExpr`] used inside `TypeExpr::Relation`.
+///
+/// Mirrors what `lower_relation_columns` does in `lower.rs` for the
+/// `RelationLiteral` lowering, but stays at the type-expression
+/// level — used for resolving `(cols)` / `Relation<(cols)>` /
+/// `TDS<(cols)>` syntactic shapes when they appear in a type position.
+fn resolve_relation_columns(
+    cols: &[ast_type::RelationColumn],
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Vec<crate::types::RelationColumnTypeExpr> {
+    cols.iter()
+        .filter_map(|c| {
+            let type_expr = resolve_type_ref(&c.type_ref, ctx, errors)?;
+            let multiplicity = c
+                .multiplicity
+                .as_ref()
+                .map_or(Multiplicity::ZeroOrOne, lower_multiplicity);
+            Some(crate::types::RelationColumnTypeExpr {
+                name: c.name.clone(),
+                type_expr,
+                multiplicity,
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
