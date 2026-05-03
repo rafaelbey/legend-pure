@@ -24,8 +24,8 @@ use legend_pure_parser_ast::expression::{
     ArithmeticExpr, ArithmeticOp, ArrowFunction, BitwiseExpr, BitwiseNotExpr, BitwiseOp,
     CollectionExpr, ColumnBuilderExpr, ComparisonExpr, ComparisonOp, CopyExpr, Expression,
     FunctionApplication, Lambda, LetExpr, Literal, LogicalExpr, LogicalOp, MemberAccess,
-    NewInstanceExpr, NotExpr, PackageableElementRef, SliceExpr, TypeReferenceExpr, UnaryMinusExpr,
-    Variable,
+    NavigationPath, NewInstanceExpr, NotExpr, PackageableElementRef, SliceExpr, TypeReferenceExpr,
+    UnaryMinusExpr, Variable,
 };
 
 use legend_pure_parser_ast::type_ref::{RELATION_TYPE_SENTINEL, TypeReference};
@@ -165,6 +165,7 @@ fn compose_expression_prec(
         Expression::Copy(e) => compose_copy(w, e),
         Expression::Column(e) => compose_column(w, e),
         Expression::Island(e) => crate::island::compose_island(w, e),
+        Expression::NavigationPath(e) => compose_navigation_path(w, e),
         Expression::UnitInstance(e) => {
             compose_expression(w, &e.value);
             w.write(" ");
@@ -368,6 +369,39 @@ fn compose_member_access(w: &mut IndentWriter, e: &MemberAccess) {
 fn compose_type_reference_expr(w: &mut IndentWriter, e: &TypeReferenceExpr) {
     w.write("@");
     crate::type_ref::compose_type_spec(w, &e.type_ref);
+}
+
+// ---------------------------------------------------------------------------
+// Navigation path
+// ---------------------------------------------------------------------------
+
+/// Renders a navigation path: `#/StartType/prop1(args)/prop2!alias#`.
+///
+/// Round-trip with the parser: every input token survives the compose
+/// (start type, each `/property`, parenthesised args, optional `!alias`,
+/// and the closing `#`).
+fn compose_navigation_path(w: &mut IndentWriter, e: &NavigationPath) {
+    w.write("#/");
+    crate::type_ref::compose_type_reference(w, &e.start_type);
+    for step in &e.path {
+        w.write("/");
+        w.write(&maybe_quote(&step.property));
+        if !step.parameters.is_empty() {
+            w.write("(");
+            for (i, arg) in step.parameters.iter().enumerate() {
+                if i > 0 {
+                    w.write(", ");
+                }
+                compose_expression(w, arg);
+            }
+            w.write(")");
+        }
+    }
+    if let Some(alias) = &e.name {
+        w.write("!");
+        w.write(&maybe_quote(alias));
+    }
+    w.write("#");
 }
 
 // ---------------------------------------------------------------------------

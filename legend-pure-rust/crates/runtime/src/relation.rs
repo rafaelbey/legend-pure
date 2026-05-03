@@ -287,15 +287,12 @@ pub fn alloc_col_spec_literal(
 
     // ColSpec's classifierGenericType points at the Column GenericType.
     let outer_gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
-    let cs_raw_type = m3_paths::resolve(model, m3_paths::COL_SPEC).map_or(Value::Unit, Value::Element);
+    let cs_raw_type =
+        m3_paths::resolve(model, m3_paths::COL_SPEC).map_or(Value::Unit, Value::Element);
     heap.mutate_add(&outer_gt, "rawType", &[cs_raw_type])
         .map_err(PureException::from)?;
-    heap.mutate_add(
-        &outer_gt,
-        "typeArguments",
-        &[Value::Object(inner_gt)],
-    )
-    .map_err(PureException::from)?;
+    heap.mutate_add(&outer_gt, "typeArguments", &[Value::Object(inner_gt)])
+        .map_err(PureException::from)?;
 
     let cs = heap.alloc_dynamic(m3_paths::COL_SPEC);
     heap.mutate_add(&cs, "name", &[Value::String(column.name.clone())])

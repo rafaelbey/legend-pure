@@ -255,6 +255,13 @@ fn walk_expression(expr: &Expression, model: &PureModel, errors: &mut Vec<Compil
                 walk_expression(&kv.value, model, errors);
             }
         }
+        Expression::NavigationPath(nav) => {
+            for step in &nav.path {
+                for arg in &step.parameters {
+                    walk_expression(arg, model, errors);
+                }
+            }
+        }
         Expression::Column(_)
         | Expression::PackageableElementRef(_)
         | Expression::TypeReferenceExpr(_)

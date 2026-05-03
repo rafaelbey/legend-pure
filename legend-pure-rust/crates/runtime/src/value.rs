@@ -220,6 +220,38 @@ pub enum FunctionValue {
     /// (for `NativeFunctionDefinition`) or `call_user_function`
     /// (for `ConcreteFunctionDefinition`).
     Compiled(ElementId),
+
+    /// A navigation-path closure: `#/Type/p1/p2(args)/p3!alias#`.
+    ///
+    /// Path is `Function<{U[1]→V[m]}>` in Pure's type system, so it dispatches
+    /// through the same `apply_callable` entry point as `Lambda` /
+    /// `Compiled`. When invoked, the runtime walks each step applying the
+    /// property name to the running value (property access for plain steps,
+    /// QP call when parameters are present).
+    ///
+    /// Captures hold any free variables referenced from step parameters
+    /// (e.g. `#/Person/nameWith($prefix)#` captures `$prefix` when the path
+    /// is constructed inside a scope binding it).
+    Path(PathClosure),
+}
+
+/// A closure form of a navigation path expression — captures the
+/// resolved start type, the step list, and any variables referenced
+/// from step parameters at construction time. The runtime walks each
+/// step on invocation; type-arg substitution through the chain happens
+/// dynamically off the running receiver's heap object.
+#[derive(Debug, Clone)]
+pub struct PathClosure {
+    /// Resolved start type — drives the first step's property lookup.
+    pub start_type: legend_pure_parser_pure::types::TypeExpr,
+    /// One entry per `/property[(args)]` segment, in source order.
+    pub steps: Rc<[legend_pure_parser_pure::types::PathStepLowered]>,
+    /// Optional alias suffix (`!alias`).
+    pub name: Option<SmolStr>,
+    /// Variables captured from the enclosing scope at the point of
+    /// path construction (typically empty — path parameters are usually
+    /// scalar literals or enum stubs).
+    pub captures: HashMap<SmolStr, Value>,
 }
 
 /// An anonymous lambda closure: parameters, body, and captured variable bindings.
@@ -680,7 +712,7 @@ impl Value {
             Self::Element(eid) => heap.object_for_element(*eid),
             Self::Function(fv) => match fv.as_ref() {
                 FunctionValue::Compiled(eid) => heap.object_for_element(*eid),
-                FunctionValue::Lambda(_) => None,
+                FunctionValue::Lambda(_) | FunctionValue::Path(_) => None,
             },
             _ => None,
         }
@@ -696,7 +728,7 @@ impl Value {
             Self::Element(eid) => Some(*eid),
             Self::Function(fv) => match fv.as_ref() {
                 FunctionValue::Compiled(eid) => Some(*eid),
-                FunctionValue::Lambda(_) => None,
+                FunctionValue::Lambda(_) | FunctionValue::Path(_) => None,
             },
             Self::Object(handle) => crate::heap::RuntimeHeap::element_for_object(handle),
             _ => None,
@@ -738,6 +770,13 @@ impl fmt::Display for Value {
             Self::Function(fv) => match fv.as_ref() {
                 FunctionValue::Lambda(_) => write!(f, "<Lambda>"),
                 FunctionValue::Compiled(id) => write!(f, "<Function:{id}>"),
+                FunctionValue::Path(p) => {
+                    write!(f, "<Path:{}", p.steps.len())?;
+                    if let Some(name) = &p.name {
+                        write!(f, "!{name}")?;
+                    }
+                    write!(f, ">")
+                }
             },
             Self::Element(id) => write!(f, "<Element:{id}>"),
             // Display prints just the member — matches `Value::Object`

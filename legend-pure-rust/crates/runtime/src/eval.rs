@@ -381,6 +381,42 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                     .map(Value::Object)
             }
 
+            // -- Navigation path literal -----------------------------------
+            // Materialises a callable `Function<{U[1]→V[m]}>` value that
+            // walks the path on invocation (see `eval_path_value`). Free
+            // variables referenced from step parameters are captured via
+            // `walk_free_variables` so the path stays self-contained
+            // when handed off to higher-order functions like `sortBy`.
+            ExprKind::PathLiteral {
+                start_type,
+                steps,
+                name,
+            } => {
+                use std::collections::HashMap;
+                use std::collections::HashSet;
+                let mut free: HashSet<SmolStr> = HashSet::new();
+                let mut binders: HashSet<SmolStr> = HashSet::new();
+                for step in steps {
+                    for param in &step.parameters {
+                        walk_free_variables(param, &mut binders, &mut free);
+                    }
+                }
+                let mut captures: HashMap<SmolStr, Value> = HashMap::new();
+                for var in free {
+                    if let Ok(val) = self.context.require(&var) {
+                        captures.insert(var, val.clone());
+                    }
+                }
+                Ok(Value::Function(Box::new(FunctionValue::Path(
+                    crate::value::PathClosure {
+                        start_type: start_type.clone(),
+                        steps: steps.iter().cloned().collect::<Vec<_>>().into(),
+                        name: name.clone(),
+                        captures,
+                    },
+                ))))
+            }
+
             // -- Bare element reference -----------------------------------
             // Produce a first-class Element handle so meta-model natives
             // (pathToElement, elementToPath, match) can inspect it. Using
@@ -1154,6 +1190,9 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                         _ => self.model.element_name(*id).clone(),
                     },
                     FunctionValue::Lambda(_) => SmolStr::new_static("<lambda>"),
+                    FunctionValue::Path(p) => {
+                        p.name.clone().unwrap_or(SmolStr::new_static("<path>"))
+                    }
                 };
                 Ok(Value::String(name))
             }
@@ -2064,7 +2103,83 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 let mangled: SmolStr = self.model.get_node(*id).name.clone();
                 self.dispatch_compiled_function(*id, &mangled, args)
             }
+            FunctionValue::Path(closure) => self.eval_path_value(&closure.clone(), args),
         }
+    }
+
+    /// Apply a [`PathClosure`] to its receiver: walks each step
+    /// applying the property name to the running value.
+    ///
+    /// `args[0]` is the receiver `U[1]`; subsequent args (per the
+    /// `Path<U,V|m>` signature) are reserved for future overloads
+    /// and currently ignored — Java's `evaluate(Path,U)` is
+    /// single-arg too.
+    ///
+    /// For each step:
+    ///  - If the step has parameters, treat it as a qualified
+    ///    property invocation — evaluate parameters, push captures
+    ///    + a synthesized scope so those parameter expressions
+    ///    resolve, then call the QP via `invoke_qualified_property`.
+    ///  - Otherwise treat it as a plain property access via
+    ///    `apply_property_to_instance`.
+    ///
+    /// Property *resolution* per step happens against the running
+    /// receiver's classifier, so chain-of-types works dynamically
+    /// without requiring static type-arg substitution. A missing
+    /// property surfaces the existing property-access error path.
+    #[allow(clippy::result_large_err)]
+    fn eval_path_value(
+        &mut self,
+        closure: &crate::value::PathClosure,
+        args: &[Value],
+    ) -> Result<Value, PureException> {
+        use crate::native::EvalContextTrait;
+        let Some(receiver) = args.first() else {
+            return Err(PureException::from(PureRuntimeError::EvaluationError(
+                "Path: expected at least one argument (the receiver)".into(),
+            )));
+        };
+        let mut running = receiver.clone();
+
+        // Push captures so step parameter expressions can read them.
+        // Captures are typically empty for paths whose parameters
+        // are scalar literals or enum stubs (the common case).
+        self.context.push_scope();
+        for (k, v) in &closure.captures {
+            self.context.set(k.clone(), v.clone());
+        }
+
+        let result = (|| -> Result<Value, PureException> {
+            for step in closure.steps.iter() {
+                if step.parameters.is_empty() {
+                    running = self.apply_property_to_instance(&step.property_name, &running)?;
+                } else {
+                    // Lower step parameters → Values, then dispatch
+                    // the QP via the existing invoke_qualified_property
+                    // path on EvalContext.
+                    let mut param_values: Vec<Value> = Vec::with_capacity(step.parameters.len());
+                    for p in &step.parameters {
+                        param_values.push(self.eval(p)?);
+                    }
+                    let mut ctx = EvalContext { evaluator: self };
+                    let invoked = ctx.invoke_qualified_property(
+                        &running,
+                        step.property_name.as_str(),
+                        &param_values,
+                    )?;
+                    running = invoked.ok_or_else(|| {
+                        PureException::from(PureRuntimeError::EvaluationError(format!(
+                            "Path step '{}': qualified property not found on receiver",
+                            step.property_name
+                        )))
+                    })?;
+                }
+            }
+            Ok(running)
+        })();
+
+        self.context.pop_scope();
+        result
     }
 
     /// Dispatch a compiled function element — native registry first, then user function.
@@ -2466,6 +2581,15 @@ fn walk_free_variables(
                 walk_free_variables(e, binders, free);
             }
         }
+        ExprKind::PathLiteral { steps, .. } => {
+            // Walk into step parameters in case any close over an outer
+            // variable (e.g. `#/Person/nameWith($prefix)#`).
+            for step in steps {
+                for param in &step.parameters {
+                    walk_free_variables(param, binders, free);
+                }
+            }
+        }
         ExprKind::IntegerLiteral(_)
         | ExprKind::FloatLiteral(_)
         | ExprKind::DecimalLiteral(_)
@@ -2740,7 +2864,7 @@ mod tests {
                     assert_eq!(lc.parameters.len(), 0);
                     assert_eq!(lc.body.len(), 1);
                 }
-                other @ FunctionValue::Compiled(_) => {
+                other @ (FunctionValue::Compiled(_) | FunctionValue::Path(_)) => {
                     panic!("Expected FunctionValue::Lambda, got {other:?}")
                 }
             },

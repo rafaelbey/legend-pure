@@ -19,7 +19,8 @@ use crate::error::ParseError;
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::type_ref::{
     FUNCTION_TYPE_SENTINEL, Identifier, Multiplicity, MultiplicityArgument, Package,
-    RelationColumn, RelationType, TypeReference, TypeSpec, TypeVariableValue, UnitReference,
+    RELATION_TYPE_SENTINEL, RelationColumn, RelationType, TypeReference, TypeSpec,
+    TypeVariableValue, UnitReference,
 };
 use legend_pure_parser_lexer::TokenKind;
 use smol_str::SmolStr;
@@ -117,8 +118,7 @@ impl Parser {
                     // resolution at compile time. Whichever operand is
                     // captured doesn't affect downstream dispatch since
                     // the lowerer treats algebra as opaque shapes.
-                    while self.cursor.check(TokenKind::Plus)
-                        || self.cursor.check(TokenKind::Minus)
+                    while self.cursor.check(TokenKind::Plus) || self.cursor.check(TokenKind::Minus)
                     {
                         self.cursor.advance();
                         let _discarded = self.parse_type_reference()?;
@@ -199,15 +199,79 @@ impl Parser {
         // Parse the qualified name first (e.g. `Relation`, `meta::pure::Relation`).
         let path = self.parse_package_path()?;
 
-        // Check for `<(` — this is column-spec syntax (e.g. `Relation<(a:Integer)>`).
-        // We detect it structurally by token sequence rather than name-matching,
-        // so user types named "Relation" with regular type args aren't affected.
+        // Check for `<(` — column-spec syntax. Two forms:
+        //   - bare wrapper-less: `Relation<(a:Integer, b:String)>` is
+        //     equivalent to `(a:Integer, b:String)` — both encode a
+        //     `RelationType<…>`. Path may be empty here when called via
+        //     other entry points; collapse to `TypeSpec::Relation`.
+        //   - wrapped: `TDS<(a:Integer, b:String)>` preserves the
+        //     wrapper class (here `TDS`), with the structural columns
+        //     encoded as a `RELATION_TYPE_SENTINEL`-named TypeReference
+        //     inside `type_arguments`. The resolver decodes the
+        //     sentinel back into `TypeExpr::Relation(cols)` (see
+        //     `resolve_relation_type_sentinel`).
         if self.cursor.check(TokenKind::Less) && self.cursor.peek_kind_at(1) == TokenKind::LParen {
             self.cursor.expect(TokenKind::Less)?;
             let columns = self.parse_relation_columns()?;
+            // Subtype-constraint operator `X⊆T` may follow the column
+            // spec (e.g. `ColSpec<(?:Z)⊆T>`). Drop the bound — Stage-1
+            // dispatch doesn't enforce it.
+            let _bound = if self.cursor.eat(TokenKind::Subset) {
+                Some(self.parse_type_reference()?)
+            } else {
+                None
+            };
             self.cursor.expect_closing_angle_bracket()?;
-            return Ok(TypeSpec::Relation(RelationType {
-                columns,
+
+            let (pkg, wrapper_name) = split_package_name(&path);
+            // `(cols)` (no wrapper) and `RelationType<(cols)>` collapse
+            // to the bare-structural form. `Relation<(cols)>` and any
+            // other wrapper (`TDS`, etc.) preserve the wrapper class
+            // so the cast result resolves to the wrapper's element id
+            // rather than `RelationType` — `is_subtype(Relation, X)`
+            // and `is_subtype(TDS, X)` both fail when the receiver is
+            // mis-typed as `RelationType`, breaking overload narrowing
+            // on functions like `relation::sort(rel:Relation<T>[1], …)`.
+            let bare_relation = wrapper_name.is_empty() || wrapper_name.as_str() == "RelationType";
+            if bare_relation {
+                return Ok(TypeSpec::Relation(RelationType {
+                    columns,
+                    source_info: start,
+                }));
+            }
+            // Wrapped: `Wrapper<(cols)>` → preserve the wrapper class
+            // and stash the structural columns under
+            // RELATION_TYPE_SENTINEL so the resolver decodes back into
+            // `TypeExpr::Relation(cols)`.
+            let cols_si = start.clone();
+            let col_refs: Vec<TypeReference> = columns
+                .into_iter()
+                .map(|c| TypeReference {
+                    package: None,
+                    name: c.name,
+                    type_arguments: vec![c.type_ref],
+                    multiplicity_arguments: c
+                        .multiplicity
+                        .map(|m| vec![MultiplicityArgument::Concrete(m, c.source_info.clone())])
+                        .unwrap_or_default(),
+                    type_variable_values: vec![],
+                    source_info: c.source_info,
+                })
+                .collect();
+            let sentinel = TypeReference {
+                package: None,
+                name: SmolStr::new(RELATION_TYPE_SENTINEL),
+                type_arguments: col_refs,
+                multiplicity_arguments: vec![],
+                type_variable_values: vec![],
+                source_info: cols_si,
+            };
+            return Ok(TypeSpec::Type(TypeReference {
+                package: pkg,
+                name: wrapper_name,
+                type_arguments: vec![sentinel],
+                multiplicity_arguments: vec![],
+                type_variable_values: vec![],
                 source_info: start,
             }));
         }
@@ -412,9 +476,16 @@ impl Parser {
     /// Grammar:
     /// ```text
     /// typeAndMultiplicityParameters: '<' ((typeParameters multiplictyParameters?) | multiplictyParameters) '>'
-    /// typeParameters:                identifier (',' identifier)*
+    /// typeParameters:                typeParameter (',' typeParameter)*
+    /// typeParameter:                 ('-' | '+')? identifier
     /// multiplictyParameters:         '|' identifier (',' identifier)*
     /// ```
+    ///
+    /// `-` / `+` prefixes mark contravariance / covariance respectively
+    /// (e.g., `Path<-U,V|m>`). Only `path.pure` uses this in the platform
+    /// today; we accept-and-discard since variance is documentary in
+    /// current Pure semantics — the type system does not enforce or
+    /// propagate the marker.
     ///
     /// Returns `(type_params, mult_params)`. Both may be empty if no `<` is present.
     pub(crate) fn parse_type_and_multiplicity_parameters(
@@ -439,9 +510,11 @@ impl Parser {
             return Ok((vec![], mult_params));
         }
 
-        // Parse type parameters
+        // Parse type parameters with optional variance prefix
+        // (`-T` contravariant, `+T` covariant — accepted and dropped).
         let mut type_params = Vec::new();
         loop {
+            let _variance = self.cursor.eat(TokenKind::Minus) || self.cursor.eat(TokenKind::Plus);
             let (p, _) = self.cursor.expect_identifier()?;
             type_params.push(p);
             if !self.cursor.eat(TokenKind::Comma) {

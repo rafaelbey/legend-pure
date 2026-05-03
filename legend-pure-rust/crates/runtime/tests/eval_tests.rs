@@ -101,6 +101,7 @@ fn synthetic_user_repo(user_source: &str) -> legend_pure_core_platform::repo::Re
         "platform_dsl_diagram",
         "platform_dsl_graph",
         "platform_dsl_tds",
+        "platform_dsl_path",
         "platform_store_relational",
     ];
     let meta = RepoMeta {
@@ -513,6 +514,44 @@ fn store_dsl_metamodel_resolves_in_platform() {
         assert!(
             matches!(model.get_element(id), Element::Class(_)),
             "Store DSL element is not a Class: {fqn_segments:?}",
+        );
+    }
+}
+
+#[test]
+fn path_dsl_metamodel_resolves_in_platform() {
+    // Locks the Path DSL embedding (Stage 2): the platform_dsl_path
+    // repo ships a single `path.pure` file with three classes:
+    //   - meta::pure::metamodel::path::Path<-U,V|m> extends Function<{U[1]→V[m]}>
+    //   - meta::pure::metamodel::path::PathElement
+    //   - meta::pure::metamodel::path::PropertyPathElement extends PathElement
+    //   - meta::pure::metamodel::path::CastPathElement extends PathElement
+    //
+    // Stage 3 (compiler lowering) and Stage 4 (runtime evaluate)
+    // both depend on these resolving as Class elements in the
+    // compiled model — without this they have nothing to construct
+    // against. This test catches a regression where the embedding
+    // is silently dropped or where one of the classes fails to
+    // compile against the M3 base model (e.g. variance prefix
+    // not parsed, contravariant `<-U>` rejected).
+    use legend_pure_parser_pure::model::Element;
+    let model = compile_with_platform("");
+    for fqn_segments in [
+        ["meta", "pure", "metamodel", "path", "Path"].as_slice(),
+        ["meta", "pure", "metamodel", "path", "PathElement"].as_slice(),
+        ["meta", "pure", "metamodel", "path", "PropertyPathElement"].as_slice(),
+        ["meta", "pure", "metamodel", "path", "CastPathElement"].as_slice(),
+    ] {
+        let segments: Vec<smol_str::SmolStr> = fqn_segments
+            .iter()
+            .map(|s| smol_str::SmolStr::new(*s))
+            .collect();
+        let id = model
+            .resolve_by_path(&segments)
+            .unwrap_or_else(|| panic!("Path DSL element missing: {fqn_segments:?}"));
+        assert!(
+            matches!(model.get_element(id), Element::Class(_)),
+            "Path DSL element is not a Class: {fqn_segments:?}",
         );
     }
 }

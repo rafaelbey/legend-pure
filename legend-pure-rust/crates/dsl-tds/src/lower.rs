@@ -44,7 +44,7 @@ use legend_pure_parser_ast::expression::{
 use legend_pure_parser_ast::island::IslandContent;
 use legend_pure_parser_ast::source_info::SourceInfo;
 use legend_pure_parser_ast::type_ref::{
-    MultiplicityArgument, Multiplicity as AstMultiplicity, Package, RELATION_TYPE_SENTINEL,
+    Multiplicity as AstMultiplicity, MultiplicityArgument, Package, RELATION_TYPE_SENTINEL,
     TypeReference, TypeSpec,
 };
 use legend_pure_parser_pure::island_lower::IslandLowerer;
@@ -364,9 +364,7 @@ fn arrow_cast_to_typed_tds(
 /// Translate the runtime [`Multiplicity`](legend_pure_parser_pure::types::Multiplicity)
 /// shape back into the AST's [`Multiplicity`](AstMultiplicity) shape so
 /// it can be embedded in a [`MultiplicityArgument::Concrete`] node.
-fn ast_multiplicity(
-    m: &legend_pure_parser_pure::types::Multiplicity,
-) -> AstMultiplicity {
+fn ast_multiplicity(m: &legend_pure_parser_pure::types::Multiplicity) -> AstMultiplicity {
     use legend_pure_parser_pure::types::Multiplicity as PureMult;
     match m {
         PureMult::PureOne => AstMultiplicity::PureOne,

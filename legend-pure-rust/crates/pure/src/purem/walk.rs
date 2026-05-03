@@ -323,6 +323,16 @@ fn walk_expr_kind(kind: &mut ExprKind, visit: &mut dyn FnMut(&mut ElementId)) {
             visit(&mut column.type_element);
             walk_multiplicity(&mut column.multiplicity, visit);
         }
+        ExprKind::PathLiteral {
+            start_type, steps, ..
+        } => {
+            walk_type(start_type, visit);
+            for step in steps {
+                for param in &mut step.parameters {
+                    walk_value_spec(param, visit);
+                }
+            }
+        }
     }
 }
 

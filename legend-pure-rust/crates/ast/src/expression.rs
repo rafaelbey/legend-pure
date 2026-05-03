@@ -29,7 +29,7 @@
 use crate::annotation::{PackageableElementPtr, Parameter};
 use crate::island::IslandExpression;
 use crate::source_info::{SourceInfo, Spanned};
-use crate::type_ref::{Identifier, Multiplicity};
+use crate::type_ref::{Identifier, Multiplicity, TypeReference};
 
 // ---------------------------------------------------------------------------
 // Expression enum
@@ -109,6 +109,14 @@ pub enum Expression {
     /// and other extensible island grammars.
     Island(IslandExpression),
 
+    // -- Navigation path --
+    /// Navigation path expression: `#/Type/prop1/prop2(args)/prop3!alias#`.
+    ///
+    /// Compiles to an instance of `meta::pure::metamodel::path::Path<U,V|m>`,
+    /// where `U` is the start type, `V` is the type of the last property in
+    /// the chain, and `m` is the combined multiplicity of all property steps.
+    NavigationPath(NavigationPath),
+
     // -- Grouping --
     /// Explicit parenthesized grouping: `(expr)`.
     ///
@@ -142,6 +150,7 @@ impl Spanned for Expression {
             Self::Copy(e) => &e.source_info,
             Self::Column(e) => e.source_info(),
             Self::Island(e) => &e.source_info,
+            Self::NavigationPath(e) => &e.source_info,
             Self::UnitInstance(e) => &e.source_info,
             Self::Group(e) => e.source_info(),
         }
@@ -638,6 +647,57 @@ pub struct KeyValuePair {
     pub source_info: SourceInfo,
 }
 
+// ---------------------------------------------------------------------------
+// Navigation path
+// ---------------------------------------------------------------------------
+
+/// A navigation path expression: `#/StartType/prop1(args)/prop2!alias#`.
+///
+/// Path expressions describe a chain of property accesses through the type
+/// graph as a first-class value. They compile to instances of
+/// `meta::pure::metamodel::path::Path<-U,V|m> extends Function<{U[1]→V[m]}>`.
+///
+/// Invariant: `path` is non-empty — a bare `#/Type#` is rejected at parse
+/// time, matching the Java grammar's "A path must contain at least one
+/// navigation" rule.
+///
+/// # Examples
+///
+/// - `#/Person/name#` — single property step
+/// - `#/Firm<Any>/employees/address#` — multi-step with type arguments on the start
+/// - `#/Person/nameWithTitle('1')#` — qualified property with parameters
+/// - `#/Product/synonymsByType(SynType.CUSIP)/value!cusip#` — params + alias
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
+pub struct NavigationPath {
+    /// The starting type — supports type arguments (`Firm<Any>`) so the
+    /// chain's first hop can resolve under the right binding.
+    pub start_type: TypeReference,
+    /// The property steps. Always non-empty by parser construction.
+    pub path: Vec<PropertyPathElement>,
+    /// Optional alias suffix (`!myAlias`); becomes the `name` slot on the
+    /// resulting `Path` instance.
+    pub name: Option<Identifier>,
+    /// Source location spanning the full `#/.../#` form.
+    pub source_info: SourceInfo,
+}
+
+/// A single segment in a navigation path: `/property` or `/property(params)`.
+///
+/// `parameters` is empty for plain property steps and populated for qualified-
+/// property steps (`/nameWithTitle('Mr')`). The lowering pass type-checks each
+/// parameter against the resolved property's signature.
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
+pub struct PropertyPathElement {
+    /// The property name being navigated.
+    pub property: Identifier,
+    /// Parameters for qualified properties — scalar literals, enum stubs
+    /// (`SynType.CUSIP` parses as `MemberAccess::Simple`), or collection
+    /// literals.
+    pub parameters: Vec<Expression>,
+    /// Source location for this `/property(...)` segment.
+    pub source_info: SourceInfo,
+}
+
 /// A unit instance expression: `5 RomanLength~Pes`.
 ///
 /// In Pure, a numeric literal followed by a `Measure~Unit` reference
@@ -735,6 +795,7 @@ pub trait ExpressionVisitor {
             Expression::Column(e) => self.visit_column(e),
             Expression::PackageableElementRef(e) => self.visit_element_ref(e),
             Expression::Island(e) => self.visit_island(e),
+            Expression::NavigationPath(e) => self.visit_navigation_path(e),
             Expression::UnitInstance(e) => self.visit_unit_instance(e),
             Expression::Group(e) => self.visit(e),
         }
@@ -792,6 +853,16 @@ pub trait ExpressionVisitor {
     fn visit_element_ref(&mut self, expr: &PackageableElementRef) {}
     /// Visit an island grammar expression.
     fn visit_island(&mut self, expr: &IslandExpression) {}
+    /// Visit a navigation path expression. Default walks parameter
+    /// expressions on each step so visitors that scan for sub-expressions
+    /// (variable refs, literals, etc.) see them without an override.
+    fn visit_navigation_path(&mut self, expr: &NavigationPath) {
+        for step in &expr.path {
+            for param in &step.parameters {
+                self.visit(param);
+            }
+        }
+    }
     /// Visit a unit instance expression.
     fn visit_unit_instance(&mut self, expr: &UnitInstanceExpr) {}
 }

@@ -47,9 +47,10 @@ fn run_validator(source: &str) -> Vec<CompilationError> {
     let extension = RelationalExtension::new();
     let mut errors: Vec<CompilationError> = Vec::new();
 
-    // Drive the extension lifecycle directly. Stage 4's validator only
-    // needs `declare()` (for FQN registration) and `validate()` —
-    // there's no body-lowering work yet.
+    // Drive the full extension lifecycle: `declare` registers the
+    // databases, `define_bodies` builds the resolved snapshots that
+    // post-B validators (A3' join-tree-node chain checks) read in
+    // `validate`, and `validate` runs the structural checks.
     let mut bootstrap = legend_pure_parser_pure::pipeline::init_bootstrap_model();
     let auto_imports: Vec<SmolStr> = Vec::new();
     let mut declare_ctx = legend_pure_parser_pure::extension::DeclareCtx {
@@ -59,6 +60,13 @@ fn run_validator(source: &str) -> Vec<CompilationError> {
         errors: &mut errors,
     };
     extension.declare(&mut declare_ctx);
+    let mut define_ctx = legend_pure_parser_pure::extension::DefineCtx {
+        source_files: &files,
+        model: &mut bootstrap,
+        auto_imports: &auto_imports,
+        errors: &mut errors,
+    };
+    extension.define_bodies(&mut define_ctx);
     let frozen = bootstrap;
     let mut validate_ctx = legend_pure_parser_pure::extension::ValidateCtx {
         model: &frozen,
@@ -480,6 +488,15 @@ fn run_validator_with_mapping(source: &str) -> Vec<CompilationError> {
         errors: &mut errors,
     };
     extension.declare(&mut declare_ctx);
+    // Phase B1+ validators (e.g. A3' join-tree-node chain checks)
+    // depend on the resolved-database snapshot built in `define_bodies`.
+    let mut define_ctx = legend_pure_parser_pure::extension::DefineCtx {
+        source_files: &files,
+        model: &mut bootstrap,
+        auto_imports: &auto_imports,
+        errors: &mut errors,
+    };
+    extension.define_bodies(&mut define_ctx);
     let frozen = bootstrap;
     let mut validate_ctx = legend_pure_parser_pure::extension::ValidateCtx {
         model: &frozen,
@@ -1015,6 +1032,293 @@ mod join_resolution {
                 CompilationErrorKind::UnresolvedElement { path } if path.as_str() == "t1t2"
             )),
             "expected join to resolve via include; got {errors:#?}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Phase B7 — implicit-db `@join` resolution via `~mainTable [db]`
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn class_mapping_implicit_db_join_via_main_table_resolves() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table src (id INT PRIMARY KEY, fk INT)
+              Table dst (id INT PRIMARY KEY)
+              Join sToD (src.fk = dst.id)
+            )
+
+            ###Pure
+            import pkg::*;
+            Class pkg::Trade { id : Integer[1]; }
+
+            ###Mapping
+            Mapping pkg::TradeMap
+            (
+              pkg::Trade : Relational
+              {
+                ~mainTable [pkg::db]src
+                (id : @sToD | dst.id)
+              }
+            )
+        "});
+        // `@sToD` lacks an explicit `[db]` — should still resolve
+        // via the `~mainTable [pkg::db]` contextual db.
+        assert!(
+            errors.iter().all(|e| !matches!(
+                &e.kind,
+                CompilationErrorKind::UnresolvedElement { path } if path.as_str() == "sToD"
+            )),
+            "expected implicit-db join to resolve via ~mainTable; got {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn class_mapping_implicit_db_unknown_join_via_main_table_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (id INT PRIMARY KEY)
+            )
+
+            ###Pure
+            import pkg::*;
+            Class pkg::Trade { id : Integer[1]; }
+
+            ###Mapping
+            Mapping pkg::TradeMap
+            (
+              pkg::Trade : Relational
+              {
+                ~mainTable [pkg::db]t
+                (id : @noSuchJoin | t.id)
+              }
+            )
+        "});
+        // The contextual db is `pkg::db`; `@noSuchJoin` doesn't exist
+        // there.
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                CompilationErrorKind::UnresolvedElement { path } if path.as_str() == "noSuchJoin"
+            )),
+            "expected unresolved-implicit-db-join error; got {errors:#?}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Phase A3' — JoinTreeNodeValidation parity
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn join_chain_with_consistent_end_tables_passes() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table src (id INT PRIMARY KEY, fk INT)
+              Table mid (id INT PRIMARY KEY, fk INT)
+              Table dst (id INT PRIMARY KEY)
+              Join sToM (src.fk = mid.id)
+              Join mToD (mid.fk = dst.id)
+            )
+
+            ###Pure
+            Class pkg::Trade { id : Integer[1]; }
+
+            ###Mapping
+            Mapping pkg::TradeMap
+            (
+              pkg::Trade : Relational
+              {
+                ~mainTable [pkg::db]src
+                (id : @sToM > @mToD | dst.id)
+              }
+            )
+        "});
+        // src → @sToM → mid → @mToD → dst → trailing column on dst.
+        let chain_errs: Vec<_> = errors
+            .iter()
+            .filter(|e| match &e.kind {
+                CompilationErrorKind::InvalidAssociation { reason, .. } => {
+                    reason.as_str().contains("ends at")
+                }
+                CompilationErrorKind::UnresolvedElement { path } => {
+                    path.as_str().starts_with("join @")
+                }
+                _ => false,
+            })
+            .collect();
+        assert!(
+            chain_errs.is_empty(),
+            "expected clean join chain; got chain errors: {chain_errs:#?}"
+        );
+    }
+
+    #[test]
+    fn join_chain_disconnected_from_source_table_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table src (id INT PRIMARY KEY)
+              Table other (id INT PRIMARY KEY, fk INT)
+              Table dst (id INT PRIMARY KEY)
+              Join otherToDst (other.fk = dst.id)
+            )
+
+            ###Pure
+            Class pkg::Trade { id : Integer[1]; }
+
+            ###Mapping
+            Mapping pkg::TradeMap
+            (
+              pkg::Trade : Relational
+              {
+                ~mainTable [pkg::db]src
+                (id : @otherToDst | dst.id)
+              }
+            )
+        "});
+        // ~mainTable says src; @otherToDst connects (other, dst) — does
+        // not contain src.
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                CompilationErrorKind::UnresolvedElement { path }
+                    if path.as_str().contains("otherToDst")
+            )),
+            "expected 'join does not contain source' error; got {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn join_chain_target_mismatch_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table src (id INT PRIMARY KEY, fk INT)
+              Table mid (id INT PRIMARY KEY, fk INT)
+              Table dst (id INT PRIMARY KEY)
+              Join sToM (src.fk = mid.id)
+            )
+
+            ###Pure
+            Class pkg::Trade { id : Integer[1]; }
+
+            ###Mapping
+            Mapping pkg::TradeMap
+            (
+              pkg::Trade : Relational
+              {
+                ~mainTable [pkg::db]src
+                (id : @sToM | dst.id)
+              }
+            )
+        "});
+        // Chain ends at 'mid' but trailing column references 'dst'.
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                CompilationErrorKind::InvalidAssociation { reason, .. }
+                    if reason.as_str().contains("ends at 'mid'")
+            )),
+            "expected join-chain target-mismatch error; got {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn join_chain_ending_back_at_source_passes() {
+        // Self-join: src → @j → mid → @j_inv → src — chain ends at src,
+        // trailing column is on src, no error.
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table src (id INT PRIMARY KEY, fk INT)
+              Table mid (id INT PRIMARY KEY, src_fk INT)
+              Join sToM (src.fk = mid.id)
+              Join mToS (mid.src_fk = src.id)
+            )
+
+            ###Pure
+            Class pkg::Trade { id : Integer[1]; }
+
+            ###Mapping
+            Mapping pkg::TradeMap
+            (
+              pkg::Trade : Relational
+              {
+                ~mainTable [pkg::db]src
+                (id : @sToM > @mToS | src.id)
+              }
+            )
+        "});
+        let chain_errs: Vec<_> = errors
+            .iter()
+            .filter(|e| match &e.kind {
+                CompilationErrorKind::InvalidAssociation { reason, .. } => {
+                    reason.as_str().contains("ends at")
+                }
+                CompilationErrorKind::UnresolvedElement { path } => {
+                    path.as_str().starts_with("join @")
+                }
+                _ => false,
+            })
+            .collect();
+        assert!(
+            chain_errs.is_empty(),
+            "expected self-loop chain to validate; got chain errors: {chain_errs:#?}"
+        );
+    }
+
+    #[test]
+    fn class_mapping_scope_db_overrides_main_table_for_implicit_join() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::main
+            (
+              Table src (id INT PRIMARY KEY)
+            )
+
+            ###Relational
+            Database pkg::other
+            (
+              Table dst (id INT PRIMARY KEY, fk INT)
+              Join scopedJoin (dst.fk = dst.id)
+            )
+
+            ###Pure
+            import pkg::*;
+            Class pkg::Trade { id : Integer[1]; }
+
+            ###Mapping
+            Mapping pkg::TradeMap
+            (
+              pkg::Trade : Relational
+              {
+                ~mainTable [pkg::main]src
+                (
+                  id : src.id,
+                  scope([pkg::other]) (
+                    altId : @scopedJoin | dst.id
+                  )
+                )
+              }
+            )
+        "});
+        // `scope([pkg::other])` overrides `~mainTable [pkg::main]`.
+        // `@scopedJoin` lives in pkg::other — should resolve.
+        assert!(
+            errors.iter().all(|e| !matches!(
+                &e.kind,
+                CompilationErrorKind::UnresolvedElement { path } if path.as_str() == "scopedJoin"
+            )),
+            "expected scope-db override to resolve join; got {errors:#?}"
         );
     }
 }

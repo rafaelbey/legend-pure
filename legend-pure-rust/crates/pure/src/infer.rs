@@ -401,6 +401,32 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                     multiplicity: Multiplicity::PureOne,
                 })
         }
+
+        // -- Path literal ---------------------------------------------------
+        // Stage 3 minimum: type as a bare `Path` instance. Full
+        // `Path<U,V|m>` parametric inference (chain return type +
+        // multiplicity product) is deferred — would require walking
+        // each step's resolved property and propagating type-args
+        // through the running class. Pass 2.5 currently leaves
+        // type-args empty; runtime evaluation is what consumers
+        // actually depend on (Stage 4).
+        ExprKind::PathLiteral { .. } => ctx
+            .model
+            .resolve_by_path(&[
+                smol_str::SmolStr::new("meta"),
+                smol_str::SmolStr::new("pure"),
+                smol_str::SmolStr::new("metamodel"),
+                smol_str::SmolStr::new("path"),
+                smol_str::SmolStr::new("Path"),
+            ])
+            .map(|element| ResolvedType {
+                type_expr: TypeExpr::Named {
+                    element,
+                    type_arguments: Vec::new(),
+                    value_arguments: Vec::new(),
+                },
+                multiplicity: Multiplicity::PureOne,
+            }),
     };
 
     set_and_return(expr, result)

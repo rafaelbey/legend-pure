@@ -16,14 +16,16 @@ use super::Parser;
 use super::R;
 use super::{ParserContext, split_package_name, unquote_string};
 use crate::error::ParseError;
+use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::annotation::{PackageableElementPtr, Parameter};
 use legend_pure_parser_ast::expression::{
     ArithmeticExpr, ArithmeticOp, ArrowFunction, BooleanLiteral, CollectionExpr, ComparisonExpr,
     ComparisonOp, CopyExpr, DateTimeLiteral, DecimalLiteral, Expression, FloatLiteral,
     FunctionApplication, IntegerLiteral, KeyValuePair, Lambda, LetExpr, Literal, LogicalExpr,
-    LogicalOp, MemberAccess, NewInstanceExpr, NotExpr, PackageableElementRef,
-    QualifiedMemberAccess, SimpleMemberAccess, SliceExpr, StrictDateLiteral, StrictTimeLiteral,
-    StringLiteral, TypeReferenceExpr, UnaryMinusExpr, UnitInstanceExpr, Variable,
+    LogicalOp, MemberAccess, NavigationPath, NewInstanceExpr, NotExpr, PackageableElementRef,
+    PropertyPathElement, QualifiedMemberAccess, SimpleMemberAccess, SliceExpr, StrictDateLiteral,
+    StrictTimeLiteral, StringLiteral, TypeReferenceExpr, UnaryMinusExpr, UnitInstanceExpr,
+    Variable,
 };
 use legend_pure_parser_ast::island::IslandExpression;
 use legend_pure_parser_ast::type_ref::Package;
@@ -791,6 +793,18 @@ impl Parser {
                 }))
             }
 
+            // Navigation path expression: `#/Type/prop1/prop2(args)/prop3!alias#`.
+            //
+            // Distinct from the tagged-island path below — paths use `/`
+            // as their step separator, not as a tag, and own a dedicated
+            // opener token (`HashSlash`) emitted by the lexer. The body
+            // is parsed inline (not via `IslandParser`) because Path is
+            // a built-in language form, not an extension DSL.
+            TokenKind::HashSlash => {
+                self.cursor.advance();
+                self.parse_navigation_path(si)
+            }
+
             // Tagged island grammar: `#tag…#` or `#tag{…}#`.
             //
             // The host parser reads the tag (an identifier like `TDS`,
@@ -850,6 +864,81 @@ impl Parser {
                 si,
             )),
         }
+    }
+
+    /// Parses the body of a navigation-path expression after the leading
+    /// `#/` has been consumed.
+    ///
+    /// Grammar:
+    /// ```text
+    /// nav-path  ::= start-type ('/' prop ('(' params ')')?)+ ('!' alias)? '#'
+    /// start-type ::= type-reference   // supports type-args (`Firm<Any>`)
+    /// prop       ::= identifier
+    /// alias      ::= identifier
+    /// ```
+    ///
+    /// At least one `/property` step is required — `#/Type#` is rejected
+    /// at parse time, matching the Java grammar's "A path must contain at
+    /// least one navigation" rule.
+    ///
+    /// Parameters are parsed as full expressions and may include scalar
+    /// literals, collection literals (`['a', 'b']`), and enum stubs
+    /// (`SynType.CUSIP` parses as `MemberAccess::Simple`).
+    fn parse_navigation_path(&mut self, opener_si: SourceInfo) -> R<Expression> {
+        let start_type = self.parse_type_reference()?;
+
+        let mut path: Vec<PropertyPathElement> = Vec::new();
+        while self.cursor.check(TokenKind::Slash) {
+            let step_si = self.cursor.current_source_info();
+            self.cursor.advance(); // consume '/'
+            let (property, _prop_si) = self.cursor.expect_identifier_or_keyword()?;
+            let parameters = if self.cursor.eat(TokenKind::LParen) {
+                let mut args = Vec::new();
+                if !self.cursor.check(TokenKind::RParen) {
+                    loop {
+                        args.push(self.parse_expression()?);
+                        if !self.cursor.eat(TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+                self.cursor.expect(TokenKind::RParen)?;
+                args
+            } else {
+                Vec::new()
+            };
+            path.push(PropertyPathElement {
+                property,
+                parameters,
+                source_info: step_si,
+            });
+        }
+
+        if path.is_empty() {
+            return Err(ParseError::expected(
+                "navigation step (`/property`) — a path must contain at least one navigation",
+                self.cursor.peek_kind(),
+                self.cursor.current_source_info(),
+            ));
+        }
+
+        // Optional alias: `!identifier`. Java grammar uses `!` (lexed as
+        // `Bang`) here, distinct from `!=` (`BangEqual`).
+        let name = if self.cursor.eat(TokenKind::Bang) {
+            let (alias, _) = self.cursor.expect_identifier_or_keyword()?;
+            Some(alias)
+        } else {
+            None
+        };
+
+        self.cursor.expect(TokenKind::Hash)?;
+
+        Ok(Expression::NavigationPath(NavigationPath {
+            start_type,
+            path,
+            name,
+            source_info: opener_si,
+        }))
     }
 
     /// Detects whether the current token starts a lambda inside braces.

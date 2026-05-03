@@ -214,6 +214,17 @@ fn walk_expression(
                 walk_expression(&kv.value, store_id, model, errors);
             }
         }
+        Expression::NavigationPath(nav) => {
+            // Recurse into property-step parameters in case any host an
+            // island (collection literals or scalar exprs may, in
+            // principle, contain one — even if the platform doesn't
+            // exercise that today).
+            for step in &nav.path {
+                for arg in &step.parameters {
+                    walk_expression(arg, store_id, model, errors);
+                }
+            }
+        }
         Expression::NewInstance(_)
         | Expression::Column(_)
         | Expression::PackageableElementRef(_)

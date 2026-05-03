@@ -1762,3 +1762,93 @@ fn test_type_ref_with_variable_multiplicity_args() {
         }
     "});
 }
+
+// ---------------------------------------------------------------------------
+// Navigation path tests (Stage 1)
+// ---------------------------------------------------------------------------
+//
+// Each test asserts the input source survives a parse → compose round-trip
+// verbatim — every token in the `#/.../#` body, the start type, every
+// `/property` step, every parenthesised parameter group, and any optional
+// `!alias` suffix appear unchanged in the composed output. Idempotency is
+// also checked via the second compose.
+
+#[test]
+fn test_navigation_path_simple() {
+    round_trip(indoc! {"
+        function my::test(): Any[*]
+        {
+          #/Person/name#
+        }
+    "});
+}
+
+#[test]
+fn test_navigation_path_multi_step_qualified() {
+    round_trip(indoc! {"
+        function my::test(): Any[*]
+        {
+          #/model::Firm/employees/address#
+        }
+    "});
+}
+
+#[test]
+fn test_navigation_path_with_type_args_on_start() {
+    round_trip(indoc! {"
+        function my::test(): Any[*]
+        {
+          #/Firm<Any>/employees/address#
+        }
+    "});
+}
+
+#[test]
+fn test_navigation_path_with_string_param() {
+    round_trip(indoc! {"
+        function my::test(): Any[*]
+        {
+          #/Person/nameWithTitle('Mr')#
+        }
+    "});
+}
+
+#[test]
+fn test_navigation_path_with_multiple_params() {
+    round_trip(indoc! {"
+        function my::test(): Any[*]
+        {
+          #/Person/nameWithPrefixAndSuffix('a', 'b')#
+        }
+    "});
+}
+
+#[test]
+fn test_navigation_path_with_collection_param() {
+    round_trip(indoc! {"
+        function my::test(): Any[*]
+        {
+          #/Person/nameWithPrefixAndSuffix('a', ['x', 'y'])#
+        }
+    "});
+}
+
+#[test]
+fn test_navigation_path_with_alias() {
+    round_trip(indoc! {"
+        function my::test(): Any[*]
+        {
+          #/Product/synonymsByType(SynonymType.CUSIP)/value!cusip#
+        }
+    "});
+}
+
+#[test]
+fn test_navigation_path_in_arrow_call() {
+    round_trip(indoc! {"
+        function my::test(xs: Any[*]): Any[*]
+        {
+          $xs->sortBy(#/model::Person/lastName#)
+        }
+    "});
+}
