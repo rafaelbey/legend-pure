@@ -228,6 +228,11 @@ impl CompilerExtension for RelationalExtension {
         // Stage 8 + 9: per-class-mapping validation.
         let class_mappings = self.relational_class_mappings.borrow();
         validate_relational_class_mappings(&class_mappings, &dbs, ctx.errors);
+        // Phase D: repo-boundary visibility for `include` and `[db]`
+        // qualifiers. No-op when `model.repo_visibility` is empty (so
+        // existing tests that build a model without descriptors stay
+        // green).
+        validate_repo_visibility(&dbs, ctx.model, ctx.errors);
     }
 }
 
@@ -1424,5 +1429,208 @@ fn check_one_join_visible_in(
             continue;
         }
         check_one_join_visible(&r.join, visible, &local_db_ptr, owner, errors);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase D: repo-boundary visibility
+// ---------------------------------------------------------------------------
+
+/// Walk every `include` and every `[db]` qualifier in every registered
+/// database, and emit `NotVisible` for each cross-repo reference whose
+/// target is not in the use-site repo's declared dependencies. No-op
+/// when `model.repo_visibility` is empty.
+fn validate_repo_visibility(
+    databases: &HashMap<SmolStr, RegisteredDatabase>,
+    model: &legend_pure_parser_pure::model::PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    use legend_pure_parser_pure::visibility::source_repo_name;
+
+    if model.repo_visibility.is_empty() {
+        return;
+    }
+
+    for reg in databases.values() {
+        let use_site = &reg.def.source_info.source;
+        let Some(use_repo) = source_repo_name(use_site) else {
+            continue;
+        };
+        let Some(visible) = model.repo_visibility.get(&use_repo) else {
+            continue;
+        };
+
+        // 1. `include other::Db` — check target's home repo.
+        for inc in &reg.def.includes {
+            check_db_ref_visibility(&inc.included, use_site, visible, databases, errors);
+        }
+
+        // 2. Walk every body for `[db]` qualifiers.
+        for elem in &reg.def.elements {
+            walk_element_for_db_refs(elem, use_site, visible, databases, errors);
+        }
+    }
+}
+
+fn check_db_ref_visibility(
+    target: &legend_pure_parser_ast::annotation::PackageableElementPtr,
+    use_site: &SmolStr,
+    visible: &std::collections::BTreeSet<SmolStr>,
+    databases: &HashMap<SmolStr, RegisteredDatabase>,
+    errors: &mut Vec<CompilationError>,
+) {
+    use legend_pure_parser_pure::visibility::source_repo_name;
+
+    let target_fqn = packageable_fqn(target);
+    let Some(target_db) = databases.get(&target_fqn) else {
+        return; // Unknown DB — V2 already raised UnresolvedElement.
+    };
+    let target_source = &target_db.def.source_info.source;
+    let Some(target_repo) = source_repo_name(target_source) else {
+        return;
+    };
+    if visible.contains(&target_repo) {
+        return;
+    }
+    errors.push(CompilationError {
+        message: format!("{target_fqn} is not visible in the file {use_site}"),
+        source_info: target.source_info.clone(),
+        kind: CompilationErrorKind::NotVisible {
+            target_fqn,
+            source_id: use_site.clone(),
+        },
+    });
+}
+
+fn walk_element_for_db_refs(
+    e: &DatabaseElement,
+    use_site: &SmolStr,
+    visible: &std::collections::BTreeSet<SmolStr>,
+    databases: &HashMap<SmolStr, RegisteredDatabase>,
+    errors: &mut Vec<CompilationError>,
+) {
+    match e {
+        DatabaseElement::Schema(s) => {
+            for v in &s.views {
+                walk_view_for_db_refs(v, use_site, visible, databases, errors);
+            }
+            // Tables don't carry [db] refs in their body.
+            // Schemas don't either.
+            let _ = s;
+        }
+        DatabaseElement::View(v) => {
+            walk_view_for_db_refs(v, use_site, visible, databases, errors);
+        }
+        DatabaseElement::Join(j) => {
+            walk_op_expr_for_db_refs(&j.body, use_site, visible, databases, errors);
+        }
+        DatabaseElement::Filter(f) => {
+            walk_op_expr_for_db_refs(&f.body, use_site, visible, databases, errors);
+        }
+        DatabaseElement::MultiGrainFilter(m) => {
+            walk_op_expr_for_db_refs(&m.body, use_site, visible, databases, errors);
+        }
+        DatabaseElement::Table(_) => {}
+    }
+}
+
+fn walk_view_for_db_refs(
+    v: &View,
+    use_site: &SmolStr,
+    visible: &std::collections::BTreeSet<SmolStr>,
+    databases: &HashMap<SmolStr, RegisteredDatabase>,
+    errors: &mut Vec<CompilationError>,
+) {
+    if let Some(filter) = &v.filter {
+        if let Some(chain) = &filter.db_chain {
+            check_db_ref_visibility(&chain.first_db, use_site, visible, databases, errors);
+            check_db_ref_visibility(&chain.second_db, use_site, visible, databases, errors);
+            walk_join_sequence_for_db_refs(
+                &chain.join_sequence,
+                use_site,
+                visible,
+                databases,
+                errors,
+            );
+        }
+    }
+    if let Some(jcs) = &v.group_by {
+        for jc in jcs {
+            walk_join_col_for_db_refs(jc, use_site, visible, databases, errors);
+        }
+    }
+    for col in &v.columns {
+        walk_join_col_for_db_refs(&col.value, use_site, visible, databases, errors);
+    }
+}
+
+fn walk_op_expr_for_db_refs(
+    expr: &OpExpr,
+    use_site: &SmolStr,
+    visible: &std::collections::BTreeSet<SmolStr>,
+    databases: &HashMap<SmolStr, RegisteredDatabase>,
+    errors: &mut Vec<CompilationError>,
+) {
+    match expr {
+        OpExpr::Bool { lhs, rhs, .. } | OpExpr::Compare { lhs, rhs, .. } => {
+            walk_op_expr_for_db_refs(lhs, use_site, visible, databases, errors);
+            walk_op_expr_for_db_refs(rhs, use_site, visible, databases, errors);
+        }
+        OpExpr::IsNull { expr, .. } | OpExpr::Group { inner: expr, .. } => {
+            walk_op_expr_for_db_refs(expr, use_site, visible, databases, errors);
+        }
+        OpExpr::Function { db, args, .. } => {
+            if let Some(db) = db {
+                check_db_ref_visibility(db, use_site, visible, databases, errors);
+            }
+            for a in args {
+                walk_op_expr_for_db_refs(a, use_site, visible, databases, errors);
+            }
+        }
+        OpExpr::Column(OpColumn::Aliased { db, .. }) => {
+            if let Some(db) = db {
+                check_db_ref_visibility(db, use_site, visible, databases, errors);
+            }
+        }
+        OpExpr::Column(OpColumn::Target { .. }) | OpExpr::Literal(_) => {}
+        OpExpr::Array { elements, .. } => {
+            for e in elements {
+                walk_op_expr_for_db_refs(e, use_site, visible, databases, errors);
+            }
+        }
+    }
+}
+
+fn walk_join_col_for_db_refs(
+    jc: &JoinColWithDbOrConstant,
+    use_site: &SmolStr,
+    visible: &std::collections::BTreeSet<SmolStr>,
+    databases: &HashMap<SmolStr, RegisteredDatabase>,
+    errors: &mut Vec<CompilationError>,
+) {
+    if let Some(db) = &jc.db {
+        check_db_ref_visibility(db, use_site, visible, databases, errors);
+    }
+    if let Some(seq) = &jc.join {
+        walk_join_sequence_for_db_refs(seq, use_site, visible, databases, errors);
+    }
+    if let Some(col) = &jc.column {
+        if let OpColumn::Aliased { db: Some(db), .. } = col {
+            check_db_ref_visibility(db, use_site, visible, databases, errors);
+        }
+    }
+}
+
+fn walk_join_sequence_for_db_refs(
+    seq: &JoinSequence,
+    use_site: &SmolStr,
+    visible: &std::collections::BTreeSet<SmolStr>,
+    databases: &HashMap<SmolStr, RegisteredDatabase>,
+    errors: &mut Vec<CompilationError>,
+) {
+    for r in &seq.right {
+        if let Some(db) = &r.db {
+            check_db_ref_visibility(db, use_site, visible, databases, errors);
+        }
     }
 }
