@@ -41,13 +41,14 @@ use legend_pure_parser_parser::section_parser::SectionParser;
 use smol_str::SmolStr;
 
 use crate::ast::{
-    BinOp, BoolOp, ColumnDef, DatabaseDef, DatabaseElement, DatabaseInclude, Filter,
-    FilterMappingBlock, FilterMappingJoinSequence, Join, JoinColWithDbOrConstant, JoinSequence,
-    LocalMappingProperty, MainTableBlock, MappingElement, MilestoneDef, MilestoneField,
-    MilestoneSpec, MilestoneValue, MultiGrainFilter, NonePlusMappingLine, OneJoin, OneJoinRight,
-    OpColumn, OpExpr, OpLiteral, PlusMappingLine, RelationalClassMappingBody, RelationalMapping,
-    SECTION_KIND, Schema, ScopedMapping, SimpleScopeInfo, SingleMappingLine, Table, TokenSlice,
-    Transformer, View,
+    BinOp, BoolOp, ColumnDef, DatabaseDef, DatabaseElement, DatabaseInclude, EmbeddedMapping,
+    EmbeddedMappingTrailer, Filter, FilterMappingBlock, FilterMappingJoinSequence, InlineRef, Join,
+    JoinColWithDbOrConstant, JoinSequence, LocalMappingProperty, MainTableBlock, MappingElement,
+    MilestoneDef, MilestoneField, MilestoneSpec, MilestoneValue, MultiGrainFilter,
+    NonePlusMappingLine, NonePlusMappingValue, OneJoin, OneJoinRight, OpColumn, OpExpr, OpLiteral,
+    OtherwiseJoin, OtherwisePropertyMapping, PlusMappingLine, RelationalClassMappingBody,
+    RelationalMapping, SECTION_KIND, Schema, ScopedMapping, SimpleScopeInfo, SingleMappingLine,
+    Table, TokenSlice, Transformer, View,
 };
 
 fn err(message: String, source_info: SourceInfo) -> ParseError {
@@ -1653,14 +1654,179 @@ fn parse_none_plus_mapping_line(
         }
         ctx.cursor().expect(TokenKind::RBracket)?;
     }
-    let mapping = parse_relational_mapping(ctx)?;
-    let span = merge_si(&property.source_info, &mapping.source_info);
+    // Stage-6 dispatch: `(` opens an embedded body; `:` continues
+    // with the Stage-5 relational mapping form.
+    let value = if ctx.cursor().check(TokenKind::LParen) {
+        NonePlusMappingValue::Embedded(parse_embedded_mapping(ctx)?)
+    } else {
+        NonePlusMappingValue::Relational(parse_relational_mapping(ctx)?)
+    };
+    let value_si = match &value {
+        NonePlusMappingValue::Relational(m) => m.source_info.clone(),
+        NonePlusMappingValue::Embedded(e) => e.source_info.clone(),
+    };
+    let span = merge_si(&property.source_info, &value_si);
     Ok(NonePlusMappingLine {
         property,
         source_id,
         target_id,
-        mapping,
+        value,
         source_info: span,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6: embedded / inline / otherwise property mappings
+//
+// Java grammar (RelationalParser.g4 lines 240-285):
+//
+//   embeddedMapping :
+//       '(' (primaryKey? singleMappingLines)? ')'
+//       (otherwiseEmbeddedMapping | inline)? ;
+//   inline           : INLINE '[' identifier ']' ;
+//   otherwiseEmbeddedMapping
+//                    : OTHERWISE '(' otherwisePropertyMappings ')' ;
+//   otherwisePropertyMappings
+//                    : otherwisePropertyMapping (',' otherwisePropertyMapping)* ;
+//   otherwisePropertyMapping
+//                    : '[' identifier ']' ':' otherwiseJoin ;
+//   otherwiseJoin    : database? joinSequence ;
+// ---------------------------------------------------------------------------
+
+fn parse_embedded_mapping(ctx: &mut ParserContext<'_>) -> Result<EmbeddedMapping, ParseError> {
+    let open = ctx.cursor().expect(TokenKind::LParen)?;
+
+    // Optional `~primaryKey(...)` then mapping lines; `()` is empty.
+    let mut primary_key: Option<Vec<JoinColWithDbOrConstant>> = None;
+    if ctx.cursor().check(TokenKind::Tilde) && ctx.cursor().peek_kind_at(1) == TokenKind::Identifier
+    {
+        // Peek past `~`; if the next identifier is "primaryKey", commit.
+        // We can't read the text without advancing, so save and check
+        // by advancing then validating the text.
+        let saved_kind = ctx.cursor().peek_kind();
+        let _ = saved_kind;
+        // Commit-on-Tilde: consume `~`, then `primaryKey`, else error.
+        ctx.cursor().expect(TokenKind::Tilde)?;
+        let kw = ctx.cursor().expect(TokenKind::Identifier)?;
+        if kw.text.as_str() != "primaryKey" {
+            return Err(err(
+                format!(
+                    "embedded mapping body only supports `~primaryKey(...)`; \
+                     got `~{}`",
+                    kw.text
+                ),
+                kw.source_info,
+            ));
+        }
+        primary_key = Some(parse_paren_join_col_list(ctx)?);
+    }
+
+    let mut mapping_lines: Vec<SingleMappingLine> = Vec::new();
+    if !ctx.cursor().check(TokenKind::RParen) {
+        loop {
+            mapping_lines.push(parse_single_mapping_line(ctx)?);
+            if !ctx.cursor().eat(TokenKind::Comma) {
+                break;
+            }
+        }
+    }
+    let close = ctx.cursor().expect(TokenKind::RParen)?;
+
+    // Optional trailing `Inline [id]` or `Otherwise (…)`.
+    let trailer = parse_optional_embedded_mapping_trailer(ctx)?;
+    let end_si = trailer
+        .as_ref()
+        .map(|t| match t {
+            EmbeddedMappingTrailer::Inline(r) => r.source_info.clone(),
+            EmbeddedMappingTrailer::Otherwise(maps) => maps
+                .last()
+                .map(|m| m.source_info.clone())
+                .unwrap_or_else(|| close.source_info.clone()),
+        })
+        .unwrap_or_else(|| close.source_info.clone());
+    Ok(EmbeddedMapping {
+        primary_key,
+        mapping_lines,
+        trailer,
+        source_info: merge_si(&open.source_info, &end_si),
+    })
+}
+
+fn parse_optional_embedded_mapping_trailer(
+    ctx: &mut ParserContext<'_>,
+) -> Result<Option<EmbeddedMappingTrailer>, ParseError> {
+    if !ctx.cursor().check(TokenKind::Identifier) {
+        return Ok(None);
+    }
+    let next_text = ctx.cursor().peek().text.clone();
+    match next_text.as_str() {
+        "Inline" => {
+            let kw = ctx.cursor().expect(TokenKind::Identifier)?;
+            ctx.cursor().expect(TokenKind::LBracket)?;
+            let id = parse_relational_identifier(ctx)?;
+            let close = ctx.cursor().expect(TokenKind::RBracket)?;
+            Ok(Some(EmbeddedMappingTrailer::Inline(InlineRef {
+                id,
+                source_info: merge_si(&kw.source_info, &close.source_info),
+            })))
+        }
+        "Otherwise" => {
+            ctx.cursor().expect(TokenKind::Identifier)?; // 'Otherwise'
+            ctx.cursor().expect(TokenKind::LParen)?;
+            let mut mappings: Vec<OtherwisePropertyMapping> = Vec::new();
+            if !ctx.cursor().check(TokenKind::RParen) {
+                loop {
+                    mappings.push(parse_otherwise_property_mapping(ctx)?);
+                    if !ctx.cursor().eat(TokenKind::Comma) {
+                        break;
+                    }
+                }
+            }
+            ctx.cursor().expect(TokenKind::RParen)?;
+            Ok(Some(EmbeddedMappingTrailer::Otherwise(mappings)))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn parse_otherwise_property_mapping(
+    ctx: &mut ParserContext<'_>,
+) -> Result<OtherwisePropertyMapping, ParseError> {
+    let open = ctx.cursor().expect(TokenKind::LBracket)?;
+    let property = parse_relational_identifier(ctx)?;
+    ctx.cursor().expect(TokenKind::RBracket)?;
+    ctx.cursor().expect(TokenKind::Colon)?;
+    let otherwise_join = parse_otherwise_join(ctx)?;
+    let span = merge_si(&open.source_info, &otherwise_join.source_info);
+    Ok(OtherwisePropertyMapping {
+        property,
+        otherwise_join,
+        source_info: span,
+    })
+}
+
+fn parse_otherwise_join(ctx: &mut ParserContext<'_>) -> Result<OtherwiseJoin, ParseError> {
+    let start_si = ctx.cursor().peek().source_info.clone();
+    let db = parse_optional_db_qualifier(ctx)?;
+    // joinSequence is required: must start with `@`.
+    let head = parse_one_join(ctx)?;
+    let mut right = Vec::new();
+    while ctx.cursor().check(TokenKind::Greater) {
+        right.push(parse_one_join_right(ctx)?);
+    }
+    let seq_end = right
+        .last()
+        .map(|r| r.source_info.clone())
+        .unwrap_or_else(|| head.source_info.clone());
+    let join_sequence = JoinSequence {
+        head,
+        right,
+        source_info: merge_si(&start_si, &seq_end),
+    };
+    Ok(OtherwiseJoin {
+        db,
+        join_sequence,
+        source_info: merge_si(&start_si, &seq_end),
     })
 }
 

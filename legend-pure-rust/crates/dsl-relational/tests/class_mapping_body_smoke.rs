@@ -24,8 +24,8 @@ use indoc::indoc;
 use legend_pure_dsl_mapping::ast::{ClassMappingBody, MappingDef};
 use legend_pure_dsl_mapping::parser::MappingSectionParser;
 use legend_pure_dsl_relational::ast::{
-    JoinColWithDbOrConstant, MappingElement, OpColumn, OpLiteral, RelationalClassMappingBody,
-    ScopedMapping, SingleMappingLine,
+    JoinColWithDbOrConstant, MappingElement, NonePlusMappingValue, OpColumn, OpLiteral,
+    RelationalClassMappingBody, ScopedMapping, SingleMappingLine,
 };
 use legend_pure_dsl_relational::parser::RelationalClassMappingBodyParser;
 use legend_pure_parser_ast::SourceFile;
@@ -100,12 +100,10 @@ fn parses_bare_property_mapping() {
         panic!("expected bare mapping line");
     };
     assert_eq!(line.property.value.as_str(), "legalName");
-    let col = line
-        .mapping
-        .value
-        .column
-        .as_ref()
-        .expect("expected column terminal");
+    let NonePlusMappingValue::Relational(rm) = &line.value else {
+        panic!("expected relational mapping value");
+    };
+    let col = rm.value.column.as_ref().expect("expected column terminal");
     let OpColumn::Aliased { alias, scope, .. } = col else {
         panic!("expected aliased column");
     };
@@ -218,7 +216,10 @@ fn parses_join_sequence_in_mapping_value() {
     else {
         panic!("expected bare mapping line");
     };
-    let JoinColWithDbOrConstant { join, column, .. } = &line.mapping.value;
+    let NonePlusMappingValue::Relational(rm) = &line.value else {
+        panic!("expected relational mapping value");
+    };
+    let JoinColWithDbOrConstant { join, column, .. } = &rm.value;
     let join = join.as_ref().expect("expected join sequence");
     assert_eq!(join.head.name.value.as_str(), "firmProduct");
     let col = column.as_ref().expect("expected | op_column tail");
@@ -249,12 +250,10 @@ fn parses_constant_literal_in_mapping_value() {
     else {
         panic!("expected bare mapping line");
     };
-    let lit = line
-        .mapping
-        .value
-        .literal
-        .as_ref()
-        .expect("expected literal");
+    let NonePlusMappingValue::Relational(rm) = &line.value else {
+        panic!("expected relational mapping value");
+    };
+    let lit = rm.value.literal.as_ref().expect("expected literal");
     assert!(matches!(lit, OpLiteral::String { value, .. } if value.as_str() == "ACTIVE"));
 }
 
@@ -342,4 +341,167 @@ fn collect_mappings(file: &SourceFile) -> Vec<&MappingDef> {
         }
     }
     out
+}
+
+// ===========================================================================
+// Stage 6: embedded / inline / otherwise property mappings
+// ===========================================================================
+
+mod embedded {
+    use super::first_relational_body;
+    use indoc::indoc;
+    use legend_pure_dsl_relational::ast::{
+        EmbeddedMappingTrailer, MappingElement, NonePlusMappingValue, SingleMappingLine,
+    };
+
+    fn embedded_value(
+        body: &legend_pure_dsl_relational::ast::RelationalClassMappingBody,
+    ) -> &legend_pure_dsl_relational::ast::EmbeddedMapping {
+        let MappingElement::Single(SingleMappingLine::NonePlus(line)) = &body.mapping_elements[0]
+        else {
+            panic!("expected bare mapping line");
+        };
+        let NonePlusMappingValue::Embedded(e) = &line.value else {
+            panic!("expected embedded mapping; got {:?}", line.value);
+        };
+        e
+    }
+
+    #[test]
+    fn parses_simple_embedded_mapping() {
+        let body = first_relational_body(indoc! {r"
+            ###Mapping
+            Mapping pkg::FirmMapping
+            (
+              Firm : Relational
+              {
+                (details (taxLocation : [pkg::FirmDb]FirmTable.tax_location))
+              }
+            )
+        "});
+        let e = embedded_value(&body);
+        assert!(e.primary_key.is_none());
+        assert!(e.trailer.is_none());
+        assert_eq!(e.mapping_lines.len(), 1);
+    }
+
+    #[test]
+    fn parses_embedded_with_primary_key() {
+        let body = first_relational_body(indoc! {r"
+            ###Mapping
+            Mapping pkg::FirmMapping
+            (
+              Firm : Relational
+              {
+                (details (
+                  ~primaryKey([pkg::FirmDb]FirmTable.id)
+                  taxLocation : [pkg::FirmDb]FirmTable.tax_location
+                ))
+              }
+            )
+        "});
+        let e = embedded_value(&body);
+        let pk = e.primary_key.as_ref().expect("~primaryKey required");
+        assert_eq!(pk.len(), 1);
+    }
+
+    #[test]
+    fn parses_embedded_inline_trailer() {
+        let body = first_relational_body(indoc! {r"
+            ###Mapping
+            Mapping pkg::FirmMapping
+            (
+              Firm : Relational
+              {
+                (details () Inline[employeeMapping])
+              }
+            )
+        "});
+        let e = embedded_value(&body);
+        let Some(EmbeddedMappingTrailer::Inline(r)) = &e.trailer else {
+            panic!("expected Inline trailer; got {:?}", e.trailer);
+        };
+        assert_eq!(r.id.value.as_str(), "employeeMapping");
+    }
+
+    #[test]
+    fn parses_embedded_otherwise_trailer() {
+        let body = first_relational_body(indoc! {r"
+            ###Mapping
+            Mapping pkg::FirmMapping
+            (
+              Firm : Relational
+              {
+                (details () Otherwise([taxLocation] : [pkg::FirmDb]@firmDetails))
+              }
+            )
+        "});
+        let e = embedded_value(&body);
+        let Some(EmbeddedMappingTrailer::Otherwise(maps)) = &e.trailer else {
+            panic!("expected Otherwise trailer; got {:?}", e.trailer);
+        };
+        assert_eq!(maps.len(), 1);
+        assert_eq!(maps[0].property.value.as_str(), "taxLocation");
+    }
+
+    #[test]
+    fn round_trips_embedded_with_primary_key_and_otherwise() {
+        let source = indoc! {r"
+            ###Mapping
+            Mapping pkg::FirmMapping
+            (
+              Firm : Relational
+              {
+                (details (
+                  ~primaryKey([pkg::FirmDb]FirmTable.id)
+                  taxLocation : [pkg::FirmDb]FirmTable.tax_location
+                ) Otherwise([taxLocation] : [pkg::FirmDb]@firmDetails))
+              }
+            )
+        "};
+        let body1 = first_relational_body(source);
+        let composed = legend_pure_dsl_mapping::compose::compose_mapping_section(
+            &super::collect_mappings(&super::parse(source)),
+        );
+        let body2 = first_relational_body(&composed);
+        let strip = |s: &str| {
+            let mut out = String::with_capacity(s.len());
+            let mut chars = s.char_indices().peekable();
+            while let Some((i, _)) = chars.peek().copied() {
+                if s[i..].starts_with("source_info:") {
+                    let after_ident = i + "source_info:".len();
+                    let Some(brace) = s[after_ident..].find('{') else {
+                        break;
+                    };
+                    out.push_str("source_info: <stripped>");
+                    let mut depth = 1usize;
+                    let mut idx = after_ident + brace + 1;
+                    while depth > 0 && idx < s.len() {
+                        let c = s.as_bytes()[idx] as char;
+                        if c == '{' {
+                            depth += 1;
+                        } else if c == '}' {
+                            depth -= 1;
+                        }
+                        idx += 1;
+                    }
+                    while let Some(&(j, _)) = chars.peek() {
+                        if j >= idx {
+                            break;
+                        }
+                        chars.next();
+                    }
+                    continue;
+                }
+                let (_, c) = chars.next().expect("checked above");
+                out.push(c);
+            }
+            out
+        };
+        assert_eq!(
+            strip(&format!("{body1:#?}")),
+            strip(&format!("{body2:#?}")),
+            "embedded round-trip diverged\nsource:\n{source}\ncomposed:\n{composed}"
+        );
+    }
 }
