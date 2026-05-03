@@ -351,10 +351,11 @@ fn write_optional_db(out: &mut String, db: Option<&PackageableElementPtr>) {
 // ===========================================================================
 
 use crate::ast::{
-    FilterMappingBlock, FilterMappingJoinSequence, JoinColWithDbOrConstant, JoinSequence,
-    LocalMappingProperty, MainTableBlock, MappingElement, NonePlusMappingLine, OneJoin,
-    OneJoinRight, PlusMappingLine, RelationalClassMappingBody, RelationalMapping, ScopedMapping,
-    SimpleScopeInfo, SingleMappingLine, Transformer,
+    EmbeddedMapping, EmbeddedMappingTrailer, FilterMappingBlock, FilterMappingJoinSequence,
+    InlineRef, JoinColWithDbOrConstant, JoinSequence, LocalMappingProperty, MainTableBlock,
+    MappingElement, NonePlusMappingLine, NonePlusMappingValue, OneJoin, OneJoinRight,
+    OtherwiseJoin, OtherwisePropertyMapping, PlusMappingLine, RelationalClassMappingBody,
+    RelationalMapping, ScopedMapping, SimpleScopeInfo, SingleMappingLine, Transformer,
 };
 
 /// Round-trip the body produced by
@@ -606,7 +607,78 @@ fn write_none_plus_line(out: &mut String, line: &NonePlusMappingLine) {
         }
         out.push(']');
     }
-    write_relational_mapping(out, &line.mapping);
+    match &line.value {
+        NonePlusMappingValue::Relational(m) => write_relational_mapping(out, m),
+        NonePlusMappingValue::Embedded(e) => {
+            out.push(' ');
+            write_embedded_mapping(out, e);
+        }
+    }
+}
+
+fn write_embedded_mapping(out: &mut String, e: &EmbeddedMapping) {
+    out.push('(');
+    if let Some(pk) = &e.primary_key {
+        out.push_str("~primaryKey(");
+        for (i, jc) in pk.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            write_join_col_with_db_or_constant(out, jc);
+        }
+        out.push(')');
+        // primaryKey isn't a singleMappingLine in the Java grammar
+        // (`'(' (primaryKey? singleMappingLines)? ')'`), so it's
+        // separated from the lines by whitespace, not a comma.
+        if !e.mapping_lines.is_empty() {
+            out.push(' ');
+        }
+    }
+    for (i, line) in e.mapping_lines.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        write_single_mapping_line(out, line);
+    }
+    out.push(')');
+    if let Some(trailer) = &e.trailer {
+        match trailer {
+            EmbeddedMappingTrailer::Inline(r) => {
+                out.push(' ');
+                write_inline_ref(out, r);
+            }
+            EmbeddedMappingTrailer::Otherwise(maps) => {
+                out.push_str(" Otherwise(");
+                for (i, m) in maps.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    write_otherwise_property_mapping(out, m);
+                }
+                out.push(')');
+            }
+        }
+    }
+}
+
+fn write_inline_ref(out: &mut String, r: &InlineRef) {
+    out.push_str("Inline[");
+    out.push_str(r.id.value.as_str());
+    out.push(']');
+}
+
+fn write_otherwise_property_mapping(out: &mut String, m: &OtherwisePropertyMapping) {
+    out.push('[');
+    out.push_str(m.property.value.as_str());
+    out.push_str("] : ");
+    write_otherwise_join(out, &m.otherwise_join);
+}
+
+fn write_otherwise_join(out: &mut String, oj: &OtherwiseJoin) {
+    if let Some(db) = &oj.db {
+        write_db_brackets(out, db);
+    }
+    write_join_sequence(out, &oj.join_sequence);
 }
 
 fn write_plus_line(out: &mut String, line: &PlusMappingLine) {

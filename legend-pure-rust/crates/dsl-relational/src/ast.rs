@@ -886,9 +886,88 @@ pub struct NonePlusMappingLine {
     pub source_id: Option<SpannedString>,
     /// Optional second tag (when `[srcId, targetId]`).
     pub target_id: Option<SpannedString>,
-    /// `: transformer? joinColWithDbOrConstant`.
-    pub mapping: RelationalMapping,
+    /// Right-hand-side mapping value: either `: transformer? joinCol`
+    /// (Stage 5) or an embedded `( … )` body (Stage 6).
+    pub value: NonePlusMappingValue,
     /// Span covering the entire line.
+    pub source_info: SourceInfo,
+}
+
+/// RHS of a [`NonePlusMappingLine`].
+///
+/// Java grammar: `nonePlusSingleMappingLine : identifier
+/// sourceAndTargetMappingId? (embeddedMapping | relationalMapping)`.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum NonePlusMappingValue {
+    /// `: transformer? joinColWithDbOrConstant` — Stage 5 form.
+    Relational(RelationalMapping),
+    /// `( <body> ) (Inline | Otherwise)?` — Stage 6 embedded form.
+    Embedded(EmbeddedMapping),
+}
+
+/// `( <primaryKey>? <singleMappingLines>? ) (<inline> | <otherwise>)?`.
+///
+/// Java grammar:
+///
+/// ```text
+/// embeddedMapping :
+///     '(' (primaryKey? singleMappingLines)? ')'
+///     (otherwiseEmbeddedMapping | inline)?
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbeddedMapping {
+    /// Optional `~primaryKey(<joinCol>, …)` inside the embedded body.
+    pub primary_key: Option<Vec<JoinColWithDbOrConstant>>,
+    /// Nested mapping lines — each line itself can be embedded, so
+    /// the AST is recursive.
+    pub mapping_lines: Vec<SingleMappingLine>,
+    /// Optional trailing `Inline [id]` or `Otherwise (…)`.
+    pub trailer: Option<EmbeddedMappingTrailer>,
+    /// Span covering the entire embedded form.
+    pub source_info: SourceInfo,
+}
+
+/// Trailing alternative on an [`EmbeddedMapping`].
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum EmbeddedMappingTrailer {
+    /// `Inline [id]` — inline another class mapping by id.
+    Inline(InlineRef),
+    /// `Otherwise ( <otherwisePropertyMapping>, … )` — fallback
+    /// property mappings reached when the primary embedded body
+    /// doesn't apply.
+    Otherwise(Vec<OtherwisePropertyMapping>),
+}
+
+/// `Inline [id]` — references another class mapping by its id.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InlineRef {
+    /// Inlined class-mapping id.
+    pub id: SpannedString,
+    /// Span covering `Inline [id]`.
+    pub source_info: SourceInfo,
+}
+
+/// `[<property>] : <otherwiseJoin>`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OtherwisePropertyMapping {
+    /// Property the fallback applies to.
+    pub property: SpannedString,
+    /// `: <db>? <joinSequence>` — the fallback join.
+    pub otherwise_join: OtherwiseJoin,
+    /// Span covering `[prop] : …`.
+    pub source_info: SourceInfo,
+}
+
+/// `<db>? <joinSequence>`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OtherwiseJoin {
+    /// Optional `[db]` qualifier.
+    pub db: Option<PackageableElementPtr>,
+    /// Mandatory join sequence.
+    pub join_sequence: JoinSequence,
+    /// Span covering the whole otherwise-join.
     pub source_info: SourceInfo,
 }
 
