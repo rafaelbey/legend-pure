@@ -1857,58 +1857,85 @@ fn lower_column(
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
     let columns = lower_relation_columns_from_specs(&e.columns, ctx, errors);
-    // Only the *plain* single-column form (`~name`, no type-spec /
-    // no extra lambda) lowers to a `ColSpec` literal today. Lambda-
-    // bearing forms (`~name:f`, `~name:f:r`) need the platform's
-    // distinct `FuncColSpec` / `AggColSpec` classifiers, and
-    // typed-column forms (`~name:Type[mult]`) historically flow
-    // through `ColSpecArrayLiteral` so callers like `addColumns` can
-    // navigate `csa.classifierGenericType.typeArguments[0]…`. Until
-    // the dedicated lowering paths land, we keep both as
-    // `ColSpecArrayLiteral` to avoid surfacing depth-shift errors
-    // from misclassified types.
-    let plain_single = !e.is_array
-        && e.columns.len() == 1
-        && e.columns
-            .first()
-            .is_some_and(|c| c.type_spec.is_none() && c.extra_function.is_none());
-    if plain_single {
-        let name = e
-            .columns
-            .first()
-            .map_or_else(|| SmolStr::new_static(""), |c| c.name.clone());
-        let column = RelationColumnLowered {
-            name,
-            type_element: crate::bootstrap::ANY_ID,
-            multiplicity: Multiplicity::ZeroOrOne,
-        };
-        let col_spec_id = resolve_col_spec_id(ctx)?;
+    let kind = classify_col_spec_kind(&e.columns);
+    let outer_id = match (e.is_array, kind) {
+        (false, crate::types::ColSpecLiteralKind::Plain) => resolve_col_spec_id(ctx)?,
+        (false, crate::types::ColSpecLiteralKind::Func) => resolve_relation_class_id(ctx, "FuncColSpec")?,
+        (false, crate::types::ColSpecLiteralKind::Agg) => resolve_relation_class_id(ctx, "AggColSpec")?,
+        (true, crate::types::ColSpecLiteralKind::Plain) => resolve_col_spec_array_id(ctx)?,
+        (true, crate::types::ColSpecLiteralKind::Func) => resolve_relation_class_id(ctx, "FuncColSpecArray")?,
+        (true, crate::types::ColSpecLiteralKind::Agg) => resolve_relation_class_id(ctx, "AggColSpecArray")?,
+    };
+    let type_expr = TypeExpr::Named {
+        element: outer_id,
+        type_arguments: vec![],
+        value_arguments: vec![],
+    };
+    if e.is_array {
         return Some(typed(
-            ExprKind::ColSpecLiteral { column },
+            ExprKind::ColSpecArrayLiteral { columns, kind },
             e.source_info.clone(),
             ResolvedType {
-                type_expr: TypeExpr::Named {
-                    element: col_spec_id,
-                    type_arguments: vec![],
-                    value_arguments: vec![],
-                },
+                type_expr,
                 multiplicity: Multiplicity::PureOne,
             },
         ));
     }
-    let col_spec_array_id = resolve_col_spec_array_id(ctx)?;
+    // Single-column form: take the first lowered column or synthesise
+    // an `Any` placeholder if the lowerer dropped it (e.g. lambda
+    // form, untyped name).
+    let column = columns.into_iter().next().unwrap_or_else(|| {
+        let name = e
+            .columns
+            .first()
+            .map_or_else(|| SmolStr::new_static(""), |c| c.name.clone());
+        RelationColumnLowered {
+            name,
+            type_element: crate::bootstrap::ANY_ID,
+            multiplicity: Multiplicity::ZeroOrOne,
+        }
+    });
     Some(typed(
-        ExprKind::ColSpecArrayLiteral { columns },
+        ExprKind::ColSpecLiteral { column, kind },
         e.source_info.clone(),
         ResolvedType {
-            type_expr: TypeExpr::Named {
-                element: col_spec_array_id,
-                type_arguments: vec![],
-                value_arguments: vec![],
-            },
+            type_expr,
             multiplicity: Multiplicity::PureOne,
         },
     ))
+}
+
+/// Classify a column-builder's columns into the three platform
+/// shapes — plain (no lambda), `func` (one init lambda per column),
+/// `agg` (init + reduce lambdas per column). Mixed shapes fall back
+/// to `Plain` so the lowerer doesn't pretend to know which classifier
+/// to pick. Mirrors the platform's
+/// `colSpec` vs `funcColSpec` vs `aggColSpec` grammar dispatch.
+fn classify_col_spec_kind(specs: &[ast_expr::ColumnSpec]) -> crate::types::ColSpecLiteralKind {
+    use crate::types::ColSpecLiteralKind;
+    if specs.is_empty() {
+        return ColSpecLiteralKind::Plain;
+    }
+    let mut has_init = true;
+    let mut has_agg = true;
+    for c in specs {
+        let is_lambda_init = matches!(&c.type_spec, Some(ast_expr::ColumnTypeSpec::Lambda(_)));
+        if !is_lambda_init {
+            has_init = false;
+            has_agg = false;
+            continue;
+        }
+        if c.extra_function.is_none() {
+            has_agg = false;
+        }
+    }
+    if has_agg {
+        ColSpecLiteralKind::Agg
+    } else if has_init {
+        ColSpecLiteralKind::Func
+    } else {
+        ColSpecLiteralKind::Plain
+    }
 }
 
 /// Resolves AST `RelationColumn`s into the lowered triple form. Used by
@@ -1999,6 +2026,19 @@ fn resolve_col_spec_id(ctx: &mut ResolutionContext<'_>) -> Option<crate::ids::El
         SmolStr::new("metamodel"),
         SmolStr::new("relation"),
         SmolStr::new("ColSpec"),
+    ])
+}
+
+fn resolve_relation_class_id(
+    ctx: &mut ResolutionContext<'_>,
+    class_name: &str,
+) -> Option<crate::ids::ElementId> {
+    ctx.model.resolve_by_path(&[
+        SmolStr::new("meta"),
+        SmolStr::new("pure"),
+        SmolStr::new("metamodel"),
+        SmolStr::new("relation"),
+        SmolStr::new(class_name),
     ])
 }
 

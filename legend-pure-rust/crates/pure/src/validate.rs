@@ -806,12 +806,17 @@ fn walk_expr_kind_refs(
         ExprKind::PackageableElementRef { element } => {
             emit(*element, si);
         }
-        ExprKind::RelationLiteral { columns } | ExprKind::ColSpecArrayLiteral { columns } => {
+        ExprKind::RelationLiteral { columns } => {
             for col in columns {
                 emit(col.type_element, si);
             }
         }
-        ExprKind::ColSpecLiteral { column } => {
+        ExprKind::ColSpecArrayLiteral { columns, .. } => {
+            for col in columns {
+                emit(col.type_element, si);
+            }
+        }
+        ExprKind::ColSpecLiteral { column, .. } => {
             emit(column.type_element, si);
         }
     }
