@@ -221,7 +221,27 @@ impl Parser {
                 n
             };
             self.cursor.expect(TokenKind::Colon)?;
-            let col_type = self.parse_type_reference()?;
+            // `?` is the wildcard column-type placeholder, e.g.
+            // `SortInfo<(?:?)⊆T>` in `over.pure`'s OLAP overload set —
+            // it stands for "any type, position-only constraint" and
+            // pairs with the wildcard column-name `?` above. Synthesise
+            // a `TypeReference { name: "?" }` so the AST captures the
+            // shape verbatim; downstream resolution treats `?`-named
+            // type references as `Any`-equivalent.
+            let col_type = if self.cursor.check(TokenKind::Question) {
+                let qsi = self.cursor.current_source_info();
+                self.cursor.advance();
+                TypeReference {
+                    package: None,
+                    name: SmolStr::new("?"),
+                    type_arguments: vec![],
+                    multiplicity_arguments: vec![],
+                    type_variable_values: vec![],
+                    source_info: qsi,
+                }
+            } else {
+                self.parse_type_reference()?
+            };
             let multiplicity = if self.cursor.check(TokenKind::LBracket) {
                 self.cursor.expect(TokenKind::LBracket)?;
                 let mult = self.parse_multiplicity()?;
