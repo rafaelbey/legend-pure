@@ -66,3 +66,4 @@ pub mod ast;
 pub mod compiler;
 pub mod compose;
 pub mod parser;
+pub mod processor;
