@@ -164,6 +164,15 @@ pub(crate) fn resolve_type_ref(
         return resolve_relation_type_sentinel(type_ref, ctx, errors);
     }
 
+    // `?` wildcard type — used inside `SortInfo<(?:?)⊆T>`-style column
+    // specs in over.pure's OLAP overloads (and `eval.pure`'s
+    // `ColSpec<(?:Z)⊆T>`). Resolve to a generic placeholder; the
+    // narrower / type-checker treats `Generic`-typed positions as
+    // permissive so the wildcard doesn't restrict overload matching.
+    if type_ref.name.as_str() == "?" {
+        return Some(TypeExpr::Generic(SmolStr::new("?")));
+    }
+
     let element_id = if let Some(pkg) = &type_ref.package {
         // Qualified — resolve directly via the AST Package tree
         if let Some(id) = ctx.model.resolve_in_package(pkg, &type_ref.name) {
