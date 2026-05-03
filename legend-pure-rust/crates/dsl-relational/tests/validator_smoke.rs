@@ -303,3 +303,189 @@ fn well_formed_milestoning_passes() {
         "expected zero errors on bi-temporal milestoning; got {errors:#?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Stage 8: relational class-mapping validators
+//
+// `RelationalExtension` walks `###Mapping` sections and gathers every
+// `Class : Relational { … }` body. Validators below check three
+// invariants:
+//   E1. Embedded property mappings must be unique within one class
+//       mapping.
+//   E2. AssociationMapping bodies must declare exactly two
+//       property-mapping lines.
+//   E3. `Inline [id]` trailers must reference a class-mapping id
+//       declared in the same enclosing `Mapping`.
+//
+// These run alongside the Stage-1+2+3 validators (V1-V5) on the same
+// extension instance, so the test driver from earlier in this file
+// reuses unchanged.
+// ---------------------------------------------------------------------------
+
+mod class_mapping {
+    use super::{assert_one_kind, run_validator_with_mapping};
+    use indoc::indoc;
+    use legend_pure_parser_pure::error::{CompilationError, CompilationErrorKind};
+    use smol_str::SmolStr;
+
+    #[test]
+    fn association_mapping_with_one_line_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Mapping
+            Mapping pkg::M
+            (
+              X : Relational
+              {
+                AssociationMapping
+                (
+                  endA : [pkg::Db]@joinX
+                )
+              }
+            )
+        "});
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e.kind, CompilationErrorKind::InvalidAssociation { .. })),
+            "expected InvalidAssociation, got {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn association_mapping_with_two_lines_passes() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Mapping
+            Mapping pkg::M
+            (
+              X : Relational
+              {
+                AssociationMapping
+                (
+                  endA[a, b] : [pkg::Db]@joinX,
+                  endB[b, a] : [pkg::Db]@joinX
+                )
+              }
+            )
+        "});
+        let assoc_errors: Vec<&CompilationError> = errors
+            .iter()
+            .filter(|e| matches!(e.kind, CompilationErrorKind::InvalidAssociation { .. }))
+            .collect();
+        assert!(
+            assoc_errors.is_empty(),
+            "expected no InvalidAssociation errors; got {assoc_errors:#?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_embedded_property_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Mapping
+            Mapping pkg::M
+            (
+              X : Relational
+              {
+                (
+                  details (taxLocation : [pkg::Db]Tbl.t),
+                  details (taxLocation : [pkg::Db]Tbl.t)
+                )
+              }
+            )
+        "});
+        assert_one_kind(
+            &errors,
+            CompilationErrorKind::DuplicateProperty {
+                class_name: SmolStr::new("X"),
+                property_name: SmolStr::new("details"),
+            },
+        );
+    }
+
+    #[test]
+    fn inline_referencing_unknown_mapping_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Mapping
+            Mapping pkg::M
+            (
+              X : Relational
+              {
+                (details () Inline[notRegistered])
+              }
+            )
+        "});
+        assert_one_kind(
+            &errors,
+            CompilationErrorKind::UnresolvedElement {
+                path: SmolStr::new("notRegistered"),
+            },
+        );
+    }
+
+    #[test]
+    fn inline_referencing_known_mapping_passes() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Mapping
+            Mapping pkg::M
+            (
+              other [knownId] : Relational { (k : [pkg::Db]Tbl.t) }
+
+              X : Relational
+              {
+                (details () Inline[knownId])
+              }
+            )
+        "});
+        let inline_errors: Vec<&CompilationError> = errors
+            .iter()
+            .filter(|e| matches!(e.kind, CompilationErrorKind::UnresolvedElement { .. }))
+            .collect();
+        assert!(
+            inline_errors.is_empty(),
+            "expected no UnresolvedElement errors; got {inline_errors:#?}"
+        );
+    }
+}
+
+/// Same shape as `run_validator` but registers
+/// `RelationalClassMappingBodyParser` so the `###Mapping` sections
+/// in the input source can route `: Relational { … }` bodies through
+/// the Stage-5+ parser.
+fn run_validator_with_mapping(source: &str) -> Vec<CompilationError> {
+    use legend_pure_dsl_mapping::parser::MappingSectionParser;
+    use legend_pure_dsl_relational::parser::RelationalClassMappingBodyParser;
+
+    let file = legend_pure_parser_parser::parse_with_sections(
+        source,
+        "validator_smoke.pure",
+        legend_pure_parser_parser::island::default_island_parsers(),
+        vec![
+            Box::new(RelationalSectionParser),
+            Box::new(MappingSectionParser::with_body_parsers(vec![Box::new(
+                RelationalClassMappingBodyParser,
+            )])),
+        ],
+    )
+    .expect("source must parse");
+
+    let files: [SourceFile; 1] = [file];
+    let extension = RelationalExtension::new();
+    let mut errors: Vec<CompilationError> = Vec::new();
+
+    let mut bootstrap = legend_pure_parser_pure::pipeline::init_bootstrap_model();
+    let auto_imports: Vec<SmolStr> = Vec::new();
+    let mut declare_ctx = legend_pure_parser_pure::extension::DeclareCtx {
+        source_files: &files,
+        model: &mut bootstrap,
+        auto_imports: &auto_imports,
+        errors: &mut errors,
+    };
+    extension.declare(&mut declare_ctx);
+    let frozen = bootstrap;
+    let mut validate_ctx = legend_pure_parser_pure::extension::ValidateCtx {
+        model: &frozen,
+        auto_imports: &auto_imports,
+        errors: &mut errors,
+    };
+    extension.validate(&mut validate_ctx);
+    errors
+}
