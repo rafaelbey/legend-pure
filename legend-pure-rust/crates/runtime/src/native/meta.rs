@@ -827,22 +827,22 @@ pub(crate) fn build_function_type_wrapper(
 ) -> Result<crate::heap::ObjectHandle, PureException> {
     let func_type_obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::FUNCTION_TYPE);
     let (params, return_type, return_mult): (
-        std::rc::Rc<[legend_pure_parser_pure::types::Parameter]>,
+        std::sync::Arc<[legend_pure_parser_pure::types::Parameter]>,
         _,
         _,
     ) = match fv {
         crate::value::FunctionValue::Lambda(closure) => {
-            (std::rc::Rc::clone(&closure.parameters), None, None)
+            (std::sync::Arc::clone(&closure.parameters), None, None)
         }
         crate::value::FunctionValue::Compiled(id) => {
             if let Element::Function(f) = ctx.model().get_element(*id) {
                 (
-                    std::rc::Rc::clone(&f.parameters),
+                    std::sync::Arc::clone(&f.parameters),
                     Some(f.return_type.clone()),
                     Some(f.return_multiplicity.clone()),
                 )
             } else {
-                (std::rc::Rc::from(Vec::new()), None, None)
+                (std::sync::Arc::from(Vec::new()), None, None)
             }
         }
         // Path closures expose `Function<{U[1]→V[m]}>` shape but we
@@ -1980,7 +1980,7 @@ impl NativeFunction for EvaluateAndDeactivate {
         if let Value::Function(fv) = &value
             && let FunctionValue::Lambda(closure) = fv.as_ref()
         {
-            let body_specs = std::rc::Rc::clone(&closure.body);
+            let body_specs = std::sync::Arc::clone(&closure.body);
             let mut deactivated_body: Vec<Value> = Vec::with_capacity(body_specs.len());
             for spec in body_specs.iter() {
                 let evaluated = ctx.evaluate(spec)?.into_value();

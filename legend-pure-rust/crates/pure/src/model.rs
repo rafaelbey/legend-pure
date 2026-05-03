@@ -236,7 +236,14 @@ pub struct PureModel {
     package_elements: Vec<Element>,
 
     /// Extension arenas for plugin element types.
-    pub extension_arenas: HashMap<TypeId, Box<dyn Any>>,
+    ///
+    /// `Send + Sync` bounds are required so the model can be shared
+    /// across threads (notably by the LSP, which runs on a
+    /// multi-threaded executor). The bound is anticipatory — no
+    /// extension currently populates this map — but pinning it here
+    /// stops the constraint from leaking into every consumer once an
+    /// extension does.
+    pub extension_arenas: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 
     /// Per-repo visibility table: repo name → its visible-set (direct
     /// dependencies plus itself). Empty by default — populated by

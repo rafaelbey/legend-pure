@@ -260,16 +260,19 @@ pub struct PathClosure {
 /// The `captures` map snapshots the enclosing scope at the point of
 /// lambda creation for lexical scoping.
 ///
-/// `parameters` and `body` are `Rc<[T]>` so that propagating a
+/// `parameters` and `body` are `Arc<[T]>` (matching `PureModel`'s
+/// `Function`/`QualifiedProperty` shape) so propagating a
 /// `LambdaClosure` (e.g. into the heap-side `LambdaFunction` wrapper
 /// the surveyor reads via `expressionSequence`) is an O(1) refcount
-/// bump — not a deep AST clone.
+/// bump — not a deep AST clone. `Arc` (vs `Rc`) keeps the underlying
+/// AST slices `Send + Sync`, which the LSP requires; the rest of
+/// `Value` remains single-threaded.
 #[derive(Debug, Clone)]
 pub struct LambdaClosure {
     /// Parameter declarations from the lambda syntax.
-    pub parameters: Rc<[legend_pure_parser_pure::types::Parameter]>,
+    pub parameters: std::sync::Arc<[legend_pure_parser_pure::types::Parameter]>,
     /// The lambda body expressions.
-    pub body: Rc<[legend_pure_parser_pure::types::ValueSpec]>,
+    pub body: std::sync::Arc<[legend_pure_parser_pure::types::ValueSpec]>,
     /// Captured variable bindings from the enclosing scope.
     pub captures: HashMap<SmolStr, Value>,
 }

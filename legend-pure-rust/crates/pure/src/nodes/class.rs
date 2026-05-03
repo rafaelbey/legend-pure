@@ -22,7 +22,7 @@
 use legend_pure_parser_ast::SourceInfo;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::annotations::{StereotypeRef, TaggedValueRef};
 use crate::types::{Expression, Multiplicity, Parameter, TypeExpr};
@@ -115,18 +115,19 @@ pub struct QualifiedProperty {
     pub name: SmolStr,
     /// Source location.
     pub source_info: SourceInfo,
-    /// Parameters. Stored as `Rc<[Parameter]>` so that QP dispatch
+    /// Parameters. Stored as `Arc<[Parameter]>` so that QP dispatch
     /// shares the parameter list across invocations instead of
-    /// deep-cloning per call (mirrors `Function.parameters`).
-    pub parameters: Rc<[Parameter]>,
+    /// deep-cloning per call (mirrors `Function.parameters`). `Arc`
+    /// (not `Rc`) keeps `PureModel: Send + Sync` for the LSP.
+    pub parameters: Arc<[Parameter]>,
     /// Return type.
     pub return_type: TypeExpr,
     /// Return multiplicity.
     pub return_multiplicity: Multiplicity,
-    /// Body expressions. Stored as `Rc<[Expression]>` for the same
+    /// Body expressions. Stored as `Arc<[Expression]>` for the same
     /// reason as `Function.body` — eliminates the per-call deep clone
     /// at `eval_qualified_property` and `apply_qualified_property`.
-    pub body: Rc<[Expression]>,
+    pub body: Arc<[Expression]>,
     /// Stereotypes on this qualified property.
     pub stereotypes: Vec<StereotypeRef>,
     /// Tagged values on this qualified property.
