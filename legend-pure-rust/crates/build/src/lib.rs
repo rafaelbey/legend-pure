@@ -358,6 +358,7 @@ impl Embedder {
         let mut out = String::new();
         let mut default_repo_calls = Vec::<EmittedRepo>::new();
         let mut artifact_repo_calls = Vec::<EmittedRepo>::new();
+        let mut tests_artifact_calls = Vec::<EmittedRepo>::new();
         let mut artifact_emitted = false;
 
         // Pre-resolve every repo's descriptor path so purem shapes can
@@ -389,7 +390,9 @@ impl Embedder {
                         entry,
                         &manifest_dir,
                         &all_descriptors,
+                        &mut out,
                         &mut artifact_emitted,
+                        &mut tests_artifact_calls,
                     )?;
                 }
                 "purem-embedded" => {
@@ -399,6 +402,8 @@ impl Embedder {
                         &all_descriptors,
                         &mut out,
                         &mut default_repo_calls,
+                        &mut artifact_emitted,
+                        &mut tests_artifact_calls,
                     )?;
                 }
                 "purem-artifact" => {
@@ -409,6 +414,7 @@ impl Embedder {
                         &mut out,
                         &mut artifact_emitted,
                         &mut artifact_repo_calls,
+                        &mut tests_artifact_calls,
                     )?;
                 }
                 other => {
@@ -422,7 +428,11 @@ impl Embedder {
 
         if self.emit_default_aggregator {
             self.emit_default_aggregator_fn(&default_repo_calls, &mut out)?;
-            self.emit_artifact_aggregator_fn(&artifact_repo_calls, &mut out)?;
+            self.emit_artifact_aggregator_fn(
+                &artifact_repo_calls,
+                &tests_artifact_calls,
+                &mut out,
+            )?;
         }
 
         fs::write(&output, out).map_err(|source| BuildError::Io {
@@ -577,7 +587,9 @@ impl Embedder {
         entry: &RepoEntry,
         manifest_dir: &Path,
         all_descriptors: &[PathBuf],
+        out: &mut String,
         artifact_emitted: &mut bool,
+        tests_artifact_calls: &mut Vec<EmittedRepo>,
     ) -> Result<(), BuildError> {
         let (_descriptor_canonical, descriptor) = self.read_descriptor(entry, manifest_dir)?;
 
@@ -587,17 +599,34 @@ impl Embedder {
             source,
         })?;
         let purem_path = target_snapshots_dir.join(format!("{}.purem", descriptor.name));
+        let tests_path = target_snapshots_dir.join(format!("{}.tests.purem", descriptor.name));
 
+        let mut produced = true;
         if let Err(source) =
             self.run_snapshot_builder(&descriptor.name, all_descriptors, &purem_path)
         {
             println!(
                 "cargo:warning=snapshot-builder failed for `{name}`: {source}. \
-                 The .purem artifact was not produced; embedded source path \
-                 is unaffected.",
+                 The .purem + .tests.purem artifacts were not produced; embedded \
+                 source path is unaffected.",
                 name = descriptor.name,
             );
             let _ = fs::remove_file(&purem_path);
+            let _ = fs::remove_file(&tests_path);
+            produced = false;
+        }
+
+        if produced {
+            // Source-embedded path also has a tests-purem sibling; emit
+            // the synthetic <NAME>_TESTS_META so downstream classpath
+            // discovery can lift the tests blob into the merged model.
+            let const_suffix = sanitize_const(&descriptor.name);
+            self.emit_tests_meta_const(&descriptor, &const_suffix, out);
+            tests_artifact_calls.push(EmittedRepo {
+                const_suffix,
+                prefix: format!("/{}", descriptor.name),
+                shape: EmittedShape::Artifact,
+            });
         }
 
         if !*artifact_emitted {
@@ -615,13 +644,51 @@ impl Embedder {
         all_descriptors: &[PathBuf],
         out: &mut String,
         default_repo_calls: &mut Vec<EmittedRepo>,
+        artifact_emitted: &mut bool,
+        tests_artifact_calls: &mut Vec<EmittedRepo>,
     ) -> Result<(), BuildError> {
         let (descriptor_canonical, descriptor) = self.read_descriptor(entry, manifest_dir)?;
         self.emit_rerun_directives(&descriptor_canonical, &descriptor)?;
 
         let out_dir = env::var_os("OUT_DIR").ok_or(BuildError::Env("OUT_DIR"))?;
         let purem_path = PathBuf::from(&out_dir).join(format!("{}.purem", descriptor.name));
+        // snapshot-builder writes both <name>.purem and <name>.tests.purem
+        // into OUT_DIR; only the production blob is `include_bytes!`'d.
+        // The tests blob is moved to target/<profile>/snapshots/ so dev
+        // workflows can pick it up via classpath auto-discovery without
+        // baking test code into production binaries.
         self.run_snapshot_builder(&descriptor.name, all_descriptors, &purem_path)?;
+        let tests_in_out_dir =
+            PathBuf::from(&out_dir).join(format!("{}.tests.purem", descriptor.name));
+        let target_snapshots_dir = resolve_target_snapshots_dir()?;
+        fs::create_dir_all(&target_snapshots_dir).map_err(|source| BuildError::Io {
+            path: target_snapshots_dir.clone(),
+            source,
+        })?;
+        let tests_target = target_snapshots_dir.join(format!("{}.tests.purem", descriptor.name));
+        // Use rename when possible (cheap on same filesystem); fall back
+        // to copy+remove if rename crosses devices.
+        if let Err(_e) = fs::rename(&tests_in_out_dir, &tests_target) {
+            fs::copy(&tests_in_out_dir, &tests_target).map_err(|source| BuildError::Io {
+                path: tests_target.clone(),
+                source,
+            })?;
+            let _ = fs::remove_file(&tests_in_out_dir);
+        }
+        // For purem-embedded shape the prod blob lives only in OUT_DIR
+        // (where `include_bytes!` reads it from); a sibling
+        // `<name>.purem` in the snapshots dir would be redundant AND
+        // confusing. Remove any stale copy left by an earlier build
+        // iteration that pre-dates the prod/tests split.
+        let stale_prod_in_snapshots =
+            target_snapshots_dir.join(format!("{}.purem", descriptor.name));
+        let _ = fs::remove_file(&stale_prod_in_snapshots);
+
+        if !*artifact_emitted {
+            let dir_str = path_to_str(&target_snapshots_dir)?;
+            println!("cargo:rustc-env=LEGEND_PURE_BUILD_SNAPSHOTS_DIR={dir_str}");
+            *artifact_emitted = true;
+        }
 
         let const_suffix = sanitize_const(&descriptor.name);
         self.emit_meta_const(&descriptor, &const_suffix, out);
@@ -691,15 +758,20 @@ impl Embedder {
         writeln!(out, "];\n").ok();
 
         default_repo_calls.push(EmittedRepo {
-            const_suffix,
-            prefix,
+            const_suffix: const_suffix.clone(),
+            prefix: prefix.clone(),
             shape: EmittedShape::Purem,
         });
 
-        // Hint to dependent crates that they can find the snapshots
-        // directory via this env var. Even though purem-embedded repos
-        // are baked in, the side-band signal is harmless and allows
-        // mixed pipelines to discover artifacts.
+        // Sibling tests-purem is artifact-shape; emit the synthetic
+        // <NAME>_TESTS_META so the artifact aggregator can lift it.
+        self.emit_tests_meta_const(&descriptor, &const_suffix, out);
+        tests_artifact_calls.push(EmittedRepo {
+            const_suffix,
+            prefix,
+            shape: EmittedShape::Artifact,
+        });
+
         let _ = cp;
         Ok(())
     }
@@ -712,6 +784,7 @@ impl Embedder {
         out: &mut String,
         artifact_emitted: &mut bool,
         artifact_repo_calls: &mut Vec<EmittedRepo>,
+        tests_artifact_calls: &mut Vec<EmittedRepo>,
     ) -> Result<(), BuildError> {
         let (descriptor_canonical, descriptor) = self.read_descriptor(entry, manifest_dir)?;
         self.emit_rerun_directives(&descriptor_canonical, &descriptor)?;
@@ -722,22 +795,25 @@ impl Embedder {
             source,
         })?;
         let purem_path = target_snapshots_dir.join(format!("{}.purem", descriptor.name));
+        let tests_path = target_snapshots_dir.join(format!("{}.tests.purem", descriptor.name));
         // Artifacts are advisory: a compile failure for one DSL doesn't
         // block the build, since users can still point a classpath at
         // the live source. Emit a cargo warning and remove any stale
-        // file so callers don't pick up a previous build's blob.
+        // file (both prod + tests) so callers don't pick up a previous
+        // build's blob.
         let mut produced = true;
         if let Err(source) =
             self.run_snapshot_builder(&descriptor.name, all_descriptors, &purem_path)
         {
             println!(
                 "cargo:warning=snapshot-builder failed for `{name}`: {source}. \
-                 The .purem artifact was not produced; load from sources via \
-                 --classpath kind=filesystem until the underlying compile error is fixed.",
+                 The .purem + .tests.purem artifacts were not produced; load \
+                 from sources via --classpath kind=filesystem until the \
+                 underlying compile error is fixed.",
                 name = descriptor.name,
             );
-            // Best-effort cleanup of any prior stale blob.
             let _ = fs::remove_file(&purem_path);
+            let _ = fs::remove_file(&tests_path);
             produced = false;
         }
 
@@ -746,6 +822,12 @@ impl Embedder {
 
         if produced {
             artifact_repo_calls.push(EmittedRepo {
+                const_suffix: const_suffix.clone(),
+                prefix: format!("/{}", descriptor.name),
+                shape: EmittedShape::Artifact,
+            });
+            self.emit_tests_meta_const(&descriptor, &const_suffix, out);
+            tests_artifact_calls.push(EmittedRepo {
                 const_suffix,
                 prefix: format!("/{}", descriptor.name),
                 shape: EmittedShape::Artifact,
@@ -875,6 +957,40 @@ impl Embedder {
         writeln!(out, "}};\n").ok();
     }
 
+    /// Emit a synthetic `<NAME>_TESTS_META` for the test slice of `<name>`.
+    /// The synthetic repo's name is `<name>_tests`, and it depends on
+    /// `<name>` plus `<name>`'s declared deps so topo-sort places it
+    /// after every required prod blob.
+    fn emit_tests_meta_const(
+        &self,
+        descriptor: &DescriptorJson,
+        const_suffix: &str,
+        out: &mut String,
+    ) {
+        let cp = &self.crate_path;
+        writeln!(
+            out,
+            "/// Synthetic descriptor metadata for the test slice of `{name}` \
+             (sibling `<name>.tests.purem` artifact).",
+            name = descriptor.name
+        )
+        .ok();
+        writeln!(
+            out,
+            "pub const REPO_{const_suffix}_TESTS_META: {cp}::repo::RepoMeta = \
+             {cp}::repo::RepoMeta {{",
+        )
+        .ok();
+        writeln!(out, "    name: \"{}_tests\",", descriptor.name).ok();
+        writeln!(out, "    pattern: r#\"{}\"#,", descriptor.pattern).ok();
+        write!(out, "    dependencies: &[\"{}\", ", descriptor.name).ok();
+        for dep in &descriptor.dependencies {
+            write!(out, "\"{dep}\", ").ok();
+        }
+        writeln!(out, "],").ok();
+        writeln!(out, "}};\n").ok();
+    }
+
     /// Generate `default_artifact_repos(snapshots_dir: &Path) -> Vec<Repo>`,
     /// which materializes a `Repo::Purem` for every `purem-artifact`
     /// shape declared in `Cargo.toml`. Each entry uses the
@@ -884,16 +1000,18 @@ impl Embedder {
     /// Empty (no-op function body) when there are no artifact entries.
     fn emit_artifact_aggregator_fn(
         &self,
-        emitted: &[EmittedRepo],
+        prod_artifacts: &[EmittedRepo],
+        tests_artifacts: &[EmittedRepo],
         out: &mut String,
     ) -> Result<(), BuildError> {
         let cp = &self.crate_path;
         out.push_str("\n/// Build-script-emitted `.purem` artifact repos in declaration order.\n");
         out.push_str(
-            "/// Loads every artifact found at `<snapshots_dir>/<name>.purem`,\n\
-             /// silently skipping any that are missing (a DSL whose compile\n\
-             /// failed during `cargo build` may not have produced an\n\
-             /// artifact).\n",
+            "/// Loads every artifact found at `<snapshots_dir>/<name>.purem`\n\
+             /// (production blob) followed by `<snapshots_dir>/<name>.tests.purem`\n\
+             /// (synthetic `<name>_tests` repo carrying the partition's test\n\
+             /// slice). Silently skips any missing files so production\n\
+             /// deployments that ship only prod blobs work as-is.\n",
         );
         out.push_str("#[must_use]\n");
         writeln!(
@@ -902,11 +1020,28 @@ impl Embedder {
         )
         .ok();
         out.push_str("    let mut out = Vec::new();\n");
-        for repo in emitted {
+        // Prod artifacts first — tests blobs depend on them at merge
+        // time, so topo order must place each tests blob AFTER its parent.
+        for repo in prod_artifacts {
             writeln!(
                 out,
                 "    if let Ok(r) = {cp}::repo::Repo::from_purem_file(\
                  &snapshots_dir.join(\"{name}.purem\"), \"{p}\".to_string(), REPO_{s}_META) \
+                 {{ out.push(r); }}",
+                name = &repo.prefix.trim_start_matches('/'),
+                p = repo.prefix,
+                s = repo.const_suffix
+            )
+            .ok();
+        }
+        // Tests artifacts after — each one synthesizes a sibling
+        // `<name>_tests` repo with a forced dependency on the parent's
+        // prod slice (handled by `_TESTS_META.dependencies`).
+        for repo in tests_artifacts {
+            writeln!(
+                out,
+                "    if let Ok(r) = {cp}::repo::Repo::from_purem_file(\
+                 &snapshots_dir.join(\"{name}.tests.purem\"), \"{p}\".to_string(), REPO_{s}_TESTS_META) \
                  {{ out.push(r); }}",
                 name = &repo.prefix.trim_start_matches('/'),
                 p = repo.prefix,

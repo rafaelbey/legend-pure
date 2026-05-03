@@ -46,7 +46,9 @@ use legend_pure_parser_ast::section::SourceFile;
 use legend_pure_parser_pure::error::CompilationError;
 use legend_pure_parser_pure::model::PureModel;
 use legend_pure_parser_pure::pipeline::{compile_repo_slice, finalize_model, init_bootstrap_model};
-use legend_pure_parser_pure::purem::{slice_by_repo, write_repo};
+use legend_pure_parser_pure::purem::{
+    assert_no_dangling_refs, collect_test_partition, slice_by_repo_with_filter, write_repo,
+};
 use serde::Deserialize;
 use smol_str::SmolStr;
 use thiserror::Error;
@@ -84,7 +86,10 @@ pub struct CompileRequest<'a> {
     /// Name of the repo whose chunks should be sliced into the output
     /// blob. Must match the `name` field of one of the descriptors.
     pub target: &'a str,
-    /// Path to write the `.purem` blob. Parent directory must exist.
+    /// Path to write the production `.purem` blob (test elements
+    /// stripped). Parent directory must exist. The companion tests blob
+    /// is always written alongside as `<output>.tests.purem`; see
+    /// [`tests_output_path`] for the exact derivation.
     pub output: &'a Path,
     /// Auto-imports applied to every repo's compile. Pass
     /// [`DEFAULT_PLATFORM_AUTO_IMPORTS`] unless you have reason to
@@ -133,11 +138,58 @@ pub enum BuildError {
     /// Cycle detected in the descriptor dependency graph.
     #[error("dependency cycle: {0}")]
     Cycle(String),
+    /// The production slice references an element that the test
+    /// partition placed in the tests slice. Indicates a bug in the
+    /// partition or the slicer; never expected from a well-formed model.
+    #[error("dangling reference in production slice: {0}")]
+    DanglingReference(String),
+}
+
+/// Compute the path of the companion tests blob alongside `output`.
+///
+/// Inserts a `.tests` segment before the final extension:
+///   `foo.purem` → `foo.tests.purem`
+///   `foo`       → `foo.tests`
+///
+/// Used internally by [`compile_to_purem`] and exposed so callers
+/// (Embedder, CLI) can predict the artifact path without re-deriving the
+/// rule.
+#[must_use]
+pub fn tests_output_path(output: &Path) -> PathBuf {
+    let stem = output.file_stem().map(|s| s.to_os_string());
+    let ext = output.extension().map(|s| s.to_os_string());
+    let parent = output.parent();
+    let new_name = match (stem, ext) {
+        (Some(stem), Some(ext)) => {
+            let mut name = stem;
+            name.push(".tests.");
+            name.push(&ext);
+            name
+        }
+        (Some(stem), None) => {
+            let mut name = stem;
+            name.push(".tests");
+            name
+        }
+        _ => return output.to_path_buf(),
+    };
+    match parent {
+        Some(p) if !p.as_os_str().is_empty() => p.join(new_name),
+        _ => PathBuf::from(new_name),
+    }
 }
 
 /// Run a snapshot-build: load every descriptor, compile in dependency
-/// order, slice the target repo's chunks, and write the resulting bytes
-/// to `output`.
+/// order, partition the target repo into prod / tests slices, and write
+/// both blobs to disk.
+///
+/// Two files are written every time:
+/// - `<req.output>` — production slice (test code stripped).
+/// - `tests_output_path(req.output)` — tests slice (only test code).
+///
+/// Together they cover every non-bootstrap element of the target repo
+/// exactly once. Production binaries embed only the production blob;
+/// development workflows load both via the snapshots dir.
 pub fn compile_to_purem(req: CompileRequest<'_>) -> Result<(), BuildError> {
     let all_descriptors = load_descriptors(req.descriptors)?;
     if !all_descriptors.iter().any(|d| d.name == req.target) {
@@ -184,8 +236,16 @@ pub fn compile_to_purem(req: CompileRequest<'_>) -> Result<(), BuildError> {
     }
 
     let range = target_range.expect("target was validated above");
-    let slice = slice_by_repo(&model, range);
-    let bytes = write_repo(&slice).map_err(|e| BuildError::Write(format!("{e}")))?;
+    let partition = collect_test_partition(&model);
+
+    let prod_slice = slice_by_repo_with_filter(&model, range.clone(), Some(&partition.prod));
+    let test_slice = slice_by_repo_with_filter(&model, range, Some(&partition.test));
+
+    assert_no_dangling_refs(&model, &prod_slice, &partition.test)
+        .map_err(|e| BuildError::DanglingReference(e.to_string()))?;
+
+    let prod_bytes = write_repo(&prod_slice).map_err(|e| BuildError::Write(format!("{e}")))?;
+    let test_bytes = write_repo(&test_slice).map_err(|e| BuildError::Write(format!("{e}")))?;
 
     if let Some(parent) = req.output.parent() {
         fs::create_dir_all(parent).map_err(|source| BuildError::Io {
@@ -193,8 +253,13 @@ pub fn compile_to_purem(req: CompileRequest<'_>) -> Result<(), BuildError> {
             source,
         })?;
     }
-    fs::write(req.output, &bytes).map_err(|source| BuildError::Io {
+    fs::write(req.output, &prod_bytes).map_err(|source| BuildError::Io {
         path: req.output.to_path_buf(),
+        source,
+    })?;
+    let tests_path = tests_output_path(req.output);
+    fs::write(&tests_path, &test_bytes).map_err(|source| BuildError::Io {
+        path: tests_path,
         source,
     })?;
 

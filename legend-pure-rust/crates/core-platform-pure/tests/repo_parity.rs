@@ -12,15 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Parity test: `Repo::default_embedded()` (just the `platform.purem`
-//! blob after Phase 3b) vs. a `Repo::from_descriptor` filesystem build
-//! of the same platform sources.
+//! Parity test: `Repo::default_with_build_snapshots()` (embedded prod
+//! `platform.purem` plus the sibling `platform.tests.purem` artifact
+//! that carries the partition's test slice) vs. a
+//! `Repo::from_descriptor` filesystem build of the same platform
+//! sources.
 //!
 //! The two configurations must produce semantically equivalent
 //! `PureModel`s — same set of qualified element names, same error
 //! count. ElementId equality is *not* asserted (arena allocation order
 //! can differ across file-iteration orders, and the .purem path
 //! recovers from FQN-encoded external refs).
+//!
+//! Note: `default_embedded()` alone (production blob, no tests) is a
+//! deliberate strict subset of the filesystem build — it omits every
+//! `<<test.Test>>`-stereotyped function and every helper that sits in
+//! a `tests::*` subpackage. Comparing those two would fail. The test
+//! load adds the tests blob back via classpath auto-discovery so the
+//! union covers every non-bootstrap element.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -69,9 +78,22 @@ fn embedded_and_filesystem_produce_equivalent_models() {
 
     let imports = auto_imports();
 
-    // Path A: embedded `platform.purem` (the only repo baked into the
-    // binary after Phase 3b).
-    let embedded_repos = Repo::default_embedded();
+    // Path A: embedded `platform.purem` (production slice) + the
+    // sibling `platform.tests.purem` artifact loaded from the build's
+    // snapshots dir. Combined, they cover every non-bootstrap element
+    // of the platform, matching the filesystem build below.
+    //
+    // Filter to platform + platform_tests only — `default_with_build_snapshots()`
+    // also includes DSL artifacts which the filesystem branch doesn't load.
+    let embedded_repos: Vec<Repo> = Repo::default_with_build_snapshots()
+        .into_iter()
+        .filter(|r| {
+            matches!(
+                r.meta().map(|m| m.name),
+                Some("platform") | Some("platform_tests")
+            )
+        })
+        .collect();
     let model_embedded = match repo::load(&embedded_repos, &imports) {
         Ok(m) => m,
         Err(p) => p.model,
