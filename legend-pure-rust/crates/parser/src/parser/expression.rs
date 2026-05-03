@@ -1035,9 +1035,23 @@ impl Parser {
         let mut extra_function = None;
 
         if self.cursor.eat(TokenKind::Colon) {
+            // Java grammar:
+            //   oneColSpec: ... columnName (COLON (type multiplicity? | anyLambda) extraFunction?)?
+            //   extraFunction: COLON anyLambda
+            //
+            // The first piece after `:` is either a type-with-mult or a
+            // primary lambda (init function); the optional second piece
+            // after another `:` is the aggregator lambda.
             if self.cursor.check(TokenKind::LBrace) || self.is_bare_lambda() {
                 let expr = self.parse_expression()?;
-                extra_function = Some(Box::new(expr));
+                if let Expression::Lambda(l) = expr {
+                    type_spec = Some(ColumnTypeSpec::Lambda(l));
+                } else {
+                    // Non-lambda expression in lambda position is unusual
+                    // but harmless — keep it as the extra-function carrier
+                    // so the resolver can still see it.
+                    extra_function = Some(Box::new(expr));
+                }
             } else {
                 let type_ref = self.parse_type_reference()?;
                 let mult = if self.cursor.check(TokenKind::LBracket) {
@@ -1051,12 +1065,9 @@ impl Parser {
                 type_spec = Some(ColumnTypeSpec::Typed(type_ref, mult));
             }
 
-            if !self.cursor.check(TokenKind::Comma)
-                && !self.cursor.check(TokenKind::RBracket)
-                && !self.cursor.check(TokenKind::RParen)
-                && !self.cursor.check(TokenKind::Semicolon)
-                && !self.cursor.check(TokenKind::Eof)
-            {
+            // Optional `extraFunction`: `: anyLambda` after the primary.
+            // Mirrors Java's `extraFunction: COLON anyLambda`.
+            if self.cursor.eat(TokenKind::Colon) {
                 let expr = self.parse_expression()?;
                 extra_function = Some(Box::new(expr));
             }
