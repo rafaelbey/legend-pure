@@ -20,14 +20,17 @@ version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-# Stage 1 dependencies:
-# - parser-ast: SourceInfo, identifiers, packageable element pointers
+# Dependencies:
+# - parser-ast:    SourceInfo, identifiers, packageable element pointers
 # - parser-parser: SectionParser trait + ParserContext for body grammar
-# - parser-lexer: TokenKind enum
+# - parser-lexer:  TokenKind enum
+# - parser-pure:   CompilerExtension trait + DeclareCtx/ValidateCtx
+#                  for the Stage-4 `RelationalExtension` validators
 [dependencies]
 legend-pure-parser-ast = { path = "../ast" }
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-lexer = { path = "../lexer" }
+legend-pure-parser-pure = { path = "../pure" }
 smol_str = { workspace = true }
 
 [dev-dependencies]
@@ -35,4 +38,3 @@ indoc = "2"
 # end_to_end.rs loads the embedded platform repos and exercises the
 # section parser against a real Java fixture's relational source.
 legend-pure-core-platform = { path = "../core-platform-pure" }
-legend-pure-parser-pure = { path = "../pure" }
