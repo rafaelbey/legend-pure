@@ -260,3 +260,47 @@ pub fn alloc_col_spec_array_literal(
         .map_err(PureException::from)?;
     Ok(csa)
 }
+
+/// Allocate the single-column `ColSpec` literal heap shape produced
+/// by `~name` source syntax. Mirrors the platform's
+/// `meta::pure::functions::relation::colSpec(s, cl):ColSpec<T>[1]`
+/// shape: a `ColSpec` heap object whose `name:String[1]` slot holds
+/// the column name and whose `classifierGenericType` chain points at
+/// an inner `Column` (with the type / multiplicity metadata) the way
+/// reflective walks expect.
+///
+/// # Errors
+/// Returns `PureException` if any underlying heap allocation fails.
+#[allow(clippy::result_large_err)]
+pub fn alloc_col_spec_literal(
+    heap: &mut RuntimeHeap,
+    model: &PureModel,
+    column: &RelationColumnLowered,
+) -> Result<ObjectHandle, PureException> {
+    // Column heap object — captures the column's typed shape.
+    let column_obj = alloc_column(heap, model, column)?;
+
+    // Inner GenericType wraps the Column.
+    let inner_gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
+    heap.mutate_add(&inner_gt, "rawType", &[Value::Object(column_obj)])
+        .map_err(PureException::from)?;
+
+    // ColSpec's classifierGenericType points at the Column GenericType.
+    let outer_gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
+    let cs_raw_type = m3_paths::resolve(model, m3_paths::COL_SPEC).map_or(Value::Unit, Value::Element);
+    heap.mutate_add(&outer_gt, "rawType", &[cs_raw_type])
+        .map_err(PureException::from)?;
+    heap.mutate_add(
+        &outer_gt,
+        "typeArguments",
+        &[Value::Object(inner_gt)],
+    )
+    .map_err(PureException::from)?;
+
+    let cs = heap.alloc_dynamic(m3_paths::COL_SPEC);
+    heap.mutate_add(&cs, "name", &[Value::String(column.name.clone())])
+        .map_err(PureException::from)?;
+    heap.mutate_add(&cs, "classifierGenericType", &[Value::Object(outer_gt)])
+        .map_err(PureException::from)?;
+    Ok(cs)
+}

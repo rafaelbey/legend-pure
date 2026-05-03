@@ -1830,24 +1830,72 @@ fn lower_slice(
 // Column / Relation literals
 // ---------------------------------------------------------------------------
 
-/// Lowers `~name` / `~[name:Type[mult], …]` → `ColSpecArrayLiteral`.
+/// Lowers `~name` / `~name:Type[mult]` / `~[name:Type[mult], …]` to
+/// either a `ColSpecLiteral` (single-column form, `is_array=false`)
+/// or a `ColSpecArrayLiteral` (array form, `is_array=true`).
 ///
-/// Captures column triples (`name`, resolved `type_element`, `multiplicity`)
-/// at lowering time so the runtime allocator can materialise the
-/// `ColSpecArray` heap shape without re-resolving names. The lowered
-/// `ValueSpec` carries `type_info = ColSpecArray<Any>[1]` so dispatch +
-/// inference see the same shape.
+/// Mirrors the platform's `PCT.grammarCharacters` annotations on
+/// `meta::pure::functions::relation::colSpec` (`'~'`) vs
+/// `colSpecArray` (`'~[,]'`). The two shapes have distinct M3
+/// classifiers (`ColSpec` vs `ColSpecArray`) and different reflective
+/// slots (`name:String[1]` vs `names:String[*]`), so downstream
+/// overload narrowing — e.g. `ascending(column:ColSpec<T>[1])` —
+/// fails to resolve when a single `~name` is mis-lowered to
+/// `ColSpecArray`.
 ///
-/// Lambda-bearing `~name:x|$x+1` columns and column-spec arrays inside
-/// `funcColSpecArray` / `aggColSpecArray` are not exercised by the
-/// initial `RelationType` test surface — those columns are dropped here.
-/// Add a follow-up if a subsequent test forces them.
+/// Captures column triples (`name`, resolved `type_element`,
+/// `multiplicity`) at lowering time so the runtime allocator can
+/// materialise the heap shape without re-resolving names.
+///
+/// Lambda-bearing `~name:x|$x+1` columns and the `funcColSpec*` /
+/// `aggColSpec*` shapes are not yet wired through this lowerer —
+/// those columns drop their lambda payload here. Add a follow-up if
+/// a subsequent test forces them.
 fn lower_column(
     e: &ast_expr::ColumnBuilderExpr,
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
     let columns = lower_relation_columns_from_specs(&e.columns, ctx, errors);
+    // Only the *plain* single-column form (`~name`, no type-spec /
+    // no extra lambda) lowers to a `ColSpec` literal today. Lambda-
+    // bearing forms (`~name:f`, `~name:f:r`) need the platform's
+    // distinct `FuncColSpec` / `AggColSpec` classifiers, and
+    // typed-column forms (`~name:Type[mult]`) historically flow
+    // through `ColSpecArrayLiteral` so callers like `addColumns` can
+    // navigate `csa.classifierGenericType.typeArguments[0]…`. Until
+    // the dedicated lowering paths land, we keep both as
+    // `ColSpecArrayLiteral` to avoid surfacing depth-shift errors
+    // from misclassified types.
+    let plain_single = !e.is_array
+        && e.columns.len() == 1
+        && e.columns
+            .first()
+            .is_some_and(|c| c.type_spec.is_none() && c.extra_function.is_none());
+    if plain_single {
+        let name = e
+            .columns
+            .first()
+            .map_or_else(|| SmolStr::new_static(""), |c| c.name.clone());
+        let column = RelationColumnLowered {
+            name,
+            type_element: crate::bootstrap::ANY_ID,
+            multiplicity: Multiplicity::ZeroOrOne,
+        };
+        let col_spec_id = resolve_col_spec_id(ctx)?;
+        return Some(typed(
+            ExprKind::ColSpecLiteral { column },
+            e.source_info.clone(),
+            ResolvedType {
+                type_expr: TypeExpr::Named {
+                    element: col_spec_id,
+                    type_arguments: vec![],
+                    value_arguments: vec![],
+                },
+                multiplicity: Multiplicity::PureOne,
+            },
+        ));
+    }
     let col_spec_array_id = resolve_col_spec_array_id(ctx)?;
     Some(typed(
         ExprKind::ColSpecArrayLiteral { columns },
@@ -1941,6 +1989,16 @@ fn resolve_col_spec_array_id(ctx: &mut ResolutionContext<'_>) -> Option<crate::i
         SmolStr::new("metamodel"),
         SmolStr::new("relation"),
         SmolStr::new("ColSpecArray"),
+    ])
+}
+
+fn resolve_col_spec_id(ctx: &mut ResolutionContext<'_>) -> Option<crate::ids::ElementId> {
+    ctx.model.resolve_by_path(&[
+        SmolStr::new("meta"),
+        SmolStr::new("pure"),
+        SmolStr::new("metamodel"),
+        SmolStr::new("relation"),
+        SmolStr::new("ColSpec"),
     ])
 }
 

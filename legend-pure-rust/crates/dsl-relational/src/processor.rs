@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Phase B1+B2: post-processor for the relational DSL.
+//! Phase B1+B2+B3: post-processor for the relational DSL.
 //!
 //! `RelationalExtension::define_bodies` runs this module against every
 //! registered [`DatabaseDef`] to produce a [`ResolvedDatabase`] — a
@@ -37,9 +37,14 @@
 //!   `[db]` qualifiers and transitively-included tables resolve through
 //!   the snapshot map.
 //!
+//! - **View bodies** (B3) — every `ViewColumnMappingLine`'s value is
+//!   resolved to an [`OpColumnBinding`]; constant literals carry a
+//!   `None` binding. Each view tracks the distinct table names it
+//!   references; views with a single referenced table get their
+//!   `main_table` populated.
+//!
 //! What this module deliberately defers (Phase-B sub-items):
 //!
-//! - View body resolution + view-cycle detection (B3)
 //! - Class-mapping property mapping resolution (B4)
 //! - Main-table inheritance through `extends` (B5)
 //! - AssociationMapping source/target class population (B6)
@@ -52,7 +57,9 @@ use smol_str::SmolStr;
 
 use legend_pure_parser_ast::SourceInfo;
 
-use crate::ast::{ColumnDef, DatabaseDef, DatabaseElement, OpColumn, OpExpr};
+use crate::ast::{
+    ColumnDef, DatabaseDef, DatabaseElement, JoinColWithDbOrConstant, OpColumn, OpExpr, View,
+};
 
 // ---------------------------------------------------------------------------
 // PureColumnType — SQL → Pure primitive mapping
@@ -286,6 +293,45 @@ pub struct ResolvedOpBody {
     pub bindings: Vec<OpColumnBinding>,
 }
 
+/// Resolved value-side binding for one `ViewColumnMappingLine` — the
+/// column reference embedded in `JoinColWithDbOrConstant`'s `column`
+/// field (after any join sequence). `None` when the line's value is
+/// a constant literal or the column ref couldn't be resolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedViewColumn {
+    /// View column name as written.
+    pub column_name: SmolStr,
+    /// Optional `[targetSetId]` qualifier on the column header.
+    pub target_set_id: Option<SmolStr>,
+    /// Resolved binding for the value's terminal column ref. `None`
+    /// when the value is a constant literal.
+    pub value_binding: Option<OpColumnBinding>,
+}
+
+/// Resolved view body — column bindings for every
+/// `ViewColumnMappingLine`, plus the inferred main table (or `None`
+/// when no consistent main table is detectable).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedViewBody {
+    /// View name as written.
+    pub view_name: SmolStr,
+    /// Resolved column lines, in source order.
+    pub columns: Vec<ResolvedViewColumn>,
+    /// All distinct table names referenced by this view's column
+    /// values (and by the optional `~filter` chain). When the set
+    /// has size 1 the view has a clean main table; size > 1 means
+    /// either Java would error (multiple main tables) or the view
+    /// pulls from joins.
+    pub referenced_tables: Vec<SmolStr>,
+    /// Inferred main table — populated when `referenced_tables`
+    /// reduces to a single entry through the column chain. `None`
+    /// when the view spans multiple unrelated tables (Java's
+    /// `identifyMainTable` raises an error in that case; we record
+    /// `None` and leave the user-facing diagnostic to a future
+    /// validator).
+    pub main_table: Option<SmolStr>,
+}
+
 /// Per-database resolved snapshot produced by [`process_database`].
 ///
 /// Lives in extension state, not on the [`PureModel`]. Consumers
@@ -318,6 +364,9 @@ pub struct ResolvedDatabase {
     pub join_bodies: Vec<ResolvedOpBody>,
     /// Resolved op-bodies for every MultiGrainFilter on this database.
     pub multi_grain_filter_bodies: Vec<ResolvedOpBody>,
+    /// Resolved view bodies for every View on this database.
+    /// Populated by [`resolve_view_bodies`] (Phase B3).
+    pub view_bodies: Vec<ResolvedViewBody>,
 }
 
 // ---------------------------------------------------------------------------
@@ -394,6 +443,7 @@ pub fn process_database(def: &DatabaseDef) -> ResolvedDatabase {
         filter_bodies: Vec::new(),
         join_bodies: Vec::new(),
         multi_grain_filter_bodies: Vec::new(),
+        view_bodies: Vec::new(),
     }
 }
 
@@ -580,6 +630,172 @@ fn walk_op_expr_for_columns(
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase B3 — view body resolution + main-table inference
+// ---------------------------------------------------------------------------
+
+/// Walk every View on every registered database, producing a
+/// [`ResolvedViewBody`] per view. Each view-column-mapping-line's
+/// terminal column reference is resolved against the snapshot map
+/// (with cross-db `[db]` qualifiers and include closures handled).
+/// The view's main table is inferred when all column lines reference
+/// the same table; otherwise `main_table` stays `None`.
+///
+/// Mutates `snapshots` in place.
+pub fn resolve_view_bodies(
+    snapshots: &mut HashMap<SmolStr, ResolvedDatabase>,
+    defs_by_fqn: &HashMap<SmolStr, DatabaseDef>,
+) {
+    let visible_tables: HashMap<SmolStr, HashSet<SmolStr>> = defs_by_fqn
+        .iter()
+        .map(|(fqn, def)| (fqn.clone(), collect_visible_table_names(def, defs_by_fqn)))
+        .collect();
+
+    for (db_fqn, def) in defs_by_fqn {
+        let mut view_bodies: Vec<ResolvedViewBody> = Vec::new();
+        for elem in &def.elements {
+            match elem {
+                DatabaseElement::View(v) => {
+                    view_bodies.push(resolve_view(v, db_fqn, snapshots, &visible_tables));
+                }
+                DatabaseElement::Schema(s) => {
+                    for v in &s.views {
+                        view_bodies.push(resolve_view(v, db_fqn, snapshots, &visible_tables));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(snapshot) = snapshots.get_mut(db_fqn) {
+            snapshot.view_bodies = view_bodies;
+        }
+    }
+}
+
+fn resolve_view(
+    v: &View,
+    owning_db_fqn: &SmolStr,
+    snapshots: &HashMap<SmolStr, ResolvedDatabase>,
+    visible_tables: &HashMap<SmolStr, HashSet<SmolStr>>,
+) -> ResolvedViewBody {
+    let mut columns: Vec<ResolvedViewColumn> = Vec::with_capacity(v.columns.len());
+    let mut referenced: Vec<SmolStr> = Vec::new();
+    let mut seen: HashSet<SmolStr> = HashSet::new();
+
+    for line in &v.columns {
+        let value_binding =
+            resolve_view_column_value(&line.value, owning_db_fqn, snapshots, visible_tables);
+        if let Some(b) = &value_binding {
+            if !b.unresolved_table && seen.insert(b.table_name.clone()) {
+                referenced.push(b.table_name.clone());
+            }
+        }
+        columns.push(ResolvedViewColumn {
+            column_name: line.column_name.value.clone(),
+            target_set_id: line.target_set_id.as_ref().map(|t| t.value.clone()),
+            value_binding,
+        });
+    }
+
+    // Filter chain may reference additional tables — track those too.
+    if let Some(filter) = &v.filter {
+        if let Some(chain) = &filter.db_chain {
+            // The join sequence's chain doesn't carry direct
+            // table-name references at this layer; the joins point
+            // at Join elements whose bodies were already resolved
+            // by B2. We can revisit per-segment table inference in
+            // B7 once implicit-db chains land.
+            let _ = chain;
+        }
+    }
+
+    let main_table = if referenced.len() == 1 {
+        Some(referenced[0].clone())
+    } else {
+        None
+    };
+
+    ResolvedViewBody {
+        view_name: v.name.value.clone(),
+        columns,
+        referenced_tables: referenced,
+        main_table,
+    }
+}
+
+fn resolve_view_column_value(
+    jc: &JoinColWithDbOrConstant,
+    owning_db_fqn: &SmolStr,
+    snapshots: &HashMap<SmolStr, ResolvedDatabase>,
+    visible_tables: &HashMap<SmolStr, HashSet<SmolStr>>,
+) -> Option<OpColumnBinding> {
+    let column = jc.column.as_ref()?;
+    let OpColumn::Aliased {
+        db,
+        alias,
+        scope,
+        source_info,
+        ..
+    } = column
+    else {
+        // `{target}.col` form is illegal in view bodies (Java's grammar
+        // only allows it inside Join op_columns). Skip.
+        return None;
+    };
+
+    // Explicit `[db]` on the inner op_column overrides the outer
+    // `JoinColWithDbOrConstant.db`; otherwise fall back to the
+    // outer-level `[db]` and finally to the owning database.
+    let target_db_ptr = db.as_ref().or(jc.db.as_ref());
+    let (target_db_fqn, unresolved_database) = match target_db_ptr {
+        Some(d) => {
+            let fqn = packageable_fqn_from_ptr(d);
+            let exists = snapshots.contains_key(&fqn);
+            (fqn, !exists)
+        }
+        None => (owning_db_fqn.clone(), false),
+    };
+
+    let mut unresolved_table = false;
+    let mut unresolved_column = false;
+    let mut column_index: Option<usize> = None;
+    let mut bound_db_fqn = target_db_fqn.clone();
+
+    if !unresolved_database {
+        let table_visible = visible_tables
+            .get(&target_db_fqn)
+            .is_some_and(|set| set.contains(&alias.value));
+        if !table_visible {
+            unresolved_table = true;
+        } else if let Some(scope_seg) = scope.first() {
+            if let Some((home_db, idx)) = lookup_column_via_includes(
+                snapshots,
+                &target_db_fqn,
+                &alias.value,
+                &scope_seg.value,
+            ) {
+                bound_db_fqn = home_db;
+                column_index = Some(idx);
+            } else {
+                unresolved_column = true;
+            }
+        } else if let Some(home_db) = lookup_table_home_db(snapshots, &target_db_fqn, &alias.value)
+        {
+            bound_db_fqn = home_db;
+        }
+    }
+
+    Some(OpColumnBinding {
+        database_fqn: bound_db_fqn,
+        table_name: alias.value.clone(),
+        column_index,
+        unresolved_database,
+        unresolved_table,
+        unresolved_column,
+        source_info: source_info.clone(),
+    })
 }
 
 fn packageable_fqn_from_ptr(

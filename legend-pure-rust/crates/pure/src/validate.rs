@@ -811,6 +811,9 @@ fn walk_expr_kind_refs(
                 emit(col.type_element, si);
             }
         }
+        ExprKind::ColSpecLiteral { column } => {
+            emit(column.type_element, si);
+        }
     }
 }
 
