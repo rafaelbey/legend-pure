@@ -36,6 +36,7 @@
 //! - The mapping-island grammar (`Class : Relational { … }` inside
 //!   `###Mapping`) — Stages 5–7.
 
+use legend_pure_dsl_mapping::ast::ForeignClassMappingBody;
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::annotation::{PackageableElementPtr, SpannedString};
 use legend_pure_parser_ast::dsl::DSLElement;
@@ -692,3 +693,268 @@ fn needs_space_between(prev: &Token, next: &Token) -> bool {
 // Validators in later stages walk `db.elements` directly to find
 // tables / views / joins / filters; keeping the Stage 1 surface lean
 // avoids over-engineering iterator helpers nobody uses yet.
+
+// ===========================================================================
+// Stage 5: Relational class-mapping body
+// ===========================================================================
+
+/// Class-mapping-body kind that
+/// `RelationalClassMappingBodyParser` reports — also the verbatim
+/// spelling consumers see in `Class : Relational { … }`.
+pub const CLASS_MAPPING_BODY_KIND: &str = "Relational";
+
+/// `Class : Relational { … }` body produced by the Stage-5 plug-in.
+/// Lives in `dsl-mapping`'s `ClassMappingBody::Foreign` variant.
+///
+/// Java grammar (RelationalParser.g4 lines 165-265):
+///
+/// ```text
+/// classMapping  : mappingBlock (mappingElements)? EOF ;
+/// mappingBlock  : filterMappingBlock? DISTINCTCMD?
+///                 mappingBlockGroupBy? primaryKey? mainTableBlock? ;
+/// ```
+///
+/// Stage 5 covers the shell + all five `mappingBlock` headers + bare
+/// property-mapping lines and the `scope(…)` wrapper. Embedded /
+/// inline / otherwise property mapping values are deferred to Stage 6.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelationalClassMappingBody {
+    /// `~filter [db]( <joinSequence> | [db2])? <id>` — optional.
+    pub filter: Option<FilterMappingBlock>,
+    /// `~distinct` flag.
+    pub distinct: bool,
+    /// `~groupBy(<joinCol>, …)` — optional list.
+    pub group_by: Option<Vec<JoinColWithDbOrConstant>>,
+    /// `~primaryKey(<joinCol>, …)` — optional list.
+    pub primary_key: Option<Vec<JoinColWithDbOrConstant>>,
+    /// `~mainTable [db]<table>(<scope>)?` — optional declared
+    /// main-table reference.
+    pub main_table: Option<MainTableBlock>,
+    /// Body mapping elements: bare property-mapping lines and / or
+    /// `scope(…) (…)` wrappers, in source order.
+    pub mapping_elements: Vec<MappingElement>,
+    /// Span of the entire `{ … }` body.
+    pub source_info: SourceInfo,
+}
+
+/// `~filter [db] (<joinSequence> | [db2])? <filter_name>`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterMappingBlock {
+    /// Leading `[db]` qualifier on the filter ref.
+    pub db: PackageableElementPtr,
+    /// Optional join-sequence + secondary `| [db2]` qualifier.
+    pub join_sequence: Option<FilterMappingJoinSequence>,
+    /// Trailing identifier — name of the registered Filter.
+    pub filter_name: SpannedString,
+    /// Span covering the entire `~filter …` clause.
+    pub source_info: SourceInfo,
+}
+
+/// `(<group>)? <oneJoin> <oneJoinRight>* | [db]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterMappingJoinSequence {
+    /// Optional `(group_id)` prefix on the first join.
+    pub group_id: Option<SpannedString>,
+    /// First `@joinName`.
+    pub head: OneJoin,
+    /// Subsequent `> [db?] @joinName` segments.
+    pub right: Vec<OneJoinRight>,
+    /// Trailing `| [db]` qualifier.
+    pub second_db: PackageableElementPtr,
+    /// Span covering the whole sequence (head through the trailing db).
+    pub source_info: SourceInfo,
+}
+
+/// `~mainTable [db]<table>(<scope>)?`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MainTableBlock {
+    /// Leading `[db]` qualifier.
+    pub db: PackageableElementPtr,
+    /// `simpleScopeInfo` — table name + 0-2 scope segments.
+    pub scope: SimpleScopeInfo,
+    /// Span covering `~mainTable …`.
+    pub source_info: SourceInfo,
+}
+
+/// `<table>(.scope (.scope)?)?` — used by mainTable + scope().
+#[derive(Debug, Clone, PartialEq)]
+pub struct SimpleScopeInfo {
+    /// Table name.
+    pub table: SpannedString,
+    /// Zero, one, or two scope-info segments after the table name.
+    pub scope: Vec<SpannedString>,
+    /// Span from the table name through the last scope segment.
+    pub source_info: SourceInfo,
+}
+
+/// `(database? ((joinSequence (PIPE op_column)?) | op_column)) | constant`.
+///
+/// Captured as a tagged shape with optional `[db]` prefix, optional
+/// `joinSequence` (followed by an optional `| op_column`), and the
+/// terminal column / literal.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JoinColWithDbOrConstant {
+    /// Optional `[db]` qualifier.
+    pub db: Option<PackageableElementPtr>,
+    /// Optional `@a > @b > …` join sequence.
+    pub join: Option<JoinSequence>,
+    /// Optional terminal column reference. Set when the source
+    /// included an `op_column` (after the join sequence's `| col`
+    /// piping form, or directly when no join sequence preceded it).
+    pub column: Option<OpColumn>,
+    /// Optional terminal constant literal.
+    pub literal: Option<OpLiteral>,
+    /// Span covering the whole expression.
+    pub source_info: SourceInfo,
+}
+
+/// `oneJoin (oneJoinRight)*` — `@head > @right1 > @right2 ...`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JoinSequence {
+    /// First `@joinName`.
+    pub head: OneJoin,
+    /// Subsequent `> [db?] @joinName` segments.
+    pub right: Vec<OneJoinRight>,
+    /// Span covering the whole sequence.
+    pub source_info: SourceInfo,
+}
+
+/// `@joinName` — one element of a join sequence.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OneJoin {
+    /// Name of the registered join.
+    pub name: SpannedString,
+    /// Span of `@joinName`.
+    pub source_info: SourceInfo,
+}
+
+/// `> (group)? [db]? @joinName` — a non-head segment.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OneJoinRight {
+    /// Optional `(group_id)` on the right side.
+    pub group_id: Option<SpannedString>,
+    /// Optional `[db]` qualifier on the right side.
+    pub db: Option<PackageableElementPtr>,
+    /// `@joinName` on the right side.
+    pub join: OneJoin,
+    /// Span covering the entire `> … @join` segment.
+    pub source_info: SourceInfo,
+}
+
+/// One element of `mappingElements`: a single mapping line or a
+/// `scope(…)` wrapper.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum MappingElement {
+    /// Bare `prop : value` mapping line.
+    Single(SingleMappingLine),
+    /// `scope([db]<scope>) (prop : value, …)` wrapper.
+    Scope(ScopedMapping),
+}
+
+/// `scope([db] simpleScopeInfo?) ( <singleMappingLines> )`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScopedMapping {
+    /// `[db]` qualifier on the scope.
+    pub db: PackageableElementPtr,
+    /// Optional `simpleScopeInfo` — table name + 0-2 scope segments.
+    pub scope: Option<SimpleScopeInfo>,
+    /// Mapping lines inside the scope's body.
+    pub mapping_lines: Vec<SingleMappingLine>,
+    /// Span covering the entire `scope(…) (…)` expression.
+    pub source_info: SourceInfo,
+}
+
+/// One `singleMappingLine` — bare or plus-form (`+localProperty`).
+/// Embedded / inline / otherwise property mapping values are
+/// deferred to Stage 6.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum SingleMappingLine {
+    /// `<property> [<srcId>(,<targetId>)?]? : transformer? joinCol`.
+    NonePlus(NonePlusMappingLine),
+    /// `+ <property> : <type>[<mult>] : transformer? joinCol`.
+    Plus(PlusMappingLine),
+}
+
+/// Bare-form mapping line.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NonePlusMappingLine {
+    /// Property being mapped on the target class.
+    pub property: SpannedString,
+    /// Optional `[srcId]` or `[srcId, targetId]` tag pair.
+    pub source_id: Option<SpannedString>,
+    /// Optional second tag (when `[srcId, targetId]`).
+    pub target_id: Option<SpannedString>,
+    /// `: transformer? joinColWithDbOrConstant`.
+    pub mapping: RelationalMapping,
+    /// Span covering the entire line.
+    pub source_info: SourceInfo,
+}
+
+/// Plus-form mapping line: `+ <prop> : <typePath>[<lower>(..<upper>)?] : … `.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlusMappingLine {
+    /// Property being mapped (declared local to this mapping).
+    pub property: SpannedString,
+    /// `: <typePath>[<lower>(..<upper>)?]` — local property declaration.
+    pub local: LocalMappingProperty,
+    /// `: transformer? joinColWithDbOrConstant`.
+    pub mapping: RelationalMapping,
+    /// Span covering the entire line.
+    pub source_info: SourceInfo,
+}
+
+/// `: <typePath>[<lower>(..<upper>)?]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalMappingProperty {
+    /// Property's declared type.
+    pub type_path: PackageableElementPtr,
+    /// Lower-bound multiplicity literal (`INTEGER | STAR`).
+    pub mult_lower: SpannedString,
+    /// Optional upper-bound multiplicity literal.
+    pub mult_upper: Option<SpannedString>,
+    /// Span covering the entire local-property declaration.
+    pub source_info: SourceInfo,
+}
+
+/// `: <transformer>? <joinCol>` — bare relational mapping value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelationalMapping {
+    /// `EnumerationMapping <id> :` — optional transformer prefix.
+    pub transformer: Option<Transformer>,
+    /// Terminal `joinColWithDbOrConstant`.
+    pub value: JoinColWithDbOrConstant,
+    /// Span covering the whole `: transformer? joinCol`.
+    pub source_info: SourceInfo,
+}
+
+/// `EnumerationMapping <id> :`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Transformer {
+    /// Enumeration-mapping identifier.
+    pub enumeration_mapping: SpannedString,
+    /// Span covering the entire transformer prefix.
+    pub source_info: SourceInfo,
+}
+
+impl ForeignClassMappingBody for RelationalClassMappingBody {
+    fn kind(&self) -> &str {
+        CLASS_MAPPING_BODY_KIND
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn clone_box(&self) -> Box<dyn ForeignClassMappingBody> {
+        Box::new(self.clone())
+    }
+    fn eq_content(&self, other: &dyn ForeignClassMappingBody) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|o| self == o)
+    }
+    fn compose(&self, out: &mut String) {
+        crate::compose::write_relational_class_mapping_body(out, self);
+    }
+}

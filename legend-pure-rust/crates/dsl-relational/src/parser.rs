@@ -41,9 +41,13 @@ use legend_pure_parser_parser::section_parser::SectionParser;
 use smol_str::SmolStr;
 
 use crate::ast::{
-    BinOp, BoolOp, ColumnDef, DatabaseDef, DatabaseElement, DatabaseInclude, Filter, Join,
-    MilestoneDef, MilestoneField, MilestoneSpec, MilestoneValue, MultiGrainFilter, OpColumn,
-    OpExpr, OpLiteral, SECTION_KIND, Schema, Table, TokenSlice, View,
+    BinOp, BoolOp, ColumnDef, DatabaseDef, DatabaseElement, DatabaseInclude, Filter,
+    FilterMappingBlock, FilterMappingJoinSequence, Join, JoinColWithDbOrConstant, JoinSequence,
+    LocalMappingProperty, MainTableBlock, MappingElement, MilestoneDef, MilestoneField,
+    MilestoneSpec, MilestoneValue, MultiGrainFilter, NonePlusMappingLine, OneJoin, OneJoinRight,
+    OpColumn, OpExpr, OpLiteral, PlusMappingLine, RelationalClassMappingBody, RelationalMapping,
+    SECTION_KIND, Schema, ScopedMapping, SimpleScopeInfo, SingleMappingLine, Table, TokenSlice,
+    Transformer, View,
 };
 
 fn err(message: String, source_info: SourceInfo) -> ParseError {
@@ -1101,4 +1105,652 @@ fn skip_to_recovery_point(cursor: &mut Cursor) {
         }
         cursor.advance();
     }
+}
+
+// ===========================================================================
+// Stage 5: Relational class-mapping body parser
+//
+// Java grammar (RelationalParser.g4 lines 165-265):
+//
+//   classMapping  : mappingBlock (mappingElements)? EOF ;
+//   mappingBlock  : filterMappingBlock? DISTINCTCMD?
+//                   mappingBlockGroupBy? primaryKey? mainTableBlock? ;
+//
+// Real fixtures (TestMappingGrammar) sometimes declare the headers in
+// a different order than the grammar (`~filter` before `~mainTable`,
+// for example), so the parser is permissive about ordering — it sees
+// `~`, advances, dispatches by the next identifier's text, and
+// accumulates each header into the body. Duplicate headers raise a
+// pointed error.
+// ===========================================================================
+
+/// Plug-in `ClassMappingBodyParser` for the Relational mapping-island
+/// shape. Register with `MappingSectionParser::with_body_parsers`.
+///
+/// The body block looks like
+///
+/// ```text
+/// Class : Relational {
+///   ~mainTable [db]Table
+///   ~filter [db]filterName
+///   ~distinct
+///   ~primaryKey([db]Table.col, …)
+///   ~groupBy([db]Table.col, …)
+///   (prop : col, prop2 : col2, …)
+/// }
+/// ```
+pub struct RelationalClassMappingBodyParser;
+
+impl legend_pure_dsl_mapping::parser::ClassMappingBodyParser for RelationalClassMappingBodyParser {
+    fn kind(&self) -> &str {
+        crate::ast::CLASS_MAPPING_BODY_KIND
+    }
+
+    fn parse(
+        &self,
+        ctx: &mut ParserContext<'_>,
+    ) -> Result<Box<dyn legend_pure_dsl_mapping::ast::ForeignClassMappingBody>, ParseError> {
+        let body = parse_relational_class_mapping_body(ctx)?;
+        Ok(Box::new(body))
+    }
+}
+
+fn parse_relational_class_mapping_body(
+    ctx: &mut ParserContext<'_>,
+) -> Result<RelationalClassMappingBody, ParseError> {
+    let open = ctx.cursor().expect(TokenKind::LBrace)?;
+
+    let mut filter: Option<FilterMappingBlock> = None;
+    let mut distinct = false;
+    let mut group_by: Option<Vec<JoinColWithDbOrConstant>> = None;
+    let mut primary_key: Option<Vec<JoinColWithDbOrConstant>> = None;
+    let mut main_table: Option<MainTableBlock> = None;
+
+    // Mapping-block headers — `~<keyword> ...` clauses. Permissive
+    // about ordering; duplicate headers error.
+    while ctx.cursor().check(TokenKind::Tilde) {
+        let tilde = ctx.cursor().expect(TokenKind::Tilde)?;
+        let kw = ctx.cursor().expect(TokenKind::Identifier)?;
+        match kw.text.as_str() {
+            "filter" => {
+                if filter.is_some() {
+                    return Err(err(
+                        "duplicate `~filter` header in Relational class-mapping body".into(),
+                        kw.source_info,
+                    ));
+                }
+                filter = Some(parse_filter_mapping_block_after_tilde(
+                    ctx,
+                    &tilde.source_info,
+                    &kw.source_info,
+                )?);
+            }
+            "distinct" => {
+                if distinct {
+                    return Err(err(
+                        "duplicate `~distinct` header in Relational class-mapping body".into(),
+                        kw.source_info,
+                    ));
+                }
+                distinct = true;
+            }
+            "groupBy" => {
+                if group_by.is_some() {
+                    return Err(err(
+                        "duplicate `~groupBy` header in Relational class-mapping body".into(),
+                        kw.source_info,
+                    ));
+                }
+                group_by = Some(parse_paren_join_col_list(ctx)?);
+            }
+            "primaryKey" => {
+                if primary_key.is_some() {
+                    return Err(err(
+                        "duplicate `~primaryKey` header in Relational class-mapping body".into(),
+                        kw.source_info,
+                    ));
+                }
+                primary_key = Some(parse_paren_join_col_list(ctx)?);
+            }
+            "mainTable" => {
+                if main_table.is_some() {
+                    return Err(err(
+                        "duplicate `~mainTable` header in Relational class-mapping body".into(),
+                        kw.source_info,
+                    ));
+                }
+                main_table = Some(parse_main_table_block_after_tilde(
+                    ctx,
+                    &tilde.source_info,
+                    &kw.source_info,
+                )?);
+            }
+            other => {
+                return Err(err(
+                    format!(
+                        "unknown Relational class-mapping body header `~{other}` \
+                         (expected one of: ~filter, ~distinct, ~groupBy, ~primaryKey, ~mainTable)"
+                    ),
+                    kw.source_info,
+                ));
+            }
+        }
+    }
+
+    // mappingElements — wrapped in `(...)` per Java's grammar. The
+    // wrapping parens are part of `classMapping`'s outer rule, but
+    // the body is delivered to us between the class-mapping `{ … }`
+    // braces, so the parens around mapping elements are required
+    // when any are present. Empty body is legal (header-only).
+    let mut mapping_elements: Vec<MappingElement> = Vec::new();
+    if ctx.cursor().check(TokenKind::LParen) {
+        ctx.cursor().expect(TokenKind::LParen)?;
+        if !ctx.cursor().check(TokenKind::RParen) {
+            loop {
+                mapping_elements.push(parse_mapping_element(ctx)?);
+                if !ctx.cursor().eat(TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        ctx.cursor().expect(TokenKind::RParen)?;
+    }
+
+    let close = ctx.cursor().expect(TokenKind::RBrace)?;
+    Ok(RelationalClassMappingBody {
+        filter,
+        distinct,
+        group_by,
+        primary_key,
+        main_table,
+        mapping_elements,
+        source_info: merge_si(&open.source_info, &close.source_info),
+    })
+}
+
+fn parse_filter_mapping_block_after_tilde(
+    ctx: &mut ParserContext<'_>,
+    tilde_si: &SourceInfo,
+    _kw_si: &SourceInfo,
+) -> Result<FilterMappingBlock, ParseError> {
+    // `~filter [db] (joinSeq | [db2])? <id>`
+    let db = parse_required_db_qualifier(ctx)?;
+
+    // Lookahead: a join sequence starts with `@` or `(group)?@`.
+    let join_sequence = if ctx.cursor().check(TokenKind::At)
+        || (ctx.cursor().check(TokenKind::LParen)
+            && ctx.cursor().peek_kind_at(1) == TokenKind::Identifier)
+    {
+        // Parse `(group)? oneJoin (oneJoinRight)* | [db2]`.
+        let group_id = if ctx.cursor().check(TokenKind::LParen)
+            && ctx.cursor().peek_kind_at(1) == TokenKind::Identifier
+            && ctx.cursor().peek_kind_at(2) == TokenKind::RParen
+        {
+            ctx.cursor().expect(TokenKind::LParen)?;
+            let id = parse_relational_identifier(ctx)?;
+            ctx.cursor().expect(TokenKind::RParen)?;
+            Some(id)
+        } else {
+            None
+        };
+        let head = parse_one_join(ctx)?;
+        let mut right = Vec::new();
+        while ctx.cursor().check(TokenKind::Greater) {
+            right.push(parse_one_join_right(ctx)?);
+        }
+        ctx.cursor().expect(TokenKind::Pipe)?;
+        let second_db = parse_required_db_qualifier(ctx)?;
+        let span = merge_si(&head.source_info, &second_db.source_info);
+        Some(FilterMappingJoinSequence {
+            group_id,
+            head,
+            right,
+            second_db,
+            source_info: span,
+        })
+    } else {
+        None
+    };
+
+    let filter_name = parse_relational_identifier(ctx)?;
+    let span = merge_si(tilde_si, &filter_name.source_info);
+    Ok(FilterMappingBlock {
+        db,
+        join_sequence,
+        filter_name,
+        source_info: span,
+    })
+}
+
+fn parse_main_table_block_after_tilde(
+    ctx: &mut ParserContext<'_>,
+    tilde_si: &SourceInfo,
+    _kw_si: &SourceInfo,
+) -> Result<MainTableBlock, ParseError> {
+    let db = parse_required_db_qualifier(ctx)?;
+    let scope = parse_simple_scope_info(ctx)?;
+    let span = merge_si(tilde_si, &scope.source_info);
+    Ok(MainTableBlock {
+        db,
+        scope,
+        source_info: span,
+    })
+}
+
+fn parse_simple_scope_info(ctx: &mut ParserContext<'_>) -> Result<SimpleScopeInfo, ParseError> {
+    let table = parse_relational_identifier(ctx)?;
+    let mut scope = Vec::new();
+    while ctx.cursor().eat(TokenKind::Dot) && scope.len() < 2 {
+        scope.push(parse_relational_identifier(ctx)?);
+    }
+    let end = scope
+        .last()
+        .map(|s| s.source_info.clone())
+        .unwrap_or_else(|| table.source_info.clone());
+    Ok(SimpleScopeInfo {
+        table: table.clone(),
+        scope,
+        source_info: merge_si(&table.source_info, &end),
+    })
+}
+
+fn parse_paren_join_col_list(
+    ctx: &mut ParserContext<'_>,
+) -> Result<Vec<JoinColWithDbOrConstant>, ParseError> {
+    ctx.cursor().expect(TokenKind::LParen)?;
+    let mut out = Vec::new();
+    if !ctx.cursor().check(TokenKind::RParen) {
+        loop {
+            out.push(parse_join_col_with_db_or_constant(ctx)?);
+            if !ctx.cursor().eat(TokenKind::Comma) {
+                break;
+            }
+        }
+    }
+    ctx.cursor().expect(TokenKind::RParen)?;
+    Ok(out)
+}
+
+fn parse_required_db_qualifier(
+    ctx: &mut ParserContext<'_>,
+) -> Result<PackageableElementPtr, ParseError> {
+    parse_optional_db_qualifier(ctx)?.ok_or_else(|| {
+        err(
+            "expected `[db]` qualifier".into(),
+            ctx.cursor().peek().source_info.clone(),
+        )
+    })
+}
+
+fn parse_join_col_with_db_or_constant(
+    ctx: &mut ParserContext<'_>,
+) -> Result<JoinColWithDbOrConstant, ParseError> {
+    let start_si = ctx.cursor().peek().source_info.clone();
+
+    // Constant?
+    let peek_kind = ctx.cursor().peek().kind;
+    if matches!(
+        peek_kind,
+        TokenKind::StringLiteral
+            | TokenKind::IntegerLiteral
+            | TokenKind::FloatLiteral
+            | TokenKind::Plus
+            | TokenKind::Minus
+    ) {
+        let lit = parse_constant_literal(ctx)?;
+        let end = lit.source_info().clone();
+        return Ok(JoinColWithDbOrConstant {
+            db: None,
+            join: None,
+            column: None,
+            literal: Some(lit),
+            source_info: merge_si(&start_si, &end),
+        });
+    }
+
+    let db = parse_optional_db_qualifier(ctx)?;
+    // Either: joinSequence (PIPE op_column)? | op_column
+    if ctx.cursor().check(TokenKind::At) {
+        // join sequence path
+        let head = parse_one_join(ctx)?;
+        let mut right = Vec::new();
+        while ctx.cursor().check(TokenKind::Greater) {
+            right.push(parse_one_join_right(ctx)?);
+        }
+        let seq_end = right
+            .last()
+            .map(|r| r.source_info.clone())
+            .unwrap_or_else(|| head.source_info.clone());
+        let join = JoinSequence {
+            head,
+            right,
+            source_info: merge_si(&start_si, &seq_end),
+        };
+        // Optional `| op_column` continuation.
+        let column = if ctx.cursor().eat(TokenKind::Pipe) {
+            Some(parse_op_column_inner(ctx)?)
+        } else {
+            None
+        };
+        let end = column
+            .as_ref()
+            .map(|c| c.source_info().clone())
+            .unwrap_or_else(|| join.source_info.clone());
+        return Ok(JoinColWithDbOrConstant {
+            db,
+            join: Some(join),
+            column,
+            literal: None,
+            source_info: merge_si(&start_si, &end),
+        });
+    }
+
+    // op_column path.
+    let column = parse_op_column_inner(ctx)?;
+    let end = column.source_info().clone();
+    Ok(JoinColWithDbOrConstant {
+        db,
+        join: None,
+        column: Some(column),
+        literal: None,
+        source_info: merge_si(&start_si, &end),
+    })
+}
+
+/// Parse just the `op_column` half of `colWithDbOrConstant` — i.e.,
+/// an `OpColumn` value (Target or Aliased), without the surrounding
+/// db-qualifier or join-sequence handling. Used by
+/// `parse_join_col_with_db_or_constant`.
+fn parse_op_column_inner(ctx: &mut ParserContext<'_>) -> Result<OpColumn, ParseError> {
+    if ctx.cursor().check(TokenKind::LBrace) {
+        return parse_target_column(ctx);
+    }
+    // Aliased form: name (.scope)? PRIMARY KEY?
+    let alias = parse_relational_identifier(ctx)?;
+    let mut scope = Vec::new();
+    while ctx.cursor().eat(TokenKind::Dot) && scope.len() < 2 {
+        scope.push(parse_relational_identifier(ctx)?);
+    }
+    let scope_end = scope
+        .last()
+        .map(|s| s.source_info.clone())
+        .unwrap_or_else(|| alias.source_info.clone());
+    let pk_end = consume_primary_key_flag(ctx)?;
+    let primary_key = pk_end.is_some();
+    let end_si = pk_end.unwrap_or(scope_end);
+    Ok(OpColumn::Aliased {
+        db: None,
+        alias: alias.clone(),
+        scope,
+        primary_key,
+        source_info: merge_si(&alias.source_info, &end_si),
+    })
+}
+
+fn parse_constant_literal(ctx: &mut ParserContext<'_>) -> Result<OpLiteral, ParseError> {
+    let peek_kind = ctx.cursor().peek().kind;
+    match peek_kind {
+        TokenKind::StringLiteral => parse_string_literal(ctx),
+        TokenKind::IntegerLiteral => parse_integer_literal(ctx),
+        TokenKind::FloatLiteral => parse_float_literal(ctx),
+        TokenKind::Plus | TokenKind::Minus => {
+            let sign = ctx.cursor().advance().clone();
+            let lit_tok = ctx.cursor().peek().clone();
+            match lit_tok.kind {
+                TokenKind::IntegerLiteral => {
+                    ctx.cursor().advance();
+                    let value: i64 =
+                        format!("{}{}", sign.text, lit_tok.text)
+                            .parse()
+                            .map_err(|_| {
+                                err(
+                                    format!(
+                                        "expected integer literal, got '{}{}'",
+                                        sign.text, lit_tok.text
+                                    ),
+                                    lit_tok.source_info.clone(),
+                                )
+                            })?;
+                    Ok(OpLiteral::Integer {
+                        value,
+                        source_info: merge_si(&sign.source_info, &lit_tok.source_info),
+                    })
+                }
+                TokenKind::FloatLiteral => {
+                    ctx.cursor().advance();
+                    let value: f64 =
+                        format!("{}{}", sign.text, lit_tok.text)
+                            .parse()
+                            .map_err(|_| {
+                                err(
+                                    format!(
+                                        "expected float literal, got '{}{}'",
+                                        sign.text, lit_tok.text
+                                    ),
+                                    lit_tok.source_info.clone(),
+                                )
+                            })?;
+                    Ok(OpLiteral::Float {
+                        value,
+                        source_info: merge_si(&sign.source_info, &lit_tok.source_info),
+                    })
+                }
+                _ => Err(err_unexpected(
+                    "numeric literal after sign",
+                    &lit_tok.text,
+                    lit_tok.source_info,
+                )),
+            }
+        }
+        _ => {
+            let tok = ctx.cursor().peek().clone();
+            Err(err_unexpected(
+                "constant literal",
+                &tok.text,
+                tok.source_info,
+            ))
+        }
+    }
+}
+
+fn parse_one_join(ctx: &mut ParserContext<'_>) -> Result<OneJoin, ParseError> {
+    let at = ctx.cursor().expect(TokenKind::At)?;
+    let name = parse_relational_identifier(ctx)?;
+    let span = merge_si(&at.source_info, &name.source_info);
+    Ok(OneJoin {
+        name,
+        source_info: span,
+    })
+}
+
+fn parse_one_join_right(ctx: &mut ParserContext<'_>) -> Result<OneJoinRight, ParseError> {
+    let gt = ctx.cursor().expect(TokenKind::Greater)?;
+    // `(group)?`
+    let group_id = if ctx.cursor().check(TokenKind::LParen)
+        && ctx.cursor().peek_kind_at(1) == TokenKind::Identifier
+        && ctx.cursor().peek_kind_at(2) == TokenKind::RParen
+    {
+        ctx.cursor().expect(TokenKind::LParen)?;
+        let id = parse_relational_identifier(ctx)?;
+        ctx.cursor().expect(TokenKind::RParen)?;
+        Some(id)
+    } else {
+        None
+    };
+    let db = parse_optional_db_qualifier(ctx)?;
+    let join = parse_one_join(ctx)?;
+    let span = merge_si(&gt.source_info, &join.source_info);
+    Ok(OneJoinRight {
+        group_id,
+        db,
+        join,
+        source_info: span,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Mapping elements: bare line | scope-wrapped lines
+// ---------------------------------------------------------------------------
+
+fn parse_mapping_element(ctx: &mut ParserContext<'_>) -> Result<MappingElement, ParseError> {
+    if is_keyword(ctx.cursor(), "scope") {
+        Ok(MappingElement::Scope(parse_scope(ctx)?))
+    } else {
+        Ok(MappingElement::Single(parse_single_mapping_line(ctx)?))
+    }
+}
+
+fn parse_scope(ctx: &mut ParserContext<'_>) -> Result<ScopedMapping, ParseError> {
+    let kw = ctx.cursor().expect(TokenKind::Identifier)?; // 'scope'
+    debug_assert_eq!(kw.text.as_str(), "scope");
+    ctx.cursor().expect(TokenKind::LParen)?;
+    let db = parse_required_db_qualifier(ctx)?;
+    let scope = if !ctx.cursor().check(TokenKind::RParen) {
+        Some(parse_simple_scope_info(ctx)?)
+    } else {
+        None
+    };
+    ctx.cursor().expect(TokenKind::RParen)?;
+    ctx.cursor().expect(TokenKind::LParen)?;
+    let mut mapping_lines = Vec::new();
+    if !ctx.cursor().check(TokenKind::RParen) {
+        loop {
+            mapping_lines.push(parse_single_mapping_line(ctx)?);
+            if !ctx.cursor().eat(TokenKind::Comma) {
+                break;
+            }
+        }
+    }
+    let close = ctx.cursor().expect(TokenKind::RParen)?;
+    Ok(ScopedMapping {
+        db,
+        scope,
+        mapping_lines,
+        source_info: merge_si(&kw.source_info, &close.source_info),
+    })
+}
+
+fn parse_single_mapping_line(ctx: &mut ParserContext<'_>) -> Result<SingleMappingLine, ParseError> {
+    if ctx.cursor().check(TokenKind::Plus) {
+        Ok(SingleMappingLine::Plus(parse_plus_mapping_line(ctx)?))
+    } else {
+        Ok(SingleMappingLine::NonePlus(parse_none_plus_mapping_line(
+            ctx,
+        )?))
+    }
+}
+
+fn parse_none_plus_mapping_line(
+    ctx: &mut ParserContext<'_>,
+) -> Result<NonePlusMappingLine, ParseError> {
+    let property = parse_relational_identifier(ctx)?;
+    let mut source_id: Option<SpannedString> = None;
+    let mut target_id: Option<SpannedString> = None;
+    if ctx.cursor().eat(TokenKind::LBracket) {
+        source_id = Some(parse_relational_identifier(ctx)?);
+        if ctx.cursor().eat(TokenKind::Comma) {
+            target_id = Some(parse_relational_identifier(ctx)?);
+        }
+        ctx.cursor().expect(TokenKind::RBracket)?;
+    }
+    let mapping = parse_relational_mapping(ctx)?;
+    let span = merge_si(&property.source_info, &mapping.source_info);
+    Ok(NonePlusMappingLine {
+        property,
+        source_id,
+        target_id,
+        mapping,
+        source_info: span,
+    })
+}
+
+fn parse_plus_mapping_line(ctx: &mut ParserContext<'_>) -> Result<PlusMappingLine, ParseError> {
+    let plus = ctx.cursor().expect(TokenKind::Plus)?;
+    let property = parse_relational_identifier(ctx)?;
+    let local = parse_local_mapping_property(ctx)?;
+    let mapping = parse_relational_mapping(ctx)?;
+    let span = merge_si(&plus.source_info, &mapping.source_info);
+    Ok(PlusMappingLine {
+        property,
+        local,
+        mapping,
+        source_info: span,
+    })
+}
+
+fn parse_local_mapping_property(
+    ctx: &mut ParserContext<'_>,
+) -> Result<LocalMappingProperty, ParseError> {
+    let colon = ctx.cursor().expect(TokenKind::Colon)?;
+    let type_path = parse_packageable_ptr(ctx)?;
+    ctx.cursor().expect(TokenKind::LBracket)?;
+    let lower = parse_local_mult_part(ctx)?;
+    // Pure's lexer emits two consecutive `Dot` tokens for `..`.
+    let upper =
+        if ctx.cursor().check(TokenKind::Dot) && ctx.cursor().peek_kind_at(1) == TokenKind::Dot {
+            ctx.cursor().expect(TokenKind::Dot)?;
+            ctx.cursor().expect(TokenKind::Dot)?;
+            Some(parse_local_mult_part(ctx)?)
+        } else {
+            None
+        };
+    let close = ctx.cursor().expect(TokenKind::RBracket)?;
+    Ok(LocalMappingProperty {
+        type_path,
+        mult_lower: lower,
+        mult_upper: upper,
+        source_info: merge_si(&colon.source_info, &close.source_info),
+    })
+}
+
+fn parse_local_mult_part(ctx: &mut ParserContext<'_>) -> Result<SpannedString, ParseError> {
+    let tok = ctx.cursor().peek().clone();
+    match tok.kind {
+        TokenKind::IntegerLiteral => {
+            ctx.cursor().advance();
+            Ok(SpannedString {
+                value: SmolStr::new(tok.text),
+                source_info: tok.source_info,
+            })
+        }
+        TokenKind::Star => {
+            ctx.cursor().advance();
+            Ok(SpannedString {
+                value: SmolStr::new("*"),
+                source_info: tok.source_info,
+            })
+        }
+        _ => Err(err_unexpected(
+            "INTEGER or '*' (multiplicity)",
+            &tok.text,
+            tok.source_info,
+        )),
+    }
+}
+
+fn parse_relational_mapping(ctx: &mut ParserContext<'_>) -> Result<RelationalMapping, ParseError> {
+    let colon = ctx.cursor().expect(TokenKind::Colon)?;
+    let transformer = if is_keyword(ctx.cursor(), "EnumerationMapping") {
+        Some(parse_transformer(ctx)?)
+    } else {
+        None
+    };
+    let value = parse_join_col_with_db_or_constant(ctx)?;
+    let span = merge_si(&colon.source_info, &value.source_info);
+    Ok(RelationalMapping {
+        transformer,
+        value,
+        source_info: span,
+    })
+}
+
+fn parse_transformer(ctx: &mut ParserContext<'_>) -> Result<Transformer, ParseError> {
+    let kw = ctx.cursor().expect(TokenKind::Identifier)?;
+    debug_assert_eq!(kw.text.as_str(), "EnumerationMapping");
+    let id = parse_relational_identifier(ctx)?;
+    let close = ctx.cursor().expect(TokenKind::Colon)?;
+    Ok(Transformer {
+        enumeration_mapping: id,
+        source_info: merge_si(&kw.source_info, &close.source_info),
+    })
 }

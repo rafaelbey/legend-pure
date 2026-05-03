@@ -25,12 +25,15 @@ repository.workspace = true
 # - parser-parser: SectionParser trait + ParserContext for body grammar
 # - parser-lexer:  TokenKind enum
 # - parser-pure:   CompilerExtension trait + DeclareCtx/ValidateCtx
-#                  for the Stage-4 `RelationalExtension` validators
+#                  for the Stage-4 RelationalExtension validators
+# - dsl-mapping:   ClassMappingBodyParser plug-in trait for the
+#                  Stage-5 Relational class-mapping body sub-grammar
 [dependencies]
 legend-pure-parser-ast = { path = "../ast" }
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-lexer = { path = "../lexer" }
 legend-pure-parser-pure = { path = "../pure" }
+legend-pure-dsl-mapping = { path = "../dsl-mapping" }
 smol_str = { workspace = true }
 
 [dev-dependencies]
