@@ -144,6 +144,87 @@ fn user_relational_block_parses_against_loaded_platform() {
     );
 }
 
+#[test]
+fn richer_op_grammar_parses_and_round_trips_against_loaded_platform() {
+    // Stage-2 e2e: a richer Filter / Join body that exercises the
+    // structured `op_operation` grammar — boolean chains, mixed
+    // comparison operators, IS NOT NULL, function call. Source
+    // shape mirrors what real Java fixtures use in
+    // `TestSimpleGrammar.java` STORE_SOURCE_CODE constants.
+    let user_source = indoc! {r"
+        ###Relational
+        Database test::B
+        (
+          Schema sales
+          (
+            Table tradeTable (id INT PRIMARY KEY, prodId INT, qty FLOAT(10, 2), region VARCHAR(2))
+            Table productTable (id INT PRIMARY KEY, name VARCHAR(200))
+          )
+
+          Join tradeProduct (tradeTable.prodId = productTable.id and tradeTable.region is not null)
+          Filter activeUS (tradeTable.qty > 0 and (tradeTable.region = 'US' or tradeTable.region = 'CA'))
+          Filter byCount (concat(tradeTable.region, '!') = 'US!')
+        )
+    "};
+
+    let _platform = match legend_pure_core_platform::platform::load_platform() {
+        Ok(m) => m,
+        Err(p) => p.model,
+    };
+
+    let file = legend_pure_parser_parser::parse_with_sections(
+        user_source,
+        "user_relational_richer.pure",
+        legend_pure_parser_parser::island::default_island_parsers(),
+        vec![Box::new(RelationalSectionParser)],
+    )
+    .expect("richer relational source must parse cleanly");
+
+    let dbs = collect_databases(&file);
+    assert_eq!(dbs.len(), 1);
+    let db = dbs[0];
+    assert_eq!(db.elements.len(), 4, "Schema + Join + 2 Filters");
+    // Confirm one of the filters has the structured shape
+    // we expect (a Bool at root, with a Group on the RHS).
+    let DatabaseElement::Filter(f) = &db.elements[2] else {
+        panic!("expected Filter at index 2");
+    };
+    assert!(
+        matches!(
+            &f.body,
+            legend_pure_dsl_relational::ast::OpExpr::Bool {
+                op: legend_pure_dsl_relational::ast::BoolOp::And,
+                ..
+            }
+        ),
+        "expected `Bool(and, …, …)` at root of filter body; got {:?}",
+        f.body
+    );
+
+    // Round-trip: compose → re-parse → assert same element count and
+    // a Bool root on the same Filter.
+    let composed = compose_relational_section(&dbs);
+    let file2 = legend_pure_parser_parser::parse_with_sections(
+        &composed,
+        "user_relational_richer_round_trip.pure",
+        legend_pure_parser_parser::island::default_island_parsers(),
+        vec![Box::new(RelationalSectionParser)],
+    )
+    .expect("composed richer source must round-trip");
+    let dbs2 = collect_databases(&file2);
+    assert_eq!(dbs2[0].elements.len(), db.elements.len());
+    let DatabaseElement::Filter(f2) = &dbs2[0].elements[2] else {
+        panic!("expected Filter at index 2 after round-trip");
+    };
+    assert!(matches!(
+        &f2.body,
+        legend_pure_dsl_relational::ast::OpExpr::Bool {
+            op: legend_pure_dsl_relational::ast::BoolOp::And,
+            ..
+        }
+    ));
+}
+
 fn collect_databases(file: &SourceFile) -> Vec<&DatabaseDef> {
     let mut out = Vec::new();
     for section in &file.sections {

@@ -154,7 +154,23 @@ fn parses_join_filter_multigrain_at_top_level() {
         panic!("expected Join at index 1");
     };
     assert_eq!(j.name.value.as_str(), "tradeProduct");
-    assert!(!j.op_body.tokens.is_empty());
+    // Body is now a structured `OpExpr` tree (Stage 2). Smoke-test it
+    // by asserting the top-level shape matches the source: a single
+    // comparison whose right-hand side is a `{target}.id` column.
+    let legend_pure_dsl_relational::ast::OpExpr::Compare {
+        op, lhs: _, rhs, ..
+    } = &j.body
+    else {
+        panic!("expected Join body to be a Compare; got {:?}", j.body);
+    };
+    assert_eq!(*op, legend_pure_dsl_relational::ast::BinOp::Eq);
+    let legend_pure_dsl_relational::ast::OpExpr::Column(
+        legend_pure_dsl_relational::ast::OpColumn::Target { column, .. },
+    ) = rhs.as_ref()
+    else {
+        panic!("expected RHS to be a {{target}}.id column");
+    };
+    assert_eq!(column.value.as_str(), "id");
 
     let DatabaseElement::Filter(f) = &db.elements[2] else {
         panic!("expected Filter at index 2");
@@ -279,4 +295,235 @@ fn assert_view_token_count_at_least(v: &View, expected_name: &str, min_tokens: u
         "view body should capture at least {min_tokens} tokens; got {}",
         v.body.tokens.len()
     );
+}
+
+// ---------------------------------------------------------------------------
+// Stage-2 op_operation fixtures
+// ---------------------------------------------------------------------------
+
+mod op_operation {
+    use super::{first_database, parse};
+    use indoc::indoc;
+    use legend_pure_dsl_relational::ast::{
+        BinOp, BoolOp, DatabaseElement, OpColumn, OpExpr, OpLiteral,
+    };
+
+    /// Helper: extract the structured body of the *only* Join element
+    /// in the database (panics otherwise).
+    fn extract_join_body(source: &str) -> OpExpr {
+        let file = parse(source);
+        let db = first_database(&file);
+        let DatabaseElement::Join(j) = db
+            .elements
+            .iter()
+            .find(|e| matches!(e, DatabaseElement::Join(_)))
+            .expect("expected a Join element")
+        else {
+            unreachable!()
+        };
+        j.body.clone()
+    }
+
+    fn extract_filter_body(source: &str) -> OpExpr {
+        let file = parse(source);
+        let db = first_database(&file);
+        let DatabaseElement::Filter(f) = db
+            .elements
+            .iter()
+            .find(|e| matches!(e, DatabaseElement::Filter(_)))
+            .expect("expected a Filter element")
+        else {
+            unreachable!()
+        };
+        f.body.clone()
+    }
+
+    #[test]
+    fn parses_simple_equality() {
+        let body = extract_join_body(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (id INT PRIMARY KEY)
+              Join j (t.id = {target}.id)
+            )
+        "});
+        let OpExpr::Compare { op, lhs, rhs, .. } = body else {
+            panic!("expected Compare");
+        };
+        assert_eq!(op, BinOp::Eq);
+        // LHS: t.id (alias = t, scope = [id]).
+        let OpExpr::Column(OpColumn::Aliased { alias, scope, .. }) = lhs.as_ref() else {
+            panic!("expected aliased column on LHS");
+        };
+        assert_eq!(alias.value.as_str(), "t");
+        assert_eq!(scope.len(), 1);
+        assert_eq!(scope[0].value.as_str(), "id");
+        // RHS: {target}.id.
+        let OpExpr::Column(OpColumn::Target { column, .. }) = rhs.as_ref() else {
+            panic!("expected {{target}}.id on RHS");
+        };
+        assert_eq!(column.value.as_str(), "id");
+    }
+
+    #[test]
+    fn parses_and_chain() {
+        let body = extract_join_body(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (id INT PRIMARY KEY, qty INT, region VARCHAR(2))
+              Join j (t.id = {target}.id and t.qty > 0 and t.region = 'US')
+            )
+        "});
+        // `a and b and c` is right-recursive → Bool(and, a, Bool(and, b, c)).
+        let OpExpr::Bool {
+            op: outer,
+            lhs: a,
+            rhs: bc,
+            ..
+        } = body
+        else {
+            panic!("expected Bool at root");
+        };
+        assert_eq!(outer, BoolOp::And);
+        assert!(matches!(a.as_ref(), OpExpr::Compare { .. }));
+        let OpExpr::Bool { op: inner, .. } = bc.as_ref() else {
+            panic!("expected nested Bool on RHS");
+        };
+        assert_eq!(*inner, BoolOp::And);
+    }
+
+    #[test]
+    fn parses_mixed_and_or_with_explicit_grouping() {
+        let body = extract_filter_body(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (id INT PRIMARY KEY, status VARCHAR(2), qty INT)
+              Filter f ((t.status = 'A' or t.status = 'B') and t.qty > 0)
+            )
+        "});
+        // Top-level: Bool(and, Group(Bool(or, …, …)), Compare(>, t.qty, 0))
+        let OpExpr::Bool { op, lhs, rhs, .. } = body else {
+            panic!("expected Bool at root; got {body:?}");
+        };
+        assert_eq!(op, BoolOp::And);
+        assert!(matches!(lhs.as_ref(), OpExpr::Group { .. }));
+        assert!(matches!(rhs.as_ref(), OpExpr::Compare { .. }));
+    }
+
+    #[test]
+    fn parses_is_null_and_is_not_null() {
+        let body = extract_filter_body(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (id INT PRIMARY KEY, region VARCHAR(2))
+              Filter f (t.region is not null)
+            )
+        "});
+        let OpExpr::IsNull { expr, negated, .. } = body else {
+            panic!("expected IsNull at root");
+        };
+        assert!(negated);
+        assert!(matches!(
+            expr.as_ref(),
+            OpExpr::Column(OpColumn::Aliased { .. })
+        ));
+
+        // Negation flag false-path
+        let body2 = extract_filter_body(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (id INT PRIMARY KEY, region VARCHAR(2))
+              Filter f (t.region is null)
+            )
+        "});
+        let OpExpr::IsNull { negated, .. } = body2 else {
+            panic!("expected IsNull at root");
+        };
+        assert!(!negated);
+    }
+
+    #[test]
+    fn parses_function_call_with_multiple_args() {
+        let body = extract_filter_body(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (id INT PRIMARY KEY, status VARCHAR(2))
+              Filter f (concat(t.status, 'X') = 'AX')
+            )
+        "});
+        let OpExpr::Compare { lhs, .. } = body else {
+            panic!("expected Compare with function-call LHS");
+        };
+        let OpExpr::Function { name, args, .. } = lhs.as_ref() else {
+            panic!("expected Function on LHS");
+        };
+        assert_eq!(name.value.as_str(), "concat");
+        assert_eq!(args.len(), 2);
+    }
+
+    #[test]
+    fn parses_string_integer_and_float_literals() {
+        let body = extract_filter_body(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (id INT PRIMARY KEY, name VARCHAR(80), price DECIMAL(10, 2))
+              Filter f (t.price > 0)
+            )
+        "});
+        let OpExpr::Compare { rhs, .. } = body else {
+            panic!("expected Compare");
+        };
+        assert!(matches!(
+            rhs.as_ref(),
+            OpExpr::Literal(OpLiteral::Integer { value: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn parses_all_comparison_operators() {
+        for (src, expected) in [
+            ("t.x = 0", BinOp::Eq),
+            ("t.x > 0", BinOp::Gt),
+            ("t.x < 0", BinOp::Lt),
+            ("t.x >= 0", BinOp::GtEq),
+            ("t.x <= 0", BinOp::LtEq),
+            ("t.x != 0", BinOp::NotEq),
+            ("t.x <> 0", BinOp::NotEq2),
+        ] {
+            let source = format!(
+                "###Relational\nDatabase pkg::db\n(\n  Table t (x INT PRIMARY KEY)\n  Filter f ({src})\n)\n"
+            );
+            let body = extract_filter_body(&source);
+            let OpExpr::Compare { op, .. } = body else {
+                panic!("expected Compare for `{src}`");
+            };
+            assert_eq!(op, expected, "operator for `{src}`");
+        }
+    }
+
+    #[test]
+    fn parses_primary_key_flag_on_column() {
+        let body = extract_join_body(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (id INT PRIMARY KEY)
+              Join j ({target}.id PRIMARY KEY = t.id)
+            )
+        "});
+        let OpExpr::Compare { lhs, .. } = body else {
+            panic!("expected Compare");
+        };
+        let OpExpr::Column(OpColumn::Target { primary_key, .. }) = lhs.as_ref() else {
+            panic!("expected target column on LHS");
+        };
+        assert!(*primary_key);
+    }
 }

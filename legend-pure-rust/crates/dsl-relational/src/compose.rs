@@ -23,8 +23,9 @@
 
 use crate::ast::{
     ColumnDef, DatabaseDef, DatabaseElement, DatabaseInclude, Filter, Join, MultiGrainFilter,
-    Schema, Table, TokenSlice, View,
+    OpColumn, OpExpr, OpLiteral, Schema, Table, TokenSlice, View,
 };
+use legend_pure_parser_ast::annotation::PackageableElementPtr;
 
 /// Compose one `Database` declaration as a string. The output does
 /// not include the `###Relational` section header; use
@@ -157,7 +158,7 @@ fn write_join(out: &mut String, j: &Join) {
     out.push_str("  Join ");
     out.push_str(j.name.value.as_str());
     out.push_str(" (");
-    write_token_slice(out, &j.op_body);
+    write_op_expr(out, &j.body);
     out.push(')');
 }
 
@@ -165,7 +166,7 @@ fn write_filter(out: &mut String, f: &Filter) {
     out.push_str("  Filter ");
     out.push_str(f.name.value.as_str());
     out.push_str(" (");
-    write_token_slice(out, &f.op_body);
+    write_op_expr(out, &f.body);
     out.push(')');
 }
 
@@ -173,10 +174,134 @@ fn write_multi_grain_filter(out: &mut String, m: &MultiGrainFilter) {
     out.push_str("  MultiGrainFilter ");
     out.push_str(m.name.value.as_str());
     out.push_str(" (");
-    write_token_slice(out, &m.op_body);
+    write_op_expr(out, &m.body);
     out.push(')');
 }
 
 fn write_token_slice(out: &mut String, slice: &TokenSlice) {
     out.push_str(&slice.render_with_spaces());
+}
+
+// ---------------------------------------------------------------------------
+// op_operation composition (Stage 2)
+// ---------------------------------------------------------------------------
+
+/// Round-trip composer for [`OpExpr`]. Output re-parses to the same
+/// AST shape under [`crate::parser::parse_op_operation`] (verified by
+/// the compose-smoke tests). Whitespace is normalised to single
+/// spaces between tokens; explicit `Group` nodes preserve user-written
+/// parentheses; implicit precedence-driven parens are not added (the
+/// grammar's right-associative `Bool` and single-shot `Compare`
+/// chains parse unambiguously without them).
+fn write_op_expr(out: &mut String, expr: &OpExpr) {
+    match expr {
+        OpExpr::Bool { op, lhs, rhs, .. } => {
+            write_op_expr(out, lhs);
+            out.push(' ');
+            out.push_str(op.as_str());
+            out.push(' ');
+            write_op_expr(out, rhs);
+        }
+        OpExpr::Compare { op, lhs, rhs, .. } => {
+            write_op_expr(out, lhs);
+            out.push(' ');
+            out.push_str(op.as_str());
+            out.push(' ');
+            write_op_expr(out, rhs);
+        }
+        OpExpr::IsNull { expr, negated, .. } => {
+            write_op_expr(out, expr);
+            out.push_str(if *negated { " is not null" } else { " is null" });
+        }
+        OpExpr::Group { inner, .. } => {
+            out.push('(');
+            write_op_expr(out, inner);
+            out.push(')');
+        }
+        OpExpr::Function { db, name, args, .. } => {
+            write_optional_db(out, db.as_ref());
+            out.push_str(name.value.as_str());
+            out.push('(');
+            for (i, a) in args.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                write_op_expr(out, a);
+            }
+            out.push(')');
+        }
+        OpExpr::Column(c) => write_op_column(out, c),
+        OpExpr::Literal(l) => write_op_literal(out, l),
+    }
+}
+
+fn write_op_column(out: &mut String, c: &OpColumn) {
+    match c {
+        OpColumn::Target {
+            column,
+            primary_key,
+            ..
+        } => {
+            out.push_str("{target}.");
+            out.push_str(column.value.as_str());
+            if *primary_key {
+                out.push_str(" PRIMARY KEY");
+            }
+        }
+        OpColumn::Aliased {
+            db,
+            alias,
+            scope,
+            primary_key,
+            ..
+        } => {
+            write_optional_db(out, db.as_ref());
+            out.push_str(alias.value.as_str());
+            for s in scope {
+                out.push('.');
+                out.push_str(s.value.as_str());
+            }
+            if *primary_key {
+                out.push_str(" PRIMARY KEY");
+            }
+        }
+    }
+}
+
+fn write_op_literal(out: &mut String, l: &OpLiteral) {
+    match l {
+        OpLiteral::String { value, .. } => {
+            out.push('\'');
+            out.push_str(value.as_str());
+            out.push('\'');
+        }
+        OpLiteral::Integer { value, .. } => {
+            let _ = std::fmt::Write::write_fmt(out, format_args!("{value}"));
+        }
+        OpLiteral::Float { value, .. } => {
+            // Pure's float literal grammar accepts plain decimal
+            // notation; format with at least one fractional digit so
+            // the round-trip parser still recognises it as a float.
+            let formatted = format!("{value}");
+            if formatted.contains('.') || formatted.contains('e') {
+                out.push_str(&formatted);
+            } else {
+                out.push_str(&formatted);
+                out.push_str(".0");
+            }
+        }
+    }
+}
+
+fn write_optional_db(out: &mut String, db: Option<&PackageableElementPtr>) {
+    let Some(db) = db else { return };
+    out.push('[');
+    if let Some(pkg) = &db.package {
+        for seg in pkg.segments() {
+            out.push_str(seg.as_str());
+            out.push_str("::");
+        }
+    }
+    out.push_str(db.name.as_str());
+    out.push(']');
 }
