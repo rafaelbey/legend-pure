@@ -106,6 +106,12 @@ struct RegisteredRelationalClassMapping {
     mapping_fqn: SmolStr,
     /// Class-mapping id — the explicit `[id]` if set, else the class FQN.
     class_mapping_id: SmolStr,
+    /// `extends [superId]` — captured so Stage-8 can validate
+    /// extends-on-association forbidden (G3).
+    extends: Option<SmolStr>,
+    /// Span of the entire class-mapping declaration (for diagnostics
+    /// that span the whole `Class : Relational { ... }` shape).
+    class_mapping_source_info: SourceInfo,
     /// The relational body (cloned from the AST).
     body: RelationalClassMappingBody,
 }
@@ -196,6 +202,8 @@ impl CompilerExtension for RelationalExtension {
                                 relational_class_mappings.push(RegisteredRelationalClassMapping {
                                     mapping_fqn: mapping_fqn.clone(),
                                     class_mapping_id,
+                                    extends: cm.extends.clone(),
+                                    class_mapping_source_info: cm.source_info.clone(),
                                     body: body.clone(),
                                 });
                             }
@@ -216,9 +224,9 @@ impl CompilerExtension for RelationalExtension {
         for reg in dbs.values() {
             validate_database(&reg.def, &dbs, ctx.errors);
         }
-        // Stage 8: per-class-mapping validation.
+        // Stage 8 + 9: per-class-mapping validation.
         let class_mappings = self.relational_class_mappings.borrow();
-        validate_relational_class_mappings(&class_mappings, ctx.errors);
+        validate_relational_class_mappings(&class_mappings, &dbs, ctx.errors);
     }
 }
 
@@ -366,6 +374,7 @@ fn validate_database(
                         "Table (within schema)",
                         errors,
                     );
+                    check_table_column_uniqueness(t, errors);
                 }
                 for v in &s.views {
                     check_unique(
@@ -377,13 +386,16 @@ fn validate_database(
                     );
                 }
             }
-            DatabaseElement::Table(t) => check_unique(
-                &mut seen_top_table_or_view,
-                &t.name.value,
-                &t.source_info,
-                "Table",
-                errors,
-            ),
+            DatabaseElement::Table(t) => {
+                check_unique(
+                    &mut seen_top_table_or_view,
+                    &t.name.value,
+                    &t.source_info,
+                    "Table",
+                    errors,
+                );
+                check_table_column_uniqueness(t, errors);
+            }
             DatabaseElement::View(v) => check_unique(
                 &mut seen_top_table_or_view,
                 &v.name.value,
@@ -446,10 +458,14 @@ fn validate_database(
     // V5: milestoning column refs.
     for elem in &db.elements {
         match elem {
-            DatabaseElement::Table(t) => validate_milestoning(t, errors),
+            DatabaseElement::Table(t) => {
+                validate_milestoning(t, errors);
+                validate_table_milestoning_column_types(t, errors);
+            }
             DatabaseElement::Schema(s) => {
                 for t in &s.tables {
                     validate_milestoning(t, errors);
+                    validate_table_milestoning_column_types(t, errors);
                 }
             }
             _ => {}
@@ -538,6 +554,61 @@ fn record_view(out: &mut HashMap<SmolStr, HashSet<SmolStr>>, _v: &View) {
     // unconditionally, while column-existence checks against view
     // columns silently pass.
     out.entry(_v.name.value.clone()).or_default();
+}
+
+/// Visible Filter / MultiGrainFilter names from `db`'s body + the
+/// transitive closure of `include`. Used by Stage-9 (D) to validate
+/// `~filter [db]name` references in class-mapping bodies.
+fn collect_visible_filters(
+    db: &DatabaseDef,
+    all_dbs: &HashMap<SmolStr, RegisteredDatabase>,
+) -> HashSet<SmolStr> {
+    let mut out: HashSet<SmolStr> = HashSet::new();
+    let mut visited: HashSet<SmolStr> = HashSet::new();
+    walk_visible_filters(db, all_dbs, &mut out, &mut visited);
+    out
+}
+
+fn walk_visible_filters(
+    db: &DatabaseDef,
+    all_dbs: &HashMap<SmolStr, RegisteredDatabase>,
+    out: &mut HashSet<SmolStr>,
+    visited: &mut HashSet<SmolStr>,
+) {
+    if !visited.insert(database_fqn(db)) {
+        return;
+    }
+    for elem in &db.elements {
+        match elem {
+            DatabaseElement::Filter(f) => {
+                out.insert(f.name.value.clone());
+            }
+            DatabaseElement::MultiGrainFilter(m) => {
+                out.insert(m.name.value.clone());
+            }
+            _ => {}
+        }
+    }
+    for inc in &db.includes {
+        let target_fqn = include_fqn(&inc.included);
+        if let Some(reg) = all_dbs.get(&target_fqn) {
+            walk_visible_filters(&reg.def, all_dbs, out, visited);
+        }
+    }
+}
+
+/// Render a `PackageableElementPtr` to its FQN string (matches
+/// `database_fqn` / `include_fqn`).
+fn packageable_fqn(p: &legend_pure_parser_ast::annotation::PackageableElementPtr) -> SmolStr {
+    let mut s = String::new();
+    if let Some(pkg) = p.package.as_ref() {
+        for seg in pkg.segments() {
+            s.push_str(seg.as_str());
+            s.push_str("::");
+        }
+    }
+    s.push_str(p.name.as_str());
+    SmolStr::new(&s)
 }
 
 fn validate_op_columns(
@@ -654,6 +725,126 @@ fn validate_milestone_spec(
 }
 
 // ---------------------------------------------------------------------------
+// Stage-9 (B): per-Table column-name uniqueness.
+// ---------------------------------------------------------------------------
+
+fn check_table_column_uniqueness(t: &Table, errors: &mut Vec<CompilationError>) {
+    let mut seen: HashSet<SmolStr> = HashSet::new();
+    for c in &t.columns {
+        if !seen.insert(c.name.value.clone()) {
+            errors.push(CompilationError {
+                message: format!(
+                    "Table '{}': duplicate column '{}'",
+                    t.name.value, c.name.value
+                ),
+                source_info: c.name.source_info.clone(),
+                kind: CompilationErrorKind::DuplicateProperty {
+                    class_name: t.name.value.clone(),
+                    property_name: c.name.value.clone(),
+                },
+            });
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stage-9 (C): milestoning column-TYPE check. The Java processor
+// requires `BUS_FROM` / `BUS_THRU` / `PROCESSING_IN` / `PROCESSING_OUT`
+// / `*_SNAPSHOT_DATE` to point at Date / Timestamp columns;
+// `*_IS_INCLUSIVE` to point at Boolean / Bit columns;
+// `INFINITY_DATE` to be either a Date literal or a Date column.
+//
+// `validate_milestone_spec` already runs the existence check (V5);
+// this pass extends that with the type check, walking
+// `MilestoneField` keys against a fixed lookup table.
+// ---------------------------------------------------------------------------
+
+fn validate_table_milestoning_column_types(t: &Table, errors: &mut Vec<CompilationError>) {
+    let Some(spec) = &t.milestoning else { return };
+    let by_name: HashMap<&str, &str> = t
+        .columns
+        .iter()
+        .map(|c| (c.name.value.as_str(), c.type_name.value.as_str()))
+        .collect();
+    for def in &spec.definitions {
+        for field in &def.fields {
+            let MilestoneValue::Identifier(col_ref) = &field.value else {
+                continue;
+            };
+            let Some(col_type) = by_name.get(col_ref.value.as_str()) else {
+                continue; // V5 already flagged the missing column
+            };
+            let Some(expected) = milestoning_field_expected_type(field.key.value.as_str()) else {
+                continue;
+            };
+            if !type_matches(col_type, expected) {
+                errors.push(CompilationError {
+                    message: format!(
+                        "Table '{}': milestoning {} '{}' expects a {} column; \
+                         '{}' is declared as '{}'",
+                        t.name.value,
+                        def.kind.value,
+                        field.key.value,
+                        expected.label(),
+                        col_ref.value,
+                        col_type
+                    ),
+                    source_info: col_ref.source_info.clone(),
+                    kind: CompilationErrorKind::InvalidAnnotation {
+                        element_name: t.name.value.clone(),
+                        reason: SmolStr::new(format!(
+                            "milestoning {} expects {}; got {}",
+                            field.key.value,
+                            expected.label(),
+                            col_type
+                        )),
+                    },
+                });
+            }
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+enum MilestoneTypeCategory {
+    Date,
+    Boolean,
+}
+
+impl MilestoneTypeCategory {
+    fn label(self) -> &'static str {
+        match self {
+            MilestoneTypeCategory::Date => "Date / Timestamp",
+            MilestoneTypeCategory::Boolean => "Boolean / Bit",
+        }
+    }
+}
+
+fn milestoning_field_expected_type(key: &str) -> Option<MilestoneTypeCategory> {
+    match key {
+        "BUS_FROM"
+        | "BUS_THRU"
+        | "BUS_SNAPSHOT_DATE"
+        | "PROCESSING_IN"
+        | "PROCESSING_OUT"
+        | "PROCESSING_SNAPSHOT_DATE"
+        | "INFINITY_DATE" => Some(MilestoneTypeCategory::Date),
+        "THRU_IS_INCLUSIVE" | "OUT_IS_INCLUSIVE" => Some(MilestoneTypeCategory::Boolean),
+        _ => None,
+    }
+}
+
+fn type_matches(col_type: &str, expected: MilestoneTypeCategory) -> bool {
+    let upper = col_type.to_ascii_uppercase();
+    match expected {
+        MilestoneTypeCategory::Date => {
+            matches!(upper.as_str(), "DATE" | "TIMESTAMP" | "DATETIME")
+        }
+        MilestoneTypeCategory::Boolean => matches!(upper.as_str(), "BOOLEAN" | "BIT"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Stage 8: relational class-mapping validators
 // ---------------------------------------------------------------------------
 
@@ -690,6 +881,7 @@ fn mapping_fqn(m: &MappingDef) -> SmolStr {
 ///     them — out of scope here).
 fn validate_relational_class_mappings(
     class_mappings: &[RegisteredRelationalClassMapping],
+    dbs: &HashMap<SmolStr, RegisteredDatabase>,
     errors: &mut Vec<CompilationError>,
 ) {
     use std::collections::HashSet;
@@ -705,6 +897,57 @@ fn validate_relational_class_mappings(
     }
 
     for reg in class_mappings {
+        // G3: extends on AssociationMapping bodies is forbidden
+        // (Java parity:
+        // `TestMappingInheritanceValidOnlyForClassMappings::testMappingInheritanceInValidForAssociationMapping`).
+        if reg.body.association_mapping.is_some() && reg.extends.is_some() {
+            errors.push(CompilationError {
+                message: format!(
+                    "AssociationMapping '{}' cannot use `extends` (extends is only valid on class mappings)",
+                    reg.class_mapping_id
+                ),
+                source_info: reg.class_mapping_source_info.clone(),
+                kind: CompilationErrorKind::InvalidAssociation {
+                    name: reg.class_mapping_id.clone(),
+                    reason: SmolStr::new("extends is only valid on class mappings"),
+                },
+            });
+        }
+
+        // D: ~filter must reference a Filter visible to the database.
+        if let Some(filter_block) = &reg.body.filter {
+            let db_fqn = packageable_fqn(&filter_block.db);
+            match dbs.get(&db_fqn) {
+                Some(db) => {
+                    let visible_filters = collect_visible_filters(&db.def, dbs);
+                    if !visible_filters.contains(&filter_block.filter_name.value) {
+                        errors.push(CompilationError {
+                            message: format!(
+                                "Class mapping '{}': ~filter '{}' is not declared on Database '{}'",
+                                reg.class_mapping_id, filter_block.filter_name.value, db_fqn,
+                            ),
+                            source_info: filter_block.filter_name.source_info.clone(),
+                            kind: CompilationErrorKind::UnresolvedElement {
+                                path: filter_block.filter_name.value.clone(),
+                            },
+                        });
+                    }
+                }
+                None => {
+                    errors.push(CompilationError {
+                        message: format!(
+                            "Class mapping '{}': ~filter references unknown Database '{}'",
+                            reg.class_mapping_id, db_fqn,
+                        ),
+                        source_info: filter_block.db.source_info.clone(),
+                        kind: CompilationErrorKind::UnresolvedElement {
+                            path: db_fqn.clone(),
+                        },
+                    });
+                }
+            }
+        }
+
         // E2: AssociationMapping arity.
         if let Some(lines) = &reg.body.association_mapping {
             if lines.len() != 2 {
@@ -772,6 +1015,26 @@ fn validate_relational_class_mappings(
                                 path: inline.id.value.clone(),
                             },
                         });
+                    }
+                }
+                // F: Otherwise property mappings must declare each
+                // property at most once within one Otherwise block.
+                if let Some(EmbeddedMappingTrailer::Otherwise(maps)) = &em.trailer {
+                    let mut seen: HashSet<SmolStr> = HashSet::new();
+                    for m in maps {
+                        if !seen.insert(m.property.value.clone()) {
+                            errors.push(CompilationError {
+                                message: format!(
+                                    "Otherwise property mapping '{}' declared twice in class mapping '{}'",
+                                    m.property.value, reg.class_mapping_id,
+                                ),
+                                source_info: m.property.source_info.clone(),
+                                kind: CompilationErrorKind::DuplicateProperty {
+                                    class_name: reg.class_mapping_id.clone(),
+                                    property_name: m.property.value.clone(),
+                                },
+                            });
+                        }
                     }
                 }
             }

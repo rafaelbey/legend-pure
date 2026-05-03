@@ -489,3 +489,258 @@ fn run_validator_with_mapping(source: &str) -> Vec<CompilationError> {
     extension.validate(&mut validate_ctx);
     errors
 }
+
+// ===========================================================================
+// Stage-9: Java-parity validator additions (B + C + D + F + G3)
+// ===========================================================================
+
+mod stage9 {
+    use super::{assert_one_kind, run_validator, run_validator_with_mapping};
+    use indoc::indoc;
+    use legend_pure_parser_pure::error::{CompilationError, CompilationErrorKind};
+    use smol_str::SmolStr;
+
+    // ---------------------------------------------------------------
+    // B: column-name uniqueness within a Table
+    // (Java: TestNameSpaces::testColumnNameConflict)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn column_name_conflict_within_table_errors() {
+        let errors = run_validator(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (id INT PRIMARY KEY, qty INT, qty FLOAT(8))
+            )
+        "});
+        assert_one_kind(
+            &errors,
+            CompilationErrorKind::DuplicateProperty {
+                class_name: SmolStr::new("t"),
+                property_name: SmolStr::new("qty"),
+            },
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // C: milestoning column TYPE check
+    // (Java: TestSimpleGrammar::testBusinessSnapshotDateColumnType)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn milestoning_date_field_with_non_date_column_errors() {
+        let errors = run_validator(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (
+                milestoning ( business (BUS_FROM=fromZ, BUS_THRU=thruZ) )
+                id INT PRIMARY KEY, fromZ DATE, thruZ INT
+              )
+            )
+        "});
+        assert!(
+            errors.iter().any(
+                |e| matches!(e.kind, CompilationErrorKind::InvalidAnnotation { .. })
+                    && e.message.contains("BUS_THRU")
+                    && e.message.contains("Date / Timestamp")
+            ),
+            "expected milestoning-type-mismatch error on BUS_THRU; got {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn milestoning_inclusive_field_with_non_boolean_column_errors() {
+        let errors = run_validator(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (
+                milestoning ( business (
+                  BUS_FROM=fromZ,
+                  BUS_THRU=thruZ,
+                  THRU_IS_INCLUSIVE=fromZ
+                ) )
+                id INT PRIMARY KEY, fromZ DATE, thruZ DATE
+              )
+            )
+        "});
+        assert!(
+            errors.iter().any(
+                |e| matches!(e.kind, CompilationErrorKind::InvalidAnnotation { .. })
+                    && e.message.contains("THRU_IS_INCLUSIVE")
+                    && e.message.contains("Boolean / Bit")
+            ),
+            "expected milestoning Boolean type-mismatch error; got {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn well_formed_milestoning_with_correct_types_passes() {
+        let errors = run_validator(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (
+                milestoning ( business (
+                  BUS_FROM=fromZ,
+                  BUS_THRU=thruZ,
+                  THRU_IS_INCLUSIVE=incFlag
+                ) )
+                id INT PRIMARY KEY,
+                fromZ DATE,
+                thruZ TIMESTAMP,
+                incFlag BOOLEAN
+              )
+            )
+        "});
+        let type_errors: Vec<&CompilationError> = errors
+            .iter()
+            .filter(|e| matches!(e.kind, CompilationErrorKind::InvalidAnnotation { .. }))
+            .collect();
+        assert!(
+            type_errors.is_empty(),
+            "expected no type mismatches on correctly-typed milestoning; got {type_errors:#?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // D: ~filter [db]name resolves to a Filter
+    // (Java: TestSimpleGrammar::wrongClassMappingFilterIdentifierCausesError)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn relational_filter_ref_must_resolve_to_known_filter() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::Db
+            (
+              Table t (id INT PRIMARY KEY, qty INT)
+              Filter realFilter (t.qty > 0)
+            )
+
+            ###Mapping
+            Mapping pkg::M
+            (
+              X : Relational
+              {
+                ~filter [pkg::Db]missingFilter
+                (id : [pkg::Db]t.id)
+              }
+            )
+        "});
+        assert_one_kind(
+            &errors,
+            CompilationErrorKind::UnresolvedElement {
+                path: SmolStr::new("missingFilter"),
+            },
+        );
+    }
+
+    #[test]
+    fn relational_filter_ref_resolves_via_include() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::Base
+            (
+              Table t (id INT PRIMARY KEY, qty INT)
+              Filter activeOnly (t.qty > 0)
+            )
+            Database pkg::Wrapper
+            (
+              include pkg::Base
+            )
+
+            ###Mapping
+            Mapping pkg::M
+            (
+              X : Relational
+              {
+                ~filter [pkg::Wrapper]activeOnly
+                (id : [pkg::Base]t.id)
+              }
+            )
+        "});
+        let unresolved: Vec<&CompilationError> = errors
+            .iter()
+            .filter(|e| matches!(e.kind, CompilationErrorKind::UnresolvedElement { .. }))
+            .collect();
+        assert!(
+            unresolved.is_empty(),
+            "expected ~filter to resolve via include; got {unresolved:#?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // F: Otherwise duplicate property
+    // (Java: TestEmbeddedGrammar::redundantOtherwiseMappingsWithTargetId)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn otherwise_with_duplicate_property_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Mapping
+            Mapping pkg::M
+            (
+              X : Relational
+              {
+                (
+                  details ()
+                    Otherwise(
+                      [taxLocation] : [pkg::Db]@firmDetails,
+                      [taxLocation] : [pkg::Db]@firmDetails
+                    )
+                )
+              }
+            )
+        "});
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                CompilationErrorKind::DuplicateProperty { property_name, .. }
+                    if property_name.as_str() == "taxLocation"
+            ) && e.message.contains("Otherwise")),
+            "expected Otherwise duplicate-property error; got {errors:#?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // G3: extends not allowed on AssociationMapping
+    // (Java: TestMappingInheritanceValidOnlyForClassMappings::testMappingInheritanceInValidForAssociationMapping)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn extends_on_association_mapping_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Mapping
+            Mapping pkg::M
+            (
+              Other [base] : Relational
+              {
+                AssociationMapping
+                (
+                  endA[a, b] : [pkg::Db]@joinX,
+                  endB[b, a] : [pkg::Db]@joinX
+                )
+              }
+
+              Firm_Person extends [base] : Relational
+              {
+                AssociationMapping
+                (
+                  endA[a, b] : [pkg::Db]@joinX,
+                  endB[b, a] : [pkg::Db]@joinX
+                )
+              }
+            )
+        "});
+        assert!(
+            errors.iter().any(
+                |e| matches!(&e.kind, CompilationErrorKind::InvalidAssociation { reason, .. }
+                    if reason.as_str().contains("extends"))
+            ),
+            "expected extends-on-AssociationMapping error; got {errors:#?}"
+        );
+    }
+}
