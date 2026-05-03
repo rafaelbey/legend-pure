@@ -54,6 +54,7 @@ pub mod fqn;
 pub mod ids;
 pub mod infer;
 pub mod island_lower;
+pub mod locate;
 pub(crate) mod lower;
 pub(crate) mod m3_parser;
 pub mod model;
