@@ -313,6 +313,10 @@ fn walk_expr_kind(kind: &mut ExprKind, visit: &mut dyn FnMut(&mut ElementId)) {
                 walk_multiplicity(&mut col.multiplicity, visit);
             }
         }
+        ExprKind::ColSpecLiteral { column } => {
+            visit(&mut column.type_element);
+            walk_multiplicity(&mut column.multiplicity, visit);
+        }
     }
 }
 

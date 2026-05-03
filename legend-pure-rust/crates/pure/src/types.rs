@@ -481,6 +481,19 @@ pub enum ExprKind {
         /// Column triples in source order.
         columns: Vec<RelationColumnLowered>,
     },
+    /// `~name` / `~name:Type[mult]` — single-column `ColSpec` literal.
+    ///
+    /// Mirrors the platform's
+    /// `meta::pure::functions::relation::colSpec(s:String[1], cl:T[1]):ColSpec<T>[1]`
+    /// shape (see its `PCT.grammarCharacters='~'` annotation): the
+    /// source form `~name` is the canonical way to construct a
+    /// `ColSpec<T>`. The Rust lowerer captures the column inline so
+    /// the runtime allocator can materialise the `ColSpec` heap object
+    /// without re-resolving names.
+    ColSpecLiteral {
+        /// The single column triple captured at lowering.
+        column: RelationColumnLowered,
+    },
 }
 
 /// One column in a `RelationLiteral` / `ColSpecArrayLiteral`.

@@ -1083,6 +1083,24 @@ fn infer_type_from_valuespec(
             // vs `dynamicNew(GenericType[1], ...)`.
             crate::bootstrap::metatype_of(model, model.get_element(*element))
         }
+        // `~name` plain form lowers to `ColSpecLiteral` only when the
+        // column has no type-spec and no lambda; surfacing its
+        // classifier narrows e.g. `ascending(column:ColSpec<T>[1])` from
+        // its previous None-arg permissive behaviour. The other
+        // relation-grammar literals (`ColSpecArrayLiteral`,
+        // `RelationLiteral`) deliberately fall through to `None` —
+        // they cover too many distinct platform classifier shapes
+        // (`ColSpecArray`, `FuncColSpec*`, `AggColSpec*`, `RelationType`)
+        // that the lowerer doesn't yet distinguish, so surfacing one
+        // of them indiscriminately would mis-narrow the lambda-bearing
+        // forms.
+        ExprKind::ColSpecLiteral { .. } => model.resolve_by_path(&[
+            SmolStr::new("meta"),
+            SmolStr::new("pure"),
+            SmolStr::new("metamodel"),
+            SmolStr::new("relation"),
+            SmolStr::new("ColSpec"),
+        ]),
         // PropertyCall / QualifiedPropertyCall arms live above — property
         // invocation is handled before the FunctionCall arm.
         _ => None,

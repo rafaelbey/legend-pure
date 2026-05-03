@@ -376,6 +376,10 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 crate::relation::alloc_col_spec_array_literal(&mut self.heap, self.model, columns)
                     .map(Value::Object)
             }
+            ExprKind::ColSpecLiteral { column } => {
+                crate::relation::alloc_col_spec_literal(&mut self.heap, self.model, column)
+                    .map(Value::Object)
+            }
 
             // -- Bare element reference -----------------------------------
             // Produce a first-class Element handle so meta-model natives
@@ -2473,7 +2477,8 @@ fn walk_free_variables(
         | ExprKind::PackageableElementRef { .. }
         | ExprKind::Column
         | ExprKind::RelationLiteral { .. }
-        | ExprKind::ColSpecArrayLiteral { .. } => {}
+        | ExprKind::ColSpecArrayLiteral { .. }
+        | ExprKind::ColSpecLiteral { .. } => {}
     }
 }
 

@@ -691,6 +691,12 @@ pub enum ColumnTypeSpec {
 pub struct ColumnBuilderExpr {
     /// Columns.
     pub columns: Vec<ColumnSpec>,
+    /// Whether the source form was the array shape `~[…]` (true) or
+    /// the single-column shape `~col` (false). Drives the lowering
+    /// to `colSpecArray` vs `colSpec` (and their `funcColSpec*` /
+    /// `aggColSpec*` variants once lambda forms are supported) per
+    /// the platform's `PCT.grammarCharacters` annotations.
+    pub is_array: bool,
     /// Source info.
     pub source_info: SourceInfo,
 }

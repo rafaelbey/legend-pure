@@ -497,7 +497,10 @@ fn compose_column(w: &mut IndentWriter, e: &ColumnBuilderExpr) {
     }
 
     w.write("~");
-    let is_array = e.columns.len() > 1;
+    // Honour the AST's explicit `is_array` flag — `~[name]` and
+    // `~name` are different shapes (ColSpecArray vs ColSpec) even
+    // when the column count is 1.
+    let is_array = e.is_array;
     if is_array {
         w.write("[");
     }
@@ -691,6 +694,7 @@ mod tests {
                 extra_function: None,
                 source_info: si(),
             }],
+            is_array: false,
             source_info: si(),
         });
 

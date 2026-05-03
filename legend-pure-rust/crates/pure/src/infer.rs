@@ -372,6 +372,23 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                 },
                 multiplicity: Multiplicity::PureOne,
             }),
+        ExprKind::ColSpecLiteral { .. } => ctx
+            .model
+            .resolve_by_path(&[
+                smol_str::SmolStr::new("meta"),
+                smol_str::SmolStr::new("pure"),
+                smol_str::SmolStr::new("metamodel"),
+                smol_str::SmolStr::new("relation"),
+                smol_str::SmolStr::new("ColSpec"),
+            ])
+            .map(|element| ResolvedType {
+                type_expr: TypeExpr::Named {
+                    element,
+                    type_arguments: Vec::new(),
+                    value_arguments: Vec::new(),
+                },
+                multiplicity: Multiplicity::PureOne,
+            }),
     };
 
     set_and_return(expr, result)

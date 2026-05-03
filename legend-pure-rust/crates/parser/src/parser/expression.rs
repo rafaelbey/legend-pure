@@ -1002,7 +1002,7 @@ impl Parser {
         si: legend_pure_parser_ast::SourceInfo,
     ) -> R<Expression> {
         let mut columns = vec![];
-        if self.cursor.eat(TokenKind::LBracket) {
+        let is_array = if self.cursor.eat(TokenKind::LBracket) {
             if !self.cursor.check(TokenKind::RBracket) {
                 loop {
                     columns.push(self.parse_one_col_spec()?);
@@ -1012,12 +1012,15 @@ impl Parser {
                 }
             }
             self.cursor.expect(TokenKind::RBracket)?;
+            true
         } else {
             columns.push(self.parse_one_col_spec()?);
-        }
+            false
+        };
         Ok(Expression::Column(
             legend_pure_parser_ast::expression::ColumnBuilderExpr {
                 columns,
+                is_array,
                 source_info: si,
             },
         ))

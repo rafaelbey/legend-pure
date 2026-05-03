@@ -78,7 +78,7 @@ const SCHEMA_FINGERPRINT_TYPES: &str = concat!(
     "ResolvedType{type_expr,multiplicity}",
     "ValueSpec{kind,source_info,type_info}",
     "FunctionCallData{function,function_name,arguments}",
-    "ExprKind{IntegerLiteral,FloatLiteral,DecimalLiteral,StringLiteral,BooleanLiteral,DateLiteral,Variable,FunctionCall,PropertyCall,QualifiedPropertyCall,EnumValue,Lambda,Collection,TypeReference,PackageableElementRef,Column,RelationLiteral,ColSpecArrayLiteral}",
+    "ExprKind{IntegerLiteral,FloatLiteral,DecimalLiteral,StringLiteral,BooleanLiteral,DateLiteral,Variable,FunctionCall,PropertyCall,QualifiedPropertyCall,EnumValue,Lambda,Collection,TypeReference,PackageableElementRef,Column,RelationLiteral,ColSpecArrayLiteral,ColSpecLiteral}",
     "RelationColumnLowered{name,type_element,multiplicity}",
     "PrimitiveType{super_type,super_type_value_arguments,type_variable_parameters,constraints}",
     // crates/pure/src/nodes/*.rs

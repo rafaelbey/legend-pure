@@ -247,6 +247,8 @@ impl CompilerExtension for RelationalExtension {
             .map(|(k, v)| (k.clone(), v.def.clone()))
             .collect();
         crate::processor::resolve_op_bodies(&mut resolved, &defs_by_fqn);
+        // Phase B3: resolve view body column refs + infer main tables.
+        crate::processor::resolve_view_bodies(&mut resolved, &defs_by_fqn);
     }
 
     fn validate(&self, ctx: &mut ValidateCtx<'_>) {

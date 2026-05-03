@@ -529,6 +529,148 @@ fn collects_multi_grain_filter_bodies() {
     assert_eq!(col.name.as_str(), "region");
 }
 
+// ---------------------------------------------------------------------------
+// Phase B3 — view body resolution + main-table inference
+// ---------------------------------------------------------------------------
+
+#[test]
+fn resolves_view_with_single_main_table() {
+    let extension = run_lifecycle(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Schema s
+          (
+            Table t (id INT PRIMARY KEY, qty FLOAT(10, 2))
+            View v (id : t.id, qty : t.qty)
+          )
+        )
+    "});
+    let resolved = extension.resolved_databases();
+    let db = resolved.get("pkg::db").expect("missing");
+    assert_eq!(db.view_bodies.len(), 1);
+    let body = &db.view_bodies[0];
+    assert_eq!(body.view_name.as_str(), "v");
+    assert_eq!(body.columns.len(), 2);
+    assert_eq!(body.referenced_tables, vec![SmolStr::new("t")]);
+    assert_eq!(body.main_table.as_deref(), Some("t"));
+
+    // Each column line resolves through to a ResolvedColumn.
+    let id_line = &body.columns[0];
+    assert_eq!(id_line.column_name.as_str(), "id");
+    let id_binding = id_line.value_binding.as_ref().expect("id binding missing");
+    let id_col = id_binding.resolved_column(&resolved).unwrap();
+    assert_eq!(id_col.name.as_str(), "id");
+    assert_eq!(id_col.pure_type, Some(PureColumnType::Integer));
+}
+
+#[test]
+fn detects_view_with_multiple_main_tables() {
+    let extension = run_lifecycle(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Schema s
+          (
+            Table a (id INT PRIMARY KEY)
+            Table b (id INT PRIMARY KEY)
+            View v (one : a.id, two : b.id)
+          )
+        )
+    "});
+    let resolved = extension.resolved_databases();
+    let db = resolved.get("pkg::db").expect("missing");
+    let body = &db.view_bodies[0];
+    assert_eq!(body.referenced_tables.len(), 2);
+    assert!(
+        body.main_table.is_none(),
+        "expected None for multi-table view"
+    );
+}
+
+#[test]
+fn resolves_view_with_target_set_id() {
+    let extension = run_lifecycle(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Schema s
+          (
+            Table t (id INT PRIMARY KEY)
+            View v (id[OrderSet] : t.id)
+          )
+        )
+    "});
+    let resolved = extension.resolved_databases();
+    let db = resolved.get("pkg::db").expect("missing");
+    let body = &db.view_bodies[0];
+    let line = &body.columns[0];
+    assert_eq!(line.target_set_id.as_deref(), Some("OrderSet"));
+    let col = line
+        .value_binding
+        .as_ref()
+        .unwrap()
+        .resolved_column(&resolved)
+        .unwrap();
+    assert_eq!(col.name.as_str(), "id");
+}
+
+#[test]
+fn resolves_view_referencing_table_via_explicit_db() {
+    let extension = run_lifecycle(indoc! {r"
+        ###Relational
+        Database pkg::other
+        (
+          Table foreign (id INT PRIMARY KEY)
+        )
+
+        ###Relational
+        Database pkg::main
+        (
+          Schema s
+          (
+            Table local (id INT PRIMARY KEY)
+            View v (orderId : [pkg::other]foreign.id)
+          )
+        )
+    "});
+    let resolved = extension.resolved_databases();
+    let main = resolved.get("pkg::main").expect("missing");
+    let body = &main.view_bodies[0];
+    let line = &body.columns[0];
+    let binding = line
+        .value_binding
+        .as_ref()
+        .expect("view col binding missing");
+    assert_eq!(binding.database_fqn.as_str(), "pkg::other");
+    assert_eq!(binding.table_name.as_str(), "foreign");
+    let col = binding.resolved_column(&resolved).unwrap();
+    assert_eq!(col.name.as_str(), "id");
+}
+
+#[test]
+fn view_with_constant_value_has_no_binding() {
+    let extension = run_lifecycle(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Schema s
+          (
+            Table t (id INT PRIMARY KEY)
+            View v (id : t.id, label : 'static')
+          )
+        )
+    "});
+    let resolved = extension.resolved_databases();
+    let db = resolved.get("pkg::db").expect("missing");
+    let body = &db.view_bodies[0];
+    assert_eq!(body.columns.len(), 2);
+    assert!(body.columns[0].value_binding.is_some());
+    // Literal-valued columns have no column binding.
+    assert!(body.columns[1].value_binding.is_none());
+    assert_eq!(body.columns[1].column_name.as_str(), "label");
+}
+
 #[test]
 fn resolved_databases_empty_before_define_bodies() {
     // Run only the declare pass — `resolved_databases` must be empty

@@ -197,6 +197,13 @@ pub const COLUMN: &Classifier = "meta::pure::metamodel::relation::Column";
 /// `stringToTDS('<csv>')->cast(@TDS<…>)`).
 pub const TDS: &Classifier = "meta::pure::metamodel::relation::TDS";
 
+/// `meta::pure::metamodel::relation::ColSpec` — heap classifier for
+/// the single-column `~name` literal. Carries `name: String[1]` plus
+/// `classifierGenericType.typeArguments[0].rawType` pointing at a
+/// `Column` with the column metadata, mirroring the platform's
+/// `colSpec<T>(s:String[1], cl:T[1]):ColSpec<T>[1]` shape.
+pub const COL_SPEC: &Classifier = "meta::pure::metamodel::relation::ColSpec";
+
 /// `meta::pure::metamodel::relation::ColSpecArray` — heap classifier for
 /// the `~[col:Type[mult], …]` literal. Carries `names: String[*]` plus
 /// `classifierGenericType.typeArguments[0].rawType` pointing at a
