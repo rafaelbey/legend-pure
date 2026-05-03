@@ -189,6 +189,14 @@ pub const RELATION_TYPE: &Classifier = "meta::pure::metamodel::relation::Relatio
 /// `multiplicityArguments=[<mult>]`).
 pub const COLUMN: &Classifier = "meta::pure::metamodel::relation::Column";
 
+/// `meta::pure::metamodel::relation::TDS` — heap classifier for a
+/// Tabular Data Set. The Pure-side metaclass is
+/// `Class TDS<T> extends Relation<T> { csv: String[1]; }`. Allocated by
+/// the `stringToTDS` native (and indirectly by every `#TDS\n…\n#`
+/// literal once the compile-time lowerer rewrites it as
+/// `stringToTDS('<csv>')->cast(@TDS<…>)`).
+pub const TDS: &Classifier = "meta::pure::metamodel::relation::TDS";
+
 /// `meta::pure::metamodel::relation::ColSpecArray` — heap classifier for
 /// the `~[col:Type[mult], …]` literal. Carries `names: String[*]` plus
 /// `classifierGenericType.typeArguments[0].rawType` pointing at a

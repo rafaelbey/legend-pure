@@ -116,11 +116,47 @@ pub fn compile_with_extensions(
     auto_imports: &[SmolStr],
     extensions: &[&dyn crate::extension::CompilerExtension],
 ) -> Result<PureModel, PartialPureModel> {
+    compile_with_extensions_and_islands(source_files, auto_imports, extensions, &[])
+}
+
+/// Compiles with both [`CompilerExtension`]s and inline-island
+/// lowerers ([`crate::island_lower::IslandLowerer`]).
+///
+/// Each DSL crate that owns an island grammar (today: `dsl-tds`)
+/// supplies an `IslandLowerer` impl that runs at body-lowering time,
+/// transforming the parsed island content into a synthetic AST
+/// expression that the main lowerer recurses on.
+///
+/// # Errors
+///
+/// Same `Result<PureModel, PartialPureModel>` shape as [`compile`].
+#[allow(clippy::result_large_err)]
+#[tracing::instrument(
+    level = "info",
+    name = "compile_and_islands",
+    skip_all,
+    fields(
+        n_source_files = source_files.len(),
+        n_extensions = extensions.len(),
+        n_island_lowerers = island_lowerers.len(),
+    ),
+)]
+pub fn compile_with_extensions_and_islands(
+    source_files: &[SourceFile],
+    auto_imports: &[SmolStr],
+    extensions: &[&dyn crate::extension::CompilerExtension],
+    island_lowerers: &[Box<dyn crate::island_lower::IslandLowerer>],
+) -> Result<PureModel, PartialPureModel> {
     let mut model = init_bootstrap_model();
     let mut errors = Vec::new();
 
-    let (_chunks, slice_errors) =
-        compile_repo_slice(&mut model, source_files, auto_imports, extensions);
+    let (_chunks, slice_errors) = compile_repo_slice_with_islands(
+        &mut model,
+        source_files,
+        auto_imports,
+        extensions,
+        island_lowerers,
+    );
     errors.extend(slice_errors);
 
     errors.extend(finalize_model(&mut model, auto_imports, extensions));
@@ -207,6 +243,21 @@ pub fn compile_repo_slice(
     auto_imports: &[SmolStr],
     extensions: &[&dyn crate::extension::CompilerExtension],
 ) -> (std::ops::Range<usize>, Vec<CompilationError>) {
+    compile_repo_slice_with_islands(model, source_files, auto_imports, extensions, &[])
+}
+
+/// Like [`compile_repo_slice`], plus a slice of inline-island
+/// lowerers ([`crate::island_lower::IslandLowerer`]) that body-pass
+/// dispatch consults on `Expression::Island(_)`.
+#[must_use]
+#[allow(clippy::result_large_err)]
+pub fn compile_repo_slice_with_islands(
+    model: &mut PureModel,
+    source_files: &[SourceFile],
+    auto_imports: &[SmolStr],
+    extensions: &[&dyn crate::extension::CompilerExtension],
+    island_lowerers: &[Box<dyn crate::island_lower::IslandLowerer>],
+) -> (std::ops::Range<usize>, Vec<CompilationError>) {
     let chunks_before = model.chunks.len();
     let mut errors = Vec::new();
 
@@ -268,6 +319,7 @@ pub fn compile_repo_slice(
         &mut resolve_caches,
         auto_imports,
         model,
+        island_lowerers,
         &mut errors,
     );
 
@@ -287,6 +339,7 @@ pub fn compile_repo_slice(
         &mut resolve_caches,
         auto_imports,
         model,
+        island_lowerers,
         &mut errors,
     );
 
@@ -1001,6 +1054,7 @@ fn pass_define_signatures<'a>(
             resolve_cache,
             type_parameters: &type_params,
             variable_types: HashMap::new(),
+            island_lowerers: &[],
         };
 
         // Hydrate everything EXCEPT function bodies (bodies resolved in Pass 2b)
@@ -1043,6 +1097,7 @@ fn pass_define_bodies(
     resolve_caches: &mut HashMap<(usize, usize), HashMap<SmolStr, crate::resolve::ResolveResult>>,
     auto_imports: &[SmolStr],
     model: &mut PureModel,
+    island_lowerers: &[Box<dyn crate::island_lower::IslandLowerer>],
     errors: &mut Vec<CompilationError>,
 ) {
     for &id in sorted {
@@ -1093,6 +1148,7 @@ fn pass_define_bodies(
             resolve_cache,
             type_parameters: &type_params,
             variable_types,
+            island_lowerers,
         };
 
         let body = crate::lower::lower_expression_body(body_exprs, &mut ctx, errors);
@@ -1142,6 +1198,7 @@ fn pass_define_class_bodies(
     resolve_caches: &mut HashMap<(usize, usize), HashMap<SmolStr, crate::resolve::ResolveResult>>,
     auto_imports: &[SmolStr],
     model: &mut PureModel,
+    island_lowerers: &[Box<dyn crate::island_lower::IslandLowerer>],
     errors: &mut Vec<CompilationError>,
 ) {
     use crate::resolve::ImportScope;
@@ -1243,6 +1300,7 @@ fn pass_define_class_bodies(
                 resolve_cache,
                 type_parameters: &type_params,
                 variable_types,
+                island_lowerers,
             };
             match ast_element {
                 ast::Element::Class(c) => (

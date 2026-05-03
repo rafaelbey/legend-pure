@@ -214,6 +214,7 @@ pub fn lower_and_infer_expression(
         resolve_cache: &mut resolve_cache,
         type_parameters: &type_parameters,
         variable_types,
+        island_lowerers: &[],
     };
 
     // Lower AST → ValueSpec.

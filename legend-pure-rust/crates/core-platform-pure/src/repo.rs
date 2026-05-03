@@ -73,6 +73,21 @@ pub fn default_island_parsers() -> Vec<Box<dyn legend_pure_parser_parser::Island
     parsers
 }
 
+/// Composes the standard inline-island lowerers shipped by
+/// legend-pure-rust. Parallel to [`default_island_parsers`].
+///
+/// Each DSL crate that owns an island grammar registers an
+/// [`IslandLowerer`] that runs at compile-time body lowering. Today
+/// only `dsl-tds` ships a lowerer (its `#TDS\n cols\n rows\n#` form
+/// lowers to a `stringToTDS('<csv>')->cast(@TDS<…>)` synthetic AST).
+/// New DSL crates with island grammars should be chained here so
+/// [`load`] sees them automatically.
+#[must_use]
+pub fn default_island_lowerers()
+-> Vec<Box<dyn legend_pure_parser_pure::island_lower::IslandLowerer>> {
+    legend_pure_dsl_tds::lower::default_island_lowerers()
+}
+
 /// Descriptor metadata read from the existing Java repo JSON
 /// (`platform.json`, `*.definition.json`).
 ///
@@ -616,8 +631,14 @@ pub fn load(repos: &[Repo], auto_imports: &[SmolStr]) -> Result<PureModel, Parti
             Repo::Embedded { .. } | Repo::Filesystem { .. } => {
                 let (parsed_files, parse_errs) = parse_repo_sources(repo);
                 errors.extend(parse_errs);
-                let (_range, slice_errs) =
-                    pipeline::compile_repo_slice(&mut model, &parsed_files, auto_imports, &[]);
+                let lowerers = default_island_lowerers();
+                let (_range, slice_errs) = pipeline::compile_repo_slice_with_islands(
+                    &mut model,
+                    &parsed_files,
+                    auto_imports,
+                    &[],
+                    &lowerers,
+                );
                 errors.extend(slice_errs);
             }
             Repo::Purem { blob, meta, .. } => match read_repo(blob) {
