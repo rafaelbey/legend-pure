@@ -733,7 +733,7 @@ mod in_clause {
 // ---------------------------------------------------------------------------
 
 mod view_body {
-    use super::{first_database, parse};
+    use super::parse;
     use indoc::indoc;
     use legend_pure_dsl_relational::ast::{DatabaseElement, OpColumn, View};
 

@@ -63,8 +63,9 @@ use legend_pure_parser_pure::extension::{CompilerExtension, DeclareCtx, Validate
 use smol_str::SmolStr;
 
 use crate::ast::{
-    DatabaseDef, DatabaseElement, EmbeddedMapping, EmbeddedMappingTrailer, Filter, Join,
-    MilestoneSpec, MilestoneValue, MultiGrainFilter, NonePlusMappingValue, OpColumn, OpExpr,
+    DatabaseDef, DatabaseElement, EmbeddedMapping, EmbeddedMappingTrailer, Filter,
+    FilterMappingJoinSequence, Join, JoinColWithDbOrConstant, JoinSequence, MilestoneSpec,
+    MilestoneValue, MultiGrainFilter, NonePlusMappingValue, OneJoin, OpColumn, OpExpr,
     RelationalClassMappingBody, SingleMappingLine, Table, View,
 };
 use legend_pure_dsl_mapping::ast::{ClassMappingBody, MappingDef};
@@ -471,6 +472,22 @@ fn validate_database(
             _ => {}
         }
     }
+
+    // E (Phase A2): @joinName references inside view bodies must
+    // resolve to a Join visible to the view's owning database.
+    // Class-mapping body checks happen later inside
+    // `validate_relational_class_mappings` per-class-mapping.
+    for elem in &db.elements {
+        match elem {
+            DatabaseElement::View(v) => validate_view_join_refs(db, v, all_dbs, errors),
+            DatabaseElement::Schema(s) => {
+                for v in &s.views {
+                    validate_view_join_refs(db, v, all_dbs, errors);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn check_unique(
@@ -598,6 +615,41 @@ fn walk_visible_filters(
         let target_fqn = include_fqn(&inc.included);
         if let Some(reg) = all_dbs.get(&target_fqn) {
             walk_visible_filters(&reg.def, all_dbs, out, visited);
+        }
+    }
+}
+
+/// Visible Join names from `db`'s body + the transitive closure of
+/// `include`. Used by Phase-A2 (E) to validate `@joinName` references
+/// in class-mapping bodies and view bodies.
+fn collect_visible_joins(
+    db: &DatabaseDef,
+    all_dbs: &HashMap<SmolStr, RegisteredDatabase>,
+) -> HashSet<SmolStr> {
+    let mut out: HashSet<SmolStr> = HashSet::new();
+    let mut visited: HashSet<SmolStr> = HashSet::new();
+    walk_visible_joins(db, all_dbs, &mut out, &mut visited);
+    out
+}
+
+fn walk_visible_joins(
+    db: &DatabaseDef,
+    all_dbs: &HashMap<SmolStr, RegisteredDatabase>,
+    out: &mut HashSet<SmolStr>,
+    visited: &mut HashSet<SmolStr>,
+) {
+    if !visited.insert(database_fqn(db)) {
+        return;
+    }
+    for elem in &db.elements {
+        if let DatabaseElement::Join(j) = elem {
+            out.insert(j.name.value.clone());
+        }
+    }
+    for inc in &db.includes {
+        let target_fqn = include_fqn(&inc.included);
+        if let Some(reg) = all_dbs.get(&target_fqn) {
+            walk_visible_joins(&reg.def, all_dbs, out, visited);
         }
     }
 }
@@ -953,6 +1005,18 @@ fn validate_relational_class_mappings(
             }
         }
 
+        // E: every `@joinName` in the class-mapping body must resolve
+        // to a Join registered on its contextual database. The
+        // contextual database is whichever explicit `[db]` qualifier
+        // sits closest in source — currently we only validate
+        // references where the qualifier is explicit (FilterMappingBlock
+        // joins, [db]@... values, OtherwiseJoin with explicit db,
+        // OneJoinRight with explicit db). References without an
+        // explicit qualifier inherit from `~mainTable` / `scope(...)`
+        // / per-property db chains, which require post-processor
+        // context propagation deferred to Phase B.
+        validate_class_mapping_join_refs(reg, dbs, errors);
+
         // E2: AssociationMapping arity.
         if let Some(lines) = &reg.body.association_mapping {
             if lines.len() != 2 {
@@ -1061,4 +1125,304 @@ fn validate_relational_class_mappings(
     // the `EmbeddedMapping` type directly (validators only inspect
     // the trailer); reference the type to keep the import clean.
     let _ = std::marker::PhantomData::<EmbeddedMapping>;
+}
+
+/// Validator (E) helper: walk every explicit-db `@joinName` reference
+/// in a class-mapping body and verify it resolves to a Join visible
+/// to that database.
+fn validate_class_mapping_join_refs(
+    reg: &RegisteredRelationalClassMapping,
+    dbs: &HashMap<SmolStr, RegisteredDatabase>,
+    errors: &mut Vec<CompilationError>,
+) {
+    // 1. FilterMappingBlock — when a join sequence is present, joins
+    //    live in the OUTER `[db]` (i.e. `FilterMappingBlock.db`, the
+    //    db the filter sequence walks FROM).
+    if let Some(filter_block) = &reg.body.filter {
+        if let Some(seq) = &filter_block.join_sequence {
+            check_filter_mapping_join_sequence(
+                seq,
+                &filter_block.db,
+                dbs,
+                &reg.class_mapping_id,
+                errors,
+            );
+        }
+    }
+
+    // 2. Walk every JoinColWithDbOrConstant + OtherwiseJoin in the
+    //    body, validating only the explicit-db cases.
+    let body = &reg.body;
+    for elem in &body.mapping_elements {
+        walk_mapping_element_for_joins(elem, dbs, &reg.class_mapping_id, errors);
+    }
+    if let Some(lines) = &body.association_mapping {
+        for line in lines {
+            walk_single_mapping_line_for_joins(line, dbs, &reg.class_mapping_id, errors);
+        }
+    }
+
+    // 3. ~groupBy / ~primaryKey at the body level.
+    if let Some(jcs) = &body.group_by {
+        for jc in jcs {
+            walk_join_col_for_joins(jc, dbs, &reg.class_mapping_id, errors);
+        }
+    }
+    if let Some(jcs) = &body.primary_key {
+        for jc in jcs {
+            walk_join_col_for_joins(jc, dbs, &reg.class_mapping_id, errors);
+        }
+    }
+}
+
+fn walk_mapping_element_for_joins(
+    e: &crate::ast::MappingElement,
+    dbs: &HashMap<SmolStr, RegisteredDatabase>,
+    owner: &SmolStr,
+    errors: &mut Vec<CompilationError>,
+) {
+    match e {
+        crate::ast::MappingElement::Single(line) => {
+            walk_single_mapping_line_for_joins(line, dbs, owner, errors);
+        }
+        crate::ast::MappingElement::Scope(s) => {
+            for line in &s.mapping_lines {
+                walk_single_mapping_line_for_joins(line, dbs, owner, errors);
+            }
+        }
+    }
+}
+
+fn walk_single_mapping_line_for_joins(
+    line: &SingleMappingLine,
+    dbs: &HashMap<SmolStr, RegisteredDatabase>,
+    owner: &SmolStr,
+    errors: &mut Vec<CompilationError>,
+) {
+    match line {
+        SingleMappingLine::Plus(p) => {
+            walk_join_col_for_joins(&p.mapping.value, dbs, owner, errors);
+        }
+        SingleMappingLine::NonePlus(np) => match &np.value {
+            NonePlusMappingValue::Relational(rm) => {
+                walk_join_col_for_joins(&rm.value, dbs, owner, errors);
+            }
+            NonePlusMappingValue::Embedded(em) => {
+                if let Some(jcs) = &em.primary_key {
+                    for jc in jcs {
+                        walk_join_col_for_joins(jc, dbs, owner, errors);
+                    }
+                }
+                for inner in &em.mapping_lines {
+                    walk_single_mapping_line_for_joins(inner, dbs, owner, errors);
+                }
+                if let Some(EmbeddedMappingTrailer::Otherwise(maps)) = &em.trailer {
+                    for m in maps {
+                        if let Some(db) = &m.otherwise_join.db {
+                            check_join_sequence_against_db(
+                                &m.otherwise_join.join_sequence,
+                                db,
+                                dbs,
+                                owner,
+                                errors,
+                            );
+                        }
+                    }
+                }
+            }
+        },
+    }
+}
+
+fn walk_join_col_for_joins(
+    jc: &JoinColWithDbOrConstant,
+    dbs: &HashMap<SmolStr, RegisteredDatabase>,
+    owner: &SmolStr,
+    errors: &mut Vec<CompilationError>,
+) {
+    let Some(seq) = &jc.join else {
+        return;
+    };
+    if let Some(db) = &jc.db {
+        check_join_sequence_against_db(seq, db, dbs, owner, errors);
+    } else {
+        // Per-segment fallback: validate any OneJoinRight with its
+        // own explicit `[db]` qualifier even if the head is
+        // contextual.
+        for r in &seq.right {
+            if let Some(db) = &r.db {
+                check_one_join_against_db(&r.join, db, dbs, owner, errors);
+            }
+        }
+    }
+}
+
+fn check_filter_mapping_join_sequence(
+    seq: &FilterMappingJoinSequence,
+    db: &legend_pure_parser_ast::annotation::PackageableElementPtr,
+    dbs: &HashMap<SmolStr, RegisteredDatabase>,
+    owner: &SmolStr,
+    errors: &mut Vec<CompilationError>,
+) {
+    let visible = match resolve_visible_joins(db, dbs) {
+        Ok(v) => v,
+        Err(e) => {
+            errors.push(e(owner.clone()));
+            return;
+        }
+    };
+    check_one_join_visible(&seq.head, &visible, db, owner, errors);
+    for r in &seq.right {
+        if let Some(rdb) = &r.db {
+            check_one_join_against_db(&r.join, rdb, dbs, owner, errors);
+        } else {
+            check_one_join_visible(&r.join, &visible, db, owner, errors);
+        }
+    }
+}
+
+fn check_join_sequence_against_db(
+    seq: &JoinSequence,
+    db: &legend_pure_parser_ast::annotation::PackageableElementPtr,
+    dbs: &HashMap<SmolStr, RegisteredDatabase>,
+    owner: &SmolStr,
+    errors: &mut Vec<CompilationError>,
+) {
+    let visible = match resolve_visible_joins(db, dbs) {
+        Ok(v) => v,
+        Err(e) => {
+            errors.push(e(owner.clone()));
+            return;
+        }
+    };
+    check_one_join_visible(&seq.head, &visible, db, owner, errors);
+    for r in &seq.right {
+        if let Some(rdb) = &r.db {
+            check_one_join_against_db(&r.join, rdb, dbs, owner, errors);
+        } else {
+            check_one_join_visible(&r.join, &visible, db, owner, errors);
+        }
+    }
+}
+
+fn check_one_join_against_db(
+    j: &OneJoin,
+    db: &legend_pure_parser_ast::annotation::PackageableElementPtr,
+    dbs: &HashMap<SmolStr, RegisteredDatabase>,
+    owner: &SmolStr,
+    errors: &mut Vec<CompilationError>,
+) {
+    match resolve_visible_joins(db, dbs) {
+        Ok(visible) => check_one_join_visible(j, &visible, db, owner, errors),
+        Err(e) => errors.push(e(owner.clone())),
+    }
+}
+
+fn check_one_join_visible(
+    j: &OneJoin,
+    visible: &HashSet<SmolStr>,
+    db: &legend_pure_parser_ast::annotation::PackageableElementPtr,
+    owner: &SmolStr,
+    errors: &mut Vec<CompilationError>,
+) {
+    if !visible.contains(&j.name.value) {
+        errors.push(CompilationError {
+            message: format!(
+                "'{owner}': @{} is not declared on Database '{}'",
+                j.name.value,
+                packageable_fqn(db),
+            ),
+            source_info: j.source_info.clone(),
+            kind: CompilationErrorKind::UnresolvedElement {
+                path: j.name.value.clone(),
+            },
+        });
+    }
+}
+
+/// Resolve `[db]` to its visible-join set, or return a closure that
+/// builds an "unknown database" error tagged with the owner name.
+fn resolve_visible_joins(
+    db: &legend_pure_parser_ast::annotation::PackageableElementPtr,
+    dbs: &HashMap<SmolStr, RegisteredDatabase>,
+) -> Result<HashSet<SmolStr>, Box<dyn FnOnce(SmolStr) -> CompilationError>> {
+    let db_fqn = packageable_fqn(db);
+    match dbs.get(&db_fqn) {
+        Some(reg) => Ok(collect_visible_joins(&reg.def, dbs)),
+        None => {
+            let si = db.source_info.clone();
+            Err(Box::new(move |owner: SmolStr| CompilationError {
+                message: format!("'{owner}': join reference targets unknown Database '{db_fqn}'"),
+                source_info: si,
+                kind: CompilationErrorKind::UnresolvedElement {
+                    path: db_fqn.clone(),
+                },
+            }))
+        }
+    }
+}
+
+/// Validator (E) helper: walk every `@joinName` reference inside a
+/// View body and verify it resolves to a Join on the view's owning
+/// database (or transitively via include).
+fn validate_view_join_refs(
+    db: &DatabaseDef,
+    v: &View,
+    dbs: &HashMap<SmolStr, RegisteredDatabase>,
+    errors: &mut Vec<CompilationError>,
+) {
+    let owner = SmolStr::new(format!("View '{}'", v.name.value));
+    let local_visible = collect_visible_joins(db, dbs);
+
+    // FilterViewBlock — explicit `[db1]@joinSeq | [db2]` chain;
+    // joins live in `db1`.
+    if let Some(filter) = &v.filter {
+        if let Some(chain) = &filter.db_chain {
+            check_join_sequence_against_db(
+                &chain.join_sequence,
+                &chain.first_db,
+                dbs,
+                &owner,
+                errors,
+            );
+        }
+    }
+
+    // Each ViewColumnMappingLine value joins; explicit `[db]`
+    // overrides the view's owning db.
+    for col in &v.columns {
+        if let Some(seq) = &col.value.join {
+            if let Some(jdb) = &col.value.db {
+                check_join_sequence_against_db(seq, jdb, dbs, &owner, errors);
+            } else {
+                check_one_join_visible_in(seq, &local_visible, db, &owner, errors);
+            }
+        }
+    }
+}
+
+fn check_one_join_visible_in(
+    seq: &JoinSequence,
+    visible: &HashSet<SmolStr>,
+    db: &DatabaseDef,
+    owner: &SmolStr,
+    errors: &mut Vec<CompilationError>,
+) {
+    let local_db_ptr = legend_pure_parser_ast::annotation::PackageableElementPtr {
+        package: db.package.clone(),
+        name: db.name.value.clone(),
+        source_info: db.name.source_info.clone(),
+    };
+    check_one_join_visible(&seq.head, visible, &local_db_ptr, owner, errors);
+    for r in &seq.right {
+        if let Some(rdb) = &r.db {
+            // An explicit per-segment db overrides the contextual db.
+            // We don't resolve includes against an unrelated db here
+            // — `walk_join_col_for_joins`/`check_join_sequence_against_db`
+            // covers that path.
+            let _ = rdb;
+            continue;
+        }
+        check_one_join_visible(&r.join, visible, &local_db_ptr, owner, errors);
+    }
 }
