@@ -150,4 +150,34 @@ pub enum CompilationErrorKind {
         /// Source path of the use site (e.g. `"/system/testFile.pure"`).
         source_id: SmolStr,
     },
+    /// A reference targets a `<<access.private>>` or `<<access.protected>>`
+    /// element from a package that the access rule disallows. Java-parity:
+    /// `VisibilityValidation.throwAccessException` /
+    /// `Visibility.isVisibleInPackage`.
+    NotAccessible {
+        /// Java-shape descriptor of the target. Functions render as
+        /// `pkg::name(Type[mult], …):Return[mult]`; classes/associations
+        /// render as their `::`-joined FQN.
+        target_fqn: SmolStr,
+        /// `::`-joined FQN of the use-site package (the package of the
+        /// containing top-level element). Empty string for the root.
+        use_site_package: SmolStr,
+    },
+    /// An element carries more than one stereotype on the
+    /// `meta::pure::profiles::access` profile. Java-parity:
+    /// `AccessLevelValidator` "has multiple access level stereotypes".
+    MultipleAccessLevels {
+        /// Java-shape descriptor of the offending element.
+        element_fqn: SmolStr,
+    },
+    /// An access stereotype was applied to something other than a class
+    /// or function (most commonly a property). Java-parity:
+    /// `AccessLevelValidator` "Only classes and functions may have an
+    /// access level".
+    AccessLevelNotAllowed {
+        /// FQN of the offending element (usually `Class::propertyName`).
+        element_fqn: SmolStr,
+        /// Reason text (the user-facing rule).
+        reason: SmolStr,
+    },
 }

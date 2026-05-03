@@ -44,6 +44,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod access;
 pub mod annotations;
 pub mod arena;
 pub mod bootstrap;

@@ -31,17 +31,25 @@
 //! | Tag must exist in the referenced Profile | `InvalidAnnotation` |
 //! | Annotation target must be a Profile element | `InvalidAnnotation` |
 //! | No duplicate property names within a class | `DuplicateProperty` |
+//! | `<<access.private/protected>>` respected across packages | `NotAccessible` |
+//! | At most one `<<access.X>>` stereotype per element | `MultipleAccessLevels` |
+//! | Access stereotypes only on classes/functions | `AccessLevelNotAllowed` |
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
+use legend_pure_parser_ast::SourceInfo;
 use smol_str::SmolStr;
 
+use crate::access::{self, AccessLevel, render_package_fqn, render_target_descriptor};
 use crate::annotations::{StereotypeRef, TaggedValueRef};
 use crate::error::{CompilationError, CompilationErrorKind};
-use crate::ids::ElementId;
+use crate::ids::{ElementId, PackageId};
 use crate::model::{Element, PureModel};
+use crate::nodes::association::Association;
+use crate::nodes::class::{Class, Constraint, Property, QualifiedProperty};
+use crate::nodes::function::Function;
 use crate::nodes::profile::Profile;
-use crate::types::TypeExpr;
+use crate::types::{ExprKind, FunctionCallData, TypeExpr, ValueSpec};
 
 /// Validates the frozen `PureModel` and returns any errors found.
 ///
@@ -54,6 +62,10 @@ pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
     // Repo-boundary visibility runs across every non-bootstrap chunk —
     // cross-repo refs are inherently a multi-chunk concern.
     errors.extend(validate_repo_visibility(model));
+
+    // Access-level (`<<access.private/protected>>`) enforcement —
+    // package-scoped, also a multi-chunk concern.
+    errors.extend(validate_access_levels(model));
 
     // Only validate the current compilation chunk (the last one).
     // Bootstrap chunk (0) is compiler-trusted.
@@ -464,6 +476,419 @@ fn validate_repo_visibility(model: &PureModel) -> Vec<CompilationError> {
         }
     }
     errors
+}
+
+// ---------------------------------------------------------------------------
+// Access-Level Validation (private / protected)
+// ---------------------------------------------------------------------------
+
+/// Walks every element in every non-bootstrap chunk and emits Java-parity
+/// `NotAccessible` / `MultipleAccessLevels` / `AccessLevelNotAllowed`
+/// diagnostics for `<<access.private>>` / `<<access.protected>>`
+/// stereotypes that are misused or violated.
+///
+/// No-op when `meta::pure::profiles::access` isn't registered (so the
+/// existing tests that build a model from raw sources without bootstrap
+/// stay green).
+fn validate_access_levels(model: &PureModel) -> Vec<CompilationError> {
+    let mut errors = Vec::new();
+
+    let Some(access_profile) = access::access_profile_id(model) else {
+        return errors;
+    };
+
+    // Memoize per-element access level — callees are referenced many
+    // times across a chunk; recomputing per ref is wasteful.
+    let mut level_cache: HashMap<ElementId, AccessLevel> = HashMap::new();
+
+    // Skip chunk 0 (M3 bootstrap is compiler-trusted).
+    for chunk in model.chunks.iter().skip(1) {
+        for (local_idx, element) in chunk.elements.iter() {
+            let id = ElementId::InstanceId {
+                chunk_id: chunk.chunk_id,
+                local_idx,
+            };
+            let node = chunk.nodes.get(local_idx);
+
+            // Step A — declaration-time checks.
+            check_declaration_access(model, id, element, node, access_profile, &mut errors);
+
+            // Step B — usage checks. Use-site package = this top-level
+            // element's parent package.
+            let use_site_pkg = node.parent_package;
+            walk_element_for_access(
+                model,
+                element,
+                node,
+                use_site_pkg,
+                &mut level_cache,
+                &mut errors,
+            );
+        }
+    }
+
+    errors
+}
+
+/// Step A. Reject elements whose access stereotypes are invalid in
+/// shape: more than one access stereotype, or an access stereotype on
+/// something that isn't a class or function (the property cases live on
+/// `Class` / `Association` / `QualifiedProperty`).
+fn check_declaration_access(
+    model: &PureModel,
+    id: ElementId,
+    element: &Element,
+    node: &crate::model::ElementNode,
+    access_profile: ElementId,
+    errors: &mut Vec<CompilationError>,
+) {
+    // Multiple-access-level check — applies to any element kind that
+    // carries stereotypes (the `access_level_stereotypes` helper returns
+    // an empty iterator for the rest, so this is a no-op for them).
+    let count = access::access_level_stereotypes(element, access_profile).count();
+    if count > 1 {
+        let descriptor = render_target_descriptor(model, id);
+        errors.push(CompilationError {
+            message: format!("{descriptor} has multiple access level stereotypes"),
+            source_info: node.source_info.clone(),
+            kind: CompilationErrorKind::MultipleAccessLevels {
+                element_fqn: descriptor,
+            },
+        });
+    }
+
+    // "Only classes and functions may have an access level" — properties
+    // (declared on Class or Association) and qualified properties carry
+    // their own stereotype lists.
+    match element {
+        Element::Class(class) => {
+            check_no_access_on_properties(
+                model,
+                id,
+                &class.properties,
+                &class.qualified_properties,
+                access_profile,
+                errors,
+            );
+        }
+        Element::Association(assoc) => {
+            check_no_access_on_properties(
+                model,
+                id,
+                &assoc.properties,
+                &assoc.qualified_properties,
+                access_profile,
+                errors,
+            );
+        }
+        // Functions, classes (themselves), enums, and the rest are
+        // either allowed (function/class) or never carry access stereos
+        // (validated by the parser front-end).
+        _ => {}
+    }
+}
+
+fn check_no_access_on_properties(
+    model: &PureModel,
+    owner_id: ElementId,
+    properties: &[Property],
+    qualified_properties: &[QualifiedProperty],
+    access_profile: ElementId,
+    errors: &mut Vec<CompilationError>,
+) {
+    let owner_fqn = render_target_descriptor(model, owner_id);
+    for prop in properties {
+        if prop.stereotypes.iter().any(|s| s.profile == access_profile) {
+            errors.push(CompilationError {
+                message: "Only classes and functions may have an access level".to_string(),
+                source_info: prop.source_info.clone(),
+                kind: CompilationErrorKind::AccessLevelNotAllowed {
+                    element_fqn: SmolStr::new(format!("{owner_fqn}::{}", prop.name)),
+                    reason: SmolStr::new_static(
+                        "Only classes and functions may have an access level",
+                    ),
+                },
+            });
+        }
+    }
+    for qp in qualified_properties {
+        if qp.stereotypes.iter().any(|s| s.profile == access_profile) {
+            errors.push(CompilationError {
+                message: "Only classes and functions may have an access level".to_string(),
+                source_info: qp.source_info.clone(),
+                kind: CompilationErrorKind::AccessLevelNotAllowed {
+                    element_fqn: SmolStr::new(format!("{owner_fqn}::{}", qp.name)),
+                    reason: SmolStr::new_static(
+                        "Only classes and functions may have an access level",
+                    ),
+                },
+            });
+        }
+    }
+}
+
+/// Step B. Walk every reference inside `element` and check each one
+/// against the use-site package's access window.
+fn walk_element_for_access(
+    model: &PureModel,
+    element: &Element,
+    node: &crate::model::ElementNode,
+    use_site_pkg: PackageId,
+    cache: &mut HashMap<ElementId, AccessLevel>,
+    errors: &mut Vec<CompilationError>,
+) {
+    let mut emit = |target: ElementId, ref_si: &SourceInfo| {
+        check_access_at(model, target, ref_si, use_site_pkg, cache, errors);
+    };
+    match element {
+        Element::Class(class) => walk_class_refs(class, &node.source_info, &mut emit),
+        Element::Function(func) => walk_function_refs(func, &node.source_info, &mut emit),
+        Element::Association(assoc) => walk_association_refs(assoc, &mut emit),
+        // Enumerations carry no element refs in their bodies; their
+        // stereotypes are validated by `validate_stereotypes`. Profile,
+        // Measure, Unit, PrimitiveType, PackageableMultiplicity, Package
+        // either have no access-level surface or are owned by chunk 0.
+        _ => {}
+    }
+}
+
+fn walk_class_refs(
+    class: &Class,
+    class_si: &SourceInfo,
+    emit: &mut impl FnMut(ElementId, &SourceInfo),
+) {
+    for st in &class.super_types {
+        // No per-supertype source location is preserved at lower time;
+        // attribute to the class declaration's source info. This is a
+        // known precision gap (parser doesn't emit per-ref spans here).
+        walk_type_refs(st, class_si, emit);
+    }
+    for tp in &class.type_variable_parameters {
+        walk_type_refs(&tp.type_expr, &tp.source_info, emit);
+    }
+    for prop in &class.properties {
+        walk_property_refs(prop, emit);
+    }
+    for qp in &class.qualified_properties {
+        walk_qualified_property_refs(qp, emit);
+    }
+    for con in &class.constraints {
+        walk_constraint_refs(con, emit);
+    }
+}
+
+fn walk_association_refs(assoc: &Association, emit: &mut impl FnMut(ElementId, &SourceInfo)) {
+    for prop in &assoc.properties {
+        walk_property_refs(prop, emit);
+    }
+    for qp in &assoc.qualified_properties {
+        walk_qualified_property_refs(qp, emit);
+    }
+}
+
+fn walk_function_refs(
+    func: &Function,
+    func_si: &SourceInfo,
+    emit: &mut impl FnMut(ElementId, &SourceInfo),
+) {
+    for param in func.parameters.iter() {
+        walk_type_refs(&param.type_expr, &param.source_info, emit);
+    }
+    walk_type_refs(&func.return_type, func_si, emit);
+    for expr in func.body.iter() {
+        walk_value_spec_refs(expr, emit);
+    }
+}
+
+fn walk_property_refs(prop: &Property, emit: &mut impl FnMut(ElementId, &SourceInfo)) {
+    walk_type_refs(&prop.type_expr, &prop.source_info, emit);
+    if let Some(dv) = &prop.default_value {
+        walk_value_spec_refs(dv, emit);
+    }
+}
+
+fn walk_qualified_property_refs(
+    qp: &QualifiedProperty,
+    emit: &mut impl FnMut(ElementId, &SourceInfo),
+) {
+    for param in qp.parameters.iter() {
+        walk_type_refs(&param.type_expr, &param.source_info, emit);
+    }
+    walk_type_refs(&qp.return_type, &qp.source_info, emit);
+    for expr in qp.body.iter() {
+        walk_value_spec_refs(expr, emit);
+    }
+}
+
+fn walk_constraint_refs(con: &Constraint, emit: &mut impl FnMut(ElementId, &SourceInfo)) {
+    walk_value_spec_refs(&con.function, emit);
+    if let Some(m) = &con.message {
+        walk_value_spec_refs(m, emit);
+    }
+}
+
+fn walk_type_refs(
+    ty: &TypeExpr,
+    fallback_si: &SourceInfo,
+    emit: &mut impl FnMut(ElementId, &SourceInfo),
+) {
+    match ty {
+        TypeExpr::Named {
+            element,
+            type_arguments,
+            ..
+        } => {
+            emit(*element, fallback_si);
+            for arg in type_arguments {
+                walk_type_refs(arg, fallback_si, emit);
+            }
+        }
+        TypeExpr::FunctionType {
+            parameters,
+            return_type,
+            ..
+        } => {
+            for (pty, _) in parameters {
+                walk_type_refs(pty, fallback_si, emit);
+            }
+            walk_type_refs(return_type, fallback_si, emit);
+        }
+        TypeExpr::AlgebraUnion(a, b) => {
+            walk_type_refs(a, fallback_si, emit);
+            walk_type_refs(b, fallback_si, emit);
+        }
+        TypeExpr::Generic(_) | TypeExpr::Relation(_) | TypeExpr::Unresolved => {}
+    }
+}
+
+fn walk_value_spec_refs(vs: &ValueSpec, emit: &mut impl FnMut(ElementId, &SourceInfo)) {
+    walk_expr_kind_refs(&vs.kind, &vs.source_info, emit);
+}
+
+fn walk_expr_kind_refs(
+    kind: &ExprKind,
+    si: &SourceInfo,
+    emit: &mut impl FnMut(ElementId, &SourceInfo),
+) {
+    match kind {
+        ExprKind::IntegerLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::DecimalLiteral(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::BooleanLiteral(_)
+        | ExprKind::DateLiteral(_)
+        | ExprKind::Variable { .. }
+        | ExprKind::Column => {}
+        ExprKind::FunctionCall(d)
+        | ExprKind::PropertyCall(d)
+        | ExprKind::QualifiedPropertyCall(d) => {
+            walk_function_call_data_refs(d, si, emit);
+        }
+        ExprKind::EnumValue { enum_element, .. } => {
+            emit(*enum_element, si);
+        }
+        ExprKind::Lambda { parameters, body } => {
+            for p in parameters {
+                walk_type_refs(&p.type_expr, &p.source_info, emit);
+            }
+            for e in body {
+                walk_value_spec_refs(e, emit);
+            }
+        }
+        ExprKind::Collection { elements } => {
+            for e in elements {
+                walk_value_spec_refs(e, emit);
+            }
+        }
+        ExprKind::TypeReference { type_expr } => {
+            walk_type_refs(type_expr, si, emit);
+        }
+        ExprKind::PackageableElementRef { element } => {
+            emit(*element, si);
+        }
+        ExprKind::RelationLiteral { columns } | ExprKind::ColSpecArrayLiteral { columns } => {
+            for col in columns {
+                emit(col.type_element, si);
+            }
+        }
+    }
+}
+
+fn walk_function_call_data_refs(
+    d: &FunctionCallData,
+    si: &SourceInfo,
+    emit: &mut impl FnMut(ElementId, &SourceInfo),
+) {
+    if let Some(f) = &d.function {
+        emit(*f, si);
+    }
+    for a in &d.arguments {
+        walk_value_spec_refs(a, emit);
+    }
+}
+
+fn check_access_at(
+    model: &PureModel,
+    target: ElementId,
+    ref_si: &SourceInfo,
+    use_site_pkg: PackageId,
+    cache: &mut HashMap<ElementId, AccessLevel>,
+    errors: &mut Vec<CompilationError>,
+) {
+    // Skip package refs, bootstrap-resident targets, and unknown ids.
+    if matches!(target, ElementId::Package(_)) {
+        return;
+    }
+    let ElementId::InstanceId { chunk_id, .. } = target else {
+        return;
+    };
+    if chunk_id == 0 {
+        return;
+    }
+
+    let level = *cache
+        .entry(target)
+        .or_insert_with(|| access::access_level_of(model, target));
+    if matches!(level, AccessLevel::Public | AccessLevel::Externalizable) {
+        return;
+    }
+
+    let target_pkg = model.get_node(target).parent_package;
+    let visible = match level {
+        AccessLevel::Private => use_site_pkg == target_pkg,
+        AccessLevel::Protected => is_same_or_sub_package(model, use_site_pkg, target_pkg),
+        AccessLevel::Public | AccessLevel::Externalizable => true,
+    };
+    if visible {
+        return;
+    }
+
+    let descriptor = render_target_descriptor(model, target);
+    let use_site_fqn = render_package_fqn(model, use_site_pkg);
+    let message = format!("{descriptor} is not accessible in {use_site_fqn}");
+    errors.push(CompilationError {
+        message,
+        source_info: ref_si.clone(),
+        kind: CompilationErrorKind::NotAccessible {
+            target_fqn: descriptor,
+            use_site_package: use_site_fqn,
+        },
+    });
+}
+
+/// True if `use_site` is `target` itself or any sub-package of it. Java
+/// `Visibility.isVisibleInPackage` walks the parent chain via
+/// `_package`; mirroring it here ensures `pkg::sub` sees `pkg`'s
+/// `<<access.protected>>` declarations but `other` does not.
+fn is_same_or_sub_package(model: &PureModel, use_site: PackageId, target: PackageId) -> bool {
+    let mut cur = Some(use_site);
+    while let Some(p) = cur {
+        if p == target {
+            return true;
+        }
+        cur = model.get_package(p).parent;
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
