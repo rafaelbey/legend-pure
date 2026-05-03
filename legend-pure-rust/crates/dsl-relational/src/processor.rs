@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Phase B1: post-processor scaffolding for the relational DSL.
+//! Phase B1+B2: post-processor for the relational DSL.
 //!
 //! `RelationalExtension::define_bodies` runs this module against every
 //! registered [`DatabaseDef`] to produce a [`ResolvedDatabase`] — a
@@ -23,17 +23,22 @@
 //!
 //! What this module currently resolves:
 //!
-//! - **Tables** — every Table on the database (top-level + schema-nested)
-//!   with its column list. SQL type names are mapped to the
-//!   [`PureColumnType`] enum (Java parity with `ColumnDataTypeFactory`),
-//!   keeping the raw SQL spelling alongside for diagnostics.
-//! - **Views / Joins / Filters / MultiGrainFilters** — by name, for
-//!   contextual lookups. Body resolution (column-ref → `ResolvedColumn`,
-//!   join-tree-node construction) lands in B2.
+//! - **Tables** (B1) — every Table on the database (top-level +
+//!   schema-nested) with its column list. SQL type names are mapped
+//!   to the [`PureColumnType`] enum (Java parity with
+//!   `ColumnDataTypeFactory`), keeping the raw SQL spelling alongside
+//!   for diagnostics.
+//! - **Views / Joins / Filters / MultiGrainFilters by name** (B1).
+//! - **`include` FQNs** (B1) — copied so consumers can walk the include
+//!   graph without re-resolving.
+//! - **Op-body column references** (B2) — every `OpColumn::Aliased`
+//!   reference inside a Filter / Join / MultiGrainFilter body is bound
+//!   to its `(database_fqn, table_name, column_index)` triple. Cross-db
+//!   `[db]` qualifiers and transitively-included tables resolve through
+//!   the snapshot map.
 //!
 //! What this module deliberately defers (Phase-B sub-items):
 //!
-//! - Op-body column references → `ResolvedColumn` ElementId (B2)
 //! - View body resolution + view-cycle detection (B3)
 //! - Class-mapping property mapping resolution (B4)
 //! - Main-table inheritance through `extends` (B5)
@@ -41,11 +46,13 @@
 //! - Implicit-db `@join` resolution (B7)
 //! - Milestoning auto-rewrite (Phase C)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use smol_str::SmolStr;
 
-use crate::ast::{ColumnDef, DatabaseDef, DatabaseElement};
+use legend_pure_parser_ast::SourceInfo;
+
+use crate::ast::{ColumnDef, DatabaseDef, DatabaseElement, OpColumn, OpExpr};
 
 // ---------------------------------------------------------------------------
 // PureColumnType — SQL → Pure primitive mapping
@@ -222,6 +229,63 @@ impl ResolvedTable {
     }
 }
 
+/// Resolved binding for one `OpColumn::Aliased` reference inside an
+/// op-body. Populated by Phase B2's `resolve_op_bodies` pass —
+/// requires the full set of registered databases so cross-db `[db]`
+/// qualifiers resolve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpColumnBinding {
+    /// Database FQN where the table lives. When the AST's `[db]`
+    /// qualifier was present, this is its FQN; otherwise it's the
+    /// owning op-element's database FQN.
+    pub database_fqn: SmolStr,
+    /// Table simple name (the `alias` segment of the op-column ref).
+    pub table_name: SmolStr,
+    /// Column index into the resolved table's `columns` vector.
+    /// `None` when the op-column had no scope segment (alias alone)
+    /// or the column wasn't found.
+    pub column_index: Option<usize>,
+    /// `True` when `[db]@alias.col` couldn't be resolved to a known
+    /// database in the snapshot map. Diagnostic-only — the V4
+    /// validator already reports the underlying error.
+    pub unresolved_database: bool,
+    /// `True` when the `alias` segment didn't match any table
+    /// visible to `database_fqn` (own + transitive includes).
+    pub unresolved_table: bool,
+    /// `True` when the table resolved but the scope's column name
+    /// didn't match a known column.
+    pub unresolved_column: bool,
+    /// Source span of the op-column reference.
+    pub source_info: SourceInfo,
+}
+
+impl OpColumnBinding {
+    /// Look up the resolved column on the bound table. Returns
+    /// `None` when the binding is unresolved or `snapshots` doesn't
+    /// contain the bound database.
+    #[must_use]
+    pub fn resolved_column<'a>(
+        &self,
+        snapshots: &'a HashMap<SmolStr, ResolvedDatabase>,
+    ) -> Option<&'a ResolvedColumn> {
+        let snapshot = snapshots.get(&self.database_fqn)?;
+        let table = snapshot.tables_by_name.get(&self.table_name)?;
+        let idx = self.column_index?;
+        table.columns.get(idx)
+    }
+}
+
+/// Resolved op-body — the column bindings extracted from one Filter
+/// / Join / MultiGrainFilter body, in source order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedOpBody {
+    /// Owning element's simple name (e.g. `"trade_product"` for
+    /// `Join trade_product (...)`).
+    pub element_name: SmolStr,
+    /// All `OpColumn::Aliased` bindings inside the body.
+    pub bindings: Vec<OpColumnBinding>,
+}
+
 /// Per-database resolved snapshot produced by [`process_database`].
 ///
 /// Lives in extension state, not on the [`PureModel`]. Consumers
@@ -247,6 +311,13 @@ pub struct ResolvedDatabase {
     /// from the AST so consumers can walk the include graph without
     /// re-resolving.
     pub include_fqns: Vec<SmolStr>,
+    /// Resolved op-bodies for every Filter on this database, in
+    /// source order. Populated by [`resolve_op_bodies`] (Phase B2).
+    pub filter_bodies: Vec<ResolvedOpBody>,
+    /// Resolved op-bodies for every Join on this database.
+    pub join_bodies: Vec<ResolvedOpBody>,
+    /// Resolved op-bodies for every MultiGrainFilter on this database.
+    pub multi_grain_filter_bodies: Vec<ResolvedOpBody>,
 }
 
 // ---------------------------------------------------------------------------
@@ -320,7 +391,331 @@ pub fn process_database(def: &DatabaseDef) -> ResolvedDatabase {
         filter_names,
         multi_grain_filter_names,
         include_fqns,
+        filter_bodies: Vec::new(),
+        join_bodies: Vec::new(),
+        multi_grain_filter_bodies: Vec::new(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase B2 — op-column reference resolution
+// ---------------------------------------------------------------------------
+
+/// Walk every Filter / Join / MultiGrainFilter op-body on every
+/// registered database, producing [`ResolvedOpBody`] rows that map
+/// each `OpColumn::Aliased` reference to a `(database_fqn,
+/// table_name, column_index)` binding. Cross-db `[db]` qualifiers
+/// resolve through `defs_by_fqn`; missing-db / missing-table /
+/// missing-column cases are recorded as flags on the binding (the
+/// V4 validator emits the user-facing error).
+///
+/// Mutates `snapshots` in place — assumes the snapshots have already
+/// been populated by [`process_database`].
+pub fn resolve_op_bodies(
+    snapshots: &mut HashMap<SmolStr, ResolvedDatabase>,
+    defs_by_fqn: &HashMap<SmolStr, DatabaseDef>,
+) {
+    // Pre-compute visible-table sets per database so cross-db
+    // resolution can answer "which tables can `dbX` see?" quickly.
+    let visible_tables: HashMap<SmolStr, HashSet<SmolStr>> = defs_by_fqn
+        .iter()
+        .map(|(fqn, def)| (fqn.clone(), collect_visible_table_names(def, defs_by_fqn)))
+        .collect();
+
+    for (db_fqn, def) in defs_by_fqn {
+        let mut filter_bodies: Vec<ResolvedOpBody> = Vec::new();
+        let mut join_bodies: Vec<ResolvedOpBody> = Vec::new();
+        let mut multi_grain_filter_bodies: Vec<ResolvedOpBody> = Vec::new();
+
+        for elem in &def.elements {
+            match elem {
+                DatabaseElement::Filter(f) => {
+                    filter_bodies.push(resolve_op_body(
+                        &f.name.value,
+                        &f.body,
+                        db_fqn,
+                        snapshots,
+                        &visible_tables,
+                    ));
+                }
+                DatabaseElement::Join(j) => {
+                    join_bodies.push(resolve_op_body(
+                        &j.name.value,
+                        &j.body,
+                        db_fqn,
+                        snapshots,
+                        &visible_tables,
+                    ));
+                }
+                DatabaseElement::MultiGrainFilter(m) => {
+                    multi_grain_filter_bodies.push(resolve_op_body(
+                        &m.name.value,
+                        &m.body,
+                        db_fqn,
+                        snapshots,
+                        &visible_tables,
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(snapshot) = snapshots.get_mut(db_fqn) {
+            snapshot.filter_bodies = filter_bodies;
+            snapshot.join_bodies = join_bodies;
+            snapshot.multi_grain_filter_bodies = multi_grain_filter_bodies;
+        }
+    }
+}
+
+fn resolve_op_body(
+    element_name: &SmolStr,
+    body: &OpExpr,
+    owning_db_fqn: &SmolStr,
+    snapshots: &HashMap<SmolStr, ResolvedDatabase>,
+    visible_tables: &HashMap<SmolStr, HashSet<SmolStr>>,
+) -> ResolvedOpBody {
+    let mut bindings: Vec<OpColumnBinding> = Vec::new();
+    walk_op_expr_for_columns(
+        body,
+        owning_db_fqn,
+        snapshots,
+        visible_tables,
+        &mut bindings,
+    );
+    ResolvedOpBody {
+        element_name: element_name.clone(),
+        bindings,
+    }
+}
+
+fn walk_op_expr_for_columns(
+    expr: &OpExpr,
+    owning_db_fqn: &SmolStr,
+    snapshots: &HashMap<SmolStr, ResolvedDatabase>,
+    visible_tables: &HashMap<SmolStr, HashSet<SmolStr>>,
+    out: &mut Vec<OpColumnBinding>,
+) {
+    match expr {
+        OpExpr::Bool { lhs, rhs, .. } | OpExpr::Compare { lhs, rhs, .. } => {
+            walk_op_expr_for_columns(lhs, owning_db_fqn, snapshots, visible_tables, out);
+            walk_op_expr_for_columns(rhs, owning_db_fqn, snapshots, visible_tables, out);
+        }
+        OpExpr::IsNull { expr, .. } | OpExpr::Group { inner: expr, .. } => {
+            walk_op_expr_for_columns(expr, owning_db_fqn, snapshots, visible_tables, out);
+        }
+        OpExpr::Function { args, .. } => {
+            for a in args {
+                walk_op_expr_for_columns(a, owning_db_fqn, snapshots, visible_tables, out);
+            }
+        }
+        OpExpr::Column(OpColumn::Aliased {
+            db,
+            alias,
+            scope,
+            source_info,
+            ..
+        }) => {
+            // Resolve target database. Explicit `[db]` overrides;
+            // otherwise inherit from the owning element.
+            let (target_db_fqn, unresolved_database) = match db {
+                Some(d) => {
+                    let fqn = packageable_fqn_from_ptr(d);
+                    let exists = snapshots.contains_key(&fqn);
+                    (fqn, !exists)
+                }
+                None => (owning_db_fqn.clone(), false),
+            };
+
+            // Resolve table existence + column index. When the table
+            // resolves through an included database, record the home
+            // db FQN on the binding so `resolved_column` finds it.
+            let mut unresolved_table = false;
+            let mut unresolved_column = false;
+            let mut column_index: Option<usize> = None;
+            let mut bound_db_fqn = target_db_fqn.clone();
+
+            if !unresolved_database {
+                let table_visible = visible_tables
+                    .get(&target_db_fqn)
+                    .is_some_and(|set| set.contains(&alias.value));
+                if !table_visible {
+                    unresolved_table = true;
+                } else if let Some(scope_seg) = scope.first() {
+                    // Walk visible snapshots to find the column AND
+                    // the database where it lives.
+                    if let Some((home_db, idx)) = lookup_column_via_includes(
+                        snapshots,
+                        &target_db_fqn,
+                        &alias.value,
+                        &scope_seg.value,
+                    ) {
+                        bound_db_fqn = home_db;
+                        column_index = Some(idx);
+                    } else {
+                        unresolved_column = true;
+                    }
+                } else if let Some(home_db) =
+                    lookup_table_home_db(snapshots, &target_db_fqn, &alias.value)
+                {
+                    // Alias-only ref (no scope) — still record the home db.
+                    bound_db_fqn = home_db;
+                }
+            }
+
+            out.push(OpColumnBinding {
+                database_fqn: bound_db_fqn,
+                table_name: alias.value.clone(),
+                column_index,
+                unresolved_database,
+                unresolved_table,
+                unresolved_column,
+                source_info: source_info.clone(),
+            });
+        }
+        OpExpr::Column(OpColumn::Target { .. }) | OpExpr::Literal(_) => {}
+        OpExpr::Array { elements, .. } => {
+            for e in elements {
+                walk_op_expr_for_columns(e, owning_db_fqn, snapshots, visible_tables, out);
+            }
+        }
+    }
+}
+
+fn packageable_fqn_from_ptr(
+    p: &legend_pure_parser_ast::annotation::PackageableElementPtr,
+) -> SmolStr {
+    let mut s = String::new();
+    if let Some(pkg) = p.package.as_ref() {
+        for seg in pkg.segments() {
+            s.push_str(seg.as_str());
+            s.push_str("::");
+        }
+    }
+    s.push_str(p.name.as_str());
+    SmolStr::new(&s)
+}
+
+/// Build the visible-table set for `def` (own tables + transitive
+/// `include` closure). Schema-nested tables and top-level tables
+/// share the same namespace.
+fn collect_visible_table_names(
+    def: &DatabaseDef,
+    all_defs: &HashMap<SmolStr, DatabaseDef>,
+) -> HashSet<SmolStr> {
+    let mut out: HashSet<SmolStr> = HashSet::new();
+    let mut visited: HashSet<SmolStr> = HashSet::new();
+    walk_collect_tables(def, all_defs, &mut out, &mut visited);
+    out
+}
+
+fn walk_collect_tables(
+    def: &DatabaseDef,
+    all_defs: &HashMap<SmolStr, DatabaseDef>,
+    out: &mut HashSet<SmolStr>,
+    visited: &mut HashSet<SmolStr>,
+) {
+    let fqn = database_fqn(def);
+    if !visited.insert(fqn) {
+        return;
+    }
+    for elem in &def.elements {
+        match elem {
+            DatabaseElement::Schema(s) => {
+                for t in &s.tables {
+                    out.insert(t.name.value.clone());
+                }
+                for v in &s.views {
+                    out.insert(v.name.value.clone());
+                }
+            }
+            DatabaseElement::Table(t) => {
+                out.insert(t.name.value.clone());
+            }
+            DatabaseElement::View(v) => {
+                out.insert(v.name.value.clone());
+            }
+            _ => {}
+        }
+    }
+    for inc in &def.includes {
+        let target_fqn = packageable_fqn_from_ptr(&inc.included);
+        if let Some(included_def) = all_defs.get(&target_fqn) {
+            walk_collect_tables(included_def, all_defs, out, visited);
+        }
+    }
+}
+
+/// Look up a column by walking `db_fqn`'s snapshot and the
+/// snapshots of its transitively-included databases. Returns the
+/// `(home_db_fqn, column_index)` of the first match.
+fn lookup_column_via_includes(
+    snapshots: &HashMap<SmolStr, ResolvedDatabase>,
+    db_fqn: &SmolStr,
+    table_name: &str,
+    column_name: &str,
+) -> Option<(SmolStr, usize)> {
+    let mut visited: HashSet<SmolStr> = HashSet::new();
+    walk_lookup_column(snapshots, db_fqn, table_name, column_name, &mut visited)
+}
+
+fn walk_lookup_column(
+    snapshots: &HashMap<SmolStr, ResolvedDatabase>,
+    db_fqn: &SmolStr,
+    table_name: &str,
+    column_name: &str,
+    visited: &mut HashSet<SmolStr>,
+) -> Option<(SmolStr, usize)> {
+    if !visited.insert(db_fqn.clone()) {
+        return None;
+    }
+    let snapshot = snapshots.get(db_fqn)?;
+    if let Some(t) = snapshot.tables_by_name.get(table_name) {
+        if let Some(idx) = t.columns_by_name.get(column_name) {
+            return Some((db_fqn.clone(), *idx));
+        }
+    }
+    for include_fqn in &snapshot.include_fqns {
+        if let Some(found) =
+            walk_lookup_column(snapshots, include_fqn, table_name, column_name, visited)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Find the database FQN that owns `table_name`, walking the include
+/// closure of `db_fqn`. Used by alias-only column refs that need to
+/// pin the home db without a column lookup.
+fn lookup_table_home_db(
+    snapshots: &HashMap<SmolStr, ResolvedDatabase>,
+    db_fqn: &SmolStr,
+    table_name: &str,
+) -> Option<SmolStr> {
+    let mut visited: HashSet<SmolStr> = HashSet::new();
+    walk_lookup_home_db(snapshots, db_fqn, table_name, &mut visited)
+}
+
+fn walk_lookup_home_db(
+    snapshots: &HashMap<SmolStr, ResolvedDatabase>,
+    db_fqn: &SmolStr,
+    table_name: &str,
+    visited: &mut HashSet<SmolStr>,
+) -> Option<SmolStr> {
+    if !visited.insert(db_fqn.clone()) {
+        return None;
+    }
+    let snapshot = snapshots.get(db_fqn)?;
+    if snapshot.tables_by_name.contains_key(table_name) {
+        return Some(db_fqn.clone());
+    }
+    for include_fqn in &snapshot.include_fqns {
+        if let Some(found) = walk_lookup_home_db(snapshots, include_fqn, table_name, visited) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn resolve_table(t: &crate::ast::Table, schema: Option<SmolStr>) -> ResolvedTable {

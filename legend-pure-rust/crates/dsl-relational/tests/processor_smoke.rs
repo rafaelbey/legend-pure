@@ -337,6 +337,198 @@ fn multi_database_each_resolved_independently() {
     assert_eq!(tb_id.pure_type, Some(PureColumnType::BigInt));
 }
 
+// ---------------------------------------------------------------------------
+// Phase B2 — op-body column reference resolution
+// ---------------------------------------------------------------------------
+
+#[test]
+fn resolves_filter_op_columns_to_local_table_columns() {
+    let extension = run_lifecycle(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (id INT PRIMARY KEY, qty FLOAT(10, 2), name VARCHAR(50))
+          Filter f1 (t.id = 1 and t.qty > 0)
+        )
+    "});
+    let resolved = extension.resolved_databases();
+    let db = resolved.get("pkg::db").expect("missing");
+    assert_eq!(db.filter_bodies.len(), 1);
+    let body = &db.filter_bodies[0];
+    assert_eq!(body.element_name.as_str(), "f1");
+    assert_eq!(body.bindings.len(), 2);
+
+    // Both bindings point at table 't' with locally-scoped column refs.
+    for b in &body.bindings {
+        assert_eq!(b.database_fqn.as_str(), "pkg::db");
+        assert_eq!(b.table_name.as_str(), "t");
+        assert!(!b.unresolved_database);
+        assert!(!b.unresolved_table);
+        assert!(!b.unresolved_column);
+    }
+
+    // Specific column indices: 'id' is column[0], 'qty' is column[1].
+    let col0 = body.bindings[0].resolved_column(&resolved).unwrap();
+    let col1 = body.bindings[1].resolved_column(&resolved).unwrap();
+    assert_eq!(col0.name.as_str(), "id");
+    assert_eq!(col0.pure_type, Some(PureColumnType::Integer));
+    assert_eq!(col1.name.as_str(), "qty");
+    assert_eq!(col1.pure_type, Some(PureColumnType::Float));
+}
+
+#[test]
+fn resolves_join_op_columns_across_two_tables() {
+    let extension = run_lifecycle(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table src (id INT PRIMARY KEY, fk INT)
+          Table dst (id INT PRIMARY KEY, name VARCHAR(50))
+          Join sToD (src.fk = dst.id)
+        )
+    "});
+    let resolved = extension.resolved_databases();
+    let db = resolved.get("pkg::db").expect("missing");
+    assert_eq!(db.join_bodies.len(), 1);
+    let body = &db.join_bodies[0];
+    assert_eq!(body.element_name.as_str(), "sToD");
+    assert_eq!(body.bindings.len(), 2);
+
+    let lhs = &body.bindings[0];
+    let rhs = &body.bindings[1];
+    assert_eq!(lhs.table_name.as_str(), "src");
+    assert_eq!(rhs.table_name.as_str(), "dst");
+
+    let lhs_col = lhs.resolved_column(&resolved).unwrap();
+    let rhs_col = rhs.resolved_column(&resolved).unwrap();
+    assert_eq!(lhs_col.name.as_str(), "fk");
+    assert_eq!(rhs_col.name.as_str(), "id");
+}
+
+#[test]
+fn resolves_op_columns_across_includes() {
+    let extension = run_lifecycle(indoc! {r"
+        ###Relational
+        Database pkg::base
+        (
+          Table sharedT (id INT PRIMARY KEY, fk INT)
+        )
+
+        ###Relational
+        Database pkg::main
+        (
+          include pkg::base
+          Table localT (id INT PRIMARY KEY)
+          Filter f (sharedT.id = localT.id)
+        )
+    "});
+    let resolved = extension.resolved_databases();
+    let main = resolved.get("pkg::main").expect("missing");
+    assert_eq!(main.filter_bodies.len(), 1);
+    let body = &main.filter_bodies[0];
+    assert_eq!(body.bindings.len(), 2);
+
+    // First binding (sharedT.id) — table lives in pkg::base via include.
+    let shared = &body.bindings[0];
+    assert_eq!(shared.table_name.as_str(), "sharedT");
+    assert!(!shared.unresolved_table); // visible via include
+    // Column index resolves through the include closure.
+    let col = shared.resolved_column(&resolved).unwrap();
+    assert_eq!(col.name.as_str(), "id");
+}
+
+#[test]
+fn resolves_explicit_db_qualifier_to_other_database() {
+    let extension = run_lifecycle(indoc! {r"
+        ###Relational
+        Database pkg::other
+        (
+          Table foreign (id INT PRIMARY KEY, name VARCHAR(50))
+        )
+
+        ###Relational
+        Database pkg::main
+        (
+          Table local (id INT PRIMARY KEY)
+          Filter f ([pkg::other]foreign.id = local.id)
+        )
+    "});
+    let resolved = extension.resolved_databases();
+    let main = resolved.get("pkg::main").expect("missing");
+    let body = &main.filter_bodies[0];
+
+    // First binding has explicit `[pkg::other]` qualifier.
+    let foreign = &body.bindings[0];
+    assert_eq!(foreign.database_fqn.as_str(), "pkg::other");
+    assert_eq!(foreign.table_name.as_str(), "foreign");
+    assert!(!foreign.unresolved_database);
+    let col = foreign.resolved_column(&resolved).unwrap();
+    assert_eq!(col.name.as_str(), "id");
+    assert_eq!(col.pure_type, Some(PureColumnType::Integer));
+
+    // Second binding falls back to the owning DB.
+    let local = &body.bindings[1];
+    assert_eq!(local.database_fqn.as_str(), "pkg::main");
+    assert_eq!(local.table_name.as_str(), "local");
+}
+
+#[test]
+fn flags_unresolved_table_in_op_body() {
+    // V4 raises a hard error; the resolver still produces a binding
+    // with `unresolved_table = true` for downstream consumers.
+    let extension = run_lifecycle(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (id INT PRIMARY KEY)
+          Filter f (missing.id = t.id)
+        )
+    "});
+    let resolved = extension.resolved_databases();
+    let db = resolved.get("pkg::db").expect("missing");
+    let body = &db.filter_bodies[0];
+    let missing = &body.bindings[0];
+    assert!(missing.unresolved_table);
+    assert!(missing.column_index.is_none());
+}
+
+#[test]
+fn flags_unresolved_database_in_op_body() {
+    let extension = run_lifecycle(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (id INT PRIMARY KEY)
+          Filter f ([pkg::nope]t.id = t.id)
+        )
+    "});
+    let resolved = extension.resolved_databases();
+    let db = resolved.get("pkg::db").expect("missing");
+    let body = &db.filter_bodies[0];
+    let missing = &body.bindings[0];
+    assert!(missing.unresolved_database);
+}
+
+#[test]
+fn collects_multi_grain_filter_bodies() {
+    let extension = run_lifecycle(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (id INT PRIMARY KEY, region VARCHAR(2))
+          MultiGrainFilter byRegion (t.region = 'US')
+        )
+    "});
+    let resolved = extension.resolved_databases();
+    let db = resolved.get("pkg::db").expect("missing");
+    assert_eq!(db.multi_grain_filter_bodies.len(), 1);
+    let body = &db.multi_grain_filter_bodies[0];
+    assert_eq!(body.element_name.as_str(), "byRegion");
+    assert_eq!(body.bindings.len(), 1);
+    let col = body.bindings[0].resolved_column(&resolved).unwrap();
+    assert_eq!(col.name.as_str(), "region");
+}
+
 #[test]
 fn resolved_databases_empty_before_define_bodies() {
     // Run only the declare pass — `resolved_databases` must be empty
