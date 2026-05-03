@@ -24,7 +24,8 @@ repository.workspace = true
 legend-pure-parser-ast = { path = "../ast" }
 legend-pure-parser-lexer = { path = "../lexer" }
 rayon = { workspace = true }
-smol_str = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+smol_str = { workspace = true, features = ["serde"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 

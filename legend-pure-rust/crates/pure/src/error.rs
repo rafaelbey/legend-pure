@@ -15,10 +15,30 @@
 //! Compilation error types for the Pure compiler pipeline.
 
 use legend_pure_parser_ast::SourceInfo;
+use serde::Serialize;
 use smol_str::SmolStr;
 
+/// Diagnostic severity, used by IDE/LSP integrations.
+///
+/// Today every [`CompilationError`] resolves to [`Severity::Error`] — there are
+/// no warning-tier diagnostics yet — but the enum + [`CompilationError::severity`]
+/// derivation are wired up so warning-emitting passes can land without churning
+/// the ~100 existing error construction sites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    /// Halts compilation; the model is partial.
+    Error,
+    /// Suspicious but not fatal; e.g. unused import, deprecated stereotype.
+    Warning,
+    /// Informational hint; e.g. style or migration suggestion.
+    Info,
+    /// Editor hint with no diagnostic weight.
+    Hint,
+}
+
 /// A compilation error produced during AST → Pure lowering or validation.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error, Serialize)]
 #[error("{source_info}: {message}")]
 pub struct CompilationError {
     /// Human-readable error message.
@@ -29,8 +49,23 @@ pub struct CompilationError {
     pub kind: CompilationErrorKind,
 }
 
+impl CompilationError {
+    /// Diagnostic severity, derived from [`CompilationErrorKind`].
+    ///
+    /// Returns [`Severity::Error`] for every kind today. When warning-tier
+    /// passes are added (e.g. unused-import lints), match on `kind` here to
+    /// promote them — no call-site changes required.
+    #[must_use]
+    pub fn severity(&self) -> Severity {
+        // No warning-tier kinds yet — every variant resolves to Error.
+        let _ = &self.kind;
+        Severity::Error
+    }
+}
+
 /// Classification of compilation errors.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "tag", rename_all = "camelCase")]
 pub enum CompilationErrorKind {
     /// An element path could not be resolved.
     UnresolvedElement {

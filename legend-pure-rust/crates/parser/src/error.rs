@@ -18,7 +18,8 @@ use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_lexer::TokenKind;
 
 /// A parser error.
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ParseError {
     /// Unexpected token encountered.
     #[error("{message} at {source_info}")]
