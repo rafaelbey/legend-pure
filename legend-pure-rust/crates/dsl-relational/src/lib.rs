@@ -63,5 +63,6 @@
 //! the full staging.
 
 pub mod ast;
+pub mod compiler;
 pub mod compose;
 pub mod parser;
