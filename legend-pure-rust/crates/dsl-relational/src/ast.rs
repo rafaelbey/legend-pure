@@ -26,8 +26,8 @@
 //! body — `op_operation` in the Java grammar — is structurally
 //! parsed in Stage 2 as an [`OpExpr`] tree (booleans, comparisons,
 //! `IS [NOT] NULL`, function calls, columns, literals). View bodies
-//! (filter / groupBy / distinct / columnMappings) remain a
-//! [`TokenSlice`] until Stage 5.
+//! are structurally parsed in Phase A: `filterViewBlock?`,
+//! `mappingBlockGroupBy?`, `DISTINCTCMD?`, `viewColumnMappingLines`.
 //!
 //! What's intentionally absent from Stage 1:
 //! - Stereotypes / tagged values on Database / Schema / Table / Column
@@ -43,7 +43,6 @@ use legend_pure_parser_ast::dsl::DSLElement;
 use legend_pure_parser_ast::element::{Annotated, PackageableElement};
 use legend_pure_parser_ast::source_info::Spanned;
 use legend_pure_parser_ast::type_ref::{Identifier, Package};
-use legend_pure_parser_lexer::Token;
 use smol_str::SmolStr;
 
 /// Section kind string this DSL claims (`###Relational`).
@@ -308,18 +307,80 @@ pub struct ColumnDef {
 
 /// A `View` declaration: `View name ( <view-body> )`.
 ///
-/// Stage 1 captures the body as an opaque [`TokenSlice`] — the
-/// internal `(filterViewBlock)? (mappingBlockGroupBy)? (DISTINCTCMD)?
-/// viewColumnMappingLines` shape is structurally parsed in a later
-/// stage. Round-trip composition replays the captured tokens.
+/// Java grammar (RelationalParser.g4):
+/// ```text
+/// view: VIEW relationalIdentifier '('
+///         filterViewBlock?
+///         mappingBlockGroupBy?
+///         DISTINCTCMD?
+///         viewColumnMappingLines
+///       ')'
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct View {
     /// View name (relational identifier — bare or quoted).
     pub name: SpannedString,
-    /// Verbatim token slice for the view body. Composed back as
-    /// space-separated token texts by [`compose`](crate::compose).
-    pub body: TokenSlice,
+    /// Optional `~filter [(db1) joinSeq | [db2]]? <filterName>` clause.
+    pub filter: Option<FilterViewBlock>,
+    /// Optional `~groupBy(<joinCol>, …)` clause.
+    pub group_by: Option<Vec<JoinColWithDbOrConstant>>,
+    /// `~distinct` flag.
+    pub distinct: bool,
+    /// One or more `colName ([targetSetId])? : <joinCol>` lines.
+    pub columns: Vec<ViewColumnMappingLine>,
     /// Span of the entire `View … ( … )` declaration.
+    pub source_info: SourceInfo,
+}
+
+/// `~filter (database joinSequence PIPE database)? identifier` —
+/// optional filter binding on a [`View`].
+///
+/// Java grammar:
+/// `filterViewBlock: MAPPING_FILTER (database joinSequence PIPE database)? identifier`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterViewBlock {
+    /// Optional `[db1] joinSeq | [db2]` chain. When `None`, the
+    /// filter resolves against the view's owning database.
+    pub db_chain: Option<FilterViewDbChain>,
+    /// Filter name. Unqualified — the bracket-enclosed `[db]`
+    /// qualifier (when present) lives in `db_chain.second_db`, not on
+    /// the filter name itself.
+    pub filter_name: SpannedString,
+    /// Span covering `~filter … <filter_name>`.
+    pub source_info: SourceInfo,
+}
+
+/// `[db1] joinSequence | [db2]` chain inside a [`FilterViewBlock`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterViewDbChain {
+    /// `[db1]` — database the join sequence walks from.
+    pub first_db: PackageableElementPtr,
+    /// `@a > @b > …` join sequence between the two databases.
+    pub join_sequence: JoinSequence,
+    /// `[db2]` — database the filter lives in.
+    pub second_db: PackageableElementPtr,
+    /// Span covering the chain.
+    pub source_info: SourceInfo,
+}
+
+/// One `viewColumnMappingLine` row inside a [`View`] body.
+///
+/// Java grammar:
+/// `viewColumnMappingLine: identifier (BRACKET_OPEN identifier BRACKET_CLOSE)? COLON joinColWithDbOrConstant`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewColumnMappingLine {
+    /// Column name written in the view.
+    pub column_name: SpannedString,
+    /// Optional `[targetSetImplementationId]` — the bracket-enclosed
+    /// identifier between the column name and the colon. Java's
+    /// `RelationalGraphBuilder.visitViewColumnMappingLine` writes this
+    /// as `targetSetImplementationId` on the synthesised
+    /// `ColumnMapping`.
+    pub target_set_id: Option<SpannedString>,
+    /// Right-hand-side `joinColWithDbOrConstant` — column / join
+    /// chain / literal whose value populates this view column.
+    pub value: JoinColWithDbOrConstant,
+    /// Span covering the entire row.
     pub source_info: SourceInfo,
 }
 
@@ -634,72 +695,6 @@ impl OpLiteral {
             | OpLiteral::Float { source_info, .. } => source_info,
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// TokenSlice — Stage 1 verbatim capture
-// ---------------------------------------------------------------------------
-
-/// A run of tokens captured between matching parens, used by
-/// Stage 1 for op-bodies and view bodies that haven't been
-/// structurally parsed yet. Preserves token text + kind so the
-/// composer can re-emit them; structural parsing in later stages
-/// replaces these slices with proper AST nodes.
-///
-/// `Vec<Token>` is heavy (each Token carries `SmolStr` + SourceInfo),
-/// but Stage 1 fixtures keep these slices short (a handful of tokens
-/// per join / filter), and the slice goes away in Stage 2.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TokenSlice {
-    /// Captured tokens, in source order. Excludes the surrounding
-    /// outer parens (the parser consumes those before / after the
-    /// capture).
-    pub tokens: Vec<Token>,
-    /// Span covering the slice, useful for diagnostics that point
-    /// inside the body before structural parsing lands.
-    pub source_info: SourceInfo,
-}
-
-impl TokenSlice {
-    /// Convenience: render the captured tokens as a single
-    /// space-separated string. Used by the composer's round-trip
-    /// path; the output isn't byte-for-byte identical to the
-    /// original source (whitespace collapses to single spaces) but
-    /// re-parses to the same token sequence per the
-    /// `feedback_token_survival_round_trip` rule.
-    #[must_use]
-    pub fn render_with_spaces(&self) -> String {
-        let mut out = String::new();
-        for (i, t) in self.tokens.iter().enumerate() {
-            if i > 0 && needs_space_between(&self.tokens[i - 1], t) {
-                out.push(' ');
-            }
-            out.push_str(&t.text);
-        }
-        out
-    }
-}
-
-/// Decide whether two adjacent tokens in a [`TokenSlice`] need a
-/// separating space when emitted by the composer. The default policy
-/// is "yes, unless one side is a punctuator that conventionally
-/// hugs its neighbour". Keeps round-trip output compact and avoids
-/// glueing identifiers like `Table.col` apart.
-fn needs_space_between(prev: &Token, next: &Token) -> bool {
-    use legend_pure_parser_lexer::TokenKind;
-    let glue_left = matches!(
-        prev.kind,
-        TokenKind::Dot | TokenKind::LParen | TokenKind::LBracket
-    );
-    let glue_right = matches!(
-        next.kind,
-        TokenKind::Dot
-            | TokenKind::Comma
-            | TokenKind::RParen
-            | TokenKind::RBracket
-            | TokenKind::Semicolon
-    );
-    !(glue_left || glue_right)
 }
 
 // Validators in later stages walk `db.elements` directly to find

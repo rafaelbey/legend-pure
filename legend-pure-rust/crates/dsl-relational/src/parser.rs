@@ -16,11 +16,10 @@
 //!
 //! Recognises a stream of `Database pkg::db ( includes* (schema |
 //! table | join | filter | multiGrainFilter | view)* )`
-//! declarations. Stage 1 parses the structural envelope and column
-//! definitions; `op_operation` body content (joins / filters /
-//! multi-grain filters) and view body content are captured as
-//! verbatim [`TokenSlice`](crate::ast::TokenSlice)s for round-trip,
-//! pending the Stage-2 op-grammar.
+//! declarations. The structural envelope, column definitions,
+//! `op_operation` bodies (joins / filters / multi-grain filters), and
+//! view bodies (filterViewBlock, mappingBlockGroupBy, distinct,
+//! viewColumnMappingLines) are all parsed into structured AST.
 //!
 //! Mirrors `legend-pure-store-relational/.../RelationalParser.g4` for
 //! the top-level rule shape; section-scoped keywords (`Database`,
@@ -33,7 +32,7 @@
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::annotation::{PackageableElementPtr, SpannedString};
 use legend_pure_parser_ast::dsl::DSLElement;
-use legend_pure_parser_lexer::{Token, TokenKind};
+use legend_pure_parser_lexer::TokenKind;
 use legend_pure_parser_parser::ParserContext;
 use legend_pure_parser_parser::cursor::Cursor;
 use legend_pure_parser_parser::error::ParseError;
@@ -42,13 +41,14 @@ use smol_str::SmolStr;
 
 use crate::ast::{
     BinOp, BoolOp, ColumnDef, DatabaseDef, DatabaseElement, DatabaseInclude, EmbeddedMapping,
-    EmbeddedMappingTrailer, Filter, FilterMappingBlock, FilterMappingJoinSequence, InlineRef, Join,
-    JoinColWithDbOrConstant, JoinSequence, LocalMappingProperty, MainTableBlock, MappingElement,
-    MilestoneDef, MilestoneField, MilestoneSpec, MilestoneValue, MultiGrainFilter,
-    NonePlusMappingLine, NonePlusMappingValue, OneJoin, OneJoinRight, OpColumn, OpExpr, OpLiteral,
-    OtherwiseJoin, OtherwisePropertyMapping, PlusMappingLine, RelationalClassMappingBody,
-    RelationalMapping, SECTION_KIND, Schema, ScopedMapping, SimpleScopeInfo, SingleMappingLine,
-    Table, TokenSlice, Transformer, View,
+    EmbeddedMappingTrailer, Filter, FilterMappingBlock, FilterMappingJoinSequence, FilterViewBlock,
+    FilterViewDbChain, InlineRef, Join, JoinColWithDbOrConstant, JoinSequence,
+    LocalMappingProperty, MainTableBlock, MappingElement, MilestoneDef, MilestoneField,
+    MilestoneSpec, MilestoneValue, MultiGrainFilter, NonePlusMappingLine, NonePlusMappingValue,
+    OneJoin, OneJoinRight, OpColumn, OpExpr, OpLiteral, OtherwiseJoin, OtherwisePropertyMapping,
+    PlusMappingLine, RelationalClassMappingBody, RelationalMapping, SECTION_KIND, Schema,
+    ScopedMapping, SimpleScopeInfo, SingleMappingLine, Table, Transformer, View,
+    ViewColumnMappingLine,
 };
 
 fn err(message: String, source_info: SourceInfo) -> ParseError {
@@ -482,12 +482,156 @@ fn parse_int(ctx: &mut ParserContext<'_>) -> Result<i64, ParseError> {
 fn parse_view(ctx: &mut ParserContext<'_>) -> Result<View, ParseError> {
     let kw = ctx.cursor().expect(TokenKind::Identifier)?; // "View"
     let name = parse_relational_identifier(ctx)?;
-    let body = capture_paren_body(ctx)?;
-    let end_si = body.source_info.clone();
+    ctx.cursor().expect(TokenKind::LParen)?;
+
+    let mut filter: Option<FilterViewBlock> = None;
+    let mut group_by: Option<Vec<JoinColWithDbOrConstant>> = None;
+    let mut distinct = false;
+
+    // `(filterViewBlock)? (mappingBlockGroupBy)? (DISTINCTCMD)?` —
+    // strict order in Java's grammar, but we accept any order and
+    // detect duplicates so unconventionally written fixtures still
+    // parse.
+    while ctx.cursor().check(TokenKind::Tilde) {
+        let tilde = ctx.cursor().expect(TokenKind::Tilde)?;
+        let kw2 = ctx.cursor().expect(TokenKind::Identifier)?;
+        match kw2.text.as_str() {
+            "filter" => {
+                if filter.is_some() {
+                    return Err(err(
+                        "duplicate `~filter` header in View body".into(),
+                        kw2.source_info,
+                    ));
+                }
+                filter = Some(parse_filter_view_block_after_tilde(
+                    ctx,
+                    &tilde.source_info,
+                )?);
+            }
+            "groupBy" => {
+                if group_by.is_some() {
+                    return Err(err(
+                        "duplicate `~groupBy` header in View body".into(),
+                        kw2.source_info,
+                    ));
+                }
+                group_by = Some(parse_paren_join_col_list(ctx)?);
+            }
+            "distinct" => {
+                if distinct {
+                    return Err(err(
+                        "duplicate `~distinct` header in View body".into(),
+                        kw2.source_info,
+                    ));
+                }
+                distinct = true;
+            }
+            other => {
+                return Err(err(
+                    format!(
+                        "unknown View body header `~{other}` \
+                         (expected one of: ~filter, ~groupBy, ~distinct)"
+                    ),
+                    kw2.source_info,
+                ));
+            }
+        }
+    }
+
+    // viewColumnMappingLines — at least one, comma-separated.
+    let mut columns: Vec<ViewColumnMappingLine> = Vec::new();
+    if !ctx.cursor().check(TokenKind::RParen) {
+        loop {
+            columns.push(parse_view_column_mapping_line(ctx)?);
+            if !ctx.cursor().eat(TokenKind::Comma) {
+                break;
+            }
+        }
+    }
+
+    let close = ctx.cursor().expect(TokenKind::RParen)?;
     Ok(View {
         name,
-        body,
-        source_info: merge_si(&kw.source_info, &end_si),
+        filter,
+        group_by,
+        distinct,
+        columns,
+        source_info: merge_si(&kw.source_info, &close.source_info),
+    })
+}
+
+fn parse_filter_view_block_after_tilde(
+    ctx: &mut ParserContext<'_>,
+    tilde_si: &SourceInfo,
+) -> Result<FilterViewBlock, ParseError> {
+    // `~filter [(database joinSequence PIPE database)]? identifier`.
+    // When a `[` follows, the full `[db1] joinSeq | [db2]` chain is
+    // required.
+    let db_chain = if ctx.cursor().check(TokenKind::LBracket) {
+        let first_db = parse_required_db_qualifier(ctx)?;
+        let head = parse_one_join(ctx)?;
+        let mut right = Vec::new();
+        while ctx.cursor().check(TokenKind::Greater) {
+            right.push(parse_one_join_right(ctx)?);
+        }
+        let join_end = right
+            .last()
+            .map(|r| r.source_info.clone())
+            .unwrap_or_else(|| head.source_info.clone());
+        let join_sequence = JoinSequence {
+            head,
+            right,
+            source_info: merge_si(&first_db.source_info, &join_end),
+        };
+        ctx.cursor().expect(TokenKind::Pipe)?;
+        let second_db = parse_required_db_qualifier(ctx)?;
+        let span = merge_si(&first_db.source_info, &second_db.source_info);
+        Some(FilterViewDbChain {
+            first_db,
+            join_sequence,
+            second_db,
+            source_info: span,
+        })
+    } else {
+        None
+    };
+
+    let filter_name = parse_relational_identifier(ctx)?;
+    Ok(FilterViewBlock {
+        db_chain,
+        filter_name: filter_name.clone(),
+        source_info: merge_si(tilde_si, &filter_name.source_info),
+    })
+}
+
+fn parse_view_column_mapping_line(
+    ctx: &mut ParserContext<'_>,
+) -> Result<ViewColumnMappingLine, ParseError> {
+    let column_name = parse_relational_identifier(ctx)?;
+    // Optional `[targetSetImplementationId]` — disambiguated from a
+    // value-side `[db]` by the trailing `:`. The colon after the
+    // bracketed identifier separates the column header from the
+    // joinColWithDbOrConstant value, so a `[id]` here is always the
+    // target-set qualifier.
+    let target_set_id = if ctx.cursor().check(TokenKind::LBracket)
+        && ctx.cursor().peek_kind_at(1) == TokenKind::Identifier
+        && ctx.cursor().peek_kind_at(2) == TokenKind::RBracket
+    {
+        ctx.cursor().expect(TokenKind::LBracket)?;
+        let id = parse_relational_identifier(ctx)?;
+        ctx.cursor().expect(TokenKind::RBracket)?;
+        Some(id)
+    } else {
+        None
+    };
+    ctx.cursor().expect(TokenKind::Colon)?;
+    let value = parse_join_col_with_db_or_constant(ctx)?;
+    let span = merge_si(&column_name.source_info, &value.source_info);
+    Ok(ViewColumnMappingLine {
+        column_name,
+        target_set_id,
+        value,
+        source_info: span,
     })
 }
 
@@ -1048,54 +1192,6 @@ fn parse_float_literal(ctx: &mut ParserContext<'_>) -> Result<OpLiteral, ParseEr
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Capture the tokens between matching outer `(` and `)`, preserving
-/// their text + kind for round-trip composition. Tracks nested
-/// parens so an inner `()` doesn't close the outer scope. Stage 2
-/// replaces these slices with structurally parsed
-/// [`Operation`](crate::ast)-level AST nodes.
-fn capture_paren_body(ctx: &mut ParserContext<'_>) -> Result<TokenSlice, ParseError> {
-    let open = ctx.cursor().expect(TokenKind::LParen)?;
-    let mut tokens = Vec::new();
-    let mut depth: usize = 1;
-    let mut last_si = open.source_info.clone();
-    while depth > 0 {
-        if ctx.cursor().check(TokenKind::Eof) {
-            return Err(err(
-                "unexpected end of input inside (...) body".into(),
-                last_si,
-            ));
-        }
-        if ctx.cursor().check(TokenKind::SectionHeader) {
-            return Err(err(
-                "unexpected `###` section header inside (...) body".into(),
-                ctx.cursor().peek().source_info.clone(),
-            ));
-        }
-        let kind = ctx.cursor().peek().kind;
-        if kind == TokenKind::LParen {
-            depth += 1;
-        } else if kind == TokenKind::RParen {
-            depth -= 1;
-            if depth == 0 {
-                let close = ctx.cursor().advance().clone();
-                let span = merge_si(&open.source_info, &close.source_info);
-                return Ok(TokenSlice {
-                    tokens,
-                    source_info: span,
-                });
-            }
-        }
-        let tok: Token = ctx.cursor().advance().clone();
-        last_si = tok.source_info.clone();
-        tokens.push(tok);
-    }
-    // Unreachable: the `depth == 0` arm returns.
-    Err(err(
-        "unbalanced parentheses in body capture".into(),
-        last_si,
-    ))
-}
 
 /// Java grammar: `relationalIdentifier: identifier | QUOTED_STRING`.
 /// Stage 1 accepts an Identifier or a StringLiteral (string literals

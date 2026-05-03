@@ -12,14 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Stage-1 composer round-trip:
-//! `parse(compose(db)) == db` modulo `source_info` fields.
-//!
-//! Verbatim op-bodies / view-bodies (Stage 1 captures these as
-//! [`TokenSlice`](legend_pure_dsl_relational::ast::TokenSlice)s) are
-//! re-emitted with single-space separation between tokens — the
-//! *tokens* round-trip but original whitespace doesn't, matching
-//! the `feedback_token_survival_round_trip` rule.
+//! Composer round-trip: `parse(compose(db)) == db` modulo
+//! `source_info` fields. Op-bodies, view bodies, and class-mapping
+//! bodies all replay through structured AST nodes — no token-slice
+//! capture remains.
 
 use indoc::indoc;
 use legend_pure_dsl_relational::ast::{DatabaseDef, DatabaseElement};
@@ -162,6 +158,85 @@ fn round_trip_schema_with_tables_and_view() {
             Table tradeTable (id INT PRIMARY KEY, qty FLOAT(10, 2))
             View activeTrades (~distinct quantity : tradeTable.qty)
           )
+        )
+    "};
+    assert_round_trip(source);
+}
+
+#[test]
+fn round_trip_view_with_pk_and_two_columns() {
+    let source = indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Schema s
+          (
+            Table t (id INT PRIMARY KEY, qty FLOAT(10, 2))
+            View v (id : t.id PRIMARY KEY, qty : t.qty)
+          )
+        )
+    "};
+    assert_round_trip(source);
+}
+
+#[test]
+fn round_trip_view_with_filter_groupby_distinct() {
+    let source = indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Schema s
+          (
+            Table t (id INT PRIMARY KEY, region VARCHAR(2))
+            View v (~filter f ~groupBy(t.region) ~distinct region : t.region)
+          )
+          Filter f (t.id > 0)
+        )
+    "};
+    assert_round_trip(source);
+}
+
+#[test]
+fn round_trip_view_with_join_chained_filter() {
+    let source = indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Schema s
+          (
+            Table t (id INT PRIMARY KEY, fid INT)
+            View v
+            (
+              ~filter [pkg::db]@toFilterDb | [pkg::filterDb] activeFilter
+              id : t.id
+            )
+          )
+          Join toFilterDb (t.fid = {target}.id)
+        )
+
+        ###Relational
+        Database pkg::filterDb
+        (
+          Table f (id INT PRIMARY KEY)
+          Filter activeFilter (f.id > 0)
+        )
+    "};
+    assert_round_trip(source);
+}
+
+#[test]
+fn round_trip_view_with_target_set_id_and_join_value() {
+    let source = indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Schema s
+          (
+            Table src (id INT PRIMARY KEY, fk INT)
+            Table dst (id INT PRIMARY KEY)
+            View v (id[OrderSet] : @srcDst | dst.id)
+          )
+          Join srcDst (src.fk = dst.id)
         )
     "};
     assert_round_trip(source);

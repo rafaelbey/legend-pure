@@ -15,16 +15,14 @@
 //! Composer: emit `###Relational` source from [`DatabaseDef`] AST.
 //!
 //! Round-trip contract: `parse(compose(db)) == db` modulo
-//! `source_info` fields and modulo per-token whitespace inside
-//! captured op-bodies / view-bodies (Stage 1 stores those as
-//! [`TokenSlice`](crate::ast::TokenSlice)s and re-emits with
-//! single-space separation — the *tokens* round-trip but the
-//! original whitespace doesn't). Verified by `tests/compose_smoke.rs`.
+//! `source_info` fields. Op-bodies, view bodies, and class-mapping
+//! bodies all replay through structured AST nodes (no token-slice
+//! capture remains). Verified by `tests/compose_smoke.rs`.
 
 use crate::ast::{
-    ColumnDef, DatabaseDef, DatabaseElement, DatabaseInclude, Filter, Join, MilestoneDef,
-    MilestoneField, MilestoneSpec, MilestoneValue, MultiGrainFilter, OpColumn, OpExpr, OpLiteral,
-    Schema, Table, TokenSlice, View,
+    ColumnDef, DatabaseDef, DatabaseElement, DatabaseInclude, Filter, FilterViewBlock,
+    FilterViewDbChain, Join, MilestoneDef, MilestoneField, MilestoneSpec, MilestoneValue,
+    MultiGrainFilter, OpColumn, OpExpr, OpLiteral, Schema, Table, View, ViewColumnMappingLine,
 };
 use legend_pure_parser_ast::annotation::PackageableElementPtr;
 
@@ -190,8 +188,69 @@ fn write_view(out: &mut String, v: &View, indent: &str) {
     out.push_str("View ");
     out.push_str(v.name.value.as_str());
     out.push_str(" (");
-    write_token_slice(out, &v.body);
+    let mut wrote_header = false;
+    if let Some(filter) = &v.filter {
+        write_filter_view_block(out, filter);
+        wrote_header = true;
+    }
+    if let Some(group_by) = &v.group_by {
+        if wrote_header {
+            out.push(' ');
+        }
+        out.push_str("~groupBy(");
+        for (i, jc) in group_by.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            write_join_col_with_db_or_constant(out, jc);
+        }
+        out.push(')');
+        wrote_header = true;
+    }
+    if v.distinct {
+        if wrote_header {
+            out.push(' ');
+        }
+        out.push_str("~distinct");
+        wrote_header = true;
+    }
+    if wrote_header && !v.columns.is_empty() {
+        out.push(' ');
+    }
+    for (i, col) in v.columns.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        write_view_column_mapping_line(out, col);
+    }
     out.push(')');
+}
+
+fn write_filter_view_block(out: &mut String, b: &FilterViewBlock) {
+    out.push_str("~filter ");
+    if let Some(chain) = &b.db_chain {
+        write_filter_view_db_chain(out, chain);
+        out.push(' ');
+    }
+    out.push_str(b.filter_name.value.as_str());
+}
+
+fn write_filter_view_db_chain(out: &mut String, c: &FilterViewDbChain) {
+    write_db_brackets(out, &c.first_db);
+    write_join_sequence(out, &c.join_sequence);
+    out.push_str(" | ");
+    write_db_brackets(out, &c.second_db);
+}
+
+fn write_view_column_mapping_line(out: &mut String, line: &ViewColumnMappingLine) {
+    out.push_str(line.column_name.value.as_str());
+    if let Some(target) = &line.target_set_id {
+        out.push('[');
+        out.push_str(target.value.as_str());
+        out.push(']');
+    }
+    out.push_str(" : ");
+    write_join_col_with_db_or_constant(out, &line.value);
 }
 
 fn write_join(out: &mut String, j: &Join) {
@@ -216,10 +275,6 @@ fn write_multi_grain_filter(out: &mut String, m: &MultiGrainFilter) {
     out.push_str(" (");
     write_op_expr(out, &m.body);
     out.push(')');
-}
-
-fn write_token_slice(out: &mut String, slice: &TokenSlice) {
-    out.push_str(&slice.render_with_spaces());
 }
 
 // ---------------------------------------------------------------------------
