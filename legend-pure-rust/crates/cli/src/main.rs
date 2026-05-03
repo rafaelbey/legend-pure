@@ -81,6 +81,9 @@ enum Commands {
     /// Validate Pure files (parse-only, no semantic analysis)
     Check(commands::check::CheckArgs),
 
+    /// Run the Pure Language Server Protocol server over stdio
+    Lsp(commands::lsp::LspArgs),
+
     /// Run Pure tests on testable elements
     Test(commands::test::TestArgs),
 
@@ -122,6 +125,7 @@ fn main() {
         Commands::Emit(args) => commands::emit::run(args),
         Commands::Compile(args) => commands::compile::run(args),
         Commands::Check(args) => commands::check::run(args),
+        Commands::Lsp(args) => commands::lsp::run(args, classpath),
         Commands::Test(args) => commands::test::run(args, classpath),
         Commands::Coverage(args) => commands::coverage_cmd::run(args),
         Commands::Plan(args) => commands::plan::run(args),

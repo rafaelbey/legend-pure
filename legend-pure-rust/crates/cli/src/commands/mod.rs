@@ -26,6 +26,7 @@ pub mod coverage_cmd;
 pub mod coverage_report;
 pub mod emit;
 pub mod init;
+pub mod lsp;
 pub mod package;
 pub mod parse;
 pub mod plan;
