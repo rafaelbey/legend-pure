@@ -41,8 +41,8 @@ use legend_pure_parser_parser::section_parser::SectionParser;
 use smol_str::SmolStr;
 
 use crate::ast::{
-    ColumnDef, DatabaseDef, DatabaseElement, DatabaseInclude, Filter, Join, MultiGrainFilter,
-    SECTION_KIND, Schema, Table, TokenSlice, View,
+    BinOp, BoolOp, ColumnDef, DatabaseDef, DatabaseElement, DatabaseInclude, Filter, Join,
+    MultiGrainFilter, OpColumn, OpExpr, OpLiteral, SECTION_KIND, Schema, Table, TokenSlice, View,
 };
 
 fn err(message: String, source_info: SourceInfo) -> ParseError {
@@ -374,11 +374,10 @@ fn parse_view(ctx: &mut ParserContext<'_>) -> Result<View, ParseError> {
 fn parse_join(ctx: &mut ParserContext<'_>) -> Result<Join, ParseError> {
     let kw = ctx.cursor().expect(TokenKind::Identifier)?; // "Join"
     let name = parse_relational_identifier(ctx)?;
-    let op_body = capture_paren_body(ctx)?;
-    let end_si = op_body.source_info.clone();
+    let (body, end_si) = parse_paren_op_body(ctx)?;
     Ok(Join {
         name,
-        op_body,
+        body,
         source_info: merge_si(&kw.source_info, &end_si),
     })
 }
@@ -386,11 +385,10 @@ fn parse_join(ctx: &mut ParserContext<'_>) -> Result<Join, ParseError> {
 fn parse_filter(ctx: &mut ParserContext<'_>) -> Result<Filter, ParseError> {
     let kw = ctx.cursor().expect(TokenKind::Identifier)?; // "Filter"
     let name = parse_relational_identifier(ctx)?;
-    let op_body = capture_paren_body(ctx)?;
-    let end_si = op_body.source_info.clone();
+    let (body, end_si) = parse_paren_op_body(ctx)?;
     Ok(Filter {
         name,
-        op_body,
+        body,
         source_info: merge_si(&kw.source_info, &end_si),
     })
 }
@@ -398,12 +396,471 @@ fn parse_filter(ctx: &mut ParserContext<'_>) -> Result<Filter, ParseError> {
 fn parse_multi_grain_filter(ctx: &mut ParserContext<'_>) -> Result<MultiGrainFilter, ParseError> {
     let kw = ctx.cursor().expect(TokenKind::Identifier)?; // "MultiGrainFilter"
     let name = parse_relational_identifier(ctx)?;
-    let op_body = capture_paren_body(ctx)?;
-    let end_si = op_body.source_info.clone();
+    let (body, end_si) = parse_paren_op_body(ctx)?;
     Ok(MultiGrainFilter {
         name,
-        op_body,
+        body,
         source_info: merge_si(&kw.source_info, &end_si),
+    })
+}
+
+/// Consume `( <op_operation> )`, returning the parsed body and the
+/// span of the closing `)`. Shared by Join / Filter / MultiGrainFilter.
+fn parse_paren_op_body(ctx: &mut ParserContext<'_>) -> Result<(OpExpr, SourceInfo), ParseError> {
+    ctx.cursor().expect(TokenKind::LParen)?;
+    let body = parse_op_operation(ctx)?;
+    let close = ctx.cursor().expect(TokenKind::RParen)?;
+    Ok((body, close.source_info))
+}
+
+// ---------------------------------------------------------------------------
+// op_operation — Stage 2 structured op-grammar
+//
+// Java grammar (RelationalParser.g4 lines 43-79):
+//
+//   op_operation                : (op_groupOperation | op_atomicOperation)
+//                                 op_boolean_operation_right? ;
+//   op_boolean_operation_right  : op_boolean_operator op_operation ;
+//   op_groupOperation           : '(' op_operation ')' ;
+//   op_atomicOperation          : op_function
+//                               | colWithDbOrConstant ( (op_operator
+//                                   colWithDbOrConstant) | ISNULL | ISNOTNULL ) ;
+//   op_function                 : functionName '(' (functionArgument
+//                                   (',' functionArgument)*)? ')' ;
+//   functionArgument            : colWithDbOrConstant | arrayOfFunctionArguments ;
+//   op_boolean_operator         : 'and' | 'or' ;
+//   op_operator                 : '=' | '>' | '<' | '>=' | '<=' | '!=' | '<>' ;
+//   colWithDbOrConstant         : (database? op_column) | constant ;
+//   op_column                   : tableAliasColumn | tableAliasColumnWithScopeInfo ;
+//   tableAliasColumn            : '{target}' '.' relationalIdentifier
+//                                 'PRIMARY KEY'? ;
+//   tableAliasColumnWithScopeInfo
+//                               : (relationalIdentifier|'and'|'or')
+//                                 (scopeInfo 'PRIMARY KEY'? )? ;
+//   scopeInfo                   : '.' relationalIdentifier ('.'
+//                                   relationalIdentifier)? ;
+//
+// Booleans are right-recursive in Java (a-and-b-and-c parses as
+// `a and (b and c)`); we mirror that. Comparisons take a single
+// col-or-constant on each side per the grammar — no chaining.
+// ---------------------------------------------------------------------------
+
+/// Public entry point used by Filter / Join / MultiGrainFilter.
+pub(crate) fn parse_op_operation(ctx: &mut ParserContext<'_>) -> Result<OpExpr, ParseError> {
+    let lhs = parse_op_atomic_or_group(ctx)?;
+    if let Some(op) = peek_bool_op(ctx) {
+        let op_si = ctx.cursor().peek().source_info.clone();
+        ctx.cursor().advance(); // 'and' / 'or'
+        let rhs = parse_op_operation(ctx)?; // right-recursive
+        let span = merge_si(lhs.source_info(), rhs.source_info());
+        Ok(OpExpr::Bool {
+            op,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+            source_info: merge_si(&op_si, &span),
+        })
+    } else {
+        Ok(lhs)
+    }
+}
+
+/// Returns `Some(BoolOp)` when the cursor is on `and` / `or`.
+fn peek_bool_op(ctx: &mut ParserContext<'_>) -> Option<BoolOp> {
+    let tok = ctx.cursor().peek();
+    if tok.kind != TokenKind::Identifier {
+        return None;
+    }
+    match tok.text.as_str() {
+        "and" => Some(BoolOp::And),
+        "or" => Some(BoolOp::Or),
+        _ => None,
+    }
+}
+
+/// `op_groupOperation | op_atomicOperation`. Disambiguated by the
+/// cursor: `(` opens a group; anything else falls into atomic.
+fn parse_op_atomic_or_group(ctx: &mut ParserContext<'_>) -> Result<OpExpr, ParseError> {
+    if ctx.cursor().check(TokenKind::LParen) {
+        let open = ctx.cursor().expect(TokenKind::LParen)?;
+        let inner = parse_op_operation(ctx)?;
+        let close = ctx.cursor().expect(TokenKind::RParen)?;
+        Ok(OpExpr::Group {
+            inner: Box::new(inner),
+            source_info: merge_si(&open.source_info, &close.source_info),
+        })
+    } else {
+        parse_op_atomic(ctx)
+    }
+}
+
+/// `op_function | colWithDbOrConstant (op_operator col | ISNULL | ISNOTNULL)`.
+///
+/// We disambiguate function vs column-with-args by peeking past the
+/// optional `[db]` qualifier and the leading identifier:
+/// - identifier followed by `(` → either op_function or
+///   `tableAliasColumnWithScopeInfo`'s args branch. We treat both as
+///   `OpExpr::Function` at the AST level (Java distinguishes only by
+///   argument-shape grammar; the surface text is identical).
+/// - otherwise → colWithDbOrConstant, then optionally the trailing
+///   comparison / IS NULL / IS NOT NULL.
+fn parse_op_atomic(ctx: &mut ParserContext<'_>) -> Result<OpExpr, ParseError> {
+    let lhs = parse_col_with_db_or_constant(ctx)?;
+
+    // Trailing `is null` / `is not null`?
+    if is_keyword(ctx.cursor(), "is") {
+        let is_tok = ctx.cursor().expect(TokenKind::Identifier)?; // 'is'
+        let negated = is_keyword(ctx.cursor(), "not");
+        if negated {
+            ctx.cursor().advance(); // 'not'
+        }
+        let null_tok = ctx.cursor().peek().clone();
+        if null_tok.kind != TokenKind::Identifier || null_tok.text != "null" {
+            return Err(err_unexpected(
+                "'null'",
+                &null_tok.text,
+                null_tok.source_info,
+            ));
+        }
+        ctx.cursor().advance(); // 'null'
+        let span = merge_si(lhs.source_info(), &null_tok.source_info);
+        return Ok(OpExpr::IsNull {
+            expr: Box::new(lhs),
+            negated,
+            source_info: merge_si(&is_tok.source_info, &span),
+        });
+    }
+
+    // Trailing comparison operator?
+    if let Some(op) = peek_compare_op(ctx) {
+        let op_span = consume_compare_op(ctx)?;
+        let rhs = parse_col_with_db_or_constant(ctx)?;
+        let span = merge_si(lhs.source_info(), rhs.source_info());
+        return Ok(OpExpr::Compare {
+            op,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+            source_info: merge_si(&op_span, &span),
+        });
+    }
+
+    // Bare colWithDbOrConstant (no trailing op) — only valid at the
+    // top of op_atomic when the LHS itself is an `op_function` call.
+    // The Java grammar requires a trailing op for non-function atoms,
+    // but in practice our consumer (Filter / Join body) always has
+    // one — we return the bare expression and let the caller error
+    // if it isn't a Function.
+    Ok(lhs)
+}
+
+/// `colWithDbOrConstant: (database? op_column) | constant`.
+///
+/// `database` is `[ qualifiedName ]`. Constants are STRING / INTEGER
+/// / FLOAT literals. `op_column` is identifier-led (alias) or
+/// `{target}.col`.
+fn parse_col_with_db_or_constant(ctx: &mut ParserContext<'_>) -> Result<OpExpr, ParseError> {
+    // Constant?
+    let peek = ctx.cursor().peek();
+    match peek.kind {
+        TokenKind::StringLiteral => {
+            return Ok(OpExpr::Literal(parse_string_literal(ctx)?));
+        }
+        TokenKind::IntegerLiteral => {
+            return Ok(OpExpr::Literal(parse_integer_literal(ctx)?));
+        }
+        TokenKind::FloatLiteral => {
+            return Ok(OpExpr::Literal(parse_float_literal(ctx)?));
+        }
+        // Signed numeric constants: '+' / '-' followed by a numeric
+        // literal. Java's `INTEGER`/`FLOAT` lex this as one token; we
+        // assemble it here.
+        TokenKind::Plus | TokenKind::Minus => {
+            let sign = ctx.cursor().advance().clone();
+            let lit_tok = ctx.cursor().peek().clone();
+            return match lit_tok.kind {
+                TokenKind::IntegerLiteral => {
+                    ctx.cursor().advance();
+                    let value: i64 =
+                        format!("{}{}", sign.text, lit_tok.text)
+                            .parse()
+                            .map_err(|_| {
+                                err(
+                                    format!(
+                                        "expected integer literal, got '{}{}'",
+                                        sign.text, lit_tok.text
+                                    ),
+                                    lit_tok.source_info.clone(),
+                                )
+                            })?;
+                    Ok(OpExpr::Literal(OpLiteral::Integer {
+                        value,
+                        source_info: merge_si(&sign.source_info, &lit_tok.source_info),
+                    }))
+                }
+                TokenKind::FloatLiteral => {
+                    ctx.cursor().advance();
+                    let value: f64 =
+                        format!("{}{}", sign.text, lit_tok.text)
+                            .parse()
+                            .map_err(|_| {
+                                err(
+                                    format!(
+                                        "expected float literal, got '{}{}'",
+                                        sign.text, lit_tok.text
+                                    ),
+                                    lit_tok.source_info.clone(),
+                                )
+                            })?;
+                    Ok(OpExpr::Literal(OpLiteral::Float {
+                        value,
+                        source_info: merge_si(&sign.source_info, &lit_tok.source_info),
+                    }))
+                }
+                _ => Err(err_unexpected(
+                    "numeric literal after sign",
+                    &lit_tok.text,
+                    lit_tok.source_info,
+                )),
+            };
+        }
+        _ => {}
+    }
+
+    // Optional `[db]` qualifier.
+    let db = parse_optional_db_qualifier(ctx)?;
+
+    // op_column.
+    parse_op_column(ctx, db)
+}
+
+/// `database: '[' qualifiedName ']'`. Only consumes when the next
+/// token is `[`; otherwise returns `None`.
+fn parse_optional_db_qualifier(
+    ctx: &mut ParserContext<'_>,
+) -> Result<Option<PackageableElementPtr>, ParseError> {
+    if !ctx.cursor().check(TokenKind::LBracket) {
+        return Ok(None);
+    }
+    ctx.cursor().expect(TokenKind::LBracket)?;
+    let ptr = parse_packageable_ptr(ctx)?;
+    ctx.cursor().expect(TokenKind::RBracket)?;
+    Ok(Some(ptr))
+}
+
+/// `op_column: tableAliasColumn | tableAliasColumnWithScopeInfo`.
+///
+/// `db` is the already-consumed optional `[db]` prefix (only legal on
+/// the `tableAliasColumnWithScopeInfo` branch — `{target}.col` doesn't
+/// take a db prefix).
+fn parse_op_column(
+    ctx: &mut ParserContext<'_>,
+    db: Option<PackageableElementPtr>,
+) -> Result<OpExpr, ParseError> {
+    // `{target}` — the Filter-context implicit subject. Pure
+    // relational syntax wraps the literal token in braces; our lexer
+    // splits this into LBrace + Identifier("target") + RBrace.
+    if ctx.cursor().check(TokenKind::LBrace) {
+        if db.is_some() {
+            return Err(err(
+                "{target} column form does not accept a [db] prefix".into(),
+                ctx.cursor().peek().source_info.clone(),
+            ));
+        }
+        return parse_target_column(ctx).map(OpExpr::Column);
+    }
+
+    // Otherwise: identifier-led `tableAliasColumnWithScopeInfo`,
+    // possibly followed by `(args)` (function call form).
+    let alias = parse_relational_identifier(ctx)?;
+
+    // `name(args)` — function-call form.
+    if ctx.cursor().check(TokenKind::LParen) {
+        let _open = ctx.cursor().expect(TokenKind::LParen)?;
+        let mut args = Vec::new();
+        if !ctx.cursor().check(TokenKind::RParen) {
+            loop {
+                args.push(parse_op_operation(ctx)?);
+                if !ctx.cursor().eat(TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        let close = ctx.cursor().expect(TokenKind::RParen)?;
+        let span = merge_si(&alias.source_info, &close.source_info);
+        return Ok(OpExpr::Function {
+            db,
+            name: alias,
+            args,
+            source_info: span,
+        });
+    }
+
+    // Plain alias / alias.scope / alias.scope.scope, with optional
+    // PRIMARY KEY trailer.
+    let mut scope = Vec::new();
+    while ctx.cursor().eat(TokenKind::Dot) && scope.len() < 2 {
+        scope.push(parse_relational_identifier(ctx)?);
+    }
+    let scope_end = scope
+        .last()
+        .map(|s| s.source_info.clone())
+        .unwrap_or_else(|| alias.source_info.clone());
+    let pk_end = consume_primary_key_flag(ctx)?;
+    let primary_key = pk_end.is_some();
+    let end_si = pk_end.unwrap_or(scope_end);
+    let start_si = db
+        .as_ref()
+        .map(|p| p.source_info.clone())
+        .unwrap_or_else(|| alias.source_info.clone());
+    Ok(OpExpr::Column(OpColumn::Aliased {
+        db,
+        alias,
+        scope,
+        primary_key,
+        source_info: merge_si(&start_si, &end_si),
+    }))
+}
+
+/// `tableAliasColumn: '{target}' '.' relationalIdentifier 'PRIMARY KEY'?`.
+fn parse_target_column(ctx: &mut ParserContext<'_>) -> Result<OpColumn, ParseError> {
+    let open = ctx.cursor().expect(TokenKind::LBrace)?;
+    let kw = ctx.cursor().peek().clone();
+    if kw.kind != TokenKind::Identifier || kw.text != "target" {
+        return Err(err_unexpected(
+            "'target' (after '{')",
+            &kw.text,
+            kw.source_info,
+        ));
+    }
+    ctx.cursor().advance(); // 'target'
+    ctx.cursor().expect(TokenKind::RBrace)?;
+    ctx.cursor().expect(TokenKind::Dot)?;
+    let column = parse_relational_identifier(ctx)?;
+    let pk_end = consume_primary_key_flag(ctx)?;
+    let primary_key = pk_end.is_some();
+    let end_si = pk_end.unwrap_or_else(|| column.source_info.clone());
+    Ok(OpColumn::Target {
+        column,
+        primary_key,
+        source_info: merge_si(&open.source_info, &end_si),
+    })
+}
+
+/// `'PRIMARY KEY'?` — two-identifier phrase. On hit, consumes both
+/// tokens and returns the span of the closing `KEY`. On miss, leaves
+/// the cursor in place and returns `Ok(None)`.
+fn consume_primary_key_flag(ctx: &mut ParserContext<'_>) -> Result<Option<SourceInfo>, ParseError> {
+    if !is_keyword(ctx.cursor(), "PRIMARY") {
+        return Ok(None);
+    }
+    ctx.cursor().advance(); // 'PRIMARY'
+    let key = ctx.cursor().peek().clone();
+    if key.kind != TokenKind::Identifier || key.text != "KEY" {
+        return Err(err_unexpected(
+            "'KEY' (after PRIMARY)",
+            &key.text,
+            key.source_info,
+        ));
+    }
+    ctx.cursor().advance();
+    Ok(Some(key.source_info))
+}
+
+/// Returns `Some(BinOp)` when the cursor is on a comparison operator.
+/// Does not consume tokens.
+fn peek_compare_op(ctx: &mut ParserContext<'_>) -> Option<BinOp> {
+    let cur = ctx.cursor().peek();
+    match cur.kind {
+        TokenKind::Equals => Some(BinOp::Eq),
+        TokenKind::Greater => {
+            // Could be `>` or `>=` (the lexer may split `>=` into two
+            // tokens depending on context).
+            if ctx.cursor().peek_kind_at(1) == TokenKind::Equals {
+                Some(BinOp::GtEq)
+            } else {
+                Some(BinOp::Gt)
+            }
+        }
+        TokenKind::GreaterEqual => Some(BinOp::GtEq),
+        TokenKind::Less => {
+            // Could be `<`, `<=`, or `<>` (the lexer doesn't have a
+            // single token for `<>`).
+            let next = ctx.cursor().peek_kind_at(1);
+            if next == TokenKind::Equals {
+                Some(BinOp::LtEq)
+            } else if next == TokenKind::Greater {
+                Some(BinOp::NotEq2)
+            } else {
+                Some(BinOp::Lt)
+            }
+        }
+        TokenKind::LessEqual => Some(BinOp::LtEq),
+        TokenKind::BangEqual => Some(BinOp::NotEq),
+        _ => None,
+    }
+}
+
+/// Consume the comparison operator that `peek_compare_op` matched.
+/// Some of the spellings (`>=`, `<=`, `<>`) span two lexer tokens
+/// because Pure's lexer doesn't have first-class `<>` and the others
+/// come through depending on lex options; consume both halves when
+/// the second half is an `Equals` / `Greater` token immediately
+/// following the first.
+fn consume_compare_op(ctx: &mut ParserContext<'_>) -> Result<SourceInfo, ParseError> {
+    let first = ctx.cursor().advance().clone();
+    match first.kind {
+        TokenKind::Greater | TokenKind::Less => {
+            let next = ctx.cursor().peek().kind;
+            if next == TokenKind::Equals
+                || (first.kind == TokenKind::Less && next == TokenKind::Greater)
+            {
+                let second = ctx.cursor().advance().clone();
+                Ok(merge_si(&first.source_info, &second.source_info))
+            } else {
+                Ok(first.source_info)
+            }
+        }
+        _ => Ok(first.source_info),
+    }
+}
+
+fn parse_string_literal(ctx: &mut ParserContext<'_>) -> Result<OpLiteral, ParseError> {
+    let tok = ctx.cursor().expect(TokenKind::StringLiteral)?;
+    let raw = tok.text.as_str();
+    let bare = raw
+        .strip_prefix('\'')
+        .and_then(|s| s.strip_suffix('\''))
+        .unwrap_or(raw);
+    Ok(OpLiteral::String {
+        value: SmolStr::new(bare),
+        source_info: tok.source_info,
+    })
+}
+
+fn parse_integer_literal(ctx: &mut ParserContext<'_>) -> Result<OpLiteral, ParseError> {
+    let tok = ctx.cursor().expect(TokenKind::IntegerLiteral)?;
+    let value: i64 = tok.text.parse().map_err(|_| {
+        err(
+            format!("expected integer literal, got '{}'", tok.text),
+            tok.source_info.clone(),
+        )
+    })?;
+    Ok(OpLiteral::Integer {
+        value,
+        source_info: tok.source_info,
+    })
+}
+
+fn parse_float_literal(ctx: &mut ParserContext<'_>) -> Result<OpLiteral, ParseError> {
+    let tok = ctx.cursor().expect(TokenKind::FloatLiteral)?;
+    let value: f64 = tok.text.parse().map_err(|_| {
+        err(
+            format!("expected float literal, got '{}'", tok.text),
+            tok.source_info.clone(),
+        )
+    })?;
+    Ok(OpLiteral::Float {
+        value,
+        source_info: tok.source_info,
     })
 }
 

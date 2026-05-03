@@ -199,9 +199,10 @@ fn round_trip_includes_before_elements() {
 
 #[test]
 fn round_trip_token_survival_in_op_body() {
-    // Locks the token-survival contract for verbatim op-bodies:
-    // every input token must appear in the composed output. Stage 1
-    // only guarantees token survival, not whitespace fidelity.
+    // Stage 2 upgrades the round-trip contract from "every input
+    // token appears in the composed output" to "the composed output
+    // re-parses to the same `OpExpr` AST". Stronger guarantee — locks
+    // the structural sub-grammar in addition to token preservation.
     let source = indoc! {r"
         ###Relational
         Database pkg::db
@@ -213,29 +214,20 @@ fn round_trip_token_survival_in_op_body() {
     let file = parse("token_survival.pure", source);
     let dbs = collect_databases(&file);
     let composed = compose_relational_section(&dbs);
-    // The composer glues `Ident . Ident` (no space between them) so
-    // `t.prodId` clusters survive verbatim. The `{target}` form
-    // tokenizes as three lexer tokens (`{`, `target`, `}`) — the
-    // generic Stage-1 token-spacing policy doesn't know that
-    // pattern is meant to glue, so it emits `{ target }`. Stage 2
-    // treats `{target}` as a single op-grammar atom and will
-    // restore the glued form.
-    for tok in [
-        "t.prodId",
-        "{ target }.id",
-        "and",
-        "t.name",
-        "{ target }.label",
-    ] {
+
+    // Surface-level: the structurally-aware composer glues `{target}`
+    // back into a single token cluster (Stage 1's generic spacing
+    // policy emitted `{ target }` — Stage 2 fixes this).
+    for tok in ["t.prodId", "{target}.id", "and", "t.name", "{target}.label"] {
         assert!(
             composed.contains(tok),
             "expected composed output to contain token-cluster '{tok}'\ncomposed:\n{composed}"
         );
     }
 
-    // Re-parse the composed output and confirm the token slice in
-    // the join body has the same length as the original — this is
-    // the core token-survival guarantee.
+    // Re-parse the composed output and confirm the join body parses
+    // to the same OpExpr shape (modulo source-info spans, which the
+    // parser re-derives from the new positions).
     let file2 = parse("token_survival_2.pure", &composed);
     let dbs2 = collect_databases(&file2);
     let dbs1_again = collect_databases(&file);
@@ -245,13 +237,224 @@ fn round_trip_token_survival_in_op_body() {
     let DatabaseElement::Join(j2) = &dbs2[0].elements[1] else {
         panic!("expected Join at index 1 after round-trip");
     };
-    assert_eq!(
-        j1.op_body.tokens.len(),
-        j2.op_body.tokens.len(),
-        "join op-body token count must survive round-trip"
+    assert!(
+        op_expr_structurally_eq(&j1.body, &j2.body),
+        "join body OpExpr must survive round-trip\noriginal: {:?}\nround-tripped: {:?}",
+        j1.body,
+        j2.body
     );
-    for (t1, t2) in j1.op_body.tokens.iter().zip(j2.op_body.tokens.iter()) {
-        assert_eq!(t1.kind, t2.kind, "token kind divergence");
-        assert_eq!(t1.text, t2.text, "token text divergence");
+}
+
+// ---------------------------------------------------------------------------
+// Stage-2 op-grammar round-trip fixtures.
+//
+// Each test composes the source, re-parses, and asserts the AST
+// structure (stripped of source spans) matches — the Stage-2 form of
+// `feedback_token_survival_round_trip`, lifted from token survival
+// to AST survival now that we have a structured op_operation tree.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn round_trip_op_simple_equality() {
+    assert_round_trip(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (id INT PRIMARY KEY)
+          Join j (t.id = {target}.id)
+        )
+    "});
+}
+
+#[test]
+fn round_trip_op_and_or_with_grouping() {
+    assert_round_trip(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (id INT PRIMARY KEY, status VARCHAR(2), qty INT)
+          Filter f ((t.status = 'A' or t.status = 'B') and t.qty > 0)
+        )
+    "});
+}
+
+#[test]
+fn round_trip_op_is_null_and_not_null() {
+    assert_round_trip(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (id INT PRIMARY KEY, region VARCHAR(2))
+          Filter active (t.region is not null)
+          Filter inactive (t.region is null)
+        )
+    "});
+}
+
+#[test]
+fn round_trip_op_function_call_arg_list() {
+    assert_round_trip(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (id INT PRIMARY KEY, status VARCHAR(2))
+          Filter f (concat(t.status, 'X') = 'AX')
+        )
+    "});
+}
+
+#[test]
+fn round_trip_op_all_comparison_operators() {
+    // One Filter per operator to lock surface-level spelling. Single
+    // round-trip exercise covers all 7 comparison forms.
+    assert_round_trip(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (x INT PRIMARY KEY)
+          Filter eq (t.x = 0)
+          Filter gt (t.x > 0)
+          Filter lt (t.x < 0)
+          Filter gte (t.x >= 0)
+          Filter lte (t.x <= 0)
+          Filter neq (t.x != 0)
+          Filter neq2 (t.x <> 0)
+        )
+    "});
+}
+
+#[test]
+fn round_trip_op_string_literal_and_negative_integer() {
+    assert_round_trip(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (id INT PRIMARY KEY, status VARCHAR(2), offset INT)
+          Filter active (t.status = 'A')
+          Filter offset (t.offset = -1)
+        )
+    "});
+}
+
+/// Structural equality on `OpExpr` ignoring `source_info`. Used by
+/// the Stage-2 round-trip tests where the composed output's source
+/// positions necessarily differ from the original.
+fn op_expr_structurally_eq(
+    a: &legend_pure_dsl_relational::ast::OpExpr,
+    b: &legend_pure_dsl_relational::ast::OpExpr,
+) -> bool {
+    use legend_pure_dsl_relational::ast::{OpColumn, OpExpr, OpLiteral};
+    match (a, b) {
+        (
+            OpExpr::Bool {
+                op: oa,
+                lhs: la,
+                rhs: ra,
+                ..
+            },
+            OpExpr::Bool {
+                op: ob,
+                lhs: lb,
+                rhs: rb,
+                ..
+            },
+        ) => oa == ob && op_expr_structurally_eq(la, lb) && op_expr_structurally_eq(ra, rb),
+        (
+            OpExpr::Compare {
+                op: oa,
+                lhs: la,
+                rhs: ra,
+                ..
+            },
+            OpExpr::Compare {
+                op: ob,
+                lhs: lb,
+                rhs: rb,
+                ..
+            },
+        ) => oa == ob && op_expr_structurally_eq(la, lb) && op_expr_structurally_eq(ra, rb),
+        (
+            OpExpr::IsNull {
+                expr: ea,
+                negated: na,
+                ..
+            },
+            OpExpr::IsNull {
+                expr: eb,
+                negated: nb,
+                ..
+            },
+        ) => na == nb && op_expr_structurally_eq(ea, eb),
+        (OpExpr::Group { inner: ia, .. }, OpExpr::Group { inner: ib, .. }) => {
+            op_expr_structurally_eq(ia, ib)
+        }
+        (
+            OpExpr::Function {
+                name: na,
+                args: aa,
+                db: dba,
+                ..
+            },
+            OpExpr::Function {
+                name: nb,
+                args: ab,
+                db: dbb,
+                ..
+            },
+        ) => {
+            na.value == nb.value
+                && aa.len() == ab.len()
+                && aa
+                    .iter()
+                    .zip(ab)
+                    .all(|(x, y)| op_expr_structurally_eq(x, y))
+                && dba.as_ref().map(|p| p.name.clone()) == dbb.as_ref().map(|p| p.name.clone())
+        }
+        (OpExpr::Column(ca), OpExpr::Column(cb)) => match (ca, cb) {
+            (
+                OpColumn::Target {
+                    column: ca,
+                    primary_key: pa,
+                    ..
+                },
+                OpColumn::Target {
+                    column: cb,
+                    primary_key: pb,
+                    ..
+                },
+            ) => ca.value == cb.value && pa == pb,
+            (
+                OpColumn::Aliased {
+                    alias: aa,
+                    scope: sa,
+                    primary_key: pa,
+                    db: dba,
+                    ..
+                },
+                OpColumn::Aliased {
+                    alias: ab,
+                    scope: sb,
+                    primary_key: pb,
+                    db: dbb,
+                    ..
+                },
+            ) => {
+                aa.value == ab.value
+                    && pa == pb
+                    && sa.len() == sb.len()
+                    && sa.iter().zip(sb).all(|(x, y)| x.value == y.value)
+                    && dba.as_ref().map(|p| p.name.clone()) == dbb.as_ref().map(|p| p.name.clone())
+            }
+            _ => false,
+        },
+        (OpExpr::Literal(la), OpExpr::Literal(lb)) => match (la, lb) {
+            (OpLiteral::String { value: a, .. }, OpLiteral::String { value: b, .. }) => a == b,
+            (OpLiteral::Integer { value: a, .. }, OpLiteral::Integer { value: b, .. }) => a == b,
+            (OpLiteral::Float { value: a, .. }, OpLiteral::Float { value: b, .. }) => {
+                (a - b).abs() < f64::EPSILON
+            }
+            _ => false,
+        },
+        _ => false,
     }
 }

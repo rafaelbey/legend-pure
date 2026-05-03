@@ -23,11 +23,11 @@
 //! Stage 1 captures structural detail for top-level shells (Database,
 //! Schema, Table, View, Join, Filter, MultiGrainFilter, include) and
 //! Table column definitions. The Join / Filter / MultiGrainFilter
-//! body — `op_operation` in the Java grammar — is captured as an
-//! opaque [`TokenSlice`] for round-trip; structural sub-grammar
-//! parsing (binary / unary / variadic / DynaFunction / TableAliasColumn)
-//! arrives in Stage 2. View bodies (filter / groupBy / distinct /
-//! columnMappings) are captured the same way.
+//! body — `op_operation` in the Java grammar — is structurally
+//! parsed in Stage 2 as an [`OpExpr`] tree (booleans, comparisons,
+//! `IS [NOT] NULL`, function calls, columns, literals). View bodies
+//! (filter / groupBy / distinct / columnMappings) remain a
+//! [`TokenSlice`] until Stage 5.
 //!
 //! What's intentionally absent from Stage 1:
 //! - Stereotypes / tagged values on Database / Schema / Table / Column
@@ -43,6 +43,7 @@ use legend_pure_parser_ast::element::{Annotated, PackageableElement};
 use legend_pure_parser_ast::source_info::Spanned;
 use legend_pure_parser_ast::type_ref::{Identifier, Package};
 use legend_pure_parser_lexer::Token;
+use smol_str::SmolStr;
 
 /// Section kind string this DSL claims (`###Relational`).
 pub const SECTION_KIND: &str = "Relational";
@@ -252,15 +253,13 @@ pub struct View {
 
 /// A `Join` declaration: `Join name ( <op_operation> )`.
 ///
-/// Stage 1 captures the `op_operation` body verbatim; Stage 2 swaps
-/// `op_body` for a structural [`Operation`] sub-tree.
+/// The `body` is the structurally parsed `op_operation` tree (Stage 2).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Join {
     /// Join name (relational identifier — bare or quoted).
     pub name: SpannedString,
-    /// Verbatim token slice for the operation body (`{target}.x =
-    /// other.y`, etc.).
-    pub op_body: TokenSlice,
+    /// Structured op-expression body (`{target}.x = other.y`, etc.).
+    pub body: OpExpr,
     /// Span of the entire `Join … ( … )` declaration.
     pub source_info: SourceInfo,
 }
@@ -270,8 +269,8 @@ pub struct Join {
 pub struct Filter {
     /// Filter name.
     pub name: SpannedString,
-    /// Verbatim token slice for the operation body.
-    pub op_body: TokenSlice,
+    /// Structured op-expression body.
+    pub body: OpExpr,
     /// Span of the entire `Filter … ( … )` declaration.
     pub source_info: SourceInfo,
 }
@@ -282,10 +281,271 @@ pub struct Filter {
 pub struct MultiGrainFilter {
     /// MultiGrainFilter name.
     pub name: SpannedString,
-    /// Verbatim token slice for the operation body.
-    pub op_body: TokenSlice,
+    /// Structured op-expression body.
+    pub body: OpExpr,
     /// Span of the entire `MultiGrainFilter … ( … )` declaration.
     pub source_info: SourceInfo,
+}
+
+// ---------------------------------------------------------------------------
+// op_operation — structured Join / Filter / MultiGrainFilter body
+// ---------------------------------------------------------------------------
+
+/// Structured `op_operation` node — the Java grammar's
+/// `op_operation`/`op_atomicOperation`/`op_function`/`op_column`
+/// productions, collapsed into one tagged-union shape that mirrors
+/// the Pure runtime `RelationalOperationElement` hierarchy at the
+/// surface level.
+///
+/// Precedence: the parser is a hand-rolled climber. Boolean operators
+/// (`and`, `or`) sit above comparisons (`=`, `>`, `<`, `>=`, `<=`,
+/// `!=`, `<>`); a comparison takes a single col-or-constant on each
+/// side per the Java grammar (no chained comparisons). `IS NULL` and
+/// `IS NOT NULL` are postfix on a col-or-constant. Function calls
+/// are atomic and take a comma-separated argument list of nested
+/// op-expressions.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum OpExpr {
+    /// `lhs and rhs` / `lhs or rhs`. Right-recursive per Java
+    /// (`op_boolean_operation_right: op_boolean_operator op_operation`).
+    Bool {
+        /// `and` or `or`.
+        op: BoolOp,
+        /// Left operand (atomic or already-grouped).
+        lhs: Box<OpExpr>,
+        /// Right operand — itself a full op_operation, so chained
+        /// `a and b and c` parses as `Bool(and, a, Bool(and, b, c))`.
+        rhs: Box<OpExpr>,
+        /// Span covering both sides + the operator token.
+        source_info: SourceInfo,
+    },
+    /// `lhs <op> rhs` — a single relational comparison. Java grammar
+    /// allows only one comparison per atomic, so `lhs` and `rhs` are
+    /// `colWithDbOrConstant`s, not nested booleans.
+    Compare {
+        /// One of `=`, `>`, `<`, `>=`, `<=`, `!=`, `<>`.
+        op: BinOp,
+        /// Left col-or-constant.
+        lhs: Box<OpExpr>,
+        /// Right col-or-constant.
+        rhs: Box<OpExpr>,
+        /// Span covering the whole comparison.
+        source_info: SourceInfo,
+    },
+    /// `expr is null` / `expr is not null`. Postfix on a
+    /// col-or-constant (cannot follow a boolean / comparison
+    /// directly per the Java grammar).
+    IsNull {
+        /// The col-or-constant being null-tested.
+        expr: Box<OpExpr>,
+        /// `true` for `is not null`, `false` for `is null`.
+        negated: bool,
+        /// Span from the expr through the `null` keyword.
+        source_info: SourceInfo,
+    },
+    /// `( inner )` — an explicit grouping in source. Preserved so
+    /// the composer can round-trip the user's parenthesisation
+    /// without re-deriving it from precedence rules.
+    Group {
+        /// Wrapped expression.
+        inner: Box<OpExpr>,
+        /// Span covering the parens and content.
+        source_info: SourceInfo,
+    },
+    /// `[db?] name(arg1, arg2, …)` — `op_function` and the
+    /// `tableAliasColumnWithScopeInfo` `name(joinCols)` form share
+    /// this shape at the AST level. The args are nested op-exprs
+    /// (col-or-constants for op_function, joinCols for the
+    /// tableAlias form — Stage 5 may refine when fixtures force it).
+    Function {
+        /// Optional `[db]` qualifier preceding the name.
+        db: Option<PackageableElementPtr>,
+        /// Function or alias name.
+        name: SpannedString,
+        /// Argument list, in source order. Empty when called with
+        /// `()`.
+        args: Vec<OpExpr>,
+        /// Span covering `[db]name(args)`.
+        source_info: SourceInfo,
+    },
+    /// `[db?] column-form` — a column reference (target, alias, or
+    /// alias-with-scope-info).
+    Column(OpColumn),
+    /// String / integer / float literal.
+    Literal(OpLiteral),
+}
+
+impl OpExpr {
+    /// Returns the span covering this node.
+    #[must_use]
+    pub fn source_info(&self) -> &SourceInfo {
+        match self {
+            OpExpr::Bool { source_info, .. }
+            | OpExpr::Compare { source_info, .. }
+            | OpExpr::IsNull { source_info, .. }
+            | OpExpr::Group { source_info, .. }
+            | OpExpr::Function { source_info, .. } => source_info,
+            OpExpr::Column(c) => c.source_info(),
+            OpExpr::Literal(l) => l.source_info(),
+        }
+    }
+}
+
+/// One of the seven Java relational comparison operators.
+///
+/// Java grammar:
+/// `op_operator: EQUAL | GREATERTHAN | LESSTHAN | GREATERTHANEQUAL |
+/// LESSTHANEQUAL | TEST_NOT_EQUAL | NOT_EQUAL_2`. We keep `NotEq`
+/// (`!=`) and `NotEq2` (`<>`) distinct so the composer can replay
+/// the original spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinOp {
+    /// `=`
+    Eq,
+    /// `>`
+    Gt,
+    /// `<`
+    Lt,
+    /// `>=`
+    GtEq,
+    /// `<=`
+    LtEq,
+    /// `!=`
+    NotEq,
+    /// `<>`
+    NotEq2,
+}
+
+impl BinOp {
+    /// Returns the canonical source spelling for this comparison.
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BinOp::Eq => "=",
+            BinOp::Gt => ">",
+            BinOp::Lt => "<",
+            BinOp::GtEq => ">=",
+            BinOp::LtEq => "<=",
+            BinOp::NotEq => "!=",
+            BinOp::NotEq2 => "<>",
+        }
+    }
+}
+
+/// `and` / `or` boolean connector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoolOp {
+    /// `and`
+    And,
+    /// `or`
+    Or,
+}
+
+impl BoolOp {
+    /// Returns the canonical source spelling (`and` / `or`).
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BoolOp::And => "and",
+            BoolOp::Or => "or",
+        }
+    }
+}
+
+/// One of the column-reference forms inside an [`OpExpr::Column`].
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum OpColumn {
+    /// `{target}.column [PRIMARY KEY]?` — the Filter-context form
+    /// (`tableAliasColumn` in the Java grammar). The leading
+    /// `{target}` literal is a special token in Pure relational
+    /// syntax that refers to the join / filter's implicit subject
+    /// table.
+    Target {
+        /// Column name following the `{target}.` prefix.
+        column: SpannedString,
+        /// `PRIMARY KEY` trailing flag (rare in op-expressions; kept
+        /// for round-trip parity with Java).
+        primary_key: bool,
+        /// Span from `{target}` through the optional flag.
+        source_info: SourceInfo,
+    },
+    /// `[db?] alias [.scope (.scope)?] [PRIMARY KEY]?` — the
+    /// alias-with-optional-scope form
+    /// (`tableAliasColumnWithScopeInfo`'s scope branch).
+    ///
+    /// Examples:
+    /// - `tradeTable.prodId` — alias `tradeTable`, `scope = ["prodId"]`.
+    /// - `tradeTable.qty PRIMARY KEY` — same with PK flag.
+    /// - `[other::db]tradeTable.prodId` — db qualifier present.
+    /// - `tradeTable` (alias alone) — `scope = []`.
+    Aliased {
+        /// Optional `[db]` prefix.
+        db: Option<PackageableElementPtr>,
+        /// Alias / table name.
+        alias: SpannedString,
+        /// Zero, one, or two scope-info segments (Java's
+        /// `scopeInfoPart scopeInfoPart?`). Empty means "alias
+        /// alone".
+        scope: Vec<SpannedString>,
+        /// `PRIMARY KEY` trailing flag.
+        primary_key: bool,
+        /// Span covering the entire reference.
+        source_info: SourceInfo,
+    },
+}
+
+impl OpColumn {
+    /// Returns the span covering this column reference.
+    #[must_use]
+    pub fn source_info(&self) -> &SourceInfo {
+        match self {
+            OpColumn::Target { source_info, .. } | OpColumn::Aliased { source_info, .. } => {
+                source_info
+            }
+        }
+    }
+}
+
+/// Literal value inside an op-expression.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum OpLiteral {
+    /// Quoted-string literal.
+    String {
+        /// Literal value, quotes stripped.
+        value: SmolStr,
+        /// Span of the literal token.
+        source_info: SourceInfo,
+    },
+    /// Signed integer literal (Java's `INTEGER: ('+'|'-')? Digit+`).
+    Integer {
+        /// Parsed integer.
+        value: i64,
+        /// Span of the literal.
+        source_info: SourceInfo,
+    },
+    /// Float literal.
+    Float {
+        /// Parsed float (string-preserved spelling stays in
+        /// `source_info`'s underlying source).
+        value: f64,
+        /// Span of the literal.
+        source_info: SourceInfo,
+    },
+}
+
+impl OpLiteral {
+    /// Returns the span covering this literal.
+    #[must_use]
+    pub fn source_info(&self) -> &SourceInfo {
+        match self {
+            OpLiteral::String { source_info, .. }
+            | OpLiteral::Integer { source_info, .. }
+            | OpLiteral::Float { source_info, .. } => source_info,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
