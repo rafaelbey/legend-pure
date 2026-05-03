@@ -239,10 +239,23 @@ impl<'a> Lexer<'a> {
                 TokenKind::HashLBrace
             }
 
+            // -- Navigation path opener: #/ --
+            //    Emitted as a single token so the inline path
+            //    parser doesn't have to peek across `Hash` +
+            //    `Slash`, and so a trailing `/` inside the body
+            //    keeps lexing as `Slash`. Section headers (`###`)
+            //    and `#{` are matched above and never reach this
+            //    arm.
+            '#' if self.peek() == Some('/') => {
+                self.advance();
+                TokenKind::HashSlash
+            }
+
             // -- Single # — opener for tagged islands (`#TDS`,
-            //    `#>`, `#sql`) and closer for raw-content islands.
-            //    Section headers (`###`) and `#{` are matched
-            //    above and never reach this arm.
+            //    `#>`, `#sql`) and closer for raw-content islands
+            //    (and for navigation paths). Section headers
+            //    (`###`), `#{`, and `#/` are matched above and
+            //    never reach this arm.
             '#' => TokenKind::Hash,
 
             // -- Delimiters --
@@ -974,6 +987,46 @@ mod tests {
         assert_eq!(
             kinds("###Foo"),
             vec![TokenKind::SectionHeader, TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn navigation_path_opener_is_atomic() {
+        // `#/` is the dedicated path opener — must lex as a single
+        // `HashSlash`, NOT `Hash` + `Slash`. Without this the inline
+        // path parser would have to peek across two tokens just to
+        // detect a path expression.
+        assert_eq!(
+            kinds("#/Person/name#"),
+            vec![
+                TokenKind::HashSlash,
+                TokenKind::Identifier,
+                TokenKind::Slash,
+                TokenKind::Identifier,
+                TokenKind::Hash,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn navigation_path_does_not_shadow_section_or_island() {
+        // Order discipline: `###` > `#{` > `#/` > bare `#`. A run of
+        // `###{/#}#` should parse as section-then-island-then-bare-hash,
+        // never as `#/` smearing across the `###` boundary.
+        assert_eq!(
+            kinds("###Pure\n#{}#\n#/T/p#"),
+            vec![
+                TokenKind::SectionHeader,
+                TokenKind::HashLBrace,
+                TokenKind::RBraceHash,
+                TokenKind::HashSlash,
+                TokenKind::Identifier,
+                TokenKind::Slash,
+                TokenKind::Identifier,
+                TokenKind::Hash,
+                TokenKind::Eof,
+            ]
         );
     }
 

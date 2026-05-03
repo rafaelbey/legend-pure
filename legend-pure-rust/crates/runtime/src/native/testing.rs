@@ -261,6 +261,7 @@ fn function_fqn(callable: &Value, ctx: &dyn EvalContextTrait) -> String {
         Value::Function(fv) => match fv.as_ref() {
             FunctionValue::Compiled(id) => build_element_path(ctx.model(), *id, "::", false),
             FunctionValue::Lambda(_) => "<lambda>".to_string(),
+            FunctionValue::Path(_) => "<path>".to_string(),
         },
         Value::Element(id) => build_element_path(ctx.model(), *id, "::", false),
         _ => "<unknown>".to_string(),

@@ -819,6 +819,16 @@ fn walk_expr_kind_refs(
         ExprKind::ColSpecLiteral { column, .. } => {
             emit(column.type_element, si);
         }
+        ExprKind::PathLiteral {
+            start_type, steps, ..
+        } => {
+            walk_type_refs(start_type, si, emit);
+            for step in steps {
+                for param in &step.parameters {
+                    walk_value_spec_refs(param, emit);
+                }
+            }
+        }
     }
 }
 

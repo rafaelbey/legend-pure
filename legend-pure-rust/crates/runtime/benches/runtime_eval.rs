@@ -50,9 +50,8 @@ fn fixture() -> &'static Fixture {
         // Phase 3b: source files no longer embedded. Walk the live
         // platform tree via `Repo::from_descriptor`.
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let descriptor = manifest.join(
-            "../../../legend-pure-core/legend-pure-m3-core/src/main/resources/platform.json",
-        );
+        let descriptor = manifest
+            .join("../../../legend-pure-core/legend-pure-m3-core/src/main/resources/platform.json");
         let mut parsed_files = Vec::new();
         if let Ok(canonical) = descriptor.canonicalize()
             && let Ok(repo) = legend_pure_core_platform::repo::Repo::from_descriptor(&canonical)

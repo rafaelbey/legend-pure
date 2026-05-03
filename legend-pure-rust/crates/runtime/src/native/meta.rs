@@ -845,6 +845,13 @@ pub(crate) fn build_function_type_wrapper(
                 (std::rc::Rc::from(Vec::new()), None, None)
             }
         }
+        // Path closures expose `Function<{U[1]→V[m]}>` shape but we
+        // don't synthesise a parameter array here — the start type +
+        // last step's return type would have to be re-derived from
+        // the model. Reflective callers that need the full FunctionType
+        // shape on a Path are not yet exercised; surface an empty
+        // signature so this code path compiles cleanly.
+        crate::value::FunctionValue::Path(_) => (std::rc::Rc::from(Vec::new()), None, None),
     };
 
     let mut param_objs: Vec<Value> = Vec::with_capacity(params.len());
@@ -1567,6 +1574,23 @@ fn resolve_value_type(
                         .unwrap_or(bootstrap::ANY_ID),
                 )
             }
+            // Path closures are `meta::pure::metamodel::path::Path`
+            // instances — runtime metatype matches Java parity for
+            // `#/Type/p#->type()`.
+            crate::value::FunctionValue::Path(_) => model
+                .resolve_by_path(&[
+                    smol_str::SmolStr::new("meta"),
+                    smol_str::SmolStr::new("pure"),
+                    smol_str::SmolStr::new("metamodel"),
+                    smol_str::SmolStr::new("path"),
+                    smol_str::SmolStr::new("Path"),
+                ])
+                .ok_or_else(|| {
+                    PureRuntimeError::EvaluationError(
+                        "type: meta::pure::metamodel::path::Path not in model".into(),
+                    )
+                    .into()
+                }),
         },
         // Collection runtime type is the least-upper-bound of its
         // elements' types — `[1, 2, 3].type() == Integer`,
@@ -1674,6 +1698,11 @@ fn render_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -
         Value::Function(fv) => match fv.as_ref() {
             FunctionValue::Lambda(_) => "<Lambda>".to_string(),
             FunctionValue::Compiled(id) => format!("<Function:{id}>"),
+            FunctionValue::Path(p) => format!(
+                "<Path:{}{}>",
+                p.steps.len(),
+                p.name.as_ref().map(|n| format!("!{n}")).unwrap_or_default()
+            ),
         },
         Value::EnumValue { enum_id, member } => {
             format!("{}.{member}", model.element_name(*enum_id))
@@ -2495,6 +2524,11 @@ impl NativeFunction for OpenVariableValues {
         let captures: Vec<(SmolStr, Value)> = match &values[0] {
             Value::Function(fv) => match fv.as_ref() {
                 FunctionValue::Lambda(closure) => closure
+                    .captures
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                FunctionValue::Path(closure) => closure
                     .captures
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))

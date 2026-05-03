@@ -1,5 +1,20 @@
 # Navigation Path Island Grammar (`#/Type/prop1/prop2#`)
 
+> **Status: shipped 2026-05-03.** All four implementation stages
+> (lexer/parser/composer + `path.pure` embed + Protocol JSON +
+> compiler lowering + runtime evaluator) merged into
+> `legend-pure-rust`. See `crates/runtime/tests/path_eval_smoke.rs`
+> and `crates/runtime/tests/path_lowering_smoke.rs` for the runtime
+> contract; parser snapshots in
+> `crates/parser/tests/test_navigation_path.rs`. The plan that drove
+> the work: `~/.claude/plans/dsl-path-cannot-be-humming-dusk.md`.
+>
+> The notes below capture the *design context* and Java-side
+> research that informed the port. Some mechanical prescriptions
+> (e.g. parsing path inline rather than as an `IslandParser`) were
+> followed; others (e.g. the AST node names) shifted slightly during
+> implementation. Trust the code over this doc for current shape.
+
 The Navigation Path is a compact syntax for specifying a path through the metamodel type graph. Used in mapping/transformation contexts.
 
 ## Research: Both Codebases

@@ -464,3 +464,140 @@ fn function_element_conversion() {
         _ => panic!("Expected Function"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Navigation path roundtrip (Stage 2)
+// ---------------------------------------------------------------------------
+
+fn synthetic_si() -> ast::SourceInfo {
+    ast::SourceInfo::new("test.pure", 0, 0, 0, 0)
+}
+
+fn type_ref(pkg_segs: &[&str], name: &str) -> ast::type_ref::TypeReference {
+    let package = pkg_segs.iter().fold(None, |parent, seg| {
+        Some(Box::new(ast::type_ref::Package::new(
+            smol_str::SmolStr::new(*seg),
+            parent,
+            synthetic_si(),
+        )))
+    });
+    ast::type_ref::TypeReference {
+        package: package.map(|b| *b),
+        name: smol_str::SmolStr::new(name),
+        type_arguments: vec![],
+        multiplicity_arguments: vec![],
+        type_variable_values: vec![],
+        source_info: synthetic_si(),
+    }
+}
+
+fn assert_path_roundtrips(original: ast::expression::NavigationPath) {
+    use ast::expression::Expression;
+    let ast_expr = Expression::NavigationPath(original.clone());
+    let vs = v1::convert::convert_expression_typed(&ast_expr);
+    let recovered = v1::from_protocol::convert_value_spec_to_expression(&vs)
+        .expect("ClassInstance(\"path\", ...) should roundtrip back to NavigationPath");
+
+    match recovered {
+        Expression::NavigationPath(rec) => {
+            assert_eq!(
+                rec.start_type.full_path(),
+                original.start_type.full_path(),
+                "start_type FQN mismatch"
+            );
+            assert_eq!(rec.path.len(), original.path.len(), "step count mismatch");
+            for (got, want) in rec.path.iter().zip(original.path.iter()) {
+                assert_eq!(got.property, want.property, "property mismatch");
+                assert_eq!(
+                    got.parameters.len(),
+                    want.parameters.len(),
+                    "parameter count mismatch on step '{}'",
+                    want.property
+                );
+            }
+            assert_eq!(rec.name, original.name, "alias mismatch");
+        }
+        other => panic!("Expected NavigationPath after roundtrip, got: {other:?}"),
+    }
+}
+
+#[test]
+fn roundtrip_navigation_path_simple() {
+    use ast::expression::{NavigationPath, PropertyPathElement};
+    assert_path_roundtrips(NavigationPath {
+        start_type: type_ref(&[], "Person"),
+        path: vec![PropertyPathElement {
+            property: smol_str::SmolStr::new("name"),
+            parameters: vec![],
+            source_info: synthetic_si(),
+        }],
+        name: None,
+        source_info: synthetic_si(),
+    });
+}
+
+#[test]
+fn roundtrip_navigation_path_qualified_multi_step() {
+    use ast::expression::{NavigationPath, PropertyPathElement};
+    assert_path_roundtrips(NavigationPath {
+        start_type: type_ref(&["model"], "Firm"),
+        path: vec![
+            PropertyPathElement {
+                property: smol_str::SmolStr::new("employees"),
+                parameters: vec![],
+                source_info: synthetic_si(),
+            },
+            PropertyPathElement {
+                property: smol_str::SmolStr::new("address"),
+                parameters: vec![],
+                source_info: synthetic_si(),
+            },
+        ],
+        name: None,
+        source_info: synthetic_si(),
+    });
+}
+
+#[test]
+fn roundtrip_navigation_path_with_alias_and_string_param() {
+    use ast::expression::{
+        Expression, Literal, NavigationPath, PropertyPathElement, StringLiteral,
+    };
+    assert_path_roundtrips(NavigationPath {
+        start_type: type_ref(&[], "Person"),
+        path: vec![PropertyPathElement {
+            property: smol_str::SmolStr::new("nameWithTitle"),
+            parameters: vec![Expression::Literal(Literal::String(StringLiteral {
+                value: smol_str::SmolStr::new("Mr"),
+                source_info: synthetic_si(),
+            }))],
+            source_info: synthetic_si(),
+        }],
+        name: Some(smol_str::SmolStr::new("formalName")),
+        source_info: synthetic_si(),
+    });
+}
+
+#[test]
+fn navigation_path_serializes_with_path_discriminator() {
+    use ast::expression::{Expression, NavigationPath, PropertyPathElement};
+    let ast_expr = Expression::NavigationPath(NavigationPath {
+        start_type: type_ref(&[], "Person"),
+        path: vec![PropertyPathElement {
+            property: smol_str::SmolStr::new("name"),
+            parameters: vec![],
+            source_info: synthetic_si(),
+        }],
+        name: None,
+        source_info: synthetic_si(),
+    });
+    let vs = v1::convert::convert_expression_typed(&ast_expr);
+    let json = serde_json::to_value(&vs).expect("serializes");
+    // Locks the wire shape: `{ _type: "classInstance", type: "path",
+    // value: { startType, path: [...], name? } }`.
+    assert_eq!(json["_type"], "classInstance");
+    assert_eq!(json["type"], "path");
+    assert_eq!(json["value"]["startType"], "Person");
+    assert_eq!(json["value"]["path"][0]["_type"], "propertyPathElement");
+    assert_eq!(json["value"]["path"][0]["property"], "name");
+}

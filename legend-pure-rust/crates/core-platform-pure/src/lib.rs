@@ -88,6 +88,9 @@ mod tests {
         );
         let manifest_count: usize = repos.iter().map(|r| r.manifests().count()).sum();
         println!("Number of platform .json manifests: {manifest_count}");
-        assert!(manifest_count > 0, "expected at least one platform manifest");
+        assert!(
+            manifest_count > 0,
+            "expected at least one platform manifest"
+        );
     }
 }

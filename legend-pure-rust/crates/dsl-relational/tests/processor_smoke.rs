@@ -66,6 +66,51 @@ fn run_lifecycle(source: &str) -> RelationalExtension {
     extension
 }
 
+/// Lifecycle helper that registers BOTH the relational section parser
+/// and a Mapping section parser with the relational class-mapping body
+/// hook. Used by Phase B4 fixtures that need a `Class : Relational
+/// { ... }` body to be registered + resolved.
+fn run_lifecycle_with_mapping(source: &str) -> RelationalExtension {
+    use legend_pure_dsl_mapping::parser::MappingSectionParser;
+    use legend_pure_dsl_relational::parser::RelationalClassMappingBodyParser;
+
+    let file = legend_pure_parser_parser::parse_with_sections(
+        source,
+        "processor_smoke.pure",
+        legend_pure_parser_parser::island::default_island_parsers(),
+        vec![
+            Box::new(RelationalSectionParser),
+            Box::new(MappingSectionParser::with_body_parsers(vec![Box::new(
+                RelationalClassMappingBodyParser,
+            )])),
+        ],
+    )
+    .expect("source must parse");
+    let files: [SourceFile; 1] = [file];
+    let extension = RelationalExtension::new();
+    let mut errors: Vec<CompilationError> = Vec::new();
+    let auto_imports: Vec<SmolStr> = Vec::new();
+
+    let mut bootstrap = legend_pure_parser_pure::pipeline::init_bootstrap_model();
+    let mut declare_ctx = legend_pure_parser_pure::extension::DeclareCtx {
+        source_files: &files,
+        model: &mut bootstrap,
+        auto_imports: &auto_imports,
+        errors: &mut errors,
+    };
+    extension.declare(&mut declare_ctx);
+
+    let mut define_ctx = legend_pure_parser_pure::extension::DefineCtx {
+        source_files: &files,
+        model: &mut bootstrap,
+        auto_imports: &auto_imports,
+        errors: &mut errors,
+    };
+    extension.define_bodies(&mut define_ctx);
+
+    extension
+}
+
 // ---------------------------------------------------------------------------
 // PureColumnType — SQL type mapping
 // ---------------------------------------------------------------------------
@@ -669,6 +714,589 @@ fn view_with_constant_value_has_no_binding() {
     // Literal-valued columns have no column binding.
     assert!(body.columns[1].value_binding.is_none());
     assert_eq!(body.columns[1].column_name.as_str(), "label");
+}
+
+// ---------------------------------------------------------------------------
+// Phase B4 — class-mapping property resolution
+// ---------------------------------------------------------------------------
+
+#[test]
+fn resolves_class_mapping_with_main_table_and_property_values() {
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table tradeTable (id INT PRIMARY KEY, qty FLOAT(10, 2))
+        )
+
+        ###Pure
+        Class pkg::Trade { id : Integer[1]; qty : Float[1]; }
+
+        ###Mapping
+        Mapping pkg::TradeMap
+        (
+          pkg::Trade : Relational
+          {
+            ~mainTable [pkg::db]tradeTable
+            (id : tradeTable.id, qty : tradeTable.qty)
+          }
+        )
+    "});
+    let resolved = extension.resolved_class_mappings();
+    assert_eq!(resolved.len(), 1);
+    let cm = &resolved[0];
+    assert_eq!(cm.mapping_fqn.as_str(), "pkg::TradeMap");
+    assert_eq!(cm.primary_database.as_deref(), Some("pkg::db"));
+    assert_eq!(cm.main_table.as_deref(), Some("tradeTable"));
+    assert_eq!(cm.inferred_main_table.as_deref(), Some("tradeTable"));
+    assert_eq!(cm.referenced_tables, vec![SmolStr::new("tradeTable")]);
+    assert_eq!(cm.properties.len(), 2);
+
+    // Both properties resolve to columns on tradeTable.
+    let dbs = extension.resolved_databases();
+    let id_prop = &cm.properties[0];
+    assert_eq!(id_prop.property_name.as_str(), "id");
+    let id_binding = match &id_prop.kind {
+        legend_pure_dsl_relational::processor::ResolvedClassMappingPropertyKind::Single {
+            binding,
+        } => binding.as_ref(),
+        _ => panic!("expected Single kind"),
+    };
+    let id_col = id_binding
+        .expect("id binding missing")
+        .resolved_column(&dbs)
+        .expect("resolved id column");
+    assert_eq!(id_col.name.as_str(), "id");
+}
+
+#[test]
+fn flags_inconsistent_main_tables_in_class_mapping() {
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table a (id INT PRIMARY KEY)
+          Table b (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class pkg::T { x : Integer[1]; y : Integer[1]; }
+
+        ###Mapping
+        Mapping pkg::M
+        (
+          pkg::T : Relational
+          {
+            ~mainTable [pkg::db]a
+            (x : a.id, y : b.id)
+          }
+        )
+    "});
+    let resolved = extension.resolved_class_mappings();
+    let cm = &resolved[0];
+    assert_eq!(cm.referenced_tables.len(), 2);
+    // ~mainTable says 'a', but property values reference both 'a' and
+    // 'b' — inferred is None, declared main_table stays as 'a'.
+    assert_eq!(cm.main_table.as_deref(), Some("a"));
+    assert!(cm.inferred_main_table.is_none());
+}
+
+#[test]
+fn resolves_scope_wrapped_lines_with_scope_db() {
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::other
+        (
+          Table foreign (id INT PRIMARY KEY, name VARCHAR(50))
+        )
+
+        ###Relational
+        Database pkg::main
+        (
+          Table local (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class pkg::T { x : Integer[1]; y : Integer[1]; }
+
+        ###Mapping
+        Mapping pkg::M
+        (
+          pkg::T : Relational
+          {
+            ~mainTable [pkg::main]local
+            (
+              x : local.id,
+              scope([pkg::other])
+              (
+                y : foreign.id
+              )
+            )
+          }
+        )
+    "});
+    let resolved = extension.resolved_class_mappings();
+    let cm = &resolved[0];
+    // Two properties resolved: x against pkg::main, y against pkg::other.
+    assert_eq!(cm.properties.len(), 2);
+    let dbs = extension.resolved_databases();
+
+    let x_binding = match &cm.properties[0].kind {
+        legend_pure_dsl_relational::processor::ResolvedClassMappingPropertyKind::Single {
+            binding,
+        } => binding.as_ref().expect("x binding"),
+        _ => panic!("expected Single"),
+    };
+    assert_eq!(x_binding.database_fqn.as_str(), "pkg::main");
+
+    let y_binding = match &cm.properties[1].kind {
+        legend_pure_dsl_relational::processor::ResolvedClassMappingPropertyKind::Single {
+            binding,
+        } => binding.as_ref().expect("y binding"),
+        _ => panic!("expected Single"),
+    };
+    assert_eq!(y_binding.database_fqn.as_str(), "pkg::other");
+    let y_col = y_binding.resolved_column(&dbs).expect("y col");
+    assert_eq!(y_col.name.as_str(), "id");
+}
+
+#[test]
+fn embedded_property_marked_as_embedded_kind() {
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (id INT PRIMARY KEY, addr_id INT)
+        )
+
+        ###Pure
+        Class pkg::Trade { id : Integer[1]; }
+
+        ###Mapping
+        Mapping pkg::TradeMap
+        (
+          pkg::Trade : Relational
+          {
+            ~mainTable [pkg::db]t
+            (
+              id : t.id,
+              address (
+                ~primaryKey(t.addr_id)
+                line : t.addr_id
+              )
+            )
+          }
+        )
+    "});
+    let resolved = extension.resolved_class_mappings();
+    let cm = &resolved[0];
+    assert_eq!(cm.properties.len(), 2);
+    assert!(matches!(
+        cm.properties[1].kind,
+        legend_pure_dsl_relational::processor::ResolvedClassMappingPropertyKind::Embedded
+    ));
+    assert_eq!(cm.properties[1].property_name.as_str(), "address");
+}
+
+#[test]
+fn class_mapping_without_main_table_marks_db_unresolved_on_lines() {
+    // Java parity: a class mapping with no `~mainTable` and no per-line
+    // `[db]` qualifier can't pin the database. Each binding records
+    // `unresolved_database`.
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class pkg::Trade { id : Integer[1]; }
+
+        ###Mapping
+        Mapping pkg::TradeMap
+        (
+          pkg::Trade : Relational
+          {
+            (id : t.id)
+          }
+        )
+    "});
+    let resolved = extension.resolved_class_mappings();
+    let cm = &resolved[0];
+    assert!(cm.primary_database.is_none());
+    let binding = match &cm.properties[0].kind {
+        legend_pure_dsl_relational::processor::ResolvedClassMappingPropertyKind::Single {
+            binding,
+        } => binding.as_ref().expect("binding"),
+        _ => panic!("expected Single"),
+    };
+    assert!(binding.unresolved_database);
+}
+
+// ---------------------------------------------------------------------------
+// Phase B5 — main-table inheritance through `extends`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn child_inherits_main_table_from_parent_via_extends() {
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table parentT (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class pkg::Parent { id : Integer[1]; }
+        Class pkg::Child extends pkg::Parent {}
+
+        ###Mapping
+        Mapping pkg::M
+        (
+          *pkg::Parent[parentMap] : Relational
+          {
+            ~mainTable [pkg::db]parentT
+            (id : parentT.id)
+          }
+
+          pkg::Child[childMap] extends [parentMap] : Relational
+          {
+            (id : parentT.id)
+          }
+        )
+    "});
+    let resolved = extension.resolved_class_mappings();
+    assert_eq!(resolved.len(), 2);
+    let parent = resolved
+        .iter()
+        .find(|cm| cm.class_mapping_id.as_str() == "parentMap")
+        .expect("parentMap missing");
+    let child = resolved
+        .iter()
+        .find(|cm| cm.class_mapping_id.as_str() == "childMap")
+        .expect("childMap missing");
+
+    assert_eq!(parent.main_table.as_deref(), Some("parentT"));
+    assert_eq!(parent.effective_main_table.as_deref(), Some("parentT"));
+
+    // Child has no `~mainTable` of its own — inherits from parent.
+    assert!(child.main_table.is_none());
+    assert_eq!(child.effective_main_table.as_deref(), Some("parentT"));
+    assert_eq!(child.effective_primary_database.as_deref(), Some("pkg::db"));
+    assert_eq!(child.extends.as_deref(), Some("parentMap"));
+}
+
+#[test]
+fn child_with_own_main_table_does_not_inherit() {
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table parentT (id INT PRIMARY KEY)
+          Table childT (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class pkg::Parent { id : Integer[1]; }
+        Class pkg::Child extends pkg::Parent {}
+
+        ###Mapping
+        Mapping pkg::M
+        (
+          *pkg::Parent[parentMap] : Relational
+          {
+            ~mainTable [pkg::db]parentT
+            (id : parentT.id)
+          }
+
+          pkg::Child[childMap] extends [parentMap] : Relational
+          {
+            ~mainTable [pkg::db]childT
+            (id : childT.id)
+          }
+        )
+    "});
+    let resolved = extension.resolved_class_mappings();
+    let child = resolved
+        .iter()
+        .find(|cm| cm.class_mapping_id.as_str() == "childMap")
+        .expect("childMap missing");
+    // Child declares its own — effective stays as childT.
+    assert_eq!(child.main_table.as_deref(), Some("childT"));
+    assert_eq!(child.effective_main_table.as_deref(), Some("childT"));
+}
+
+#[test]
+fn extends_inheritance_walks_three_level_chain() {
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table rootT (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class pkg::A { id : Integer[1]; }
+        Class pkg::B extends pkg::A {}
+        Class pkg::C extends pkg::B {}
+
+        ###Mapping
+        Mapping pkg::M
+        (
+          *pkg::A[aMap] : Relational
+          {
+            ~mainTable [pkg::db]rootT
+            (id : rootT.id)
+          }
+
+          pkg::B[bMap] extends [aMap] : Relational
+          {
+            (id : rootT.id)
+          }
+
+          pkg::C[cMap] extends [bMap] : Relational
+          {
+            (id : rootT.id)
+          }
+        )
+    "});
+    let resolved = extension.resolved_class_mappings();
+    let c = resolved
+        .iter()
+        .find(|cm| cm.class_mapping_id.as_str() == "cMap")
+        .expect("cMap missing");
+    // C → B → A → rootT.
+    assert!(c.main_table.is_none());
+    assert_eq!(c.effective_main_table.as_deref(), Some("rootT"));
+}
+
+#[test]
+fn extends_chain_with_no_ancestor_main_table_stays_none() {
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class pkg::Parent { id : Integer[1]; }
+        Class pkg::Child extends pkg::Parent {}
+
+        ###Mapping
+        Mapping pkg::M
+        (
+          *pkg::Parent[parentMap] : Relational
+          {
+            (id : t.id)
+          }
+
+          pkg::Child[childMap] extends [parentMap] : Relational
+          {
+            (id : t.id)
+          }
+        )
+    "});
+    let resolved = extension.resolved_class_mappings();
+    let child = resolved
+        .iter()
+        .find(|cm| cm.class_mapping_id.as_str() == "childMap")
+        .expect("childMap missing");
+    // Neither parent nor child declares ~mainTable — effective stays None.
+    assert!(child.effective_main_table.is_none());
+    assert!(child.effective_primary_database.is_none());
+}
+
+#[test]
+fn extends_inheritance_terminates_on_cycle() {
+    // Hypothetical cycle: A extends B, B extends A (Java errors via
+    // G1, but the inheritance walker should still terminate).
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class pkg::A { id : Integer[1]; }
+        Class pkg::B {}
+
+        ###Mapping
+        Mapping pkg::M
+        (
+          *pkg::A[aMap] extends [bMap] : Relational
+          {
+            (id : t.id)
+          }
+
+          pkg::B[bMap] extends [aMap] : Relational
+          {
+            (id : t.id)
+          }
+        )
+    "});
+    let resolved = extension.resolved_class_mappings();
+    // Walker terminates without panicking and leaves both with None
+    // effective main table.
+    let a = resolved
+        .iter()
+        .find(|cm| cm.class_mapping_id.as_str() == "aMap")
+        .expect("aMap missing");
+    let b = resolved
+        .iter()
+        .find(|cm| cm.class_mapping_id.as_str() == "bMap")
+        .expect("bMap missing");
+    assert!(a.effective_main_table.is_none());
+    assert!(b.effective_main_table.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Phase B6 — AssociationMapping body resolution
+// ---------------------------------------------------------------------------
+
+#[test]
+fn resolves_association_mapping_with_two_ends() {
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table tradeT (id INT PRIMARY KEY, prodId INT)
+          Table prodT (id INT PRIMARY KEY)
+          Join tradeProd (tradeT.prodId = prodT.id)
+        )
+
+        ###Pure
+        Class pkg::Trade { id : Integer[1]; }
+        Class pkg::Product { id : Integer[1]; }
+        Association pkg::TradeProd
+        {
+          trade : pkg::Trade[1];
+          product : pkg::Product[1];
+        }
+
+        ###Mapping
+        Mapping pkg::M
+        (
+          pkg::Trade[tradeMap] : Relational
+          {
+            ~mainTable [pkg::db]tradeT
+            (id : tradeT.id)
+          }
+
+          pkg::Product[prodMap] : Relational
+          {
+            ~mainTable [pkg::db]prodT
+            (id : prodT.id)
+          }
+
+          pkg::TradeProd : Relational
+          {
+            AssociationMapping
+            (
+              trade[tradeMap, prodMap] : [pkg::db]@tradeProd | tradeT.id,
+              product[prodMap, tradeMap] : [pkg::db]@tradeProd | prodT.id
+            )
+          }
+        )
+    "});
+    let resolved = extension.resolved_class_mappings();
+    let assoc = resolved
+        .iter()
+        .find(|cm| {
+            matches!(
+                cm.kind,
+                legend_pure_dsl_relational::processor::ResolvedClassMappingKind::Association
+            )
+        })
+        .expect("association mapping missing");
+    assert_eq!(assoc.properties.len(), 2);
+    assert_eq!(assoc.properties[0].property_name.as_str(), "trade");
+    assert_eq!(assoc.properties[1].property_name.as_str(), "product");
+    // Both ends carry [srcId, tgtId].
+    assert_eq!(assoc.properties[0].source_id.as_deref(), Some("tradeMap"));
+    assert_eq!(assoc.properties[0].target_id.as_deref(), Some("prodMap"));
+    assert_eq!(assoc.properties[1].source_id.as_deref(), Some("prodMap"));
+    assert_eq!(assoc.properties[1].target_id.as_deref(), Some("tradeMap"));
+
+    // Each end's value is bound to a column.
+    let dbs = extension.resolved_databases();
+    let trade_binding = match &assoc.properties[0].kind {
+        legend_pure_dsl_relational::processor::ResolvedClassMappingPropertyKind::Single {
+            binding,
+        } => binding.as_ref().expect("binding"),
+        _ => panic!("expected Single"),
+    };
+    let trade_col = trade_binding.resolved_column(&dbs).expect("col");
+    assert_eq!(trade_col.name.as_str(), "id");
+    assert_eq!(trade_binding.table_name.as_str(), "tradeT");
+}
+
+#[test]
+fn association_mapping_kind_distinguishes_from_class_mapping() {
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table t (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class pkg::A { id : Integer[1]; }
+        Class pkg::B { id : Integer[1]; }
+        Association pkg::AB
+        {
+          a : pkg::A[1];
+          b : pkg::B[1];
+        }
+
+        ###Mapping
+        Mapping pkg::M
+        (
+          pkg::A[aMap] : Relational
+          {
+            ~mainTable [pkg::db]t
+            (id : t.id)
+          }
+
+          pkg::B[bMap] : Relational
+          {
+            ~mainTable [pkg::db]t
+            (id : t.id)
+          }
+
+          pkg::AB : Relational
+          {
+            AssociationMapping
+            (
+              a[aMap, bMap] : [pkg::db]t.id,
+              b[bMap, aMap] : [pkg::db]t.id
+            )
+          }
+        )
+    "});
+    let resolved = extension.resolved_class_mappings();
+    let class_mappings = resolved
+        .iter()
+        .filter(|cm| {
+            matches!(
+                cm.kind,
+                legend_pure_dsl_relational::processor::ResolvedClassMappingKind::Class
+            )
+        })
+        .count();
+    let association_mappings = resolved
+        .iter()
+        .filter(|cm| {
+            matches!(
+                cm.kind,
+                legend_pure_dsl_relational::processor::ResolvedClassMappingKind::Association
+            )
+        })
+        .count();
+    assert_eq!(class_mappings, 2);
+    assert_eq!(association_mappings, 1);
 }
 
 #[test]

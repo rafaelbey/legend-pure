@@ -193,14 +193,22 @@ pub enum TokenKind {
     /// Kept as a single token for the most common case so the
     /// existing parser dispatch path stays untouched.
     HashLBrace,
+    /// `#/` — atomic opener for a navigation-path expression
+    /// (`#/Type/prop1/prop2!alias#`). Emitted as a single token
+    /// so the path parser sees a clean opener and downstream
+    /// `/` characters keep their `Slash` lexing inside the path
+    /// body. Section headers (`###`) and `#{` are matched
+    /// above and never reach this arm.
+    HashSlash,
     /// `}#` — closing for `#tag{ … }#` curly-body islands.
     RBraceHash,
     /// `#` — single hash. Used as both the opener for tagged
     /// islands (`#TDS`, `#>`, `#sql`) and the closer for
     /// raw-content islands like TDS (`#TDS\n…\n#`). Section
-    /// headers (`###Identifier`) and the empty-tag opener (`#{`)
-    /// take precedence at lex time and produce their own token
-    /// kinds; `Hash` is emitted only when neither matches.
+    /// headers (`###Identifier`), the empty-tag opener (`#{`),
+    /// and the path opener (`#/`) take precedence at lex time
+    /// and produce their own token kinds; `Hash` is emitted only
+    /// when none matches.
     Hash,
 
     // -- End of file --
@@ -308,6 +316,7 @@ impl TokenKind {
             TokenKind::Percent => "'%'",
             TokenKind::SectionHeader => "section header",
             TokenKind::HashLBrace => "'#{'",
+            TokenKind::HashSlash => "'#/'",
             TokenKind::RBraceHash => "'}#'",
             TokenKind::Hash => "'#'",
             TokenKind::Eof => "end of file",

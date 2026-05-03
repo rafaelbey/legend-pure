@@ -36,8 +36,7 @@ use legend_pure_parser_pure::error::{CompilationError, CompilationErrorKind};
 use legend_pure_parser_pure::model::PureModel;
 use legend_pure_parser_pure::pipeline::{compile_repo_slice, finalize_model, init_bootstrap_model};
 
-const ACCESS_PROFILE_SOURCE: &str =
-    "Profile meta::pure::profiles::access { stereotypes: [public, protected, private, externalizable]; }";
+const ACCESS_PROFILE_SOURCE: &str = "Profile meta::pure::profiles::access { stereotypes: [public, protected, private, externalizable]; }";
 
 fn parse(source: &str, path: &str) -> SourceFile {
     legend_pure_parser_parser::parse(source, path).expect("parse should succeed")
@@ -68,11 +67,17 @@ fn has_kind(errors: &[CompilationError], pred: impl Fn(&CompilationErrorKind) ->
     errors.iter().any(|e| pred(&e.kind))
 }
 
-fn has_not_accessible_with(errors: &[CompilationError], target_substring: &str, use_site: &str) -> bool {
-    errors.iter().any(|e| matches!(&e.kind,
-        CompilationErrorKind::NotAccessible { target_fqn, use_site_package }
-            if target_fqn.contains(target_substring) && use_site_package == use_site
-    ))
+fn has_not_accessible_with(
+    errors: &[CompilationError],
+    target_substring: &str,
+    use_site: &str,
+) -> bool {
+    errors.iter().any(|e| {
+        matches!(&e.kind,
+            CompilationErrorKind::NotAccessible { target_fqn, use_site_package }
+                if target_fqn.contains(target_substring) && use_site_package == use_site
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -89,7 +94,10 @@ fn private_call_in_same_package_succeeds() {
          }",
     );
     assert!(
-        !has_kind(&errs, |k| matches!(k, CompilationErrorKind::NotAccessible { .. })),
+        !has_kind(&errs, |k| matches!(
+            k,
+            CompilationErrorKind::NotAccessible { .. }
+        )),
         "should not emit NotAccessible: {errs:#?}"
     );
 }
@@ -194,7 +202,10 @@ fn protected_call_in_same_package_succeeds() {
          }",
     );
     assert!(
-        !has_kind(&errs, |k| matches!(k, CompilationErrorKind::NotAccessible { .. })),
+        !has_kind(&errs, |k| matches!(
+            k,
+            CompilationErrorKind::NotAccessible { .. }
+        )),
         "should not emit NotAccessible: {errs:#?}"
     );
 }
@@ -210,7 +221,10 @@ fn protected_call_in_subpackage_succeeds() {
          }",
     );
     assert!(
-        !has_kind(&errs, |k| matches!(k, CompilationErrorKind::NotAccessible { .. })),
+        !has_kind(&errs, |k| matches!(
+            k,
+            CompilationErrorKind::NotAccessible { .. }
+        )),
         "should not emit NotAccessible: {errs:#?}"
     );
 }
@@ -264,7 +278,10 @@ fn private_class_reference_in_same_package_succeeds() {
          }",
     );
     assert!(
-        !has_kind(&errs, |k| matches!(k, CompilationErrorKind::NotAccessible { .. })),
+        !has_kind(&errs, |k| matches!(
+            k,
+            CompilationErrorKind::NotAccessible { .. }
+        )),
         "should not emit NotAccessible: {errs:#?}"
     );
 }
@@ -340,7 +357,10 @@ fn protected_class_reference_in_subpackage_succeeds() {
          }",
     );
     assert!(
-        !has_kind(&errs, |k| matches!(k, CompilationErrorKind::NotAccessible { .. })),
+        !has_kind(&errs, |k| matches!(
+            k,
+            CompilationErrorKind::NotAccessible { .. }
+        )),
         "should not emit NotAccessible: {errs:#?}"
     );
 }
@@ -383,7 +403,10 @@ fn multiple_access_stereotypes_on_function_fails() {
               pkg::func(s1: String[1], s2: String[1]): String[1] { 'x' }",
     );
     assert!(
-        has_kind(&errs, |k| matches!(k, CompilationErrorKind::MultipleAccessLevels { .. })),
+        has_kind(&errs, |k| matches!(
+            k,
+            CompilationErrorKind::MultipleAccessLevels { .. }
+        )),
         "expected MultipleAccessLevels: {errs:#?}"
     );
 }
@@ -399,7 +422,10 @@ fn private_stereotype_on_property_fails() {
         "Class pkg::TestClass { <<meta::pure::profiles::access.private>> name: String[1]; }",
     );
     assert!(
-        has_kind(&errs, |k| matches!(k, CompilationErrorKind::AccessLevelNotAllowed { .. })),
+        has_kind(&errs, |k| matches!(
+            k,
+            CompilationErrorKind::AccessLevelNotAllowed { .. }
+        )),
         "expected AccessLevelNotAllowed on property: {errs:#?}"
     );
 }
@@ -411,7 +437,10 @@ fn protected_stereotype_on_property_fails() {
         "Class pkg::TestClass { <<meta::pure::profiles::access.protected>> name: String[1]; }",
     );
     assert!(
-        has_kind(&errs, |k| matches!(k, CompilationErrorKind::AccessLevelNotAllowed { .. })),
+        has_kind(&errs, |k| matches!(
+            k,
+            CompilationErrorKind::AccessLevelNotAllowed { .. }
+        )),
         "expected AccessLevelNotAllowed on property: {errs:#?}"
     );
 }

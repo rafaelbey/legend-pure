@@ -504,6 +504,9 @@ pub fn convert_value_spec_to_expression(
                 source_info: si,
             }))
         }
+        ValueSpecification::ClassInstance(ci) if ci.type_name == "path" => {
+            convert_navigation_path_class_instance(ci)
+        }
         ValueSpecification::EnumValue(_)
         | ValueSpecification::GenericTypeInstance(_)
         | ValueSpecification::KeyExpression(_)
@@ -513,6 +516,83 @@ pub fn convert_value_spec_to_expression(
             Err(ConversionError::UnsupportedValueSpec)
         }
     }
+}
+
+/// Reconstructs an AST `NavigationPath` from a `classInstance("path", ...)`
+/// payload (the inverse of `convert_navigation_path` in `convert.rs`).
+///
+/// Wire format:
+/// ```json
+/// { "type": "path",
+///   "value": { "startType": "...", "path": [{...}], "name": "..." } }
+/// ```
+fn convert_navigation_path_class_instance(
+    ci: &v1::value_spec::ClassInstance,
+) -> Result<ast::expression::Expression> {
+    use ast::expression::{Expression, NavigationPath, PropertyPathElement};
+
+    let si = source_info_or_synthetic(ci.source_information.as_ref());
+
+    let value = ci
+        .value
+        .as_object()
+        .ok_or(ConversionError::UnsupportedValueSpec)?;
+
+    let start_type_str = value
+        .get("startType")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(ConversionError::UnsupportedValueSpec)?;
+    let (package, name) = parse_qualified_path(start_type_str)?;
+    let start_type = ast::type_ref::TypeReference {
+        package,
+        name,
+        type_arguments: vec![],
+        multiplicity_arguments: vec![],
+        type_variable_values: vec![],
+        source_info: si.clone(),
+    };
+
+    let path_array = value
+        .get("path")
+        .and_then(serde_json::Value::as_array)
+        .ok_or(ConversionError::UnsupportedValueSpec)?;
+    let mut path = Vec::with_capacity(path_array.len());
+    for step_json in path_array {
+        let step = step_json
+            .as_object()
+            .ok_or(ConversionError::UnsupportedValueSpec)?;
+        let property = step
+            .get("property")
+            .and_then(serde_json::Value::as_str)
+            .ok_or(ConversionError::UnsupportedValueSpec)?;
+        let parameters = if let Some(params_array) =
+            step.get("parameters").and_then(serde_json::Value::as_array)
+        {
+            params_array
+                .iter()
+                .map(convert_json_value_to_expression)
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            vec![]
+        };
+        path.push(PropertyPathElement {
+            property: SmolStr::new(property),
+            parameters,
+            source_info: si.clone(),
+        });
+    }
+
+    let name = value
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .map(SmolStr::new);
+
+    Ok(Expression::NavigationPath(NavigationPath {
+        start_type,
+        path,
+        name,
+        source_info: si,
+    }))
 }
 
 /// Converts a `serde_json::Value` (expected to be a serialized `ValueSpecification`)

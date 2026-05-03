@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Phase B1+B2+B3: post-processor for the relational DSL.
+//! Phase B1+B2+B3+B4+B5+B6 (and B7 in compiler.rs): post-processor
+//! for the relational DSL.
 //!
 //! `RelationalExtension::define_bodies` runs this module against every
 //! registered [`DatabaseDef`] to produce a [`ResolvedDatabase`] — a
@@ -42,14 +43,33 @@
 //!   `None` binding. Each view tracks the distinct table names it
 //!   references; views with a single referenced table get their
 //!   `main_table` populated.
+//! - **Class-mapping property mappings** (B4) — for every registered
+//!   `Class : Relational { ... }` body, each `SingleMappingLine`'s
+//!   value is resolved to a [`ResolvedClassMappingProperty`]. The
+//!   mapping's primary database flows from `~mainTable [db]`;
+//!   scope-wrapped lines pick up the scope's `[db]`. Embedded
+//!   mappings are tagged but not recursed.
+//! - **Main-table inheritance through `extends`** (B5) — when a
+//!   class mapping has `extends [parentId]` and no `~mainTable` of
+//!   its own, the inheritance walker fills `effective_main_table`
+//!   and `effective_primary_database` from the nearest ancestor
+//!   that declares one. Cycles terminate cleanly.
+//! - **AssociationMapping bodies** (B6) — bodies whose AST has
+//!   `association_mapping = Some(lines)` are tagged with
+//!   `ResolvedClassMappingKind::Association` and the two property
+//!   lines (one per association end) get the same value-side
+//!   resolution as class-mapping properties. Each end's
+//!   `[srcId, tgtId]` tags are preserved for downstream consumers.
 //!
-//! What this module deliberately defers (Phase-B sub-items):
+//! What this module deliberately defers:
 //!
-//! - Class-mapping property mapping resolution (B4)
-//! - Main-table inheritance through `extends` (B5)
-//! - AssociationMapping source/target class population (B6)
-//! - Implicit-db `@join` resolution (B7)
+//! - Embedded-body recursion (depends on broader plumbing)
 //! - Milestoning auto-rewrite (Phase C)
+//!
+//! Phase B7 (implicit-db `@join` resolution) lives in
+//! `compiler.rs::validate_class_mapping_join_refs` rather than
+//! producing a parallel resolved structure here, since it just
+//! threads the contextual db through the existing validator.
 
 use std::collections::{HashMap, HashSet};
 
@@ -58,7 +78,8 @@ use smol_str::SmolStr;
 use legend_pure_parser_ast::SourceInfo;
 
 use crate::ast::{
-    ColumnDef, DatabaseDef, DatabaseElement, JoinColWithDbOrConstant, OpColumn, OpExpr, View,
+    ColumnDef, DatabaseDef, DatabaseElement, JoinColWithDbOrConstant, MappingElement,
+    NonePlusMappingValue, OpColumn, OpExpr, RelationalClassMappingBody, SingleMappingLine, View,
 };
 
 // ---------------------------------------------------------------------------
@@ -330,6 +351,105 @@ pub struct ResolvedViewBody {
     /// `None` and leave the user-facing diagnostic to a future
     /// validator).
     pub main_table: Option<SmolStr>,
+}
+
+/// One resolved property mapping inside a relational class-mapping
+/// body. Mirrors the shape of [`crate::ast::SingleMappingLine`] but
+/// with the value's terminal column reference resolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedClassMappingProperty {
+    /// Property being mapped on the target class.
+    pub property_name: SmolStr,
+    /// Optional `[srcId]` tag.
+    pub source_id: Option<SmolStr>,
+    /// Optional `[srcId, targetId]` second tag.
+    pub target_id: Option<SmolStr>,
+    /// Resolved value-side payload — the kind tells whether the
+    /// line was bare (Single), a `+local` Plus line, or an Embedded
+    /// (whose recursion is deferred to a later phase).
+    pub kind: ResolvedClassMappingPropertyKind,
+}
+
+/// Shape of a resolved class-mapping property's RHS.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ResolvedClassMappingPropertyKind {
+    /// Bare `prop : <joinCol>` with the terminal column ref bound.
+    /// `binding = None` when the value was a literal constant or
+    /// resolution failed.
+    Single {
+        /// Resolved binding for the value's terminal column ref.
+        binding: Option<OpColumnBinding>,
+    },
+    /// `+prop : Type[mult] : <joinCol>` plus-form local property.
+    Plus {
+        /// Resolved binding for the value's terminal column ref.
+        binding: Option<OpColumnBinding>,
+    },
+    /// Embedded `(<inner-mappings>) (Inline | Otherwise)?` form —
+    /// recursion deferred. Java's `RelationalPropertyMappingProcessor`
+    /// recurses into the embedded body; our scaffolding tracks the
+    /// shape so a later phase can fill it in.
+    Embedded,
+}
+
+/// Whether a `ResolvedClassMapping` represents a regular class
+/// mapping or an `AssociationMapping ( ... )` body. Set during
+/// resolution; consumers can switch on it to enforce
+/// association-only constraints (e.g. exactly two property
+/// mapping lines per Java's grammar).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ResolvedClassMappingKind {
+    /// Regular class mapping body.
+    Class,
+    /// `AssociationMapping (...)` body — exactly two property lines
+    /// (one per association end).
+    Association,
+}
+
+/// Resolved class-mapping snapshot produced by Phase B4 + B5 + B6.
+/// Lives in extension state, accessible via
+/// [`crate::compiler::RelationalExtension::resolved_class_mappings`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedClassMapping {
+    /// FQN of the enclosing `Mapping`.
+    pub mapping_fqn: SmolStr,
+    /// Class-mapping id — the `[id]` if explicitly set in source,
+    /// otherwise the class's FQN.
+    pub class_mapping_id: SmolStr,
+    /// Whether this is a regular class mapping or an
+    /// `AssociationMapping (...)` body.
+    pub kind: ResolvedClassMappingKind,
+    /// `extends [superId]` — captured verbatim from the AST.
+    pub extends: Option<SmolStr>,
+    /// Database FQN declared on `~mainTable [db]<table>`. `None` when
+    /// the body has no `~mainTable` block.
+    pub primary_database: Option<SmolStr>,
+    /// Table name declared on `~mainTable`. `None` when the body has
+    /// no `~mainTable` block.
+    pub main_table: Option<SmolStr>,
+    /// Effective main-table table name after walking the `extends`
+    /// chain (Phase B5). When `main_table` is set on this body
+    /// itself, the values match. Otherwise it's inherited from the
+    /// nearest ancestor that declares one. `None` if no ancestor
+    /// declares a main table or the chain has a cycle.
+    pub effective_main_table: Option<SmolStr>,
+    /// Effective primary database after walking the `extends`
+    /// chain. Same inheritance rule as `effective_main_table`.
+    pub effective_primary_database: Option<SmolStr>,
+    /// Inferred main table — populated when all property values
+    /// reference the same table. Independent of the explicit
+    /// `~mainTable` declaration.
+    pub inferred_main_table: Option<SmolStr>,
+    /// Distinct table names referenced by property values, in
+    /// source order. Useful for the multiple-main-tables diagnostic.
+    pub referenced_tables: Vec<SmolStr>,
+    /// Resolved property mappings, top-level only — Embedded
+    /// recursion is deferred. Scope-wrapped lines are flattened
+    /// into this list (the scope's `[db]` is honoured during
+    /// resolution but the wrapping is not preserved here).
+    pub properties: Vec<ResolvedClassMappingProperty>,
 }
 
 /// Per-database resolved snapshot produced by [`process_database`].
@@ -972,4 +1092,306 @@ fn database_fqn(db: &DatabaseDef) -> SmolStr {
     }
     s.push_str(db.name.value.as_str());
     SmolStr::new(&s)
+}
+
+// ---------------------------------------------------------------------------
+// Phase B4 — class-mapping property resolution
+// ---------------------------------------------------------------------------
+
+/// Resolve every `SingleMappingLine` in `body` to a
+/// [`ResolvedClassMappingProperty`]. The class-mapping's contextual
+/// database is determined by the `~mainTable [db]` block when present
+/// (overrides per-line `[db]` for inheriting cases); each scope-wrapped
+/// line picks up the scope's `[db]` instead.
+///
+/// `defs_by_fqn` is required to know which databases exist for
+/// cross-db `[db]` qualifier validation. Resolution flags
+/// (`unresolved_database`, `unresolved_table`, `unresolved_column`)
+/// remain as on the binding — the V4 / E validators emit user-facing
+/// diagnostics; this resolver produces the parallel structure.
+///
+/// `effective_main_table` and `effective_primary_database` are not
+/// populated here — they require the full set of class mappings for
+/// the `extends` chain walk. Use [`apply_extends_inheritance`] on
+/// the resolved set after this returns.
+pub fn resolve_class_mapping(
+    body: &RelationalClassMappingBody,
+    mapping_fqn: &SmolStr,
+    class_mapping_id: &SmolStr,
+    extends: Option<&SmolStr>,
+    snapshots: &HashMap<SmolStr, ResolvedDatabase>,
+    defs_by_fqn: &HashMap<SmolStr, DatabaseDef>,
+) -> ResolvedClassMapping {
+    let visible_tables: HashMap<SmolStr, HashSet<SmolStr>> = defs_by_fqn
+        .iter()
+        .map(|(fqn, def)| (fqn.clone(), collect_visible_table_names(def, defs_by_fqn)))
+        .collect();
+
+    // Primary database + main table from `~mainTable`.
+    let primary_database = body
+        .main_table
+        .as_ref()
+        .map(|mt| packageable_fqn_from_ptr(&mt.db));
+    let main_table = body
+        .main_table
+        .as_ref()
+        .map(|mt| mt.scope.table.value.clone());
+
+    let mut properties: Vec<ResolvedClassMappingProperty> = Vec::new();
+    let mut referenced: Vec<SmolStr> = Vec::new();
+    let mut seen: HashSet<SmolStr> = HashSet::new();
+
+    let kind = if body.association_mapping.is_some() {
+        ResolvedClassMappingKind::Association
+    } else {
+        ResolvedClassMappingKind::Class
+    };
+
+    // Choose the line set to walk based on body kind. Association
+    // bodies use `body.association_mapping`; class bodies use
+    // `body.mapping_elements` (with scope-wrapped lines flattened).
+    let owning_db_fqn = primary_database.clone().unwrap_or_else(|| SmolStr::new(""));
+    if let Some(assoc_lines) = &body.association_mapping {
+        for line in assoc_lines {
+            let prop =
+                resolve_single_mapping_line(line, &owning_db_fqn, snapshots, &visible_tables);
+            record_binding(&prop, &mut referenced, &mut seen);
+            properties.push(prop);
+        }
+    } else {
+        for elem in &body.mapping_elements {
+            match elem {
+                MappingElement::Single(line) => {
+                    let prop = resolve_single_mapping_line(
+                        line,
+                        &owning_db_fqn,
+                        snapshots,
+                        &visible_tables,
+                    );
+                    record_binding(&prop, &mut referenced, &mut seen);
+                    properties.push(prop);
+                }
+                MappingElement::Scope(scope) => {
+                    // Scope sets a per-block contextual db.
+                    let scope_db_fqn = packageable_fqn_from_ptr(&scope.db);
+                    for line in &scope.mapping_lines {
+                        let prop = resolve_single_mapping_line(
+                            line,
+                            &scope_db_fqn,
+                            snapshots,
+                            &visible_tables,
+                        );
+                        record_binding(&prop, &mut referenced, &mut seen);
+                        properties.push(prop);
+                    }
+                }
+            }
+        }
+    }
+
+    let inferred_main_table = if referenced.len() == 1 {
+        Some(referenced[0].clone())
+    } else {
+        None
+    };
+
+    let effective_main_table = main_table.clone();
+    let effective_primary_database = primary_database.clone();
+
+    ResolvedClassMapping {
+        mapping_fqn: mapping_fqn.clone(),
+        class_mapping_id: class_mapping_id.clone(),
+        kind,
+        extends: extends.cloned(),
+        primary_database,
+        main_table,
+        effective_main_table,
+        effective_primary_database,
+        inferred_main_table,
+        referenced_tables: referenced,
+        properties,
+    }
+}
+
+/// Phase B5 — apply `extends`-chain inheritance to the resolved
+/// class mappings. Mirrors Java's
+/// `RelationalInstanceSetImplementationProcessor`'s main-table
+/// inheritance: when a class mapping has `extends [parentId]` and
+/// no `~mainTable` of its own, walk up the chain to inherit the
+/// nearest ancestor's main table + primary database.
+///
+/// Cycles in the `extends` graph terminate the walk silently
+/// (the validator emits a structured error elsewhere).
+pub fn apply_extends_inheritance(class_mappings: &mut [ResolvedClassMapping]) {
+    // Index by (mapping_fqn, class_mapping_id) for fast parent lookup.
+    let by_id: HashMap<(SmolStr, SmolStr), usize> = class_mappings
+        .iter()
+        .enumerate()
+        .map(|(i, cm)| ((cm.mapping_fqn.clone(), cm.class_mapping_id.clone()), i))
+        .collect();
+
+    // Pre-compute the inherited values per index (reading current
+    // state — no in-place mutation during walk). Then write back.
+    let mut effective: Vec<(Option<SmolStr>, Option<SmolStr>)> =
+        Vec::with_capacity(class_mappings.len());
+    for cm in class_mappings.iter() {
+        let mut visited: HashSet<(SmolStr, SmolStr)> = HashSet::new();
+        let mut current = cm;
+        let mut main_table = current.main_table.clone();
+        let mut primary_db = current.primary_database.clone();
+        while main_table.is_none() {
+            let Some(parent_id) = &current.extends else {
+                break;
+            };
+            let key = (current.mapping_fqn.clone(), parent_id.clone());
+            if !visited.insert(key.clone()) {
+                break;
+            }
+            let Some(idx) = by_id.get(&key) else {
+                break;
+            };
+            current = &class_mappings[*idx];
+            if current.main_table.is_some() {
+                main_table = current.main_table.clone();
+                primary_db = current.primary_database.clone();
+            }
+        }
+        effective.push((main_table, primary_db));
+    }
+
+    for (cm, (mt, db)) in class_mappings.iter_mut().zip(effective) {
+        cm.effective_main_table = mt;
+        cm.effective_primary_database = db;
+    }
+}
+
+fn record_binding(
+    prop: &ResolvedClassMappingProperty,
+    referenced: &mut Vec<SmolStr>,
+    seen: &mut HashSet<SmolStr>,
+) {
+    let binding = match &prop.kind {
+        ResolvedClassMappingPropertyKind::Single { binding } => binding,
+        ResolvedClassMappingPropertyKind::Plus { binding } => binding,
+        ResolvedClassMappingPropertyKind::Embedded => return,
+    };
+    if let Some(b) = binding {
+        if !b.unresolved_table && seen.insert(b.table_name.clone()) {
+            referenced.push(b.table_name.clone());
+        }
+    }
+}
+
+fn resolve_single_mapping_line(
+    line: &SingleMappingLine,
+    owning_db_fqn: &SmolStr,
+    snapshots: &HashMap<SmolStr, ResolvedDatabase>,
+    visible_tables: &HashMap<SmolStr, HashSet<SmolStr>>,
+) -> ResolvedClassMappingProperty {
+    match line {
+        SingleMappingLine::NonePlus(np) => {
+            let kind = match &np.value {
+                NonePlusMappingValue::Relational(rm) => {
+                    let binding =
+                        resolve_join_col_value(&rm.value, owning_db_fqn, snapshots, visible_tables);
+                    ResolvedClassMappingPropertyKind::Single { binding }
+                }
+                NonePlusMappingValue::Embedded(_) => ResolvedClassMappingPropertyKind::Embedded,
+            };
+            ResolvedClassMappingProperty {
+                property_name: np.property.value.clone(),
+                source_id: np.source_id.as_ref().map(|s| s.value.clone()),
+                target_id: np.target_id.as_ref().map(|t| t.value.clone()),
+                kind,
+            }
+        }
+        SingleMappingLine::Plus(p) => {
+            let binding =
+                resolve_join_col_value(&p.mapping.value, owning_db_fqn, snapshots, visible_tables);
+            ResolvedClassMappingProperty {
+                property_name: p.property.value.clone(),
+                source_id: None,
+                target_id: None,
+                kind: ResolvedClassMappingPropertyKind::Plus { binding },
+            }
+        }
+    }
+}
+
+/// Resolve a single `JoinColWithDbOrConstant`'s terminal column ref
+/// against the snapshot map. Same machinery as the view resolver
+/// (B3) — refactor candidate but kept inline so view / class-mapping
+/// shapes can diverge later.
+fn resolve_join_col_value(
+    jc: &JoinColWithDbOrConstant,
+    owning_db_fqn: &SmolStr,
+    snapshots: &HashMap<SmolStr, ResolvedDatabase>,
+    visible_tables: &HashMap<SmolStr, HashSet<SmolStr>>,
+) -> Option<OpColumnBinding> {
+    let column = jc.column.as_ref()?;
+    let OpColumn::Aliased {
+        db,
+        alias,
+        scope,
+        source_info,
+        ..
+    } = column
+    else {
+        return None;
+    };
+
+    let target_db_ptr = db.as_ref().or(jc.db.as_ref());
+    let (target_db_fqn, mut unresolved_database) = match target_db_ptr {
+        Some(d) => {
+            let fqn = packageable_fqn_from_ptr(d);
+            let exists = snapshots.contains_key(&fqn);
+            (fqn, !exists)
+        }
+        None => (owning_db_fqn.clone(), false),
+    };
+    if target_db_fqn.is_empty() {
+        // No `~mainTable [db]` declared and no explicit `[db]` on the
+        // column — we can't resolve. Mark database-unresolved so
+        // consumers see a structured signal.
+        unresolved_database = true;
+    }
+
+    let mut unresolved_table = false;
+    let mut unresolved_column = false;
+    let mut column_index: Option<usize> = None;
+    let mut bound_db_fqn = target_db_fqn.clone();
+
+    if !unresolved_database {
+        let table_visible = visible_tables
+            .get(&target_db_fqn)
+            .is_some_and(|set| set.contains(&alias.value));
+        if !table_visible {
+            unresolved_table = true;
+        } else if let Some(scope_seg) = scope.first() {
+            if let Some((home_db, idx)) = lookup_column_via_includes(
+                snapshots,
+                &target_db_fqn,
+                &alias.value,
+                &scope_seg.value,
+            ) {
+                bound_db_fqn = home_db;
+                column_index = Some(idx);
+            } else {
+                unresolved_column = true;
+            }
+        } else if let Some(home_db) = lookup_table_home_db(snapshots, &target_db_fqn, &alias.value)
+        {
+            bound_db_fqn = home_db;
+        }
+    }
+
+    Some(OpColumnBinding {
+        database_fqn: bound_db_fqn,
+        table_name: alias.value.clone(),
+        column_index,
+        unresolved_database,
+        unresolved_table,
+        unresolved_column,
+        source_info: source_info.clone(),
+    })
 }

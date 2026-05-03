@@ -304,13 +304,14 @@ fn resolve_relation_type_sentinel(
             .first()
             .and_then(|t| resolve_type_ref(t, ctx, errors))
             .unwrap_or(TypeExpr::Generic("Any".into()));
-        let multiplicity = col_ref.multiplicity_arguments.first().map_or(
-            Multiplicity::ZeroOrOne,
-            |ma| match ma {
-                ast_type::MultiplicityArgument::Concrete(m, _) => lower_multiplicity(m),
-                ast_type::MultiplicityArgument::Identifier(_, _) => Multiplicity::ZeroOrMany,
-            },
-        );
+        let multiplicity =
+            col_ref
+                .multiplicity_arguments
+                .first()
+                .map_or(Multiplicity::ZeroOrOne, |ma| match ma {
+                    ast_type::MultiplicityArgument::Concrete(m, _) => lower_multiplicity(m),
+                    ast_type::MultiplicityArgument::Identifier(_, _) => Multiplicity::ZeroOrMany,
+                });
         columns.push(crate::types::RelationColumnTypeExpr {
             name: col_ref.name.clone(),
             type_expr,
@@ -982,6 +983,32 @@ fn infer_type_from_valuespec(
             // is the receiver. Mirrors the Java `propertyExpression`
             // post-processor.
             let target = data.arguments.first()?;
+
+            // Structural-relation receiver: when the target's TypeExpr
+            // is (or wraps) a `TypeExpr::Relation(cols)` — e.g. `$x`
+            // bound to a TDS/Relation row tuple — the "property" is a
+            // column name. Look it up in the column list and return the
+            // column's resolved primitive type. Mirrors Java's
+            // relation-row property-access semantics: `$x.value` on a
+            // row of `(value:Integer)` returns `Integer`.
+            let target_te = infer_typeexpr_from_valuespec(target, model, var_types);
+            if let Some(te) = &target_te
+                && let Some(cols) = extract_relation_columns(te)
+            {
+                for col in cols {
+                    if col.name == data.function_name {
+                        return match &col.type_expr {
+                            crate::types::TypeExpr::Named { element, .. } => Some(*element),
+                            crate::types::TypeExpr::Generic(_) => Some(crate::bootstrap::ANY_ID),
+                            _ => None,
+                        };
+                    }
+                }
+                // Property not found in columns — fall through to the
+                // class-property path so the user gets a coherent
+                // diagnostic instead of a silent None.
+            }
+
             let target_eid = infer_type_from_valuespec(target, model, var_types)?;
             let receiver_type_args = extract_receiver_type_args(target, var_types);
             let (prop_ty_owned, type_params_owned) =
@@ -1226,7 +1253,7 @@ pub(crate) fn infer_typeexpr_from_valuespec(
 /// against receiver type-arguments). Walks `super_types` breadth-first —
 /// `.package` on a `Package` value must find the `package` declaration
 /// inherited from `PackageableElement`.
-fn find_property_with_inheritance(
+pub(crate) fn find_property_with_inheritance(
     eid: ElementId,
     property: &smol_str::SmolStr,
     model: &crate::model::PureModel,
@@ -1349,9 +1376,9 @@ fn extract_relation_columns(
     use crate::types::TypeExpr;
     match te {
         TypeExpr::Relation(cols) => Some(cols.as_slice()),
-        TypeExpr::Named {
-            type_arguments, ..
-        } => type_arguments.first().and_then(extract_relation_columns),
+        TypeExpr::Named { type_arguments, .. } => {
+            type_arguments.first().and_then(extract_relation_columns)
+        }
         _ => None,
     }
 }

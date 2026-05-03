@@ -61,6 +61,10 @@ descriptor = "../../../legend-pure-dsl/legend-pure-dsl-tds/legend-pure-m2-dsl-td
 shape = "purem-artifact"
 
 [[package.metadata.legend-pure.repos]]
+descriptor = "../../../legend-pure-dsl/legend-pure-dsl-path/legend-pure-m2-dsl-path-pure/src/main/resources/platform_dsl_path.definition.json"
+shape = "purem-artifact"
+
+[[package.metadata.legend-pure.repos]]
 descriptor = "../../../legend-pure-store/legend-pure-store-relational/legend-pure-m2-store-relational-pure/src/main/resources/platform_store_relational.definition.json"
 shape = "purem-artifact"
 

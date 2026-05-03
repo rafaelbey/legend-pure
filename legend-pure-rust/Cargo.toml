@@ -35,6 +35,7 @@ members = [
     "crates/dsl-store",
     "crates/dsl-tds",
     "crates/stress",
+    "crates/xtask",
 ]
 
 [workspace.package]

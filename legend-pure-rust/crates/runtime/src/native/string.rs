@@ -435,6 +435,11 @@ pub(crate) fn pure_to_string(
             FunctionValue::Compiled(id) => {
                 Ok(crate::model_utils::element_simple_name(ctx.model(), *id).to_string())
             }
+            FunctionValue::Path(p) => Ok(format!(
+                "<Path:{}{}>",
+                p.steps.len(),
+                p.name.as_ref().map(|n| format!("!{n}")).unwrap_or_default()
+            )),
         },
         Value::Map(m) => Ok(format!("<Map size={}>", m.borrow().entries.len())),
         Value::UnitInstance { unit_id, inner } => {

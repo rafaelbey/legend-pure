@@ -132,6 +132,7 @@ pub(crate) fn lower_expression(
         ast_expr::Expression::Copy(e) => Some(lower_copy(e, ctx, errors)),
         ast_expr::Expression::Slice(e) => lower_slice(e, ctx, errors),
         ast_expr::Expression::UnitInstance(e) => lower_unit_instance(e, ctx, errors),
+        ast_expr::Expression::NavigationPath(e) => lower_navigation_path(e, ctx, errors),
     }
 }
 
@@ -1860,11 +1861,19 @@ fn lower_column(
     let kind = classify_col_spec_kind(&e.columns);
     let outer_id = match (e.is_array, kind) {
         (false, crate::types::ColSpecLiteralKind::Plain) => resolve_col_spec_id(ctx)?,
-        (false, crate::types::ColSpecLiteralKind::Func) => resolve_relation_class_id(ctx, "FuncColSpec")?,
-        (false, crate::types::ColSpecLiteralKind::Agg) => resolve_relation_class_id(ctx, "AggColSpec")?,
+        (false, crate::types::ColSpecLiteralKind::Func) => {
+            resolve_relation_class_id(ctx, "FuncColSpec")?
+        }
+        (false, crate::types::ColSpecLiteralKind::Agg) => {
+            resolve_relation_class_id(ctx, "AggColSpec")?
+        }
         (true, crate::types::ColSpecLiteralKind::Plain) => resolve_col_spec_array_id(ctx)?,
-        (true, crate::types::ColSpecLiteralKind::Func) => resolve_relation_class_id(ctx, "FuncColSpecArray")?,
-        (true, crate::types::ColSpecLiteralKind::Agg) => resolve_relation_class_id(ctx, "AggColSpecArray")?,
+        (true, crate::types::ColSpecLiteralKind::Func) => {
+            resolve_relation_class_id(ctx, "FuncColSpecArray")?
+        }
+        (true, crate::types::ColSpecLiteralKind::Agg) => {
+            resolve_relation_class_id(ctx, "AggColSpecArray")?
+        }
     };
     let type_expr = TypeExpr::Named {
         element: outer_id,
@@ -2214,6 +2223,85 @@ fn lower_unit_instance(
             function_name: SmolStr::new_static("newUnit"),
             arguments: vec![unit_ref, value_vs],
         }),
+        e.source_info.clone(),
+    ))
+}
+
+/// Lowers `#/StartType/p1(args)/p2!alias#` → `ExprKind::PathLiteral`.
+///
+/// Strategy:
+///  1. Resolve `start_type` via the standard type-spec resolver so type
+///     args (`Firm<Any>`) are bound consistently with the rest of the
+///     pipeline.
+///  2. Lower each step's parameters as ordinary expressions (so enum
+///     stubs, scalar literals, and collection literals all flow through
+///     the existing lowering machinery).
+///  3. *Validate the first step's property exists on the start type.*
+///     This is a cheap correctness gate that catches most typos.
+///     Subsequent steps' properties resolve at runtime — the chain
+///     "running type" depends on each previous step's return type with
+///     type-arg substitution, which is straightforward at evaluation
+///     time but expensive to fully model statically. The Stage-4
+///     `evaluate(Path,U)` native re-resolves through the chain.
+///
+/// On a property-not-found error, lowering still returns the
+/// `PathLiteral` so downstream passes can keep going — the recorded
+/// error is enough to fail compilation cleanly without cascading.
+fn lower_navigation_path(
+    e: &ast_expr::NavigationPath,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    use crate::types::{PathStepLowered, TypeExpr};
+
+    let start_type = resolve::resolve_type_ref(&e.start_type, ctx, errors)?;
+
+    // Validate the first step's property exists on the start type.
+    // (Subsequent steps validated at runtime — see fn doc.)
+    if let Some(first_step) = e.path.first() {
+        if let TypeExpr::Named { element, .. } = &start_type {
+            if resolve::find_property_with_inheritance(*element, &first_step.property, ctx.model)
+                .is_none()
+            {
+                errors.push(CompilationError {
+                    message: format!(
+                        "Navigation path: property '{}' not found on type '{}'",
+                        first_step.property,
+                        e.start_type.full_path(),
+                    ),
+                    source_info: first_step.source_info.clone(),
+                    kind: crate::error::CompilationErrorKind::UnknownProperty {
+                        type_name: SmolStr::new(e.start_type.full_path()),
+                        property_name: first_step.property.clone(),
+                    },
+                });
+            }
+        }
+    }
+
+    let steps: Vec<PathStepLowered> = e
+        .path
+        .iter()
+        .map(|step| {
+            let parameters: Vec<ValueSpec> = step
+                .parameters
+                .iter()
+                .filter_map(|p| lower_expression(p, ctx, errors))
+                .collect();
+            PathStepLowered {
+                property_name: step.property.clone(),
+                parameters,
+                source_info: step.source_info.clone(),
+            }
+        })
+        .collect();
+
+    Some(untyped(
+        ExprKind::PathLiteral {
+            start_type,
+            steps,
+            name: e.name.clone(),
+        },
         e.source_info.clone(),
     ))
 }

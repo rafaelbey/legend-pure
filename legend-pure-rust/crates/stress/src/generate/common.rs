@@ -45,9 +45,8 @@ pub fn platform_fixture() -> &'static PlatformFixture {
     static FIXTURE: OnceLock<PlatformFixture> = OnceLock::new();
     FIXTURE.get_or_init(|| {
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let descriptor = manifest.join(
-            "../../../legend-pure-core/legend-pure-m3-core/src/main/resources/platform.json",
-        );
+        let descriptor = manifest
+            .join("../../../legend-pure-core/legend-pure-m3-core/src/main/resources/platform.json");
         let mut parsed_files = Vec::new();
         if let Ok(canonical) = descriptor.canonicalize()
             && let Ok(repo) = legend_pure_core_platform::repo::Repo::from_descriptor(&canonical)

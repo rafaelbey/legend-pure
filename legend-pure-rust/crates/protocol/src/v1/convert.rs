@@ -590,6 +590,9 @@ pub fn convert_expression_typed(
         // -- Island grammar: graph fetch → classInstance --
         Expression::Island(island) => convert_island_expression(island),
 
+        // -- Navigation path: `#/Type/p1/p2!alias#` → classInstance("path", { startType, path, name }) --
+        Expression::NavigationPath(nav) => convert_navigation_path(nav),
+
         // -- Unit instance: `5 RomanLength~Pes` → newUnit(unit, value) --
         Expression::UnitInstance(e) => {
             let unit_ref =
@@ -756,6 +759,71 @@ fn convert_column(e: &ast::expression::ColumnBuilderExpr) -> v1::value_spec::Val
         type_name: "colSpec".to_string(),
         value: serde_json::Value::Object(value_map),
         source_information: source_information(&e.source_info),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Navigation path conversion
+// ---------------------------------------------------------------------------
+
+/// Converts a `NavigationPath` into a `classInstance("path", ...)`.
+///
+/// Wire format (mirrors Legend Engine's `NavigationPathComposer`):
+/// ```json
+/// {
+///   "_type": "classInstance",
+///   "type": "path",
+///   "value": {
+///     "startType": "model::Person",
+///     "path": [
+///       { "_type": "propertyPathElement", "property": "name", "parameters": [...] },
+///       ...
+///     ],
+///     "name": "alias"   // optional
+///   }
+/// }
+/// ```
+fn convert_navigation_path(
+    nav: &ast::expression::NavigationPath,
+) -> v1::value_spec::ValueSpecification {
+    let mut value_map = serde_json::Map::new();
+    value_map.insert(
+        "startType".to_string(),
+        serde_json::Value::String(nav.start_type.full_path()),
+    );
+
+    let path_steps: Vec<serde_json::Value> = nav
+        .path
+        .iter()
+        .map(|step| {
+            let params: Vec<serde_json::Value> = step
+                .parameters
+                .iter()
+                .map(|p| {
+                    serde_json::to_value(convert_expression_typed(p))
+                        .unwrap_or(serde_json::Value::Null)
+                })
+                .collect();
+            serde_json::json!({
+                "_type": "propertyPathElement",
+                "property": step.property.to_string(),
+                "parameters": params,
+            })
+        })
+        .collect();
+    value_map.insert("path".to_string(), serde_json::Value::Array(path_steps));
+
+    if let Some(alias) = &nav.name {
+        value_map.insert(
+            "name".to_string(),
+            serde_json::Value::String(alias.to_string()),
+        );
+    }
+
+    v1::value_spec::ValueSpecification::ClassInstance(v1::value_spec::ClassInstance {
+        type_name: "path".to_string(),
+        value: serde_json::Value::Object(value_map),
+        source_information: source_information(&nav.source_info),
     })
 }
 

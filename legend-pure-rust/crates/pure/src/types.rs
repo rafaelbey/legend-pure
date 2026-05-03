@@ -502,6 +502,36 @@ pub enum ExprKind {
         /// Whether the form is plain, func-bearing, or agg-bearing.
         kind: ColSpecLiteralKind,
     },
+
+    // -- Navigation path literal ------------------------------------------
+    /// Navigation path expression: `#/Type/p1/p2(args)/p3!alias#`.
+    ///
+    /// Materialises a `meta::pure::metamodel::path::Path<U,V|m>` instance
+    /// at runtime. The lowering captures:
+    ///   - `start_type` — the start type with type-args bound (e.g.
+    ///     `Firm<Any>`)
+    ///   - `steps` — one entry per `/property[(args)]` segment, with the
+    ///     property *name* (resolved at runtime against the running type
+    ///     to support chain-of-types) and lowered parameter
+    ///     `ValueSpec`s
+    ///   - `name` — optional alias (`!alias`)
+    ///
+    /// Property *resolution* through the chain happens in the runtime
+    /// `evaluate(Path,U)` native (Stage 4) since each step's "running
+    /// type" depends on the previous step's return type, which requires
+    /// walking the model with type-arg substitution. The compiler does
+    /// validate that the *first* step's property exists on the start
+    /// type (a cheap correctness check that catches the most common
+    /// typo without committing to full chain inference).
+    PathLiteral {
+        /// Resolved start type, including type arguments (e.g.
+        /// `Firm<Any>`).
+        start_type: TypeExpr,
+        /// One entry per `/property(args)` segment, in source order.
+        steps: Vec<PathStepLowered>,
+        /// Optional alias suffix from `!alias`.
+        name: Option<SmolStr>,
+    },
 }
 
 /// Discriminator for [`ExprKind::ColSpecLiteral`] /
@@ -526,6 +556,26 @@ pub enum ColSpecLiteralKind {
     /// `~name:f:r` / `~[name1:f1:r1, …]` — init + reduce lambdas
     /// per column. Maps to `AggColSpec` / `AggColSpecArray`.
     Agg,
+}
+
+/// One step in a navigation-path literal: `/property` or `/property(args)`.
+///
+/// Property *resolution* against the running class is deferred to runtime
+/// (Stage 4) so this struct only carries the source-level name plus the
+/// lowered parameter expressions. The runtime walks the chain
+/// `start_type → step[0].return → step[1].return → …`, looking up each
+/// step's property on the previous step's return type with type-arg
+/// substitution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PathStepLowered {
+    /// Property name as it appeared in source (e.g. `"name"`,
+    /// `"nameWithTitle"`).
+    pub property_name: SmolStr,
+    /// Parameters for qualified-property steps. Empty for plain
+    /// property steps.
+    pub parameters: Vec<ValueSpec>,
+    /// Source location for this `/property(...)` segment.
+    pub source_info: SourceInfo,
 }
 
 /// One column in a `RelationLiteral` / `ColSpecArrayLiteral`.

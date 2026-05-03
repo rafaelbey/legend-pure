@@ -93,6 +93,12 @@ pub struct RelationalExtension {
     /// [`crate::processor::ResolvedDatabase`] for the shape and
     /// [`Self::resolved_databases`] for the post-compile accessor.
     resolved_databases: RefCell<HashMap<SmolStr, crate::processor::ResolvedDatabase>>,
+    /// Resolved relational class mappings built during Pass 2b
+    /// (Phase B4). One entry per registered `Class : Relational { ... }`
+    /// body, in registration order. See
+    /// [`crate::processor::ResolvedClassMapping`] and
+    /// [`Self::resolved_class_mappings`].
+    resolved_class_mappings: RefCell<Vec<crate::processor::ResolvedClassMapping>>,
 }
 
 /// One registered database, plus the source file it came from
@@ -148,6 +154,15 @@ impl RelationalExtension {
     #[must_use]
     pub fn resolved_databases(&self) -> HashMap<SmolStr, crate::processor::ResolvedDatabase> {
         self.resolved_databases.borrow().clone()
+    }
+
+    /// Snapshot of the resolved relational class mappings built during
+    /// Pass 2b (Phase B4). One entry per registered class mapping,
+    /// in registration order. Empty until
+    /// [`CompilerExtension::define_bodies`] runs.
+    #[must_use]
+    pub fn resolved_class_mappings(&self) -> Vec<crate::processor::ResolvedClassMapping> {
+        self.resolved_class_mappings.borrow().clone()
     }
 }
 
@@ -249,6 +264,23 @@ impl CompilerExtension for RelationalExtension {
         crate::processor::resolve_op_bodies(&mut resolved, &defs_by_fqn);
         // Phase B3: resolve view body column refs + infer main tables.
         crate::processor::resolve_view_bodies(&mut resolved, &defs_by_fqn);
+        // Phase B4: resolve class-mapping property values.
+        let class_mappings = self.relational_class_mappings.borrow();
+        let mut resolved_cms = self.resolved_class_mappings.borrow_mut();
+        resolved_cms.clear();
+        for reg in class_mappings.iter() {
+            resolved_cms.push(crate::processor::resolve_class_mapping(
+                &reg.body,
+                &reg.mapping_fqn,
+                &reg.class_mapping_id,
+                reg.extends.as_ref(),
+                &resolved,
+                &defs_by_fqn,
+            ));
+        }
+        // Phase B5: inherit main-table / primary-database through the
+        // `extends` chain.
+        crate::processor::apply_extends_inheritance(&mut resolved_cms);
     }
 
     fn validate(&self, ctx: &mut ValidateCtx<'_>) {
@@ -268,6 +300,13 @@ impl CompilerExtension for RelationalExtension {
         // existing tests that build a model without descriptors stay
         // green).
         validate_repo_visibility(&dbs, ctx.model, ctx.errors);
+        // Phase A3' (post-B2): JoinTreeNode parity — chained
+        // `@a > @b > ...` join sequences must share end-tables. Reads
+        // the resolved snapshots from `define_bodies` so it can pull
+        // each Join's distinct table set without re-walking the AST.
+        let resolved = self.resolved_databases.borrow();
+        let resolved_cms = self.resolved_class_mappings.borrow();
+        validate_join_tree_chains(&class_mappings, &resolved, &resolved_cms, ctx.errors);
     }
 }
 
@@ -1190,44 +1229,61 @@ fn validate_class_mapping_join_refs(
         }
     }
 
+    // Phase B7: contextual db for implicit-db join refs flows from
+    // `~mainTable [db]` when present. Scope-wrapped lines override
+    // with the scope's `[db]`.
+    let contextual_db: Option<&legend_pure_parser_ast::annotation::PackageableElementPtr> =
+        reg.body.main_table.as_ref().map(|mt| &mt.db);
+
     // 2. Walk every JoinColWithDbOrConstant + OtherwiseJoin in the
-    //    body, validating only the explicit-db cases.
+    //    body, including implicit-db cases that fall back to the
+    //    contextual db.
     let body = &reg.body;
     for elem in &body.mapping_elements {
-        walk_mapping_element_for_joins(elem, dbs, &reg.class_mapping_id, errors);
+        walk_mapping_element_for_joins(elem, contextual_db, dbs, &reg.class_mapping_id, errors);
     }
     if let Some(lines) = &body.association_mapping {
         for line in lines {
-            walk_single_mapping_line_for_joins(line, dbs, &reg.class_mapping_id, errors);
+            walk_single_mapping_line_for_joins(
+                line,
+                contextual_db,
+                dbs,
+                &reg.class_mapping_id,
+                errors,
+            );
         }
     }
 
-    // 3. ~groupBy / ~primaryKey at the body level.
+    // 3. ~groupBy / ~primaryKey at the body level — use the
+    //    mapping's contextual db.
     if let Some(jcs) = &body.group_by {
         for jc in jcs {
-            walk_join_col_for_joins(jc, dbs, &reg.class_mapping_id, errors);
+            walk_join_col_for_joins(jc, contextual_db, dbs, &reg.class_mapping_id, errors);
         }
     }
     if let Some(jcs) = &body.primary_key {
         for jc in jcs {
-            walk_join_col_for_joins(jc, dbs, &reg.class_mapping_id, errors);
+            walk_join_col_for_joins(jc, contextual_db, dbs, &reg.class_mapping_id, errors);
         }
     }
 }
 
 fn walk_mapping_element_for_joins(
     e: &crate::ast::MappingElement,
+    contextual_db: Option<&legend_pure_parser_ast::annotation::PackageableElementPtr>,
     dbs: &HashMap<SmolStr, RegisteredDatabase>,
     owner: &SmolStr,
     errors: &mut Vec<CompilationError>,
 ) {
     match e {
         crate::ast::MappingElement::Single(line) => {
-            walk_single_mapping_line_for_joins(line, dbs, owner, errors);
+            walk_single_mapping_line_for_joins(line, contextual_db, dbs, owner, errors);
         }
         crate::ast::MappingElement::Scope(s) => {
+            // Scope overrides the contextual db for its lines.
+            let scope_db = Some(&s.db);
             for line in &s.mapping_lines {
-                walk_single_mapping_line_for_joins(line, dbs, owner, errors);
+                walk_single_mapping_line_for_joins(line, scope_db, dbs, owner, errors);
             }
         }
     }
@@ -1235,37 +1291,49 @@ fn walk_mapping_element_for_joins(
 
 fn walk_single_mapping_line_for_joins(
     line: &SingleMappingLine,
+    contextual_db: Option<&legend_pure_parser_ast::annotation::PackageableElementPtr>,
     dbs: &HashMap<SmolStr, RegisteredDatabase>,
     owner: &SmolStr,
     errors: &mut Vec<CompilationError>,
 ) {
     match line {
         SingleMappingLine::Plus(p) => {
-            walk_join_col_for_joins(&p.mapping.value, dbs, owner, errors);
+            walk_join_col_for_joins(&p.mapping.value, contextual_db, dbs, owner, errors);
         }
         SingleMappingLine::NonePlus(np) => match &np.value {
             NonePlusMappingValue::Relational(rm) => {
-                walk_join_col_for_joins(&rm.value, dbs, owner, errors);
+                walk_join_col_for_joins(&rm.value, contextual_db, dbs, owner, errors);
             }
             NonePlusMappingValue::Embedded(em) => {
                 if let Some(jcs) = &em.primary_key {
                     for jc in jcs {
-                        walk_join_col_for_joins(jc, dbs, owner, errors);
+                        walk_join_col_for_joins(jc, contextual_db, dbs, owner, errors);
                     }
                 }
                 for inner in &em.mapping_lines {
-                    walk_single_mapping_line_for_joins(inner, dbs, owner, errors);
+                    walk_single_mapping_line_for_joins(inner, contextual_db, dbs, owner, errors);
                 }
                 if let Some(EmbeddedMappingTrailer::Otherwise(maps)) = &em.trailer {
                     for m in maps {
-                        if let Some(db) = &m.otherwise_join.db {
-                            check_join_sequence_against_db(
+                        match &m.otherwise_join.db {
+                            Some(db) => check_join_sequence_against_db(
                                 &m.otherwise_join.join_sequence,
                                 db,
                                 dbs,
                                 owner,
                                 errors,
-                            );
+                            ),
+                            None => {
+                                if let Some(ctx_db) = contextual_db {
+                                    check_join_sequence_against_db(
+                                        &m.otherwise_join.join_sequence,
+                                        ctx_db,
+                                        dbs,
+                                        owner,
+                                        errors,
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -1276,6 +1344,7 @@ fn walk_single_mapping_line_for_joins(
 
 fn walk_join_col_for_joins(
     jc: &JoinColWithDbOrConstant,
+    contextual_db: Option<&legend_pure_parser_ast::annotation::PackageableElementPtr>,
     dbs: &HashMap<SmolStr, RegisteredDatabase>,
     owner: &SmolStr,
     errors: &mut Vec<CompilationError>,
@@ -1283,12 +1352,16 @@ fn walk_join_col_for_joins(
     let Some(seq) = &jc.join else {
         return;
     };
-    if let Some(db) = &jc.db {
+    // Explicit `[db]` on the joinColWithDbOrConstant takes precedence;
+    // otherwise fall back to the contextual db when one is in scope.
+    let resolved_db = jc.db.as_ref().or(contextual_db);
+    if let Some(db) = resolved_db {
         check_join_sequence_against_db(seq, db, dbs, owner, errors);
     } else {
-        // Per-segment fallback: validate any OneJoinRight with its
-        // own explicit `[db]` qualifier even if the head is
-        // contextual.
+        // No explicit AND no contextual db — validate per-segment
+        // explicit `[db]`s only. Without a contextual db, the
+        // implicit-db case stays unresolved (a future post-processor
+        // pass could pick this up).
         for r in &seq.right {
             if let Some(db) = &r.db {
                 check_one_join_against_db(&r.join, db, dbs, owner, errors);
@@ -1668,4 +1741,363 @@ fn walk_join_sequence_for_db_refs(
             check_db_ref_visibility(db, use_site, visible, databases, errors);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase A3' — JoinTreeNodeValidation parity
+// ---------------------------------------------------------------------------
+
+/// Validate that every chained `@a > @b > ...` join sequence in a
+/// class-mapping body shares end-tables. Mirrors Java's
+/// [`JoinTreeNodeValidation.validateJoinTreeNode`][1]:
+///
+/// - Each `Join`'s op-body references some table set (typically two
+///   tables); we extract that set from B2's resolved op-bodies.
+/// - Walk the chain starting from the contextual source table
+///   (`~mainTable` / `scope` table). For each `@joinName`, the join
+///   must contain the current source table in its set; we then
+///   "follow" to the OTHER table in the set, which becomes the new
+///   source for the next iteration.
+/// - When a chain ends with `| <op_column>`, the chain's final
+///   source table must match the column's alias.
+///
+/// Errors as `UnresolvedElement` for "join doesn't contain source"
+/// and `InvalidProperty` for "join doesn't connect to target". The
+/// V4 + B2 paths already report missing-join / missing-table cases;
+/// this validator runs after those and assumes the resolved data is
+/// consistent.
+///
+/// [1]: legend-pure-store/legend-pure-store-relational/.../v1/validator/JoinTreeNodeValidation.java
+fn validate_join_tree_chains(
+    class_mappings: &[RegisteredRelationalClassMapping],
+    resolved: &HashMap<SmolStr, crate::processor::ResolvedDatabase>,
+    _resolved_cms: &[crate::processor::ResolvedClassMapping],
+    errors: &mut Vec<CompilationError>,
+) {
+    for reg in class_mappings {
+        // Class mapping's contextual main table comes from `~mainTable`.
+        // Without one, we can't anchor the chain — skip (the V4 / E
+        // validators surface the missing-context as needed).
+        let Some(main_table) = &reg.body.main_table else {
+            continue;
+        };
+        let source_db_fqn = packageable_fqn(&main_table.db);
+        let source_table = main_table.scope.table.value.clone();
+
+        let owner = SmolStr::new(format!("Class mapping '{}'", reg.class_mapping_id.as_str()));
+
+        // Walk every JoinColWithDbOrConstant + Otherwise in the body.
+        for elem in &reg.body.mapping_elements {
+            walk_jc_for_chain(
+                elem,
+                &source_db_fqn,
+                &source_table,
+                resolved,
+                &owner,
+                errors,
+            );
+        }
+        if let Some(lines) = &reg.body.association_mapping {
+            for line in lines {
+                walk_line_for_chain(
+                    line,
+                    &source_db_fqn,
+                    &source_table,
+                    resolved,
+                    &owner,
+                    errors,
+                );
+            }
+        }
+    }
+}
+
+fn walk_jc_for_chain(
+    e: &crate::ast::MappingElement,
+    source_db_fqn: &SmolStr,
+    source_table: &SmolStr,
+    resolved: &HashMap<SmolStr, crate::processor::ResolvedDatabase>,
+    owner: &SmolStr,
+    errors: &mut Vec<CompilationError>,
+) {
+    match e {
+        crate::ast::MappingElement::Single(line) => {
+            walk_line_for_chain(line, source_db_fqn, source_table, resolved, owner, errors);
+        }
+        crate::ast::MappingElement::Scope(s) => {
+            // Scope optionally overrides the source via simpleScopeInfo.
+            let scope_db_fqn = packageable_fqn(&s.db);
+            let scope_source_table = s
+                .scope
+                .as_ref()
+                .map(|info| info.table.value.clone())
+                .unwrap_or_else(|| source_table.clone());
+            for line in &s.mapping_lines {
+                walk_line_for_chain(
+                    line,
+                    &scope_db_fqn,
+                    &scope_source_table,
+                    resolved,
+                    owner,
+                    errors,
+                );
+            }
+        }
+    }
+}
+
+fn walk_line_for_chain(
+    line: &SingleMappingLine,
+    source_db_fqn: &SmolStr,
+    source_table: &SmolStr,
+    resolved: &HashMap<SmolStr, crate::processor::ResolvedDatabase>,
+    owner: &SmolStr,
+    errors: &mut Vec<CompilationError>,
+) {
+    match line {
+        SingleMappingLine::Plus(p) => {
+            check_chain_in_join_col(
+                &p.mapping.value,
+                source_db_fqn,
+                source_table,
+                resolved,
+                owner,
+                errors,
+            );
+        }
+        SingleMappingLine::NonePlus(np) => match &np.value {
+            NonePlusMappingValue::Relational(rm) => {
+                check_chain_in_join_col(
+                    &rm.value,
+                    source_db_fqn,
+                    source_table,
+                    resolved,
+                    owner,
+                    errors,
+                );
+            }
+            NonePlusMappingValue::Embedded(em) => {
+                if let Some(jcs) = &em.primary_key {
+                    for jc in jcs {
+                        check_chain_in_join_col(
+                            jc,
+                            source_db_fqn,
+                            source_table,
+                            resolved,
+                            owner,
+                            errors,
+                        );
+                    }
+                }
+                for inner in &em.mapping_lines {
+                    walk_line_for_chain(
+                        inner,
+                        source_db_fqn,
+                        source_table,
+                        resolved,
+                        owner,
+                        errors,
+                    );
+                }
+                if let Some(EmbeddedMappingTrailer::Otherwise(maps)) = &em.trailer {
+                    for m in maps {
+                        let oj_db = m
+                            .otherwise_join
+                            .db
+                            .as_ref()
+                            .map(packageable_fqn)
+                            .unwrap_or_else(|| source_db_fqn.clone());
+                        check_chain_in_sequence(
+                            &m.otherwise_join.join_sequence,
+                            &oj_db,
+                            source_table,
+                            None,
+                            resolved,
+                            owner,
+                            errors,
+                        );
+                    }
+                }
+            }
+        },
+    }
+}
+
+fn check_chain_in_join_col(
+    jc: &JoinColWithDbOrConstant,
+    source_db_fqn: &SmolStr,
+    source_table: &SmolStr,
+    resolved: &HashMap<SmolStr, crate::processor::ResolvedDatabase>,
+    owner: &SmolStr,
+    errors: &mut Vec<CompilationError>,
+) {
+    let Some(seq) = &jc.join else {
+        return;
+    };
+    let chain_db = jc
+        .db
+        .as_ref()
+        .map(packageable_fqn)
+        .unwrap_or_else(|| source_db_fqn.clone());
+    // Trailing column after `|` — its alias is the chain's claimed
+    // target table.
+    let target_alias = jc.column.as_ref().and_then(|c| match c {
+        OpColumn::Aliased { alias, .. } => Some(alias.value.clone()),
+        OpColumn::Target { .. } => None,
+    });
+    check_chain_in_sequence(
+        seq,
+        &chain_db,
+        source_table,
+        target_alias.as_ref(),
+        resolved,
+        owner,
+        errors,
+    );
+}
+
+fn check_chain_in_sequence(
+    seq: &JoinSequence,
+    chain_db: &SmolStr,
+    source_table: &SmolStr,
+    target_table: Option<&SmolStr>,
+    resolved: &HashMap<SmolStr, crate::processor::ResolvedDatabase>,
+    owner: &SmolStr,
+    errors: &mut Vec<CompilationError>,
+) {
+    let mut current_source = source_table.clone();
+    let mut current_db = chain_db.clone();
+
+    let head = follow_join(
+        &seq.head,
+        &current_db,
+        &current_source,
+        resolved,
+        owner,
+        errors,
+    );
+    if let Some(next) = head {
+        current_source = next;
+    } else {
+        // Couldn't follow — error already pushed; abort the rest of
+        // the chain so we don't cascade misleading messages.
+        return;
+    }
+
+    for r in &seq.right {
+        if let Some(rdb) = &r.db {
+            current_db = packageable_fqn(rdb);
+        }
+        let next = follow_join(
+            &r.join,
+            &current_db,
+            &current_source,
+            resolved,
+            owner,
+            errors,
+        );
+        if let Some(next) = next {
+            current_source = next;
+        } else {
+            return;
+        }
+    }
+
+    if let Some(target) = target_table {
+        if &current_source != target {
+            errors.push(CompilationError {
+                message: format!(
+                    "{owner}: join chain ends at table '{current_source}' \
+                     but the trailing column references table '{target}'"
+                ),
+                source_info: seq.source_info.clone(),
+                kind: CompilationErrorKind::InvalidAssociation {
+                    name: owner.clone(),
+                    reason: SmolStr::new(format!(
+                        "chain ends at '{current_source}', trailing column at '{target}'"
+                    )),
+                },
+            });
+        }
+    }
+}
+
+/// Look up `@join`'s table set in the resolved database snapshot;
+/// if `source_table` is in the set, return the OTHER table in the
+/// pair. Reports an `UnresolvedElement` when the join's table set
+/// doesn't contain `source_table`.
+fn follow_join(
+    one_join: &OneJoin,
+    db_fqn: &SmolStr,
+    source_table: &SmolStr,
+    resolved: &HashMap<SmolStr, crate::processor::ResolvedDatabase>,
+    owner: &SmolStr,
+    errors: &mut Vec<CompilationError>,
+) -> Option<SmolStr> {
+    let join_tables = resolve_join_tables(db_fqn, &one_join.name.value, resolved)?;
+    if !join_tables.contains(source_table) {
+        // Skip when the join is unknown or has < 2 distinct tables —
+        // those cases are surfaced by validator E / V4. The chain
+        // walker only fires when the join exists but doesn't include
+        // the source.
+        if join_tables.len() >= 2 {
+            errors.push(CompilationError {
+                message: format!(
+                    "{owner}: join @{} does not contain source table '{}'",
+                    one_join.name.value, source_table
+                ),
+                source_info: one_join.source_info.clone(),
+                kind: CompilationErrorKind::UnresolvedElement {
+                    path: SmolStr::new(format!("join @{}", one_join.name.value)),
+                },
+            });
+        }
+        return None;
+    }
+    // Return the OTHER table.
+    join_tables.into_iter().find(|t| t != source_table)
+}
+
+/// Distinct table names referenced by a Join's resolved op-body,
+/// walking the include closure. Returns `None` when the join isn't
+/// found in any visible database.
+fn resolve_join_tables(
+    db_fqn: &SmolStr,
+    join_name: &SmolStr,
+    resolved: &HashMap<SmolStr, crate::processor::ResolvedDatabase>,
+) -> Option<Vec<SmolStr>> {
+    let mut visited: HashSet<SmolStr> = HashSet::new();
+    walk_resolve_join_tables(db_fqn, join_name, resolved, &mut visited)
+}
+
+fn walk_resolve_join_tables(
+    db_fqn: &SmolStr,
+    join_name: &SmolStr,
+    resolved: &HashMap<SmolStr, crate::processor::ResolvedDatabase>,
+    visited: &mut HashSet<SmolStr>,
+) -> Option<Vec<SmolStr>> {
+    if !visited.insert(db_fqn.clone()) {
+        return None;
+    }
+    let snapshot = resolved.get(db_fqn)?;
+    if let Some(body) = snapshot
+        .join_bodies
+        .iter()
+        .find(|b| &b.element_name == join_name)
+    {
+        let mut tables: Vec<SmolStr> = Vec::new();
+        let mut seen: HashSet<SmolStr> = HashSet::new();
+        for binding in &body.bindings {
+            if !binding.unresolved_table && seen.insert(binding.table_name.clone()) {
+                tables.push(binding.table_name.clone());
+            }
+        }
+        return Some(tables);
+    }
+    for include_fqn in &snapshot.include_fqns {
+        if let Some(tables) = walk_resolve_join_tables(include_fqn, join_name, resolved, visited) {
+            return Some(tables);
+        }
+    }
+    None
 }
