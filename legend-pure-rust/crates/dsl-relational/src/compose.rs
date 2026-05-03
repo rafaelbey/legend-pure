@@ -345,3 +345,321 @@ fn write_optional_db(out: &mut String, db: Option<&PackageableElementPtr>) {
     out.push_str(db.name.as_str());
     out.push(']');
 }
+
+// ===========================================================================
+// Stage 5: class-mapping body composer
+// ===========================================================================
+
+use crate::ast::{
+    FilterMappingBlock, FilterMappingJoinSequence, JoinColWithDbOrConstant, JoinSequence,
+    LocalMappingProperty, MainTableBlock, MappingElement, NonePlusMappingLine, OneJoin,
+    OneJoinRight, PlusMappingLine, RelationalClassMappingBody, RelationalMapping, ScopedMapping,
+    SimpleScopeInfo, SingleMappingLine, Transformer,
+};
+
+/// Round-trip the body produced by
+/// `RelationalClassMappingBodyParser::parse`. Output replays the
+/// declared headers (`~filter` / `~distinct` / `~groupBy` /
+/// `~primaryKey` / `~mainTable`) in canonical order, even when the
+/// source declared them in a different order — Java's grammar
+/// requires the canonical order, so this normalises lazy fixtures.
+pub fn write_relational_class_mapping_body(out: &mut String, body: &RelationalClassMappingBody) {
+    out.push('{');
+    let mut wrote_header = false;
+    if let Some(filter) = &body.filter {
+        if wrote_header {
+            out.push(' ');
+        }
+        write_filter_mapping_block(out, filter);
+        wrote_header = true;
+    }
+    if body.distinct {
+        if wrote_header {
+            out.push(' ');
+        }
+        out.push_str("~distinct");
+        wrote_header = true;
+    }
+    if let Some(group_by) = &body.group_by {
+        if wrote_header {
+            out.push(' ');
+        }
+        out.push_str("~groupBy(");
+        for (i, jc) in group_by.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            write_join_col_with_db_or_constant(out, jc);
+        }
+        out.push(')');
+        wrote_header = true;
+    }
+    if let Some(primary_key) = &body.primary_key {
+        if wrote_header {
+            out.push(' ');
+        }
+        out.push_str("~primaryKey(");
+        for (i, jc) in primary_key.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            write_join_col_with_db_or_constant(out, jc);
+        }
+        out.push(')');
+        wrote_header = true;
+    }
+    if let Some(main_table) = &body.main_table {
+        if wrote_header {
+            out.push(' ');
+        }
+        write_main_table_block(out, main_table);
+        wrote_header = true;
+    }
+    if !body.mapping_elements.is_empty() {
+        if wrote_header {
+            out.push(' ');
+        }
+        out.push('(');
+        for (i, e) in body.mapping_elements.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            write_mapping_element(out, e);
+        }
+        out.push(')');
+    }
+    out.push('}');
+}
+
+fn write_filter_mapping_block(out: &mut String, b: &FilterMappingBlock) {
+    out.push_str("~filter ");
+    write_db_brackets(out, &b.db);
+    if let Some(seq) = &b.join_sequence {
+        write_filter_mapping_join_sequence(out, seq);
+    }
+    out.push_str(b.filter_name.value.as_str());
+}
+
+fn write_filter_mapping_join_sequence(out: &mut String, seq: &FilterMappingJoinSequence) {
+    if let Some(g) = &seq.group_id {
+        out.push('(');
+        out.push_str(g.value.as_str());
+        out.push(')');
+    }
+    write_one_join(out, &seq.head);
+    for r in &seq.right {
+        write_one_join_right(out, r);
+    }
+    out.push_str(" | ");
+    write_db_brackets(out, &seq.second_db);
+}
+
+fn write_main_table_block(out: &mut String, b: &MainTableBlock) {
+    out.push_str("~mainTable ");
+    write_db_brackets(out, &b.db);
+    write_simple_scope_info(out, &b.scope);
+}
+
+fn write_simple_scope_info(out: &mut String, s: &SimpleScopeInfo) {
+    out.push_str(s.table.value.as_str());
+    for seg in &s.scope {
+        out.push('.');
+        out.push_str(seg.value.as_str());
+    }
+}
+
+fn write_join_col_with_db_or_constant(out: &mut String, jc: &JoinColWithDbOrConstant) {
+    if let Some(db) = &jc.db {
+        write_db_brackets(out, db);
+    }
+    if let Some(seq) = &jc.join {
+        write_join_sequence(out, seq);
+        if let Some(col) = &jc.column {
+            out.push_str(" | ");
+            write_op_column_inline(out, col);
+        }
+    } else if let Some(col) = &jc.column {
+        write_op_column_inline(out, col);
+    } else if let Some(lit) = &jc.literal {
+        write_op_literal_inline(out, lit);
+    }
+}
+
+fn write_join_sequence(out: &mut String, seq: &JoinSequence) {
+    write_one_join(out, &seq.head);
+    for r in &seq.right {
+        write_one_join_right(out, r);
+    }
+}
+
+fn write_one_join(out: &mut String, j: &OneJoin) {
+    out.push('@');
+    out.push_str(j.name.value.as_str());
+}
+
+fn write_one_join_right(out: &mut String, r: &OneJoinRight) {
+    out.push_str(" > ");
+    if let Some(g) = &r.group_id {
+        out.push('(');
+        out.push_str(g.value.as_str());
+        out.push_str(") ");
+    }
+    if let Some(db) = &r.db {
+        write_db_brackets(out, db);
+    }
+    write_one_join(out, &r.join);
+}
+
+fn write_op_column_inline(out: &mut String, c: &crate::ast::OpColumn) {
+    use crate::ast::OpColumn;
+    match c {
+        OpColumn::Target {
+            column,
+            primary_key,
+            ..
+        } => {
+            out.push_str("{target}.");
+            out.push_str(column.value.as_str());
+            if *primary_key {
+                out.push_str(" PRIMARY KEY");
+            }
+        }
+        OpColumn::Aliased {
+            db,
+            alias,
+            scope,
+            primary_key,
+            ..
+        } => {
+            if let Some(d) = db {
+                write_db_brackets(out, d);
+            }
+            out.push_str(alias.value.as_str());
+            for s in scope {
+                out.push('.');
+                out.push_str(s.value.as_str());
+            }
+            if *primary_key {
+                out.push_str(" PRIMARY KEY");
+            }
+        }
+    }
+}
+
+fn write_op_literal_inline(out: &mut String, l: &crate::ast::OpLiteral) {
+    use crate::ast::OpLiteral;
+    match l {
+        OpLiteral::String { value, .. } => {
+            out.push('\'');
+            out.push_str(value.as_str());
+            out.push('\'');
+        }
+        OpLiteral::Integer { value, .. } => {
+            let _ = std::fmt::Write::write_fmt(out, format_args!("{value}"));
+        }
+        OpLiteral::Float { value, .. } => {
+            let f = format!("{value}");
+            if f.contains('.') || f.contains('e') {
+                out.push_str(&f);
+            } else {
+                out.push_str(&f);
+                out.push_str(".0");
+            }
+        }
+    }
+}
+
+fn write_db_brackets(out: &mut String, db: &PackageableElementPtr) {
+    out.push('[');
+    if let Some(pkg) = &db.package {
+        for seg in pkg.segments() {
+            out.push_str(seg.as_str());
+            out.push_str("::");
+        }
+    }
+    out.push_str(db.name.as_str());
+    out.push(']');
+}
+
+fn write_mapping_element(out: &mut String, e: &MappingElement) {
+    match e {
+        MappingElement::Single(line) => write_single_mapping_line(out, line),
+        MappingElement::Scope(s) => write_scope(out, s),
+    }
+}
+
+fn write_single_mapping_line(out: &mut String, line: &SingleMappingLine) {
+    match line {
+        SingleMappingLine::NonePlus(np) => write_none_plus_line(out, np),
+        SingleMappingLine::Plus(p) => write_plus_line(out, p),
+    }
+}
+
+fn write_none_plus_line(out: &mut String, line: &NonePlusMappingLine) {
+    out.push_str(line.property.value.as_str());
+    if let Some(src) = &line.source_id {
+        out.push('[');
+        out.push_str(src.value.as_str());
+        if let Some(t) = &line.target_id {
+            out.push_str(", ");
+            out.push_str(t.value.as_str());
+        }
+        out.push(']');
+    }
+    write_relational_mapping(out, &line.mapping);
+}
+
+fn write_plus_line(out: &mut String, line: &PlusMappingLine) {
+    out.push_str("+ ");
+    out.push_str(line.property.value.as_str());
+    write_local_mapping_property(out, &line.local);
+    write_relational_mapping(out, &line.mapping);
+}
+
+fn write_local_mapping_property(out: &mut String, lp: &LocalMappingProperty) {
+    out.push_str(" : ");
+    if let Some(pkg) = &lp.type_path.package {
+        for seg in pkg.segments() {
+            out.push_str(seg.as_str());
+            out.push_str("::");
+        }
+    }
+    out.push_str(lp.type_path.name.as_str());
+    out.push('[');
+    out.push_str(lp.mult_lower.value.as_str());
+    if let Some(u) = &lp.mult_upper {
+        out.push_str("..");
+        out.push_str(u.value.as_str());
+    }
+    out.push(']');
+}
+
+fn write_relational_mapping(out: &mut String, m: &RelationalMapping) {
+    out.push_str(" : ");
+    if let Some(t) = &m.transformer {
+        write_transformer(out, t);
+    }
+    write_join_col_with_db_or_constant(out, &m.value);
+}
+
+fn write_transformer(out: &mut String, t: &Transformer) {
+    out.push_str("EnumerationMapping ");
+    out.push_str(t.enumeration_mapping.value.as_str());
+    out.push_str(" : ");
+}
+
+fn write_scope(out: &mut String, s: &ScopedMapping) {
+    out.push_str("scope(");
+    write_db_brackets(out, &s.db);
+    if let Some(scope) = &s.scope {
+        write_simple_scope_info(out, scope);
+    }
+    out.push_str(") (");
+    for (i, line) in s.mapping_lines.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        write_single_mapping_line(out, line);
+    }
+    out.push(')');
+}
