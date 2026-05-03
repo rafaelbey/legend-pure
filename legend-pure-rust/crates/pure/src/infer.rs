@@ -355,40 +355,52 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                 },
                 multiplicity: Multiplicity::PureOne,
             }),
-        ExprKind::ColSpecArrayLiteral { .. } => ctx
-            .model
-            .resolve_by_path(&[
-                smol_str::SmolStr::new("meta"),
-                smol_str::SmolStr::new("pure"),
-                smol_str::SmolStr::new("metamodel"),
-                smol_str::SmolStr::new("relation"),
-                smol_str::SmolStr::new("ColSpecArray"),
-            ])
-            .map(|element| ResolvedType {
-                type_expr: TypeExpr::Named {
-                    element,
-                    type_arguments: Vec::new(),
-                    value_arguments: Vec::new(),
-                },
-                multiplicity: Multiplicity::PureOne,
-            }),
-        ExprKind::ColSpecLiteral { .. } => ctx
-            .model
-            .resolve_by_path(&[
-                smol_str::SmolStr::new("meta"),
-                smol_str::SmolStr::new("pure"),
-                smol_str::SmolStr::new("metamodel"),
-                smol_str::SmolStr::new("relation"),
-                smol_str::SmolStr::new("ColSpec"),
-            ])
-            .map(|element| ResolvedType {
-                type_expr: TypeExpr::Named {
-                    element,
-                    type_arguments: Vec::new(),
-                    value_arguments: Vec::new(),
-                },
-                multiplicity: Multiplicity::PureOne,
-            }),
+        ExprKind::ColSpecArrayLiteral { kind, .. } => {
+            let class_name = match kind {
+                crate::types::ColSpecLiteralKind::Plain => "ColSpecArray",
+                crate::types::ColSpecLiteralKind::Func => "FuncColSpecArray",
+                crate::types::ColSpecLiteralKind::Agg => "AggColSpecArray",
+            };
+            ctx.model
+                .resolve_by_path(&[
+                    smol_str::SmolStr::new("meta"),
+                    smol_str::SmolStr::new("pure"),
+                    smol_str::SmolStr::new("metamodel"),
+                    smol_str::SmolStr::new("relation"),
+                    smol_str::SmolStr::new(class_name),
+                ])
+                .map(|element| ResolvedType {
+                    type_expr: TypeExpr::Named {
+                        element,
+                        type_arguments: Vec::new(),
+                        value_arguments: Vec::new(),
+                    },
+                    multiplicity: Multiplicity::PureOne,
+                })
+        }
+        ExprKind::ColSpecLiteral { kind, .. } => {
+            let class_name = match kind {
+                crate::types::ColSpecLiteralKind::Plain => "ColSpec",
+                crate::types::ColSpecLiteralKind::Func => "FuncColSpec",
+                crate::types::ColSpecLiteralKind::Agg => "AggColSpec",
+            };
+            ctx.model
+                .resolve_by_path(&[
+                    smol_str::SmolStr::new("meta"),
+                    smol_str::SmolStr::new("pure"),
+                    smol_str::SmolStr::new("metamodel"),
+                    smol_str::SmolStr::new("relation"),
+                    smol_str::SmolStr::new(class_name),
+                ])
+                .map(|element| ResolvedType {
+                    type_expr: TypeExpr::Named {
+                        element,
+                        type_arguments: Vec::new(),
+                        value_arguments: Vec::new(),
+                    },
+                    multiplicity: Multiplicity::PureOne,
+                })
+        }
     };
 
     set_and_return(expr, result)

@@ -1083,24 +1083,38 @@ fn infer_type_from_valuespec(
             // vs `dynamicNew(GenericType[1], ...)`.
             crate::bootstrap::metatype_of(model, model.get_element(*element))
         }
-        // `~name` plain form lowers to `ColSpecLiteral` only when the
-        // column has no type-spec and no lambda; surfacing its
-        // classifier narrows e.g. `ascending(column:ColSpec<T>[1])` from
-        // its previous None-arg permissive behaviour. The other
-        // relation-grammar literals (`ColSpecArrayLiteral`,
-        // `RelationLiteral`) deliberately fall through to `None` —
-        // they cover too many distinct platform classifier shapes
-        // (`ColSpecArray`, `FuncColSpec*`, `AggColSpec*`, `RelationType`)
-        // that the lowerer doesn't yet distinguish, so surfacing one
-        // of them indiscriminately would mis-narrow the lambda-bearing
-        // forms.
-        ExprKind::ColSpecLiteral { .. } => model.resolve_by_path(&[
-            SmolStr::new("meta"),
-            SmolStr::new("pure"),
-            SmolStr::new("metamodel"),
-            SmolStr::new("relation"),
-            SmolStr::new("ColSpec"),
-        ]),
+        // Relation-grammar column-spec literals: surface the
+        // discriminator-driven classifier so overload narrowing on
+        // `ColSpec<T>[1]` / `FuncColSpec<…,T>[1]` / `AggColSpec<…,T>[1]`
+        // (and their array variants) can dispatch correctly.
+        ExprKind::ColSpecLiteral { kind, .. } => {
+            let class_name = match kind {
+                crate::types::ColSpecLiteralKind::Plain => "ColSpec",
+                crate::types::ColSpecLiteralKind::Func => "FuncColSpec",
+                crate::types::ColSpecLiteralKind::Agg => "AggColSpec",
+            };
+            model.resolve_by_path(&[
+                SmolStr::new("meta"),
+                SmolStr::new("pure"),
+                SmolStr::new("metamodel"),
+                SmolStr::new("relation"),
+                SmolStr::new(class_name),
+            ])
+        }
+        ExprKind::ColSpecArrayLiteral { kind, .. } => {
+            let class_name = match kind {
+                crate::types::ColSpecLiteralKind::Plain => "ColSpecArray",
+                crate::types::ColSpecLiteralKind::Func => "FuncColSpecArray",
+                crate::types::ColSpecLiteralKind::Agg => "AggColSpecArray",
+            };
+            model.resolve_by_path(&[
+                SmolStr::new("meta"),
+                SmolStr::new("pure"),
+                SmolStr::new("metamodel"),
+                SmolStr::new("relation"),
+                SmolStr::new(class_name),
+            ])
+        }
         // PropertyCall / QualifiedPropertyCall arms live above — property
         // invocation is handled before the FunctionCall arm.
         _ => None,
@@ -1893,6 +1907,25 @@ pub fn is_multiplicity_compatible(
         // Unknown — assume compatible
         return true;
     };
+
+    // Unbound multiplicity variable on the arg (e.g. PCT tests typed
+    // `<T|m>` flow `m` through the result of `f->eval(...)`). The
+    // narrower can't decide subset-of without binding `m`, so treat
+    // it as permissive — same logic the type-side uses for
+    // `TypeExpr::Generic` / `Unresolved`. Otherwise Variable's
+    // `(0, MAX)` bound spuriously fails subset checks against
+    // `PureOne` / `ZeroOrOne` params, eliminating every candidate
+    // and triggering the empty-fallback that returns the original
+    // candidate set unchanged → spurious `Ambiguous function call`.
+    if matches!(am, crate::types::Multiplicity::Variable(_)) {
+        return true;
+    }
+
+    // Symmetric — same rule for an unbound param multiplicity (e.g.
+    // a generic signature with `T[m]`).
+    if matches!(param_mult, crate::types::Multiplicity::Variable(_)) {
+        return true;
+    }
 
     // Check if arg's range is a subset of param's range
     let (arg_lo, arg_hi) = mult_bounds(am);

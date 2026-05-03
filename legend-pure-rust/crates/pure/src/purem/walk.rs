@@ -307,13 +307,19 @@ fn walk_expr_kind(kind: &mut ExprKind, visit: &mut dyn FnMut(&mut ElementId)) {
         ExprKind::PackageableElementRef { element } => {
             visit(element);
         }
-        ExprKind::RelationLiteral { columns } | ExprKind::ColSpecArrayLiteral { columns } => {
+        ExprKind::RelationLiteral { columns } => {
             for col in columns {
                 visit(&mut col.type_element);
                 walk_multiplicity(&mut col.multiplicity, visit);
             }
         }
-        ExprKind::ColSpecLiteral { column } => {
+        ExprKind::ColSpecArrayLiteral { columns, .. } => {
+            for col in columns {
+                visit(&mut col.type_element);
+                walk_multiplicity(&mut col.multiplicity, visit);
+            }
+        }
+        ExprKind::ColSpecLiteral { column, .. } => {
             visit(&mut column.type_element);
             walk_multiplicity(&mut column.multiplicity, visit);
         }

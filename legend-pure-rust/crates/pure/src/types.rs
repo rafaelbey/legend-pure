@@ -471,29 +471,61 @@ pub enum ExprKind {
         /// Column triples in source order.
         columns: Vec<RelationColumnLowered>,
     },
-    /// `~[name:Type[mult], …]` — `ColSpecArray` literal. Materialises a
-    /// `meta::pure::metamodel::relation::ColSpecArray` heap object whose
-    /// `names` slot lists the column names and whose `classifierGenericType`
-    /// chains down to a `RelationType` carrying full `Column` metadata
-    /// (per Java `ColSpecArrayInstance.classifierGenericType
-    /// .typeArguments[0].rawType._columns()`).
+    /// `~[…]`-array column-spec literal — `~[name1, …]`,
+    /// `~[name1:f1, …]`, or `~[name1:f1:r1, …]` per the
+    /// [`ColSpecLiteralKind`] discriminator.
+    ///
+    /// Mirrors the platform's
+    /// [`colSpecArray`](https://example.invalid/colSpecArray) /
+    /// `funcColSpecArray` / `aggColSpecArray` grammar functions
+    /// (`PCT.grammarCharacters='~[,]'` / `'~[:,:]'` /
+    /// `'~[::,::]'`). The discriminator drives both compile-time
+    /// type inference (`ColSpecArray` vs `FuncColSpecArray` vs
+    /// `AggColSpecArray`) and downstream overload narrowing.
     ColSpecArrayLiteral {
         /// Column triples in source order.
         columns: Vec<RelationColumnLowered>,
+        /// Whether the array is plain, func-bearing, or agg-bearing.
+        kind: ColSpecLiteralKind,
     },
-    /// `~name` / `~name:Type[mult]` — single-column `ColSpec` literal.
+    /// `~name` single-column literal — plain name, name+lambda
+    /// (init function), or name+init+reduce per [`ColSpecLiteralKind`].
     ///
     /// Mirrors the platform's
-    /// `meta::pure::functions::relation::colSpec(s:String[1], cl:T[1]):ColSpec<T>[1]`
-    /// shape (see its `PCT.grammarCharacters='~'` annotation): the
-    /// source form `~name` is the canonical way to construct a
-    /// `ColSpec<T>`. The Rust lowerer captures the column inline so
-    /// the runtime allocator can materialise the `ColSpec` heap object
-    /// without re-resolving names.
+    /// `meta::pure::functions::relation::colSpec(s,cl):ColSpec<T>[1]`,
+    /// `funcColSpec(f,s,cl):FuncColSpec<…,T>[1]`, and
+    /// `aggColSpec(map,reduce,s,cl):AggColSpec<…,T>[1]` grammar
+    /// functions (`PCT.grammarCharacters='~'` / `'~:'` / `'~::'`).
     ColSpecLiteral {
         /// The single column triple captured at lowering.
         column: RelationColumnLowered,
+        /// Whether the form is plain, func-bearing, or agg-bearing.
+        kind: ColSpecLiteralKind,
     },
+}
+
+/// Discriminator for [`ExprKind::ColSpecLiteral`] /
+/// [`ExprKind::ColSpecArrayLiteral`] — which platform classifier the
+/// lowered form maps to.
+///
+/// The lambda payload that distinguishes `Func` / `Agg` from `Plain`
+/// is preserved on the AST `ColumnSpec` rather than threaded through
+/// here — overload narrowing only needs the outer classifier
+/// (`ColSpec` vs `FuncColSpec` vs `AggColSpec`), and the runtime
+/// allocator can re-walk the AST shape if it ever materialises the
+/// lambda-bearing heap forms (today they fall back to the plain
+/// `ColSpec` / `ColSpecArray` allocation).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ColSpecLiteralKind {
+    /// `~name` / `~[name1, …]` — name(s) only. Maps to
+    /// `ColSpec` / `ColSpecArray`.
+    Plain,
+    /// `~name:f` / `~[name1:f1, …]` — init lambda per column.
+    /// Maps to `FuncColSpec` / `FuncColSpecArray`.
+    Func,
+    /// `~name:f:r` / `~[name1:f1:r1, …]` — init + reduce lambdas
+    /// per column. Maps to `AggColSpec` / `AggColSpecArray`.
+    Agg,
 }
 
 /// One column in a `RelationLiteral` / `ColSpecArrayLiteral`.
