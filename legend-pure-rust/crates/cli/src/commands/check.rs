@@ -31,12 +31,25 @@
 //! legend check --show-source src/main/pure
 //! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use owo_colors::OwoColorize;
 
 use crate::diagnostics::{self, CliError};
 use crate::discovery;
+
+/// Output format for `legend check`.
+#[derive(Default, Clone, Copy, clap::ValueEnum)]
+pub enum CheckFormat {
+    /// Human-readable terminal output (default).
+    #[default]
+    Pretty,
+    /// One JSON object per line (NDJSON), suitable for editor / CI
+    /// integrations. Each line is the serialized form of
+    /// [`legend_pure_parser_parser::error::ParseError`] augmented with
+    /// the file path and a stable severity tag.
+    Json,
+}
 
 /// Arguments for the `legend check` command.
 #[derive(clap::Args)]
@@ -47,6 +60,12 @@ pub struct CheckArgs {
     /// Show source code snippets for errors with line numbers and carets.
     #[arg(long)]
     pub show_source: bool,
+
+    /// Output format. `pretty` writes coloured human output to stderr;
+    /// `json` writes one diagnostic JSON object per line to stdout (NDJSON)
+    /// with a final summary object on the last line.
+    #[arg(long, value_enum, default_value_t = CheckFormat::Pretty)]
+    pub format: CheckFormat,
 }
 
 /// Execute the `legend check` command.
@@ -58,11 +77,14 @@ pub fn run(args: CheckArgs) -> Result<(), CliError> {
         return Err(CliError::NoFilesFound);
     }
 
-    eprintln!(
-        "{} {} .pure file(s)...",
-        "Checking".cyan().bold(),
-        files.len()
-    );
+    let json_mode = matches!(args.format, CheckFormat::Json);
+    if !json_mode {
+        eprintln!(
+            "{} {} .pure file(s)...",
+            "Checking".cyan().bold(),
+            files.len()
+        );
+    }
 
     // -- Load + parse all files in parallel --
     let inputs: Vec<_> = files
@@ -83,36 +105,44 @@ pub fn run(args: CheckArgs) -> Result<(), CliError> {
         match output.outcome {
             legend_pure_parser_parser::ParseOutcome::Success(source_file) => {
                 let count = source_file.element_count();
-                eprintln!(
-                    "  {} {} ({} element{})",
-                    "✓".green(),
-                    path.display().dimmed(),
-                    count,
-                    if count == 1 { "" } else { "s" }
-                );
+                if !json_mode {
+                    eprintln!(
+                        "  {} {} ({} element{})",
+                        "✓".green(),
+                        path.display().dimmed(),
+                        count,
+                        if count == 1 { "" } else { "s" }
+                    );
+                }
                 ok_count += 1;
             }
             legend_pure_parser_parser::ParseOutcome::Partial(partial) => {
                 let count = partial.source_file.element_count();
-                eprintln!(
-                    "  {} {} ({} element{} recovered, {} error{})",
-                    "⚠".yellow(),
-                    path.display().dimmed(),
-                    count,
-                    if count == 1 { "" } else { "s" },
-                    partial.errors.len(),
-                    if partial.errors.len() == 1 { "" } else { "s" }
-                );
-                for e in &partial.errors {
+                if !json_mode {
                     eprintln!(
-                        "      {} {}",
-                        "✗".red(),
-                        diagnostics::format_error_with_path(path, e).red()
+                        "  {} {} ({} element{} recovered, {} error{})",
+                        "⚠".yellow(),
+                        path.display().dimmed(),
+                        count,
+                        if count == 1 { "" } else { "s" },
+                        partial.errors.len(),
+                        if partial.errors.len() == 1 { "" } else { "s" }
                     );
-                    if args.show_source
-                        && let Some(ref text) = output.source_text
-                    {
-                        diagnostics::render_source_snippet(text, path, e);
+                }
+                for e in &partial.errors {
+                    if json_mode {
+                        emit_json_diagnostic(path, e)?;
+                    } else {
+                        eprintln!(
+                            "      {} {}",
+                            "✗".red(),
+                            diagnostics::format_error_with_path(path, e).red()
+                        );
+                        if args.show_source
+                            && let Some(ref text) = output.source_text
+                        {
+                            diagnostics::render_source_snippet(text, path, e);
+                        }
                     }
                 }
                 error_count += partial.errors.len();
@@ -126,21 +156,63 @@ pub fn run(args: CheckArgs) -> Result<(), CliError> {
         }
     }
 
-    eprintln!();
+    if json_mode {
+        // Emit a final summary object so consumers can synchronise on
+        // a known-shape EOF marker rather than guessing from EOF.
+        let summary = serde_json::json!({
+            "type": "summary",
+            "ok": ok_count,
+            "errors": error_count,
+            "files": files.len(),
+        });
+        println!("{summary}");
+    } else {
+        eprintln!();
+        if error_count > 0 {
+            eprintln!(
+                "{} {} passed, {} failed",
+                "Result:".bold(),
+                ok_count.to_string().green(),
+                error_count.to_string().red()
+            );
+        } else {
+            eprintln!(
+                "{} all {} file(s) are valid ✓",
+                "Result:".bold(),
+                ok_count.to_string().green()
+            );
+        }
+    }
+
     if error_count > 0 {
-        eprintln!(
-            "{} {} passed, {} failed",
-            "Result:".bold(),
-            ok_count.to_string().green(),
-            error_count.to_string().red()
-        );
         Err(CliError::ParseErrors(error_count))
     } else {
-        eprintln!(
-            "{} all {} file(s) are valid ✓",
-            "Result:".bold(),
-            ok_count.to_string().green()
-        );
         Ok(())
     }
+}
+
+/// Emit one NDJSON line for a single parser diagnostic.
+fn emit_json_diagnostic(
+    path: &Path,
+    err: &legend_pure_parser_parser::error::ParseError,
+) -> Result<(), CliError> {
+    // Build a small wire shape rather than serializing the raw enum:
+    // we want a stable schema and a `file` field so consumers can group.
+    let (line, column, end_line, end_column) = err
+        .source_info()
+        .map(|si| (si.start_line, si.start_column, si.end_line, si.end_column))
+        .unwrap_or((0, 0, 0, 0));
+    let payload = serde_json::json!({
+        "type": "diagnostic",
+        "file": path.display().to_string(),
+        "severity": "error",
+        "code": "parseFailure",
+        "message": err.message(),
+        "range": {
+            "start": { "line": line, "column": column },
+            "end":   { "line": end_line, "column": end_column },
+        },
+    });
+    println!("{payload}");
+    Ok(())
 }
