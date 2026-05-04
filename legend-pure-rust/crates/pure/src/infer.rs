@@ -186,7 +186,27 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
         ExprKind::DateLiteral(dv) => Some(date_literal_type(dv)),
 
         // -- Variable -------------------------------------------------------
-        ExprKind::Variable { name } => ctx.lookup_var(name).cloned(),
+        ExprKind::Variable { name } => {
+            let resolved = ctx.lookup_var(name).cloned();
+            if resolved.is_none() {
+                // Undeclared variable. Surface a `UnresolvedElement`
+                // diagnostic so the IDE can red-squiggle the use-site.
+                //
+                // Implicit variables like `$this` must be added to
+                // the scope by the caller (e.g. `pass_infer` injecting
+                // a `this` Parameter when entering a class QP body /
+                // constraint expression / property default-value).
+                // No name-based whitelisting here.
+                ctx.errors.push(crate::error::CompilationError {
+                    message: format!("Variable '${name}' is not declared in scope"),
+                    source_info: expr.source_info.clone(),
+                    kind: crate::error::CompilationErrorKind::UnresolvedElement {
+                        path: SmolStr::from(format!("${name}")),
+                    },
+                });
+            }
+            resolved
+        }
 
         // -- Function call --------------------------------------------------
         //
@@ -211,7 +231,16 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                 None
             };
 
-            let result = infer_function_call(ctx, *function, function_name, let_name, &arg_types);
+            let arg_source_infos: Vec<legend_pure_parser_ast::SourceInfo> =
+                arguments.iter().map(|a| a.source_info.clone()).collect();
+            let result = infer_function_call(
+                ctx,
+                *function,
+                function_name,
+                let_name,
+                &arg_types,
+                &arg_source_infos,
+            );
             return set_and_return(expr, result);
         }
 
@@ -461,11 +490,19 @@ fn infer_function_call(
     function_name: &SmolStr,
     let_name: Option<(&SmolStr, &legend_pure_parser_ast::SourceInfo)>,
     arg_types: &[Option<ResolvedType>],
+    arg_source_infos: &[legend_pure_parser_ast::SourceInfo],
 ) -> Option<ResolvedType> {
-    // Handle `letFunction` — side effect: bind the variable in scope
+    // Handle `letFunction` — side effect: bind the variable in scope.
+    //
+    // Bind even when the value's type couldn't be inferred (None) —
+    // otherwise subsequent `$name` references downstream would
+    // false-positive the undeclared-variable check just because we
+    // couldn't infer the let-rhs's type. The placeholder is
+    // `TypeExpr::Unresolved` which type-compatibility helpers
+    // already treat as "matches anything".
     if function_name == "letFunction"
         && arg_types.len() == 2
-        && let (Some(val_type), Some((name, source_info))) = (&arg_types[1], let_name)
+        && let Some((name, source_info)) = let_name
     {
         if let Some(scope) = ctx.scopes.last()
             && scope.lookup(name).is_some()
@@ -476,8 +513,12 @@ fn infer_function_call(
                 kind: crate::error::CompilationErrorKind::DuplicateVariable { name: name.clone() },
             });
         }
+        let bound = arg_types[1].clone().unwrap_or_else(|| ResolvedType {
+            type_expr: TypeExpr::Unresolved,
+            multiplicity: Multiplicity::PureOne,
+        });
         if let Some(scope) = ctx.scopes.last_mut() {
-            scope.bind(name.clone(), val_type.clone());
+            scope.bind(name.clone(), bound);
         }
         // letFunction itself returns Nil[0] (it's a side-effect statement)
         return Some(ResolvedType {
@@ -507,6 +548,100 @@ fn infer_function_call(
     // the same type-info plumbing) is the upstream prerequisite. This
     // helper just consumes whatever `arg_ty.type_expr` already carries.
     if let Some(Element::Function(f)) = function.and_then(|id| ctx.model.try_get_element(id)) {
+        // Type-check each argument against its parameter. The
+        // dispatcher's `narrow_candidates_by_type` short-circuits
+        // when there's only one candidate by name+arity, so a
+        // sole-overload function would otherwise silently accept
+        // mismatched argument types (e.g. `range(0.0, 5)` against
+        // `range(Integer[1], Integer[1])`). Run the same
+        // `is_type_compatible` check the dispatcher uses, but emit
+        // a diagnostic on failure rather than just filtering.
+        for (param, (arg_ty, arg_idx)) in f
+            .parameters
+            .iter()
+            .zip(arg_types.iter().zip(0usize..))
+        {
+            let Some(arg_ty) = arg_ty else { continue };
+            let arg_eid = match &arg_ty.type_expr {
+                TypeExpr::Named { element, .. } => Some(*element),
+                _ => None,
+            };
+            // Narrow the check to *primitive* arg-vs-param
+            // mismatches — exactly the user-facing class observed
+            // (`range(0.0, $stop)` against `range(Integer, Integer)`).
+            // Non-primitive cases involve subtyping, packages-as-
+            // PackageableElements, structural function-types, and
+            // generic parameters that the dispatcher already handles
+            // (or has known gaps in). Emitting beyond primitives
+            // floods the platform compile with noise from cases
+            // where dispatch ranking — not user code — is at fault.
+            //
+            // `arg_idx` shadows here intentionally: we keep the
+            // index for diagnostics even when the check is skipped.
+            let primitive = |id: crate::ids::ElementId| -> bool {
+                id == bootstrap::INTEGER_ID
+                    || id == bootstrap::FLOAT_ID
+                    || id == bootstrap::DECIMAL_ID
+                    || id == bootstrap::STRING_ID
+                    || id == bootstrap::BOOLEAN_ID
+                    || id == bootstrap::DATE_TIME_ID
+                    || id == bootstrap::STRICT_DATE_ID
+                    || id == bootstrap::STRICT_TIME_ID
+            };
+            let param_eid = match &param.type_expr {
+                TypeExpr::Named { element, .. } => Some(*element),
+                _ => None,
+            };
+            let both_primitive = matches!((arg_eid, param_eid), (Some(a), Some(p)) if primitive(a) && primitive(p));
+            if !both_primitive {
+                continue;
+            }
+            // Suppress when an alternative overload at this package
+            // would accept the actual arg type — the dispatcher had
+            // a real choice; second-guessing it on its decision is
+            // out of scope for this layer.
+            if has_compatible_sibling_overload(
+                ctx.model,
+                function,
+                function_name,
+                arg_idx,
+                arg_eid,
+            ) {
+                continue;
+            }
+            if !crate::resolve::is_type_compatible(arg_eid, &param.type_expr, ctx.model) {
+                let arg_name = arg_eid
+                    .map(|e| ctx.model.element_name(e).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let param_name = match &param.type_expr {
+                    TypeExpr::Named { element, .. } => {
+                        ctx.model.element_name(*element).to_string()
+                    }
+                    _ => format!("{:?}", param.type_expr),
+                };
+                let arg_si = arg_source_infos
+                    .get(arg_idx)
+                    .cloned()
+                    .unwrap_or_else(|| arg_source_infos.first().cloned().unwrap_or_else(|| {
+                        legend_pure_parser_ast::SourceInfo::new("<unknown>", 0, 0, 0, 0)
+                    }));
+                ctx.errors.push(crate::error::CompilationError {
+                    message: format!(
+                        "Argument {} of '{}': expected {}, got {}",
+                        arg_idx + 1,
+                        function_name,
+                        param_name,
+                        arg_name,
+                    ),
+                    source_info: arg_si,
+                    kind: crate::error::CompilationErrorKind::UnresolvedElement {
+                        path: SmolStr::from(format!(
+                            "argument-type-mismatch:{function_name}:{arg_idx}"
+                        )),
+                    },
+                });
+            }
+        }
         let mut bindings: std::collections::HashMap<SmolStr, TypeExpr> =
             std::collections::HashMap::new();
         for (param, arg_ty) in f.parameters.iter().zip(arg_types.iter()) {
@@ -1332,6 +1467,53 @@ fn primitive(element_id: crate::ids::ElementId) -> ResolvedType {
     }
 }
 
+/// True when at least one sibling overload (same package + simple
+/// name, same parameter count) has a parameter at `arg_idx` whose
+/// element id is *different* from `current_fn`'s param at the same
+/// index. Used by the arg-vs-param type check to suppress
+/// false-positive errors when the dispatcher was ranking among
+/// multiple compatible overloads — only single-overload functions
+/// (where dispatch has no choice) emit type-mismatch errors.
+fn has_compatible_sibling_overload(
+    model: &PureModel,
+    current_fn: Option<crate::ids::ElementId>,
+    function_name: &SmolStr,
+    arg_idx: usize,
+    arg_eid: Option<crate::ids::ElementId>,
+) -> bool {
+    let Some(current_id) = current_fn else {
+        return false;
+    };
+    let Some(Element::Function(current)) = model.try_get_element(current_id) else {
+        return false;
+    };
+    if matches!(current_id, crate::ids::ElementId::Package(_)) {
+        return false;
+    }
+    let pkg = model.get_node(current_id).parent_package;
+    let candidates = model.resolve_functions_by_name_in_package(pkg, function_name);
+    for candidate_id in candidates {
+        if candidate_id == current_id {
+            continue;
+        }
+        let Some(Element::Function(candidate)) = model.try_get_element(candidate_id) else {
+            continue;
+        };
+        if candidate.parameters.len() != current.parameters.len() {
+            continue;
+        }
+        let Some(candidate_param) = candidate.parameters.get(arg_idx) else {
+            continue;
+        };
+        // If this candidate would accept the actual arg type, the
+        // dispatcher had a real alternative — don't second-guess it.
+        if crate::resolve::is_type_compatible(arg_eid, &candidate_param.type_expr, model) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Returns the resolved type for a date literal based on its variant.
 fn date_literal_type(dv: &DateValue) -> ResolvedType {
     match dv {
@@ -1444,9 +1626,143 @@ mod tests {
 
         infer_function_body(&model, &params, &mut body, &mut errors);
 
+        // Sanity: known variable should not emit any error.
+        assert!(
+            errors.is_empty(),
+            "known variable should not error, got: {errors:?}"
+        );
         let ti = body[0].type_info.as_ref().unwrap();
         assert_eq!(ti.type_expr, named_type(bootstrap::STRING_ID));
         assert_eq!(ti.multiplicity, Multiplicity::PureOne);
+    }
+
+    /// Calling a known-signature function with a literal whose type
+    /// doesn't match the corresponding parameter type must surface
+    /// a compile-time error. Observed in the IDE as "I changed
+    /// `range(0, $stop)` to `range(0.0, $stop)` and got no error,
+    /// even though `range`'s first parameter is `Integer[1]`."
+    ///
+    /// Today `infer_function_call` skips arg-vs-param type checks
+    /// once a function has been resolved by name+arity (the
+    /// dispatcher's `narrow_candidates_by_type` is short-circuited
+    /// at `candidates.len() <= 1`). So a sole-overload function
+    /// accepting `Integer[1]` happily takes a `Float[1]` argument.
+    #[test]
+    fn infer_function_call_with_wrong_arg_type_emits_error() {
+        use crate::model::{Element as ModelElement, ElementNode, ModelChunk};
+        use crate::nodes::function::Function;
+
+        // Bootstrap + a chunk containing a synthetic
+        // `meta::test::takesInt(Integer[1]): Integer[1]` function.
+        let mut model = model_with_bootstrap();
+        let pkg = model.get_or_create_package(&[
+            SmolStr::new("meta"),
+            SmolStr::new("test"),
+        ]);
+        let chunk_id: u16 = 1;
+        let mut chunk = ModelChunk::new(chunk_id);
+        let func_si = SourceInfo::new("synth.pure", 1, 1, 3, 1);
+        let local_idx = chunk.alloc_element(
+            ElementNode {
+                name: SmolStr::new("takesInt_Integer_1__Integer_1_"),
+                source_info: func_si.clone(),
+                name_source_info: func_si.clone(),
+                parent_package: pkg,
+            },
+            ModelElement::Function(Function {
+                function_name: SmolStr::new("takesInt"),
+                is_native: false,
+                parameters: std::sync::Arc::from(vec![Parameter {
+                    name: SmolStr::new("n"),
+                    type_expr: named_type(bootstrap::INTEGER_ID),
+                    multiplicity: Multiplicity::PureOne,
+                    source_info: func_si.clone(),
+                }]),
+                return_type: named_type(bootstrap::INTEGER_ID),
+                return_multiplicity: Multiplicity::PureOne,
+                body: std::sync::Arc::from(Vec::new()),
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+            }),
+        );
+        let func_id = crate::ids::ElementId::InstanceId {
+            chunk_id,
+            local_idx,
+        };
+        model.chunks.push(chunk);
+        model.register_element(pkg, func_id);
+
+        // Body: `takesInt(0.0)` — wrong type, must error.
+        let mut body = vec![untyped(
+            ExprKind::FunctionCall(crate::types::FunctionCallData {
+                function: Some(func_id),
+                function_name: SmolStr::new("takesInt"),
+                arguments: vec![untyped(
+                    ExprKind::FloatLiteral(0.0),
+                    SourceInfo::new("call.pure", 5, 10, 5, 13),
+                )],
+            }),
+            SourceInfo::new("call.pure", 5, 1, 5, 14),
+        )];
+        let mut errors = Vec::new();
+        infer_function_body(&model, &[], &mut body, &mut errors);
+
+        assert!(
+            !errors.is_empty(),
+            "expected a type-mismatch error for takesInt(Float), got none"
+        );
+        let mismatch = errors.iter().find(|e| {
+            let m = &e.message;
+            (m.contains("Integer") && m.contains("Float"))
+                || m.to_lowercase().contains("type")
+        });
+        assert!(
+            mismatch.is_some(),
+            "expected an error mentioning the type mismatch (Integer vs Float), got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// A `$x` reference where `x` is not in scope (no parameter, no
+    /// preceding `let`, not a lambda binding) must surface a
+    /// compile-time error. Today the inference layer silently
+    /// returns `None` from `lookup_var`, leaving `type_info` empty
+    /// and producing no diagnostic — observed in the IDE as "I
+    /// renamed `$stop` to `$sto` and got no error."
+    #[test]
+    fn infer_undeclared_variable_emits_error() {
+        let model = model_with_bootstrap();
+
+        let mut body = vec![untyped(
+            ExprKind::Variable {
+                name: SmolStr::new("undeclared"),
+            },
+            SourceInfo::new("test.pure", 3, 5, 3, 16),
+        )];
+        let mut errors = Vec::new();
+
+        // No params, no enclosing scope — `$undeclared` cannot resolve.
+        infer_function_body(&model, &[], &mut body, &mut errors);
+
+        assert!(
+            !errors.is_empty(),
+            "expected at least one error for `$undeclared`, got none"
+        );
+        let undeclared_err = errors
+            .iter()
+            .find(|e| e.message.contains("undeclared"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected an error mentioning the undeclared variable name, \
+                     got messages: {:?}",
+                    errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+                )
+            });
+        // Source location must point at the `$undeclared` use, not
+        // the (synthetic) function header — otherwise the IDE
+        // squiggle lands on the wrong line.
+        assert_eq!(undeclared_err.source_info.start_line, 3);
+        assert_eq!(undeclared_err.source_info.start_column, 5);
     }
 
     #[test]

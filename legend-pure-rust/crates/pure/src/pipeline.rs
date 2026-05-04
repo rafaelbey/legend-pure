@@ -2028,13 +2028,45 @@ fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
                     });
                 }
                 Element::Class(c) => {
+                    // `$this` is implicitly bound to the receiving
+                    // instance inside any class qualified-property
+                    // body. Build a synthetic Parameter that the
+                    // inference scope will pick up via
+                    // `Scope::from_params`, so `$this` resolves the
+                    // same way an explicit parameter would.
+                    //
+                    // Type-variable parameters declared on the class
+                    // (e.g. `Class C(x:Integer[1]) [...]`) are
+                    // similarly in-scope inside QP bodies — Java
+                    // Pure threads them through `eval_qualified_property`
+                    // at runtime.
+                    let class_id = ElementId::InstanceId {
+                        chunk_id: chunk.chunk_id,
+                        local_idx,
+                    };
+                    let this_param = crate::types::Parameter {
+                        name: SmolStr::new("this"),
+                        type_expr: crate::types::TypeExpr::Named {
+                            element: class_id,
+                            type_arguments: Vec::new(),
+                            value_arguments: Vec::new(),
+                        },
+                        multiplicity: crate::types::Multiplicity::PureOne,
+                        source_info: chunk.nodes.get(local_idx).source_info.clone(),
+                    };
                     for (qp_idx, qp) in c.qualified_properties.iter().enumerate() {
                         if !qp.body.is_empty() {
+                            let mut params: Vec<crate::types::Parameter> =
+                                Vec::with_capacity(qp.parameters.len() + 1
+                                    + c.type_variable_parameters.len());
+                            params.push(this_param.clone());
+                            params.extend(c.type_variable_parameters.iter().cloned());
+                            params.extend(qp.parameters.iter().cloned());
                             targets.push(InferTarget {
                                 chunk_idx,
                                 local_idx,
                                 kind: TargetKind::QualifiedProperty(qp_idx),
-                                params: qp.parameters.to_vec(),
+                                params,
                                 body: qp.body.to_vec(),
                             });
                         }
