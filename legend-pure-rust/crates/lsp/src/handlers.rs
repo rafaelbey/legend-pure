@@ -119,11 +119,21 @@ fn render_element_label(model: &PureModel, id: ElementId) -> Option<String> {
     Some(format!("**{label}** `{name}`"))
 }
 
-/// Resolve a definition jump for a position. Returns the location of
-/// the cursor's owning element, which is the cheapest correct answer
-/// for tier-1: it lets the user jump from the body of a function back
-/// to the function header. Future work resolves identifier-under-cursor
-/// to the declaring symbol.
+/// Resolve a definition jump for a position.
+///
+/// Resolution order, narrowest to widest:
+///   1. If the cursor sits on a `ValueSpec` whose kind carries a
+///      resolved [`ElementId`] (function call, packageable-element
+///      ref, enum value), jump to that element's name span — this
+///      is the IDE-natural "click on `String`, jump to String".
+///   2. Otherwise fall back to the cursor's *owning* element's
+///      name span — at least the user gets a stable navigation
+///      target instead of nothing.
+///
+/// Both paths return the element's `name_source_info` (the
+/// identifier-only span) rather than the full element body, so
+/// IntelliJ highlights the name on goto-def, not the entire
+/// declaration.
 #[must_use]
 pub fn definition_for_position(
     model: &PureModel,
@@ -133,14 +143,68 @@ pub fn definition_for_position(
 ) -> Option<Location> {
     let (line, column) = convert::position_to_1indexed(position);
     let located = model.locate(canonical_path, line, column)?;
-    // For now: jump to the element header span.
-    if model.try_get_element(located.element).is_none() {
+
+    // Try to resolve the cursor's specific symbol target first.
+    if let LocatedKind::ValueSpec(vs) = located.kind
+        && let Some(target) = resolve_value_spec_target(vs)
+        && let Some(loc) = element_location(model, target, file_uri)
+    {
+        return Some(loc);
+    }
+
+    // Fallback: jump to the owning element's name span.
+    element_location(model, located.element, file_uri)
+}
+
+/// If a [`ValueSpec`] kind directly references a resolved element,
+/// return that element's `ElementId`. None for variables (need
+/// scope tracking), literals, lambdas, etc.
+fn resolve_value_spec_target(
+    vs: &legend_pure_parser_pure::types::ValueSpec,
+) -> Option<ElementId> {
+    use legend_pure_parser_pure::types::ExprKind;
+    match &*vs.kind {
+        ExprKind::FunctionCall(d) | ExprKind::QualifiedPropertyCall(d) => d.function,
+        // PropertyCall's `function_name` is the property name, not a
+        // resolved element — finding the declaring class needs more
+        // context, deferred.
+        ExprKind::PackageableElementRef { element } => Some(*element),
+        ExprKind::EnumValue { enum_element, .. } => Some(*enum_element),
+        ExprKind::TypeReference { type_expr } => match type_expr {
+            legend_pure_parser_pure::types::TypeExpr::Named { element, .. } => Some(*element),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Return a [`Location`] pointing at an element's name span. Returns
+/// None for invalid IDs or Package targets (Packages have no source
+/// of their own that's worth navigating to).
+fn element_location(
+    model: &PureModel,
+    id: ElementId,
+    file_uri: &Url,
+) -> Option<Location> {
+    if model.try_get_element(id).is_none() {
         return None;
     }
-    let node = model.get_node(located.element);
+    if matches!(id, ElementId::Package(_)) {
+        return None;
+    }
+    let node = model.get_node(id);
+    // Convert the canonical source path back to a file URI so the
+    // IDE can open the right buffer. For files the user has open,
+    // this matches the URI they opened with; for platform sources,
+    // it points at the on-disk file the LSP loaded.
+    let uri = if node.source_info.source.starts_with('/') {
+        Url::parse(&format!("file://{}", node.source_info.source)).unwrap_or_else(|_| file_uri.clone())
+    } else {
+        file_uri.clone()
+    };
     Some(Location {
-        uri: file_uri.clone(),
-        range: range_from_source_info(&node.source_info),
+        uri,
+        range: range_from_source_info(&node.name_source_info),
     })
 }
 
@@ -368,13 +432,14 @@ mod tests {
         let src = "function test::greet(name: String[1]): String[1]\n{\n  $name\n}\n";
         let model = compile_fixture("fixture.pure", src);
         let uri = Url::parse("file:///fixture.pure").unwrap();
-        // Cursor inside the body — should resolve to the function header.
+        // Cursor inside the body — falls back to the owning element's
+        // name span (just the function-name identifier, not the whole
+        // body). For `function test::greet(...)` the name `greet`
+        // starts at line 1 col 16 (1-indexed) → 0-indexed col 15.
         let loc = definition_for_position(&model, "fixture.pure", pos(2, 2), &uri)
             .expect("definition must resolve");
-        // Function header span starts at line 1 col 1 (1-indexed) → 0-indexed (0, 0).
         assert_eq!(loc.range.start.line, 0);
-        assert_eq!(loc.range.start.character, 0);
-        assert_eq!(loc.uri, uri);
+        assert_eq!(loc.range.start.character, 15);
     }
 
     #[test]

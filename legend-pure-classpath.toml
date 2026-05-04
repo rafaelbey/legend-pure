@@ -1,0 +1,84 @@
+# Copyright 2026 Goldman Sachs
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Workspace classpath for the Legend Pure repository.
+#
+# Picked up by the `legend lsp` ancestor walk and by the IntelliJ
+# plugin's project-base discovery, so opening this directory (or any
+# descendant) in an IDE gives the LSP a complete, source-of-truth
+# picture of the platform.
+#
+# Every entry is a `kind = "filesystem"` repo backed by the Java
+# module's `src/main/resources/<name>` source root, with the
+# canonical `*.definition.json` descriptor declaring the package
+# pattern + transitive dependencies. The descriptor's `name` (read
+# at load time) matches the prefix used in `<repo>::<package>::…`
+# canonical URLs.
+#
+# `kind = "filesystem"` (not `kind = "purem"`) is intentional: the
+# LSP picks up edits live, no rebuild step. Trade `~1s` slower
+# initial compile for full edit-time fidelity.
+
+# ---- M3 core platform -----------------------------------------------------
+
+[[repo]]
+name       = "platform"
+kind       = "filesystem"
+descriptor = "legend-pure-core/legend-pure-m3-core/src/main/resources/platform.json"
+
+# ---- M3 precise primitives ------------------------------------------------
+
+[[repo]]
+name       = "platform_precise_primitives"
+kind       = "filesystem"
+descriptor = "legend-pure-core/legend-pure-m3-precisePrimitives/src/main/resources/platform_precise_primitives.definition.json"
+
+# ---- M2 DSLs --------------------------------------------------------------
+
+[[repo]]
+name       = "platform_dsl_diagram"
+kind       = "filesystem"
+descriptor = "legend-pure-dsl/legend-pure-dsl-diagram/legend-pure-m2-dsl-diagram-pure/src/main/resources/platform_dsl_diagram.definition.json"
+
+[[repo]]
+name       = "platform_dsl_graph"
+kind       = "filesystem"
+descriptor = "legend-pure-dsl/legend-pure-dsl-graph/legend-pure-m2-dsl-graph-pure/src/main/resources/platform_dsl_graph.definition.json"
+
+[[repo]]
+name       = "platform_dsl_mapping"
+kind       = "filesystem"
+descriptor = "legend-pure-dsl/legend-pure-dsl-mapping/legend-pure-m2-dsl-mapping-pure/src/main/resources/platform_dsl_mapping.definition.json"
+
+[[repo]]
+name       = "platform_dsl_path"
+kind       = "filesystem"
+descriptor = "legend-pure-dsl/legend-pure-dsl-path/legend-pure-m2-dsl-path-pure/src/main/resources/platform_dsl_path.definition.json"
+
+[[repo]]
+name       = "platform_dsl_store"
+kind       = "filesystem"
+descriptor = "legend-pure-dsl/legend-pure-dsl-store/legend-pure-m2-dsl-store-pure/src/main/resources/platform_dsl_store.definition.json"
+
+[[repo]]
+name       = "platform_dsl_tds"
+kind       = "filesystem"
+descriptor = "legend-pure-dsl/legend-pure-dsl-tds/legend-pure-m2-dsl-tds-pure/src/main/resources/platform_dsl_tds.definition.json"
+
+# ---- Stores ---------------------------------------------------------------
+
+[[repo]]
+name       = "platform_store_relational"
+kind       = "filesystem"
+descriptor = "legend-pure-store/legend-pure-store-relational/legend-pure-m2-store-relational-pure/src/main/resources/platform_store_relational.definition.json"
