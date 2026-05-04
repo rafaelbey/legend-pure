@@ -181,6 +181,15 @@ fn resolve_value_spec_target(
 /// Return a [`Location`] pointing at an element's name span. Returns
 /// None for invalid IDs or Package targets (Packages have no source
 /// of their own that's worth navigating to).
+///
+/// The URI returned is the **click-origin** URI rather than the
+/// target's canonical source path. This means same-file goto-def
+/// works (jumping from a body back to the function header, or from
+/// a use-site to a sibling declaration in the same file). Cross-file
+/// goto-def — e.g. clicking on `String` to jump into the platform
+/// repo — requires mapping the target's canonical path back to a
+/// real on-disk URL, which needs `Repo::Filesystem` to retain its
+/// `source_root` (it currently doesn't). Tracked as a follow-up.
 fn element_location(
     model: &PureModel,
     id: ElementId,
@@ -193,17 +202,16 @@ fn element_location(
         return None;
     }
     let node = model.get_node(id);
-    // Convert the canonical source path back to a file URI so the
-    // IDE can open the right buffer. For files the user has open,
-    // this matches the URI they opened with; for platform sources,
-    // it points at the on-disk file the LSP loaded.
-    let uri = if node.source_info.source.starts_with('/') {
-        Url::parse(&format!("file://{}", node.source_info.source)).unwrap_or_else(|_| file_uri.clone())
-    } else {
-        file_uri.clone()
-    };
+    // Only navigate when the target is in the same file as the
+    // click — otherwise we'd return a `file://<canonical>` URI that
+    // doesn't exist on disk and the IDE silently fails to open it.
+    let click_path = file_uri.to_file_path().ok()?;
+    let canonical_tail = node.source_info.source.trim_start_matches('/');
+    if !click_path.ends_with(canonical_tail) {
+        return None;
+    }
     Some(Location {
-        uri,
+        uri: file_uri.clone(),
         range: range_from_source_info(&node.name_source_info),
     })
 }

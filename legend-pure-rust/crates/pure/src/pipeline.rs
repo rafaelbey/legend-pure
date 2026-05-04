@@ -2009,36 +2009,39 @@ fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
 
     let mut targets: Vec<InferTarget> = Vec::new();
 
-    // Only infer in the current compilation chunk (the last one).
-    // Bootstrap chunk (0) has no function/QP bodies.
-    let chunk_idx = model.chunks.len() - 1;
-    let chunk = &model.chunks[chunk_idx];
-
-    for (local_idx, element) in chunk.elements.iter() {
-        match element {
-            Element::Function(f) if !f.body.is_empty() => {
-                targets.push(InferTarget {
-                    chunk_idx,
-                    local_idx,
-                    kind: TargetKind::FunctionBody,
-                    params: f.parameters.to_vec(),
-                    body: f.body.to_vec(),
-                });
-            }
-            Element::Class(c) => {
-                for (qp_idx, qp) in c.qualified_properties.iter().enumerate() {
-                    if !qp.body.is_empty() {
-                        targets.push(InferTarget {
-                            chunk_idx,
-                            local_idx,
-                            kind: TargetKind::QualifiedProperty(qp_idx),
-                            params: qp.parameters.to_vec(),
-                            body: qp.body.to_vec(),
-                        });
+    // Walk every non-bootstrap chunk. Bootstrap (0) has no function /
+    // QP bodies. Earlier this routine processed only `chunks.last()`
+    // — same bug as `validate.rs` had: with multi-repo loaders
+    // (`core_platform_pure::repo::load`) earlier chunks' expressions
+    // never had `type_info` populated, which silently degraded
+    // dispatch precision and downstream type-mismatch detection.
+    for (chunk_idx, chunk) in model.chunks.iter().enumerate().skip(1) {
+        for (local_idx, element) in chunk.elements.iter() {
+            match element {
+                Element::Function(f) if !f.body.is_empty() => {
+                    targets.push(InferTarget {
+                        chunk_idx,
+                        local_idx,
+                        kind: TargetKind::FunctionBody,
+                        params: f.parameters.to_vec(),
+                        body: f.body.to_vec(),
+                    });
+                }
+                Element::Class(c) => {
+                    for (qp_idx, qp) in c.qualified_properties.iter().enumerate() {
+                        if !qp.body.is_empty() {
+                            targets.push(InferTarget {
+                                chunk_idx,
+                                local_idx,
+                                kind: TargetKind::QualifiedProperty(qp_idx),
+                                params: qp.parameters.to_vec(),
+                                body: qp.body.to_vec(),
+                            });
+                        }
                     }
                 }
+                _ => {}
             }
-            _ => {}
         }
     }
 
