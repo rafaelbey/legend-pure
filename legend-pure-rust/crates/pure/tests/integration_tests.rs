@@ -2461,15 +2461,17 @@ function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->
 }
 
 #[test]
-#[ignore = "bind_type LUB widens authoritative bindings: T binds Integer from \
-            the Function<{T[n]->V[m]}> slot, then bind_type for `param:T[n]` \
-            against String LUBs to Any (Integer + String share no non-Any \
-            ancestor). The arg-type-check then substitutes T→Any, and \
-            is_type_compatible(String, Any) trivially passes. Real fix needs \
-            to distinguish authoritative bindings (from FunctionType slots) \
-            from constraint slots (`param:T`); the latter should CHECK \
-            against the bound T, not LUB-merge into it. Java Pure uses \
-            `TypeInferenceContext` ordering for this. Tracked separately."]
+#[ignore = "Tried twice (commits c17a06 and the bind_type-auth-tracking \
+            spike): bind_type unconditional LUB-merge widens T to Any \
+            when sibling slots disagree, masking eval's wrong-arg-type. \
+            Both attempts at distinguishing 'authoritative' (FunctionType \
+            slot) from 'constraint' (param:T) bindings produced platform \
+            regressions in fold-style chains where the lambda body's \
+            inferred return type is the source of V. Real fix needs \
+            Java-style TypeInferenceContext ordering with proper \
+            'supplies T' vs 'consumes T' tracking that handles the \
+            lambda-body-as-V-source case correctly. Tracked in BACKLOG \
+            'Authoritative vs constraint bindings (eval arg validation)'."]
 fn function_type_one_arg_wrong_type_errors() {
     // Same shape, but the arg type is wrong: pass String to a
     // Function<{Integer[1]->...}>. This MUST error — eval's T binds
@@ -2522,10 +2524,8 @@ function test::pctRunner<Z|y>(
 }
 
 #[test]
-#[ignore = "Same root cause as `function_type_one_arg_wrong_type_errors`: \
-            bind_type LUB widens authoritative bindings, masking the \
-            mismatch when the inner FunctionType disagrees with the PCT's \
-            expected shape. Tracked with that test."]
+#[ignore = "Same root cause + same failed attempts as \
+            `function_type_one_arg_wrong_type_errors`."]
 fn function_type_higher_order_wrong_inner_type_errors() {
     // Same PCT shape, but the inner Function shape doesn't match the
     // PCT's expectation. `pct: Function<{Function<{->Integer[1]}>[1]->Integer[1]}>`
