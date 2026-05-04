@@ -32,7 +32,7 @@
 
 #![allow(clippy::needless_pass_by_value)]
 
-use legend_pure_dsl_tds::csv::ParsedTDS;
+use legend_pure_dsl_tds::csv::{ParsedColumn, ParsedTDS, TypedCell};
 
 use crate::error::{PureException, PureRuntimeError};
 use crate::heap::ObjectHandle;
@@ -181,4 +181,80 @@ pub(super) fn read_parsed_tds(
             "{fn_name}: parse_and_infer({csv:?}) failed: {e}"
         )))
     })
+}
+
+// ---------------------------------------------------------------------------
+// Canonical CSV reconstruction (TypedCell → source-form text)
+// ---------------------------------------------------------------------------
+
+/// Convenience wrapper: render an entire [`ParsedTDS`] back to canonical
+/// CSV form by feeding its `columns` + `rows` through
+/// [`render_csv_from_columns_and_rows`].
+pub(super) fn render_canonical_csv(parsed: &ParsedTDS) -> String {
+    render_csv_from_columns_and_rows(&parsed.columns, &parsed.rows)
+}
+
+/// Reconstruct the canonical CSV string from a column header list and a
+/// row matrix of typed cells. Output round-trips through
+/// [`legend_pure_dsl_tds::csv::parse_and_infer`] — i.e. parsing the
+/// returned string yields a `ParsedTDS` whose `columns` (matched on
+/// `name` + `type_tag`) and `rows` are equal to the inputs (modulo
+/// multiplicity, which the parser re-derives from the data).
+///
+/// Header line uses `, ` separators (mirroring `dsl-tds::lower::reconstruct_csv`);
+/// row cells likewise. `\n` terminates lines.
+///
+/// Per-cell rendering rules:
+///
+/// - `None` → `''` — quoted empty, recognised by `RawCell::is_empty`.
+/// - `Integer(i)` → decimal, no leading `+`.
+/// - `Float(f)` → must include a `.` so reparse classifies the column
+///   as `Float` (not `Integer`). We use `{:?}` which always emits `1.0`
+///   form for whole-valued floats.
+/// - `Decimal(s)` → emitted verbatim (already carries `D`/`d` suffix).
+/// - `Boolean(b)` → `true` / `false`.
+/// - `String(s)` → wrapped in single quotes; any internal `'` escaped
+///   as `\'`.
+/// - `StrictDate(s)`, `DateTime(s)` → verbatim (already source-form).
+pub(super) fn render_csv_from_columns_and_rows(
+    columns: &[ParsedColumn],
+    rows: &[Vec<Option<TypedCell>>],
+) -> String {
+    let mut buf = String::new();
+    let header: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
+    buf.push_str(&header.join(", "));
+    for row in rows {
+        buf.push('\n');
+        let cells: Vec<String> = row.iter().map(render_cell).collect();
+        buf.push_str(&cells.join(", "));
+    }
+    buf
+}
+
+/// Render a single [`TypedCell`] (or `None`) to its canonical CSV form.
+fn render_cell(cell: &Option<TypedCell>) -> String {
+    match cell {
+        None => "''".to_string(),
+        Some(TypedCell::Integer(i)) => i.to_string(),
+        Some(TypedCell::Float(f)) => {
+            // `{:?}` on f64 always renders a decimal point (`1.0`,
+            // `-3.14`, `2e10`). Plain `{}` would emit `1` for whole
+            // values and the column would re-classify as Integer.
+            format!("{f:?}")
+        }
+        Some(TypedCell::Decimal(s)) => s.to_string(),
+        Some(TypedCell::Boolean(true)) => "true".to_string(),
+        Some(TypedCell::Boolean(false)) => "false".to_string(),
+        Some(TypedCell::String(s)) => {
+            // Single-quote wrap; escape internal `'` as `\'`. The
+            // parser's `parse_csv_line` consumes `\\<quote>` as the
+            // literal quote inside a quoted segment, and the cell
+            // materialiser strips the leading backslash via
+            // `unescape_string`.
+            let escaped = s.replace('\'', "\\'");
+            format!("'{escaped}'")
+        }
+        Some(TypedCell::StrictDate(s)) => s.to_string(),
+        Some(TypedCell::DateTime(s)) => s.to_string(),
+    }
 }
