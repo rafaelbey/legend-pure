@@ -233,28 +233,6 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
 
             let arg_source_infos: Vec<legend_pure_parser_ast::SourceInfo> =
                 arguments.iter().map(|a| a.source_info.clone()).collect();
-            // High-confidence inference shapes — multiplicity reported
-            // for these is reliable. For other kinds (FunctionCall,
-            // PropertyCall, lambdas, …) the inferred multiplicity can
-            // be wrong when downstream rules (e.g. `toOne` widening
-            // `[*]` to `[1]`) aren't fully applied yet, so the
-            // arg-mult check is skipped on those positions.
-            let arg_mult_trustworthy: Vec<bool> = arguments
-                .iter()
-                .map(|a| {
-                    matches!(
-                        &*a.kind,
-                        ExprKind::IntegerLiteral(_)
-                            | ExprKind::FloatLiteral(_)
-                            | ExprKind::DecimalLiteral(_)
-                            | ExprKind::StringLiteral(_)
-                            | ExprKind::BooleanLiteral(_)
-                            | ExprKind::DateLiteral(_)
-                            | ExprKind::Variable { .. }
-                            | ExprKind::Collection { .. }
-                    )
-                })
-                .collect();
             let result = infer_function_call(
                 ctx,
                 *function,
@@ -262,7 +240,6 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                 let_name,
                 &arg_types,
                 &arg_source_infos,
-                &arg_mult_trustworthy,
             );
             return set_and_return(expr, result);
         }
@@ -514,7 +491,6 @@ fn infer_function_call(
     let_name: Option<(&SmolStr, &legend_pure_parser_ast::SourceInfo)>,
     arg_types: &[Option<ResolvedType>],
     arg_source_infos: &[legend_pure_parser_ast::SourceInfo],
-    arg_mult_trustworthy: &[bool],
 ) -> Option<ResolvedType> {
     // Handle `letFunction` — side effect: bind the variable in scope.
     //
@@ -634,13 +610,10 @@ fn infer_function_call(
             ) {
                 continue;
             }
-            let mult_check_ok = arg_mult_trustworthy.get(arg_idx).copied().unwrap_or(false);
-            if mult_check_ok
-                && !crate::resolve::is_multiplicity_compatible(
-                    Some(&arg_ty.multiplicity),
-                    &param.multiplicity,
-                )
-            {
+            if !crate::resolve::is_multiplicity_compatible(
+                Some(&arg_ty.multiplicity),
+                &param.multiplicity,
+            ) {
                 let arg_si = arg_source_infos
                     .get(arg_idx)
                     .cloned()
@@ -1645,20 +1618,7 @@ pub fn check_body_return_signature(
         });
     }
 
-    let trustworthy = matches!(
-        &*last.kind,
-        ExprKind::IntegerLiteral(_)
-            | ExprKind::FloatLiteral(_)
-            | ExprKind::DecimalLiteral(_)
-            | ExprKind::StringLiteral(_)
-            | ExprKind::BooleanLiteral(_)
-            | ExprKind::DateLiteral(_)
-            | ExprKind::Variable { .. }
-            | ExprKind::Collection { .. }
-    );
-    if trustworthy
-        && !crate::resolve::is_multiplicity_compatible(Some(&rt.multiplicity), expected_mult)
-    {
+    if !crate::resolve::is_multiplicity_compatible(Some(&rt.multiplicity), expected_mult) {
         errors.push(crate::error::CompilationError {
             message: format!(
                 "Function '{function_name}' declares return multiplicity {} but body returns {}",

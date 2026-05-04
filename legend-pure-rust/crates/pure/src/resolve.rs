@@ -1713,7 +1713,7 @@ fn get_first_supertype(id: ElementId, model: &crate::model::PureModel) -> Option
 
 /// Infers multiplicity from a lowered `ValueSpec` by examining `ExprKind`.
 /// Returns `None` for expressions whose multiplicity can't be determined.
-fn infer_multiplicity_from_valuespec(
+pub(crate) fn infer_multiplicity_from_valuespec(
     vs: &crate::types::ValueSpec,
     model: &crate::model::PureModel,
     var_types: &VarTypes,
