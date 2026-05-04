@@ -2423,6 +2423,142 @@ function test::caller(h: test::Holder<String|*>[1]): String[1] { $h.items }
 }
 
 // ---------------------------------------------------------------------------
+// FunctionType compilation + eval-arg validation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn function_type_zero_arg_returning_z_y_typechecks() {
+    // `Function<{->Z[y]}>` — zero-arg function returning `Z[y]` where
+    // both Z and y come from the surrounding fn signature. The PCT
+    // tests use this shape pervasively. Calling `$f->eval()` against
+    // a `Function<{->Z[y]}>[1]` arg must dispatch the 0-arg eval
+    // overload and substitute Z, y from the caller.
+    let source = r"
+###Pure
+native function test::eval<V|m>(func: meta::pure::metamodel::function::Function<{->V[m]}>[1]): V[m];
+function test::caller<Z|y>(f: meta::pure::metamodel::function::Function<{->Z[y]}>[1]): Z[y] { $f->eval() }
+";
+    compile_with_imports(&[source], &[])
+        .expect("0-arg eval against Function<{->Z[y]}> must dispatch + substitute V→Z, m→y");
+}
+
+#[test]
+fn function_type_one_arg_typechecks() {
+    // `Function<{T[n]->V[m]}>[1]` — one-arg function. eval(func, arg)
+    // must check arg's type against T's binding.
+    let source = r"
+###Pure
+native function test::eval<T,V|m,n>(
+    func: meta::pure::metamodel::function::Function<{T[n]->V[m]}>[1],
+    param: T[n]
+): V[m];
+function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->String[1]}>[1]): String[1] {
+    $f->eval(42)
+}
+";
+    compile_with_imports(&[source], &[])
+        .expect("eval(func: Function<{Integer[1]->String[1]}>, 42) must compile");
+}
+
+#[test]
+#[ignore = "bind_type LUB widens authoritative bindings: T binds Integer from \
+            the Function<{T[n]->V[m]}> slot, then bind_type for `param:T[n]` \
+            against String LUBs to Any (Integer + String share no non-Any \
+            ancestor). The arg-type-check then substitutes T→Any, and \
+            is_type_compatible(String, Any) trivially passes. Real fix needs \
+            to distinguish authoritative bindings (from FunctionType slots) \
+            from constraint slots (`param:T`); the latter should CHECK \
+            against the bound T, not LUB-merge into it. Java Pure uses \
+            `TypeInferenceContext` ordering for this. Tracked separately."]
+fn function_type_one_arg_wrong_type_errors() {
+    // Same shape, but the arg type is wrong: pass String to a
+    // Function<{Integer[1]->...}>. This MUST error — eval's T binds
+    // to Integer from the FunctionType slot, then `param: T[n]` =
+    // `Integer[1]` doesn't accept `String[1]`.
+    let source = r#"
+###Pure
+native function test::eval<T,V|m,n>(
+    func: meta::pure::metamodel::function::Function<{T[n]->V[m]}>[1],
+    param: T[n]
+): V[m];
+function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->String[1]}>[1]): String[1] {
+    $f->eval('not an int')
+}
+"#;
+    let result = compile_with_imports(&[source], &[]);
+    let partial = result.expect_err(
+        "eval with String arg to Integer-typed Function param must surface an arg-type error",
+    );
+    assert!(
+        !partial.errors.is_empty(),
+        "expected at least one type error from FunctionType arg-validation"
+    );
+}
+
+#[test]
+fn function_type_higher_order_pct_shape_typechecks() {
+    // The PCT test pattern: `Function<{Function<{->Z[y]}>[1]->Z[y]}>`.
+    // Outer fn takes a HO-fn that takes an inner Function<{->Z[y]}>
+    // and returns Z[y]. Calling `$pct->eval($f)` where $f is
+    // Function<{->Z[y]}>[1] must compile.
+    let source = r"
+###Pure
+native function test::eval<T,V|m,n>(
+    func: meta::pure::metamodel::function::Function<{T[n]->V[m]}>[1],
+    param: T[n]
+): V[m];
+function test::pctRunner<Z|y>(
+    f: meta::pure::metamodel::function::Function<{->Z[y]}>[1],
+    pct: meta::pure::metamodel::function::Function<{
+        meta::pure::metamodel::function::Function<{->Z[y]}>[1]->Z[y]
+    }>[1]
+): Z[y] {
+    $pct->eval($f)
+}
+";
+    compile_with_imports(&[source], &[]).expect(
+        "PCT-style higher-order eval(pct, f) must dispatch with nested FunctionType binding",
+    );
+}
+
+#[test]
+#[ignore = "Same root cause as `function_type_one_arg_wrong_type_errors`: \
+            bind_type LUB widens authoritative bindings, masking the \
+            mismatch when the inner FunctionType disagrees with the PCT's \
+            expected shape. Tracked with that test."]
+fn function_type_higher_order_wrong_inner_type_errors() {
+    // Same PCT shape, but the inner Function shape doesn't match the
+    // PCT's expectation. `pct: Function<{Function<{->Integer[1]}>[1]->Integer[1]}>`
+    // shouldn't accept an `f: Function<{->String[1]}>`. With eval's
+    // generic substitution, T binds to `Function<{->Integer[1]}>` from
+    // the pct's FunctionType slot. Then param: T must be that exact
+    // shape — passing a `Function<{->String[1]}>` should error.
+    let source = r"
+###Pure
+native function test::eval<T,V|m,n>(
+    func: meta::pure::metamodel::function::Function<{T[n]->V[m]}>[1],
+    param: T[n]
+): V[m];
+function test::caller(
+    f: meta::pure::metamodel::function::Function<{->String[1]}>[1],
+    pct: meta::pure::metamodel::function::Function<{
+        meta::pure::metamodel::function::Function<{->Integer[1]}>[1]->Integer[1]
+    }>[1]
+): Integer[1] {
+    $pct->eval($f)
+}
+";
+    let result = compile_with_imports(&[source], &[]);
+    let partial = result.expect_err(
+        "Mismatched inner FunctionType (String vs Integer) must surface an arg-type error",
+    );
+    assert!(
+        !partial.errors.is_empty(),
+        "expected at least one type error from nested FunctionType mismatch"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // M3 property types — diagnostic & lock for the BACKLOG P1 ⚠️ Partial item
 // ---------------------------------------------------------------------------
 

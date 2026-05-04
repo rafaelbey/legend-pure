@@ -2098,6 +2098,34 @@ pub(crate) fn bind_type(
                 }
             }
         }
+        // FunctionType: recurse pairwise into parameter and return
+        // types so that `eval<T,V|m,n>(func:Function<{T[n]->V[m]}>[1],
+        // param:T[n]):V[m]` binds T from the Function's first param
+        // slot and V from its return slot. Without this recursion,
+        // `bind_type(Named{Function,[FunctionType{T->V}]},
+        // Named{Function,[FunctionType{Integer->String}]})` recurses
+        // into the outer `Named`'s type_arguments, hits the inner
+        // `FunctionType` pair, and falls through the wildcard arm
+        // below — `T` never binds, the `param:T[n]` check passes
+        // permissively against any arg type, and `eval(f, "wrong")`
+        // silently compiles.
+        TypeExpr::FunctionType {
+            parameters: p_params,
+            return_type: p_ret,
+            ..
+        } => {
+            if let TypeExpr::FunctionType {
+                parameters: a_params,
+                return_type: a_ret,
+                ..
+            } = arg_ty
+            {
+                for ((p_ty, _), (a_ty, _)) in p_params.iter().zip(a_params.iter()) {
+                    bind_type(p_ty, a_ty, out, model);
+                }
+                bind_type(p_ret, a_ret, out, model);
+            }
+        }
         _ => {}
     }
 }
