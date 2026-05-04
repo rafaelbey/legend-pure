@@ -1208,6 +1208,7 @@ dependencies = [
  "lcov",
  "legend-pure-core-platform",
  "legend-pure-dsl-graph",
+ "legend-pure-lsp",
  "legend-pure-parser-ast",
  "legend-pure-parser-compose",
  "legend-pure-parser-lexer",
