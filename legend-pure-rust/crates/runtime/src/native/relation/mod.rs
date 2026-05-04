@@ -25,6 +25,11 @@
 //! helpers — heap walks, TDS row-access, etc. — are in `shared.rs`.
 
 mod add_columns;
+mod concatenate;
+mod distinct;
+mod drop;
+mod filter;
+mod limit;
 mod shared;
 mod size;
 mod string_to_tds;
@@ -32,6 +37,11 @@ mod string_to_tds;
 use crate::native::NativeRegistry;
 
 pub use add_columns::AddColumns;
+pub use concatenate::Concatenate;
+pub use distinct::Distinct;
+pub use drop::Drop;
+pub use filter::Filter;
+pub use limit::Limit;
 pub use size::Size;
 pub use string_to_tds::StringToTDS;
 
@@ -44,4 +54,12 @@ pub fn register(registry: &mut NativeRegistry) {
     );
     registry.register("stringToTDS_String_1__TDS_1_", StringToTDS);
     registry.register("size_Relation_1__Integer_1_", Size);
+    registry.register("distinct_Relation_1__Relation_1_", Distinct);
+    registry.register(
+        "concatenate_Relation_1__Relation_1__Relation_1_",
+        Concatenate,
+    );
+    registry.register("filter_Relation_1__Function_1__Relation_1_", Filter);
+    registry.register("limit_Relation_1__Integer_1__Relation_1_", Limit);
+    registry.register("drop_Relation_1__Integer_1__Relation_1_", Drop);
 }
