@@ -1345,6 +1345,78 @@ pub(crate) fn find_property_with_inheritance(
     None
 }
 
+/// Walks the class hierarchy looking for `property`'s declared
+/// multiplicity (sibling to [`find_property_with_inheritance`] but
+/// returning the multiplicity instead of the type).
+pub(crate) fn find_property_multiplicity(
+    eid: ElementId,
+    property: &smol_str::SmolStr,
+    model: &crate::model::PureModel,
+) -> Option<crate::types::Multiplicity> {
+    use crate::types::TypeExpr;
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(eid);
+    while let Some(current) = queue.pop_front() {
+        if !visited.insert(current) {
+            continue;
+        }
+        let Element::Class(c) = model.get_element(current) else {
+            continue;
+        };
+        if let Some(p) = c.properties.iter().find(|p| p.name == *property) {
+            return Some(p.multiplicity.clone());
+        }
+        if let Some(q) = c.qualified_properties.iter().find(|q| q.name == *property) {
+            return Some(q.return_multiplicity.clone());
+        }
+        for st in &c.super_types {
+            if let TypeExpr::Named { element, .. } = st {
+                queue.push_back(*element);
+            }
+        }
+    }
+    None
+}
+
+/// Multiplicity product for a property/QP access chain
+/// `receiver.prop`: combines the receiver's multiplicity with the
+/// property's declared multiplicity.
+///
+/// Rules (matching Java Pure's `propertyExpression` post-processor):
+///   - Either side `[*]` → `[*]`.
+///   - Either side `[0..*]` (zero-or-many) → `[*]`.
+///   - Either side has lower bound 0 → result lower bound 0.
+///   - Bounded × Bounded → product of bounds.
+///   - Variable / Generic on either side → fall back to the *receiver*
+///     multiplicity (best partial answer; better than `None` which
+///     dispatch treats as permissively compatible with everything).
+pub(crate) fn multiplicity_product(
+    receiver_mult: &crate::types::Multiplicity,
+    property_mult: &crate::types::Multiplicity,
+) -> crate::types::Multiplicity {
+    use crate::types::Multiplicity;
+    if matches!(receiver_mult, Multiplicity::Variable(_))
+        || matches!(property_mult, Multiplicity::Variable(_))
+    {
+        return receiver_mult.clone();
+    }
+    let (r_lo, r_hi) = mult_bounds(receiver_mult);
+    let (p_lo, p_hi) = mult_bounds(property_mult);
+
+    let lo = r_lo.saturating_mul(p_lo);
+    let hi = r_hi.saturating_mul(p_hi);
+    let hi_opt = if hi == u32::MAX { None } else { Some(hi) };
+
+    match (lo, hi_opt) {
+        (1, Some(1)) => Multiplicity::PureOne,
+        (0, Some(1)) => Multiplicity::ZeroOrOne,
+        (1, None) => Multiplicity::OneOrMany,
+        (0, None) => Multiplicity::ZeroOrMany,
+        (lower, upper) => Multiplicity::Range { lower, upper },
+    }
+}
+
 /// Extracts the type arguments from the receiver expression's stored type.
 /// Only handles `Variable` — the most common receiver. Other receivers
 /// (chained calls, property chains) return an empty vec; callers treat
@@ -1700,7 +1772,23 @@ fn infer_multiplicity_from_valuespec(
         // Variable → look up declared multiplicity
         ExprKind::Variable { name } => var_types.get(name).map(|(_, m)| m.clone()),
 
-        // Property access, etc. — unknown
+        // Property / qualified-property access — combine receiver
+        // multiplicity with the property's declared multiplicity.
+        // Without this, dispatch sees `obj.collProp` as
+        // multiplicity-unknown and the `is_multiplicity_compatible`
+        // permissive-on-None branch lets `[1]`-typed param overloads
+        // win against `[*]`-typed ones, causing
+        // `String[*]->contains(String[1])` to dispatch to the
+        // `string::contains(String[1], String[1])` substring overload
+        // instead of `collection::contains(Any[*], Any[1])`.
+        ExprKind::PropertyCall(data) | ExprKind::QualifiedPropertyCall(data) => {
+            let target = data.arguments.first()?;
+            let recv_mult = infer_multiplicity_from_valuespec(target, model, var_types)?;
+            let target_eid = infer_type_from_valuespec(target, model, var_types)?;
+            let prop_mult = find_property_multiplicity(target_eid, &data.function_name, model)?;
+            Some(multiplicity_product(&recv_mult, &prop_mult))
+        }
+
         _ => None,
     }
 }
@@ -2498,6 +2586,65 @@ fn any_arg_reads_unresolved(args: &[crate::types::ValueSpec], var_types: &VarTyp
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `multiplicity_product` is the heart of property-chain
+    /// multiplicity inference (`obj[m1].prop[m2]` → `[m1*m2]`).
+    /// This test pins down the cases dispatch relies on.
+    #[test]
+    fn multiplicity_product_table() {
+        use crate::types::Multiplicity::*;
+
+        // Identity: [1] × [1] = [1]
+        assert_eq!(
+            multiplicity_product(&PureOne, &PureOne),
+            PureOne
+        );
+        // [1] × [0..1] = [0..1]
+        assert_eq!(
+            multiplicity_product(&PureOne, &ZeroOrOne),
+            ZeroOrOne
+        );
+        // [0..1] × [1] = [0..1]
+        assert_eq!(
+            multiplicity_product(&ZeroOrOne, &PureOne),
+            ZeroOrOne
+        );
+        // [*] absorbs anything → [*]
+        assert_eq!(
+            multiplicity_product(&ZeroOrMany, &PureOne),
+            ZeroOrMany
+        );
+        assert_eq!(
+            multiplicity_product(&PureOne, &ZeroOrMany),
+            ZeroOrMany
+        );
+        // [1..*] × [1] = [1..*] (lower 1*1=1, upper *=*).
+        assert_eq!(
+            multiplicity_product(&OneOrMany, &PureOne),
+            OneOrMany
+        );
+        // [1..*] × [0..1] = [*] (lower 1*0=0, upper *).
+        assert_eq!(
+            multiplicity_product(&OneOrMany, &ZeroOrOne),
+            ZeroOrMany
+        );
+        // [2] × [1] = [2]
+        assert_eq!(
+            multiplicity_product(
+                &Range { lower: 2, upper: Some(2) },
+                &PureOne,
+            ),
+            Range { lower: 2, upper: Some(2) },
+        );
+        // [2..3] × [1..*] = [2..*]
+        assert_eq!(
+            multiplicity_product(
+                &Range { lower: 2, upper: Some(3) },
+                &OneOrMany,
+            ),
+            Range { lower: 2, upper: None },
+        );
+    }
 
     #[test]
     fn lower_multiplicity_variants() {
