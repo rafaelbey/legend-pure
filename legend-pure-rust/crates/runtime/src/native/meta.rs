@@ -851,7 +851,7 @@ pub(crate) fn build_function_type_wrapper(
         // the model. Reflective callers that need the full FunctionType
         // shape on a Path are not yet exercised; surface an empty
         // signature so this code path compiles cleanly.
-        crate::value::FunctionValue::Path(_) => (std::rc::Rc::from(Vec::new()), None, None),
+        crate::value::FunctionValue::Path(_) => (std::sync::Arc::from(Vec::new()), None, None),
     };
 
     let mut param_objs: Vec<Value> = Vec::with_capacity(params.len());

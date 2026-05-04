@@ -256,6 +256,17 @@ fn refine_in_expr_kind<'a>(best: &mut Located<'a>, cursor: Cursor, kind: &'a Exp
                 refine_in_value_spec(best, cursor, e);
             }
         }
+        ExprKind::PathLiteral { steps, .. } => {
+            // Steps carry their own source_info but we don't surface a
+            // dedicated `LocatedKind` for them yet — descending into
+            // each step's QP-argument expressions is enough for tier-1
+            // hover/goto on the parameter lambdas inside `/qp(args)`.
+            for step in steps {
+                for param in &step.parameters {
+                    refine_in_value_spec(best, cursor, param);
+                }
+            }
+        }
         ExprKind::IntegerLiteral(_)
         | ExprKind::FloatLiteral(_)
         | ExprKind::DecimalLiteral(_)
