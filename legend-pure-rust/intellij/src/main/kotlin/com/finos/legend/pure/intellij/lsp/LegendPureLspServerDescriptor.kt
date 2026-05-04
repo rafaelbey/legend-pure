@@ -21,25 +21,56 @@ import com.redhat.devtools.lsp4ij.server.OSProcessStreamConnectionProvider
 /**
  * Builds the OS process command line for `legend lsp`.
  *
- * Resolution rule for the `legend` binary:
- *   1. The `LEGEND_PURE_BIN` environment variable.
- *   2. `legend` on `PATH`.
+ * Resolution rules:
+ *   - **Binary**: `LEGEND_PURE_BIN` env var, then `legend` on PATH.
+ *   - **Classpath**: walk up from the project base for the first
+ *     `legend-pure-classpath.toml` and pass it via `--classpath`.
+ *     Trusting the LSP's own ancestor-walk discovery is unreliable
+ *     because the LSP's cwd is the *project* root, not necessarily
+ *     the directory containing the descriptor — and silently falling
+ *     through to the embedded-only fallback gives the user no
+ *     feedback for files in their own repo.
  *
- * No `--classpath` flag is forwarded yet — the LSP's built-in
- * discovery cascade (env → ancestor walk → next-to-binary) handles
- * the typical case. Settings panel + explicit overrides are
- * follow-ups (see plan §5c).
+ * Settings-panel overrides are a follow-up.
  */
 class LegendPureLspServerDescriptor(project: Project) : OSProcessStreamConnectionProvider() {
 
     init {
+        val baseDir = project.basePath?.let { java.nio.file.Paths.get(it) }
+        val classpathToml = baseDir?.let(::discoverClasspathToml)
+
+        val params = mutableListOf("lsp")
+        if (classpathToml != null) {
+            params += "--classpath"
+            params += classpathToml.toString()
+        }
+
         val command = GeneralCommandLine().apply {
             withExePath(System.getenv("LEGEND_PURE_BIN") ?: "legend")
-            withParameters("lsp")
-            // Run from the project root so the LSP's ancestor-walk
-            // descriptor discovery finds `legend-pure-classpath.toml`.
-            project.basePath?.let { withWorkDirectory(it) }
+            withParameters(params)
+            baseDir?.let { withWorkDirectory(it.toString()) }
         }
         super.setCommandLine(command)
+    }
+
+    private companion object {
+        private const val DESCRIPTOR_NAME = "legend-pure-classpath.toml"
+
+        /**
+         * Walk `start` and its ancestors looking for the first
+         * `legend-pure-classpath.toml`. Returns null if none is found
+         * within the file-system root.
+         */
+        fun discoverClasspathToml(start: java.nio.file.Path): java.nio.file.Path? {
+            var dir: java.nio.file.Path? = start
+            while (dir != null) {
+                val candidate = dir.resolve(DESCRIPTOR_NAME)
+                if (java.nio.file.Files.isRegularFile(candidate)) {
+                    return candidate
+                }
+                dir = dir.parent
+            }
+            return null
+        }
     }
 }
