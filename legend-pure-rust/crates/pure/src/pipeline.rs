@@ -600,18 +600,65 @@ fn resolve_m3_supertypes(model: &mut PureModel) {
         let type_params: std::collections::HashSet<SmolStr> =
             c.type_parameters.iter().cloned().collect();
 
-        let resolve_in_place = |ty: &mut TypeExpr| match ty {
-            TypeExpr::Generic(name) if !type_params.contains(name) => {
-                if let Some(&resolved_id) = name_to_id.get(name.as_str()) {
-                    *ty = TypeExpr::Named {
-                        element: resolved_id,
-                        type_arguments: vec![],
-                        multiplicity_arguments: Vec::new(),
-                        value_arguments: vec![],
-                    };
+        // Resolves M3 stub forms into their final TypeExpr shapes:
+        //
+        //  - `Generic(name)` where `name` is NOT a class type-parameter →
+        //    look up the chunk-0 class set and rewrite to `Named { id }`.
+        //  - `Named { ANY_ID, …, value_arguments: [String(rawType)] }` —
+        //    the parametric-marker form `m3_parser::build_pack_typeexpr`
+        //    produces when a property type carries `<type_args | mult_args>`.
+        //    Rewrite element to the resolved class id, drop the marker
+        //    String, and recurse into the inner type/mult args.
+        //
+        // Recursive (closure-style) so nested cases like
+        // `Class.properties: Property<Class<T>, Any>[*]` resolve all the
+        // way down. Implemented via a fn so it can call itself.
+        fn resolve_in_place(
+            ty: &mut TypeExpr,
+            name_to_id: &HashMap<SmolStr, ElementId>,
+            type_params: &std::collections::HashSet<SmolStr>,
+        ) {
+            match ty {
+                TypeExpr::Generic(name) if !type_params.contains(name) => {
+                    if let Some(&resolved_id) = name_to_id.get(name.as_str()) {
+                        *ty = TypeExpr::Named {
+                            element: resolved_id,
+                            type_arguments: vec![],
+                            multiplicity_arguments: Vec::new(),
+                            value_arguments: vec![],
+                        };
+                    }
                 }
+                TypeExpr::Named {
+                    element,
+                    type_arguments,
+                    value_arguments,
+                    ..
+                } => {
+                    // Detect the m3_parser sentinel marker: ANY_ID with
+                    // a single `ConstValue::String(rawType)` in
+                    // value_arguments. Rewrite the element to the
+                    // resolved class id and clear the marker.
+                    if *element == crate::bootstrap::ANY_ID
+                        && value_arguments.len() == 1
+                        && let crate::types::ConstValue::String(raw_name) = &value_arguments[0]
+                    {
+                        if let Some(&resolved_id) = name_to_id.get(raw_name.as_str()) {
+                            *element = resolved_id;
+                            value_arguments.clear();
+                        }
+                    }
+                    // Recurse into inner type-arguments so `Property<Class<T>, Any>`
+                    // resolves the nested `Class<T>` too.
+                    for inner in type_arguments.iter_mut() {
+                        resolve_in_place(inner, name_to_id, type_params);
+                    }
+                }
+                _ => {}
             }
-            _ => {}
+        }
+        let resolve_in_place = |ty: &mut TypeExpr| {
+            resolve_in_place(ty, &name_to_id, &type_params);
         };
 
         for st in &mut c.super_types {

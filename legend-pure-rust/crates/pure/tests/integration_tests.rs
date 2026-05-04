@@ -2415,6 +2415,65 @@ function test::caller(h: test::Holder<String|*>[1]): String[1] { $h.items }
 }
 
 // ---------------------------------------------------------------------------
+// M3 property types — diagnostic & lock for the BACKLOG P1 ⚠️ Partial item
+// ---------------------------------------------------------------------------
+
+#[test]
+fn m3_property_parametric_types_preserved() {
+    // Regression lock for the M3 property type-args fix: any property
+    // whose declared rawType in `m3.pure` is a generic class
+    // (`Property<U,V>`, `Class<T>`, …) must carry non-empty
+    // `type_arguments` after `resolve_m3_supertypes`. Before the fix
+    // these stripped to bare `Named { Property, type_arguments: [] }`,
+    // dropping anchoring info for downstream reflection chains.
+    use legend_pure_parser_pure::ids::ElementId;
+    use legend_pure_parser_pure::model::Element;
+    use legend_pure_parser_pure::types::TypeExpr;
+
+    let model = legend_pure_parser_pure::pipeline::init_bootstrap_model();
+    let chunk = &model.chunks[0];
+    let mut stripped: Vec<String> = Vec::new();
+    for local_idx in 0..chunk.elements.len() {
+        let id = ElementId::InstanceId {
+            chunk_id: 0,
+            local_idx,
+        };
+        let node = chunk.nodes.get(id.local_idx());
+        let elem = chunk.elements.get(id.local_idx());
+        if let Element::Class(c) = elem {
+            for p in &c.properties {
+                if let TypeExpr::Named {
+                    element,
+                    type_arguments,
+                    ..
+                } = &p.type_expr
+                {
+                    let name = model.element_name(*element);
+                    if type_arguments.is_empty()
+                        && let Some(Element::Class(target)) = model.try_get_element(*element)
+                        && !target.type_parameters.is_empty()
+                    {
+                        stripped.push(format!(
+                            "{}.{}: {}<{}>",
+                            node.name,
+                            p.name,
+                            name,
+                            target.type_parameters.join(", ")
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        stripped.is_empty(),
+        "M3 properties with stripped parametric types ({}):\n  {}",
+        stripped.len(),
+        stripped.join("\n  ")
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Lambda parameter inference from `Function<{T->X}>` shape
 // ---------------------------------------------------------------------------
 
