@@ -765,24 +765,15 @@ fn infer_function_call(
             if arg_eid == Some(bootstrap::NIL_ID) {
                 continue;
             }
-            // Substitute the param's declared type with the bindings
-            // collected upstream so generic params (`T[n]` in
-            // `eval<T,V|m,n>(func, param: T[n])`) become their bound
-            // form (`Integer[1]` once T binds from the FunctionType
-            // slot of `func: Function<{Integer[1]->String[1]}>[1]`).
-            // Without this, `is_type_compatible(_, Generic(T))`
-            // returns permissive and `eval(func, "wrong")` slips
-            // through silently.
-            let expected_type = crate::resolve::substitute_type(&param.type_expr, &bindings.ty);
-            if !crate::resolve::is_type_compatible(arg_eid, &expected_type, ctx.model) {
+            if !crate::resolve::is_type_compatible(arg_eid, &param.type_expr, ctx.model) {
                 let arg_name = arg_eid
                     .map(|e| ctx.model.element_name(e).to_string())
                     .unwrap_or_else(|| "<unknown>".to_string());
-                let param_name = match &expected_type {
+                let param_name = match &param.type_expr {
                     TypeExpr::Named { element, .. } => {
                         ctx.model.element_name(*element).to_string()
                     }
-                    _ => format!("{:?}", expected_type),
+                    _ => format!("{:?}", param.type_expr),
                 };
                 let arg_si = arg_source_infos
                     .get(arg_idx)

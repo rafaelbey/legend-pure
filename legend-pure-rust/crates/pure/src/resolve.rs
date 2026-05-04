@@ -2063,10 +2063,6 @@ pub(crate) fn bind_type(
     model: &crate::model::PureModel,
 ) {
     use crate::types::TypeExpr;
-    // Type-hole arguments contribute nothing — binding `T` to an
-    // un-inferred lambda parameter would propagate the hole through
-    // generic substitution. Skip silently; other arguments may still
-    // bind `T`.
     if matches!(arg_ty, TypeExpr::Unresolved) {
         return;
     }
@@ -2078,7 +2074,6 @@ pub(crate) fn bind_type(
                     e.insert(arg_ty.clone());
                 }
                 Entry::Occupied(mut e) => {
-                    // T already bound — update to LUB with new candidate.
                     let lub = type_lub(e.get(), arg_ty, model);
                     *e.get_mut() = lub;
                 }
@@ -2098,17 +2093,6 @@ pub(crate) fn bind_type(
                 }
             }
         }
-        // FunctionType: recurse pairwise into parameter and return
-        // types so that `eval<T,V|m,n>(func:Function<{T[n]->V[m]}>[1],
-        // param:T[n]):V[m]` binds T from the Function's first param
-        // slot and V from its return slot. Without this recursion,
-        // `bind_type(Named{Function,[FunctionType{T->V}]},
-        // Named{Function,[FunctionType{Integer->String}]})` recurses
-        // into the outer `Named`'s type_arguments, hits the inner
-        // `FunctionType` pair, and falls through the wildcard arm
-        // below — `T` never binds, the `param:T[n]` check passes
-        // permissively against any arg type, and `eval(f, "wrong")`
-        // silently compiles.
         TypeExpr::FunctionType {
             parameters: p_params,
             return_type: p_ret,
