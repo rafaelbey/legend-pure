@@ -1949,12 +1949,39 @@ pub(crate) fn infer_generic_bindings(
         else {
             continue;
         };
-        // Extend var_types with the lambda's own params, substituting any type
-        // variables already bound (e.g., T → TestResult from the first arg).
+        // Extend var_types with the lambda's own params, preferring the
+        // lambda's own declared type when concrete and falling back to
+        // the substituted FunctionType expectation otherwise.
+        //
+        // Without the "lambda-declared first" preference, an explicitly-
+        // typed lambda param like
+        //   `fold(coll, {inc:MappingInclude[1], sub:Store[0..1] | …}, [])`
+        // would have its `sub` bound to `Generic("V")` (because the
+        // accumulator `[]` left V unbound, so substituting the
+        // FunctionType slot `V[m]` yields `Generic("V")`). The lambda
+        // body then types `$sub->isEmpty()` against `Generic` rather
+        // than `Store[0..1]`, and downstream `bind_type(return_type=V,
+        // body_te)` binds V from `Generic`/`Any` instead of `Store`.
         let mut extended = var_types.clone();
-        for (lp, (ft_ty, _ft_mult)) in lambda_params.iter().zip(ft_params.iter()) {
-            let resolved = substitute_type(ft_ty, &bindings.ty);
-            extended.insert(lp.name.clone(), (resolved, Multiplicity::PureOne));
+        for (lp, (ft_ty, ft_mult)) in lambda_params.iter().zip(ft_params.iter()) {
+            let lambda_ty_concrete = !matches!(
+                lp.type_expr,
+                TypeExpr::Generic(_) | TypeExpr::Unresolved
+            );
+            let ty = if lambda_ty_concrete {
+                lp.type_expr.clone()
+            } else {
+                substitute_type(ft_ty, &bindings.ty)
+            };
+            // Same preference for multiplicity: use the lambda's
+            // declared mult when not a Variable, else the substituted
+            // FT mult.
+            let mult = if !matches!(lp.multiplicity, Multiplicity::Variable(_)) {
+                lp.multiplicity.clone()
+            } else {
+                substitute_mult(ft_mult, &bindings.mult)
+            };
+            extended.insert(lp.name.clone(), (ty, mult));
         }
         let Some(last_expr) = lambda_body.last() else {
             continue;

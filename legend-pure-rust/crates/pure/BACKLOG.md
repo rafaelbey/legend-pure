@@ -73,7 +73,7 @@ dependencies, so future contributors know what's safe to pick up.
 |---|---|---|---|
 | Type hierarchy walk (subtype check) | P0 | ✅ Done | `is_subtype(child, parent)` following `super_types` chain. |
 | Multiplicity compatibility | P0 | ✅ Done | `is_multiplicity_compatible` + `mult_bounds` + `mult_specificity`. |
-| Type inference (bottom-up) | P2 | 🔲 Deferred | Pass 2.5 in pipeline doc. Infer expression types. |
+| Type inference (bottom-up) | P2 | ✅ Done | `pass_infer` runs as Pass 2.5 in `pipeline::finalize_model` — bottom-up inference over every function body, populating `expr.type_info` on every node. The recent generic-substitution + lambda second-pass fixes (e5e27c592) make this layer's output precise enough that `inference_precision_sweep.rs` keeps platform `body→Any` divergences under 2. |
 | Constraint evaluation | P3 | 🔲 Deferred | Class constraints need expression evaluation at validation time. |
 
 ---
@@ -92,9 +92,9 @@ dependencies, so future contributors know what's safe to pick up.
 
 | Item | Priority | Status | Notes |
 |---|---|---|---|
-| Compilation tracing (`tracing` crate) | P1 | 🔲 Planned | Add `tracing` instrumentation to pipeline passes, function dispatch, expression lowering, and type narrowing. Enable via `RUST_LOG=legend_pure_parser_pure=debug`. Shows pass timing, dispatch decisions, candidate narrowing, and resolution fallback paths. |
-| Dispatch decision log | P1 | 🔲 Planned | Log each `resolve_function_call`: function name, arg count, candidates found, type-narrowed set, final pick or error. Critical for debugging false ambiguity / false elimination. |
-| Pass timing | P2 | 🔲 Planned | `tracing::info_span!` on each pipeline pass (1, 1.5, 2a, 2b, 2.5, 3) with element count and duration. |
+| Compilation tracing (`tracing` crate) | P1 | ✅ Done | `#[tracing::instrument]` on every pipeline pass (declare, topo_sort, define_signatures, define_bodies, define_class_bodies, infer, finalize_model), `resolve_function_call` (resolve.rs:811), `narrow_candidates_by_type` (resolve.rs:2349), and lower-side `lower_expression_body`. Enable via `RUST_LOG=legend_pure_parser_pure=debug`. Locked by `crates/pure/tests/tracing_smoke.rs`. |
+| Dispatch decision log | P1 | ✅ Done | `resolve_function_call` (resolve.rs:811-820) emits `#[tracing::instrument]` with `name=`, `package=`, `arg_count`, `n_imports` fields and inline `tracing::debug!` events for each phase (root-package lookup, import-scope lookup, single-vs-multi candidates). |
+| Pass timing | P2 | ✅ Done | Pipeline passes use `#[tracing::instrument(level = "info", name = "...", skip_all, fields(...))]` so `RUST_LOG=info` produces per-pass spans with timing. |
 | Error source chain | P2 | 🔲 Planned | For cascading errors (arg lowering fails → function unresolved), link parent error to child cause. |
 
 ---
