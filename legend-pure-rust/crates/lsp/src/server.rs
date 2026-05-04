@@ -101,6 +101,20 @@ impl Backend {
             }
         }
         tracing::info!(error_count = outcome.error_count, "recompile complete");
+        // Echo into the client's log so the LSP4IJ "Logs" tab shows
+        // activity each time the workspace recompiles. Helps users
+        // tell whether the LSP is alive and producing output.
+        let level = if outcome.error_count == 0 {
+            MessageType::INFO
+        } else {
+            MessageType::WARNING
+        };
+        self.client
+            .log_message(
+                level,
+                format!("recompile complete: {} error(s)", outcome.error_count),
+            )
+            .await;
     }
 }
 
@@ -128,9 +142,52 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _params: InitializedParams) {
+        tracing::info!("initialized notification received");
+        // Surface the resolved repo set so a user staring at "no
+        // diagnostics, no hover" can immediately tell whether their
+        // project sources are in scope.
+        let (repo_summary, has_filesystem) = {
+            let ws = self.workspace.lock().await;
+            let mut filesystem = 0usize;
+            let mut purem = 0usize;
+            let mut other = 0usize;
+            let mut total_files = 0usize;
+            for repo in &ws.base_repos {
+                use legend_pure_core_platform::repo::Repo;
+                match repo {
+                    Repo::Filesystem { files, .. } => {
+                        filesystem += 1;
+                        total_files += files.iter().filter(|f| f.path.ends_with(".pure")).count();
+                    }
+                    Repo::Purem { .. } => purem += 1,
+                    _ => other += 1,
+                }
+            }
+            (
+                format!(
+                    "legend-pure-lsp initialized: {filesystem} filesystem repo(s) ({total_files} \
+                     .pure files), {purem} purem repo(s), {other} other"
+                ),
+                filesystem > 0,
+            )
+        };
         self.client
-            .log_message(MessageType::INFO, "legend-pure-lsp initialized")
+            .log_message(MessageType::INFO, &repo_summary)
             .await;
+        if !has_filesystem {
+            // Without a filesystem repo, hover/goto/outline silently
+            // return None for any user file — that confused the first
+            // smoke run. Surface it as a warning popup rather than
+            // letting the LSP look broken.
+            self.client
+                .show_message(
+                    MessageType::WARNING,
+                    "No filesystem repos in classpath. Hover, go-to-definition, and \
+                     diagnostics on user `.pure` files will not be available until a \
+                     `legend-pure-classpath.toml` declares a filesystem repo.",
+                )
+                .await;
+        }
         self.recompile_and_publish().await;
     }
 
@@ -139,6 +196,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        tracing::info!(uri = %params.text_document.uri, "did_open received");
         let uri = params.text_document.uri;
         let content = params.text_document.text;
         {
