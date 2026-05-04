@@ -1526,14 +1526,39 @@ fn infer_let_type(
                 None
             }
         }),
-        ExprKind::PropertyCall(_) | ExprKind::QualifiedPropertyCall(_) => {
-            // Property/QP type inference here would require multiplicity
-            // info that the lookup helpers used by `infer_typeexpr_from_valuespec`
-            // don't surface. The legacy implementation returned None for
-            // these IR shapes (they weren't matched), and `let` bindings
-            // populate types via Pass 2.5 inference instead — keep
-            // parity here. Out of scope for the unification commit.
-            None
+        ExprKind::PropertyCall(data) | ExprKind::QualifiedPropertyCall(data) => {
+            // Resolve the property's declared type + multiplicity and
+            // combine with the receiver's multiplicity (`obj[m1].prop[m2]`
+            // → `[m1*m2]`). Without this, `let x = $obj.collProp`
+            // failed to bind `x` into `var_types`, leaving every
+            // downstream `$x` reference type-unknown — which made
+            // dispatch silently pick wrong overloads (e.g.
+            // `String[*]->contains(String[1])` going to
+            // `string::contains(String[1], String[1])`).
+            let target = data.arguments.first()?;
+            let target_te =
+                crate::resolve::infer_typeexpr_from_valuespec(target, ctx.model, &ctx.variable_types)?;
+            let target_eid = match &target_te {
+                TypeExpr::Named { element, .. } => *element,
+                _ => return None,
+            };
+            let recv_mult = crate::resolve::infer_multiplicity_from_valuespec(
+                target,
+                ctx.model,
+                &ctx.variable_types,
+            )?;
+            let prop_te =
+                crate::resolve::find_property_with_inheritance(target_eid, &data.function_name, ctx.model)?
+                    .0;
+            let prop_mult = crate::resolve::find_property_multiplicity(
+                target_eid,
+                &data.function_name,
+                ctx.model,
+            )?;
+            Some((
+                prop_te,
+                crate::resolve::multiplicity_product(&recv_mult, &prop_mult),
+            ))
         }
         ExprKind::Variable { name } => ctx.variable_types.get(name).cloned(),
         ExprKind::Collection { elements } => {
