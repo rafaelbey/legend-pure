@@ -1162,6 +1162,7 @@ fn lower_type_reference(
                 type_expr: TypeExpr::Named {
                     element: relation_type_id,
                     type_arguments: vec![],
+                    multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
                 },
                 multiplicity: Multiplicity::PureOne,
@@ -1216,12 +1217,14 @@ pub(crate) fn build_packageable_element_ref(
             let element_te = TypeExpr::Named {
                 element: element_id,
                 type_arguments: vec![],
+                multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
             };
             Box::new(ResolvedType {
                 type_expr: TypeExpr::Named {
                     element: metatype,
                     type_arguments: vec![element_te],
+                    multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
                 },
                 multiplicity: Multiplicity::PureOne,
@@ -1480,6 +1483,7 @@ fn infer_let_type(
     let named = |eid: crate::ids::ElementId| TypeExpr::Named {
         element: eid,
         type_arguments: vec![],
+        multiplicity_arguments: Vec::new(),
         value_arguments: vec![],
     };
 
@@ -1582,6 +1586,7 @@ fn infer_let_type(
                                 TypeExpr::Named {
                                     element: lub_id,
                                     type_arguments: vec![],
+                                    multiplicity_arguments: Vec::new(),
                                     value_arguments: vec![],
                                 }
                             } else {
@@ -1745,6 +1750,7 @@ fn lower_new_instance(
         type_expr: crate::types::TypeExpr::Named {
             element: class_id,
             type_arguments: resolved_type_args,
+            multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
         },
         multiplicity: crate::types::Multiplicity::PureOne,
@@ -1903,6 +1909,7 @@ fn lower_column(
     let type_expr = TypeExpr::Named {
         element: outer_id,
         type_arguments: vec![],
+        multiplicity_arguments: Vec::new(),
         value_arguments: vec![],
     };
     if e.is_array {

@@ -59,6 +59,7 @@ fn boolean_literal_infers_to_boolean_one() {
         TypeExpr::Named {
             element: bootstrap::BOOLEAN_ID,
             type_arguments: Vec::new(),
+            multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
         }
     );
@@ -82,6 +83,7 @@ fn variable_binding_resolves_to_supplied_type() {
         TypeExpr::Named {
             element: bootstrap::STRING_ID,
             type_arguments: Vec::new(),
+            multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
         },
         Multiplicity::PureOne,
@@ -94,6 +96,7 @@ fn variable_binding_resolves_to_supplied_type() {
         TypeExpr::Named {
             element: bootstrap::STRING_ID,
             type_arguments: Vec::new(),
+            multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
         }
     );

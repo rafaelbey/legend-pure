@@ -27,8 +27,6 @@
 //! - **Scope chain** — `let` bindings and lambda parameters push entries
 //!   into a scope stack. Variable references resolve by walking up.
 
-use std::collections::HashMap;
-
 use smol_str::SmolStr;
 
 use crate::bootstrap;
@@ -270,6 +268,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
             type_expr: TypeExpr::Named {
                 element: *enum_element,
                 type_arguments: Vec::new(),
+                multiplicity_arguments: Vec::new(),
                 value_arguments: Vec::new(),
             },
             multiplicity: Multiplicity::PureOne,
@@ -302,6 +301,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                     TypeExpr::Named {
                         element: bootstrap::ANY_ID,
                         type_arguments: Vec::new(),
+                        multiplicity_arguments: Vec::new(),
                         value_arguments: Vec::new(),
                     },
                     Multiplicity::ZeroOrMany,
@@ -348,6 +348,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                         TypeExpr::Named {
                             element: lub_id,
                             type_arguments: Vec::new(),
+                            multiplicity_arguments: Vec::new(),
                             value_arguments: Vec::new(),
                         }
                     }
@@ -356,6 +357,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                 .unwrap_or_else(|| TypeExpr::Named {
                     element: bootstrap::NIL_ID,
                     type_arguments: Vec::new(),
+                    multiplicity_arguments: Vec::new(),
                     value_arguments: Vec::new(),
                 });
 
@@ -397,6 +399,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                 type_expr: TypeExpr::Named {
                     element: metatype_eid,
                     type_arguments: Vec::new(),
+                    multiplicity_arguments: Vec::new(),
                     value_arguments: Vec::new(),
                 },
                 multiplicity: Multiplicity::PureOne,
@@ -423,6 +426,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                 type_expr: TypeExpr::Named {
                     element,
                     type_arguments: Vec::new(),
+                    multiplicity_arguments: Vec::new(),
                     value_arguments: Vec::new(),
                 },
                 multiplicity: Multiplicity::PureOne,
@@ -445,6 +449,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                     type_expr: TypeExpr::Named {
                         element,
                         type_arguments: Vec::new(),
+                        multiplicity_arguments: Vec::new(),
                         value_arguments: Vec::new(),
                     },
                     multiplicity: Multiplicity::PureOne,
@@ -468,6 +473,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                     type_expr: TypeExpr::Named {
                         element,
                         type_arguments: Vec::new(),
+                        multiplicity_arguments: Vec::new(),
                         value_arguments: Vec::new(),
                     },
                     multiplicity: Multiplicity::PureOne,
@@ -495,6 +501,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                 type_expr: TypeExpr::Named {
                     element,
                     type_arguments: Vec::new(),
+                    multiplicity_arguments: Vec::new(),
                     value_arguments: Vec::new(),
                 },
                 multiplicity: Multiplicity::PureOne,
@@ -568,6 +575,7 @@ fn infer_function_call(
             type_expr: TypeExpr::Named {
                 element: bootstrap::NIL_ID,
                 type_arguments: Vec::new(),
+                multiplicity_arguments: Vec::new(),
                 value_arguments: Vec::new(),
             },
             multiplicity: Multiplicity::Range {
@@ -871,15 +879,18 @@ enum PropertyLookup {
 /// One qualified-property overload candidate, ready for arity + arg-type
 /// validation against a specific call site.
 struct QpCandidate {
-    /// Return type with receiver type-arg bindings already substituted.
+    /// Return type with receiver type-arg + mult-arg bindings already
+    /// substituted.
     return_type: ResolvedType,
     /// QP parameter list (cloned from the resolved QP).
     parameters: Vec<Parameter>,
-    /// Bindings to substitute when checking `parameters[i].type_expr`.
-    bindings: HashMap<SmolStr, TypeExpr>,
+    /// Bindings to substitute when checking `parameters[i].type_expr`
+    /// and `parameters[i].multiplicity`.
+    bindings: crate::resolve::GenericBindings,
     /// Receiver class name (for diagnostics).
     receiver_type_name: SmolStr,
 }
+
 
 /// Inference helper for simple property access (`$x.name`). Shared by
 /// the legacy `ExprKind::PropertyAccess` arm and the new
@@ -1228,12 +1239,17 @@ fn infer_property_access(
     };
 
     // Receiver must be a `Named` type whose element resolves to a Class.
-    let (receiver_id, receiver_type_args) = match &target.type_expr {
+    let (receiver_id, receiver_type_args, receiver_mult_args) = match &target.type_expr {
         TypeExpr::Named {
             element,
             type_arguments,
+            multiplicity_arguments,
             ..
-        } => (*element, type_arguments.clone()),
+        } => (
+            *element,
+            type_arguments.clone(),
+            multiplicity_arguments.clone(),
+        ),
         _ => return PropertyLookup::UnknownTarget,
     };
     let Some(receiver_elem) = ctx.model.try_get_element(receiver_id) else {
@@ -1244,10 +1260,16 @@ fn infer_property_access(
     }
     let receiver_type_name = ctx.model.get_node(receiver_id).name.clone();
 
-    // Build type-argument bindings for the immediate receiver class
-    // (e.g., receiver `Pair<Integer,String>` with class `Pair<U,V>`
-    // produces { U → Integer, V → String }).
-    let receiver_bindings = compute_type_arg_bindings(ctx.model, receiver_id, &receiver_type_args);
+    // Build type-argument and multiplicity-argument bindings for the
+    // immediate receiver class. `Pair<Integer,String>` (class
+    // `Pair<U,V>`) → { U → Integer, V → String }. `Holder<String|*>`
+    // (class `Holder<T|m>`) → { T → String } and { m → ZeroOrMany }.
+    let receiver_bindings = compute_type_arg_bindings(
+        ctx.model,
+        receiver_id,
+        &receiver_type_args,
+        &receiver_mult_args,
+    );
 
     // Walk type hierarchy (own + association + supertypes) looking for
     // a member named `property_name`.
@@ -1320,19 +1342,28 @@ fn is_metatype_carrier(model: &PureModel, class_id: ElementId) -> bool {
     )
 }
 
-/// Computes type-parameter → type-argument bindings for a class.
+/// Computes type-parameter and multiplicity-parameter bindings for a
+/// class from a use-site's `<TypeArgs|MultArgs>`.
 ///
-/// Returns an empty map when the class has no type parameters or the
-/// receiver carried no type arguments.
+/// Empty maps when the class has no parameters or the receiver carried
+/// no arguments.
 fn compute_type_arg_bindings(
     model: &PureModel,
     class_id: ElementId,
     type_arguments: &[TypeExpr],
-) -> HashMap<SmolStr, TypeExpr> {
-    let mut out = HashMap::new();
+    multiplicity_arguments: &[Multiplicity],
+) -> crate::resolve::GenericBindings {
+    let mut out = crate::resolve::GenericBindings::default();
     if let Some(Element::Class(class)) = model.try_get_element(class_id) {
         for (param_name, arg) in class.type_parameters.iter().zip(type_arguments.iter()) {
-            out.insert(param_name.clone(), arg.clone());
+            out.ty.insert(param_name.clone(), arg.clone());
+        }
+        for (param_name, arg) in class
+            .multiplicity_parameters
+            .iter()
+            .zip(multiplicity_arguments.iter())
+        {
+            out.mult.insert(param_name.clone(), arg.clone());
         }
     }
     out
@@ -1351,7 +1382,7 @@ fn lookup_member_in_class(
     model: &PureModel,
     class_id: ElementId,
     property_name: &str,
-    bindings: &HashMap<SmolStr, TypeExpr>,
+    bindings: &crate::resolve::GenericBindings,
     receiver_type_name: &SmolStr,
     visited: &mut std::collections::HashSet<ElementId>,
 ) -> Option<PropertyLookup> {
@@ -1365,8 +1396,8 @@ fn lookup_member_in_class(
     // 1. Own declared properties.
     if let Some(prop) = class.properties.iter().find(|p| p.name == property_name) {
         let resolved = ResolvedType {
-            type_expr: crate::resolve::substitute_type(&prop.type_expr, bindings),
-            multiplicity: prop.multiplicity.clone(),
+            type_expr: crate::resolve::substitute_type(&prop.type_expr, &bindings.ty),
+            multiplicity: crate::resolve::substitute_mult(&prop.multiplicity, &bindings.mult),
         };
         return Some(PropertyLookup::FoundProperty(resolved));
     }
@@ -1382,8 +1413,11 @@ fn lookup_member_in_class(
             .into_iter()
             .map(|qp| QpCandidate {
                 return_type: ResolvedType {
-                    type_expr: crate::resolve::substitute_type(&qp.return_type, bindings),
-                    multiplicity: qp.return_multiplicity.clone(),
+                    type_expr: crate::resolve::substitute_type(&qp.return_type, &bindings.ty),
+                    multiplicity: crate::resolve::substitute_mult(
+                        &qp.return_multiplicity,
+                        &bindings.mult,
+                    ),
                 },
                 parameters: qp.parameters.to_vec(),
                 bindings: bindings.clone(),
@@ -1405,8 +1439,11 @@ fn lookup_member_in_class(
             let injected = &assoc.properties[1 - *prop_idx_pointing_to_self];
             if injected.name == property_name {
                 let resolved = ResolvedType {
-                    type_expr: crate::resolve::substitute_type(&injected.type_expr, bindings),
-                    multiplicity: injected.multiplicity.clone(),
+                    type_expr: crate::resolve::substitute_type(&injected.type_expr, &bindings.ty),
+                    multiplicity: crate::resolve::substitute_mult(
+                        &injected.multiplicity,
+                        &bindings.mult,
+                    ),
                 };
                 return Some(PropertyLookup::FoundProperty(resolved));
             }
@@ -1419,17 +1456,28 @@ fn lookup_member_in_class(
         if let TypeExpr::Named {
             element: super_id,
             type_arguments: super_args,
+            multiplicity_arguments: super_mult_args,
             ..
         } = st
         {
-            // Substitute current bindings into the supertype's type args
-            // so generics carry through (`Foo<T> extends Bar<List<T>>`
-            // looks up properties on Bar with X → List<T_resolved>).
+            // Substitute current bindings into the supertype's type and
+            // mult args so generics carry through (`Foo<T|m> extends
+            // Bar<List<T>|m>` looks up properties on Bar with X →
+            // List<T_resolved> and m → m_resolved).
             let substituted_args: Vec<TypeExpr> = super_args
                 .iter()
-                .map(|a| crate::resolve::substitute_type(a, bindings))
+                .map(|a| crate::resolve::substitute_type(a, &bindings.ty))
                 .collect();
-            let super_bindings = compute_type_arg_bindings(model, *super_id, &substituted_args);
+            let substituted_mult_args: Vec<Multiplicity> = super_mult_args
+                .iter()
+                .map(|m| crate::resolve::substitute_mult(m, &bindings.mult))
+                .collect();
+            let super_bindings = compute_type_arg_bindings(
+                model,
+                *super_id,
+                &substituted_args,
+                &substituted_mult_args,
+            );
             if let Some(found) = lookup_member_in_class(
                 model,
                 *super_id,
@@ -1501,7 +1549,10 @@ fn resolve_qualified_property_overload(
 
     // Per-argument type + multiplicity check on the chosen overload.
     for (idx, (param, arg_ty)) in chosen.parameters.iter().zip(arg_types.iter()).enumerate() {
-        let expected_type = crate::resolve::substitute_type(&param.type_expr, &chosen.bindings);
+        let expected_type =
+            crate::resolve::substitute_type(&param.type_expr, &chosen.bindings.ty);
+        let expected_mult =
+            crate::resolve::substitute_mult(&param.multiplicity, &chosen.bindings.mult);
         let arg_eid = arg_ty.as_ref().and_then(|rt| match &rt.type_expr {
             TypeExpr::Named { element, .. } => Some(*element),
             _ => None,
@@ -1509,7 +1560,7 @@ fn resolve_qualified_property_overload(
         let arg_mult = arg_ty.as_ref().map(|rt| &rt.multiplicity);
 
         let type_ok = crate::resolve::is_type_compatible(arg_eid, &expected_type, ctx.model);
-        let mult_ok = crate::resolve::is_multiplicity_compatible(arg_mult, &param.multiplicity);
+        let mult_ok = crate::resolve::is_multiplicity_compatible(arg_mult, &expected_mult);
 
         if !type_ok || !mult_ok {
             let expected = render_type(ctx.model, &expected_type, &param.multiplicity);
@@ -1607,6 +1658,7 @@ fn primitive(element_id: crate::ids::ElementId) -> ResolvedType {
         type_expr: TypeExpr::Named {
             element: element_id,
             type_arguments: Vec::new(),
+            multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
         },
         multiplicity: Multiplicity::PureOne,
@@ -1796,6 +1848,7 @@ mod tests {
         TypeExpr::Named {
             element: id,
             type_arguments: Vec::new(),
+            multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
         }
     }
@@ -2468,6 +2521,7 @@ mod tests {
             },
             ModelElement::Class(Class {
                 type_parameters: Vec::new(),
+                multiplicity_parameters: Vec::new(),
                 type_variable_parameters: Vec::new(),
                 super_types: Vec::new(),
                 properties: Vec::new(),
@@ -2573,6 +2627,7 @@ mod tests {
             },
             ModelElement::Class(Class {
                 type_parameters: Vec::new(),
+                multiplicity_parameters: Vec::new(),
                 type_variable_parameters: Vec::new(),
                 super_types: Vec::new(),
                 properties: Vec::new(),

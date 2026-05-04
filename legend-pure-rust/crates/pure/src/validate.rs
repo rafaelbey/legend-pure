@@ -1157,6 +1157,7 @@ mod tests {
                         local_idx: 0,
                     },
                     type_arguments: vec![],
+                    multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
                 },
                 multiplicity: Multiplicity::PureOne,
@@ -1174,6 +1175,7 @@ mod tests {
                         local_idx: 0,
                     },
                     type_arguments: vec![],
+                    multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
                 },
                 multiplicity: Multiplicity::PureOne,
@@ -1274,6 +1276,7 @@ mod tests {
             },
             ModelElement::Class(Class {
                 type_parameters: vec![SmolStr::new("U"), SmolStr::new("V")],
+                multiplicity_parameters: Vec::new(),
                 type_variable_parameters: Vec::new(),
                 super_types: Vec::new(),
                 properties: Vec::new(),
@@ -1293,6 +1296,7 @@ mod tests {
         let pair_te_no_args = TypeExpr::Named {
             element: pair_id,
             type_arguments: Vec::new(),
+            multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
         };
         let fn_idx = chunk.alloc_element(

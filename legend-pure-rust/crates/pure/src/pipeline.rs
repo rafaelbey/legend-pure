@@ -542,6 +542,7 @@ fn wire_any_reflective_properties(model: &mut PureModel) {
         type_expr: TypeExpr::Named {
             element: generic_type_id,
             type_arguments: vec![],
+            multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
         },
         multiplicity: Multiplicity::ZeroOrOne,
@@ -556,6 +557,7 @@ fn wire_any_reflective_properties(model: &mut PureModel) {
         type_expr: TypeExpr::Named {
             element: element_override_id,
             type_arguments: vec![],
+            multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
         },
         multiplicity: Multiplicity::ZeroOrOne,
@@ -604,6 +606,7 @@ fn resolve_m3_supertypes(model: &mut PureModel) {
                     *ty = TypeExpr::Named {
                         element: resolved_id,
                         type_arguments: vec![],
+                        multiplicity_arguments: Vec::new(),
                         value_arguments: vec![],
                     };
                 }
@@ -1258,15 +1261,22 @@ fn pass_define_class_bodies(
                     .iter()
                     .map(|name| crate::types::TypeExpr::Generic(name.clone()))
                     .collect();
+                let multiplicity_arguments: Vec<crate::types::Multiplicity> = c
+                    .multiplicity_parameters
+                    .iter()
+                    .map(|name| crate::types::Multiplicity::Variable(name.clone()))
+                    .collect();
                 Some(crate::types::TypeExpr::Named {
                     element: id,
                     type_arguments,
+                    multiplicity_arguments,
                     value_arguments: Vec::new(),
                 })
             }
             Element::Association(_) => Some(crate::types::TypeExpr::Named {
                 element: id,
                 type_arguments: Vec::new(),
+                multiplicity_arguments: Vec::new(),
                 value_arguments: Vec::new(),
             }),
             Element::PrimitiveType(p) => {
@@ -1279,6 +1289,7 @@ fn pass_define_class_bodies(
                 Some(crate::types::TypeExpr::Named {
                     element: id,
                     type_arguments: Vec::new(),
+                    multiplicity_arguments: Vec::new(),
                     value_arguments: Vec::new(),
                 })
             }
@@ -1415,6 +1426,7 @@ fn create_shell(element: &ast::Element) -> Element {
     match element {
         ast::Element::Class(_) => Element::Class(Class {
             type_parameters: vec![],
+            multiplicity_parameters: Vec::new(),
             type_variable_parameters: vec![],
             super_types: vec![],
             properties: vec![],
@@ -1437,6 +1449,7 @@ fn create_shell(element: &ast::Element) -> Element {
                     type_expr: TypeExpr::Named {
                         element: bootstrap::ANY_ID,
                         type_arguments: vec![],
+                        multiplicity_arguments: Vec::new(),
                         value_arguments: vec![],
                     },
                     multiplicity: Multiplicity::PureOne,
@@ -1450,6 +1463,7 @@ fn create_shell(element: &ast::Element) -> Element {
                 return_type: TypeExpr::Named {
                     element: bootstrap::ANY_ID,
                     type_arguments: vec![],
+                    multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
                 },
                 return_multiplicity: Multiplicity::PureOne,
@@ -1467,6 +1481,7 @@ fn create_shell(element: &ast::Element) -> Element {
                     type_expr: TypeExpr::Named {
                         element: bootstrap::ANY_ID,
                         type_arguments: vec![],
+                        multiplicity_arguments: Vec::new(),
                         value_arguments: vec![],
                     },
                     multiplicity: Multiplicity::PureOne,
@@ -1480,6 +1495,7 @@ fn create_shell(element: &ast::Element) -> Element {
                 return_type: TypeExpr::Named {
                     element: bootstrap::ANY_ID,
                     type_arguments: vec![],
+                    multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
                 },
                 return_multiplicity: Multiplicity::PureOne,
@@ -1571,6 +1587,7 @@ fn hydrate_element_signature(
                 lower_type_variable_parameters(&class_def.type_variable_parameters, ctx, errors);
             Element::Class(Class {
                 type_parameters: class_def.type_parameters.clone(),
+                multiplicity_parameters: class_def.multiplicity_parameters.clone(),
                 type_variable_parameters,
                 super_types,
                 properties,
@@ -1618,6 +1635,7 @@ fn hydrate_element_signature(
                 .unwrap_or(TypeExpr::Named {
                     element: bootstrap::ANY_ID,
                     type_arguments: vec![],
+                    multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
                 });
             let return_multiplicity = resolve::lower_multiplicity(&func_def.return_multiplicity);
@@ -1659,6 +1677,7 @@ fn hydrate_element_signature(
                 .unwrap_or(TypeExpr::Named {
                     element: bootstrap::ANY_ID,
                     type_arguments: vec![],
+                    multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
                 });
             let return_multiplicity = resolve::lower_multiplicity(&func_def.return_multiplicity);
@@ -2049,6 +2068,7 @@ fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
                         type_expr: crate::types::TypeExpr::Named {
                             element: class_id,
                             type_arguments: Vec::new(),
+                            multiplicity_arguments: Vec::new(),
                             value_arguments: Vec::new(),
                         },
                         multiplicity: crate::types::Multiplicity::PureOne,

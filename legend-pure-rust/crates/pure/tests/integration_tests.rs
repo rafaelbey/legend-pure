@@ -2393,12 +2393,6 @@ function test::caller(h: test::Holder<String|*>[1]): String[*] { $h.items }
 }
 
 #[test]
-#[ignore = "needs TypeExpr::Named.multiplicity_arguments — the receiver type \
-            `Holder<String|*>` parses fine but its `*` mult-arg is dropped \
-            during lower→TypeExpr conversion (TypeExpr::Named has only \
-            type_arguments + value_arguments). Without that field, \
-            `compute_type_arg_bindings` can't map `m → *`, so property `items: T[m]` \
-            substitutes T but leaves m as Variable. Tracked in BACKLOG."]
 fn generic_subst_property_chain_with_mult_variable_decl_one_errors() {
     // Sensitivity twin for the mult-variable test: declare String[1]
     // return on a body whose actual multiplicity is `[*]`. If
