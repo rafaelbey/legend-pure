@@ -257,9 +257,15 @@ fn render_fqn(model: &PureModel, id: ElementId) -> String {
     if model.try_get_element(id).is_none() {
         return model.element_name(id).to_string();
     }
+    // `get_node` panics for `ElementId::Package`; the caller (CodeLens
+    // emission) only ever feeds in InstanceIds today, but a
+    // partial-compile fixture once tripped this path. Fall back to the
+    // element-name lookup which is total over both ID kinds.
+    if matches!(id, ElementId::Package(_)) {
+        return model.element_name(id).to_string();
+    }
     let node = model.get_node(id);
-    let mut parts: Vec<String> = Vec::new();
-    parts.push(node.name.to_string());
+    let mut parts: Vec<String> = vec![node.name.to_string()];
     let mut pkg_id = node.parent_package;
     loop {
         let pkg = model.get_package(pkg_id);
@@ -274,4 +280,155 @@ fn render_fqn(model: &PureModel, id: ElementId) -> String {
     }
     parts.reverse();
     parts.join("::")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use legend_pure_parser_parser::parse;
+    use legend_pure_parser_pure::error::CompilationErrorKind;
+    use legend_pure_parser_pure::pipeline;
+
+    /// Compiles a single source file via the real pipeline (bootstrap
+    /// pre-loaded). Returns the model whether the compile succeeds or
+    /// produces a `PartialPureModel`, since handler tests want to
+    /// exercise the model regardless of clean-vs-recovered status.
+    fn compile_fixture(name: &str, source: &str) -> PureModel {
+        let parsed = parse(source, name).expect("test fixture must parse");
+        match pipeline::compile(&[parsed], &[]) {
+            Ok(m) => m,
+            Err(p) => p.model,
+        }
+    }
+
+    fn pos(line: u32, col: u32) -> Position {
+        Position {
+            line,
+            character: col,
+        }
+    }
+
+    #[test]
+    fn diagnostics_for_round_trips_message_and_severity() {
+        let err = CompilationError {
+            message: "boom".to_string(),
+            source_info: legend_pure_parser_ast::SourceInfo::new("x.pure", 2, 3, 2, 8),
+            kind: CompilationErrorKind::UnresolvedElement {
+                path: smol_str::SmolStr::new("Foo"),
+            },
+        };
+        let diags = diagnostics_for(&[err]);
+        assert_eq!(diags.len(), 1);
+        let d = &diags[0];
+        assert_eq!(d.message, "boom");
+        assert_eq!(
+            d.severity,
+            Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR)
+        );
+        // Range converts 1-indexed (2,3)-(2,8) to 0-indexed (1,2)-(1,7).
+        assert_eq!(d.range.start.line, 1);
+        assert_eq!(d.range.start.character, 2);
+        assert_eq!(d.range.end.line, 1);
+        assert_eq!(d.range.end.character, 7);
+        // Code surfaces the kind tag.
+        assert!(matches!(
+            d.code.as_ref(),
+            Some(tower_lsp::lsp_types::NumberOrString::String(s)) if s == "unresolvedElement"
+        ));
+    }
+
+    #[test]
+    fn hover_renders_parameter_kind() {
+        let src = "function test::greet(name: String[1]): String[1]\n{\n  $name\n}\n";
+        let model = compile_fixture("fixture.pure", src);
+        // Cursor on the `name` parameter identifier (column 22).
+        // LSP positions are 0-indexed → (line 0, char 21).
+        let hover = hover_for_position(&model, "fixture.pure", pos(0, 21))
+            .expect("hover must produce content for the parameter");
+        match hover.contents {
+            HoverContents::Markup(m) => {
+                assert!(m.value.contains("**parameter**"), "got: {}", m.value);
+                assert!(m.value.contains("`name`"), "got: {}", m.value);
+            }
+            other => panic!("expected markup hover, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hover_returns_none_outside_known_file() {
+        let model = compile_fixture(
+            "fixture.pure",
+            "function test::f(): Integer[1]\n{\n  1\n}\n",
+        );
+        assert!(hover_for_position(&model, "missing.pure", pos(0, 0)).is_none());
+    }
+
+    #[test]
+    fn definition_jumps_to_element_header_span() {
+        let src = "function test::greet(name: String[1]): String[1]\n{\n  $name\n}\n";
+        let model = compile_fixture("fixture.pure", src);
+        let uri = Url::parse("file:///fixture.pure").unwrap();
+        // Cursor inside the body — should resolve to the function header.
+        let loc = definition_for_position(&model, "fixture.pure", pos(2, 2), &uri)
+            .expect("definition must resolve");
+        // Function header span starts at line 1 col 1 (1-indexed) → 0-indexed (0, 0).
+        assert_eq!(loc.range.start.line, 0);
+        assert_eq!(loc.range.start.character, 0);
+        assert_eq!(loc.uri, uri);
+    }
+
+    #[test]
+    fn document_symbols_lists_one_per_top_level_element() {
+        let src = "\
+function test::greet(name: String[1]): String[1]
+{
+  $name
+}
+
+Class test::Person
+{
+  name: String[1];
+}
+";
+        let model = compile_fixture("fixture.pure", src);
+        let symbols = document_symbols_for(&model, "fixture.pure");
+        // Two top-level elements in this file: a function and a class.
+        assert_eq!(symbols.len(), 2);
+        let kinds: Vec<_> = symbols.iter().map(|s| s.kind).collect();
+        assert!(kinds.contains(&SymbolKind::FUNCTION));
+        assert!(kinds.contains(&SymbolKind::CLASS));
+    }
+
+    #[test]
+    fn code_lenses_empty_for_untagged_function() {
+        let plain = compile_fixture(
+            "plain.pure",
+            "function test::ordinary(): Integer[1]\n{\n  1\n}\n",
+        );
+        assert_eq!(code_lenses_for(&plain, "plain.pure").len(), 0);
+    }
+
+    // The companion test for *tagged* functions can't run through
+    // `compile_fixture` today: a fixture that uses
+    // `<<test.Test>>` without the platform's `test` profile loaded
+    // trips a pre-existing panic in
+    // `validate.rs::validate_stereotypes` (it calls `get_node` on the
+    // unresolved stereotype's profile ID, which can be a Package). The
+    // detection logic in `is_test_stereotyped` is exercised at the
+    // integration level once the LSP runs against a real classpath.
+    // Leaving an ignored placeholder so the gap is visible.
+    #[test]
+    #[ignore = "blocked: validate_stereotypes panics on unresolved profile refs (pre-existing in pure)"]
+    fn code_lenses_emit_for_test_stereotyped_function() {
+        let tagged = compile_fixture(
+            "tagged.pure",
+            "import meta::pure::profiles::*;\n\
+             function <<test.Test>> test::myCheck(): Boolean[1]\n\
+             {\n  true\n}\n",
+        );
+        let lenses = code_lenses_for(&tagged, "tagged.pure");
+        assert_eq!(lenses.len(), 1);
+        let cmd = lenses[0].command.as_ref().unwrap();
+        assert_eq!(cmd.command, "legend.runTest");
+    }
 }
