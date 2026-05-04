@@ -501,16 +501,59 @@ fn resolve_unqualified(
     ctx: &ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Option<ElementId> {
-    // Step 1: Try bootstrap/model root types (String, Integer, etc.)
+    // Step 1: Primitives + `Any` / `Nil` always shadow imports. They
+    // sit at root as part of the bootstrap and the language treats
+    // `Boolean[1]`, `Integer[1]`, `Any[*]` etc. as reserved — an
+    // imported same-named class (e.g.
+    // `meta::relational::metamodel::datatype::Boolean` brought in by
+    // `import meta::relational::metamodel::datatype::*`) must NOT win
+    // over the primitive when a Pure source writes the bare name.
     if let Some(id) = ctx.model.resolve_by_path(std::slice::from_ref(name)) {
-        return Some(id);
+        if let Some(elem) = ctx.model.try_get_element(id) {
+            if matches!(
+                elem,
+                crate::model::Element::PrimitiveType(_)
+                    | crate::model::Element::Class(_) // captures `Any` / `Nil` only via the
+                                                      // `is_root_class_alias` filter below
+            ) {
+                use crate::ids::ElementId as Eid;
+                let is_any_or_nil = matches!(
+                    id,
+                    Eid::InstanceId { chunk_id: 0, local_idx: 0 } // ANY
+                    | Eid::InstanceId { chunk_id: 0, local_idx: 1 } // NIL
+                );
+                if matches!(elem, crate::model::Element::PrimitiveType(_)) || is_any_or_nil {
+                    return Some(id);
+                }
+            }
+        }
     }
 
-    // Step 2: Search import scopes using the AST Package directly
+    // Step 2: Search the file's explicit + auto imports.
+    //
+    // Imports take precedence over the *non-primitive* root fallback.
+    // Bootstrap registers M3 metamodel classes (e.g.
+    // `meta::pure::metamodel::relation::Column<U,V>`,
+    // `meta::pure::metamodel::function::Function`) as aliases at root —
+    // that's how unqualified references resolve when no import brings a
+    // sibling into scope. But when an import *does* bring a sibling
+    // (e.g. `import meta::relational::metamodel::*` exposes the concrete
+    // `Column` next to the M3 generic), the user means the imported one.
+    // Without this ordering, bare `Column` in
+    // `platform_store_relational/functions.pure` short-circuited to the
+    // M3 `Column<U,V>` and downstream code saw it carrying no type args.
     let mut candidates: Vec<(&ImportScope, ElementId)> = Vec::new();
     for scope in ctx.import_scopes {
         if let Some(id) = ctx.model.resolve_in_package(&scope.package, name) {
             candidates.push((scope, id));
+        }
+    }
+
+    // Step 3: Fall back to root-level M3 metaclass aliases (`Function`,
+    // `Class`, `Property`, `Column`, …) when no import contributed.
+    if candidates.is_empty() {
+        if let Some(id) = ctx.model.resolve_by_path(std::slice::from_ref(name)) {
+            return Some(id);
         }
     }
 
@@ -2694,5 +2737,127 @@ mod tests {
     fn import_scope_from_path_str() {
         let scope = ImportScope::from_path_str("meta::pure::profiles");
         assert_eq!(scope.package.to_string(), "meta::pure::profiles");
+    }
+
+    /// Imports must shadow non-primitive root aliases.
+    ///
+    /// Bootstrap registers M3 metaclasses (`Function`, `Class`,
+    /// `Column<U,V>`, …) under the root package so unqualified
+    /// references resolve when no import brings a sibling. But when an
+    /// `import x::*` exposes a same-named **class** at the use-site,
+    /// the user means the imported one — not the M3 alias.
+    /// `platform_store_relational/functions.pure` was the canary:
+    /// `import meta::relational::metamodel::*` brings in a concrete
+    /// `Column`, so `cols:Column[*]` must point at it, not the M3
+    /// generic.
+    #[test]
+    fn unqualified_import_shadows_root_metaclass_alias() {
+        use crate::ids::PackageId;
+        use crate::model::{Element, ElementNode, ModelChunk, PureModel};
+        use crate::nodes::class::Class;
+
+        let mut model = PureModel::new();
+        // Push a placeholder bootstrap chunk so `chunk_id=0` slot 0/1
+        // (Any/Nil-coded by the resolver's primitive-shadow filter) are
+        // not stepped on by user content.
+        model.chunks.push(ModelChunk::new(0));
+
+        // Two `Foo` classes:
+        //  - one at root (M3 metaclass alias)
+        //  - one inside `pkg::sub` (the imported sibling)
+        let chunk_id = 1u16;
+        let mut chunk = ModelChunk::new(chunk_id);
+        let si = SourceInfo::new("t.pure", 1, 1, 1, 1);
+
+        let root_foo_idx = chunk.alloc_element(
+            ElementNode {
+                name: SmolStr::new("Foo"),
+                source_info: si.clone(),
+                name_source_info: si.clone(),
+                parent_package: model.root_package,
+            },
+            Element::Class(Class {
+                type_parameters: vec![SmolStr::new("T")],
+                type_variable_parameters: Vec::new(),
+                super_types: Vec::new(),
+                properties: Vec::new(),
+                qualified_properties: Vec::new(),
+                constraints: Vec::new(),
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+            }),
+        );
+        let pkg_id: PackageId =
+            model.get_or_create_package(&[SmolStr::new("pkg"), SmolStr::new("sub")]);
+        let import_foo_idx = chunk.alloc_element(
+            ElementNode {
+                name: SmolStr::new("Foo"),
+                source_info: si.clone(),
+                name_source_info: si.clone(),
+                parent_package: pkg_id,
+            },
+            Element::Class(Class {
+                type_parameters: Vec::new(),
+                type_variable_parameters: Vec::new(),
+                super_types: Vec::new(),
+                properties: Vec::new(),
+                qualified_properties: Vec::new(),
+                constraints: Vec::new(),
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+            }),
+        );
+        model.chunks.push(chunk);
+        let root_foo_id = ElementId::InstanceId {
+            chunk_id,
+            local_idx: root_foo_idx,
+        };
+        let import_foo_id = ElementId::InstanceId {
+            chunk_id,
+            local_idx: import_foo_idx,
+        };
+        model.register_element(model.root_package, root_foo_id);
+        model.register_element(pkg_id, import_foo_id);
+
+        // Resolve `Foo` with `pkg::sub` in scope. Imported sibling wins.
+        let import_scope = ImportScope::from_path_str("pkg::sub");
+        let scopes = vec![import_scope];
+        let mut cache = HashMap::new();
+        let type_params: Vec<SmolStr> = Vec::new();
+        let ctx = ResolutionContext {
+            model: &model,
+            import_scopes: &scopes,
+            resolve_cache: &mut cache,
+            type_parameters: &type_params,
+            variable_types: HashMap::new(),
+            island_lowerers: &[],
+        };
+        let mut errors = Vec::new();
+        let resolved =
+            resolve_unqualified(&SmolStr::new("Foo"), &SourceInfo::new("t.pure", 1, 1, 1, 1), &ctx, &mut errors);
+        assert_eq!(resolved, Some(import_foo_id));
+        assert!(errors.is_empty());
+
+        // Resolve `Foo` with no relevant imports. Falls through to the
+        // root M3 alias.
+        let mut empty_cache = HashMap::new();
+        let no_scopes: Vec<ImportScope> = Vec::new();
+        let ctx2 = ResolutionContext {
+            model: &model,
+            import_scopes: &no_scopes,
+            resolve_cache: &mut empty_cache,
+            type_parameters: &type_params,
+            variable_types: HashMap::new(),
+            island_lowerers: &[],
+        };
+        let mut errors2 = Vec::new();
+        let resolved2 = resolve_unqualified(
+            &SmolStr::new("Foo"),
+            &SourceInfo::new("t.pure", 1, 1, 1, 1),
+            &ctx2,
+            &mut errors2,
+        );
+        assert_eq!(resolved2, Some(root_foo_id));
+        assert!(errors2.is_empty());
     }
 }

@@ -1364,6 +1364,7 @@ dependencies = [
  "dashmap 6.1.0",
  "legend-pure-core-platform",
  "legend-pure-parser-ast",
+ "legend-pure-parser-parser",
  "legend-pure-parser-pure",
  "serde",
  "serde_json",
