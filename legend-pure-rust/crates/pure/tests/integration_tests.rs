@@ -2167,3 +2167,255 @@ fn association_injected_property_resolves() {
     ";
     compile_one(source).expect("association-injected property must resolve");
 }
+
+// ---------------------------------------------------------------------------
+// Generic type / multiplicity substitution — closes the BACKLOG P1
+// "Generic params treated as Any; causes false matches" entry.
+// Each test pins one substitution gap. See plan
+// `~/.claude/plans/do-we-have-enought-quiet-swing.md` for context.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn generic_subst_head_on_typed_collection_flows_element_type_clean() {
+    // Positive baseline: `head<T>(T[*]):T[0..1]` called with `Integer[*]`
+    // must bind T:=Integer and produce Integer[0..1]. The function header
+    // declares Integer[0..1] return — substitution + body-return-signature
+    // check together keep the compile clean.
+    let source = r"
+###Pure
+native function test::head<T>(c: T[*]): T[0..1];
+function test::caller(): Integer[0..1] { [1, 2, 3]->head() }
+";
+    compile_with_imports(&[source], &[]).expect("head on Integer[*] must yield Integer[0..1]");
+}
+
+#[test]
+fn generic_subst_head_on_typed_collection_mismatched_decl_errors() {
+    // Negative twin: declare String[0..1] return on a body that produces
+    // Integer[0..1]. Inference must surface a body-return-signature error.
+    let source = r"
+###Pure
+native function test::head<T>(c: T[*]): T[0..1];
+function test::caller(): String[0..1] { [1, 2, 3]->head() }
+";
+    let result = compile_with_imports(&[source], &[]);
+    let partial = result.expect_err(
+        "head on Integer[*] returns Integer — declaring String[0..1] must error",
+    );
+    assert!(
+        partial.errors.iter().any(|e| {
+            e.message.contains("return") || e.message.contains("Argument")
+        }),
+        "expected return-type or argument error, got: {:?}",
+        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn generic_subst_head_on_empty_collection_treats_t_as_nil() {
+    // Plan decision (b): empty `[]` binds T:=Nil so head returns
+    // Nil[0..1]. Nil is subtype of every type, so this declaration
+    // compiles cleanly regardless of declared return type.
+    let source = r"
+###Pure
+native function test::head<T>(c: T[*]): T[0..1];
+function test::caller(): String[0..1] { []->head() }
+";
+    compile_with_imports(&[source], &[]).expect(
+        "head on empty collection should bind T:=Nil and accept any \
+         declared return type (Nil <: T for all T)",
+    );
+}
+
+#[test]
+fn generic_subst_two_arg_homogeneous_returns_concrete_t() {
+    // f<T>(T,T):T called with (Integer, Integer) → T:=Integer.
+    let source = r"
+###Pure
+native function test::pick<T>(a: T[1], b: T[1]): T[1];
+function test::caller(): Integer[1] { pick(1, 2) }
+";
+    compile_with_imports(&[source], &[])
+        .expect("homogeneous Integer args must bind T:=Integer");
+}
+
+#[test]
+fn generic_subst_two_arg_subtype_lubs_to_supertype() {
+    // f<T>(T,T):T called with (Integer, Float) → T:=Number (LUB walks the
+    // numeric hierarchy). Declaring Number[1] return must compile clean.
+    let source = r"
+###Pure
+native function test::pick<T>(a: T[1], b: T[1]): T[1];
+function test::caller(): Number[1] { pick(1, 1.5) }
+";
+    compile_with_imports(&[source], &[])
+        .expect("Integer + Float must LUB to Number, not stay at Integer");
+}
+
+#[test]
+fn generic_subst_two_arg_subtype_lub_decl_integer_errors() {
+    // Negative twin of the LUB test: with (Integer, Float) the bound T is
+    // Number, so declaring Integer[1] return must error.
+    let source = r"
+###Pure
+native function test::pick<T>(a: T[1], b: T[1]): T[1];
+function test::caller(): Integer[1] { pick(1, 1.5) }
+";
+    let result = compile_with_imports(&[source], &[]);
+    let partial = result.expect_err(
+        "T:=Number from Integer+Float LUB is incompatible with declared Integer[1]",
+    );
+    assert!(
+        !partial.errors.is_empty(),
+        "expected at least one return/type error"
+    );
+}
+
+#[test]
+fn generic_subst_two_arg_unrelated_lubs_to_any() {
+    // f<T>(T,T):T called with (Integer, String) → T:=Any. Declaring
+    // Any[1] return compiles clean (consistent with Collection LUB:
+    // [1, 'x'] is Collection<Any>[*]).
+    let source = r"
+###Pure
+native function test::pick<T>(a: T[1], b: T[1]): T[1];
+function test::caller(): Any[1] { pick(1, 'x') }
+";
+    compile_with_imports(&[source], &[])
+        .expect("Integer + String must LUB to Any (mirror of Collection LUB)");
+}
+
+#[test]
+fn generic_subst_multiplicity_var_threads_through_return() {
+    // f<T|m>(T[m]):T[m] — multiplicity threads from arg to return. Called
+    // with Integer[2..2] (literal collection of two), declared
+    // Integer[*]: must compile cleanly because Integer[2..2] ⊆ Integer[*].
+    let source = r"
+###Pure
+native function test::ident<T|m>(p: T[m]): T[m];
+function test::caller(): Integer[*] { ident([1, 2]) }
+";
+    compile_with_imports(&[source], &[])
+        .expect("ident<T|m> must thread Integer[2..2] through to Integer[2..2]");
+}
+
+#[test]
+fn generic_subst_multiplicity_var_decl_pure_one_errors() {
+    // ident([1,2]) returns Integer[2..2], not Integer[1]. Declaring [1]
+    // must surface a multiplicity error.
+    let source = r"
+###Pure
+native function test::ident<T|m>(p: T[m]): T[m];
+function test::caller(): Integer[1] { ident([1, 2]) }
+";
+    let result = compile_with_imports(&[source], &[]);
+    let partial = result.expect_err(
+        "Integer[2..2] from ident([1,2]) cannot satisfy declared Integer[1]",
+    );
+    assert!(!partial.errors.is_empty());
+}
+
+#[test]
+fn generic_subst_property_chain_through_generic_class() {
+    // Property access through a generic class: the receiver's type-args
+    // (`Box<String>`) must flow into property `value`'s declared `T`.
+    // Today `extract_receiver_type_args` only handles `ExprKind::Variable`,
+    // so direct-variable receivers work but chained receivers
+    // (`func()->prop`) lose the bindings. Validate the variable case is
+    // green; the chained case lives in a follow-up test.
+    let source = r"
+###Pure
+Class test::Box<T> { value: T[1]; }
+function test::caller(b: test::Box<String>[1]): String[1] { $b.value }
+";
+    compile_with_imports(&[source], &[]).expect(
+        "$b.value on Box<String> must produce String[1] via class-generic substitution",
+    );
+}
+
+#[test]
+fn generic_subst_property_chain_via_function_receiver() {
+    // Chained receiver: factory()->value. The receiver isn't a bare
+    // Variable; today `extract_receiver_type_args` returns vec![] for
+    // anything other than ExprKind::Variable, so the property's `T` stays
+    // as Generic and degrades downstream. Plan Step 2 fixes this by
+    // delegating to `infer_typeexpr_from_valuespec` (which already
+    // handles arbitrary receivers).
+    let source = r"
+###Pure
+Class test::Box<T> { value: T[1]; }
+native function test::makeBox(): test::Box<String>[1];
+function test::caller(): String[1] { makeBox().value }
+";
+    compile_with_imports(&[source], &[]).expect(
+        "Chained receiver makeBox().value must thread Box<String>'s T:=String through",
+    );
+}
+
+#[test]
+fn generic_subst_property_chain_via_function_receiver_decl_integer_errors() {
+    // Sensitivity twin for the chain test: if substitution actually
+    // resolved `value` to `String[1]`, declaring Integer[1] return must
+    // error. If the gap leaves `value` as `T[1]` / `Any[1]`, the
+    // body-return-signature check skips on Any and the test silently
+    // passes — so this asserts the substitution genuinely happens.
+    let source = r"
+###Pure
+Class test::Box<T> { value: T[1]; }
+native function test::makeBox(): test::Box<String>[1];
+function test::caller(): Integer[1] { makeBox().value }
+";
+    let result = compile_with_imports(&[source], &[]);
+    let partial = result.expect_err(
+        "Box<String>.value resolves to String[1]; declaring Integer[1] must error",
+    );
+    assert!(
+        !partial.errors.is_empty(),
+        "expected at least one error from chained generic substitution"
+    );
+}
+
+#[test]
+fn generic_subst_property_chain_with_mult_variable() {
+    // Class-level multiplicity parameter on a property: receiver
+    // `Holder<String|m>` carries `m`, property `items: T[m]`. Today
+    // `multiplicity_product` bails to receiver-only when the property's
+    // multiplicity is `Variable`. Plan Step 3 plumbs class-mult
+    // substitution through.
+    let source = r"
+###Pure
+Class test::Holder<T|m> { items: T[m]; }
+function test::caller(h: test::Holder<String|*>[1]): String[*] { $h.items }
+";
+    compile_with_imports(&[source], &[]).expect(
+        "$h.items on Holder<String|*> must flow String[*] through class-mult substitution",
+    );
+}
+
+#[test]
+#[ignore = "needs TypeExpr::Named.multiplicity_arguments — the receiver type \
+            `Holder<String|*>` parses fine but its `*` mult-arg is dropped \
+            during lower→TypeExpr conversion (TypeExpr::Named has only \
+            type_arguments + value_arguments). Without that field, \
+            `compute_type_arg_bindings` can't map `m → *`, so property `items: T[m]` \
+            substitutes T but leaves m as Variable. Tracked in BACKLOG."]
+fn generic_subst_property_chain_with_mult_variable_decl_one_errors() {
+    // Sensitivity twin for the mult-variable test: declare String[1]
+    // return on a body whose actual multiplicity is `[*]`. If
+    // substitution works, the body's String[*] cannot fit declared [1]
+    // → error. If multiplicity_product silently bails to receiver-only
+    // ([1]), the test passes silently and the gap is undetected.
+    let source = r"
+###Pure
+Class test::Holder<T|m> { items: T[m]; }
+function test::caller(h: test::Holder<String|*>[1]): String[1] { $h.items }
+";
+    let result = compile_with_imports(&[source], &[]);
+    let partial = result.expect_err(
+        "items on Holder<String|*> resolves to String[*]; declaring String[1] must error",
+    );
+    assert!(
+        !partial.errors.is_empty(),
+        "expected multiplicity error from class-mult substitution"
+    );
+}

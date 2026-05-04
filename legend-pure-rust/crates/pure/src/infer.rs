@@ -761,25 +761,52 @@ fn infer_function_call(
                 });
             }
         }
-        let mut bindings: std::collections::HashMap<SmolStr, TypeExpr> =
+        // Bind both type and multiplicity variables from the call's
+        // arguments, then substitute both in the function's declared
+        // return signature. Substituting only `T` and leaving `m` as
+        // `Variable("m")` made `is_multiplicity_compatible` return
+        // permissively (line 2164-2172 of resolve.rs) — `ident<T|m>(p:T[m]):T[m]`
+        // called with `[1,2]` flowed `Integer[Variable(m)]` through to
+        // `check_body_return_signature`, which then accepted any
+        // declared return multiplicity silently.
+        let mut ty_bindings: std::collections::HashMap<SmolStr, TypeExpr> =
+            std::collections::HashMap::new();
+        let mut mult_bindings: std::collections::HashMap<SmolStr, Multiplicity> =
             std::collections::HashMap::new();
         for (param, arg_ty) in f.parameters.iter().zip(arg_types.iter()) {
             let Some(arg_ty) = arg_ty else { continue };
             crate::resolve::bind_type(
                 &param.type_expr,
                 &arg_ty.type_expr,
-                &mut bindings,
+                &mut ty_bindings,
                 ctx.model,
             );
+            if let Multiplicity::Variable(name) = &param.multiplicity {
+                use std::collections::hash_map::Entry;
+                match mult_bindings.entry(name.clone()) {
+                    Entry::Vacant(e) => {
+                        e.insert(arg_ty.multiplicity.clone());
+                    }
+                    Entry::Occupied(mut e) => {
+                        let lub = crate::resolve::mult_lub(e.get(), &arg_ty.multiplicity);
+                        *e.get_mut() = lub;
+                    }
+                }
+            }
         }
-        let type_expr = if bindings.is_empty() {
+        let type_expr = if ty_bindings.is_empty() {
             f.return_type.clone()
         } else {
-            crate::resolve::substitute_type(&f.return_type, &bindings)
+            crate::resolve::substitute_type(&f.return_type, &ty_bindings)
+        };
+        let multiplicity = if mult_bindings.is_empty() {
+            f.return_multiplicity.clone()
+        } else {
+            crate::resolve::substitute_mult(&f.return_multiplicity, &mult_bindings)
         };
         return Some(ResolvedType {
             type_expr,
-            multiplicity: f.return_multiplicity.clone(),
+            multiplicity,
         });
     }
 

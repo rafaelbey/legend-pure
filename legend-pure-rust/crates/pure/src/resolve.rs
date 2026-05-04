@@ -2040,7 +2040,7 @@ fn type_lub(
 /// Computes the least upper bound of two multiplicities — the smallest range
 /// that covers both. Used when the same multiplicity variable `m` is bound
 /// from multiple arguments.
-fn mult_lub(
+pub(crate) fn mult_lub(
     a: &crate::types::Multiplicity,
     b: &crate::types::Multiplicity,
 ) -> crate::types::Multiplicity {
