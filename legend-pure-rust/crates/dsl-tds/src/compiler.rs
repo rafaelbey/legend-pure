@@ -40,6 +40,8 @@ use legend_pure_parser_pure::model::{Element as ModelElement, PureModel};
 use smol_str::SmolStr;
 
 use crate::ast::TDSExpr;
+use crate::csv;
+use crate::lower::{column_overrides, reconstruct_csv};
 
 /// Compiler extension for the TDS inline-island DSL.
 #[derive(Default)]
@@ -226,6 +228,52 @@ fn validate_island(isl: &IslandExpression, model: &PureModel, errors: &mut Vec<C
                 source_info: ty.source_info.clone(),
                 kind: CompilationErrorKind::UnresolvedElement {
                     path: ty.name.clone(),
+                },
+            });
+        }
+    }
+
+    // CSV-level validation: run the same shared parse the lowerer
+    // uses, with the column overrides derived from explicit
+    // `name:Type[mult]` annotations. Surfaces:
+    //
+    // - Type mismatch — a non-empty cell that doesn't parse against
+    //   the declared primitive type (e.g. `v:Integer` with cell
+    //   `"hello"`).
+    // - Multiplicity mismatch — an empty cell under a column declared
+    //   `[1]` / `[1..*]` / `[1..n]`.
+    //
+    // Cell-level errors are positioned at the offending cell when we
+    // can identify it; otherwise they fall back to the island span.
+    // Skips when the per-row arity check above has already fired,
+    // since `parse_and_infer` would just re-report that.
+    let arity_clean = tds
+        .rows
+        .iter()
+        .all(|row| row.len() == tds.columns.len());
+    if arity_clean {
+        let canonical_csv = reconstruct_csv(tds);
+        let overrides = column_overrides(&tds.columns);
+        if let Err(e) = csv::parse_and_infer(&canonical_csv, &overrides) {
+            // The CSV's line numbering: header on line 1, data row N
+            // on line N+1. Map back to the offending TDS cell's
+            // source_info when we have it.
+            let target_si = if e.line >= 2 {
+                let row_idx = e.line - 2;
+                let col_idx = e.column.saturating_sub(1);
+                tds.rows
+                    .get(row_idx)
+                    .and_then(|r| r.get(col_idx))
+                    .map(|c| c.source_info.clone())
+                    .unwrap_or_else(|| tds.source_info.clone())
+            } else {
+                tds.source_info.clone()
+            };
+            errors.push(CompilationError {
+                message: e.message,
+                source_info: target_si,
+                kind: CompilationErrorKind::UnsupportedExpression {
+                    kind: SmolStr::new_static("TDS"),
                 },
             });
         }

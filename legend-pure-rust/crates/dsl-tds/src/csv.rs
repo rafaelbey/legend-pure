@@ -258,8 +258,9 @@ pub fn parse_and_infer(csv: &str, overrides: &[ColumnOverride]) -> Result<Parsed
     let column_count = header_cells.len();
 
     // Parse all data rows up front so we can scan column-major during
-    // inference.
-    let mut data_rows: Vec<Vec<RawCell>> = Vec::with_capacity(lines.len());
+    // inference. Each entry preserves its source line for downstream
+    // error positioning.
+    let mut data_rows: Vec<DataRow> = Vec::with_capacity(lines.len());
     for raw_line in lines {
         let cells = parse_csv_line(raw_line.text, raw_line.line)?;
         if cells.len() != column_count {
@@ -273,14 +274,17 @@ pub fn parse_and_infer(csv: &str, overrides: &[ColumnOverride]) -> Result<Parsed
                 column: 1,
             });
         }
-        data_rows.push(cells);
+        data_rows.push(DataRow {
+            line: raw_line.line,
+            cells,
+        });
     }
 
     // Per-column inference: walk every cell in the column to classify.
     let mut columns = Vec::with_capacity(column_count);
     for (idx, header) in header_cells.iter().enumerate() {
         let override_entry = overrides.get(idx).cloned().unwrap_or_default();
-        let column_cells: Vec<&RawCell> = data_rows.iter().map(|row| &row[idx]).collect();
+        let column_cells: Vec<&RawCell> = data_rows.iter().map(|row| &row.cells[idx]).collect();
         let inferred = infer_column(&column_cells);
         let type_tag = override_entry.type_tag.clone().unwrap_or(inferred.0);
         let multiplicity = override_entry.multiplicity.unwrap_or(inferred.1);
@@ -291,14 +295,61 @@ pub fn parse_and_infer(csv: &str, overrides: &[ColumnOverride]) -> Result<Parsed
         });
     }
 
-    // Materialise cells per the chosen column types.
+    // Materialise cells per the chosen column types. Type-mismatch
+    // errors (non-empty cell that doesn't parse against the declared
+    // type) surface as `CsvError`s positioned at the offending row.
     let mut rows: Vec<Vec<Option<TypedCell>>> = Vec::with_capacity(data_rows.len());
-    for row in &data_rows {
+    for (row_idx, row) in data_rows.iter().enumerate() {
         let mut typed_row = Vec::with_capacity(column_count);
-        for (idx, cell) in row.iter().enumerate() {
-            typed_row.push(materialise_cell(cell, &columns[idx].type_tag));
+        for (idx, cell) in row.cells.iter().enumerate() {
+            match materialise_cell(cell, &columns[idx].type_tag) {
+                Ok(value) => typed_row.push(value),
+                Err(reason) => {
+                    return Err(CsvError {
+                        message: format!(
+                            "TDS column '{}' is declared `{}` but the value {:?} on row {} is not a valid {}: {}",
+                            columns[idx].name,
+                            columns[idx].type_tag.pure_type_name(),
+                            cell.raw,
+                            row_idx + 1,
+                            columns[idx].type_tag.pure_type_name(),
+                            reason,
+                        ),
+                        line: row.line,
+                        column: idx + 1,
+                    });
+                }
+            }
         }
         rows.push(typed_row);
+    }
+
+    // Multiplicity validation: when a column carries an explicit `[1]`
+    // (or `[1..*]`), every cell must be non-empty. Inferred
+    // multiplicities are by construction consistent with the data, so
+    // this only fires when an override forces a tighter bound than the
+    // CSV supports.
+    for (col_idx, col) in columns.iter().enumerate() {
+        if !multiplicity_requires_nonempty(&col.multiplicity) {
+            continue;
+        }
+        if let Some((row_idx, row)) = data_rows
+            .iter()
+            .enumerate()
+            .find(|(_, r)| r.cells[col_idx].is_empty())
+        {
+            return Err(CsvError {
+                message: format!(
+                    "TDS column '{}' is declared `{}` (`{}`) but row {} cell is empty",
+                    col.name,
+                    col.type_tag.pure_type_name(),
+                    multiplicity_display(&col.multiplicity),
+                    row_idx + 1,
+                ),
+                line: row.line,
+                column: col_idx + 1,
+            });
+        }
     }
 
     Ok(ParsedTDS {
@@ -306,6 +357,42 @@ pub fn parse_and_infer(csv: &str, overrides: &[ColumnOverride]) -> Result<Parsed
         columns,
         rows,
     })
+}
+
+/// One parsed CSV data row paired with its source-line number.
+struct DataRow {
+    line: usize,
+    cells: Vec<RawCell>,
+}
+
+/// Returns `true` when `m` requires at least one non-empty cell per
+/// row (`[1]`, `[1..*]`, `[1..n]`). `Variable` (parameterised) is
+/// treated permissively — the binding is unknown at parse time.
+fn multiplicity_requires_nonempty(m: &Multiplicity) -> bool {
+    use Multiplicity::{OneOrMany, PureOne, Range, Variable, ZeroOrMany, ZeroOrOne};
+    match m {
+        PureOne | OneOrMany => true,
+        Range { lower, .. } => *lower >= 1,
+        ZeroOrOne | ZeroOrMany | Variable(_) => false,
+    }
+}
+
+/// Render a [`Multiplicity`] in source-form for error messages
+/// (`1`, `0..1`, `*`, `1..*`, `2..5`).
+fn multiplicity_display(m: &Multiplicity) -> String {
+    use Multiplicity::{OneOrMany, PureOne, Range, Variable, ZeroOrMany, ZeroOrOne};
+    match m {
+        PureOne => "1".into(),
+        ZeroOrOne => "0..1".into(),
+        ZeroOrMany => "*".into(),
+        OneOrMany => "1..*".into(),
+        Range {
+            lower,
+            upper: Some(u),
+        } => format!("{lower}..{u}"),
+        Range { lower, upper: None } => format!("{lower}..*"),
+        Variable(name) => name.to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -348,9 +435,18 @@ impl RawCell {
         }
     }
 
-    /// `true` if this cell carries no value (whitespace-only, no quotes).
+    /// `true` if this cell carries no value. Bare cells with no
+    /// non-whitespace text are empty; quoted cells whose content is
+    /// likewise empty (`''`, `""`) are also treated as empty so they
+    /// can mark a null in the standard CSV convention. A non-empty
+    /// quoted cell (`'foo'`) is not empty.
     fn is_empty(&self) -> bool {
-        !self.quoted && self.raw.trim().is_empty()
+        if self.quoted {
+            // Strip surrounding quotes and check the inner text.
+            self.value().trim().is_empty()
+        } else {
+            self.raw.trim().is_empty()
+        }
     }
 }
 
@@ -591,16 +687,46 @@ fn is_datetime_literal(s: &str) -> bool {
 // Cell materialisation
 // ---------------------------------------------------------------------------
 
-fn materialise_cell(cell: &RawCell, type_tag: &ColumnType) -> Option<TypedCell> {
+/// Materialise a single cell. Returns:
+///
+/// - `Ok(None)` when the cell is empty (whitespace-only or missing).
+/// - `Ok(Some(typed))` when the cell parses against `type_tag`.
+/// - `Err(reason)` when the cell text is non-empty but doesn't fit
+///   `type_tag` (e.g. `"hello"` declared `Integer`, or `"yes"`
+///   declared `Boolean`). The `reason` is a short description suitable
+///   for embedding in a positioned diagnostic.
+///
+/// Decimal / `StrictDate` / `DateTime` / `String` / `Other` accept any
+/// non-empty text — typed parsing of those forms happens later (the
+/// compiler keeps the source-form string and the runtime decides how
+/// to interpret it).
+fn materialise_cell(
+    cell: &RawCell,
+    type_tag: &ColumnType,
+) -> Result<Option<TypedCell>, &'static str> {
     if cell.is_empty() {
-        return None;
+        return Ok(None);
     }
     let v = cell.value();
-    Some(match type_tag {
-        ColumnType::Integer => TypedCell::Integer(v.parse::<i64>().ok()?),
-        ColumnType::Float => TypedCell::Float(v.parse::<f64>().ok()?),
+    Ok(Some(match type_tag {
+        ColumnType::Integer => v
+            .parse::<i64>()
+            .map(TypedCell::Integer)
+            .map_err(|_| "expected a whole-number Integer literal")?,
+        ColumnType::Float => v
+            .parse::<f64>()
+            .map(TypedCell::Float)
+            .map_err(|_| "expected a Float literal (e.g. `1.5`, `-3.14`)")?,
         ColumnType::Decimal => TypedCell::Decimal(SmolStr::new(v)),
-        ColumnType::Boolean => TypedCell::Boolean(v.eq_ignore_ascii_case("true")),
+        ColumnType::Boolean => {
+            if v.eq_ignore_ascii_case("true") {
+                TypedCell::Boolean(true)
+            } else if v.eq_ignore_ascii_case("false") {
+                TypedCell::Boolean(false)
+            } else {
+                return Err("expected `true` or `false`");
+            }
+        }
         ColumnType::String => TypedCell::String(unescape_string(v)),
         ColumnType::StrictDate => TypedCell::StrictDate(SmolStr::new(v)),
         ColumnType::DateTime => TypedCell::DateTime(SmolStr::new(v)),
@@ -608,7 +734,7 @@ fn materialise_cell(cell: &RawCell, type_tag: &ColumnType) -> Option<TypedCell> 
         // reconstructs the typed value from that string at execution
         // time (e.g. `Variant` parses its own JSON-bearing payload).
         ColumnType::Other { .. } => TypedCell::String(unescape_string(v)),
-    })
+    }))
 }
 
 fn unescape_string(s: &str) -> SmolStr {
