@@ -2413,3 +2413,93 @@ function test::caller(h: test::Holder<String|*>[1]): String[1] { $h.items }
         "expected multiplicity error from class-mult substitution"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Lambda parameter inference from `Function<{T->X}>` shape
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lambda_param_inferred_from_filter_signature() {
+    // `filter<T>(coll: T[*], pred: Function<{T[1]->Boolean[1]}>[1]): T[*]`
+    // Called with `[1, 2, 3]->filter(x | $x->greaterThan(0))`.
+    // T binds Integer from coll → lambda's `x` should be Integer[1] → the
+    // body's `$x->greaterThan(0)` dispatches the Integer-typed overload
+    // unambiguously and the compile is clean.
+    let source = r"
+###Pure
+native function test::filter<T>(coll: T[*], pred: meta::pure::metamodel::function::Function<{T[1]->Boolean[1]}>[1]): T[*];
+native function test::greaterThan(a: Integer[1], b: Integer[1]): Boolean[1];
+function test::caller(): Integer[*] { [1, 2, 3]->filter(x | $x->greaterThan(0)) }
+";
+    compile_with_imports(&[source], &[])
+        .expect("filter must thread T:=Integer through to lambda param x");
+}
+
+#[test]
+fn lambda_param_inferred_via_chained_generic_class() {
+    // Lambda inside a chain whose receiver is a generic class.
+    // `Holder<T> { items: T[*]; }; func<T>(h:Holder<T>[1], pred:Function<{T[1]->Boolean[1]}>[1]):T[*]`
+    // Receiver `Holder<String>[1]` binds T:=String → pred's x is String[1]
+    // → body `$x->equalString('')` resolves to the String overload.
+    let source = r"
+###Pure
+Class test::Holder<T> { items: T[*]; }
+native function test::pickItems<T>(h: test::Holder<T>[1], pred: meta::pure::metamodel::function::Function<{T[1]->Boolean[1]}>[1]): T[*];
+native function test::isEmpty(s: String[1]): Boolean[1];
+function test::caller(h: test::Holder<String>[1]): String[*] { pickItems($h, x | $x->isEmpty()) }
+";
+    compile_with_imports(&[source], &[])
+        .expect("pickItems must bind T:=String from Holder<String> and type lambda param x as String[1]");
+}
+
+#[test]
+fn lambda_param_inferred_for_t_to_t_signature() {
+    // `mutate<T>(coll: T[*], f: Function<{T[1]->T[1]}>[1]): T[*]`
+    // Lambda's input AND output are T. T binds from coll → lambda's x and
+    // its return are both Integer.
+    let source = r"
+###Pure
+native function test::mutate<T>(coll: T[*], f: meta::pure::metamodel::function::Function<{T[1]->T[1]}>[1]): T[*];
+native function test::identity(x: Integer[1]): Integer[1];
+function test::caller(): Integer[*] { [1, 2, 3]->mutate(x | $x->identity()) }
+";
+    compile_with_imports(&[source], &[])
+        .expect("mutate must bind T:=Integer for both arg and return positions of the lambda");
+}
+
+#[test]
+fn lambda_param_typed_arg_dispatches_specific_overload() {
+    // Sensitivity check: the lambda's body uses `$x` against an
+    // overloaded function, where dispatch can pick the wrong overload
+    // if `x`'s type is `Any` or `Unresolved`. Filter binds T:=Integer
+    // → x:Integer[1] → dispatch picks the Integer overload of `pickOne`.
+    let source = r"
+###Pure
+native function test::filter<T>(coll: T[*], pred: meta::pure::metamodel::function::Function<{T[1]->Boolean[1]}>[1]): T[*];
+native function test::pickOne(x: Integer[1]): Boolean[1];
+native function test::pickOne(x: String[1]): Boolean[1];
+function test::caller(): Integer[*] { [1, 2, 3]->filter(x | $x->pickOne()) }
+";
+    compile_with_imports(&[source], &[])
+        .expect("filter must thread T:=Integer so pickOne(Integer) wins dispatch");
+}
+
+#[test]
+fn lambda_multi_param_inferred_from_function_shape() {
+    // Two-param lambda `{x, y | ...}` passed to
+    // `Function<{T[1], U[1]->Boolean[1]}>[1]`. Both T and U bind from
+    // sibling args (or coll-style). x and y must each get their typed
+    // expectations.
+    let source = r"
+###Pure
+native function test::zipPred<T, U>(
+  a: T[*],
+  b: U[*],
+  pred: meta::pure::metamodel::function::Function<{T[1], U[1]->Boolean[1]}>[1]
+): Boolean[1];
+native function test::eqInt(a: Integer[1], b: Integer[1]): Boolean[1];
+function test::caller(): Boolean[1] { zipPred([1, 2], [3, 4], {x, y | eqInt($x, $y)}) }
+";
+    compile_with_imports(&[source], &[])
+        .expect("zipPred must bind T:=Integer, U:=Integer and type both x, y as Integer[1]");
+}
