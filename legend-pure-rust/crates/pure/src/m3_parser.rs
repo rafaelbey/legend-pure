@@ -695,6 +695,7 @@ impl<'a> M3Parser<'a> {
 
         let mut multiplicity = Multiplicity::PureOne;
         let mut type_name = SmolStr::new("Any");
+        let mut pack: Option<(Vec<crate::types::TypeExpr>, Vec<Multiplicity>)> = None;
 
         if self.eat(&Token::LBrace) {
             loop {
@@ -722,8 +723,14 @@ impl<'a> M3Parser<'a> {
                                 multiplicity = self.parse_multiplicity_ref();
                             }
                             "genericType" => {
-                                // Extract the raw type name from the GenericType
-                                type_name = self.parse_generic_type_raw_type();
+                                // Extract rawType + typeArguments + multiplicityArguments
+                                // so parametric property types like
+                                // `Property<U, V>[*]` survive the bootstrap pass.
+                                let (raw, ta, ma) = self.parse_generic_type_full();
+                                type_name = raw.clone();
+                                if !ta.is_empty() || !ma.is_empty() {
+                                    pack = Some((ta, ma));
+                                }
                             }
                             _ => {
                                 self.skip_value();
@@ -736,10 +743,21 @@ impl<'a> M3Parser<'a> {
             self.eat(&Token::RBrace);
         }
 
+        // When parametric, encode `<type_args | mult_args>` inline via
+        // the sentinel marker (`Named { ANY_ID, …, value_arguments[0] = String(rawType) }`)
+        // so `resolve_m3_supertypes` can rewrite element ID + preserve
+        // args in one pass. Otherwise fall back to the bare
+        // `Generic(name)` form that the same pass already resolves.
+        let type_expr = if let Some((type_arguments, multiplicity_arguments)) = pack {
+            self.build_pack_typeexpr(type_name, type_arguments, multiplicity_arguments)
+        } else {
+            crate::types::TypeExpr::Generic(type_name)
+        };
+
         Property {
             name: SmolStr::new(&prop_name),
             source_info: synthetic_source(),
-            type_expr: crate::types::TypeExpr::Generic(type_name),
+            type_expr,
             multiplicity,
             aggregation: None,
             default_value: None,
@@ -927,12 +945,35 @@ impl<'a> M3Parser<'a> {
     /// Extracts the raw type name from a `^GenericType{rawType: X}` or
     /// a simple element reference `Root.children[...].children[X]`.
     fn parse_generic_type_raw_type(&mut self) -> SmolStr {
+        let (raw, _, _) = self.parse_generic_type_full();
+        raw
+    }
+
+    /// Parses an `^GenericType { rawType: …, typeArguments: […], multiplicityArguments: … }`
+    /// inline instance and returns the raw type name plus a recursive
+    /// `TypeExpr` for each type argument and a `Multiplicity` for each
+    /// multiplicity argument.
+    ///
+    /// Used by property-instance parsing to feed the
+    /// `M3_PROPERTY_TYPE_PACKS` sidecar so `resolve_m3_supertypes` can
+    /// rebuild parametric property types like `Property<U, V>[*]` (which
+    /// the Generic-only path stripped to bare `Property`).
+    fn parse_generic_type_full(
+        &mut self,
+    ) -> (SmolStr, Vec<crate::types::TypeExpr>, Vec<Multiplicity>) {
         if self.at(&Token::Caret) {
-            // Inline ^GenericType { rawType: ... }
+            // Inline ^GenericType { rawType: ... [, typeArguments / multiplicityArguments / typeParameter] }
             self.advance(); // ^
             let _classifier = self.parse_classifier_path();
 
             let mut raw_type = SmolStr::new("Any");
+            let mut type_arguments: Vec<crate::types::TypeExpr> = Vec::new();
+            let mut multiplicity_arguments: Vec<Multiplicity> = Vec::new();
+            // GenericType can be `{rawType: X}` OR
+            // `{typeParameter: ^TypeParameter{name:'T'}}` — the latter
+            // is a forward reference to one of the surrounding class's
+            // declared type parameters and survives as `Generic("T")`.
+            let mut type_parameter_name: Option<SmolStr> = None;
 
             if self.eat(&Token::LBrace) {
                 loop {
@@ -945,10 +986,37 @@ impl<'a> M3Parser<'a> {
                                 continue;
                             }
 
-                            if path_tail.as_str() == "rawType" {
-                                raw_type = self.parse_element_ref_tail();
-                            } else {
-                                self.skip_value();
+                            match path_tail.as_str() {
+                                "rawType" => {
+                                    // m3.pure occasionally inlines a
+                                    // `^FunctionType{...}` here (9 sites
+                                    // in the metamodel — e.g.
+                                    // `Function<{->Z[y]}>` typeArgs).
+                                    // We don't yet model FunctionType
+                                    // shapes inside the M3 stub
+                                    // encoding, so fall back to "Any"
+                                    // for those — same precision as
+                                    // before this work; doesn't
+                                    // regress.
+                                    if self.at(&Token::Caret) {
+                                        self.skip_inline_instance();
+                                        raw_type = SmolStr::new("Any");
+                                    } else {
+                                        raw_type = self.parse_element_ref_tail();
+                                    }
+                                }
+                                "typeArguments" => {
+                                    type_arguments = self.parse_type_argument_list();
+                                }
+                                "multiplicityArguments" => {
+                                    multiplicity_arguments = self.parse_multiplicity_argument_list();
+                                }
+                                "typeParameter" => {
+                                    type_parameter_name = Some(self.parse_type_parameter_name());
+                                }
+                                _ => {
+                                    self.skip_value();
+                                }
                             }
                         }
                     }
@@ -957,10 +1025,148 @@ impl<'a> M3Parser<'a> {
                 self.eat(&Token::RBrace);
             }
 
-            raw_type
+            // `typeParameter` form short-circuits to the parameter name.
+            if let Some(name) = type_parameter_name {
+                return (name, Vec::new(), Vec::new());
+            }
+            (raw_type, type_arguments, multiplicity_arguments)
         } else {
             // Direct element reference: Root.children[...].children[Type]
-            self.parse_element_ref_tail()
+            (self.parse_element_ref_tail(), Vec::new(), Vec::new())
+        }
+    }
+
+    /// Parses `typeArguments: [^GenericType{…}, ^GenericType{…}, …]` and
+    /// returns each entry as a `TypeExpr`. Class refs become
+    /// `TypeExpr::Generic(class_name)` (resolved later by
+    /// `resolve_m3_supertypes`); type-parameter refs become
+    /// `TypeExpr::Generic(param_name)`.
+    fn parse_type_argument_list(&mut self) -> Vec<crate::types::TypeExpr> {
+        let mut out = Vec::new();
+        // Single ^GenericType (no surrounding brackets).
+        if self.at(&Token::Caret) {
+            let (raw, ta, ma) = self.parse_generic_type_full();
+            out.push(self.build_pack_typeexpr(raw, ta, ma));
+            return out;
+        }
+        if !self.eat(&Token::LBrack) {
+            self.skip_value();
+            return out;
+        }
+        loop {
+            match self.peek() {
+                Token::RBrack | Token::Eof => break,
+                Token::Caret => {
+                    let (raw, ta, ma) = self.parse_generic_type_full();
+                    out.push(self.build_pack_typeexpr(raw, ta, ma));
+                }
+                _ => {
+                    self.skip_value();
+                }
+            }
+            self.eat(&Token::Comma);
+        }
+        self.eat(&Token::RBrack);
+        out
+    }
+
+    /// Parses `multiplicityArguments: …` — either a single
+    /// `Root.children[multiplicity].children[ZeroMany]` ref or a
+    /// bracketed list. Inline multiplicity instances are tolerated
+    /// (default `PureOne`).
+    fn parse_multiplicity_argument_list(&mut self) -> Vec<Multiplicity> {
+        let mut out = Vec::new();
+        if self.eat(&Token::LBrack) {
+            loop {
+                match self.peek() {
+                    Token::RBrack | Token::Eof => break,
+                    Token::Caret => {
+                        // Inline ^Multiplicity{...}; not used by m3.pure today.
+                        self.skip_inline_instance();
+                        out.push(Multiplicity::PureOne);
+                    }
+                    _ => {
+                        out.push(self.parse_multiplicity_ref());
+                    }
+                }
+                self.eat(&Token::Comma);
+            }
+            self.eat(&Token::RBrack);
+        } else {
+            out.push(self.parse_multiplicity_ref());
+        }
+        out
+    }
+
+    /// Parses `^TypeParameter { name: 'T', … }` and returns just the name.
+    fn parse_type_parameter_name(&mut self) -> SmolStr {
+        if !self.eat(&Token::Caret) {
+            self.skip_value();
+            return SmolStr::new("");
+        }
+        let _classifier = self.parse_classifier_path();
+        let mut name = SmolStr::new("");
+        if self.eat(&Token::LBrace) {
+            loop {
+                match self.peek() {
+                    Token::RBrace | Token::Eof => break,
+                    _ => {
+                        let path_tail = self.parse_property_path_tail();
+                        if !self.eat(&Token::Colon) {
+                            self.skip_to_comma_or_brace();
+                            continue;
+                        }
+                        if path_tail.as_str() == "name" {
+                            name = self.parse_string_literal();
+                        } else {
+                            self.skip_value();
+                        }
+                    }
+                }
+                self.eat(&Token::Comma);
+            }
+            self.eat(&Token::RBrace);
+        }
+        name
+    }
+
+    /// Folds a `(rawType_name, type_arguments, multiplicity_arguments)`
+    /// triple into a single `TypeExpr`. With no args, it stays
+    /// `Generic(name)` so the existing forward-ref resolution in
+    /// `resolve_m3_supertypes` handles it. With args, it becomes a
+    /// `Named` whose `element` is a placeholder (`Any`) — the resolver
+    /// detects the marker via `value_arguments[0] == String(rawType)`
+    /// and rewrites the element while preserving the type/mult args.
+    fn build_pack_typeexpr(
+        &self,
+        raw: SmolStr,
+        type_arguments: Vec<crate::types::TypeExpr>,
+        multiplicity_arguments: Vec<Multiplicity>,
+    ) -> crate::types::TypeExpr {
+        if type_arguments.is_empty() && multiplicity_arguments.is_empty() {
+            crate::types::TypeExpr::Generic(raw)
+        } else {
+            // Sidecar inline encoding: ANY_ID + value_arguments[0] = String(raw_name).
+            // resolve_m3_supertypes detects this pattern and rewrites
+            // element to the resolved class id.
+            crate::types::TypeExpr::Named {
+                element: crate::bootstrap::ANY_ID,
+                type_arguments,
+                multiplicity_arguments,
+                value_arguments: vec![crate::types::ConstValue::String(raw.to_string())],
+            }
+        }
+    }
+
+    /// Parses a string literal token, returning its content. Falls back
+    /// to an empty `SmolStr` if the next token isn't a string.
+    fn parse_string_literal(&mut self) -> SmolStr {
+        if let Token::StringLit(s) = self.peek().clone() {
+            self.advance();
+            s
+        } else {
+            self.skip_value();
+            SmolStr::new("")
         }
     }
 
