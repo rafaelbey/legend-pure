@@ -992,7 +992,13 @@ fn infer_type_from_valuespec(
                     if col.name == data.function_name {
                         return match &col.type_expr {
                             crate::types::TypeExpr::Named { element, .. } => Some(*element),
-                            crate::types::TypeExpr::Generic(_) => Some(crate::bootstrap::ANY_ID),
+                            // Unbound generic: report `None` (unknown), not
+                            // `Any`. The narrower distinguishes "couldn't
+                            // infer" from "positively top type" — the former
+                            // accepts every param via the unknown-arg-permits
+                            // branch in `is_type_compatible`; the latter would
+                            // be rejected against non-Any params.
+                            crate::types::TypeExpr::Generic(_) => None,
                             _ => None,
                         };
                     }
@@ -1010,7 +1016,9 @@ fn infer_type_from_valuespec(
                 substitute_class_generics(&prop_ty_owned, &type_params_owned, &receiver_type_args);
             match resolved {
                 crate::types::TypeExpr::Named { element, .. } => Some(element),
-                crate::types::TypeExpr::Generic(_) => Some(crate::bootstrap::ANY_ID),
+                // Unbound generic from class-property substitution: report
+                // `None` (unknown). See sibling note above.
+                crate::types::TypeExpr::Generic(_) => None,
                 _ => None,
             }
         }
@@ -1028,8 +1036,14 @@ fn infer_type_from_valuespec(
                 let substituted = substitute_type(&f.return_type, &bindings.ty);
                 match &substituted {
                     crate::types::TypeExpr::Named { element, .. } => return Some(*element),
-                    // Unbound type variable — widen to Any (type unknown at this call site).
-                    crate::types::TypeExpr::Generic(_) => return Some(bootstrap::ANY_ID),
+                    // Unbound type variable: report `None` (unknown), not
+                    // `Any`. Narrowing relies on the distinction —
+                    // unknown-arg permits every overload (via
+                    // `is_type_compatible`'s None branch) so Phase 2 rank
+                    // can disambiguate by remaining args. Widening to Any
+                    // would instead reject every non-Any param and force
+                    // the empty-fallback ambiguity.
+                    crate::types::TypeExpr::Generic(_) => return None,
                     _ => {}
                 }
             }
