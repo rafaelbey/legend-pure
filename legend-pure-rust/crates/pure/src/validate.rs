@@ -68,12 +68,16 @@ pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
     // package-scoped, also a multi-chunk concern.
     errors.extend(validate_access_levels(model));
 
-    // Only validate the current compilation chunk (the last one).
-    // Bootstrap chunk (0) is compiler-trusted.
-    let Some(chunk) = model.chunks.last() else {
-        return errors;
-    };
-    {
+    // Validate every non-bootstrap chunk. Bootstrap (0) is
+    // compiler-trusted. Earlier this routine validated only
+    // `chunks.last()` on the assumption that prior chunks had been
+    // validated when they were "last" — but `repo::load` runs
+    // `finalize_model` only once, after every repo has been merged,
+    // so anything but the final repo's elements would silently skip
+    // per-element checks (stereotype-name correctness, duplicates,
+    // bad supertypes, etc.). The LSP, which loads many repos and
+    // surfaces diagnostics interactively, exposed the gap.
+    for chunk in model.chunks.iter().skip(1) {
         for (local_idx, element) in chunk.elements.iter() {
             let id = ElementId::InstanceId {
                 chunk_id: chunk.chunk_id,
