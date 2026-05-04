@@ -329,14 +329,35 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                 upper: Some(count),
             };
 
-            let type_expr = elem_types.iter().flatten().next().map_or_else(
-                || TypeExpr::Named {
+            // LUB across all element types — `[1, 1.5]` widens to
+            // `Number`, not `Integer`. Without this, body-return
+            // checks against a literal collection (and downstream
+            // dispatch on the collection's element type) silently
+            // accepted heterogeneous numeric literals as the
+            // first element's type.
+            let type_expr = elem_types
+                .iter()
+                .flatten()
+                .map(|t| t.type_expr.clone())
+                .reduce(|acc, te| match (&acc, &te) {
+                    (
+                        TypeExpr::Named { element: a, .. },
+                        TypeExpr::Named { element: b, .. },
+                    ) => {
+                        let lub_id = crate::resolve::least_upper_bound_ids(*a, *b, ctx.model);
+                        TypeExpr::Named {
+                            element: lub_id,
+                            type_arguments: Vec::new(),
+                            value_arguments: Vec::new(),
+                        }
+                    }
+                    _ => acc,
+                })
+                .unwrap_or_else(|| TypeExpr::Named {
                     element: bootstrap::NIL_ID,
                     type_arguments: Vec::new(),
                     value_arguments: Vec::new(),
-                },
-                |t| t.type_expr.clone(),
-            );
+                });
 
             Some(ResolvedType {
                 type_expr,
@@ -351,14 +372,36 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
         }),
 
         // -- Element reference ----------------------------------------------
-        ExprKind::PackageableElementRef { element } => Some(ResolvedType {
-            type_expr: TypeExpr::Named {
-                element: *element,
-                type_arguments: Vec::new(),
-                value_arguments: Vec::new(),
-            },
-            multiplicity: Multiplicity::PureOne,
-        }),
+        //
+        // A bare element reference's *type* is its M3 metatype, not
+        // the element itself. `Class<Foo>` referenced as a value has
+        // type `meta::pure::metamodel::type::Class`; a function name
+        // used as a value (e.g. `reverse_T_m__T_m_->eval([1,2,3])`)
+        // has type `meta::pure::metamodel::function::NativeFunctionDefinition`
+        // (or `ConcreteFunctionDefinition`). This mirrors what
+        // `resolve.rs::infer_type_from_valuespec` returns at dispatch
+        // time, keeping Pass 2.5 and dispatch in sync.
+        //
+        // Without this alignment, the arg-vs-param check would see
+        // arg-eid = the function's id and param-eid = the Function
+        // metaclass, fail `is_type_compatible`, and require a
+        // specialised Function-element skip — exactly the kind of
+        // gate the user pushed back on.
+        ExprKind::PackageableElementRef { element } => {
+            let metatype_eid = ctx
+                .model
+                .try_get_element(*element)
+                .and_then(|e| bootstrap::metatype_of(ctx.model, e))
+                .unwrap_or(*element);
+            Some(ResolvedType {
+                type_expr: TypeExpr::Named {
+                    element: metatype_eid,
+                    type_arguments: Vec::new(),
+                    value_arguments: Vec::new(),
+                },
+                multiplicity: Multiplicity::PureOne,
+            })
+        }
 
         // -- Column (TDS — deferred) ----------------------------------------
         ExprKind::Column => None,
@@ -566,36 +609,6 @@ fn infer_function_call(
                 TypeExpr::Named { element, .. } => Some(*element),
                 _ => None,
             };
-            // Narrow the check to *primitive* arg-vs-param
-            // mismatches — exactly the user-facing class observed
-            // (`range(0.0, $stop)` against `range(Integer, Integer)`).
-            // Non-primitive cases involve subtyping, packages-as-
-            // PackageableElements, structural function-types, and
-            // generic parameters that the dispatcher already handles
-            // (or has known gaps in). Emitting beyond primitives
-            // floods the platform compile with noise from cases
-            // where dispatch ranking — not user code — is at fault.
-            //
-            // `arg_idx` shadows here intentionally: we keep the
-            // index for diagnostics even when the check is skipped.
-            let primitive = |id: crate::ids::ElementId| -> bool {
-                id == bootstrap::INTEGER_ID
-                    || id == bootstrap::FLOAT_ID
-                    || id == bootstrap::DECIMAL_ID
-                    || id == bootstrap::STRING_ID
-                    || id == bootstrap::BOOLEAN_ID
-                    || id == bootstrap::DATE_TIME_ID
-                    || id == bootstrap::STRICT_DATE_ID
-                    || id == bootstrap::STRICT_TIME_ID
-            };
-            let param_eid = match &param.type_expr {
-                TypeExpr::Named { element, .. } => Some(*element),
-                _ => None,
-            };
-            let both_primitive = matches!((arg_eid, param_eid), (Some(a), Some(p)) if primitive(a) && primitive(p));
-            if !both_primitive {
-                continue;
-            }
             // Suppress when an alternative overload at this package
             // would accept the actual arg type AND multiplicity —
             // the dispatcher had a real choice; second-guessing its
@@ -608,6 +621,34 @@ fn infer_function_call(
                 arg_eid,
                 Some(&arg_ty.multiplicity),
             ) {
+                continue;
+            }
+            // Imprecise-inference detector: when arg and param share
+            // the same element id but the param carries type-arguments
+            // (generic specialisation) and the arg doesn't, the arg's
+            // generic bindings — including its multiplicity — were
+            // never narrowed. Multiplicity inference for chained
+            // `cast<T|m>` and similar `m`-generic returns currently
+            // loses the binding; reporting an error here would just
+            // surface that upstream gap as a noisy false positive.
+            // Skip until generic-multiplicity binding propagates
+            // through the chain.
+            if let (
+                TypeExpr::Named {
+                    element: a_eid,
+                    type_arguments: a_args,
+                    ..
+                },
+                TypeExpr::Named {
+                    element: p_eid,
+                    type_arguments: p_args,
+                    ..
+                },
+            ) = (&arg_ty.type_expr, &param.type_expr)
+                && a_eid == p_eid
+                && a_args.is_empty()
+                && !p_args.is_empty()
+            {
                 continue;
             }
             if !crate::resolve::is_multiplicity_compatible(
@@ -635,6 +676,57 @@ fn infer_function_call(
                         )),
                     },
                 });
+            }
+            // Three cases this nominal check can't model — they
+            // need structural / lattice-aware matching that lives
+            // upstream and isn't this layer's concern. Skipping them
+            // is *not* the kind of "trustworthy" gate the user
+            // pushed back on (those suppressed real bugs); these are
+            // category mismatches the check fundamentally doesn't
+            // handle:
+            //
+            //   1. **Function references**: `myFn` as a value has
+            //      M3 metatype `ConcreteFunctionDefinition` /
+            //      `NativeFunctionDefinition`, both subtypes of the
+            //      `Function` metaclass. `is_subtype` walks Class
+            //      `super_types`, but the M3 metamodel hierarchy
+            //      isn't always loaded as Class supertypes, so a
+            //      function-arg vs `Function<{…}>` param falsely
+            //      fails. The proper fix is to teach `is_subtype`
+            //      about the metamodel hierarchy; until then the
+            //      structural `FunctionType` type-arg on the param
+            //      is enough to identify the callee shape.
+            //
+            //   2. **Structural `FunctionType` params**: the param's
+            //      type-expr is `TypeExpr::FunctionType { … }`
+            //      (lambda arrow type), not `Named { … }`. Nominal
+            //      element comparison is meaningless.
+            //
+            //   3. **`Nil` arg**: the empty-collection literal `[]`
+            //      lowers to `Nil[0..0]`. `Nil` is the bottom of
+            //      Pure's subtyping lattice, compatible with every
+            //      type. The platform passes it freely into Function
+            //      and other typed params.
+            if let Some(eid) = arg_eid
+                && matches!(ctx.model.try_get_element(eid), Some(Element::Function(_)))
+            {
+                continue;
+            }
+            // Package values (`meta::pure::functions::meta` passed
+            // as a `PackageableElement` arg) — same metaclass-
+            // hierarchy issue as function references. `is_subtype`
+            // walks `Class.super_types` but doesn't navigate the
+            // metaclass hierarchy of value-element-IDs, so the
+            // nominal check spuriously rejects every Package arg.
+            // Skip until `is_subtype` learns the metaclass story.
+            if matches!(arg_eid, Some(crate::ids::ElementId::Package(_))) {
+                continue;
+            }
+            if matches!(param.type_expr, TypeExpr::FunctionType { .. }) {
+                continue;
+            }
+            if arg_eid == Some(bootstrap::NIL_ID) {
+                continue;
             }
             if !crate::resolve::is_type_compatible(arg_eid, &param.type_expr, ctx.model) {
                 let arg_name = arg_eid
@@ -1576,16 +1668,21 @@ pub fn check_body_return_signature(
     let Some(last) = body.last() else { return };
     let Some(rt) = last.type_info.as_ref() else { return };
 
-    let primitive = |id: crate::ids::ElementId| -> bool {
-        id == bootstrap::INTEGER_ID
-            || id == bootstrap::FLOAT_ID
-            || id == bootstrap::DECIMAL_ID
-            || id == bootstrap::STRING_ID
-            || id == bootstrap::BOOLEAN_ID
-            || id == bootstrap::DATE_TIME_ID
-            || id == bootstrap::STRICT_DATE_ID
-            || id == bootstrap::STRICT_TIME_ID
-    };
+    // Pure semantics: a `let x = expr;` as the body's last
+    // statement is treated as if the body returned `expr` itself —
+    // the let's `Nil[0]` return type is a syntactic artifact.
+    // (Java Pure's `letAsLastStatement` test names the rule.) Skip
+    // the body-return check when we'd otherwise flag every
+    // platform-side function whose tail is a `let`.
+    if let ExprKind::FunctionCall(crate::types::FunctionCallData {
+        function_name,
+        ..
+    }) = &*last.kind
+        && function_name == "letFunction"
+    {
+        return;
+    }
+
     let actual_eid = match &rt.type_expr {
         TypeExpr::Named { element, .. } => Some(*element),
         _ => None,
@@ -1594,9 +1691,19 @@ pub fn check_body_return_signature(
         TypeExpr::Named { element, .. } => Some(*element),
         _ => None,
     };
-    let both_primitive =
-        matches!((actual_eid, expected_eid), (Some(a), Some(p)) if primitive(a) && primitive(p));
-    if !both_primitive {
+
+    // When inference couldn't narrow the body's tail expression to
+    // anything meaningful, don't second-guess the user-declared
+    // return — they're more authoritative than our imprecise
+    // inference. Symmetric to `is_type_compatible`'s permissive
+    // handling of unknown args.
+    //
+    // - `Any`: top type, signals "couldn't narrow downward".
+    // - `Nil`: bottom type, signals "generic binding picked the
+    //   bottom because there was nothing to anchor against"
+    //   (e.g. `fold(lambda, [])` where the empty accumulator
+    //   shadows the lambda's return type as the binding source).
+    if actual_eid == Some(bootstrap::ANY_ID) || actual_eid == Some(bootstrap::NIL_ID) {
         return;
     }
 
@@ -2267,6 +2374,224 @@ mod tests {
         // squiggle lands on the wrong line.
         assert_eq!(undeclared_err.source_info.start_line, 3);
         assert_eq!(undeclared_err.source_info.start_column, 5);
+    }
+
+    /// Mixed-numeric collection literals widen to the LUB. `[1, 1.5]`
+    /// must infer as `Number`, not `Integer` — otherwise dispatch
+    /// picks `times(Integer[*])` for `1 * 1.5` and the chained
+    /// `head()` cascade silently propagates the wrong inner type.
+    #[test]
+    fn infer_collection_lub_widens_integer_and_float() {
+        let model = model_with_bootstrap();
+        let mut body = vec![untyped(
+            ExprKind::Collection {
+                elements: vec![
+                    untyped(
+                        ExprKind::IntegerLiteral(1),
+                        SourceInfo::new("c.pure", 1, 2, 1, 3),
+                    ),
+                    untyped(
+                        ExprKind::FloatLiteral(1.5),
+                        SourceInfo::new("c.pure", 1, 5, 1, 8),
+                    ),
+                ],
+            },
+            SourceInfo::new("c.pure", 1, 1, 1, 9),
+        )];
+        let mut errors = Vec::new();
+        infer_function_body(&model, &[], &mut body, &mut errors);
+
+        let ti = body[0].type_info.as_ref().expect("collection must have type_info");
+        // LUB(Integer, Float) = Number — that's what the platform
+        // arithmetic dispatch needs to see.
+        assert_eq!(
+            ti.type_expr,
+            named_type(bootstrap::NUMBER_ID),
+            "expected Number, got {:?}",
+            ti.type_expr,
+        );
+    }
+
+    /// Passing a non-primitive (a class instance) where a primitive
+    /// param is declared must error. Observed as "if I try to pass
+    /// `pair(1, 1.3)` to `Integer`, I get no error" — the
+    /// `both_primitive` gate was suppressing it.
+    #[test]
+    fn infer_function_call_with_class_arg_emits_type_error() {
+        use crate::model::{Element as ModelElement, ElementNode, ModelChunk};
+        use crate::nodes::class::Class;
+        use crate::nodes::function::Function;
+
+        let mut model = model_with_bootstrap();
+        let pkg = model.get_or_create_package(&[
+            SmolStr::new("meta"),
+            SmolStr::new("test"),
+        ]);
+        let chunk_id: u16 = 1;
+        let mut chunk = ModelChunk::new(chunk_id);
+        let si = SourceInfo::new("synth.pure", 1, 1, 3, 1);
+
+        // Synthetic class `Box`.
+        let box_idx = chunk.alloc_element(
+            ElementNode {
+                name: SmolStr::new("Box"),
+                source_info: si.clone(),
+                name_source_info: si.clone(),
+                parent_package: pkg,
+            },
+            ModelElement::Class(Class {
+                type_parameters: Vec::new(),
+                type_variable_parameters: Vec::new(),
+                super_types: Vec::new(),
+                properties: Vec::new(),
+                qualified_properties: Vec::new(),
+                constraints: Vec::new(),
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+            }),
+        );
+        let box_id = crate::ids::ElementId::InstanceId {
+            chunk_id,
+            local_idx: box_idx,
+        };
+
+        // Synthetic `takesInt(n: Integer[1]): Integer[1]`.
+        let fn_idx = chunk.alloc_element(
+            ElementNode {
+                name: SmolStr::new("takesInt_Integer_1__Integer_1_"),
+                source_info: si.clone(),
+                name_source_info: si.clone(),
+                parent_package: pkg,
+            },
+            ModelElement::Function(Function {
+                function_name: SmolStr::new("takesInt"),
+                is_native: false,
+                parameters: std::sync::Arc::from(vec![Parameter {
+                    name: SmolStr::new("n"),
+                    type_expr: named_type(bootstrap::INTEGER_ID),
+                    multiplicity: Multiplicity::PureOne,
+                    source_info: si.clone(),
+                }]),
+                return_type: named_type(bootstrap::INTEGER_ID),
+                return_multiplicity: Multiplicity::PureOne,
+                body: std::sync::Arc::from(Vec::new()),
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+            }),
+        );
+        let fn_id = crate::ids::ElementId::InstanceId {
+            chunk_id,
+            local_idx: fn_idx,
+        };
+        model.chunks.push(chunk);
+        model.register_element(pkg, box_id);
+        model.register_element(pkg, fn_id);
+
+        // Body: `takesInt($b)` where $b: Box[1] — class arg into
+        // primitive-typed param. Must error.
+        let mut body = vec![untyped(
+            ExprKind::FunctionCall(crate::types::FunctionCallData {
+                function: Some(fn_id),
+                function_name: SmolStr::new("takesInt"),
+                arguments: vec![untyped(
+                    ExprKind::Variable { name: SmolStr::new("b") },
+                    SourceInfo::new("call.pure", 5, 10, 5, 12),
+                )],
+            }),
+            SourceInfo::new("call.pure", 5, 1, 5, 13),
+        )];
+        let outer_params = vec![Parameter {
+            name: SmolStr::new("b"),
+            type_expr: named_type(box_id),
+            multiplicity: Multiplicity::PureOne,
+            source_info: SourceInfo::new("call.pure", 1, 1, 1, 1),
+        }];
+        let mut errors = Vec::new();
+        infer_function_body(&model, &outer_params, &mut body, &mut errors);
+
+        let mismatch = errors.iter().find(|e| {
+            let m = &e.message;
+            m.contains("Box") && m.contains("Integer")
+        });
+        assert!(
+            mismatch.is_some(),
+            "expected type-mismatch error mentioning Box and Integer, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// Function declared `Integer[1]` but body returns a class
+    /// instance — the body-return signature check must error.
+    /// Symmetric to `infer_function_call_with_class_arg_emits_type_error`
+    /// for the return position.
+    #[test]
+    fn function_body_returning_class_when_integer_declared_emits_error() {
+        use crate::model::{Element as ModelElement, ElementNode, ModelChunk};
+        use crate::nodes::class::Class;
+
+        let mut model = model_with_bootstrap();
+        let pkg = model.get_or_create_package(&[
+            SmolStr::new("meta"),
+            SmolStr::new("test"),
+        ]);
+        let chunk_id: u16 = 1;
+        let mut chunk = ModelChunk::new(chunk_id);
+        let si = SourceInfo::new("synth.pure", 1, 1, 3, 1);
+        let box_idx = chunk.alloc_element(
+            ElementNode {
+                name: SmolStr::new("Box"),
+                source_info: si.clone(),
+                name_source_info: si.clone(),
+                parent_package: pkg,
+            },
+            ModelElement::Class(Class {
+                type_parameters: Vec::new(),
+                type_variable_parameters: Vec::new(),
+                super_types: Vec::new(),
+                properties: Vec::new(),
+                qualified_properties: Vec::new(),
+                constraints: Vec::new(),
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+            }),
+        );
+        let box_id = crate::ids::ElementId::InstanceId {
+            chunk_id,
+            local_idx: box_idx,
+        };
+        model.chunks.push(chunk);
+        model.register_element(pkg, box_id);
+
+        // Body's tail expression is a `$b: Box[1]` reference,
+        // already type-info'd to Box[1].
+        let body = vec![ValueSpec {
+            kind: Box::new(ExprKind::Variable { name: SmolStr::new("b") }),
+            source_info: SourceInfo::new("c.pure", 3, 5, 3, 7),
+            type_info: Some(Box::new(ResolvedType {
+                type_expr: named_type(box_id),
+                multiplicity: Multiplicity::PureOne,
+            })),
+        }];
+        let mut errors = Vec::new();
+        check_body_return_signature(
+            &model,
+            &SmolStr::new("test::f"),
+            &SourceInfo::new("c.pure", 1, 1, 4, 1),
+            &body,
+            &named_type(bootstrap::INTEGER_ID),
+            &Multiplicity::PureOne,
+            &mut errors,
+        );
+
+        let mismatch = errors.iter().find(|e| {
+            let m = e.message.to_lowercase();
+            m.contains("return") && m.contains("box") && m.contains("integer")
+        });
+        assert!(
+            mismatch.is_some(),
+            "expected return-type mismatch mentioning Box and Integer, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
     }
 
     #[test]
