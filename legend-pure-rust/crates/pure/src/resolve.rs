@@ -1640,6 +1640,16 @@ pub fn is_subtype(child: ElementId, parent: ElementId, model: &crate::model::Pur
         return true;
     }
 
+    // `Nil` is the bottom type — a subtype of every type by language
+    // definition. Encoding this here lets `least_upper_bound(Nil, X)`
+    // shortcut to `X` instead of falling through to `Any`, which is
+    // what `[]`-as-accumulator chains (`fold(_, λ, [])`) need so V
+    // binds from the lambda body's actual return rather than being
+    // pinned to the empty-collection's `Nil` and LUB'd to `Any`.
+    if child == crate::bootstrap::NIL_ID {
+        return true;
+    }
+
     let element = model.get_element(child);
     let super_types = match element {
         Element::Class(c) => &c.super_types,
@@ -1924,14 +1934,13 @@ pub(crate) fn infer_generic_bindings(
     // the FunctionType's return type variable.  This lets `map(coll, r | $r.x)`
     // propagate the property type through `V` so downstream calls like `->plus()`
     // can resolve unambiguously.
+    //
+    // Also handles `arg` shapes where the lambda is wrapped in a
+    // `Collection` — the `match<T|m,n>(var, [λ1, λ2, …])` form. The
+    // FunctionType slot's multiplicity allows multi-element collections,
+    // so we walk every Lambda inside the Collection and bind from each
+    // body in turn (LUB-merging through `bind_type`).
     for (param, arg) in params.iter().zip(args.iter()) {
-        let ExprKind::Lambda {
-            parameters: lambda_params,
-            body: lambda_body,
-        } = arg.kind.as_ref()
-        else {
-            continue;
-        };
         // The param type may be FunctionType directly, or Named<Function>[FunctionType]
         // (the common `Function<{T[1]->V[*]}>` spelling).
         let function_type = match &param.type_expr {
@@ -1941,64 +1950,101 @@ pub(crate) fn infer_generic_bindings(
                 .find(|ta| matches!(ta, TypeExpr::FunctionType { .. })),
             _ => None,
         };
-        let Some(TypeExpr::FunctionType {
-            parameters: ft_params,
-            return_type,
-            ..
-        }) = function_type
-        else {
+        let Some(function_type) = function_type else {
             continue;
         };
-        // Extend var_types with the lambda's own params, preferring the
-        // lambda's own declared type when concrete and falling back to
-        // the substituted FunctionType expectation otherwise.
-        //
-        // Without the "lambda-declared first" preference, an explicitly-
-        // typed lambda param like
-        //   `fold(coll, {inc:MappingInclude[1], sub:Store[0..1] | …}, [])`
-        // would have its `sub` bound to `Generic("V")` (because the
-        // accumulator `[]` left V unbound, so substituting the
-        // FunctionType slot `V[m]` yields `Generic("V")`). The lambda
-        // body then types `$sub->isEmpty()` against `Generic` rather
-        // than `Store[0..1]`, and downstream `bind_type(return_type=V,
-        // body_te)` binds V from `Generic`/`Any` instead of `Store`.
-        let mut extended = var_types.clone();
-        for (lp, (ft_ty, ft_mult)) in lambda_params.iter().zip(ft_params.iter()) {
-            let lambda_ty_concrete = !matches!(
-                lp.type_expr,
-                TypeExpr::Generic(_) | TypeExpr::Unresolved
+        // Collect every lambda contributing to this parameter slot — a
+        // direct `Lambda` arg or every `Lambda` inside a `Collection` arg.
+        let lambda_args: Vec<&crate::types::ValueSpec> = match arg.kind.as_ref() {
+            ExprKind::Lambda { .. } => vec![arg],
+            ExprKind::Collection { elements } => elements
+                .iter()
+                .filter(|e| matches!(e.kind.as_ref(), ExprKind::Lambda { .. }))
+                .collect(),
+            _ => continue,
+        };
+        for lambda_arg in lambda_args {
+            bind_from_lambda_body(
+                function_type,
+                lambda_arg,
+                model,
+                var_types,
+                &mut bindings,
             );
-            let ty = if lambda_ty_concrete {
-                lp.type_expr.clone()
-            } else {
-                substitute_type(ft_ty, &bindings.ty)
-            };
-            // Same preference for multiplicity: use the lambda's
-            // declared mult when not a Variable, else the substituted
-            // FT mult.
-            let mult = if !matches!(lp.multiplicity, Multiplicity::Variable(_)) {
-                lp.multiplicity.clone()
-            } else {
-                substitute_mult(ft_mult, &bindings.mult)
-            };
-            extended.insert(lp.name.clone(), (ty, mult));
         }
-        let Some(last_expr) = lambda_body.last() else {
-            continue;
-        };
-        let Some(body_eid) = infer_type_from_valuespec(last_expr, model, &extended) else {
-            continue;
-        };
-        let body_te = TypeExpr::Named {
-            element: body_eid,
-            type_arguments: vec![],
-            multiplicity_arguments: Vec::new(),
-            value_arguments: vec![],
-        };
-        bind_type(return_type, &body_te, &mut bindings.ty, model);
     }
 
     bindings
+}
+
+/// Drill into a single lambda arg against an expected `FunctionType`
+/// shape, infer the lambda body's last expression's type with the
+/// lambda's params in scope, and `bind_type`-merge the result against
+/// the FunctionType's `return_type` variable.
+///
+/// Extracted so both the direct-Lambda and Collection-of-Lambdas
+/// branches in `infer_generic_bindings`'s second pass can share the
+/// per-lambda binding logic.
+fn bind_from_lambda_body(
+    function_type: &crate::types::TypeExpr,
+    arg: &crate::types::ValueSpec,
+    model: &crate::model::PureModel,
+    var_types: &VarTypes,
+    bindings: &mut GenericBindings,
+) {
+    use crate::types::{ExprKind, Multiplicity, TypeExpr};
+    let TypeExpr::FunctionType {
+        parameters: ft_params,
+        return_type,
+        ..
+    } = function_type
+    else {
+        return;
+    };
+    let ExprKind::Lambda {
+        parameters: lambda_params,
+        body: lambda_body,
+    } = arg.kind.as_ref()
+    else {
+        return;
+    };
+    // Extend var_types with the lambda's own params, preferring the
+    // lambda's declared type when concrete (mirrors Java's "explicit
+    // annotation wins" rule). Without this, an explicitly-typed param
+    // like `{inc:MappingInclude[1], sub:Store[0..1] | …}` against
+    // `Function<{T[1], V[m] -> V[m]}>[1]` would have `sub` bound to
+    // `Generic("V")` whenever V hadn't bound from a sibling arg yet —
+    // and the lambda body would then type its uses against `Generic`
+    // rather than `Store[0..1]`.
+    let mut extended = var_types.clone();
+    for (lp, (ft_ty, ft_mult)) in lambda_params.iter().zip(ft_params.iter()) {
+        let lambda_ty_concrete =
+            !matches!(lp.type_expr, TypeExpr::Generic(_) | TypeExpr::Unresolved);
+        let ty = if lambda_ty_concrete {
+            lp.type_expr.clone()
+        } else {
+            substitute_type(ft_ty, &bindings.ty)
+        };
+        let mult = if !matches!(lp.multiplicity, Multiplicity::Variable(_)) {
+            lp.multiplicity.clone()
+        } else {
+            substitute_mult(ft_mult, &bindings.mult)
+        };
+        extended.insert(lp.name.clone(), (ty, mult));
+    }
+    let Some(last_expr) = lambda_body.last() else {
+        return;
+    };
+    let Some(body_eid) = infer_type_from_valuespec(last_expr, model, &extended) else {
+        return;
+    };
+    let body_te = TypeExpr::Named {
+        element: body_eid,
+        type_arguments: vec![],
+        multiplicity_arguments: Vec::new(),
+        value_arguments: vec![],
+    };
+    bind_type(return_type, &body_te, &mut bindings.ty, model);
 }
 
 /// Recursively match `param_ty` against `arg_ty`, collecting type-variable

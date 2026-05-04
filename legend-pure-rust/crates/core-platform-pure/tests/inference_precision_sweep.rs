@@ -23,24 +23,19 @@
 //! escape hatch already protects.
 //!
 //! Asserts a hard ceiling so regressions in the dispatch / generic
-//! substitution / lambda inference pipeline trip a CI failure. Drop
-//! the ceiling as fixes land.
+//! substitution / lambda inference pipeline trip a CI failure. The
+//! ceiling started at 9 (commit `e5e27c592` brought it to 2 by running
+//! the full lambda-body second-pass at infer-time), then to 0 once
+//! `is_subtype` recognised `Nil` as the bottom type and the second-pass
+//! walked into Lambdas wrapped in a `Collection` (the
+//! `match([λ1, λ2, …])` shape).
 
 use legend_pure_core_platform::platform;
 use legend_pure_parser_pure::bootstrap;
 use legend_pure_parser_pure::model::Element;
 use legend_pure_parser_pure::types::{ExprKind, FunctionCallData, TypeExpr};
 
-/// Cap on platform functions whose body's last expression infers as
-/// `Any` while the declared return is more specific. Today's count is
-/// 2 (after the lambda-body second-pass fix knocked it down from 9):
-/// - `__classMappingByClass_Mapping_1__Class_1__SetImplementation_MANY_`
-/// - `findSubstituteStore_Mapping_1__Store_1__Store_$0_1$_`
-///
-/// Both are `Mapping`-walking chains involving include-style recursion
-/// over `Mapping.includes` plus `concatenate`. Investigation in
-/// progress; ceiling tightens to 0 once they're closed.
-const PRECISION_CEILING: usize = 2;
+const PRECISION_CEILING: usize = 0;
 
 #[test]
 fn platform_inference_precision_under_ceiling() {
