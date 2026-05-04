@@ -89,6 +89,7 @@ pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
                 Element::Class(class) => {
                     validate_super_types(model, id, node.name.clone(), class, &mut errors);
                     validate_duplicate_properties(&node.name, &class.properties, &mut errors);
+                    validate_class_type_args(model, &node.name, class, &mut errors);
                     validate_stereotypes(
                         model,
                         &node.name,
@@ -106,6 +107,7 @@ pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
                 }
                 Element::Association(assoc) => {
                     validate_association(model, &node.name, assoc, &node.source_info, &mut errors);
+                    validate_association_type_args(model, &node.name, assoc, &mut errors);
                     validate_stereotypes(
                         model,
                         &node.name,
@@ -138,6 +140,7 @@ pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
                     );
                 }
                 Element::Function(func) => {
+                    validate_function_type_args(model, &node.name, func, &node.source_info, &mut errors);
                     validate_stereotypes(
                         model,
                         &node.name,
@@ -226,6 +229,207 @@ fn validate_association(
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Type-Argument Completeness Validation
+// ---------------------------------------------------------------------------
+
+/// Walks a `TypeExpr`, recursing through nested type arguments, and
+/// pushes an `InvalidAnnotation` error for every reference to a
+/// generic class that doesn't supply its required type-arguments.
+///
+/// `Pair[1]` (where `Pair<U, V>` declares two type parameters) and
+/// any other `Class<T1, …>` reference written without `<…>` is
+/// malformed: with no `T` bindings, every downstream check
+/// (dispatch, body-return, generic substitution) silently degrades
+/// — failing here surfaces the upstream cause instead of the
+/// noisy downstream symptoms.
+///
+/// `position_label` describes where the type appears (parameter,
+/// return, property, etc.) so the error message points the user
+/// at the right declaration site.
+fn check_type_args_complete(
+    model: &PureModel,
+    type_expr: &TypeExpr,
+    position_label: &str,
+    owner_name: &SmolStr,
+    source_info: &legend_pure_parser_ast::SourceInfo,
+    errors: &mut Vec<CompilationError>,
+) {
+    match type_expr {
+        TypeExpr::Named {
+            element,
+            type_arguments,
+            ..
+        } => {
+            if let Some(Element::Class(class)) = model.try_get_element(*element) {
+                let declared = class.type_parameters.len();
+                let supplied = type_arguments.len();
+                if declared > 0 && supplied != declared {
+                    let class_fqn = SmolStr::new(
+                        crate::purem::fqn_path::element_fqn_path(model, *element).join("::"),
+                    );
+                    errors.push(CompilationError {
+                        message: format!(
+                            "{position_label} of '{owner_name}' references generic class \
+                             '{class_fqn}' without its required type arguments \
+                             (expected {declared}, got {supplied})"
+                        ),
+                        source_info: source_info.clone(),
+                        kind: CompilationErrorKind::InvalidAnnotation {
+                            element_name: owner_name.clone(),
+                            reason: SmolStr::new(format!(
+                                "missing type arguments on '{class_fqn}': expected \
+                                 {declared}, got {supplied}"
+                            )),
+                        },
+                    });
+                }
+            }
+            // Recurse into type-argument expressions — `List<Pair>`
+            // (without args on `Pair`) must also error.
+            for ta in type_arguments {
+                check_type_args_complete(model, ta, position_label, owner_name, source_info, errors);
+            }
+        }
+        TypeExpr::FunctionType {
+            parameters,
+            return_type,
+            ..
+        } => {
+            for (pty, _) in parameters {
+                check_type_args_complete(model, pty, position_label, owner_name, source_info, errors);
+            }
+            check_type_args_complete(model, return_type, position_label, owner_name, source_info, errors);
+        }
+        TypeExpr::AlgebraUnion(a, b) => {
+            check_type_args_complete(model, a, position_label, owner_name, source_info, errors);
+            check_type_args_complete(model, b, position_label, owner_name, source_info, errors);
+        }
+        TypeExpr::Generic(_) | TypeExpr::Relation(_) | TypeExpr::Unresolved => {}
+    }
+}
+
+/// Walks every type-position reference on a `Class` (super-types,
+/// property types, qualified-property param/return types) and
+/// flags missing type arguments on generic class references.
+fn validate_class_type_args(
+    model: &PureModel,
+    class_name: &SmolStr,
+    class: &Class,
+    errors: &mut Vec<CompilationError>,
+) {
+    for st in &class.super_types {
+        // Super-types lack their own span; use the class's element
+        // header span via the property's first member or fall back
+        // to a synthetic span.
+        let si = class
+            .properties
+            .first()
+            .map(|p| p.source_info.clone())
+            .unwrap_or_else(|| {
+                legend_pure_parser_ast::SourceInfo::new("<unknown>", 0, 0, 0, 0)
+            });
+        check_type_args_complete(model, st, "super-type", class_name, &si, errors);
+    }
+    for prop in &class.properties {
+        check_type_args_complete(
+            model,
+            &prop.type_expr,
+            &format!("property '{}'", prop.name),
+            class_name,
+            &prop.source_info,
+            errors,
+        );
+    }
+    for qp in &class.qualified_properties {
+        for param in qp.parameters.iter() {
+            check_type_args_complete(
+                model,
+                &param.type_expr,
+                &format!("qualified-property '{}' parameter '{}'", qp.name, param.name),
+                class_name,
+                &param.source_info,
+                errors,
+            );
+        }
+        check_type_args_complete(
+            model,
+            &qp.return_type,
+            &format!("qualified-property '{}' return type", qp.name),
+            class_name,
+            &qp.source_info,
+            errors,
+        );
+    }
+}
+
+/// Walks property types on an Association.
+fn validate_association_type_args(
+    model: &PureModel,
+    assoc_name: &SmolStr,
+    assoc: &crate::nodes::association::Association,
+    errors: &mut Vec<CompilationError>,
+) {
+    for prop in &assoc.properties {
+        check_type_args_complete(
+            model,
+            &prop.type_expr,
+            &format!("property '{}'", prop.name),
+            assoc_name,
+            &prop.source_info,
+            errors,
+        );
+    }
+    for qp in &assoc.qualified_properties {
+        for param in qp.parameters.iter() {
+            check_type_args_complete(
+                model,
+                &param.type_expr,
+                &format!("qualified-property '{}' parameter '{}'", qp.name, param.name),
+                assoc_name,
+                &param.source_info,
+                errors,
+            );
+        }
+        check_type_args_complete(
+            model,
+            &qp.return_type,
+            &format!("qualified-property '{}' return type", qp.name),
+            assoc_name,
+            &qp.source_info,
+            errors,
+        );
+    }
+}
+
+/// Walks parameter and return types on a Function.
+fn validate_function_type_args(
+    model: &PureModel,
+    fn_name: &SmolStr,
+    func: &Function,
+    fn_source_info: &legend_pure_parser_ast::SourceInfo,
+    errors: &mut Vec<CompilationError>,
+) {
+    for param in func.parameters.iter() {
+        check_type_args_complete(
+            model,
+            &param.type_expr,
+            &format!("parameter '{}'", param.name),
+            fn_name,
+            &param.source_info,
+            errors,
+        );
+    }
+    check_type_args_complete(
+        model,
+        &func.return_type,
+        "return type",
+        fn_name,
+        fn_source_info,
+        errors,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1034,6 +1238,107 @@ mod tests {
             errors[0].message.contains("test"),
             "expected error message to mention the package name, got: {}",
             errors[0].message
+        );
+    }
+
+    /// A reference to a generic class without supplying its required
+    /// type arguments must fail compilation. `function f(p: Pair[1])`
+    /// where `Pair<U,V>` declares two type parameters must error —
+    /// otherwise the type carries no anchoring for `U` / `V` and
+    /// every downstream check (dispatch, body-return, generic
+    /// substitution) silently degrades.
+    #[test]
+    fn validate_missing_type_arguments_on_generic_class_emits_error() {
+        use crate::ids::PackageId;
+        use crate::model::{Element as ModelElement, ElementNode, ModelChunk, PureModel};
+        use crate::nodes::class::Class;
+        use crate::nodes::function::Function;
+        use crate::types::{Multiplicity, Parameter, TypeExpr};
+
+        let mut model = PureModel::new();
+        let pkg: PackageId = model.get_or_create_package(&[SmolStr::new("test")]);
+        // chunk 0 is the bootstrap chunk skipped by `validate()`; push
+        // an empty placeholder so the user-content chunk lives at id 1.
+        model.chunks.push(ModelChunk::new(0));
+        let chunk_id: u16 = 1;
+        let mut chunk = ModelChunk::new(chunk_id);
+        let si = legend_pure_parser_ast::SourceInfo::new("t.pure", 1, 1, 1, 1);
+
+        // Generic class `Pair<U, V>`.
+        let pair_idx = chunk.alloc_element(
+            ElementNode {
+                name: SmolStr::new("Pair"),
+                source_info: si.clone(),
+                name_source_info: si.clone(),
+                parent_package: pkg,
+            },
+            ModelElement::Class(Class {
+                type_parameters: vec![SmolStr::new("U"), SmolStr::new("V")],
+                type_variable_parameters: Vec::new(),
+                super_types: Vec::new(),
+                properties: Vec::new(),
+                qualified_properties: Vec::new(),
+                constraints: Vec::new(),
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+            }),
+        );
+        let pair_id = ElementId::InstanceId {
+            chunk_id,
+            local_idx: pair_idx,
+        };
+
+        // Function `f(p: Pair[1]): Pair[1]` — both param and return
+        // reference Pair *without* the required <U, V>.
+        let pair_te_no_args = TypeExpr::Named {
+            element: pair_id,
+            type_arguments: Vec::new(),
+            value_arguments: Vec::new(),
+        };
+        let fn_idx = chunk.alloc_element(
+            ElementNode {
+                name: SmolStr::new("f_Pair_1__Pair_1_"),
+                source_info: si.clone(),
+                name_source_info: si.clone(),
+                parent_package: pkg,
+            },
+            ModelElement::Function(Function {
+                function_name: SmolStr::new("f"),
+                is_native: false,
+                parameters: std::sync::Arc::from(vec![Parameter {
+                    name: SmolStr::new("p"),
+                    type_expr: pair_te_no_args.clone(),
+                    multiplicity: Multiplicity::PureOne,
+                    source_info: si.clone(),
+                }]),
+                return_type: pair_te_no_args,
+                return_multiplicity: Multiplicity::PureOne,
+                body: std::sync::Arc::from(Vec::new()),
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+            }),
+        );
+        let fn_id = ElementId::InstanceId {
+            chunk_id,
+            local_idx: fn_idx,
+        };
+        model.chunks.push(chunk);
+        model.register_element(pkg, pair_id);
+        model.register_element(pkg, fn_id);
+
+        let errors = validate(&model);
+
+        // Both the parameter type AND the return type reference
+        // `Pair` without args — expect at least one error mentioning
+        // Pair / type arguments.
+        let arg_err = errors.iter().find(|e| {
+            let m = e.message.to_lowercase();
+            m.contains("pair") && (m.contains("type argument") || m.contains("type-argument"))
+        });
+        assert!(
+            arg_err.is_some(),
+            "expected a missing-type-argument error mentioning Pair, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
         );
     }
 }
