@@ -40,6 +40,12 @@ use crate::types::{Expression, Multiplicity, Parameter, TypeExpr};
 pub struct Class {
     /// Type parameters (e.g., `["T", "U"]`).
     pub type_parameters: Vec<SmolStr>,
+    /// Multiplicity parameters declared on a parametric class —
+    /// `Class Holder<T|m>` carries one parameter named `m`. Position-
+    /// aligned with use-site `TypeExpr::Named.multiplicity_arguments`
+    /// so `compute_type_arg_bindings` can map declared name → use-site
+    /// value when substituting on property access.
+    pub multiplicity_parameters: Vec<SmolStr>,
     /// Type-variable VALUE parameters declared on a parametric class —
     /// `Class C(x:Integer[1]) [...]` carries one parameter named `x`.
     /// Bound at construction time from `^C(10)(props)` and threaded

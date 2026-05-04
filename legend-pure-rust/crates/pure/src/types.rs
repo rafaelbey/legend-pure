@@ -51,14 +51,25 @@ use crate::ids::ElementId;
 /// | (untyped lambda param, no annotation, no expectation) | `Unresolved` |
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypeExpr {
-    /// A resolved named type, optionally with type and/or value arguments.
+    /// A resolved named type, optionally with type, multiplicity and/or
+    /// value arguments.
     ///
-    /// Covers: `String`, `Person`, `List<String>`, `Map<K,V>`, `Varchar(255)`.
+    /// Covers: `String`, `Person`, `List<String>`, `Map<K,V>`,
+    /// `Holder<T|m>`, `Varchar(255)`.
     Named {
         /// The resolved element (`Class`, `Enum`, `PrimitiveType`, `Measure`, `Unit`).
         element: ElementId,
         /// Generic type arguments: `<String, Integer>`.
         type_arguments: Vec<TypeExpr>,
+        /// Generic multiplicity arguments: the `*` in `Holder<String|*>`.
+        /// Position-aligned with the class's `multiplicity_parameters`.
+        /// Required so class-level mult-vars (`m` in
+        /// `Holder<T|m> { items: T[m] }`) flow through property access:
+        /// without this field, `compute_type_arg_bindings` could only
+        /// substitute `T → String` and `items` would type as
+        /// `String[Variable("m")]`, which `is_multiplicity_compatible`
+        /// then accepted permissively against any declared site.
+        multiplicity_arguments: Vec<Multiplicity>,
         /// Compile-time value arguments: `(255, 'ok')`.
         value_arguments: Vec<ConstValue>,
     },
@@ -671,6 +682,7 @@ mod tests {
                 local_idx: 2,
             },
             type_arguments: vec![],
+            multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
         };
         assert!(matches!(ty, TypeExpr::Named { .. }));
@@ -685,6 +697,7 @@ mod tests {
                 local_idx: 2,
             },
             type_arguments: vec![],
+            multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
         };
         let list_ty = TypeExpr::Named {
@@ -693,6 +706,7 @@ mod tests {
                 local_idx: 20,
             },
             type_arguments: vec![string_ty],
+            multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
         };
         if let TypeExpr::Named { type_arguments, .. } = &list_ty {
@@ -709,6 +723,7 @@ mod tests {
                 local_idx: 12,
             },
             type_arguments: vec![],
+            multiplicity_arguments: Vec::new(),
             value_arguments: vec![ConstValue::Integer(255)],
         };
         if let TypeExpr::Named {
@@ -729,6 +744,7 @@ mod tests {
                 local_idx: 2,
             },
             type_arguments: vec![],
+            multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
         };
         let boolean = TypeExpr::Named {
@@ -737,6 +753,7 @@ mod tests {
                 local_idx: 5,
             },
             type_arguments: vec![],
+            multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
         };
         let ft = TypeExpr::FunctionType {

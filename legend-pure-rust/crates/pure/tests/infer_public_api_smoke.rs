@@ -70,6 +70,7 @@ fn infer_function_body_is_callable_from_external_crate() {
         TypeExpr::Named {
             element: bootstrap::STRING_ID,
             type_arguments: Vec::new(),
+            multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
         }
     );

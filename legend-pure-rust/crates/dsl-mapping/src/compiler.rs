@@ -466,6 +466,7 @@ fn validate_pure_body(
                 TypeExpr::Named {
                     element: id,
                     type_arguments: Vec::new(),
+                    multiplicity_arguments: Vec::new(),
                     value_arguments: Vec::new(),
                 },
                 Multiplicity::PureOne,
@@ -564,6 +565,7 @@ fn validate_property_mapping(
         let prop_type = TypeExpr::Named {
             element: elem,
             type_arguments: Vec::new(),
+            multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
         };
         (prop_type, prop_mult)
@@ -1213,6 +1215,7 @@ fn validate_model_operation(
         TypeExpr::Named {
             element: class_id,
             type_arguments: Vec::new(),
+            multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
         },
         Multiplicity::PureOne,

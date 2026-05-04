@@ -206,6 +206,7 @@ mod tests {
             type_expr: TypeExpr::Named {
                 element: type_id,
                 type_arguments: vec![],
+                multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
             },
             multiplicity: mult,
@@ -232,6 +233,7 @@ mod tests {
             return_type: TypeExpr::Named {
                 element: bootstrap::INTEGER_ID,
                 type_arguments: vec![],
+                multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
             },
             return_multiplicity: Multiplicity::PureOne,
@@ -332,6 +334,7 @@ mod tests {
             return_type: TypeExpr::Named {
                 element: bootstrap::BOOLEAN_ID,
                 type_arguments: vec![],
+                multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
             },
             return_multiplicity: Multiplicity::PureOne,
@@ -381,6 +384,7 @@ mod tests {
             return_type: TypeExpr::Named {
                 element: bootstrap::DATE_TIME_ID,
                 type_arguments: vec![],
+                multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
             },
             return_multiplicity: Multiplicity::PureOne,

@@ -202,6 +202,23 @@ pub(crate) fn resolve_type_ref(
         .filter_map(|arg| resolve_type_ref(arg, ctx, errors))
         .collect();
 
+    // Lower multiplicity arguments — `Holder<String|*>`'s `*` becomes
+    // `Multiplicity::ZeroOrMany`; `Holder<String|m>`'s `m` becomes
+    // `Multiplicity::Variable("m")`. Position-aligned with the class's
+    // `multiplicity_parameters` so `compute_type_arg_bindings` can map
+    // declared `m` → use-site value when substituting on property
+    // access.
+    let multiplicity_arguments: Vec<Multiplicity> = type_ref
+        .multiplicity_arguments
+        .iter()
+        .map(|ma| match ma {
+            ast_type::MultiplicityArgument::Identifier(name, _) => {
+                Multiplicity::Variable(name.clone())
+            }
+            ast_type::MultiplicityArgument::Concrete(m, _) => lower_multiplicity(m),
+        })
+        .collect();
+
     // Lower value arguments
     let value_arguments: Vec<ConstValue> = type_ref
         .type_variable_values
@@ -212,6 +229,7 @@ pub(crate) fn resolve_type_ref(
     Some(TypeExpr::Named {
         element: element_id,
         type_arguments,
+        multiplicity_arguments,
         value_arguments,
     })
 }
@@ -352,6 +370,7 @@ pub(crate) fn resolve_type_spec(
                 Some(TypeExpr::Named {
                     element: id,
                     type_arguments: vec![],
+                    multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
                 })
             } else {
@@ -384,6 +403,7 @@ pub(crate) fn resolve_type_spec(
             Some(TypeExpr::Named {
                 element: rt_element,
                 type_arguments: vec![TypeExpr::Relation(columns)],
+                multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
             })
         }
@@ -1273,6 +1293,7 @@ pub(crate) fn infer_typeexpr_from_valuespec(
     let bare = |eid: ElementId| TypeExpr::Named {
         element: eid,
         type_arguments: vec![],
+        multiplicity_arguments: Vec::new(),
         value_arguments: vec![],
     };
     // Honour pre-set `type_info` first — this is the canonical
@@ -1842,7 +1863,7 @@ pub(crate) fn infer_multiplicity_from_valuespec(
 
 /// Bindings from generic parameter names (`T`, `m`, …) to the concrete
 /// types/multiplicities inferred at a specific call site.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct GenericBindings {
     /// Type-variable bindings: `T` → `TypeExpr::Named { Class, … }`.
     pub ty: HashMap<SmolStr, crate::types::TypeExpr>,
@@ -1944,6 +1965,7 @@ pub(crate) fn infer_generic_bindings(
         let body_te = TypeExpr::Named {
             element: body_eid,
             type_arguments: vec![],
+            multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
         };
         bind_type(return_type, &body_te, &mut bindings.ty, model);
@@ -2025,6 +2047,7 @@ fn type_lub(
             TypeExpr::Named {
                 element: least_upper_bound(*ea, *eb, model),
                 type_arguments: vec![],
+                multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
             }
         }
@@ -2032,6 +2055,7 @@ fn type_lub(
         _ => TypeExpr::Named {
             element: bootstrap::ANY_ID,
             type_arguments: vec![],
+            multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
         },
     }
@@ -2073,6 +2097,7 @@ pub(crate) fn substitute_type(
         TypeExpr::Named {
             element,
             type_arguments,
+            multiplicity_arguments,
             value_arguments,
         } => TypeExpr::Named {
             element: *element,
@@ -2080,6 +2105,7 @@ pub(crate) fn substitute_type(
                 .iter()
                 .map(|t| substitute_type(t, bindings))
                 .collect(),
+            multiplicity_arguments: multiplicity_arguments.clone(),
             value_arguments: value_arguments.clone(),
         },
         TypeExpr::FunctionType {
@@ -2778,6 +2804,7 @@ mod tests {
             },
             Element::Class(Class {
                 type_parameters: vec![SmolStr::new("T")],
+                multiplicity_parameters: Vec::new(),
                 type_variable_parameters: Vec::new(),
                 super_types: Vec::new(),
                 properties: Vec::new(),
@@ -2798,6 +2825,7 @@ mod tests {
             },
             Element::Class(Class {
                 type_parameters: Vec::new(),
+                multiplicity_parameters: Vec::new(),
                 type_variable_parameters: Vec::new(),
                 super_types: Vec::new(),
                 properties: Vec::new(),
