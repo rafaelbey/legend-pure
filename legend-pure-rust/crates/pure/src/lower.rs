@@ -1979,31 +1979,53 @@ fn lower_relation_columns(
 
 /// Resolves AST `ColumnSpec`s into the lowered triple form. Used by the
 /// `ColSpecArrayLiteral` lowering path (`~[cols]`).
+///
+/// Each input becomes a `RelationColumnLowered` regardless of shape:
+///
+/// - `name:Type[mult]` — typed column. Type resolves; multiplicity
+///   parsed if present, else `[0..1]`.
+/// - `name` (bare) and `name:lam|...` (lambda-bearing — Func/Agg) —
+///   the type / lambda payload isn't preserved here yet, but the
+///   column NAME must be kept so the runtime allocator populates the
+///   `ColSpecArray.names` slot. Synthesise a placeholder
+///   `(Any, [0..1])` so downstream consumers (`select`, `rename`,
+///   `extend`) at least see the column name. Lambda-body preservation
+///   is tracked separately — see `extend_func_col_spec_currently_drops_its_lambda`
+///   in the engine smoke tests.
 fn lower_relation_columns_from_specs(
     cols: &[ast_expr::ColumnSpec],
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Vec<RelationColumnLowered> {
     cols.iter()
-        .filter_map(|c| {
-            let (type_ref, mult) = match &c.type_spec {
-                Some(ast_expr::ColumnTypeSpec::Typed(tr, m)) => (tr, m.as_ref()),
-                _ => return None,
-            };
-            let type_expr = resolve::resolve_type_ref(type_ref, ctx, errors)?;
-            let TypeExpr::Named {
-                element: type_element,
-                ..
-            } = type_expr
-            else {
-                return None;
-            };
-            let multiplicity = mult.map_or(Multiplicity::ZeroOrOne, resolve::lower_multiplicity);
-            Some(RelationColumnLowered {
+        .map(|c| {
+            // Typed column → resolve and use as-is.
+            if let Some(ast_expr::ColumnTypeSpec::Typed(type_ref, mult)) = &c.type_spec {
+                let resolved = resolve::resolve_type_ref(type_ref, ctx, errors);
+                if let Some(TypeExpr::Named {
+                    element: type_element,
+                    ..
+                }) = resolved
+                {
+                    let multiplicity = mult
+                        .as_ref()
+                        .map_or(Multiplicity::ZeroOrOne, resolve::lower_multiplicity);
+                    return RelationColumnLowered {
+                        name: c.name.clone(),
+                        type_element,
+                        multiplicity,
+                    };
+                }
+                // Type didn't resolve to Named — fall through to the
+                // placeholder so the column name survives.
+            }
+            // Bare name or lambda-bearing — placeholder type. Lambda
+            // bodies are dropped here (see lower_column doc).
+            RelationColumnLowered {
                 name: c.name.clone(),
-                type_element,
-                multiplicity,
-            })
+                type_element: crate::bootstrap::ANY_ID,
+                multiplicity: Multiplicity::ZeroOrOne,
+            }
         })
         .collect()
 }
