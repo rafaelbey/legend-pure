@@ -1562,9 +1562,13 @@ fn expression_function_call_resolved() {
 #[test]
 fn expression_lambda_lowering() {
     // Stub `filter` — will be removed once the standard library is loaded.
+    // Synthetic `filter` returns `test::Person[*]` directly so the
+    // outer fn's declared return matches without leaning on the
+    // `Any → declared` escape hatch (removed when the inference
+    // precision sweep reached zero).
     let source = r"
-        native function filter(col: Any[*], fn: Any[1]): Any[*];
         Class test::Person { name: String[1]; age: Integer[1]; }
+        native function filter(col: test::Person[*], fn: Any[1]): test::Person[*];
         function test::f(people: test::Person[*]): test::Person[*] {
             $people->filter({p: test::Person[1] | $p.age > 18})
         }
@@ -1749,8 +1753,12 @@ fn compile_lambda_let_shadows_outer_let() {
     // (`CannotInferLambdaParameterTypes`). Annotate `y` explicitly:
     // the test's purpose is verifying lambda-`let` shadowing of outer
     // `let x`, which the annotation doesn't change.
+    // Synthetic `map` returns `Integer[*]` directly so the outer fn's
+    // declared return matches without leaning on the `Any → declared`
+    // escape hatch (removed when the inference precision sweep reached
+    // zero).
     let source = r"
-        native function map(col: Any[*], fn: Any[1]): Any[*];
+        native function map(col: Any[*], fn: Any[1]): Integer[*];
         native function plus(ints: Integer[*]): Integer[1];
         function test::f(): Integer[*] { let x = 42; [1, 2]->map(y: Integer[1] | let x = 43; $x + $y); }
     ";

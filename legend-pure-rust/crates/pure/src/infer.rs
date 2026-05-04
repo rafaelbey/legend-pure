@@ -1760,21 +1760,24 @@ pub fn check_body_return_signature(
         _ => None,
     };
 
-    // When inference couldn't narrow the body's tail expression to
-    // anything meaningful, don't second-guess the user-declared
-    // return — they're more authoritative than our imprecise
-    // inference. Symmetric to `is_type_compatible`'s permissive
-    // handling of unknown args.
+    // Previously this site short-circuited on `actual_eid == Any` or
+    // `actual_eid == Nil` — protection against imprecise inference
+    // that left the body's tail typed as `Any` (top, "couldn't
+    // narrow") or `Nil` (bottom, "generic binding picked bottom
+    // because there was nothing to anchor against, like
+    // `fold(λ, [])`'s accumulator").
     //
-    // - `Any`: top type, signals "couldn't narrow downward".
-    // - `Nil`: bottom type, signals "generic binding picked the
-    //   bottom because there was nothing to anchor against"
-    //   (e.g. `fold(lambda, [])` where the empty accumulator
-    //   shadows the lambda's return type as the binding source).
-    if actual_eid == Some(bootstrap::ANY_ID) || actual_eid == Some(bootstrap::NIL_ID) {
-        return;
-    }
-
+    // No longer needed:
+    // - `Nil` is now a subtype of every type per
+    //   `resolve::is_subtype`'s explicit Nil-as-bottom rule. So
+    //   `is_type_compatible(Nil, X) = true` always — the check below
+    //   passes for free.
+    // - `Any`-typed bodies against more-specific declared returns are
+    //   real precision losses. Locked to zero on the embedded
+    //   platform by `inference_precision_sweep`'s
+    //   `PRECISION_CEILING = 0`. Letting this check fire turns any
+    //   future regression into a per-function diagnostic instead of a
+    //   silent miss.
     if !crate::resolve::is_type_compatible(actual_eid, expected_type, model) {
         let actual = actual_eid
             .map(|e| model.element_name(e).to_string())
