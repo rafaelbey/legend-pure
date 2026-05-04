@@ -236,6 +236,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                 *function,
                 function_name,
                 let_name,
+                arguments,
                 &arg_types,
                 &arg_source_infos,
             );
@@ -534,11 +535,27 @@ fn set_and_return(expr: &mut ValueSpec, result: Option<ResolvedType>) -> Option<
 // ---------------------------------------------------------------------------
 
 /// Infers the return type of a function call.
+/// Flattens the `InferCtx` scope chain (innermost-last winner) into a
+/// `VarTypes` map suitable for `resolve::infer_generic_bindings`.
+fn collect_var_types(ctx: &InferCtx<'_>) -> crate::resolve::VarTypes {
+    let mut out = crate::resolve::VarTypes::new();
+    for scope in ctx.scopes.iter() {
+        for (name, rt) in scope.bindings.iter() {
+            out.insert(
+                name.clone(),
+                (rt.type_expr.clone(), rt.multiplicity.clone()),
+            );
+        }
+    }
+    out
+}
+
 fn infer_function_call(
     ctx: &mut InferCtx<'_>,
     function: Option<crate::ids::ElementId>,
     function_name: &SmolStr,
     let_name: Option<(&SmolStr, &legend_pure_parser_ast::SourceInfo)>,
+    arguments: &[ValueSpec],
     arg_types: &[Option<ResolvedType>],
     arg_source_infos: &[legend_pure_parser_ast::SourceInfo],
 ) -> Option<ResolvedType> {
@@ -769,49 +786,21 @@ fn infer_function_call(
                 });
             }
         }
-        // Bind both type and multiplicity variables from the call's
-        // arguments, then substitute both in the function's declared
-        // return signature. Substituting only `T` and leaving `m` as
-        // `Variable("m")` made `is_multiplicity_compatible` return
-        // permissively (line 2164-2172 of resolve.rs) — `ident<T|m>(p:T[m]):T[m]`
-        // called with `[1,2]` flowed `Integer[Variable(m)]` through to
-        // `check_body_return_signature`, which then accepted any
-        // declared return multiplicity silently.
-        let mut ty_bindings: std::collections::HashMap<SmolStr, TypeExpr> =
-            std::collections::HashMap::new();
-        let mut mult_bindings: std::collections::HashMap<SmolStr, Multiplicity> =
-            std::collections::HashMap::new();
-        for (param, arg_ty) in f.parameters.iter().zip(arg_types.iter()) {
-            let Some(arg_ty) = arg_ty else { continue };
-            crate::resolve::bind_type(
-                &param.type_expr,
-                &arg_ty.type_expr,
-                &mut ty_bindings,
-                ctx.model,
-            );
-            if let Multiplicity::Variable(name) = &param.multiplicity {
-                use std::collections::hash_map::Entry;
-                match mult_bindings.entry(name.clone()) {
-                    Entry::Vacant(e) => {
-                        e.insert(arg_ty.multiplicity.clone());
-                    }
-                    Entry::Occupied(mut e) => {
-                        let lub = crate::resolve::mult_lub(e.get(), &arg_ty.multiplicity);
-                        *e.get_mut() = lub;
-                    }
-                }
-            }
-        }
-        let type_expr = if ty_bindings.is_empty() {
-            f.return_type.clone()
-        } else {
-            crate::resolve::substitute_type(&f.return_type, &ty_bindings)
-        };
-        let multiplicity = if mult_bindings.is_empty() {
-            f.return_multiplicity.clone()
-        } else {
-            crate::resolve::substitute_mult(&f.return_multiplicity, &mult_bindings)
-        };
+        // Delegate to `resolve::infer_generic_bindings` so the lambda
+        // second-pass (extending var_types with substituted lambda
+        // params and binding the FunctionType's return-type variable
+        // from the lambda body's last expression) actually fires.
+        // Without it, `map<T,V>(coll:T[*], pred:Function<{T[1]->V[*]}>[1]):V[*]`
+        // bound only T; V stayed `Generic("V")` because the local
+        // `bind_type` loop ignores `FunctionType` parameters. That left
+        // chains like `$p.package->map(p|$p->getUpstreamPackages())`
+        // typed as `Generic(V)[*]`, which then LUB'd with the sibling
+        // `concatenate` arg to `Any[*]`.
+        let var_types = collect_var_types(ctx);
+        let bindings =
+            crate::resolve::infer_generic_bindings(&f.parameters, arguments, ctx.model, &var_types);
+        let type_expr = crate::resolve::substitute_type(&f.return_type, &bindings.ty);
+        let multiplicity = crate::resolve::substitute_mult(&f.return_multiplicity, &bindings.mult);
         return Some(ResolvedType {
             type_expr,
             multiplicity,

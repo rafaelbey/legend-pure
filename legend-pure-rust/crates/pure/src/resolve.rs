@@ -1042,7 +1042,7 @@ fn collect_unresolved_param_reads(
 /// its `ExprKind` structure. Returns `None` for expressions whose type
 /// cannot be statically determined (treated as `Any` — matches everything).
 /// Type alias for variable scope: name → (type, multiplicity).
-type VarTypes = HashMap<SmolStr, (crate::types::TypeExpr, crate::types::Multiplicity)>;
+pub(crate) type VarTypes = HashMap<SmolStr, (crate::types::TypeExpr, crate::types::Multiplicity)>;
 
 #[allow(clippy::too_many_lines)]
 fn infer_type_from_valuespec(
