@@ -140,3 +140,128 @@ fn primitive_type_references_resolve() {
         "expected primitive types to resolve; got {tds_errors:?}"
     );
 }
+
+#[test]
+fn validate_reports_cell_value_type_mismatch() {
+    // Column declares `Integer` but the data has `hello`. The CSV
+    // validation pass should catch this and surface a positioned
+    // error.
+    let source = indoc! {r"
+        function my::test::run(): Any[*]
+        {
+            #TDS
+              v:Integer
+              hello
+            #
+        }
+    "};
+    let file = parse(source);
+    let ext = TDSExtension::new();
+    let errors = compile_with_tds(vec![file], &ext);
+
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("'v'") && e.contains("Integer") && e.contains("hello")),
+        "expected type-mismatch error mentioning column 'v', `Integer`, and the cell value; got {errors:?}",
+    );
+}
+
+#[test]
+fn validate_reports_boolean_cell_mismatch() {
+    let source = indoc! {r"
+        function my::test::run(): Any[*]
+        {
+            #TDS
+              flag:Boolean
+              yes
+            #
+        }
+    "};
+    let file = parse(source);
+    let ext = TDSExtension::new();
+    let errors = compile_with_tds(vec![file], &ext);
+
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("Boolean") && e.contains("yes")),
+        "expected Boolean type-mismatch error; got {errors:?}",
+    );
+}
+
+#[test]
+fn validate_reports_multiplicity_mismatch_with_explicit_pure_one() {
+    // Column declares `[1]` but a cell is empty.
+    let source = indoc! {r"
+        function my::test::run(): Any[*]
+        {
+            #TDS
+              name:String[1]
+              Alice
+              ''
+            #
+        }
+    "};
+    let file = parse(source);
+    let ext = TDSExtension::new();
+    let errors = compile_with_tds(vec![file], &ext);
+
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("'name'") && e.contains('1')),
+        "expected multiplicity-mismatch error mentioning column 'name' and the `1` bound; got {errors:?}",
+    );
+}
+
+#[test]
+fn validate_accepts_typed_columns_with_matching_data() {
+    // Sanity: well-formed typed TDS produces no TDS errors.
+    let source = indoc! {r"
+        function my::test::run(): Any[*]
+        {
+            #TDS
+              id:Integer[1], name:String[0..1]
+              1, Alice
+              2, ''
+              3, Bob
+            #
+        }
+    "};
+    let file = parse(source);
+    let ext = TDSExtension::new();
+    let errors = compile_with_tds(vec![file], &ext);
+
+    let tds_errors: Vec<&String> = errors.iter().filter(|e| e.contains("TDS")).collect();
+    assert!(
+        tds_errors.is_empty(),
+        "expected clean TDS validation; got {tds_errors:?}"
+    );
+}
+
+#[test]
+fn validate_reports_first_offending_row_for_type_mismatch() {
+    // The validator should name the first bad row so users iterate
+    // toward a clean TDS rather than fixing in arbitrary order.
+    let source = indoc! {r"
+        function my::test::run(): Any[*]
+        {
+            #TDS
+              v:Integer
+              1
+              2
+              broken
+              4
+            #
+        }
+    "};
+    let file = parse(source);
+    let ext = TDSExtension::new();
+    let errors = compile_with_tds(vec![file], &ext);
+
+    assert!(
+        errors.iter().any(|e| e.contains("broken")),
+        "expected error to name the offending cell `broken`; got {errors:?}",
+    );
+}

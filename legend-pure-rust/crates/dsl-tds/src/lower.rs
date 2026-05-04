@@ -127,7 +127,7 @@ pub fn default_island_lowerers() -> Vec<Box<dyn IslandLowerer>> {
 /// the column names (just names — types are stripped here; the
 /// runtime/compile-time inference re-derives them); each data row
 /// joins its raw cell texts with `, `; rows separated by `\n`.
-fn reconstruct_csv(tds: &TDSExpr) -> String {
+pub(crate) fn reconstruct_csv(tds: &TDSExpr) -> String {
     let mut buf = String::new();
     let header: Vec<&str> = tds.columns.iter().map(|c| c.name.as_str()).collect();
     buf.push_str(&header.join(", "));
@@ -143,7 +143,7 @@ fn reconstruct_csv(tds: &TDSExpr) -> String {
 // Column-override extraction
 // ---------------------------------------------------------------------------
 
-fn column_overrides(columns: &[TDSColumn]) -> Vec<ColumnOverride> {
+pub(crate) fn column_overrides(columns: &[TDSColumn]) -> Vec<ColumnOverride> {
     columns
         .iter()
         .map(|col| match &col.type_ref {

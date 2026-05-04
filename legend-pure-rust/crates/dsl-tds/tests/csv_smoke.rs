@@ -264,3 +264,245 @@ fn pure_type_names_match_canonical_class_names() {
     assert_eq!(ColumnType::StrictDate.pure_type_name(), "StrictDate");
     assert_eq!(ColumnType::DateTime.pure_type_name(), "DateTime");
 }
+
+// ---------------------------------------------------------------------------
+// Type-mismatch error reporting (override forces a type the data
+// can't honour). Inference itself never produces a mismatch — these
+// only fire when an explicit `name:Type` annotation overrides the
+// data-inferred classification.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integer_override_with_non_integer_cell_reports_error() {
+    let overrides = vec![ColumnOverride {
+        type_tag: Some(ColumnType::Integer),
+        multiplicity: None,
+    }];
+    let err = parse_and_infer("v\nhello\n", &overrides).expect_err("should fail");
+    assert!(err.message.contains("Integer"), "got: {err}");
+    assert!(err.message.contains("hello"), "got: {err}");
+    // Row counter in the message is the 1-based source line (header is
+    // line 1; the first data line is line 2). `err.line` matches.
+    assert_eq!(err.line, 2);
+    assert_eq!(err.column, 1);
+}
+
+#[test]
+fn float_override_with_alphabetic_cell_reports_error() {
+    let overrides = vec![ColumnOverride {
+        type_tag: Some(ColumnType::Float),
+        multiplicity: None,
+    }];
+    let err = parse_and_infer("v\nNaNish\n", &overrides).expect_err("should fail");
+    assert!(err.message.contains("Float"), "got: {err}");
+    assert!(err.message.contains("NaNish"), "got: {err}");
+}
+
+#[test]
+fn boolean_override_with_yes_no_cell_reports_error() {
+    let overrides = vec![ColumnOverride {
+        type_tag: Some(ColumnType::Boolean),
+        multiplicity: None,
+    }];
+    let err = parse_and_infer("flag\nyes\n", &overrides).expect_err("should fail");
+    assert!(err.message.contains("Boolean"), "got: {err}");
+    assert!(err.message.contains("yes"), "got: {err}");
+    assert!(
+        err.message.to_lowercase().contains("true") || err.message.contains("false"),
+        "expected the diagnostic to suggest the valid forms; got: {err}"
+    );
+}
+
+#[test]
+fn type_mismatch_points_at_first_offending_row() {
+    let overrides = vec![ColumnOverride {
+        type_tag: Some(ColumnType::Integer),
+        multiplicity: None,
+    }];
+    let err = parse_and_infer("v\n1\n2\nbroken\n4\n", &overrides).expect_err("should fail");
+    assert!(err.message.contains("broken"), "got: {err}");
+    assert_eq!(err.line, 4, "expected the line of the bad cell, got: {err}");
+}
+
+#[test]
+fn integer_override_accepts_integer_cells() {
+    let overrides = vec![ColumnOverride {
+        type_tag: Some(ColumnType::Integer),
+        multiplicity: None,
+    }];
+    let parsed = parse_and_infer("v\n1\n42\n", &overrides).expect("should succeed");
+    assert_eq!(parsed.columns[0].type_tag, ColumnType::Integer);
+    assert_eq!(parsed.rows.len(), 2);
+}
+
+#[test]
+fn boolean_override_accepts_case_insensitive_true_false() {
+    let overrides = vec![ColumnOverride {
+        type_tag: Some(ColumnType::Boolean),
+        multiplicity: None,
+    }];
+    let parsed = parse_and_infer("flag\nTrue\nFALSE\n", &overrides).expect("should succeed");
+    assert!(matches!(
+        parsed.rows[0][0],
+        Some(TypedCell::Boolean(true))
+    ));
+    assert!(matches!(
+        parsed.rows[1][0],
+        Some(TypedCell::Boolean(false))
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Multiplicity-mismatch error reporting (override forces a tighter
+// bound than the data supports).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pure_one_override_with_empty_cell_reports_error() {
+    let overrides = vec![
+        ColumnOverride::default(),
+        ColumnOverride {
+            type_tag: None,
+            multiplicity: Some(Multiplicity::PureOne),
+        },
+    ];
+    let err = parse_and_infer("a, b\n1, X\n2,\n3, Z\n", &overrides).expect_err("should fail");
+    assert!(err.message.contains("'b'"), "got: {err}");
+    assert!(err.message.contains('1'), "got: {err}"); // multiplicity literal
+    // The message uses 1-based data-row indexing — the empty cell is
+    // on the second data row.
+    assert!(err.message.contains("row 2"), "got: {err}");
+    // `err.line` is the source line; header on line 1 + 2 data rows.
+    assert_eq!(err.line, 3);
+}
+
+#[test]
+fn one_or_many_override_with_empty_cell_reports_error() {
+    let overrides = vec![ColumnOverride {
+        type_tag: None,
+        multiplicity: Some(Multiplicity::OneOrMany),
+    }];
+    let err = parse_and_infer("v\n1\n\n3\n", &overrides).expect_err("should fail");
+    assert!(err.message.contains("'v'"), "got: {err}");
+    assert!(err.message.contains("1..*"), "got: {err}");
+}
+
+#[test]
+fn zero_or_one_override_allows_empty_cells() {
+    let overrides = vec![ColumnOverride {
+        type_tag: None,
+        multiplicity: Some(Multiplicity::ZeroOrOne),
+    }];
+    let parsed = parse_and_infer("v\n1\n\n3\n", &overrides).expect("should succeed");
+    assert_eq!(parsed.columns[0].multiplicity, Multiplicity::ZeroOrOne);
+    assert_eq!(parsed.rows[1][0], None);
+}
+
+#[test]
+fn pure_one_override_with_all_cells_present_succeeds() {
+    let overrides = vec![ColumnOverride {
+        type_tag: None,
+        multiplicity: Some(Multiplicity::PureOne),
+    }];
+    let parsed = parse_and_infer("v\n1\n2\n3\n", &overrides).expect("should succeed");
+    assert_eq!(parsed.columns[0].multiplicity, Multiplicity::PureOne);
+}
+
+#[test]
+fn range_override_with_min_one_validates_like_pure_one() {
+    let overrides = vec![ColumnOverride {
+        type_tag: None,
+        multiplicity: Some(Multiplicity::Range {
+            lower: 1,
+            upper: Some(3),
+        }),
+    }];
+    let err = parse_and_infer("v\n1\n\n3\n", &overrides).expect_err("should fail");
+    assert!(err.message.contains("1..3"), "got: {err}");
+}
+
+#[test]
+fn range_override_with_min_zero_allows_empty_cells() {
+    let overrides = vec![ColumnOverride {
+        type_tag: None,
+        multiplicity: Some(Multiplicity::Range {
+            lower: 0,
+            upper: Some(2),
+        }),
+    }];
+    let parsed = parse_and_infer("v\n1\n\n3\n", &overrides).expect("should succeed");
+    assert_eq!(parsed.rows.len(), 3);
+    assert_eq!(parsed.rows[1][0], None);
+}
+
+// ---------------------------------------------------------------------------
+// Qualified-class column types (`payload:meta::pure::metamodel::variant::Variant`
+// and friends). Cells store as String; the type carries the package
+// path so the lowerer can emit a fully-qualified TypeReference.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn qualified_class_override_carries_package_and_name() {
+    let overrides = vec![ColumnOverride {
+        type_tag: Some(ColumnType::Other {
+            package: Some("meta::pure::metamodel::variant".into()),
+            name: "Variant".into(),
+        }),
+        multiplicity: None,
+    }];
+    let parsed = parse_and_infer("v\n\"[1,2,3]\"\n", &overrides).expect("should succeed");
+    let ColumnType::Other { package, name } = &parsed.columns[0].type_tag else {
+        panic!("expected Other variant; got {:?}", parsed.columns[0].type_tag);
+    };
+    assert_eq!(package.as_ref().unwrap().as_str(), "meta::pure::metamodel::variant");
+    assert_eq!(name.as_str(), "Variant");
+    // Cells stored as String — the runtime reconstructs the typed
+    // value from the raw text.
+    assert!(matches!(parsed.rows[0][0], Some(TypedCell::String(_))));
+}
+
+#[test]
+fn other_column_with_empty_cell_under_pure_one_still_reports_multiplicity_error() {
+    // `Other` doesn't reject any non-empty text but still participates
+    // in multiplicity validation.
+    let overrides = vec![ColumnOverride {
+        type_tag: Some(ColumnType::Other {
+            package: None,
+            name: "MyClass".into(),
+        }),
+        multiplicity: Some(Multiplicity::PureOne),
+    }];
+    let err = parse_and_infer("v\nfoo\n\nbaz\n", &overrides).expect_err("should fail");
+    assert!(err.message.contains("MyClass"), "got: {err}");
+    assert!(err.message.contains("row 2"), "got: {err}");
+}
+
+#[test]
+fn pure_type_package_returns_path_for_other_with_qualified_name() {
+    let t = ColumnType::Other {
+        package: Some("meta::pure::metamodel::variant".into()),
+        name: "Variant".into(),
+    };
+    assert_eq!(
+        t.pure_type_package(),
+        Some("meta::pure::metamodel::variant")
+    );
+    assert_eq!(t.pure_type_name(), "Variant");
+}
+
+#[test]
+fn pure_type_package_returns_none_for_primitives() {
+    assert_eq!(ColumnType::Integer.pure_type_package(), None);
+    assert_eq!(ColumnType::String.pure_type_package(), None);
+    assert_eq!(ColumnType::DateTime.pure_type_package(), None);
+}
+
+#[test]
+fn pure_type_package_returns_none_for_other_with_bare_name() {
+    let t = ColumnType::Other {
+        package: None,
+        name: "Variant".into(),
+    };
+    assert_eq!(t.pure_type_package(), None);
+    assert_eq!(t.pure_type_name(), "Variant");
+}
