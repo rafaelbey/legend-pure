@@ -67,6 +67,18 @@ pub enum TestMode {
     Pct,
 }
 
+/// Output format for `legend test`.
+#[derive(Default, Clone, Copy, clap::ValueEnum)]
+pub enum TestFormat {
+    /// Human-readable terminal output (default).
+    #[default]
+    Pretty,
+    /// One JSON object per line (NDJSON), suitable for IDE / CI
+    /// integrations. Each line is `{"type":"result", ...}` per test
+    /// outcome plus a final `{"type":"summary", ...}` line.
+    Json,
+}
+
 /// Arguments for the `legend test` command.
 #[derive(clap::Args)]
 #[allow(clippy::struct_excessive_bools)]
@@ -74,6 +86,12 @@ pub struct TestArgs {
     /// Input `.pure` file(s) or directory containing tests.
     #[arg(default_value = ".")]
     pub paths: Vec<PathBuf>,
+
+    /// Output format. `pretty` writes coloured human output to stderr;
+    /// `json` writes one diagnostic JSON object per test result to
+    /// stdout (NDJSON) plus a final summary line.
+    #[arg(long, value_enum, default_value_t = TestFormat::Pretty)]
+    pub format: TestFormat,
 
     /// Scope test execution to a specific package.
     #[arg(long, default_value = "Root")]
@@ -304,7 +322,10 @@ fn run_once(
         let mut evaluator = Evaluator::with_hooks(&model, &registry, hooks);
 
         let (report, fail) = run_tests(&model, &mut evaluator, args)?;
-        report.render(&model, args.show_detail);
+        match args.format {
+            TestFormat::Pretty => report.render(&model, args.show_detail),
+            TestFormat::Json => report.render_json(&model),
+        }
 
         // Extract coverage data and generate reports.
         let map = evaluator.into_hooks().into_map();
@@ -341,7 +362,10 @@ fn run_once(
         // Production path — zero-overhead NoOpHooks.
         let mut evaluator = Evaluator::new(&model, &registry);
         let (report, fail) = run_tests(&model, &mut evaluator, args)?;
-        report.render(&model, args.show_detail);
+        match args.format {
+            TestFormat::Pretty => report.render(&model, args.show_detail),
+            TestFormat::Json => report.render_json(&model),
+        }
 
         if fail {
             Err(CliError::Custom(format!(
@@ -561,6 +585,54 @@ impl TestReport {
         );
         eprintln!("  Skipped : {}", self.skip_count.to_string().yellow());
         eprintln!("  Elapsed : {}ms", self.total_elapsed_ms);
+    }
+
+    /// Emit one NDJSON object per test result on stdout, followed by a
+    /// final `{"type":"summary",…}` line. Stable wire format consumed
+    /// by the IntelliJ test-runner integration and any CI tooling.
+    fn render_json(&self, model: &PureModel) {
+        for r in &self.results {
+            let status = match &r.status {
+                TestStatus::Pass => "pass",
+                TestStatus::Fail => "fail",
+                TestStatus::Error => "error",
+                TestStatus::Skip => "skip",
+                TestStatus::Other(_) => "other",
+            };
+            // Resolve source location best-effort so the IDE runner can
+            // jump to the failing test. Same lookup used by the pretty
+            // printer.
+            let path: Vec<smol_str::SmolStr> =
+                r.fqn.split("::").map(smol_str::SmolStr::new).collect();
+            let location = model.resolve_function_by_path(&path).map(|eid| {
+                let node = model.get_node(eid);
+                let si = &node.source_info;
+                serde_json::json!({
+                    "source": si.source.as_str(),
+                    "line":   si.start_line,
+                    "column": si.start_column,
+                })
+            });
+            let payload = serde_json::json!({
+                "type":      "result",
+                "fqn":       r.fqn,
+                "status":    status,
+                "elapsedMs": r.elapsed_ms,
+                "message":   r.message,
+                "location":  location,
+            });
+            println!("{payload}");
+        }
+        let summary = serde_json::json!({
+            "type":        "summary",
+            "tests":       self.results.len(),
+            "pass":        self.pass_count,
+            "fail":        self.fail_count,
+            "errors":      self.error_count,
+            "skip":        self.skip_count,
+            "elapsedMs":   self.total_elapsed_ms,
+        });
+        println!("{summary}");
     }
 }
 
