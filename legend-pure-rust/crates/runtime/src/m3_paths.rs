@@ -212,6 +212,16 @@ pub const COL_SPEC: &Classifier = "meta::pure::metamodel::relation::ColSpec";
 /// .getFirst()._rawType()._columns()`.
 pub const COL_SPEC_ARRAY: &Classifier = "meta::pure::metamodel::relation::ColSpecArray";
 
+/// `meta::pure::functions::relation::SortInfo` — heap classifier for a
+/// single sort key. Carries `column: ColSpec<T>[1]` plus
+/// `direction: SortType[1]`. Allocated by the `ascending` / `descending`
+/// natives, consumed by `sort` (and downstream by `over`).
+pub const SORT_INFO: &Classifier = "meta::pure::functions::relation::SortInfo";
+
+/// `meta::pure::functions::relation::SortType` — enumeration with members
+/// `ASC` and `DESC`. Used as the `direction` slot value on a `SortInfo`.
+pub const SORT_TYPE: &Classifier = "meta::pure::functions::relation::SortType";
+
 /// `meta::pure::profiles::equality` — Profile whose `Key` stereotype
 /// marks class properties as structural-equality keys. A `<<equality.Key>>`
 /// stereotype ref matches iff `profile` resolves to this FQN and

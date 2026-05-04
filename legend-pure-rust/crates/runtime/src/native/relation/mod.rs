@@ -25,24 +25,37 @@
 //! helpers — heap walks, TDS row-access, etc. — are in `shared.rs`.
 
 mod add_columns;
+mod ascending;
+mod columns;
 mod concatenate;
+mod descending;
 mod distinct;
 mod drop;
 mod filter;
 mod limit;
+mod rename;
+mod select;
 mod shared;
 mod size;
+mod sort;
+mod sort_info;
 mod string_to_tds;
 
 use crate::native::NativeRegistry;
 
 pub use add_columns::AddColumns;
+pub use ascending::Ascending;
+pub use columns::Columns;
 pub use concatenate::Concatenate;
+pub use descending::Descending;
 pub use distinct::Distinct;
 pub use drop::Drop;
 pub use filter::Filter;
 pub use limit::Limit;
+pub use rename::Rename;
+pub use select::{SelectColSpec, SelectColSpecArray};
 pub use size::Size;
+pub use sort::Sort;
 pub use string_to_tds::StringToTDS;
 
 /// Register relation native functions into the registry under their
@@ -62,4 +75,23 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("filter_Relation_1__Function_1__Relation_1_", Filter);
     registry.register("limit_Relation_1__Integer_1__Relation_1_", Limit);
     registry.register("drop_Relation_1__Integer_1__Relation_1_", Drop);
+    registry.register(
+        "rename_Relation_1__ColSpec_1__ColSpec_1__Relation_1_",
+        Rename,
+    );
+    registry.register(
+        "select_Relation_1__ColSpec_1__Relation_1_",
+        SelectColSpec,
+    );
+    registry.register(
+        "select_Relation_1__ColSpecArray_1__Relation_1_",
+        SelectColSpecArray,
+    );
+    registry.register("columns_Relation_1__Column_MANY_", Columns);
+    registry.register(
+        "sort_Relation_1__SortInfo_MANY__Relation_1_",
+        Sort,
+    );
+    registry.register("ascending_ColSpec_1__SortInfo_1_", Ascending);
+    registry.register("descending_ColSpec_1__SortInfo_1_", Descending);
 }
