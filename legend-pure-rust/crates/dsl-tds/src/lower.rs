@@ -160,8 +160,14 @@ fn column_overrides(columns: &[TDSColumn]) -> Vec<ColumnOverride> {
 }
 
 /// Map a Pure-side type name in a `#TDS\n cols\n…\n#` header to our
-/// [`ColumnType`] enum. Unrecognised names → `None`, leaving the
-/// inference to data classification (which falls back to `String`).
+/// [`ColumnType`] enum. The seven primitives map to their dedicated
+/// variants; any other identifier (including a qualified path like
+/// `meta::pure::metamodel::variant::Variant`) becomes a
+/// [`ColumnType::Other`] carrying the trailing class name and the
+/// `::`-joined package prefix. Unrecognised primitive-like names with
+/// no package qualification still fall through to [`ColumnType::Other`]
+/// so the resolver — not the TDS DSL — decides whether the symbol is
+/// resolvable.
 fn classify_type_name(name: &str) -> Option<ColumnType> {
     match name {
         "Integer" => Some(ColumnType::Integer),
@@ -171,7 +177,19 @@ fn classify_type_name(name: &str) -> Option<ColumnType> {
         "String" => Some(ColumnType::String),
         "StrictDate" | "Date" => Some(ColumnType::StrictDate),
         "DateTime" => Some(ColumnType::DateTime),
-        _ => None,
+        _ => {
+            // Qualified path: split on the final `::` separator. The
+            // suffix is the bare class name; the prefix (if any) is the
+            // package path. Accepts unqualified class names too.
+            let (package, bare) = match name.rsplit_once("::") {
+                Some((pkg, n)) => (Some(SmolStr::new(pkg)), SmolStr::new(n)),
+                None => (None, SmolStr::new(name)),
+            };
+            Some(ColumnType::Other {
+                package,
+                name: bare,
+            })
+        }
     }
 }
 
@@ -304,23 +322,29 @@ fn arrow_cast_to_typed_tds(
     let column_refs: Vec<TypeReference> = parsed
         .columns
         .iter()
-        .map(|col| TypeReference {
-            package: None,
-            name: col.name.clone(),
-            type_arguments: vec![TypeReference {
+        .map(|col| {
+            let inner_pkg = col.type_tag.pure_type_package().map(|p| {
+                let segments: Vec<&str> = p.split("::").collect();
+                build_package(&segments, source_info.clone())
+            });
+            TypeReference {
                 package: None,
-                name: SmolStr::new(col.type_tag.pure_type_name()),
-                type_arguments: vec![],
-                multiplicity_arguments: vec![],
+                name: col.name.clone(),
+                type_arguments: vec![TypeReference {
+                    package: inner_pkg.flatten(),
+                    name: SmolStr::new(col.type_tag.pure_type_name()),
+                    type_arguments: vec![],
+                    multiplicity_arguments: vec![],
+                    type_variable_values: vec![],
+                    source_info: source_info.clone(),
+                }],
+                multiplicity_arguments: vec![MultiplicityArgument::Concrete(
+                    ast_multiplicity(&col.multiplicity),
+                    source_info.clone(),
+                )],
                 type_variable_values: vec![],
                 source_info: source_info.clone(),
-            }],
-            multiplicity_arguments: vec![MultiplicityArgument::Concrete(
-                ast_multiplicity(&col.multiplicity),
-                source_info.clone(),
-            )],
-            type_variable_values: vec![],
-            source_info: source_info.clone(),
+            }
         })
         .collect();
     // The structural relation type (sentinel-encoded).

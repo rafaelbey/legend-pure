@@ -26,7 +26,7 @@ fn parse(csv: &str) -> ParsedTDS {
 }
 
 fn col_types(parsed: &ParsedTDS) -> Vec<ColumnType> {
-    parsed.columns.iter().map(|c| c.type_tag).collect()
+    parsed.columns.iter().map(|c| c.type_tag.clone()).collect()
 }
 
 #[test]

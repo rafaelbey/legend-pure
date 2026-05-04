@@ -92,10 +92,11 @@ pub struct ParsedColumn {
     pub multiplicity: Multiplicity,
 }
 
-/// Pure-side primitive types the inference recognises. Maps 1-1 to
-/// the canonical names in `meta::pure::metamodel::type` /
-/// `meta::pure::metamodel::primitive`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Pure-side type a TDS column resolves to. The seven primitives are
+/// recognised by data-driven inference; `Other` carries an arbitrary
+/// class reference parsed from a `name:Pkg::Class` header annotation
+/// (e.g. `payload:meta::pure::metamodel::variant::Variant`).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ColumnType {
     /// `Integer` — whole-number literal.
     Integer,
@@ -111,13 +112,25 @@ pub enum ColumnType {
     StrictDate,
     /// `DateTime` — `YYYY-MM-DDTHH:MM:SS[.fraction][+ZZZZ|Z]`.
     DateTime,
+    /// Arbitrary class type from an explicit header annotation. The
+    /// inferer never produces this — it can only be set via
+    /// [`ColumnOverride`]. Cell values for such columns are stored as
+    /// [`TypedCell::String`] (raw text); the runtime is expected to
+    /// reconstruct the typed value from that string.
+    Other {
+        /// `::`-joined package path (e.g. `meta::pure::metamodel::variant`),
+        /// or `None` for an unqualified class name.
+        package: Option<SmolStr>,
+        /// Bare class name (e.g. `Variant`).
+        name: SmolStr,
+    },
 }
 
 impl ColumnType {
-    /// Pure-side qualified type name for use in the lowered
+    /// Pure-side bare type name for use in the lowered
     /// `RelationType<…>` AST.
     #[must_use]
-    pub fn pure_type_name(self) -> &'static str {
+    pub fn pure_type_name(&self) -> &str {
         match self {
             ColumnType::Integer => "Integer",
             ColumnType::Float => "Float",
@@ -126,6 +139,21 @@ impl ColumnType {
             ColumnType::String => "String",
             ColumnType::StrictDate => "StrictDate",
             ColumnType::DateTime => "DateTime",
+            ColumnType::Other { name, .. } => name.as_str(),
+        }
+    }
+
+    /// `::`-joined package path that qualifies the type name, when the
+    /// column carries an `Other` annotation with a package prefix.
+    /// `None` for primitives (which live in `meta::pure::metamodel` and
+    /// are auto-imported) and for bare-name `Other` annotations.
+    #[must_use]
+    pub fn pure_type_package(&self) -> Option<&str> {
+        match self {
+            ColumnType::Other {
+                package: Some(p), ..
+            } => Some(p.as_str()),
+            _ => None,
         }
     }
 }
@@ -254,7 +282,7 @@ pub fn parse_and_infer(csv: &str, overrides: &[ColumnOverride]) -> Result<Parsed
         let override_entry = overrides.get(idx).cloned().unwrap_or_default();
         let column_cells: Vec<&RawCell> = data_rows.iter().map(|row| &row[idx]).collect();
         let inferred = infer_column(&column_cells);
-        let type_tag = override_entry.type_tag.unwrap_or(inferred.0);
+        let type_tag = override_entry.type_tag.clone().unwrap_or(inferred.0);
         let multiplicity = override_entry.multiplicity.unwrap_or(inferred.1);
         columns.push(ParsedColumn {
             name: SmolStr::new(header.canonical_name()),
@@ -268,7 +296,7 @@ pub fn parse_and_infer(csv: &str, overrides: &[ColumnOverride]) -> Result<Parsed
     for row in &data_rows {
         let mut typed_row = Vec::with_capacity(column_count);
         for (idx, cell) in row.iter().enumerate() {
-            typed_row.push(materialise_cell(cell, columns[idx].type_tag));
+            typed_row.push(materialise_cell(cell, &columns[idx].type_tag));
         }
         rows.push(typed_row);
     }
@@ -563,7 +591,7 @@ fn is_datetime_literal(s: &str) -> bool {
 // Cell materialisation
 // ---------------------------------------------------------------------------
 
-fn materialise_cell(cell: &RawCell, type_tag: ColumnType) -> Option<TypedCell> {
+fn materialise_cell(cell: &RawCell, type_tag: &ColumnType) -> Option<TypedCell> {
     if cell.is_empty() {
         return None;
     }
@@ -576,6 +604,10 @@ fn materialise_cell(cell: &RawCell, type_tag: ColumnType) -> Option<TypedCell> {
         ColumnType::String => TypedCell::String(unescape_string(v)),
         ColumnType::StrictDate => TypedCell::StrictDate(SmolStr::new(v)),
         ColumnType::DateTime => TypedCell::DateTime(SmolStr::new(v)),
+        // Arbitrary class column: store the raw text. The runtime
+        // reconstructs the typed value from that string at execution
+        // time (e.g. `Variant` parses its own JSON-bearing payload).
+        ColumnType::Other { .. } => TypedCell::String(unescape_string(v)),
     })
 }
 
