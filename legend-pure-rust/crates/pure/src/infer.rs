@@ -1572,6 +1572,107 @@ fn has_compatible_sibling_overload(
     false
 }
 
+/// Verifies that a function body's last expression satisfies the
+/// declared return signature.
+///
+/// Same gating principles as the call-site arg-vs-param check:
+///
+///   - Both sides must be **leaf primitives** (Integer / Float /
+///     Decimal / String / Boolean / three Date kinds). Generic and
+///     class returns involve subtyping nuances that this layer
+///     doesn't second-guess.
+///   - Multiplicity is checked only for **trustworthy expression
+///     shapes** (literals, `Variable`, `Collection` literal). Other
+///     shapes — chained `FunctionCall`s, `PropertyCall`s, lambdas —
+///     can have inferred multiplicity that's wrong upstream (e.g.
+///     `expr->toOne()` not narrowing `[*]` to `[1]`); reporting on
+///     those would emit noise on real platform code.
+///
+/// Errors get the function's source span, since "the body returns
+/// the wrong thing" is a property of the function as a whole and
+/// the IDE squiggle should land on the declaration.
+pub fn check_body_return_signature(
+    model: &PureModel,
+    function_name: &SmolStr,
+    function_si: &legend_pure_parser_ast::SourceInfo,
+    body: &[ValueSpec],
+    expected_type: &TypeExpr,
+    expected_mult: &Multiplicity,
+    errors: &mut Vec<crate::error::CompilationError>,
+) {
+    let Some(last) = body.last() else { return };
+    let Some(rt) = last.type_info.as_ref() else { return };
+
+    let primitive = |id: crate::ids::ElementId| -> bool {
+        id == bootstrap::INTEGER_ID
+            || id == bootstrap::FLOAT_ID
+            || id == bootstrap::DECIMAL_ID
+            || id == bootstrap::STRING_ID
+            || id == bootstrap::BOOLEAN_ID
+            || id == bootstrap::DATE_TIME_ID
+            || id == bootstrap::STRICT_DATE_ID
+            || id == bootstrap::STRICT_TIME_ID
+    };
+    let actual_eid = match &rt.type_expr {
+        TypeExpr::Named { element, .. } => Some(*element),
+        _ => None,
+    };
+    let expected_eid = match expected_type {
+        TypeExpr::Named { element, .. } => Some(*element),
+        _ => None,
+    };
+    let both_primitive =
+        matches!((actual_eid, expected_eid), (Some(a), Some(p)) if primitive(a) && primitive(p));
+    if !both_primitive {
+        return;
+    }
+
+    if !crate::resolve::is_type_compatible(actual_eid, expected_type, model) {
+        let actual = actual_eid
+            .map(|e| model.element_name(e).to_string())
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let expected = expected_eid
+            .map(|e| model.element_name(e).to_string())
+            .unwrap_or_else(|| "<unknown>".to_string());
+        errors.push(crate::error::CompilationError {
+            message: format!(
+                "Function '{function_name}' declares return type {expected} but body returns {actual}"
+            ),
+            source_info: function_si.clone(),
+            kind: crate::error::CompilationErrorKind::UnresolvedElement {
+                path: SmolStr::from(format!("return-type-mismatch:{function_name}")),
+            },
+        });
+    }
+
+    let trustworthy = matches!(
+        &*last.kind,
+        ExprKind::IntegerLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::DecimalLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::BooleanLiteral(_)
+            | ExprKind::DateLiteral(_)
+            | ExprKind::Variable { .. }
+            | ExprKind::Collection { .. }
+    );
+    if trustworthy
+        && !crate::resolve::is_multiplicity_compatible(Some(&rt.multiplicity), expected_mult)
+    {
+        errors.push(crate::error::CompilationError {
+            message: format!(
+                "Function '{function_name}' declares return multiplicity {} but body returns {}",
+                render_multiplicity(expected_mult),
+                render_multiplicity(&rt.multiplicity),
+            ),
+            source_info: function_si.clone(),
+            kind: crate::error::CompilationErrorKind::UnresolvedElement {
+                path: SmolStr::from(format!("return-multiplicity-mismatch:{function_name}")),
+            },
+        });
+    }
+}
+
 /// Returns the resolved type for a date literal based on its variant.
 fn date_literal_type(dv: &DateValue) -> ResolvedType {
     match dv {
@@ -2076,6 +2177,92 @@ mod tests {
         assert!(
             mismatch.is_some(),
             "expected a multiplicity-mismatch error for takesInt([1,2]), got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// Function body's last expression must satisfy the declared
+    /// return *type*. If the function says it returns `Integer[1]`
+    /// but the body's tail is a `Float`, the compiler must error
+    /// (else the user can write nonsense like
+    /// `function foo(): Integer[1] { $x * 1.5 }`).
+    #[test]
+    fn function_body_return_type_mismatch_emits_error() {
+        let model = model_with_bootstrap();
+        let body = vec![ValueSpec {
+            kind: Box::new(ExprKind::FloatLiteral(1.5)),
+            source_info: SourceInfo::new("x.pure", 3, 5, 3, 8),
+            type_info: Some(Box::new(ResolvedType {
+                type_expr: named_type(bootstrap::FLOAT_ID),
+                multiplicity: Multiplicity::PureOne,
+            })),
+        }];
+        let expected_return = (
+            named_type(bootstrap::INTEGER_ID),
+            Multiplicity::PureOne,
+        );
+
+        let mut errors = Vec::new();
+        check_body_return_signature(
+            &model,
+            &SmolStr::new("test::foo"),
+            &SourceInfo::new("x.pure", 1, 1, 4, 1),
+            &body,
+            &expected_return.0,
+            &expected_return.1,
+            &mut errors,
+        );
+
+        let mismatch = errors.iter().find(|e| {
+            let m = e.message.to_lowercase();
+            m.contains("return") && (m.contains("integer") || m.contains("float"))
+        });
+        assert!(
+            mismatch.is_some(),
+            "expected a return-type-mismatch error, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// Function body's last expression must satisfy the declared
+    /// return *multiplicity*. `function foo(): Integer[1] { … }`
+    /// must error if the body returns `Integer[0..1]` (e.g. via
+    /// `head()`).
+    #[test]
+    fn function_body_return_multiplicity_mismatch_emits_error() {
+        let model = model_with_bootstrap();
+        // High-confidence shape — `Variable` reference, mult [0..1].
+        let body = vec![ValueSpec {
+            kind: Box::new(ExprKind::Variable { name: SmolStr::new("x") }),
+            source_info: SourceInfo::new("x.pure", 3, 5, 3, 7),
+            type_info: Some(Box::new(ResolvedType {
+                type_expr: named_type(bootstrap::INTEGER_ID),
+                multiplicity: Multiplicity::ZeroOrOne,
+            })),
+        }];
+        let expected_return = (
+            named_type(bootstrap::INTEGER_ID),
+            Multiplicity::PureOne,
+        );
+
+        let mut errors = Vec::new();
+        check_body_return_signature(
+            &model,
+            &SmolStr::new("test::foo"),
+            &SourceInfo::new("x.pure", 1, 1, 4, 1),
+            &body,
+            &expected_return.0,
+            &expected_return.1,
+            &mut errors,
+        );
+
+        let mismatch = errors.iter().find(|e| {
+            let m = e.message.to_lowercase();
+            m.contains("return") && (m.contains("multiplicity") || m.contains("[0..1]"))
+        });
+        assert!(
+            mismatch.is_some(),
+            "expected a return-multiplicity-mismatch error, got: {:?}",
             errors.iter().map(|e| &e.message).collect::<Vec<_>>()
         );
     }

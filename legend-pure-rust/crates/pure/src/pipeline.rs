@@ -2082,6 +2082,46 @@ fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
         infer::infer_function_body(model, &target.params, &mut target.body, errors);
     }
 
+    // After inference, validate every body's last expression
+    // against the declaring function/QP's declared return
+    // signature. Catches `function foo(): Integer[1] { $x * 1.5 }`
+    // (returns Float not Integer) and `function foo(): Integer[1]
+    // { $stop->head() }` (returns [0..1] not [1]).
+    for target in &targets {
+        let chunk = &model.chunks[target.chunk_idx];
+        let element = chunk.elements.get(target.local_idx);
+        let node = chunk.nodes.get(target.local_idx);
+        match &target.kind {
+            TargetKind::FunctionBody => {
+                if let Element::Function(f) = element {
+                    infer::check_body_return_signature(
+                        model,
+                        &node.name,
+                        &node.source_info,
+                        &target.body,
+                        &f.return_type,
+                        &f.return_multiplicity,
+                        errors,
+                    );
+                }
+            }
+            TargetKind::QualifiedProperty(qp_idx) => {
+                if let Element::Class(c) = element {
+                    let qp = &c.qualified_properties[*qp_idx];
+                    infer::check_body_return_signature(
+                        model,
+                        &qp.name,
+                        &qp.source_info,
+                        &target.body,
+                        &qp.return_type,
+                        &qp.return_multiplicity,
+                        errors,
+                    );
+                }
+            }
+        }
+    }
+
     // Write back the typed bodies.
     for target in targets {
         let element = model.chunks[target.chunk_idx]
