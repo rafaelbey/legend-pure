@@ -233,6 +233,28 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
 
             let arg_source_infos: Vec<legend_pure_parser_ast::SourceInfo> =
                 arguments.iter().map(|a| a.source_info.clone()).collect();
+            // High-confidence inference shapes — multiplicity reported
+            // for these is reliable. For other kinds (FunctionCall,
+            // PropertyCall, lambdas, …) the inferred multiplicity can
+            // be wrong when downstream rules (e.g. `toOne` widening
+            // `[*]` to `[1]`) aren't fully applied yet, so the
+            // arg-mult check is skipped on those positions.
+            let arg_mult_trustworthy: Vec<bool> = arguments
+                .iter()
+                .map(|a| {
+                    matches!(
+                        &*a.kind,
+                        ExprKind::IntegerLiteral(_)
+                            | ExprKind::FloatLiteral(_)
+                            | ExprKind::DecimalLiteral(_)
+                            | ExprKind::StringLiteral(_)
+                            | ExprKind::BooleanLiteral(_)
+                            | ExprKind::DateLiteral(_)
+                            | ExprKind::Variable { .. }
+                            | ExprKind::Collection { .. }
+                    )
+                })
+                .collect();
             let result = infer_function_call(
                 ctx,
                 *function,
@@ -240,6 +262,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                 let_name,
                 &arg_types,
                 &arg_source_infos,
+                &arg_mult_trustworthy,
             );
             return set_and_return(expr, result);
         }
@@ -491,6 +514,7 @@ fn infer_function_call(
     let_name: Option<(&SmolStr, &legend_pure_parser_ast::SourceInfo)>,
     arg_types: &[Option<ResolvedType>],
     arg_source_infos: &[legend_pure_parser_ast::SourceInfo],
+    arg_mult_trustworthy: &[bool],
 ) -> Option<ResolvedType> {
     // Handle `letFunction` — side effect: bind the variable in scope.
     //
@@ -597,17 +621,47 @@ fn infer_function_call(
                 continue;
             }
             // Suppress when an alternative overload at this package
-            // would accept the actual arg type — the dispatcher had
-            // a real choice; second-guessing it on its decision is
-            // out of scope for this layer.
+            // would accept the actual arg type AND multiplicity —
+            // the dispatcher had a real choice; second-guessing its
+            // ranking is out of scope for this layer.
             if has_compatible_sibling_overload(
                 ctx.model,
                 function,
                 function_name,
                 arg_idx,
                 arg_eid,
+                Some(&arg_ty.multiplicity),
             ) {
                 continue;
+            }
+            let mult_check_ok = arg_mult_trustworthy.get(arg_idx).copied().unwrap_or(false);
+            if mult_check_ok
+                && !crate::resolve::is_multiplicity_compatible(
+                    Some(&arg_ty.multiplicity),
+                    &param.multiplicity,
+                )
+            {
+                let arg_si = arg_source_infos
+                    .get(arg_idx)
+                    .cloned()
+                    .unwrap_or_else(|| arg_source_infos.first().cloned().unwrap_or_else(|| {
+                        legend_pure_parser_ast::SourceInfo::new("<unknown>", 0, 0, 0, 0)
+                    }));
+                ctx.errors.push(crate::error::CompilationError {
+                    message: format!(
+                        "Argument {} of '{}': expected multiplicity {}, got {}",
+                        arg_idx + 1,
+                        function_name,
+                        render_multiplicity(&param.multiplicity),
+                        render_multiplicity(&arg_ty.multiplicity),
+                    ),
+                    source_info: arg_si,
+                    kind: crate::error::CompilationErrorKind::UnresolvedElement {
+                        path: SmolStr::from(format!(
+                            "argument-multiplicity-mismatch:{function_name}:{arg_idx}"
+                        )),
+                    },
+                });
             }
             if !crate::resolve::is_type_compatible(arg_eid, &param.type_expr, ctx.model) {
                 let arg_name = arg_eid
@@ -1480,6 +1534,7 @@ fn has_compatible_sibling_overload(
     function_name: &SmolStr,
     arg_idx: usize,
     arg_eid: Option<crate::ids::ElementId>,
+    arg_mult: Option<&Multiplicity>,
 ) -> bool {
     let Some(current_id) = current_fn else {
         return false;
@@ -1505,9 +1560,12 @@ fn has_compatible_sibling_overload(
         let Some(candidate_param) = candidate.parameters.get(arg_idx) else {
             continue;
         };
-        // If this candidate would accept the actual arg type, the
-        // dispatcher had a real alternative — don't second-guess it.
-        if crate::resolve::is_type_compatible(arg_eid, &candidate_param.type_expr, model) {
+        // If this candidate would accept the actual arg type AND
+        // multiplicity, the dispatcher had a real alternative —
+        // don't second-guess.
+        if crate::resolve::is_type_compatible(arg_eid, &candidate_param.type_expr, model)
+            && crate::resolve::is_multiplicity_compatible(arg_mult, &candidate_param.multiplicity)
+        {
             return true;
         }
     }
@@ -1719,6 +1777,305 @@ mod tests {
         assert!(
             mismatch.is_some(),
             "expected an error mentioning the type mismatch (Integer vs Float), got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// Helper: builds a model with a synthetic
+    /// `meta::test::takesInt(n: Integer[1]): Integer[1]` and returns
+    /// `(model, takesInt_id)`. Reused by the multiplicity tests.
+    fn model_with_takes_int() -> (PureModel, crate::ids::ElementId) {
+        use crate::model::{Element as ModelElement, ElementNode, ModelChunk};
+        use crate::nodes::function::Function;
+
+        let mut model = model_with_bootstrap();
+        let pkg = model.get_or_create_package(&[
+            SmolStr::new("meta"),
+            SmolStr::new("test"),
+        ]);
+        let chunk_id: u16 = 1;
+        let mut chunk = ModelChunk::new(chunk_id);
+        let func_si = SourceInfo::new("synth.pure", 1, 1, 3, 1);
+        let local_idx = chunk.alloc_element(
+            ElementNode {
+                name: SmolStr::new("takesInt_Integer_1__Integer_1_"),
+                source_info: func_si.clone(),
+                name_source_info: func_si.clone(),
+                parent_package: pkg,
+            },
+            ModelElement::Function(Function {
+                function_name: SmolStr::new("takesInt"),
+                is_native: false,
+                parameters: std::sync::Arc::from(vec![Parameter {
+                    name: SmolStr::new("n"),
+                    type_expr: named_type(bootstrap::INTEGER_ID),
+                    multiplicity: Multiplicity::PureOne,
+                    source_info: func_si.clone(),
+                }]),
+                return_type: named_type(bootstrap::INTEGER_ID),
+                return_multiplicity: Multiplicity::PureOne,
+                body: std::sync::Arc::from(Vec::new()),
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+            }),
+        );
+        let func_id = crate::ids::ElementId::InstanceId {
+            chunk_id,
+            local_idx,
+        };
+        model.chunks.push(chunk);
+        model.register_element(pkg, func_id);
+        (model, func_id)
+    }
+
+    /// Calling a `[1]`-multiplicity parameter with a `[0..1]`
+    /// argument (e.g. an outer parameter typed `Integer[0..1]`)
+    /// must error. Observed in the IDE as: "If `range`'s start
+    /// param is changed to a multiplicity other than [1], calls
+    /// expecting [1] still don't error."
+    #[test]
+    fn infer_function_call_with_wrong_arg_multiplicity_emits_error() {
+        let (model, func_id) = model_with_takes_int();
+
+        // Body: `takesInt($x)` with $x: Integer[0..1]. Param expects [1].
+        let mut body = vec![untyped(
+            ExprKind::FunctionCall(crate::types::FunctionCallData {
+                function: Some(func_id),
+                function_name: SmolStr::new("takesInt"),
+                arguments: vec![untyped(
+                    ExprKind::Variable { name: SmolStr::new("x") },
+                    SourceInfo::new("call.pure", 5, 10, 5, 12),
+                )],
+            }),
+            SourceInfo::new("call.pure", 5, 1, 5, 13),
+        )];
+        let outer_params = vec![Parameter {
+            name: SmolStr::new("x"),
+            type_expr: named_type(bootstrap::INTEGER_ID),
+            multiplicity: Multiplicity::ZeroOrOne,
+            source_info: SourceInfo::new("call.pure", 1, 1, 1, 1),
+        }];
+        let mut errors = Vec::new();
+        infer_function_body(&model, &outer_params, &mut body, &mut errors);
+
+        let mismatch = errors.iter().find(|e| {
+            let m = e.message.to_lowercase();
+            m.contains("multiplicity") || m.contains("[0..1]") || m.contains("[1]")
+        });
+        assert!(
+            mismatch.is_some(),
+            "expected a multiplicity-mismatch error, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// Builds a synthetic `meta::test::takes(n: Integer[<param_mult>])`
+    /// function for parameterised multiplicity tests.
+    fn model_with_takes_int_mult(param_mult: Multiplicity) -> (PureModel, crate::ids::ElementId) {
+        use crate::model::{Element as ModelElement, ElementNode, ModelChunk};
+        use crate::nodes::function::Function;
+
+        let mut model = model_with_bootstrap();
+        let pkg = model.get_or_create_package(&[
+            SmolStr::new("meta"),
+            SmolStr::new("test"),
+        ]);
+        let chunk_id: u16 = 1;
+        let mut chunk = ModelChunk::new(chunk_id);
+        let func_si = SourceInfo::new("synth.pure", 1, 1, 3, 1);
+        let local_idx = chunk.alloc_element(
+            ElementNode {
+                name: SmolStr::new("takes_Integer_X__Integer_1_"),
+                source_info: func_si.clone(),
+                name_source_info: func_si.clone(),
+                parent_package: pkg,
+            },
+            ModelElement::Function(Function {
+                function_name: SmolStr::new("takes"),
+                is_native: false,
+                parameters: std::sync::Arc::from(vec![Parameter {
+                    name: SmolStr::new("n"),
+                    type_expr: named_type(bootstrap::INTEGER_ID),
+                    multiplicity: param_mult,
+                    source_info: func_si.clone(),
+                }]),
+                return_type: named_type(bootstrap::INTEGER_ID),
+                return_multiplicity: Multiplicity::PureOne,
+                body: std::sync::Arc::from(Vec::new()),
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+            }),
+        );
+        let func_id = crate::ids::ElementId::InstanceId {
+            chunk_id,
+            local_idx,
+        };
+        model.chunks.push(chunk);
+        model.register_element(pkg, func_id);
+        (model, func_id)
+    }
+
+    /// Run `takes(<arg>)` against a function whose parameter has
+    /// `param_mult`. The `arg` is a single Variable `$x` whose
+    /// outer-scope binding has `arg_mult`. Asserts whether an error
+    /// is emitted matching `expect_error`.
+    fn run_mult_check(
+        param_mult: Multiplicity,
+        arg_mult: Multiplicity,
+        expect_error: bool,
+        scenario: &str,
+    ) {
+        let (model, func_id) = model_with_takes_int_mult(param_mult);
+        let mut body = vec![untyped(
+            ExprKind::FunctionCall(crate::types::FunctionCallData {
+                function: Some(func_id),
+                function_name: SmolStr::new("takes"),
+                arguments: vec![untyped(
+                    ExprKind::Variable { name: SmolStr::new("x") },
+                    SourceInfo::new("call.pure", 5, 10, 5, 12),
+                )],
+            }),
+            SourceInfo::new("call.pure", 5, 1, 5, 13),
+        )];
+        let outer_params = vec![Parameter {
+            name: SmolStr::new("x"),
+            type_expr: named_type(bootstrap::INTEGER_ID),
+            multiplicity: arg_mult,
+            source_info: SourceInfo::new("call.pure", 1, 1, 1, 1),
+        }];
+        let mut errors = Vec::new();
+        infer_function_body(&model, &outer_params, &mut body, &mut errors);
+
+        let got_error = errors.iter().any(|e| {
+            let m = e.message.to_lowercase();
+            m.contains("multiplicity")
+        });
+        assert_eq!(
+            got_error, expect_error,
+            "{scenario}: errors = {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+
+    /// Compatibility matrix — arg mult `[1]` fits every supertype
+    /// range. None should error.
+    #[test]
+    fn mult_pure_one_arg_is_compatible_with_supertype_params() {
+        run_mult_check(Multiplicity::PureOne, Multiplicity::PureOne, false,
+            "[1] arg into [1] param");
+        run_mult_check(Multiplicity::ZeroOrOne, Multiplicity::PureOne, false,
+            "[1] arg into [0..1] param");
+        run_mult_check(Multiplicity::OneOrMany, Multiplicity::PureOne, false,
+            "[1] arg into [1..*] param");
+        run_mult_check(Multiplicity::ZeroOrMany, Multiplicity::PureOne, false,
+            "[1] arg into [*] param");
+    }
+
+    /// `[0..1]` arg is broader than `[1]` — must error when the
+    /// param insists on `[1]`. Compatible with `[0..1]` and `[*]`.
+    #[test]
+    fn mult_zero_or_one_arg_against_various_params() {
+        run_mult_check(Multiplicity::PureOne, Multiplicity::ZeroOrOne, true,
+            "[0..1] arg into [1] param — must error");
+        run_mult_check(Multiplicity::ZeroOrOne, Multiplicity::ZeroOrOne, false,
+            "[0..1] arg into [0..1] param");
+        run_mult_check(Multiplicity::OneOrMany, Multiplicity::ZeroOrOne, true,
+            "[0..1] arg into [1..*] param — lower-bound mismatch");
+        run_mult_check(Multiplicity::ZeroOrMany, Multiplicity::ZeroOrOne, false,
+            "[0..1] arg into [*] param");
+    }
+
+    /// `[1..*]` arg fits `[1..*]` and `[*]` but not `[1]` or `[0..1]`.
+    #[test]
+    fn mult_one_or_many_arg_against_various_params() {
+        run_mult_check(Multiplicity::PureOne, Multiplicity::OneOrMany, true,
+            "[1..*] arg into [1] param — must error");
+        run_mult_check(Multiplicity::ZeroOrOne, Multiplicity::OneOrMany, true,
+            "[1..*] arg into [0..1] param — must error");
+        run_mult_check(Multiplicity::OneOrMany, Multiplicity::OneOrMany, false,
+            "[1..*] arg into [1..*] param");
+        run_mult_check(Multiplicity::ZeroOrMany, Multiplicity::OneOrMany, false,
+            "[1..*] arg into [*] param");
+    }
+
+    /// `[*]` (zero-or-many) is the broadest — only fits `[*]`.
+    #[test]
+    fn mult_zero_or_many_arg_against_various_params() {
+        run_mult_check(Multiplicity::PureOne, Multiplicity::ZeroOrMany, true,
+            "[*] arg into [1] param — must error");
+        run_mult_check(Multiplicity::ZeroOrOne, Multiplicity::ZeroOrMany, true,
+            "[*] arg into [0..1] param — must error");
+        run_mult_check(Multiplicity::OneOrMany, Multiplicity::ZeroOrMany, true,
+            "[*] arg into [1..*] param — must error");
+        run_mult_check(Multiplicity::ZeroOrMany, Multiplicity::ZeroOrMany, false,
+            "[*] arg into [*] param");
+    }
+
+    /// Bounded ranges. `[2..2]` = exactly two; fits `[2..2]`, `[1..*]`,
+    /// `[2..3]`, `[*]` but not `[1]` or `[0..1]`.
+    #[test]
+    fn mult_fixed_range_arg_against_various_params() {
+        let two = Multiplicity::Range { lower: 2, upper: Some(2) };
+        run_mult_check(Multiplicity::PureOne, two.clone(), true,
+            "[2] arg into [1] param — must error");
+        run_mult_check(Multiplicity::ZeroOrOne, two.clone(), true,
+            "[2] arg into [0..1] param — must error");
+        run_mult_check(Multiplicity::OneOrMany, two.clone(), false,
+            "[2] arg into [1..*] param");
+        run_mult_check(two.clone(), two.clone(), false,
+            "[2] arg into [2] param");
+        run_mult_check(
+            Multiplicity::Range { lower: 2, upper: Some(3) },
+            two.clone(),
+            false,
+            "[2] arg into [2..3] param",
+        );
+        run_mult_check(Multiplicity::ZeroOrMany, two, false,
+            "[2] arg into [*] param");
+    }
+
+    /// Passing a collection literal `[1, 2]` (multiplicity `[2..2]`)
+    /// to a parameter expecting a single value `Integer[1]` must
+    /// error. Observed in the IDE as: "If a constant `1` I changed
+    /// to a collection `[1, 2]`, no error is brought up."
+    #[test]
+    fn infer_function_call_with_collection_in_scalar_position_emits_error() {
+        let (model, func_id) = model_with_takes_int();
+
+        // Body: `takesInt([1, 2])` — multiplicity [2..2] vs param [1].
+        let coll = untyped(
+            ExprKind::Collection {
+                elements: vec![
+                    untyped(
+                        ExprKind::IntegerLiteral(1),
+                        SourceInfo::new("call.pure", 5, 11, 5, 12),
+                    ),
+                    untyped(
+                        ExprKind::IntegerLiteral(2),
+                        SourceInfo::new("call.pure", 5, 14, 5, 15),
+                    ),
+                ],
+            },
+            SourceInfo::new("call.pure", 5, 10, 5, 16),
+        );
+        let mut body = vec![untyped(
+            ExprKind::FunctionCall(crate::types::FunctionCallData {
+                function: Some(func_id),
+                function_name: SmolStr::new("takesInt"),
+                arguments: vec![coll],
+            }),
+            SourceInfo::new("call.pure", 5, 1, 5, 17),
+        )];
+        let mut errors = Vec::new();
+        infer_function_body(&model, &[], &mut body, &mut errors);
+
+        let mismatch = errors.iter().find(|e| {
+            let m = e.message.to_lowercase();
+            m.contains("multiplicity") || m.contains("[2..2]") || m.contains("[1]")
+        });
+        assert!(
+            mismatch.is_some(),
+            "expected a multiplicity-mismatch error for takesInt([1,2]), got: {:?}",
             errors.iter().map(|e| &e.message).collect::<Vec<_>>()
         );
     }
