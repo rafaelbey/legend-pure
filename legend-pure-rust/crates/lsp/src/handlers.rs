@@ -408,27 +408,97 @@ Class test::Person
         assert_eq!(code_lenses_for(&plain, "plain.pure").len(), 0);
     }
 
-    // The companion test for *tagged* functions can't run through
-    // `compile_fixture` today: a fixture that uses
-    // `<<test.Test>>` without the platform's `test` profile loaded
-    // trips a pre-existing panic in
-    // `validate.rs::validate_stereotypes` (it calls `get_node` on the
-    // unresolved stereotype's profile ID, which can be a Package). The
-    // detection logic in `is_test_stereotyped` is exercised at the
-    // integration level once the LSP runs against a real classpath.
-    // Leaving an ignored placeholder so the gap is visible.
+    /// Tagged-function lens emission.
+    ///
+    /// We build the model by hand here rather than going through
+    /// `compile_fixture`. The compile path is a poor fit for this
+    /// test because — without the platform's
+    /// `meta::pure::profiles::test` Profile loaded — the resolver
+    /// (correctly) drops the unresolvable stereotype and the
+    /// resulting function ends up with `stereotypes = []`. That's
+    /// the right behaviour for the resolver, but it means
+    /// `is_test_stereotyped` has nothing to match on. Manually
+    /// inserting a `Profile` + a `Function` whose `StereotypeRef`
+    /// points at it lets us test the lens-detection logic in
+    /// isolation, on a platform-free model.
     #[test]
-    #[ignore = "blocked: validate_stereotypes panics on unresolved profile refs (pre-existing in pure)"]
     fn code_lenses_emit_for_test_stereotyped_function() {
-        let tagged = compile_fixture(
-            "tagged.pure",
-            "import meta::pure::profiles::*;\n\
-             function <<test.Test>> test::myCheck(): Boolean[1]\n\
-             {\n  true\n}\n",
+        use legend_pure_parser_ast::SourceInfo;
+        use legend_pure_parser_pure::annotations::StereotypeRef;
+        use legend_pure_parser_pure::ids::ElementId;
+        use legend_pure_parser_pure::model::{
+            Element as ModelElement, ElementNode, ModelChunk, PureModel,
+        };
+        use legend_pure_parser_pure::nodes::function::Function;
+        use legend_pure_parser_pure::nodes::profile::Profile;
+        use legend_pure_parser_pure::types::{Multiplicity, TypeExpr};
+
+        let mut model = PureModel::new();
+        let test_pkg = model.get_or_create_package(&[smol_str::SmolStr::new("test")]);
+
+        // `PureModel::new()` leaves `chunks` empty; we slot ours in
+        // at index 0 with a matching chunk_id so `get_node` (which
+        // indexes by chunk_id) doesn't trip.
+        let chunk_id: u16 = 0;
+        let mut chunk = ModelChunk::new(chunk_id);
+        let fixture_si = SourceInfo::new("fixture.pure", 1, 1, 4, 1);
+
+        // Profile element — declares the "Test" stereotype.
+        let profile_local_idx = chunk.alloc_element(
+            ElementNode {
+                name: smol_str::SmolStr::new("test"),
+                source_info: fixture_si.clone(),
+                name_source_info: fixture_si.clone(),
+                parent_package: test_pkg,
+            },
+            ModelElement::Profile(Profile {
+                stereotypes: vec![smol_str::SmolStr::new("Test")],
+                tags: Vec::new(),
+            }),
         );
-        let lenses = code_lenses_for(&tagged, "tagged.pure");
-        assert_eq!(lenses.len(), 1);
-        let cmd = lenses[0].command.as_ref().unwrap();
+        let profile_id = ElementId::InstanceId {
+            chunk_id,
+            local_idx: profile_local_idx,
+        };
+
+        // Function element — references the Profile via StereotypeRef.
+        let func_local_idx = chunk.alloc_element(
+            ElementNode {
+                name: smol_str::SmolStr::new("myCheck__Boolean_1_"),
+                source_info: fixture_si.clone(),
+                name_source_info: fixture_si.clone(),
+                parent_package: test_pkg,
+            },
+            ModelElement::Function(Function {
+                function_name: smol_str::SmolStr::new("myCheck"),
+                is_native: false,
+                parameters: std::sync::Arc::from(Vec::new()),
+                return_type: TypeExpr::Unresolved,
+                return_multiplicity: Multiplicity::PureOne,
+                body: std::sync::Arc::from(Vec::new()),
+                stereotypes: vec![StereotypeRef {
+                    profile: profile_id,
+                    value: smol_str::SmolStr::new("Test"),
+                }],
+                tagged_values: Vec::new(),
+            }),
+        );
+        let func_id = ElementId::InstanceId {
+            chunk_id,
+            local_idx: func_local_idx,
+        };
+
+        model.chunks.push(chunk);
+        model.register_element(test_pkg, profile_id);
+        model.register_element(test_pkg, func_id);
+
+        let lenses = code_lenses_for(&model, "fixture.pure");
+        assert_eq!(lenses.len(), 1, "expected one lens for the Test-tagged function");
+        let cmd = lenses[0]
+            .command
+            .as_ref()
+            .expect("lens must carry a command");
         assert_eq!(cmd.command, "legend.runTest");
+        assert_eq!(cmd.title, "▶ Run test");
     }
 }
