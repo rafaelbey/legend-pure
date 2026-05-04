@@ -616,6 +616,18 @@ fn infer_function_call(
     // the same type-info plumbing) is the upstream prerequisite. This
     // helper just consumes whatever `arg_ty.type_expr` already carries.
     if let Some(Element::Function(f)) = function.and_then(|id| ctx.model.try_get_element(id)) {
+        // Bindings up front: needed both for substituting the param
+        // types we're about to check arguments against AND for
+        // substituting the function's return signature. Computing
+        // them once before the per-arg loop also lets us validate
+        // generic param shapes (`param: T[n]`) against their
+        // resolved binding (`Integer[1]`) instead of their raw
+        // `Generic(T)` placeholder, which `is_type_compatible`
+        // treats as permissive.
+        let var_types = collect_var_types(ctx);
+        let bindings =
+            crate::resolve::infer_generic_bindings(&f.parameters, arguments, ctx.model, &var_types);
+
         // Type-check each argument against its parameter. The
         // dispatcher's `narrow_candidates_by_type` short-circuits
         // when there's only one candidate by name+arity, so a
@@ -753,15 +765,24 @@ fn infer_function_call(
             if arg_eid == Some(bootstrap::NIL_ID) {
                 continue;
             }
-            if !crate::resolve::is_type_compatible(arg_eid, &param.type_expr, ctx.model) {
+            // Substitute the param's declared type with the bindings
+            // collected upstream so generic params (`T[n]` in
+            // `eval<T,V|m,n>(func, param: T[n])`) become their bound
+            // form (`Integer[1]` once T binds from the FunctionType
+            // slot of `func: Function<{Integer[1]->String[1]}>[1]`).
+            // Without this, `is_type_compatible(_, Generic(T))`
+            // returns permissive and `eval(func, "wrong")` slips
+            // through silently.
+            let expected_type = crate::resolve::substitute_type(&param.type_expr, &bindings.ty);
+            if !crate::resolve::is_type_compatible(arg_eid, &expected_type, ctx.model) {
                 let arg_name = arg_eid
                     .map(|e| ctx.model.element_name(e).to_string())
                     .unwrap_or_else(|| "<unknown>".to_string());
-                let param_name = match &param.type_expr {
+                let param_name = match &expected_type {
                     TypeExpr::Named { element, .. } => {
                         ctx.model.element_name(*element).to_string()
                     }
-                    _ => format!("{:?}", param.type_expr),
+                    _ => format!("{:?}", expected_type),
                 };
                 let arg_si = arg_source_infos
                     .get(arg_idx)
@@ -786,19 +807,13 @@ fn infer_function_call(
                 });
             }
         }
-        // Delegate to `resolve::infer_generic_bindings` so the lambda
-        // second-pass (extending var_types with substituted lambda
-        // params and binding the FunctionType's return-type variable
-        // from the lambda body's last expression) actually fires.
-        // Without it, `map<T,V>(coll:T[*], pred:Function<{T[1]->V[*]}>[1]):V[*]`
-        // bound only T; V stayed `Generic("V")` because the local
-        // `bind_type` loop ignores `FunctionType` parameters. That left
-        // chains like `$p.package->map(p|$p->getUpstreamPackages())`
-        // typed as `Generic(V)[*]`, which then LUB'd with the sibling
-        // `concatenate` arg to `Any[*]`.
-        let var_types = collect_var_types(ctx);
-        let bindings =
-            crate::resolve::infer_generic_bindings(&f.parameters, arguments, ctx.model, &var_types);
+        // Reuse the up-front `bindings` to substitute the function's
+        // declared return signature. The lambda second-pass
+        // (`infer_generic_bindings` runs over `Function<{T->V}>` slots
+        // and binds V from the lambda body's last expression) is part
+        // of `bindings` already, so `map<T,V>(coll:T[*],
+        // pred:Function<{T[1]->V[*]}>[1]):V[*]` returns a substituted
+        // `Named{V_resolved}[*]` here.
         let type_expr = crate::resolve::substitute_type(&f.return_type, &bindings.ty);
         let multiplicity = crate::resolve::substitute_mult(&f.return_multiplicity, &bindings.mult);
         return Some(ResolvedType {
