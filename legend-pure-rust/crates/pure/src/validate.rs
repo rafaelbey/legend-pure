@@ -56,6 +56,7 @@ use crate::types::{ExprKind, FunctionCallData, TypeExpr, ValueSpec};
 /// This is Pass 3 of the compiler pipeline. It runs after
 /// `rebuild_derived_indexes()` and is purely read-only.
 #[tracing::instrument(level = "info", name = "validate", skip_all)]
+// todo why we need most of these - should not the resolve do these like resolve_tagged_values and resolve_stereotypes rather than doing it here?
 pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
     let mut errors = Vec::new();
 
@@ -198,7 +199,10 @@ fn validate_association(
         {
             if let Some(target_element) = model.try_get_element(*target_id) {
                 if !matches!(target_element, Element::Class(_)) {
-                    let target_name = model.get_node(*target_id).name.clone();
+                    // `element_name` (not `get_node`) — type-position
+                    // targets shouldn't be Packages in well-formed
+                    // input, but use the total accessor as defence.
+                    let target_name = model.element_name(*target_id).clone();
                     errors.push(CompilationError {
                         message: format!(
                             "Association '{assoc_name}' property '{}' must reference a Class, \
@@ -302,7 +306,12 @@ fn validate_stereotypes(
                 );
             }
             Some(_) => {
-                let target_name = model.get_node(stereo.profile).name.clone();
+                // `element_name` is total over both ElementId kinds —
+                // the resolver only feeds Profile or genuine non-Profile
+                // elements through to here (Package fallbacks are
+                // intercepted in `resolve_stereotypes`), but
+                // `element_name` is the safer accessor either way.
+                let target_name = model.element_name(stereo.profile).clone();
                 errors.push(CompilationError {
                     message: format!(
                         "Stereotype target '{target_name}' on '{element_name}' is not a Profile"
@@ -360,7 +369,11 @@ fn validate_tagged_values(
                 validate_tag_exists(element_name, &tv.tag, profile, source_info, errors);
             }
             Some(_) => {
-                let target_name = model.get_node(tv.profile).name.clone();
+                // `element_name` (not `get_node`) — same Package-fallback
+                // safety as `validate_stereotypes`; the resolver
+                // intercepts Package targets, but the safer accessor
+                // costs nothing.
+                let target_name = model.element_name(tv.profile).clone();
                 errors.push(CompilationError {
                     message: format!(
                         "Tag target '{target_name}' on '{element_name}' is not a Profile"
@@ -916,6 +929,9 @@ fn is_same_or_sub_package(model: &PureModel, use_site: PackageId, target: Packag
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::annotations::StereotypeRef;
+    use crate::ids::PackageId;
+    use crate::model::PureModel;
     use crate::nodes::class::Property;
     use crate::types::Multiplicity;
 
@@ -967,5 +983,53 @@ mod tests {
             errors[0].kind,
             CompilationErrorKind::DuplicateProperty { .. }
         ));
+    }
+
+    /// `validate_stereotypes` used to call `model.get_node(profile)`
+    /// without checking the ID kind, which panics for `Package` IDs
+    /// (`get_node` rejects them by design — packages live in a
+    /// separate arena). The fix is a switch to `model.element_name`,
+    /// which is total over both kinds.
+    ///
+    /// In production the resolver intercepts Package fallbacks for
+    /// stereotype profiles before they reach this validator (see
+    /// `resolve::resolve_stereotypes`), but feeding one in directly
+    /// still has to be panic-free.
+    #[test]
+    fn validate_stereotypes_handles_package_profile_without_panic() {
+        let mut model = PureModel::new();
+        // Create `test` as a child package of root. This is exactly
+        // the shape the resolver used to produce when falling back
+        // from `<<test.Foo>>` to package `test`.
+        let pkg_id: PackageId =
+            model.get_or_create_package(&[SmolStr::new("test")]);
+
+        let stereos = vec![StereotypeRef {
+            profile: ElementId::Package(pkg_id),
+            value: SmolStr::new("Foo"),
+        }];
+        let element_name = SmolStr::new("someElement");
+        let src = legend_pure_parser_ast::SourceInfo::new("t.pure", 1, 1, 1, 1);
+
+        let mut errors = Vec::new();
+        // Must not panic.
+        validate_stereotypes(&model, &element_name, &stereos, &src, &mut errors);
+
+        // The validator's own diagnostic is the "not a Profile" form —
+        // the resolver-level filter is what suppresses double-reporting
+        // in the full pipeline; this unit test exercises the validator
+        // in isolation.
+        assert_eq!(errors.len(), 1);
+        assert!(matches!(
+            errors[0].kind,
+            CompilationErrorKind::InvalidAnnotation { .. }
+        ));
+        // Error message must reference the package's name (not panic
+        // by trying to reach into the chunk arena).
+        assert!(
+            errors[0].message.contains("test"),
+            "expected error message to mention the package name, got: {}",
+            errors[0].message
+        );
     }
 }

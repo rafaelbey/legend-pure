@@ -599,6 +599,15 @@ pub(crate) fn lower_const_value(v: &ast_type::TypeVariableValue) -> ConstValue {
 /// Stereotypes reference a Profile element + a stereotype name within it.
 /// If the Profile cannot be resolved, an error is pushed and the stereotype
 /// is skipped.
+///
+/// `resolve_element_ptr`'s last-resort fallback is to return a child
+/// package of root — legitimate for positions where a Package is a
+/// PackageableElement value (e.g. `elementPath(meta)`), but a Package
+/// can never be a valid stereotype profile. When the fallback fires
+/// for a stereotype, [`resolve_element_ptr`] also *pops* the original
+/// `UnresolvedElement` error it previously pushed. We re-emit it here
+/// so the user sees one clear "couldn't find the profile" diagnostic
+/// instead of a misleading "Package isn't a Profile" downstream.
 pub(crate) fn resolve_stereotypes(
     stereotypes: &[ast_ann::StereotypePtr],
     ctx: &mut ResolutionContext<'_>,
@@ -608,6 +617,19 @@ pub(crate) fn resolve_stereotypes(
         .iter()
         .filter_map(|s| {
             let profile_id = resolve_element_ptr(&s.profile, &s.source_info, ctx, errors)?;
+            if matches!(profile_id, ElementId::Package(_)) {
+                errors.push(CompilationError {
+                    message: format!(
+                        "Cannot resolve stereotype profile '{}'",
+                        s.profile.name()
+                    ),
+                    source_info: s.source_info.clone(),
+                    kind: CompilationErrorKind::UnresolvedElement {
+                        path: s.profile.name().clone(),
+                    },
+                });
+                return None;
+            }
             Some(StereotypeRef {
                 profile: profile_id,
                 value: s.value.clone(),
@@ -620,7 +642,9 @@ pub(crate) fn resolve_stereotypes(
 ///
 /// Tagged values reference a Profile element + a tag name + a string value.
 /// If the Profile cannot be resolved, an error is pushed and the tagged value
-/// is skipped.
+/// is skipped. Same Package-fallback caveat as
+/// [`resolve_stereotypes`] — a Package is never a valid tag profile,
+/// so we re-emit the resolver's popped error and skip.
 pub(crate) fn resolve_tagged_values(
     tagged_values: &[ast_ann::TaggedValue],
     ctx: &mut ResolutionContext<'_>,
@@ -630,6 +654,19 @@ pub(crate) fn resolve_tagged_values(
         .iter()
         .filter_map(|tv| {
             let profile_id = resolve_element_ptr(&tv.tag.profile, &tv.source_info, ctx, errors)?;
+            if matches!(profile_id, ElementId::Package(_)) {
+                errors.push(CompilationError {
+                    message: format!(
+                        "Cannot resolve tagged-value profile '{}'",
+                        tv.tag.profile.name()
+                    ),
+                    source_info: tv.source_info.clone(),
+                    kind: CompilationErrorKind::UnresolvedElement {
+                        path: tv.tag.profile.name().clone(),
+                    },
+                });
+                return None;
+            }
             Some(TaggedValueRef {
                 profile: profile_id,
                 tag: tv.tag.value.clone(),
