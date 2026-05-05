@@ -805,8 +805,8 @@ fn infer_function_call(
         // of `bindings` already, so `map<T,V>(coll:T[*],
         // pred:Function<{T[1]->V[*]}>[1]):V[*]` returns a substituted
         // `Named{V_resolved}[*]` here.
-        let type_expr = crate::resolve::substitute_type(&f.return_type, &bindings.ty);
-        let multiplicity = crate::resolve::substitute_mult(&f.return_multiplicity, &bindings.mult);
+        let type_expr = bindings.make_concrete_type(&f.return_type);
+        let multiplicity = bindings.make_concrete_mult(&f.return_multiplicity);
         return Some(ResolvedType {
             type_expr,
             multiplicity,
@@ -1391,8 +1391,8 @@ fn lookup_member_in_class(
     // 1. Own declared properties.
     if let Some(prop) = class.properties.iter().find(|p| p.name == property_name) {
         let resolved = ResolvedType {
-            type_expr: crate::resolve::substitute_type(&prop.type_expr, &bindings.ty),
-            multiplicity: crate::resolve::substitute_mult(&prop.multiplicity, &bindings.mult),
+            type_expr: bindings.make_concrete_type(&prop.type_expr),
+            multiplicity: bindings.make_concrete_mult(&prop.multiplicity),
         };
         return Some(PropertyLookup::FoundProperty(resolved));
     }
@@ -1408,11 +1408,8 @@ fn lookup_member_in_class(
             .into_iter()
             .map(|qp| QpCandidate {
                 return_type: ResolvedType {
-                    type_expr: crate::resolve::substitute_type(&qp.return_type, &bindings.ty),
-                    multiplicity: crate::resolve::substitute_mult(
-                        &qp.return_multiplicity,
-                        &bindings.mult,
-                    ),
+                    type_expr: bindings.make_concrete_type(&qp.return_type),
+                    multiplicity: bindings.make_concrete_mult(&qp.return_multiplicity),
                 },
                 parameters: qp.parameters.to_vec(),
                 bindings: bindings.clone(),
@@ -1434,11 +1431,8 @@ fn lookup_member_in_class(
             let injected = &assoc.properties[1 - *prop_idx_pointing_to_self];
             if injected.name == property_name {
                 let resolved = ResolvedType {
-                    type_expr: crate::resolve::substitute_type(&injected.type_expr, &bindings.ty),
-                    multiplicity: crate::resolve::substitute_mult(
-                        &injected.multiplicity,
-                        &bindings.mult,
-                    ),
+                    type_expr: bindings.make_concrete_type(&injected.type_expr),
+                    multiplicity: bindings.make_concrete_mult(&injected.multiplicity),
                 };
                 return Some(PropertyLookup::FoundProperty(resolved));
             }
@@ -1461,11 +1455,11 @@ fn lookup_member_in_class(
             // List<T_resolved> and m → m_resolved).
             let substituted_args: Vec<TypeExpr> = super_args
                 .iter()
-                .map(|a| crate::resolve::substitute_type(a, &bindings.ty))
+                .map(|a| bindings.make_concrete_type(a))
                 .collect();
             let substituted_mult_args: Vec<Multiplicity> = super_mult_args
                 .iter()
-                .map(|m| crate::resolve::substitute_mult(m, &bindings.mult))
+                .map(|m| bindings.make_concrete_mult(m))
                 .collect();
             let super_bindings = compute_type_arg_bindings(
                 model,
@@ -1544,10 +1538,8 @@ fn resolve_qualified_property_overload(
 
     // Per-argument type + multiplicity check on the chosen overload.
     for (idx, (param, arg_ty)) in chosen.parameters.iter().zip(arg_types.iter()).enumerate() {
-        let expected_type =
-            crate::resolve::substitute_type(&param.type_expr, &chosen.bindings.ty);
-        let expected_mult =
-            crate::resolve::substitute_mult(&param.multiplicity, &chosen.bindings.mult);
+        let expected_type = chosen.bindings.make_concrete_type(&param.type_expr);
+        let expected_mult = chosen.bindings.make_concrete_mult(&param.multiplicity);
         let arg_eid = arg_ty.as_ref().and_then(|rt| match &rt.type_expr {
             TypeExpr::Named { element, .. } => Some(*element),
             _ => None,

@@ -47,3 +47,35 @@ pub(crate) struct GenericBindings {
     /// Multiplicity-variable bindings: `m` → `Multiplicity::PureOne`.
     pub mult: HashMap<SmolStr, Multiplicity>,
 }
+
+impl GenericBindings {
+    /// Substitute the type-variable bindings into `ty`. Replaces every
+    /// `TypeExpr::Generic(name)` whose `name` is in `self.ty`; recurses
+    /// through `Named { type_arguments }`, `FunctionType { parameters,
+    /// return_type }`, and `AlgebraUnion`.
+    ///
+    /// This is the single entry point for "make this `TypeExpr` as
+    /// concrete as possible given the bindings I've collected." Mirrors
+    /// Java's `GenericType.makeTypeArgumentAsConcreteAsPossible`
+    /// (`navigation/generictype/GenericType.java:125-171`).
+    ///
+    /// Today it delegates to `crate::resolve::substitute_type`. As
+    /// `TypeInferenceContext` grows (Step 3c), this method will pick up
+    /// parent-context lookup so a child call site's missing binding can
+    /// resolve through the enclosing function's bound parameters.
+    #[must_use]
+    pub fn make_concrete_type(&self, ty: &TypeExpr) -> TypeExpr {
+        crate::resolve::substitute_type(ty, &self.ty)
+    }
+
+    /// Substitute the multiplicity-variable bindings into `m`. Replaces
+    /// every `Multiplicity::Variable(name)` whose `name` is in
+    /// `self.mult`. Mirrors the multiplicity-side of
+    /// `GenericType.makeTypeArgumentAsConcreteAsPossible`.
+    ///
+    /// Today it delegates to `crate::resolve::substitute_mult`.
+    #[must_use]
+    pub fn make_concrete_mult(&self, m: &Multiplicity) -> Multiplicity {
+        crate::resolve::substitute_mult(m, &self.mult)
+    }
+}
