@@ -703,7 +703,9 @@ mod stage9 {
               X : Relational
               {
                 (
-                  details ()
+                  details (
+                    foo : [pkg::Db]t.x
+                  )
                     Otherwise(
                       [taxLocation] : [pkg::Db]@firmDetails,
                       [taxLocation] : [pkg::Db]@firmDetails
@@ -719,6 +721,38 @@ mod stage9 {
                     if property_name.as_str() == "taxLocation"
             ) && e.message.contains("Otherwise")),
             "expected Otherwise duplicate-property error; got {errors:#?}"
+        );
+    }
+
+    // A5b: Java-parity — Otherwise embedded body must declare at
+    // least one inner property mapping line. Java errors with
+    // "Invalid Otherwise mapping found: ... has no embedded
+    // mappings defined, please use a property mapping with Join
+    // instead."
+    #[test]
+    fn otherwise_with_empty_embedded_body_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Mapping
+            Mapping pkg::M
+            (
+              X : Relational
+              {
+                (
+                  details ()
+                    Otherwise(
+                      [taxLocation] : [pkg::Db]@firmDetails
+                    )
+                )
+              }
+            )
+        "});
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                CompilationErrorKind::InvalidAssociation { reason, .. }
+                    if reason.as_str().contains("embedded body cannot be empty")
+            )),
+            "expected empty-Otherwise-body error; got {errors:#?}"
         );
     }
 
