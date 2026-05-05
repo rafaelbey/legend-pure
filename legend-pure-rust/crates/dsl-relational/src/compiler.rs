@@ -329,6 +329,12 @@ impl CompilerExtension for RelationalExtension {
         // "The inlineSetImplementationId '...' is implementing the
         // class 'X' which is not a subType of 'Y'".
         validate_inline_target_subtypes(&class_mappings, ctx.model, ctx.errors);
+        // Phase A7: AssociationMapping target identity. An
+        // AssociationMapping body's class FQN must resolve to an
+        // `Association` element on the model (not a Class), and
+        // each association can be mapped at most once per Mapping
+        // (Java parity: TestAssociationMappingValidation).
+        validate_association_mapping_targets(&class_mappings, ctx.model, ctx.errors);
     }
 }
 
@@ -2835,4 +2841,99 @@ fn is_subtype_of(
         }
     }
     false
+}
+
+// ---------------------------------------------------------------------------
+// Phase A7 — AssociationMapping target identity + duplicate detection
+// ---------------------------------------------------------------------------
+
+/// For every relational class-mapping body whose AST is an
+/// `AssociationMapping (...)` shape, validate two Java-parity rules
+/// from `TestAssociationMappingValidation`:
+///
+/// 1. **Target must be an Association element on the model.** When
+///    `class_fqn` resolves to a `Class` (or any non-Association),
+///    error.
+/// 2. **At most one AssociationMapping per (Mapping, Association)
+///    pair.** Two `pkg::Foo : Relational { AssociationMapping(...) }`
+///    bodies in the same Mapping that target the same association
+///    error as duplicates.
+fn validate_association_mapping_targets(
+    class_mappings: &[RegisteredRelationalClassMapping],
+    model: &legend_pure_parser_pure::model::PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    use legend_pure_parser_pure::model::Element as ModelElement;
+
+    let mut seen: HashSet<(SmolStr, SmolStr)> = HashSet::new();
+    for reg in class_mappings {
+        if reg.body.association_mapping.is_none() {
+            continue;
+        }
+        let key = (reg.mapping_fqn.clone(), reg.class_fqn.clone());
+        if !seen.insert(key) {
+            errors.push(CompilationError {
+                message: format!(
+                    "Duplicate AssociationMapping for '{}' in mapping '{}'",
+                    reg.class_fqn, reg.mapping_fqn,
+                ),
+                source_info: reg.class_mapping_source_info.clone(),
+                kind: CompilationErrorKind::DuplicateElement {
+                    name: reg.class_fqn.clone(),
+                },
+            });
+            continue;
+        }
+        // Resolve the target on the model and ensure it's an
+        // Association (not a Class, Enumeration, etc.).
+        let segments: Vec<SmolStr> = reg
+            .class_fqn
+            .as_str()
+            .split("::")
+            .map(SmolStr::new)
+            .collect();
+        if segments.is_empty() || segments.iter().any(SmolStr::is_empty) {
+            continue;
+        }
+        let Some(id) = model.resolve_by_path(&segments) else {
+            // dsl-mapping's element-resolution path emits the
+            // "association not found" diagnostic; we don't double up.
+            continue;
+        };
+        match model.try_get_element(id) {
+            Some(ModelElement::Association(_)) => {}
+            Some(ModelElement::Class(_)) => {
+                errors.push(CompilationError {
+                    message: format!(
+                        "AssociationMapping body for '{}' but '{}' is a Class, not an \
+                         Association — class mappings must use a regular `Class : Relational \
+                         {{ (...) }}` body",
+                        reg.class_fqn, reg.class_fqn,
+                    ),
+                    source_info: reg.class_mapping_source_info.clone(),
+                    kind: CompilationErrorKind::InvalidAssociation {
+                        name: reg.class_fqn.clone(),
+                        reason: SmolStr::new(
+                            "AssociationMapping body targets a Class, not an Association",
+                        ),
+                    },
+                });
+            }
+            _ => {
+                errors.push(CompilationError {
+                    message: format!(
+                        "AssociationMapping body for '{}' but '{}' is not an Association",
+                        reg.class_fqn, reg.class_fqn,
+                    ),
+                    source_info: reg.class_mapping_source_info.clone(),
+                    kind: CompilationErrorKind::InvalidAssociation {
+                        name: reg.class_fqn.clone(),
+                        reason: SmolStr::new(
+                            "AssociationMapping body targets a non-Association element",
+                        ),
+                    },
+                });
+            }
+        }
+    }
 }
