@@ -252,6 +252,149 @@ fn class_typed_property_without_join_errors() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// A6: Inline target's class must be a subtype of the property's target class
+// ---------------------------------------------------------------------------
+
+#[test]
+fn inline_target_class_not_subtype_errors() {
+    let errors = compile_errors(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table tradeT (id INT PRIMARY KEY, addrId INT)
+          Table addrT (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class pkg::Address { id : Integer[1]; }
+        Class pkg::Stranger { other : Integer[1]; }
+        Class pkg::Trade
+        {
+          id : Integer[1];
+          address : pkg::Address[1];
+        }
+
+        ###Mapping
+        Mapping pkg::TradeMap
+        (
+          pkg::Stranger[strangerMap] : Relational
+          {
+            ~mainTable [pkg::db]addrT
+            (other : addrT.id)
+          }
+
+          pkg::Trade[tradeMap] : Relational
+          {
+            ~mainTable [pkg::db]tradeT
+            (
+              id : tradeT.id,
+              address () Inline[strangerMap]
+            )
+          }
+        )
+    "});
+    assert!(
+        errors.iter().any(|m| m.contains("Inline target")
+            && m.contains("not a subtype")
+            && m.contains("Stranger")),
+        "expected inline-target-not-subtype error; got {errors:#?}"
+    );
+}
+
+#[test]
+fn inline_target_class_subtype_passes() {
+    let errors = compile_errors(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table tradeT (id INT PRIMARY KEY, addrId INT)
+          Table addrT (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class pkg::Address { id : Integer[1]; }
+        Class pkg::FullAddress extends pkg::Address {}
+        Class pkg::Trade
+        {
+          id : Integer[1];
+          address : pkg::Address[1];
+        }
+
+        ###Mapping
+        Mapping pkg::TradeMap
+        (
+          pkg::FullAddress[fullAddrMap] : Relational
+          {
+            ~mainTable [pkg::db]addrT
+            (id : addrT.id)
+          }
+
+          pkg::Trade[tradeMap] : Relational
+          {
+            ~mainTable [pkg::db]tradeT
+            (
+              id : tradeT.id,
+              address () Inline[fullAddrMap]
+            )
+          }
+        )
+    "});
+    assert!(
+        !errors
+            .iter()
+            .any(|m| m.contains("Inline target") && m.contains("not a subtype")),
+        "expected no subtype error (FullAddress extends Address); got {errors:#?}"
+    );
+}
+
+#[test]
+fn inline_target_same_class_passes() {
+    // Identity case: inline target maps the same class as the
+    // property's declared type — must pass.
+    let errors = compile_errors(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table tradeT (id INT PRIMARY KEY, addrId INT)
+          Table addrT (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class pkg::Address { id : Integer[1]; }
+        Class pkg::Trade
+        {
+          id : Integer[1];
+          address : pkg::Address[1];
+        }
+
+        ###Mapping
+        Mapping pkg::TradeMap
+        (
+          pkg::Address[addrMap] : Relational
+          {
+            ~mainTable [pkg::db]addrT
+            (id : addrT.id)
+          }
+
+          pkg::Trade[tradeMap] : Relational
+          {
+            ~mainTable [pkg::db]tradeT
+            (
+              id : tradeT.id,
+              address () Inline[addrMap]
+            )
+          }
+        )
+    "});
+    assert!(
+        !errors
+            .iter()
+            .any(|m| m.contains("Inline target") && m.contains("not a subtype")),
+        "expected no subtype error for identity inline; got {errors:#?}"
+    );
+}
+
 #[test]
 fn class_typed_property_with_join_passes() {
     let errors = compile_errors(indoc! {r"
