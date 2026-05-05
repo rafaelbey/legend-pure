@@ -1299,6 +1299,319 @@ fn association_mapping_kind_distinguishes_from_class_mapping() {
     assert_eq!(association_mappings, 1);
 }
 
+// ---------------------------------------------------------------------------
+// Phase C — milestoning auto-rewrite
+// ---------------------------------------------------------------------------
+
+#[test]
+fn synthesizes_from_thru_for_business_milestoned_main_table() {
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table tradeT (
+            milestoning ( business (BUS_FROM=fromZ, BUS_THRU=thruZ) )
+            id INT PRIMARY KEY,
+            fromZ DATE,
+            thruZ DATE
+          )
+        )
+
+        ###Pure
+        Class pkg::Trade { id : Integer[1]; }
+
+        ###Mapping
+        Mapping pkg::TradeMap
+        (
+          pkg::Trade : Relational
+          {
+            ~mainTable [pkg::db]tradeT
+            (id : tradeT.id)
+          }
+        )
+    "});
+    let resolved = extension.resolved_class_mappings();
+    let cm = &resolved[0];
+    let synth = cm
+        .synthesized_milestoning
+        .as_ref()
+        .expect("expected synthesized milestoning");
+    assert_eq!(
+        synth.id.as_str(),
+        format!("{}_milestoning", cm.class_mapping_id.as_str())
+    );
+    assert_eq!(
+        synth.source_set_implementation_id.as_str(),
+        cm.class_mapping_id.as_str()
+    );
+    let names: Vec<&str> = synth
+        .property_bindings
+        .iter()
+        .map(|(n, _)| n.as_str())
+        .collect();
+    assert_eq!(names, vec!["from", "thru"]);
+
+    // Each binding points at the milestoning column on the main table.
+    let dbs = extension.resolved_databases();
+    let from_col = synth.property_bindings[0]
+        .1
+        .resolved_column(&dbs)
+        .expect("from column");
+    let thru_col = synth.property_bindings[1]
+        .1
+        .resolved_column(&dbs)
+        .expect("thru column");
+    assert_eq!(from_col.name.as_str(), "fromZ");
+    assert_eq!(thru_col.name.as_str(), "thruZ");
+}
+
+#[test]
+fn synthesizes_in_out_for_processing_milestoned_main_table() {
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table eventT (
+            milestoning ( processing (PROCESSING_IN=inZ, PROCESSING_OUT=outZ) )
+            id INT PRIMARY KEY,
+            inZ DATE,
+            outZ DATE
+          )
+        )
+
+        ###Pure
+        Class pkg::Event { id : Integer[1]; }
+
+        ###Mapping
+        Mapping pkg::EventMap
+        (
+          pkg::Event : Relational
+          {
+            ~mainTable [pkg::db]eventT
+            (id : eventT.id)
+          }
+        )
+    "});
+    let synth = extension.resolved_class_mappings()[0]
+        .synthesized_milestoning
+        .clone()
+        .expect("expected synthesized milestoning");
+    let names: Vec<&str> = synth
+        .property_bindings
+        .iter()
+        .map(|(n, _)| n.as_str())
+        .collect();
+    assert_eq!(names, vec!["in", "out"]);
+}
+
+#[test]
+fn synthesizes_all_four_for_bitemporal_main_table() {
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table biT (
+            milestoning (
+              business (BUS_FROM=fromZ, BUS_THRU=thruZ),
+              processing (PROCESSING_IN=inZ, PROCESSING_OUT=outZ)
+            )
+            id INT PRIMARY KEY,
+            fromZ DATE,
+            thruZ DATE,
+            inZ DATE,
+            outZ DATE
+          )
+        )
+
+        ###Pure
+        Class pkg::Bi { id : Integer[1]; }
+
+        ###Mapping
+        Mapping pkg::BiMap
+        (
+          pkg::Bi : Relational
+          {
+            ~mainTable [pkg::db]biT
+            (id : biT.id)
+          }
+        )
+    "});
+    let synth = extension.resolved_class_mappings()[0]
+        .synthesized_milestoning
+        .clone()
+        .expect("expected synthesized milestoning");
+    // Canonical order: in, out, from, thru.
+    let names: Vec<&str> = synth
+        .property_bindings
+        .iter()
+        .map(|(n, _)| n.as_str())
+        .collect();
+    assert_eq!(names, vec!["in", "out", "from", "thru"]);
+}
+
+#[test]
+fn synthesis_skipped_for_non_milestoned_table() {
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table plain (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class pkg::Trade { id : Integer[1]; }
+
+        ###Mapping
+        Mapping pkg::TradeMap
+        (
+          pkg::Trade : Relational
+          {
+            ~mainTable [pkg::db]plain
+            (id : plain.id)
+          }
+        )
+    "});
+    let cm = &extension.resolved_class_mappings()[0];
+    assert!(cm.synthesized_milestoning.is_none());
+}
+
+#[test]
+fn synthesis_skipped_when_parent_already_milestoned() {
+    // Java's `shouldCreateMilestoningPropertyMapping` skips children
+    // when the parent's super_set_impl_id is non-null and the parent
+    // is milestoned. The child inherits the synthesised mapping via
+    // the parent.
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table tradeT (
+            milestoning ( business (BUS_FROM=fromZ, BUS_THRU=thruZ) )
+            id INT PRIMARY KEY,
+            fromZ DATE,
+            thruZ DATE
+          )
+        )
+
+        ###Pure
+        Class pkg::Parent { id : Integer[1]; }
+        Class pkg::Child extends pkg::Parent {}
+
+        ###Mapping
+        Mapping pkg::M
+        (
+          *pkg::Parent[parentMap] : Relational
+          {
+            ~mainTable [pkg::db]tradeT
+            (id : tradeT.id)
+          }
+
+          pkg::Child[childMap] extends [parentMap] : Relational
+          {
+            (id : tradeT.id)
+          }
+        )
+    "});
+    let resolved = extension.resolved_class_mappings();
+    let parent = resolved
+        .iter()
+        .find(|cm| cm.class_mapping_id.as_str() == "parentMap")
+        .expect("parentMap missing");
+    let child = resolved
+        .iter()
+        .find(|cm| cm.class_mapping_id.as_str() == "childMap")
+        .expect("childMap missing");
+    // Parent gets the synthesised mapping.
+    assert!(parent.synthesized_milestoning.is_some());
+    // Child skips synthesis since the parent already carries it.
+    assert!(child.synthesized_milestoning.is_none());
+}
+
+#[test]
+fn synthesizes_for_business_snapshot_milestoning() {
+    let extension = run_lifecycle_with_mapping(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table snapT (
+            milestoning ( business (BUS_SNAPSHOT_DATE=snapZ) )
+            id INT PRIMARY KEY,
+            snapZ DATE
+          )
+        )
+
+        ###Pure
+        Class pkg::Snap { id : Integer[1]; }
+
+        ###Mapping
+        Mapping pkg::SnapMap
+        (
+          pkg::Snap : Relational
+          {
+            ~mainTable [pkg::db]snapT
+            (id : snapT.id)
+          }
+        )
+    "});
+    let synth = extension.resolved_class_mappings()[0]
+        .synthesized_milestoning
+        .clone()
+        .expect("expected synthesized milestoning");
+    let names: Vec<&str> = synth
+        .property_bindings
+        .iter()
+        .map(|(n, _)| n.as_str())
+        .collect();
+    // Snapshot maps both 'from' and 'thru' to the same column.
+    assert_eq!(names, vec!["from", "thru"]);
+    let dbs = extension.resolved_databases();
+    let from_col = synth.property_bindings[0]
+        .1
+        .resolved_column(&dbs)
+        .expect("from column");
+    let thru_col = synth.property_bindings[1]
+        .1
+        .resolved_column(&dbs)
+        .expect("thru column");
+    assert_eq!(from_col.name.as_str(), "snapZ");
+    assert_eq!(thru_col.name.as_str(), "snapZ");
+}
+
+#[test]
+fn resolved_table_carries_milestoning_definitions() {
+    let extension = run_lifecycle(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table biT (
+            milestoning (
+              business (BUS_FROM=fromZ, BUS_THRU=thruZ, INFINITY_DATE=%9999-12-31),
+              processing (PROCESSING_IN=inZ, PROCESSING_OUT=outZ)
+            )
+            id INT PRIMARY KEY,
+            fromZ DATE,
+            thruZ DATE,
+            inZ DATE,
+            outZ DATE
+          )
+        )
+    "});
+    let resolved = extension.resolved_databases();
+    let db = resolved.get("pkg::db").expect("missing");
+    let table = db.tables_by_name.get("biT").expect("biT missing");
+    let milestoning = table.milestoning.as_ref().expect("expected milestoning");
+    assert_eq!(milestoning.definitions.len(), 2);
+    // The date-literal `INFINITY_DATE` field is filtered out — only
+    // identifier-valued fields produce ResolvedMilestoningField rows.
+    let business_def = &milestoning.definitions[0];
+    let business_keys: Vec<&str> = business_def.fields.iter().map(|f| f.key.as_str()).collect();
+    assert_eq!(business_keys, vec!["BUS_FROM", "BUS_THRU"]);
+    // Each business field has a resolved column index.
+    for f in &business_def.fields {
+        assert!(f.column_index.is_some(), "expected column resolved");
+    }
+}
+
 #[test]
 fn resolved_databases_empty_before_define_bodies() {
     // Run only the declare pass — `resolved_databases` must be empty
