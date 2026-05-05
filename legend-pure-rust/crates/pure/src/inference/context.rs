@@ -23,10 +23,11 @@
 //! (3c of the plan) once the surrounding code routes binding /
 //! substitution through this seam.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use smol_str::SmolStr;
 
+use crate::ids::ElementId;
 use crate::types::{Multiplicity, TypeExpr};
 
 /// Bindings from generic parameter names (`T`, `m`, …) to the concrete
@@ -40,7 +41,7 @@ use crate::types::{Multiplicity, TypeExpr};
 /// around this so authoritative-vs-constraint bindings are
 /// distinguishable; at that point this struct may grow a `parent` link
 /// or be replaced wholesale by a richer state record.
-#[derive(Default, Clone)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct GenericBindings {
     /// Type-variable bindings: `T` → `TypeExpr::Named { Class, … }`.
     pub ty: HashMap<SmolStr, TypeExpr>,
@@ -90,6 +91,7 @@ impl GenericBindings {
 /// `AlgebraUnion`, and `Relation` columns so a parametric position
 /// (`Class<T>`, `Function<{T->X}>`) doesn't hide an unresolved
 /// generic.
+#[allow(dead_code)] // wired in Step 3g (strict-mode flag)
 #[must_use]
 pub fn unresolved_type_params(ty: &TypeExpr) -> Vec<SmolStr> {
     let mut out = Vec::new();
@@ -97,6 +99,7 @@ pub fn unresolved_type_params(ty: &TypeExpr) -> Vec<SmolStr> {
     out
 }
 
+#[allow(dead_code)] // wired in Step 3g (strict-mode flag)
 fn walk_type_for_unresolved(ty: &TypeExpr, out: &mut Vec<SmolStr>) {
     match ty {
         TypeExpr::Generic(name) => {
@@ -137,10 +140,233 @@ fn walk_type_for_unresolved(ty: &TypeExpr, out: &mut Vec<SmolStr>) {
 /// [`unresolved_type_params`] to detect unresolved multiplicity
 /// generics — Java parity for `TypeInference.java:102` ("The
 /// multiplicity parameter X was not resolved").
+#[allow(dead_code)] // wired in Step 3g (strict-mode flag)
 #[must_use]
 pub fn unresolved_mult_param(m: &Multiplicity) -> Option<SmolStr> {
     match m {
         Multiplicity::Variable(name) => Some(name.clone()),
         _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TypeInferenceContext — Java port skeleton
+// ---------------------------------------------------------------------------
+
+/// Java's `register(merge: bool)` flag distinguishing the two
+/// dispatch branches.
+///
+/// In Java's
+/// `FunctionExpressionProcessor.java:121-265`, the orchestrator
+/// chooses one of two paths after `firstPassTypeInference` walks each
+/// argument:
+///
+/// - [`RegisterMode::Authoritative`] — `merge=false`. Used by
+///   `potentiallyUpdateTypeInferenceContextUsingFunctionSignature`
+///   (`:567-584`) when at least one argument failed to converge in
+///   the first pass. Only the *succeeded* arg pairs are walked, and
+///   each binding is treated as the canonical value for the type
+///   parameter — an existing non-concrete entry can be replaced
+///   outright by a concrete incoming value.
+/// - [`RegisterMode::Constraint`] — `merge=true`. Used by
+///   `updateTypeInferenceContextUsingFunctionSignature` (`:586-594`)
+///   when every argument converged. All pairs are walked
+///   left-to-right and each registration LUB-merges with the
+///   existing binding (Java acknowledges a known-broken
+///   widen-to-Any-then-drop case at `register():474-478`).
+///
+/// Today `bind_type` always behaves like `Constraint` (LUB-merge
+/// unconditionally). Step 3d of the plan will route the two-branch
+/// dispatch through the new [`TypeInferenceContext`] and select the
+/// mode based on first-pass convergence, exactly as Java does.
+#[allow(dead_code)] // wired in Step 3d
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegisterMode {
+    /// Authoritative source for this binding (Java `merge=false`).
+    Authoritative,
+    /// Constraint slot LUB-merging with the existing binding (Java
+    /// `merge=true`).
+    Constraint,
+}
+
+/// Skeleton port of Java's
+/// `org.finos.legend.pure.m3.compiler.postprocessing.inference.TypeInferenceContext`.
+///
+/// **Today**: a single-frame wrapper around [`GenericBindings`] with
+/// stack-frame metadata (`parent`, `scope`, `tops`) and a
+/// `register*`-shaped API. **Not yet wired** as the inner carrier of
+/// `infer_generic_bindings` — Step 3d of the plan does that. This
+/// commit lands the structure so subsequent steps have a stable home
+/// for the merge-aware register semantics, the lambda-body second-
+/// pass, and the strict-mode arg-type checks.
+///
+/// Java fields mirrored:
+/// - `id` — sequential identifier; useful for the
+///   `TypeInferenceObserver` trace.
+/// - `parent` — pointer to the enclosing context. Recursive generic
+///   functions like `getAllTypeGeneralisations` rely on the parent
+///   chain to resolve a type parameter that's bound in an outer
+///   call.
+/// - `scope` — the M3 element being processed (function, class).
+///   Surfaces in error messages.
+/// - `bindings` — the current frame's `(types, mults)` map pair. Two
+///   per-state Java fields (`ahead`, `ahead_consumed`) are *not*
+///   ported yet — they cover the deferred-lambda-body case and land
+///   together with [`crate::inference::lambda::LambdaParamFiller`]
+///   (Step 3e).
+/// - `tops` — set of type-parameter names that are *top-level* in
+///   this context (declared on the M3 element being processed). A
+///   `Generic(name)` whose name is in `tops` MUST stay generic
+///   through `make_concrete` — substituting it would conflate
+///   distinct outer-scope parameters with bindings collected at this
+///   call site.
+///
+/// The struct deliberately uses owned values (no `Rc`/`Weak`) until
+/// Step 3d shows whether shared ownership is required. Most call
+/// sites in our pipeline are single-threaded and tree-structured, so
+/// `Box<...>` for the parent link should suffice.
+#[allow(dead_code)] // wired in Step 3d
+#[derive(Debug, Clone, Default)]
+pub struct TypeInferenceContext {
+    /// Sequential id (cheap diagnostic + observer trace anchor).
+    pub id: u32,
+    /// The element being processed — surfaces in error messages.
+    pub scope: Option<ElementId>,
+    /// Set of type-parameter names declared on this scope's element.
+    /// `make_concrete` does not substitute these; they are the
+    /// surrounding generic's own parameters.
+    pub tops: HashSet<SmolStr>,
+    /// The current frame's bindings.
+    pub bindings: GenericBindings,
+    /// Enclosing context, if any. Recursive generic functions look up
+    /// unresolved bindings here (Java's
+    /// `find_parent_for_operation`).
+    pub parent: Option<Box<TypeInferenceContext>>,
+}
+
+#[allow(dead_code)] // wired in Step 3d
+impl TypeInferenceContext {
+    /// Construct a fresh top-level context for `scope` with the given
+    /// top-level type-parameter names.
+    #[must_use]
+    pub fn root(scope: Option<ElementId>, tops: HashSet<SmolStr>) -> Self {
+        Self {
+            id: 0,
+            scope,
+            tops,
+            bindings: GenericBindings::default(),
+            parent: None,
+        }
+    }
+
+    /// Push a child frame onto the stack. The returned context's
+    /// `parent` points at the previous one. Java analog:
+    /// `TypeInferenceContext.addStateForCollectionElement` and the
+    /// new-state cases in `FunctionExpressionProcessor`.
+    #[must_use]
+    pub fn enter_child(self, scope: Option<ElementId>, tops: HashSet<SmolStr>) -> Self {
+        let next_id = self.id + 1;
+        Self {
+            id: next_id,
+            scope,
+            tops,
+            bindings: GenericBindings::default(),
+            parent: Some(Box::new(self)),
+        }
+    }
+
+    /// Register a type-variable binding with the given mode.
+    ///
+    /// **Authoritative**: a fresh binding is inserted; an existing
+    /// one is REPLACED (mirrors Java's `merge=false` branch's late
+    /// "non-concrete + concrete → propagate upward" rule).
+    ///
+    /// **Constraint**: a fresh binding is inserted; an existing one
+    /// LUB-merges with the new value via
+    /// `crate::resolve::bind_type`'s existing rule. This is what
+    /// `bind_type` currently does unconditionally.
+    ///
+    /// Today both modes delegate to `bind_type` — Step 3d will split
+    /// out the authoritative path properly. Surfacing the API now
+    /// lets call sites declare their intent ahead of the algorithm
+    /// change.
+    pub fn register_type(
+        &mut self,
+        name: &SmolStr,
+        value: TypeExpr,
+        mode: RegisterMode,
+        model: &crate::model::PureModel,
+    ) {
+        match mode {
+            RegisterMode::Authoritative => {
+                self.bindings.ty.insert(name.clone(), value);
+            }
+            RegisterMode::Constraint => {
+                let template = TypeExpr::Generic(name.clone());
+                crate::resolve::bind_type(&template, &value, &mut self.bindings.ty, model);
+            }
+        }
+    }
+
+    /// Register a multiplicity-variable binding with the given mode.
+    pub fn register_mult(
+        &mut self,
+        name: &SmolStr,
+        value: Multiplicity,
+        mode: RegisterMode,
+    ) {
+        match mode {
+            RegisterMode::Authoritative => {
+                self.bindings.mult.insert(name.clone(), value);
+            }
+            RegisterMode::Constraint => {
+                use std::collections::hash_map::Entry;
+                match self.bindings.mult.entry(name.clone()) {
+                    Entry::Vacant(e) => {
+                        e.insert(value);
+                    }
+                    Entry::Occupied(mut e) => {
+                        let lub = crate::resolve::mult_lub(e.get(), &value);
+                        *e.get_mut() = lub;
+                    }
+                }
+            }
+        }
+    }
+
+    /// `true` when `name` is a top-level type parameter of this
+    /// context — meaning `make_concrete` should NOT substitute it.
+    /// Java's `TypeInferenceContext.isTop`.
+    #[must_use]
+    pub fn is_top(&self, name: &SmolStr) -> bool {
+        self.tops.contains(name)
+    }
+
+    /// Walk up the parent chain looking for a binding for `name`.
+    /// Returns `None` if no ancestor has bound it. Java's
+    /// `find_parent_for_operation` shape, simplified.
+    #[must_use]
+    pub fn lookup_type_in_parents(&self, name: &SmolStr) -> Option<&TypeExpr> {
+        let mut cur = self.parent.as_deref();
+        while let Some(ctx) = cur {
+            if let Some(v) = ctx.bindings.ty.get(name) {
+                return Some(v);
+            }
+            cur = ctx.parent.as_deref();
+        }
+        None
+    }
+
+    /// Walk up the parent chain looking for a multiplicity binding.
+    #[must_use]
+    pub fn lookup_mult_in_parents(&self, name: &SmolStr) -> Option<&Multiplicity> {
+        let mut cur = self.parent.as_deref();
+        while let Some(ctx) = cur {
+            if let Some(v) = ctx.bindings.mult.get(name) {
+                return Some(v);
+            }
+            cur = ctx.parent.as_deref();
+        }
+        None
     }
 }
