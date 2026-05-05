@@ -105,12 +105,14 @@ struct InferCtx<'a> {
     /// `TypeInference.java:87-89`. Seeded at `infer_function_body`
     /// entry by walking the enclosing fn's parameter types + return
     /// type for `Generic(_)` references.
+    #[allow(dead_code)] // wired in Step 3g (strict-mode flag)
     type_params_in_scope: std::collections::HashSet<SmolStr>,
     /// Multiplicity-parameter names declared on the enclosing
     /// function (`Variable(name)` shapes appearing in params/return).
     /// Same role as `type_params_in_scope` for the multiplicity side
     /// — `TypeInference.java:102` ("multiplicity parameter X was not
     /// resolved") only fires for genuine top-level unboundeds.
+    #[allow(dead_code)] // wired in Step 3g (strict-mode flag)
     mult_params_in_scope: std::collections::HashSet<SmolStr>,
 }
 
