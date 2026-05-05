@@ -175,6 +175,30 @@ pub enum CompilationErrorKind {
         /// Names of the parameters that could not be inferred.
         names: Vec<SmolStr>,
     },
+    /// A generic type parameter declared in a function's signature
+    /// (e.g. `T` in `eval<T>(...)`) was not bound from any call-site
+    /// argument. After dispatch + binding, the substituted return
+    /// type still contained `Generic(T)`. Java-parity:
+    /// `TypeInference.java:87-89` ("The type parameter X was not
+    /// resolved").
+    UnresolvedTypeParameter {
+        /// Name of the function whose call site triggered the error.
+        function: SmolStr,
+        /// Name of the unresolved generic type parameter.
+        parameter: SmolStr,
+    },
+    /// A generic multiplicity parameter declared in a function's
+    /// signature (e.g. `m` in `f<T|m>(...)`) was not bound from any
+    /// call-site argument. After dispatch + binding, the substituted
+    /// return multiplicity still contained `Variable(m)`. Java-parity:
+    /// `TypeInference.java:102` ("The multiplicity parameter X was
+    /// not resolved").
+    UnresolvedMultiplicityParameter {
+        /// Name of the function whose call site triggered the error.
+        function: SmolStr,
+        /// Name of the unresolved generic multiplicity parameter.
+        parameter: SmolStr,
+    },
     /// A reference targets a packageable element whose home repo is not
     /// in the use-site repo's declared dependencies. Java-parity:
     /// `VisibilityValidation.throwRepoVisibilityException`.

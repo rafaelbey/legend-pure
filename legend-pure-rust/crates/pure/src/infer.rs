@@ -97,6 +97,21 @@ struct InferCtx<'a> {
     scopes: Vec<Scope>,
     /// Errors accumulator (used in Phase B for type mismatch errors).
     errors: &'a mut Vec<CompilationError>,
+    /// Type-parameter names declared on the enclosing function. A
+    /// `Generic(name)` whose `name` is in this set is *in scope*, not
+    /// unbound — it's a transitive generic from the outer signature
+    /// and must not surface as `UnresolvedTypeParameter`. Mirrors
+    /// Java's `TypeInferenceContext.getParent() == null` guard at
+    /// `TypeInference.java:87-89`. Seeded at `infer_function_body`
+    /// entry by walking the enclosing fn's parameter types + return
+    /// type for `Generic(_)` references.
+    type_params_in_scope: std::collections::HashSet<SmolStr>,
+    /// Multiplicity-parameter names declared on the enclosing
+    /// function (`Variable(name)` shapes appearing in params/return).
+    /// Same role as `type_params_in_scope` for the multiplicity side
+    /// — `TypeInference.java:102` ("multiplicity parameter X was not
+    /// resolved") only fires for genuine top-level unboundeds.
+    mult_params_in_scope: std::collections::HashSet<SmolStr>,
 }
 
 impl InferCtx<'_> {
@@ -155,14 +170,91 @@ pub fn infer_function_body(
     errors: &mut Vec<CompilationError>,
 ) {
     let root_scope = Scope::from_params(params);
+    let mut type_params_in_scope = std::collections::HashSet::new();
+    let mut mult_params_in_scope = std::collections::HashSet::new();
+    for p in params {
+        harvest_in_scope_generics(
+            &p.type_expr,
+            &p.multiplicity,
+            &mut type_params_in_scope,
+            &mut mult_params_in_scope,
+        );
+    }
     let mut ctx = InferCtx {
         model,
         scopes: vec![root_scope],
         errors,
+        type_params_in_scope,
+        mult_params_in_scope,
     };
 
     for expr in body.iter_mut() {
         infer_expr(&mut ctx, expr);
+    }
+}
+
+/// Walk a parameter's type+multiplicity expressions and record every
+/// `Generic(name)` and `Variable(name)` that appears, treating those
+/// names as in-scope for the enclosing function's body. Used to seed
+/// `InferCtx::type_params_in_scope` and `mult_params_in_scope` so the
+/// post-dispatch unresolved-generic check (Java parity
+/// `TypeInference.java:87-102`) doesn't fire on transitive generics.
+fn harvest_in_scope_generics(
+    ty: &TypeExpr,
+    mult: &Multiplicity,
+    types: &mut std::collections::HashSet<SmolStr>,
+    mults: &mut std::collections::HashSet<SmolStr>,
+) {
+    walk_type_for_generics(ty, types, mults);
+    if let Multiplicity::Variable(name) = mult {
+        mults.insert(name.clone());
+    }
+}
+
+fn walk_type_for_generics(
+    ty: &TypeExpr,
+    types: &mut std::collections::HashSet<SmolStr>,
+    mults: &mut std::collections::HashSet<SmolStr>,
+) {
+    match ty {
+        TypeExpr::Generic(name) => {
+            types.insert(name.clone());
+        }
+        TypeExpr::Named { type_arguments, multiplicity_arguments, .. } => {
+            for ta in type_arguments {
+                walk_type_for_generics(ta, types, mults);
+            }
+            for ma in multiplicity_arguments {
+                if let Multiplicity::Variable(name) = ma {
+                    mults.insert(name.clone());
+                }
+            }
+        }
+        TypeExpr::FunctionType { parameters, return_type, return_multiplicity } => {
+            for (p, m) in parameters {
+                walk_type_for_generics(p, types, mults);
+                if let Multiplicity::Variable(name) = m {
+                    mults.insert(name.clone());
+                }
+            }
+            walk_type_for_generics(return_type, types, mults);
+            if let Multiplicity::Variable(name) = return_multiplicity {
+                mults.insert(name.clone());
+            }
+        }
+        TypeExpr::AlgebraUnion(a, b) => {
+            walk_type_for_generics(a, types, mults);
+            walk_type_for_generics(b, types, mults);
+        }
+        TypeExpr::Relation(cols) => {
+            for c in cols {
+                walk_type_for_generics(&c.type_expr, types, mults);
+                if let Multiplicity::Variable(name) = &c.multiplicity {
+                    mults.insert(name.clone());
+                }
+            }
+        }
+        TypeExpr::Unresolved => {}
     }
 }
 
@@ -807,6 +899,24 @@ fn infer_function_call(
         // `Named{V_resolved}[*]` here.
         let type_expr = bindings.make_concrete_type(&f.return_type);
         let multiplicity = bindings.make_concrete_mult(&f.return_multiplicity);
+
+        // **Java parity intentionally LENIENT here.** Java's
+        // "type parameter X was not resolved" error
+        // (`TypeInference.java:87-89`) is gated on
+        // `typeInferenceContext.getParent() == null` — it only fires
+        // at the outermost processing context. Every call inside a
+        // function body has a parent context, so the check stays
+        // silent there even when the substituted return retains a
+        // `Generic(T)`. Locks current behaviour with the platform
+        // PCT corpus, which constantly threads `<Z|y>` parameters
+        // through nested `eval` calls.
+        //
+        // A *strict-mode* divergence (covered by tests
+        // `tic_unbound_top_level_t_errors`,
+        // `tic_unbound_multiplicity_errors`,
+        // `tic_eval_wrong_arg_strict_errors`) is a separate item;
+        // see plan Step 3g + the `inference::` module's open work.
+
         return Some(ResolvedType {
             type_expr,
             multiplicity,

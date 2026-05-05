@@ -185,9 +185,13 @@ function test::pctRunner<Z|y>(
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "Pending Step 3f (UnresolvedTypeParameter diagnostic at \
-            `TypeInference.java:87-89` site). Currently we silently \
-            substitute Any."]
+#[ignore = "STRICT-MODE DIVERGENCE (not Java parity). Java's \
+            `TypeInference.java:87-89` is gated on `getParent() == null` — \
+            it fires only at the outermost processing context, never at \
+            nested call sites inside a function body. To make this test \
+            green we'd flip the check on as a strict-mode opt-in (Step 3g). \
+            Java itself silently substitutes `Generic(T)` and lets it \
+            propagate, matching our current default behaviour."]
 fn tic_unbound_top_level_t_errors() {
     // The function body uses `someFn`, whose signature has T but no
     // arg position can supply T at this call site (everything is
@@ -217,8 +221,10 @@ function test::caller(): Any[1] {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "Pending Step 3f (UnresolvedMultiplicityParameter diagnostic, \
-            symmetric to test 6)."]
+#[ignore = "STRICT-MODE DIVERGENCE (not Java parity). Symmetric to \
+            `tic_unbound_top_level_t_errors`: Java is silent at nested \
+            call sites; strict mode would flip it on. See `Step 3g` of \
+            the plan."]
 fn tic_unbound_multiplicity_errors() {
     let source = r#"
 ###Pure
