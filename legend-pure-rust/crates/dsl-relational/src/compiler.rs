@@ -1193,6 +1193,33 @@ fn validate_relational_class_mappings(
                             });
                         }
                     }
+                    // A5b (RelationalInstanceSetImplementationValidator
+                    // parity): an Otherwise embedded body must declare
+                    // at least one inner property mapping line — Java
+                    // errors with "Invalid Otherwise mapping found:
+                    // '<prop>' property has no embedded mappings
+                    // defined, please use a property mapping with
+                    // Join instead."
+                    if em.mapping_lines.is_empty() {
+                        errors.push(CompilationError {
+                            message: format!(
+                                "Invalid Otherwise mapping for property '{}' in class mapping '{}': \
+                                 the embedded body has no property mappings; use a property mapping \
+                                 with a Join instead",
+                                np.property.value, reg.class_mapping_id,
+                            ),
+                            source_info: em.source_info.clone(),
+                            kind: CompilationErrorKind::InvalidAssociation {
+                                name: SmolStr::new(format!(
+                                    "Otherwise '{}' in '{}'",
+                                    np.property.value, reg.class_mapping_id
+                                )),
+                                reason: SmolStr::new(
+                                    "embedded body cannot be empty when Otherwise is present",
+                                ),
+                            },
+                        });
+                    }
                 }
             }
         };
