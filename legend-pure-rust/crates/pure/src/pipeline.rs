@@ -1471,9 +1471,17 @@ fn build_import_scope(
 #[allow(clippy::too_many_lines)] // dispatch table over every Element variant
 fn create_shell(element: &ast::Element) -> Element {
     match element {
-        ast::Element::Class(_) => Element::Class(Class {
-            type_parameters: vec![],
-            multiplicity_parameters: Vec::new(),
+        // Pass-1 shells carry every *syntactic* field already known
+        // from the AST — type/multiplicity-parameter arity, and
+        // Profile stereotype/tag name lists. This is what lets the
+        // resolver-eager checks (`resolve_type_ref`'s type-arg
+        // completeness, `resolve_stereotypes`'s name-existence)
+        // fire correctly during Pass 2a regardless of topological
+        // hydration order: the *target* of the reference already
+        // advertises its declared arity / name list at Pass 1.
+        ast::Element::Class(c) => Element::Class(Class {
+            type_parameters: c.type_parameters.clone(),
+            multiplicity_parameters: c.multiplicity_parameters.clone(),
             type_variable_parameters: vec![],
             super_types: vec![],
             properties: vec![],
@@ -1551,9 +1559,9 @@ fn create_shell(element: &ast::Element) -> Element {
                 tagged_values: vec![],
             })
         }
-        ast::Element::Profile(_) => Element::Profile(Profile {
-            stereotypes: vec![],
-            tags: vec![],
+        ast::Element::Profile(p) => Element::Profile(Profile {
+            stereotypes: p.stereotype_names.iter().map(|s| s.value.clone()).collect(),
+            tags: p.tag_names.iter().map(|t| t.value.clone()).collect(),
         }),
         ast::Element::Association(_) => Element::Association(Association {
             properties: vec![],
@@ -1601,12 +1609,23 @@ fn hydrate_element_signature(
 ) -> Element {
     match element {
         ast::Element::Class(class_def) => {
-            // Super types
+            let class_name = class_def.name.value.clone();
+            let class_si = class_def.source_info.clone();
+
+            // Super types — resolve, then validate immediately.
             let super_types: Vec<TypeExpr> = class_def
                 .super_types
                 .iter()
                 .filter_map(|type_ref| resolve::resolve_type_ref(type_ref, ctx, errors))
                 .collect();
+            crate::validate::validate_super_types(
+                ctx.model,
+                element_id,
+                &class_name,
+                &super_types,
+                &class_si,
+                errors,
+            );
 
             // Properties — signatures only. Default-value bodies are lowered
             // in Pass 2b (`pass_define_class_bodies`) once all function
@@ -1614,21 +1633,41 @@ fn hydrate_element_signature(
             // operator/function call inside a default value sees real
             // return types instead of Pass 1 placeholders.
             let properties = lower_property_signatures(&class_def.properties, ctx, errors);
+            crate::validate::validate_duplicate_properties(&class_name, &properties, errors);
 
             // Qualified properties — signatures only; bodies deferred to
             // Pass 2b for the same reason.
             let qualified_properties =
                 lower_qualified_property_signatures(&class_def.qualified_properties, ctx, errors);
 
+            // Access-level Step A: `<<access.X>>` on a class
+            // property / qualified property is rejected.
+            crate::validate::validate_no_access_on_properties(
+                ctx.model,
+                element_id,
+                &properties,
+                &qualified_properties,
+                errors,
+            );
+
             // Constraints — fully deferred to Pass 2b. Constraint expressions
             // are body-shape: they call functions that may not yet have
             // hydrated signatures during Pass 2a topo-ordered hydration.
             let constraints = Vec::new();
 
-            // Annotations
+            // Annotations — resolver folds in profile-kind + name
+            // existence checks. After hydration, also flag multiple
+            // `<<access.X>>` stereotypes on the class itself.
             let stereotypes = resolve::resolve_stereotypes(&class_def.stereotypes, ctx, errors);
             let tagged_values =
                 resolve::resolve_tagged_values(&class_def.tagged_values, ctx, errors);
+            crate::validate::validate_no_multiple_access_levels(
+                ctx.model,
+                element_id,
+                &stereotypes,
+                &class_si,
+                errors,
+            );
 
             let type_variable_parameters =
                 lower_type_variable_parameters(&class_def.type_variable_parameters, ctx, errors);
@@ -1648,6 +1687,13 @@ fn hydrate_element_signature(
             let stereotypes = resolve::resolve_stereotypes(&enum_def.stereotypes, ctx, errors);
             let tagged_values =
                 resolve::resolve_tagged_values(&enum_def.tagged_values, ctx, errors);
+            crate::validate::validate_no_multiple_access_levels(
+                ctx.model,
+                element_id,
+                &stereotypes,
+                &enum_def.source_info,
+                errors,
+            );
 
             Element::Enumeration(Enumeration {
                 values: enum_def
@@ -1689,6 +1735,13 @@ fn hydrate_element_signature(
             let stereotypes = resolve::resolve_stereotypes(&func_def.stereotypes, ctx, errors);
             let tagged_values =
                 resolve::resolve_tagged_values(&func_def.tagged_values, ctx, errors);
+            crate::validate::validate_no_multiple_access_levels(
+                ctx.model,
+                element_id,
+                &stereotypes,
+                &func_def.source_info,
+                errors,
+            );
 
             Element::Function(Function {
                 function_name: func_def.name.value.clone(),
@@ -1702,14 +1755,40 @@ fn hydrate_element_signature(
             })
         }
         ast::Element::Association(assoc_def) => {
+            let assoc_name = assoc_def.name.value.clone();
+            let assoc_si = assoc_def.source_info.clone();
+
             // Properties / QPs — signatures only; default values & QP bodies
             // deferred to Pass 2b (see Class arm above for rationale).
             let properties = lower_property_signatures(&assoc_def.properties, ctx, errors);
+            crate::validate::validate_association(
+                ctx.model,
+                &assoc_name,
+                &properties,
+                &assoc_si,
+                errors,
+            );
+
             let qualified_properties =
                 lower_qualified_property_signatures(&assoc_def.qualified_properties, ctx, errors);
+            crate::validate::validate_no_access_on_properties(
+                ctx.model,
+                element_id,
+                &properties,
+                &qualified_properties,
+                errors,
+            );
+
             let stereotypes = resolve::resolve_stereotypes(&assoc_def.stereotypes, ctx, errors);
             let tagged_values =
                 resolve::resolve_tagged_values(&assoc_def.tagged_values, ctx, errors);
+            crate::validate::validate_no_multiple_access_levels(
+                ctx.model,
+                element_id,
+                &stereotypes,
+                &assoc_si,
+                errors,
+            );
 
             Element::Association(Association {
                 properties,
@@ -1731,6 +1810,13 @@ fn hydrate_element_signature(
             let stereotypes = resolve::resolve_stereotypes(&func_def.stereotypes, ctx, errors);
             let tagged_values =
                 resolve::resolve_tagged_values(&func_def.tagged_values, ctx, errors);
+            crate::validate::validate_no_multiple_access_levels(
+                ctx.model,
+                element_id,
+                &stereotypes,
+                &func_def.source_info,
+                errors,
+            );
 
             Element::Function(Function {
                 function_name: func_def.name.value.clone(),

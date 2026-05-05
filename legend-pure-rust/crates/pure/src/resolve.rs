@@ -226,6 +226,39 @@ pub(crate) fn resolve_type_ref(
         .map(lower_const_value)
         .collect();
 
+    // Eager generic-class type-arg completeness check: `Pair[1]`
+    // (where `Pair<U, V>` declares two type parameters) and any
+    // other generic class referenced without `<…>` is malformed —
+    // with no `T` bindings every downstream check (dispatch,
+    // body-return, generic substitution) silently degrades. Sound
+    // here because `create_shell` (Pass 1) populates
+    // `Class.type_parameters` from the AST, so the target's declared
+    // arity is visible regardless of topological hydration order.
+    // Recursion on `type_arguments` above covers nested refs.
+    if let Some(Element::Class(class)) = ctx.model.try_get_element(element_id) {
+        let declared = class.type_parameters.len();
+        let supplied = type_arguments.len();
+        if declared > 0 && supplied != declared {
+            let class_fqn = SmolStr::new(
+                crate::purem::fqn_path::element_fqn_path(ctx.model, element_id).join("::"),
+            );
+            errors.push(CompilationError {
+                message: format!(
+                    "Reference to generic class '{class_fqn}' is missing required \
+                     type arguments (expected {declared}, got {supplied})"
+                ),
+                source_info: type_ref.source_info.clone(),
+                kind: CompilationErrorKind::InvalidAnnotation {
+                    element_name: class_fqn.clone(),
+                    reason: SmolStr::new(format!(
+                        "missing type arguments on '{class_fqn}': expected \
+                         {declared}, got {supplied}"
+                    )),
+                },
+            });
+        }
+    }
+
     Some(TypeExpr::Named {
         element: element_id,
         type_arguments,
@@ -693,6 +726,51 @@ pub(crate) fn resolve_stereotypes(
                 });
                 return None;
             }
+            // Eager kind + name-existence check. Sound here because
+            // `create_shell` (Pass 1) populates `Profile.stereotypes`
+            // from the AST, so the referenced profile's declared
+            // stereotype list is visible regardless of topological
+            // hydration order.
+            match ctx.model.try_get_element(profile_id) {
+                Some(Element::Profile(profile)) => {
+                    if !profile.stereotypes.iter().any(|name| name == &s.value) {
+                        let profile_stereos: Vec<&str> =
+                            profile.stereotypes.iter().map(SmolStr::as_str).collect();
+                        errors.push(CompilationError {
+                            message: format!(
+                                "Stereotype '{}' does not exist in the Profile. \
+                                 Available stereotypes: [{}]",
+                                s.value,
+                                profile_stereos.join(", ")
+                            ),
+                            source_info: s.source_info.clone(),
+                            kind: CompilationErrorKind::InvalidAnnotation {
+                                element_name: ctx.model.element_name(profile_id).clone(),
+                                reason: SmolStr::new(format!(
+                                    "stereotype '{}' not found",
+                                    s.value
+                                )),
+                            },
+                        });
+                    }
+                }
+                Some(_) => {
+                    let target_name = ctx.model.element_name(profile_id).clone();
+                    errors.push(CompilationError {
+                        message: format!(
+                            "Stereotype target '{target_name}' is not a Profile"
+                        ),
+                        source_info: s.source_info.clone(),
+                        kind: CompilationErrorKind::InvalidAnnotation {
+                            element_name: target_name.clone(),
+                            reason: SmolStr::new(format!(
+                                "'{target_name}' is not a Profile"
+                            )),
+                        },
+                    });
+                }
+                None => {} // Resolution error already reported upstream.
+            }
             Some(StereotypeRef {
                 profile: profile_id,
                 value: s.value.clone(),
@@ -729,6 +807,49 @@ pub(crate) fn resolve_tagged_values(
                     },
                 });
                 return None;
+            }
+            // Eager kind + tag-name check — symmetric with
+            // `resolve_stereotypes` and sound for the same reason
+            // (Pass-1 shell populates `Profile.tags`).
+            match ctx.model.try_get_element(profile_id) {
+                Some(Element::Profile(profile)) => {
+                    if !profile.tags.iter().any(|name| name == &tv.tag.value) {
+                        let profile_tags: Vec<&str> =
+                            profile.tags.iter().map(SmolStr::as_str).collect();
+                        errors.push(CompilationError {
+                            message: format!(
+                                "Tag '{}' does not exist in the Profile. \
+                                 Available tags: [{}]",
+                                tv.tag.value,
+                                profile_tags.join(", ")
+                            ),
+                            source_info: tv.source_info.clone(),
+                            kind: CompilationErrorKind::InvalidAnnotation {
+                                element_name: ctx.model.element_name(profile_id).clone(),
+                                reason: SmolStr::new(format!(
+                                    "tag '{}' not found",
+                                    tv.tag.value
+                                )),
+                            },
+                        });
+                    }
+                }
+                Some(_) => {
+                    let target_name = ctx.model.element_name(profile_id).clone();
+                    errors.push(CompilationError {
+                        message: format!(
+                            "Tag target '{target_name}' is not a Profile"
+                        ),
+                        source_info: tv.source_info.clone(),
+                        kind: CompilationErrorKind::InvalidAnnotation {
+                            element_name: target_name.clone(),
+                            reason: SmolStr::new(format!(
+                                "'{target_name}' is not a Profile"
+                            )),
+                        },
+                    });
+                }
+                None => {} // Resolution error already reported upstream.
             }
             Some(TaggedValueRef {
                 profile: profile_id,

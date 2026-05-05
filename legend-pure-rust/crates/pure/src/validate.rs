@@ -12,28 +12,62 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Post-freeze validation pass on the compiled `PureModel`.
+//! Validation entry points.
 //!
-//! This module implements **Pass 3** of the compiler pipeline — a read-only
-//! scan over the frozen model that detects semantic errors not caught during
-//! resolution (Pass 2). Because the model is frozen, this pass is safe to
-//! run in parallel (future optimization).
+//! Java-parity placement: validators run **next to the data they
+//! inspect**. Adding a new element kind means adding match arms in
+//! `create_shell` (syntactic shell) and `hydrate_element_signature`
+//! (where each validator is called inline) — no batch passes to
+//! wire up.
+//!
+//! Three seams, each as eager as soundness allows:
+//!
+//! * **Resolver-eager** (`crate::resolve`):
+//!   - Generic-class type-arg completeness fires inside
+//!     `resolve_type_ref` the moment a `TypeExpr::Named` is built.
+//!   - Stereotype/tag profile-kind + name-existence fires inside
+//!     `resolve_stereotypes` / `resolve_tagged_values` the moment
+//!     the profile is resolved. Sound because `create_shell` (Pass 1)
+//!     populates `Profile.stereotypes` / `tags` from the AST, so the
+//!     referenced profile's name list is visible regardless of
+//!     topological hydration order.
+//!
+//! * **Per-element-eager** (called directly from
+//!   [`crate::pipeline::hydrate_element_signature`]):
+//!   `validate_super_types`, `validate_association`,
+//!   `validate_duplicate_properties`,
+//!   `validate_no_multiple_access_levels`, and
+//!   `validate_no_access_on_properties`. Each fires the moment its
+//!   inputs (the slice of super-types, properties, stereotypes, …)
+//!   are built, before the parent `Element` value is constructed.
+//!
+//! * **Cross-chunk** ([`validate`], called from
+//!   [`crate::pipeline::finalize_model`]): repo-boundary visibility
+//!   and the `<<access.private/protected>>` use-site walker. The
+//!   only validators whose inputs *genuinely* span multiple chunks.
+//!
+//! `.purem` chunks are trusted at merge time — the schema_hash in
+//! the purem header (`crate::purem::header`) is the coarse
+//! compatibility gate. Semantic drift inside an already-shipped
+//! slice is the intentional trade-off (the "Java .class at runtime"
+//! analogy).
 //!
 //! # Checks Performed
 //!
-//! | Check | Error Kind |
-//! |-------|------------|
-//! | Association must have exactly 2 properties | `InvalidAssociation` |
-//! | Association properties must reference a Class | `InvalidAssociation` |
-//! | Supertype must be a Class (not Enum, Function, etc.) | `InvalidSuperType` |
-//! | No self-inheritance | `InvalidSuperType` |
-//! | Stereotype must exist in the referenced Profile | `InvalidAnnotation` |
-//! | Tag must exist in the referenced Profile | `InvalidAnnotation` |
-//! | Annotation target must be a Profile element | `InvalidAnnotation` |
-//! | No duplicate property names within a class | `DuplicateProperty` |
-//! | `<<access.private/protected>>` respected across packages | `NotAccessible` |
-//! | At most one `<<access.X>>` stereotype per element | `MultipleAccessLevels` |
-//! | Access stereotypes only on classes/functions | `AccessLevelNotAllowed` |
+//! | Check | Seam | Error Kind |
+//! |-------|------|------------|
+//! | Generic class ref supplies its required type arguments | resolver | `InvalidAnnotation` |
+//! | Stereotype / tag target is a Profile element | resolver | `InvalidAnnotation` |
+//! | Stereotype / tag name exists in the referenced Profile | resolver | `InvalidAnnotation` |
+//! | Association must have exactly 2 properties | per-element | `InvalidAssociation` |
+//! | Association properties must reference a Class | per-element | `InvalidAssociation` |
+//! | Supertype must be a Class (not Enum, Function, etc.) | per-element | `InvalidSuperType` |
+//! | No self-inheritance | per-element | `InvalidSuperType` |
+//! | No duplicate property names within a class | per-element | `DuplicateProperty` |
+//! | At most one `<<access.X>>` stereotype per element | per-element | `MultipleAccessLevels` |
+//! | Access stereotypes only on classes/functions | per-element | `AccessLevelNotAllowed` |
+//! | `<<access.private/protected>>` respected across packages | cross-chunk | `NotAccessible` |
+//! | Cross-repo refs respect declared dependencies | cross-chunk | `NotVisible` |
 
 use std::collections::{HashMap, HashSet};
 
@@ -41,130 +75,35 @@ use legend_pure_parser_ast::SourceInfo;
 use smol_str::SmolStr;
 
 use crate::access::{self, AccessLevel, render_package_fqn, render_target_descriptor};
-use crate::annotations::{StereotypeRef, TaggedValueRef};
+use crate::annotations::StereotypeRef;
 use crate::error::{CompilationError, CompilationErrorKind};
 use crate::ids::{ElementId, PackageId};
 use crate::model::{Element, PureModel};
 use crate::nodes::association::Association;
 use crate::nodes::class::{Class, Constraint, Property, QualifiedProperty};
 use crate::nodes::function::Function;
-use crate::nodes::profile::Profile;
 use crate::types::{ExprKind, FunctionCallData, TypeExpr, ValueSpec};
 
-/// Validates the frozen `PureModel` and returns any errors found.
+/// Cross-chunk validation: visibility + access-level use-site walk.
 ///
-/// This is Pass 3 of the compiler pipeline. It runs after
-/// `rebuild_derived_indexes()` and is purely read-only.
+/// Called from [`crate::pipeline::finalize_model`] once on the merged
+/// model. Per-element checks fire eagerly inside
+/// [`crate::pipeline::hydrate_element_signature`] via the piecewise
+/// helpers below — this entry point keeps only validators whose
+/// inputs span multiple chunks.
 #[tracing::instrument(level = "info", name = "validate", skip_all)]
-// todo why we need most of these - should not the resolve do these like resolve_tagged_values and resolve_stereotypes rather than doing it here?
 pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
     let mut errors = Vec::new();
 
-    // Repo-boundary visibility runs across every non-bootstrap chunk —
-    // cross-repo refs are inherently a multi-chunk concern.
+    // Repo-boundary visibility — cross-repo refs are inherently a
+    // multi-chunk concern; only resolvable on the merged model.
     errors.extend(validate_repo_visibility(model));
 
-    // Access-level (`<<access.private/protected>>`) enforcement —
-    // package-scoped, also a multi-chunk concern.
+    // Access-level (`<<access.private/protected>>`) use-site walk:
+    // walks every `ElementId` reference inside each non-bootstrap
+    // element and checks the *target's* access level. Targets
+    // routinely live in earlier chunks, so this stays cross-chunk.
     errors.extend(validate_access_levels(model));
-
-    // Validate every non-bootstrap chunk. Bootstrap (0) is
-    // compiler-trusted. Earlier this routine validated only
-    // `chunks.last()` on the assumption that prior chunks had been
-    // validated when they were "last" — but `repo::load` runs
-    // `finalize_model` only once, after every repo has been merged,
-    // so anything but the final repo's elements would silently skip
-    // per-element checks (stereotype-name correctness, duplicates,
-    // bad supertypes, etc.). The LSP, which loads many repos and
-    // surfaces diagnostics interactively, exposed the gap.
-    for chunk in model.chunks.iter().skip(1) {
-        for (local_idx, element) in chunk.elements.iter() {
-            let id = ElementId::InstanceId {
-                chunk_id: chunk.chunk_id,
-                local_idx,
-            };
-            let node = chunk.nodes.get(local_idx);
-
-            match element {
-                Element::Class(class) => {
-                    validate_super_types(model, id, node.name.clone(), class, &mut errors);
-                    validate_duplicate_properties(&node.name, &class.properties, &mut errors);
-                    validate_class_type_args(model, &node.name, class, &mut errors);
-                    validate_stereotypes(
-                        model,
-                        &node.name,
-                        &class.stereotypes,
-                        &node.source_info,
-                        &mut errors,
-                    );
-                    validate_tagged_values(
-                        model,
-                        &node.name,
-                        &class.tagged_values,
-                        &node.source_info,
-                        &mut errors,
-                    );
-                }
-                Element::Association(assoc) => {
-                    validate_association(model, &node.name, assoc, &node.source_info, &mut errors);
-                    validate_association_type_args(model, &node.name, assoc, &mut errors);
-                    validate_stereotypes(
-                        model,
-                        &node.name,
-                        &assoc.stereotypes,
-                        &node.source_info,
-                        &mut errors,
-                    );
-                    validate_tagged_values(
-                        model,
-                        &node.name,
-                        &assoc.tagged_values,
-                        &node.source_info,
-                        &mut errors,
-                    );
-                }
-                Element::Enumeration(enum_def) => {
-                    validate_stereotypes(
-                        model,
-                        &node.name,
-                        &enum_def.stereotypes,
-                        &node.source_info,
-                        &mut errors,
-                    );
-                    validate_tagged_values(
-                        model,
-                        &node.name,
-                        &enum_def.tagged_values,
-                        &node.source_info,
-                        &mut errors,
-                    );
-                }
-                Element::Function(func) => {
-                    validate_function_type_args(model, &node.name, func, &node.source_info, &mut errors);
-                    validate_stereotypes(
-                        model,
-                        &node.name,
-                        &func.stereotypes,
-                        &node.source_info,
-                        &mut errors,
-                    );
-                    validate_tagged_values(
-                        model,
-                        &node.name,
-                        &func.tagged_values,
-                        &node.source_info,
-                        &mut errors,
-                    );
-                }
-                Element::Measure(_)
-                | Element::Unit(_)
-                | Element::Profile(_)
-                | Element::PrimitiveType(_)
-                | Element::PackageableMultiplicity(_)
-                | Element::Package(_) => {}
-            }
-        }
-    }
 
     errors
 }
@@ -173,18 +112,21 @@ pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
 // Association Validation
 // ---------------------------------------------------------------------------
 
-/// Validates an association:
+/// Validates an association's hydrated property list. Inlined into
+/// [`crate::pipeline::hydrate_element_signature`] right after the
+/// association's `properties` are lowered.
+///
 /// - Must have exactly 2 properties
 /// - Each property must reference a Class
 #[allow(clippy::collapsible_if)]
-fn validate_association(
+pub(crate) fn validate_association(
     model: &PureModel,
     assoc_name: &SmolStr,
-    assoc: &crate::nodes::association::Association,
-    source_info: &legend_pure_parser_ast::SourceInfo,
+    properties: &[Property],
+    source_info: &SourceInfo,
     errors: &mut Vec<CompilationError>,
 ) {
-    let prop_count = assoc.properties.len();
+    let prop_count = properties.len();
     if prop_count != 2 {
         errors.push(CompilationError {
             message: format!(
@@ -198,17 +140,17 @@ fn validate_association(
         });
     }
 
-    // Validate each property references a Class
-    for prop in &assoc.properties {
+    // Each property must reference a Class. Sound at hydration time:
+    // the kind discriminant (`Element::Class(_)` vs others) is set
+    // at `create_shell` (Pass 1), so this check works regardless of
+    // topological hydration order.
+    for prop in properties {
         if let TypeExpr::Named {
             element: target_id, ..
         } = &prop.type_expr
         {
             if let Some(target_element) = model.try_get_element(*target_id) {
                 if !matches!(target_element, Element::Class(_)) {
-                    // `element_name` (not `get_node`) — type-position
-                    // targets shouldn't be Packages in well-formed
-                    // input, but use the total accessor as defence.
                     let target_name = model.element_name(*target_id).clone();
                     errors.push(CompilationError {
                         message: format!(
@@ -232,223 +174,25 @@ fn validate_association(
 }
 
 // ---------------------------------------------------------------------------
-// Type-Argument Completeness Validation
-// ---------------------------------------------------------------------------
-
-/// Walks a `TypeExpr`, recursing through nested type arguments, and
-/// pushes an `InvalidAnnotation` error for every reference to a
-/// generic class that doesn't supply its required type-arguments.
-///
-/// `Pair[1]` (where `Pair<U, V>` declares two type parameters) and
-/// any other `Class<T1, …>` reference written without `<…>` is
-/// malformed: with no `T` bindings, every downstream check
-/// (dispatch, body-return, generic substitution) silently degrades
-/// — failing here surfaces the upstream cause instead of the
-/// noisy downstream symptoms.
-///
-/// `position_label` describes where the type appears (parameter,
-/// return, property, etc.) so the error message points the user
-/// at the right declaration site.
-fn check_type_args_complete(
-    model: &PureModel,
-    type_expr: &TypeExpr,
-    position_label: &str,
-    owner_name: &SmolStr,
-    source_info: &legend_pure_parser_ast::SourceInfo,
-    errors: &mut Vec<CompilationError>,
-) {
-    match type_expr {
-        TypeExpr::Named {
-            element,
-            type_arguments,
-            ..
-        } => {
-            if let Some(Element::Class(class)) = model.try_get_element(*element) {
-                let declared = class.type_parameters.len();
-                let supplied = type_arguments.len();
-                if declared > 0 && supplied != declared {
-                    let class_fqn = SmolStr::new(
-                        crate::purem::fqn_path::element_fqn_path(model, *element).join("::"),
-                    );
-                    errors.push(CompilationError {
-                        message: format!(
-                            "{position_label} of '{owner_name}' references generic class \
-                             '{class_fqn}' without its required type arguments \
-                             (expected {declared}, got {supplied})"
-                        ),
-                        source_info: source_info.clone(),
-                        kind: CompilationErrorKind::InvalidAnnotation {
-                            element_name: owner_name.clone(),
-                            reason: SmolStr::new(format!(
-                                "missing type arguments on '{class_fqn}': expected \
-                                 {declared}, got {supplied}"
-                            )),
-                        },
-                    });
-                }
-            }
-            // Recurse into type-argument expressions — `List<Pair>`
-            // (without args on `Pair`) must also error.
-            for ta in type_arguments {
-                check_type_args_complete(model, ta, position_label, owner_name, source_info, errors);
-            }
-        }
-        TypeExpr::FunctionType {
-            parameters,
-            return_type,
-            ..
-        } => {
-            for (pty, _) in parameters {
-                check_type_args_complete(model, pty, position_label, owner_name, source_info, errors);
-            }
-            check_type_args_complete(model, return_type, position_label, owner_name, source_info, errors);
-        }
-        TypeExpr::AlgebraUnion(a, b) => {
-            check_type_args_complete(model, a, position_label, owner_name, source_info, errors);
-            check_type_args_complete(model, b, position_label, owner_name, source_info, errors);
-        }
-        TypeExpr::Generic(_) | TypeExpr::Relation(_) | TypeExpr::Unresolved => {}
-    }
-}
-
-/// Walks every type-position reference on a `Class` (super-types,
-/// property types, qualified-property param/return types) and
-/// flags missing type arguments on generic class references.
-fn validate_class_type_args(
-    model: &PureModel,
-    class_name: &SmolStr,
-    class: &Class,
-    errors: &mut Vec<CompilationError>,
-) {
-    for st in &class.super_types {
-        // Super-types lack their own span; use the class's element
-        // header span via the property's first member or fall back
-        // to a synthetic span.
-        let si = class
-            .properties
-            .first()
-            .map(|p| p.source_info.clone())
-            .unwrap_or_else(|| {
-                legend_pure_parser_ast::SourceInfo::new("<unknown>", 0, 0, 0, 0)
-            });
-        check_type_args_complete(model, st, "super-type", class_name, &si, errors);
-    }
-    for prop in &class.properties {
-        check_type_args_complete(
-            model,
-            &prop.type_expr,
-            &format!("property '{}'", prop.name),
-            class_name,
-            &prop.source_info,
-            errors,
-        );
-    }
-    for qp in &class.qualified_properties {
-        for param in qp.parameters.iter() {
-            check_type_args_complete(
-                model,
-                &param.type_expr,
-                &format!("qualified-property '{}' parameter '{}'", qp.name, param.name),
-                class_name,
-                &param.source_info,
-                errors,
-            );
-        }
-        check_type_args_complete(
-            model,
-            &qp.return_type,
-            &format!("qualified-property '{}' return type", qp.name),
-            class_name,
-            &qp.source_info,
-            errors,
-        );
-    }
-}
-
-/// Walks property types on an Association.
-fn validate_association_type_args(
-    model: &PureModel,
-    assoc_name: &SmolStr,
-    assoc: &crate::nodes::association::Association,
-    errors: &mut Vec<CompilationError>,
-) {
-    for prop in &assoc.properties {
-        check_type_args_complete(
-            model,
-            &prop.type_expr,
-            &format!("property '{}'", prop.name),
-            assoc_name,
-            &prop.source_info,
-            errors,
-        );
-    }
-    for qp in &assoc.qualified_properties {
-        for param in qp.parameters.iter() {
-            check_type_args_complete(
-                model,
-                &param.type_expr,
-                &format!("qualified-property '{}' parameter '{}'", qp.name, param.name),
-                assoc_name,
-                &param.source_info,
-                errors,
-            );
-        }
-        check_type_args_complete(
-            model,
-            &qp.return_type,
-            &format!("qualified-property '{}' return type", qp.name),
-            assoc_name,
-            &qp.source_info,
-            errors,
-        );
-    }
-}
-
-/// Walks parameter and return types on a Function.
-fn validate_function_type_args(
-    model: &PureModel,
-    fn_name: &SmolStr,
-    func: &Function,
-    fn_source_info: &legend_pure_parser_ast::SourceInfo,
-    errors: &mut Vec<CompilationError>,
-) {
-    for param in func.parameters.iter() {
-        check_type_args_complete(
-            model,
-            &param.type_expr,
-            &format!("parameter '{}'", param.name),
-            fn_name,
-            &param.source_info,
-            errors,
-        );
-    }
-    check_type_args_complete(
-        model,
-        &func.return_type,
-        "return type",
-        fn_name,
-        fn_source_info,
-        errors,
-    );
-}
-
-// ---------------------------------------------------------------------------
 // Super-type Validation
 // ---------------------------------------------------------------------------
 
-/// Validates class super-types:
+/// Validates class super-types. Inlined into
+/// [`crate::pipeline::hydrate_element_signature`] right after the
+/// class's `super_types` are resolved.
+///
 /// - Must reference a Class (not Enum, Function, etc.)
 /// - Must not be self-referential
 #[allow(clippy::collapsible_if)]
-fn validate_super_types(
+pub(crate) fn validate_super_types(
     model: &PureModel,
     class_id: ElementId,
-    class_name: SmolStr,
-    class: &crate::nodes::class::Class,
+    class_name: &SmolStr,
+    super_types: &[TypeExpr],
+    source_info: &SourceInfo,
     errors: &mut Vec<CompilationError>,
 ) {
-    let class_node = model.get_node(class_id);
-    for super_type in &class.super_types {
+    for super_type in super_types {
         if let TypeExpr::Named {
             element: super_id, ..
         } = super_type
@@ -457,7 +201,7 @@ fn validate_super_types(
             if *super_id == class_id {
                 errors.push(CompilationError {
                     message: format!("Class '{class_name}' cannot extend itself"),
-                    source_info: class_node.source_info.clone(),
+                    source_info: source_info.clone(),
                     kind: CompilationErrorKind::InvalidSuperType {
                         class_name: class_name.clone(),
                         super_name: class_name.clone(),
@@ -466,18 +210,21 @@ fn validate_super_types(
                 continue;
             }
 
-            // Kind check: super must be a Class
+            // Kind check: super must be a Class. Sound at hydration
+            // time because the kind discriminant is set at
+            // `create_shell` (Pass 1), so even a not-yet-fully-
+            // hydrated supertype reports its variant correctly.
             if let Some(super_element) = model.try_get_element(*super_id) {
                 if !matches!(super_element, Element::Class(_)) {
-                    let super_name = model.get_node(*super_id).name.clone();
+                    let super_name = model.element_name(*super_id).clone();
                     errors.push(CompilationError {
                         message: format!(
                             "Class '{class_name}' cannot extend '{super_name}': \
                              only Classes can be extended"
                         ),
-                        source_info: class_node.source_info.clone(),
+                        source_info: source_info.clone(),
                         kind: CompilationErrorKind::InvalidSuperType {
-                            class_name,
+                            class_name: class_name.clone(),
                             super_name,
                         },
                     });
@@ -489,137 +236,83 @@ fn validate_super_types(
 }
 
 // ---------------------------------------------------------------------------
-// Annotation Validation
+// Access-Level Declaration Shape (Step A) — piecewise
 // ---------------------------------------------------------------------------
 
-/// Validates stereotype references:
-/// - Target element must be a Profile
-/// - The stereotype name must exist in the Profile
-fn validate_stereotypes(
+/// Step A — multiple `<<access.X>>` stereotypes on a single element.
+/// Inlined into [`crate::pipeline::hydrate_element_signature`] right
+/// after the element's `stereotypes` are resolved. No-op when the
+/// access profile isn't registered (unit-test fixtures without
+/// bootstrap).
+pub(crate) fn validate_no_multiple_access_levels(
     model: &PureModel,
-    element_name: &SmolStr,
+    id: ElementId,
     stereotypes: &[StereotypeRef],
-    source_info: &legend_pure_parser_ast::SourceInfo,
+    source_info: &SourceInfo,
     errors: &mut Vec<CompilationError>,
 ) {
-    for stereo in stereotypes {
-        match model.try_get_element(stereo.profile) {
-            Some(Element::Profile(profile)) => {
-                validate_stereotype_exists(
-                    element_name,
-                    &stereo.value,
-                    profile,
-                    source_info,
-                    errors,
-                );
-            }
-            Some(_) => {
-                // `element_name` is total over both ElementId kinds —
-                // the resolver only feeds Profile or genuine non-Profile
-                // elements through to here (Package fallbacks are
-                // intercepted in `resolve_stereotypes`), but
-                // `element_name` is the safer accessor either way.
-                let target_name = model.element_name(stereo.profile).clone();
-                errors.push(CompilationError {
-                    message: format!(
-                        "Stereotype target '{target_name}' on '{element_name}' is not a Profile"
-                    ),
-                    source_info: source_info.clone(),
-                    kind: CompilationErrorKind::InvalidAnnotation {
-                        element_name: element_name.clone(),
-                        reason: SmolStr::new(format!("'{target_name}' is not a Profile")),
-                    },
-                });
-            }
-            None => {} // Resolution error already reported
-        }
-    }
-}
-
-/// Checks that a stereotype name actually exists in the profile.
-fn validate_stereotype_exists(
-    element_name: &SmolStr,
-    stereotype_name: &SmolStr,
-    profile: &Profile,
-    source_info: &legend_pure_parser_ast::SourceInfo,
-    errors: &mut Vec<CompilationError>,
-) {
-    if !profile.stereotypes.iter().any(|s| s == stereotype_name) {
-        let profile_stereos: Vec<&str> = profile.stereotypes.iter().map(SmolStr::as_str).collect();
+    let Some(access_profile) = access::access_profile_id(model) else {
+        return;
+    };
+    let count = stereotypes
+        .iter()
+        .filter(|s| s.profile == access_profile)
+        .count();
+    if count > 1 {
+        let descriptor = render_target_descriptor(model, id);
         errors.push(CompilationError {
-            message: format!(
-                "Stereotype '{stereotype_name}' does not exist in the Profile. \
-                 Available stereotypes: [{}]",
-                profile_stereos.join(", ")
-            ),
+            message: format!("{descriptor} has multiple access level stereotypes"),
             source_info: source_info.clone(),
-            kind: CompilationErrorKind::InvalidAnnotation {
-                element_name: element_name.clone(),
-                reason: SmolStr::new(format!("stereotype '{stereotype_name}' not found")),
+            kind: CompilationErrorKind::MultipleAccessLevels {
+                element_fqn: descriptor,
             },
         });
     }
 }
 
-/// Validates tagged value references:
-/// - Target element must be a Profile
-/// - The tag name must exist in the Profile
-fn validate_tagged_values(
+/// Step A — `<<access.X>>` on a class/association property or
+/// qualified property is rejected (only classes and functions may
+/// carry access levels). Inlined into
+/// [`crate::pipeline::hydrate_element_signature`] right after
+/// `properties` + `qualified_properties` are lowered.
+pub(crate) fn validate_no_access_on_properties(
     model: &PureModel,
-    element_name: &SmolStr,
-    tagged_values: &[TaggedValueRef],
-    source_info: &legend_pure_parser_ast::SourceInfo,
+    owner_id: ElementId,
+    properties: &[Property],
+    qualified_properties: &[QualifiedProperty],
     errors: &mut Vec<CompilationError>,
 ) {
-    for tv in tagged_values {
-        match model.try_get_element(tv.profile) {
-            Some(Element::Profile(profile)) => {
-                validate_tag_exists(element_name, &tv.tag, profile, source_info, errors);
-            }
-            Some(_) => {
-                // `element_name` (not `get_node`) — same Package-fallback
-                // safety as `validate_stereotypes`; the resolver
-                // intercepts Package targets, but the safer accessor
-                // costs nothing.
-                let target_name = model.element_name(tv.profile).clone();
-                errors.push(CompilationError {
-                    message: format!(
-                        "Tag target '{target_name}' on '{element_name}' is not a Profile"
+    let Some(access_profile) = access::access_profile_id(model) else {
+        return;
+    };
+    let owner_fqn = render_target_descriptor(model, owner_id);
+    for prop in properties {
+        if prop.stereotypes.iter().any(|s| s.profile == access_profile) {
+            errors.push(CompilationError {
+                message: "Only classes and functions may have an access level".to_string(),
+                source_info: prop.source_info.clone(),
+                kind: CompilationErrorKind::AccessLevelNotAllowed {
+                    element_fqn: SmolStr::new(format!("{owner_fqn}::{}", prop.name)),
+                    reason: SmolStr::new_static(
+                        "Only classes and functions may have an access level",
                     ),
-                    source_info: source_info.clone(),
-                    kind: CompilationErrorKind::InvalidAnnotation {
-                        element_name: element_name.clone(),
-                        reason: SmolStr::new(format!("'{target_name}' is not a Profile")),
-                    },
-                });
-            }
-            None => {} // Resolution error already reported
+                },
+            });
         }
     }
-}
-
-/// Checks that a tag name actually exists in the profile.
-fn validate_tag_exists(
-    element_name: &SmolStr,
-    tag_name: &SmolStr,
-    profile: &Profile,
-    source_info: &legend_pure_parser_ast::SourceInfo,
-    errors: &mut Vec<CompilationError>,
-) {
-    if !profile.tags.iter().any(|t| t == tag_name) {
-        let profile_tags: Vec<&str> = profile.tags.iter().map(SmolStr::as_str).collect();
-        errors.push(CompilationError {
-            message: format!(
-                "Tag '{tag_name}' does not exist in the Profile. \
-                 Available tags: [{}]",
-                profile_tags.join(", ")
-            ),
-            source_info: source_info.clone(),
-            kind: CompilationErrorKind::InvalidAnnotation {
-                element_name: element_name.clone(),
-                reason: SmolStr::new(format!("tag '{tag_name}' not found")),
-            },
-        });
+    for qp in qualified_properties {
+        if qp.stereotypes.iter().any(|s| s.profile == access_profile) {
+            errors.push(CompilationError {
+                message: "Only classes and functions may have an access level".to_string(),
+                source_info: qp.source_info.clone(),
+                kind: CompilationErrorKind::AccessLevelNotAllowed {
+                    element_fqn: SmolStr::new(format!("{owner_fqn}::{}", qp.name)),
+                    reason: SmolStr::new_static(
+                        "Only classes and functions may have an access level",
+                    ),
+                },
+            });
+        }
     }
 }
 
@@ -628,9 +321,11 @@ fn validate_tag_exists(
 // ---------------------------------------------------------------------------
 
 /// Checks that no two properties in a class share the same name.
-fn validate_duplicate_properties(
+/// Inlined into [`crate::pipeline::hydrate_element_signature`] right
+/// after `properties` are lowered.
+pub(crate) fn validate_duplicate_properties(
     class_name: &SmolStr,
-    properties: &[crate::nodes::class::Property],
+    properties: &[Property],
     errors: &mut Vec<CompilationError>,
 ) {
     let mut seen = HashSet::new();
@@ -703,18 +398,23 @@ fn validate_repo_visibility(model: &PureModel) -> Vec<CompilationError> {
 // Access-Level Validation (private / protected)
 // ---------------------------------------------------------------------------
 
-/// Walks every element in every non-bootstrap chunk and emits Java-parity
-/// `NotAccessible` / `MultipleAccessLevels` / `AccessLevelNotAllowed`
-/// diagnostics for `<<access.private>>` / `<<access.protected>>`
-/// stereotypes that are misused or violated.
+/// Use-site walker (Step B) for `<<access.private/protected>>`.
+/// Walks every `ElementId` reference inside each non-bootstrap
+/// element and emits `NotAccessible` against the *target's* effective
+/// access level. Targets routinely live in earlier chunks, so this
+/// stays in the cross-chunk Pass-3 entry. The declaration-shape
+/// checks (Step A) are inline in
+/// [`crate::pipeline::hydrate_element_signature`] via
+/// [`validate_no_multiple_access_levels`] and
+/// [`validate_no_access_on_properties`].
 ///
-/// No-op when `meta::pure::profiles::access` isn't registered (so the
-/// existing tests that build a model from raw sources without bootstrap
-/// stay green).
+/// No-op when `meta::pure::profiles::access` isn't registered (so
+/// the existing tests that build a model from raw sources without
+/// bootstrap stay green).
 fn validate_access_levels(model: &PureModel) -> Vec<CompilationError> {
     let mut errors = Vec::new();
 
-    let Some(access_profile) = access::access_profile_id(model) else {
+    if access::access_profile_id(model).is_none() {
         return errors;
     };
 
@@ -725,17 +425,9 @@ fn validate_access_levels(model: &PureModel) -> Vec<CompilationError> {
     // Skip chunk 0 (M3 bootstrap is compiler-trusted).
     for chunk in model.chunks.iter().skip(1) {
         for (local_idx, element) in chunk.elements.iter() {
-            let id = ElementId::InstanceId {
-                chunk_id: chunk.chunk_id,
-                local_idx,
-            };
             let node = chunk.nodes.get(local_idx);
-
-            // Step A — declaration-time checks.
-            check_declaration_access(model, id, element, node, access_profile, &mut errors);
-
-            // Step B — usage checks. Use-site package = this top-level
-            // element's parent package.
+            // Step B — usage checks. Use-site package = this
+            // top-level element's parent package.
             let use_site_pkg = node.parent_package;
             walk_element_for_access(
                 model,
@@ -749,103 +441,6 @@ fn validate_access_levels(model: &PureModel) -> Vec<CompilationError> {
     }
 
     errors
-}
-
-/// Step A. Reject elements whose access stereotypes are invalid in
-/// shape: more than one access stereotype, or an access stereotype on
-/// something that isn't a class or function (the property cases live on
-/// `Class` / `Association` / `QualifiedProperty`).
-fn check_declaration_access(
-    model: &PureModel,
-    id: ElementId,
-    element: &Element,
-    node: &crate::model::ElementNode,
-    access_profile: ElementId,
-    errors: &mut Vec<CompilationError>,
-) {
-    // Multiple-access-level check — applies to any element kind that
-    // carries stereotypes (the `access_level_stereotypes` helper returns
-    // an empty iterator for the rest, so this is a no-op for them).
-    let count = access::access_level_stereotypes(element, access_profile).count();
-    if count > 1 {
-        let descriptor = render_target_descriptor(model, id);
-        errors.push(CompilationError {
-            message: format!("{descriptor} has multiple access level stereotypes"),
-            source_info: node.source_info.clone(),
-            kind: CompilationErrorKind::MultipleAccessLevels {
-                element_fqn: descriptor,
-            },
-        });
-    }
-
-    // "Only classes and functions may have an access level" — properties
-    // (declared on Class or Association) and qualified properties carry
-    // their own stereotype lists.
-    match element {
-        Element::Class(class) => {
-            check_no_access_on_properties(
-                model,
-                id,
-                &class.properties,
-                &class.qualified_properties,
-                access_profile,
-                errors,
-            );
-        }
-        Element::Association(assoc) => {
-            check_no_access_on_properties(
-                model,
-                id,
-                &assoc.properties,
-                &assoc.qualified_properties,
-                access_profile,
-                errors,
-            );
-        }
-        // Functions, classes (themselves), enums, and the rest are
-        // either allowed (function/class) or never carry access stereos
-        // (validated by the parser front-end).
-        _ => {}
-    }
-}
-
-fn check_no_access_on_properties(
-    model: &PureModel,
-    owner_id: ElementId,
-    properties: &[Property],
-    qualified_properties: &[QualifiedProperty],
-    access_profile: ElementId,
-    errors: &mut Vec<CompilationError>,
-) {
-    let owner_fqn = render_target_descriptor(model, owner_id);
-    for prop in properties {
-        if prop.stereotypes.iter().any(|s| s.profile == access_profile) {
-            errors.push(CompilationError {
-                message: "Only classes and functions may have an access level".to_string(),
-                source_info: prop.source_info.clone(),
-                kind: CompilationErrorKind::AccessLevelNotAllowed {
-                    element_fqn: SmolStr::new(format!("{owner_fqn}::{}", prop.name)),
-                    reason: SmolStr::new_static(
-                        "Only classes and functions may have an access level",
-                    ),
-                },
-            });
-        }
-    }
-    for qp in qualified_properties {
-        if qp.stereotypes.iter().any(|s| s.profile == access_profile) {
-            errors.push(CompilationError {
-                message: "Only classes and functions may have an access level".to_string(),
-                source_info: qp.source_info.clone(),
-                kind: CompilationErrorKind::AccessLevelNotAllowed {
-                    element_fqn: SmolStr::new(format!("{owner_fqn}::{}", qp.name)),
-                    reason: SmolStr::new_static(
-                        "Only classes and functions may have an access level",
-                    ),
-                },
-            });
-        }
-    }
 }
 
 /// Step B. Walk every reference inside `element` and check each one
@@ -1195,154 +790,9 @@ mod tests {
         ));
     }
 
-    /// `validate_stereotypes` used to call `model.get_node(profile)`
-    /// without checking the ID kind, which panics for `Package` IDs
-    /// (`get_node` rejects them by design — packages live in a
-    /// separate arena). The fix is a switch to `model.element_name`,
-    /// which is total over both kinds.
-    ///
-    /// In production the resolver intercepts Package fallbacks for
-    /// stereotype profiles before they reach this validator (see
-    /// `resolve::resolve_stereotypes`), but feeding one in directly
-    /// still has to be panic-free.
-    #[test]
-    fn validate_stereotypes_handles_package_profile_without_panic() {
-        let mut model = PureModel::new();
-        // Create `test` as a child package of root. This is exactly
-        // the shape the resolver used to produce when falling back
-        // from `<<test.Foo>>` to package `test`.
-        let pkg_id: PackageId =
-            model.get_or_create_package(&[SmolStr::new("test")]);
-
-        let stereos = vec![StereotypeRef {
-            profile: ElementId::Package(pkg_id),
-            value: SmolStr::new("Foo"),
-        }];
-        let element_name = SmolStr::new("someElement");
-        let src = legend_pure_parser_ast::SourceInfo::new("t.pure", 1, 1, 1, 1);
-
-        let mut errors = Vec::new();
-        // Must not panic.
-        validate_stereotypes(&model, &element_name, &stereos, &src, &mut errors);
-
-        // The validator's own diagnostic is the "not a Profile" form —
-        // the resolver-level filter is what suppresses double-reporting
-        // in the full pipeline; this unit test exercises the validator
-        // in isolation.
-        assert_eq!(errors.len(), 1);
-        assert!(matches!(
-            errors[0].kind,
-            CompilationErrorKind::InvalidAnnotation { .. }
-        ));
-        // Error message must reference the package's name (not panic
-        // by trying to reach into the chunk arena).
-        assert!(
-            errors[0].message.contains("test"),
-            "expected error message to mention the package name, got: {}",
-            errors[0].message
-        );
-    }
-
-    /// A reference to a generic class without supplying its required
-    /// type arguments must fail compilation. `function f(p: Pair[1])`
-    /// where `Pair<U,V>` declares two type parameters must error —
-    /// otherwise the type carries no anchoring for `U` / `V` and
-    /// every downstream check (dispatch, body-return, generic
-    /// substitution) silently degrades.
-    #[test]
-    fn validate_missing_type_arguments_on_generic_class_emits_error() {
-        use crate::ids::PackageId;
-        use crate::model::{Element as ModelElement, ElementNode, ModelChunk, PureModel};
-        use crate::nodes::class::Class;
-        use crate::nodes::function::Function;
-        use crate::types::{Multiplicity, Parameter, TypeExpr};
-
-        let mut model = PureModel::new();
-        let pkg: PackageId = model.get_or_create_package(&[SmolStr::new("test")]);
-        // chunk 0 is the bootstrap chunk skipped by `validate()`; push
-        // an empty placeholder so the user-content chunk lives at id 1.
-        model.chunks.push(ModelChunk::new(0));
-        let chunk_id: u16 = 1;
-        let mut chunk = ModelChunk::new(chunk_id);
-        let si = legend_pure_parser_ast::SourceInfo::new("t.pure", 1, 1, 1, 1);
-
-        // Generic class `Pair<U, V>`.
-        let pair_idx = chunk.alloc_element(
-            ElementNode {
-                name: SmolStr::new("Pair"),
-                source_info: si.clone(),
-                name_source_info: si.clone(),
-                parent_package: pkg,
-            },
-            ModelElement::Class(Class {
-                type_parameters: vec![SmolStr::new("U"), SmolStr::new("V")],
-                multiplicity_parameters: Vec::new(),
-                type_variable_parameters: Vec::new(),
-                super_types: Vec::new(),
-                properties: Vec::new(),
-                qualified_properties: Vec::new(),
-                constraints: Vec::new(),
-                stereotypes: Vec::new(),
-                tagged_values: Vec::new(),
-            }),
-        );
-        let pair_id = ElementId::InstanceId {
-            chunk_id,
-            local_idx: pair_idx,
-        };
-
-        // Function `f(p: Pair[1]): Pair[1]` — both param and return
-        // reference Pair *without* the required <U, V>.
-        let pair_te_no_args = TypeExpr::Named {
-            element: pair_id,
-            type_arguments: Vec::new(),
-            multiplicity_arguments: Vec::new(),
-            value_arguments: Vec::new(),
-        };
-        let fn_idx = chunk.alloc_element(
-            ElementNode {
-                name: SmolStr::new("f_Pair_1__Pair_1_"),
-                source_info: si.clone(),
-                name_source_info: si.clone(),
-                parent_package: pkg,
-            },
-            ModelElement::Function(Function {
-                function_name: SmolStr::new("f"),
-                is_native: false,
-                parameters: std::sync::Arc::from(vec![Parameter {
-                    name: SmolStr::new("p"),
-                    type_expr: pair_te_no_args.clone(),
-                    multiplicity: Multiplicity::PureOne,
-                    source_info: si.clone(),
-                }]),
-                return_type: pair_te_no_args,
-                return_multiplicity: Multiplicity::PureOne,
-                body: std::sync::Arc::from(Vec::new()),
-                stereotypes: Vec::new(),
-                tagged_values: Vec::new(),
-            }),
-        );
-        let fn_id = ElementId::InstanceId {
-            chunk_id,
-            local_idx: fn_idx,
-        };
-        model.chunks.push(chunk);
-        model.register_element(pkg, pair_id);
-        model.register_element(pkg, fn_id);
-
-        let errors = validate(&model);
-
-        // Both the parameter type AND the return type reference
-        // `Pair` without args — expect at least one error mentioning
-        // Pair / type arguments.
-        let arg_err = errors.iter().find(|e| {
-            let m = e.message.to_lowercase();
-            m.contains("pair") && (m.contains("type argument") || m.contains("type-argument"))
-        });
-        assert!(
-            arg_err.is_some(),
-            "expected a missing-type-argument error mentioning Pair, got: {:?}",
-            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
-        );
-    }
+    // The "stereotype-profile-as-package falls back without panic"
+    // and "missing type arguments on generic class" cases are now
+    // covered by the resolver folds (they fire at resolve time, not
+    // in `validate(model)`). End-to-end coverage lives in
+    // `tests/stereotype_resolution_tests.rs`.
 }
