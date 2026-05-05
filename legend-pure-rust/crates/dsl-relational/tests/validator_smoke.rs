@@ -794,6 +794,118 @@ mod stage9 {
             "expected extends-on-AssociationMapping error; got {errors:#?}"
         );
     }
+
+    // ---------------------------------------------------------------
+    // A8: extends rules on class mappings
+    // (Java: TestExtendGrammar.testExtendInvalidSetCannotBeSelf,
+    //        testExtendInvalidIdWithInclude)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn class_mapping_extending_itself_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (id INT PRIMARY KEY)
+            )
+
+            ###Pure
+            Class pkg::Person { id : Integer[1]; }
+
+            ###Mapping
+            Mapping pkg::M
+            (
+              pkg::Person[p_subclass] extends [p_subclass] : Relational
+              {
+                ~mainTable [pkg::db]t
+                (id : t.id)
+              }
+            )
+        "});
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                CompilationErrorKind::InvalidAssociation { reason, .. }
+                    if reason.as_str() == "class mapping extends itself"
+            )),
+            "expected extends-self error; got {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn class_mapping_extending_unknown_id_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (id INT PRIMARY KEY)
+            )
+
+            ###Pure
+            Class pkg::Person { id : Integer[1]; }
+
+            ###Mapping
+            Mapping pkg::M
+            (
+              pkg::Person[childMap] extends [doesNotExist] : Relational
+              {
+                ~mainTable [pkg::db]t
+                (id : t.id)
+              }
+            )
+        "});
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                CompilationErrorKind::UnresolvedElement { path }
+                    if path.as_str() == "doesNotExist"
+            )),
+            "expected extends-unknown-id error; got {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn class_mapping_extending_known_id_passes() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (id INT PRIMARY KEY)
+            )
+
+            ###Pure
+            Class pkg::Parent { id : Integer[1]; }
+            Class pkg::Child extends pkg::Parent {}
+
+            ###Mapping
+            Mapping pkg::M
+            (
+              *pkg::Parent[parentMap] : Relational
+              {
+                ~mainTable [pkg::db]t
+                (id : t.id)
+              }
+
+              pkg::Child[childMap] extends [parentMap] : Relational
+              {
+                (id : t.id)
+              }
+            )
+        "});
+        assert!(
+            errors.iter().all(|e| !matches!(
+                &e.kind,
+                CompilationErrorKind::InvalidAssociation { reason, .. }
+                    if reason.as_str().contains("extends itself")
+            ) && !matches!(
+                &e.kind,
+                CompilationErrorKind::UnresolvedElement { path }
+                    if path.as_str() == "parentMap"
+            )),
+            "expected clean extends; got {errors:#?}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
