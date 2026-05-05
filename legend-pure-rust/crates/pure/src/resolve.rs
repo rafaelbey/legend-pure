@@ -1992,15 +1992,12 @@ pub(crate) fn infer_multiplicity_from_valuespec(
 // Generic substitution (type variables + multiplicity variables)
 // ---------------------------------------------------------------------------
 
-/// Bindings from generic parameter names (`T`, `m`, …) to the concrete
-/// types/multiplicities inferred at a specific call site.
-#[derive(Default, Clone)]
-pub(crate) struct GenericBindings {
-    /// Type-variable bindings: `T` → `TypeExpr::Named { Class, … }`.
-    pub ty: HashMap<SmolStr, crate::types::TypeExpr>,
-    /// Multiplicity-variable bindings: `m` → `Multiplicity::PureOne`.
-    pub mult: HashMap<SmolStr, crate::types::Multiplicity>,
-}
+// `GenericBindings` lives in `crate::inference::context`. The
+// re-export here keeps the existing `crate::resolve::GenericBindings`
+// import path working while the substitution machinery migrates
+// gradually to the new module — see plan
+// `~/.claude/plans/do-we-have-enought-quiet-swing.md`.
+pub(crate) use crate::inference::GenericBindings;
 
 /// Walks `(params, args)` pairs and collects generic-variable bindings.
 ///

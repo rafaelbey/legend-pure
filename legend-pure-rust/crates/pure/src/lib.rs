@@ -53,6 +53,7 @@ pub mod extension;
 pub mod fqn;
 pub mod ids;
 pub mod infer;
+pub(crate) mod inference;
 pub mod island_lower;
 pub mod locate;
 pub(crate) mod lower;
