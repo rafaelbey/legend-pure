@@ -1276,6 +1276,246 @@ mod join_resolution {
         );
     }
 
+    // -----------------------------------------------------------------
+    // Phase A4 — RelationalAssociationImplementationValidator parity
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn association_with_well_formed_join_chain_passes() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table tradeT (id INT PRIMARY KEY, prodId INT)
+              Table prodT (id INT PRIMARY KEY)
+              Join tradeProd (tradeT.prodId = prodT.id)
+            )
+
+            ###Pure
+            Class pkg::Trade { id : Integer[1]; }
+            Class pkg::Product { id : Integer[1]; }
+            Association pkg::TradeProd
+            {
+              trade : pkg::Trade[1];
+              product : pkg::Product[1];
+            }
+
+            ###Mapping
+            Mapping pkg::M
+            (
+              pkg::Trade[tradeMap] : Relational
+              {
+                ~mainTable [pkg::db]tradeT
+                (id : tradeT.id)
+              }
+
+              pkg::Product[prodMap] : Relational
+              {
+                ~mainTable [pkg::db]prodT
+                (id : prodT.id)
+              }
+
+              pkg::TradeProd : Relational
+              {
+                AssociationMapping
+                (
+                  trade[prodMap, tradeMap] : [pkg::db]@tradeProd | tradeT.id,
+                  product[tradeMap, prodMap] : [pkg::db]@tradeProd | prodT.id
+                )
+              }
+            )
+        "});
+        let assoc_errs: Vec<_> = errors
+            .iter()
+            .filter(|e| match &e.kind {
+                CompilationErrorKind::InvalidAssociation { reason, .. } => {
+                    reason.as_str().contains("expected a join")
+                        || reason.as_str().contains("ends at")
+                        || reason.as_str().contains("no main table")
+                }
+                _ => false,
+            })
+            .collect();
+        assert!(
+            assoc_errs.is_empty(),
+            "expected clean association mapping; got {assoc_errs:#?}"
+        );
+    }
+
+    #[test]
+    fn association_line_without_join_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table tradeT (id INT PRIMARY KEY, prodId INT)
+              Table prodT (id INT PRIMARY KEY)
+            )
+
+            ###Pure
+            Class pkg::Trade { id : Integer[1]; }
+            Class pkg::Product { id : Integer[1]; }
+            Association pkg::TradeProd
+            {
+              trade : pkg::Trade[1];
+              product : pkg::Product[1];
+            }
+
+            ###Mapping
+            Mapping pkg::M
+            (
+              pkg::Trade[tradeMap] : Relational
+              {
+                ~mainTable [pkg::db]tradeT
+                (id : tradeT.id)
+              }
+
+              pkg::Product[prodMap] : Relational
+              {
+                ~mainTable [pkg::db]prodT
+                (id : prodT.id)
+              }
+
+              pkg::TradeProd : Relational
+              {
+                AssociationMapping
+                (
+                  trade[prodMap, tradeMap] : [pkg::db]tradeT.id,
+                  product[tradeMap, prodMap] : [pkg::db]prodT.id
+                )
+              }
+            )
+        "});
+        // Both lines lack a join sequence — Java emits "expected a join"
+        // for each.
+        let count = errors
+            .iter()
+            .filter(|e| {
+                matches!(
+                    &e.kind,
+                    CompilationErrorKind::InvalidAssociation { reason, .. }
+                        if reason.as_str() == "expected a join"
+                )
+            })
+            .count();
+        assert_eq!(
+            count, 2,
+            "expected two 'expected a join' errors; got {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn association_unknown_source_id_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table tradeT (id INT PRIMARY KEY, prodId INT)
+              Table prodT (id INT PRIMARY KEY)
+              Join tradeProd (tradeT.prodId = prodT.id)
+            )
+
+            ###Pure
+            Class pkg::Trade { id : Integer[1]; }
+            Class pkg::Product { id : Integer[1]; }
+            Association pkg::TradeProd
+            {
+              trade : pkg::Trade[1];
+              product : pkg::Product[1];
+            }
+
+            ###Mapping
+            Mapping pkg::M
+            (
+              pkg::Trade[tradeMap] : Relational
+              {
+                ~mainTable [pkg::db]tradeT
+                (id : tradeT.id)
+              }
+
+              pkg::Product[prodMap] : Relational
+              {
+                ~mainTable [pkg::db]prodT
+                (id : prodT.id)
+              }
+
+              pkg::TradeProd : Relational
+              {
+                AssociationMapping
+                (
+                  trade[noSuchMap, tradeMap] : [pkg::db]@tradeProd | tradeT.id,
+                  product[tradeMap, prodMap] : [pkg::db]@tradeProd | prodT.id
+                )
+              }
+            )
+        "});
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                CompilationErrorKind::UnresolvedElement { path } if path.as_str() == "noSuchMap"
+            )),
+            "expected unresolved-source-id error; got {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn association_chain_disconnected_from_target_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table tradeT (id INT PRIMARY KEY, fk INT)
+              Table prodT (id INT PRIMARY KEY)
+              Table other (id INT PRIMARY KEY, fk INT)
+              Join tradeOther (tradeT.fk = other.id)
+            )
+
+            ###Pure
+            Class pkg::Trade { id : Integer[1]; }
+            Class pkg::Product { id : Integer[1]; }
+            Association pkg::TradeProd
+            {
+              trade : pkg::Trade[1];
+              product : pkg::Product[1];
+            }
+
+            ###Mapping
+            Mapping pkg::M
+            (
+              pkg::Trade[tradeMap] : Relational
+              {
+                ~mainTable [pkg::db]tradeT
+                (id : tradeT.id)
+              }
+
+              pkg::Product[prodMap] : Relational
+              {
+                ~mainTable [pkg::db]prodT
+                (id : prodT.id)
+              }
+
+              pkg::TradeProd : Relational
+              {
+                AssociationMapping
+                (
+                  trade[prodMap, tradeMap] : [pkg::db]@tradeOther | other.id,
+                  product[tradeMap, prodMap] : [pkg::db]@tradeOther | other.id
+                )
+              }
+            )
+        "});
+        // Chain ends at 'other' but target main_table is 'prodT' /
+        // 'tradeT'; one or both lines should error.
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                CompilationErrorKind::InvalidAssociation { reason, .. }
+                    if reason.as_str().contains("ends at")
+            )),
+            "expected target-mismatch error; got {errors:#?}"
+        );
+    }
+
     #[test]
     fn class_mapping_scope_db_overrides_main_table_for_implicit_join() {
         let errors = run_validator_with_mapping(indoc! {r"

@@ -311,6 +311,11 @@ impl CompilerExtension for RelationalExtension {
         let resolved = self.resolved_databases.borrow();
         let resolved_cms = self.resolved_class_mappings.borrow();
         validate_join_tree_chains(&class_mappings, &resolved, &resolved_cms, ctx.errors);
+        // Phase A4: RelationalAssociationImplementationValidator
+        // parity — every property line on an AssociationMapping body
+        // must (a) reference a join sequence, and (b) form a chain
+        // from the source class mapping's main table to the target's.
+        validate_association_mapping_joins(&class_mappings, &resolved_cms, &resolved, ctx.errors);
     }
 }
 
@@ -2104,4 +2109,189 @@ fn walk_resolve_join_tables(
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// Phase A4 — RelationalAssociationImplementationValidator parity
+// ---------------------------------------------------------------------------
+
+/// For every AssociationMapping body (Java's
+/// `RelationalAssociationImplementation`), validate each property
+/// mapping line:
+///
+/// 1. The line's `[srcId, tgtId]` must each resolve to a registered
+///    class mapping in the same `Mapping` (E2 already enforces the
+///    arity-of-2; here we focus on identity).
+/// 2. Both source and target class mappings must declare an
+///    `effective_main_table` (own or inherited via `extends`).
+/// 3. The line's value must carry a join sequence (Java errors with
+///    "Mapping Error: expected a join" for bare-column / literal
+///    values on association lines).
+/// 4. The join chain must start at the source's main table and end
+///    at the target's main table — same connectivity check as A3'
+///    but anchored to a known source/target pair.
+fn validate_association_mapping_joins(
+    class_mappings: &[RegisteredRelationalClassMapping],
+    resolved_cms: &[crate::processor::ResolvedClassMapping],
+    resolved: &HashMap<SmolStr, crate::processor::ResolvedDatabase>,
+    errors: &mut Vec<CompilationError>,
+) {
+    // Build (mapping_fqn, class_mapping_id) → effective main table /
+    // primary db for fast source/target resolution.
+    let mut by_id: HashMap<(SmolStr, SmolStr), (Option<SmolStr>, Option<SmolStr>)> = HashMap::new();
+    for cm in resolved_cms {
+        by_id.insert(
+            (cm.mapping_fqn.clone(), cm.class_mapping_id.clone()),
+            (
+                cm.effective_main_table.clone(),
+                cm.effective_primary_database.clone(),
+            ),
+        );
+    }
+
+    for reg in class_mappings {
+        let Some(lines) = &reg.body.association_mapping else {
+            continue;
+        };
+
+        let owner = SmolStr::new(format!(
+            "AssociationMapping '{}'",
+            reg.class_mapping_id.as_str()
+        ));
+
+        for line in lines {
+            let (property_name, source_id, target_id, value, line_si) = match line {
+                SingleMappingLine::NonePlus(np) => (
+                    np.property.value.clone(),
+                    np.source_id.as_ref().map(|s| s.value.clone()),
+                    np.target_id.as_ref().map(|t| t.value.clone()),
+                    match &np.value {
+                        NonePlusMappingValue::Relational(rm) => Some(&rm.value),
+                        NonePlusMappingValue::Embedded(_) => None,
+                    },
+                    np.source_info.clone(),
+                ),
+                SingleMappingLine::Plus(p) => (
+                    p.property.value.clone(),
+                    None,
+                    None,
+                    Some(&p.mapping.value),
+                    p.source_info.clone(),
+                ),
+            };
+
+            // (1) Source / target ids resolve to class mappings.
+            let Some((source_table, source_db)) = source_id
+                .as_ref()
+                .and_then(|id| by_id.get(&(reg.mapping_fqn.clone(), id.clone())).cloned())
+            else {
+                if let Some(id) = &source_id {
+                    errors.push(CompilationError {
+                        message: format!(
+                            "{owner}: property '{property_name}' source set-implementation id \
+                             '{id}' does not match any class mapping in '{}'",
+                            reg.mapping_fqn
+                        ),
+                        source_info: line_si.clone(),
+                        kind: CompilationErrorKind::UnresolvedElement { path: id.clone() },
+                    });
+                }
+                continue;
+            };
+            let Some((target_table, target_db)) = target_id
+                .as_ref()
+                .and_then(|id| by_id.get(&(reg.mapping_fqn.clone(), id.clone())).cloned())
+            else {
+                if let Some(id) = &target_id {
+                    errors.push(CompilationError {
+                        message: format!(
+                            "{owner}: property '{property_name}' target set-implementation id \
+                             '{id}' does not match any class mapping in '{}'",
+                            reg.mapping_fqn
+                        ),
+                        source_info: line_si.clone(),
+                        kind: CompilationErrorKind::UnresolvedElement { path: id.clone() },
+                    });
+                }
+                continue;
+            };
+
+            // (2) Both class mappings must declare a main table.
+            let (Some(source_table), Some(source_db)) = (source_table, source_db) else {
+                errors.push(CompilationError {
+                    message: format!(
+                        "{owner}: property '{property_name}' source class mapping has no \
+                         resolvable main table"
+                    ),
+                    source_info: line_si.clone(),
+                    kind: CompilationErrorKind::InvalidAssociation {
+                        name: owner.clone(),
+                        reason: SmolStr::new("source class mapping has no main table"),
+                    },
+                });
+                continue;
+            };
+            let (Some(target_table), Some(_target_db)) = (target_table, target_db) else {
+                errors.push(CompilationError {
+                    message: format!(
+                        "{owner}: property '{property_name}' target class mapping has no \
+                         resolvable main table"
+                    ),
+                    source_info: line_si.clone(),
+                    kind: CompilationErrorKind::InvalidAssociation {
+                        name: owner.clone(),
+                        reason: SmolStr::new("target class mapping has no main table"),
+                    },
+                });
+                continue;
+            };
+
+            // (3) Line must carry a join sequence (Java's
+            // "Mapping Error: expected a join").
+            let Some(value) = value else {
+                errors.push(CompilationError {
+                    message: format!(
+                        "{owner}: property '{property_name}' must specify a join sequence \
+                         (Java parity: 'Mapping Error: expected a join')"
+                    ),
+                    source_info: line_si.clone(),
+                    kind: CompilationErrorKind::InvalidAssociation {
+                        name: owner.clone(),
+                        reason: SmolStr::new("expected a join"),
+                    },
+                });
+                continue;
+            };
+            let Some(seq) = &value.join else {
+                errors.push(CompilationError {
+                    message: format!(
+                        "{owner}: property '{property_name}' must specify a join sequence \
+                         (Java parity: 'Mapping Error: expected a join')"
+                    ),
+                    source_info: value.source_info.clone(),
+                    kind: CompilationErrorKind::InvalidAssociation {
+                        name: owner.clone(),
+                        reason: SmolStr::new("expected a join"),
+                    },
+                });
+                continue;
+            };
+
+            // (4) Chain must connect source main table → target main table.
+            let chain_db = value
+                .db
+                .as_ref()
+                .map(packageable_fqn)
+                .unwrap_or(source_db.clone());
+            check_chain_in_sequence(
+                seq,
+                &chain_db,
+                &source_table,
+                Some(&target_table),
+                resolved,
+                &owner,
+                errors,
+            );
+        }
+    }
 }
