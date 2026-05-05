@@ -302,8 +302,11 @@ fn lower_arrow_function(
 ///
 /// `prepended` is the arrow-function target: it occupies position 0 and is
 /// already lowered (or absent for plain function applications).
-type LambdaExpectations =
-    Vec<Option<Vec<Option<(crate::types::TypeExpr, crate::types::Multiplicity)>>>>;
+// Type alias relocated alongside its inference helpers — see
+// `crate::inference::lambda::LambdaExpectations`. Bringing it back
+// in via local alias keeps the existing `lower_args_with_lambda_inference`
+// + QP-call call sites readable without rewriting their annotations.
+type LambdaExpectations = crate::inference::lambda::LambdaExpectations;
 
 fn lower_args_with_lambda_inference(
     function_ptr: &legend_pure_parser_ast::annotation::PackageableElementPtr,
@@ -359,7 +362,7 @@ fn lower_args_with_lambda_inference(
 
     // Compute expected param types per lambda slot.
     let lambda_expectations: LambdaExpectations = if let Some(fid) = candidate {
-        compute_lambda_param_expectations(fid, &slots, ctx)
+        crate::inference::lambda::compute_lambda_param_expectations(fid, &slots, ctx)
     } else {
         (0..total_arity).map(|_| None).collect()
     };
@@ -537,7 +540,7 @@ pub(super) fn lower_qp_call_args(
         };
         all_params.push(recv_param);
         all_params.extend(params);
-        expectations_from_callee_params(&all_params, &slots, ctx)
+        crate::inference::lambda::expectations_from_callee_params(&all_params, &slots, ctx)
     } else {
         (0..total_slots).map(|_| None).collect()
     };
@@ -608,90 +611,10 @@ fn find_qp_params_for_arity(
     None
 }
 
-/// For each argument slot, computes the expected lambda parameter
-/// `(TypeExpr, Multiplicity)` list when the slot is a lambda whose matching
-/// callee parameter is `Function<{T[m]->U[n]}>` and the call's generic
-/// variables can be bound from the surrounding non-lambda args.
-///
-/// Slots that aren't lambdas, or whose matching param isn't a function type,
-/// or whose substituted parameter types remain non-concrete, return `None`.
-fn compute_lambda_param_expectations(
-    callee: crate::ids::ElementId,
-    slots: &[Option<ValueSpec>],
-    ctx: &ResolutionContext<'_>,
-) -> LambdaExpectations {
-    let crate::model::Element::Function(callee_fn) = ctx.model.get_element(callee) else {
-        return (0..slots.len()).map(|_| None).collect();
-    };
-    expectations_from_callee_params(&callee_fn.parameters, slots, ctx)
-}
-
-/// Shared core: given a callee's declared parameter list and the
-/// already-lowered argument slots (with `None` placeholders for lambda
-/// positions), produce per-slot lambda expectations. Used by both the
-/// function-call path (params come from `Function.parameters`) and the
-/// QP-call path (params come from the matched `QualifiedProperty`).
-fn expectations_from_callee_params(
-    params: &[crate::types::Parameter],
-    slots: &[Option<ValueSpec>],
-    ctx: &ResolutionContext<'_>,
-) -> LambdaExpectations {
-    use crate::types::TypeExpr;
-    if params.len() != slots.len() {
-        return (0..slots.len()).map(|_| None).collect();
-    }
-
-    // Collect the (param, arg) pairs for non-lambda slots only — lambda
-    // positions are still empty and would just contribute nothing.
-    let mut pair_params: Vec<crate::types::Parameter> = Vec::new();
-    let mut pair_args: Vec<ValueSpec> = Vec::new();
-    for (param, slot) in params.iter().zip(slots.iter()) {
-        if let Some(arg) = slot {
-            pair_params.push(param.clone());
-            pair_args.push(arg.clone());
-        }
-    }
-    let bindings =
-        resolve::infer_generic_bindings(&pair_params, &pair_args, ctx.model, &ctx.variable_types);
-
-    // For each lambda slot, extract Function<{...}> and substitute bindings.
-    slots
-        .iter()
-        .enumerate()
-        .map(|(i, slot)| {
-            if slot.is_some() {
-                return None;
-            }
-            let param = params.get(i)?;
-            // The param type may be FunctionType directly, or
-            // Named<Function>[FunctionType] — same shapes handled by the
-            // existing inference pass in resolve.rs.
-            let function_type: Option<&TypeExpr> = match &param.type_expr {
-                TypeExpr::FunctionType { .. } => Some(&param.type_expr),
-                TypeExpr::Named { type_arguments, .. } => type_arguments
-                    .iter()
-                    .find(|ta| matches!(ta, TypeExpr::FunctionType { .. })),
-                _ => None,
-            };
-            let TypeExpr::FunctionType {
-                parameters: ft_params,
-                ..
-            } = function_type?
-            else {
-                return None;
-            };
-            let expected = ft_params
-                .iter()
-                .map(|(ft_ty, ft_mult)| {
-                    let ty = resolve::substitute_type(ft_ty, &bindings.ty);
-                    let mult = resolve::substitute_mult(ft_mult, &bindings.mult);
-                    Some((ty, mult))
-                })
-                .collect::<Vec<_>>();
-            Some(expected)
-        })
-        .collect()
-}
+// `compute_lambda_param_expectations` and `expectations_from_callee_params`
+// live in `crate::inference::lambda` (Step 3e). Their call sites above
+// reach in via the fully-qualified path; the type alias
+// `LambdaExpectations` is re-aliased locally for readability.
 
 // `lower_member_access` and `desugar_all_to_getall` live in
 // `lower/member_access.rs`.
