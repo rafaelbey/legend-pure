@@ -30,7 +30,8 @@ use crate::error::CompilationError;
 use crate::resolve::{self, ResolutionContext};
 use crate::types::{ExprKind, FunctionCallData, ValueSpec};
 
-use super::{lower_expression, lower_qp_call_args, operator, untyped};
+use super::function_app::lower_qp_call_args;
+use super::{lower_expression, operator, untyped};
 
 /// Lowers member access (dot): `$x.name` or `$x.derived('arg')`.
 ///
