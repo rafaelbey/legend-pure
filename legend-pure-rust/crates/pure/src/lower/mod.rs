@@ -48,6 +48,7 @@ use crate::types::{
 // pattern in `crate::validate`. Adding a new kind = one match arm in
 // `lower_expression` + one file under `lower/<kind>.rs`. See plan
 // `~/.claude/plans/do-we-have-enought-quiet-swing.md` Step 4.
+pub(super) mod collection;
 pub(super) mod literal;
 
 /// Convenience: wrap an `ExprKind` into a `ValueSpec` with no type info.
@@ -86,7 +87,9 @@ pub(crate) fn lower_expression(
         // Phase 1
         ast_expr::Expression::Literal(lit) => literal::lower_literal(lit),
         ast_expr::Expression::Variable(var) => Some(literal::lower_variable(var)),
-        ast_expr::Expression::Collection(coll) => Some(lower_collection(coll, ctx, errors)),
+        ast_expr::Expression::Collection(coll) => {
+            Some(collection::lower_collection(coll, ctx, errors))
+        }
         ast_expr::Expression::Group(inner) => lower_expression(inner, ctx, errors),
 
         // Phase 2 — Operators → FunctionCall
@@ -164,23 +167,7 @@ pub(crate) fn lower_expression_body(
 // helpers (`parse_strict_date`, `parse_datetime`, `parse_strict_time`,
 // `split_tz`, `parse_subsecond_parts`) live in `lower/literal.rs`.
 
-// ---------------------------------------------------------------------------
-// Collection lowering
-// ---------------------------------------------------------------------------
-
-/// Lowers a collection literal `[a, b, c]`.
-fn lower_collection(
-    coll: &ast_expr::CollectionExpr,
-    ctx: &mut ResolutionContext<'_>,
-    errors: &mut Vec<CompilationError>,
-) -> ValueSpec {
-    let elements = coll
-        .elements
-        .iter()
-        .filter_map(|e| lower_expression(e, ctx, errors))
-        .collect();
-    untyped(ExprKind::Collection { elements }, coll.source_info.clone())
-}
+// `lower_collection` lives in `lower/collection.rs`.
 
 // ---------------------------------------------------------------------------
 // Operator desugaring → FunctionCall
