@@ -1148,7 +1148,7 @@ fn collect_unresolved_param_reads(
 pub(crate) type VarTypes = HashMap<SmolStr, (crate::types::TypeExpr, crate::types::Multiplicity)>;
 
 #[allow(clippy::too_many_lines)]
-fn infer_type_from_valuespec(
+pub(crate) fn infer_type_from_valuespec(
     vs: &crate::types::ValueSpec,
     model: &crate::model::PureModel,
     var_types: &VarTypes,
@@ -2064,82 +2064,24 @@ pub(crate) fn infer_generic_bindings(
             _ => continue,
         };
         for lambda_arg in lambda_args {
-            bind_from_lambda_body(function_type, lambda_arg, model, var_types, &mut bindings);
+            crate::inference::lambda::bind_from_lambda_body(
+                function_type,
+                lambda_arg,
+                model,
+                var_types,
+                &mut bindings,
+            );
         }
     }
 
     bindings
 }
 
-/// Drill into a single lambda arg against an expected `FunctionType`
-/// shape, infer the lambda body's last expression's type with the
-/// lambda's params in scope, and `bind_type`-merge the result against
-/// the FunctionType's `return_type` variable.
-///
-/// Extracted so both the direct-Lambda and Collection-of-Lambdas
-/// branches in `infer_generic_bindings`'s second pass can share the
-/// per-lambda binding logic.
-fn bind_from_lambda_body(
-    function_type: &crate::types::TypeExpr,
-    arg: &crate::types::ValueSpec,
-    model: &crate::model::PureModel,
-    var_types: &VarTypes,
-    bindings: &mut GenericBindings,
-) {
-    use crate::types::{ExprKind, Multiplicity, TypeExpr};
-    let TypeExpr::FunctionType {
-        parameters: ft_params,
-        return_type,
-        ..
-    } = function_type
-    else {
-        return;
-    };
-    let ExprKind::Lambda {
-        parameters: lambda_params,
-        body: lambda_body,
-    } = arg.kind.as_ref()
-    else {
-        return;
-    };
-    // Extend var_types with the lambda's own params, preferring the
-    // lambda's declared type when concrete (mirrors Java's "explicit
-    // annotation wins" rule). Without this, an explicitly-typed param
-    // like `{inc:MappingInclude[1], sub:Store[0..1] | …}` against
-    // `Function<{T[1], V[m] -> V[m]}>[1]` would have `sub` bound to
-    // `Generic("V")` whenever V hadn't bound from a sibling arg yet —
-    // and the lambda body would then type its uses against `Generic`
-    // rather than `Store[0..1]`.
-    let mut extended = var_types.clone();
-    for (lp, (ft_ty, ft_mult)) in lambda_params.iter().zip(ft_params.iter()) {
-        let lambda_ty_concrete =
-            !matches!(lp.type_expr, TypeExpr::Generic(_) | TypeExpr::Unresolved);
-        let ty = if lambda_ty_concrete {
-            lp.type_expr.clone()
-        } else {
-            substitute_type(ft_ty, &bindings.ty)
-        };
-        let mult = if !matches!(lp.multiplicity, Multiplicity::Variable(_)) {
-            lp.multiplicity.clone()
-        } else {
-            substitute_mult(ft_mult, &bindings.mult)
-        };
-        extended.insert(lp.name.clone(), (ty, mult));
-    }
-    let Some(last_expr) = lambda_body.last() else {
-        return;
-    };
-    let Some(body_eid) = infer_type_from_valuespec(last_expr, model, &extended) else {
-        return;
-    };
-    let body_te = TypeExpr::Named {
-        element: body_eid,
-        type_arguments: vec![],
-        multiplicity_arguments: Vec::new(),
-        value_arguments: vec![],
-    };
-    bind_type(return_type, &body_te, &mut bindings.ty, model);
-}
+// `bind_from_lambda_body` lives in `crate::inference::lambda`
+// (Step 3e.2). The second-pass dispatch above (collecting lambdas
+// from direct-Lambda or Collection-of-Lambdas args) stays here
+// because it lives inside `infer_generic_bindings`'s overall flow;
+// only the per-lambda binding step moved.
 
 /// Recursively match `param_ty` against `arg_ty`, collecting type-variable
 /// bindings. Handles:
