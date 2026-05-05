@@ -52,6 +52,14 @@ pub(super) mod collection;
 pub(super) mod literal;
 pub(super) mod member_access;
 pub(super) mod operator;
+pub(super) mod type_ref;
+
+// Re-export so the crate-level path
+// `crate::lower::build_packageable_element_ref` stays stable for the
+// few external callers (Pass 2.5's `set_and_return`, the new-instance
+// class-arg synthesizer) — they don't need to know which submodule
+// owns the helper.
+pub(crate) use type_ref::build_packageable_element_ref;
 
 /// Convenience: wrap an `ExprKind` into a `ValueSpec` with no type info.
 pub(super) fn untyped(kind: ExprKind, source_info: SourceInfo) -> ValueSpec {
@@ -65,7 +73,7 @@ pub(super) fn untyped(kind: ExprKind, source_info: SourceInfo) -> ValueSpec {
 /// Convenience: wrap an `ExprKind` into a `ValueSpec` whose `type_info`
 /// is pre-set at lowering time. Honoured by `set_and_return` in Pass 2.5,
 /// matching the `lower_new_instance` pattern for parametric type capture.
-fn typed(kind: ExprKind, source_info: SourceInfo, ty: ResolvedType) -> ValueSpec {
+pub(super) fn typed(kind: ExprKind, source_info: SourceInfo, ty: ResolvedType) -> ValueSpec {
     ValueSpec {
         kind: Box::new(kind),
         source_info,
@@ -107,9 +115,9 @@ pub(crate) fn lower_expression(
         ast_expr::Expression::FunctionApplication(e) => lower_function_application(e, ctx, errors),
         ast_expr::Expression::ArrowFunction(e) => Some(lower_arrow_function(e, ctx, errors)),
         ast_expr::Expression::MemberAccess(e) => member_access::lower_member_access(e, ctx, errors),
-        ast_expr::Expression::TypeReferenceExpr(e) => lower_type_reference(e, ctx, errors),
+        ast_expr::Expression::TypeReferenceExpr(e) => type_ref::lower_type_reference(e, ctx, errors),
         ast_expr::Expression::PackageableElementRef(e) => {
-            lower_packageable_element_ref(e, ctx, errors)
+            type_ref::lower_packageable_element_ref(e, ctx, errors)
         }
 
         // Phase 3 — Lambda, Let, New, Column, Island
@@ -683,110 +691,10 @@ fn expectations_from_callee_params(
 // `lower_member_access` and `desugar_all_to_getall` live in
 // `lower/member_access.rs`.
 
-// ---------------------------------------------------------------------------
-// Type reference & element reference
-// ---------------------------------------------------------------------------
-
-/// Lowers `@MyType` → `TypeReference`.
-///
-/// Special case: `@(name:Type[mult], …)` (relation type at expression
-/// position) lowers to `ExprKind::RelationLiteral` instead, with the
-/// column metadata captured at lowering time. The runtime allocator
-/// materialises a `RelationType` heap object whose `columns` slot
-/// carries the lowered specs. The lowered `ValueSpec` carries
-/// `type_info = RelationType<Any>[1]` so dispatch + inference see the
-/// same shape `resolve_type_spec(TypeSpec::Relation)` reports.
-fn lower_type_reference(
-    e: &ast_expr::TypeReferenceExpr,
-    ctx: &mut ResolutionContext<'_>,
-    errors: &mut Vec<CompilationError>,
-) -> Option<ValueSpec> {
-    if let ast_type::TypeSpec::Relation(rt) = &e.type_ref {
-        let columns = lower_relation_columns(&rt.columns, ctx, errors);
-        let relation_type_id = resolve_relation_type_id(ctx)?;
-        return Some(typed(
-            ExprKind::RelationLiteral { columns },
-            e.source_info.clone(),
-            ResolvedType {
-                type_expr: TypeExpr::Named {
-                    element: relation_type_id,
-                    type_arguments: vec![],
-                    multiplicity_arguments: Vec::new(),
-                    value_arguments: vec![],
-                },
-                multiplicity: Multiplicity::PureOne,
-            },
-        ));
-    }
-    let type_expr = resolve::resolve_type_spec(&e.type_ref, ctx, errors)?;
-    Some(untyped(
-        ExprKind::TypeReference { type_expr },
-        e.source_info.clone(),
-    ))
-}
-
-/// Lowers a bare element reference: `String`, `my::Enum` → `PackageableElementRef`.
-///
-/// Pre-sets `type_info` via [`build_packageable_element_ref`]. The AST
-/// node `ExprKind::PackageableElementRef { element }` stays a pure
-/// name-on-graph reference — type capture lives on the `ValueSpec`'s
-/// `type_info` slot per `reference_type_info_capture.md`.
-fn lower_packageable_element_ref(
-    e: &ast_expr::PackageableElementRef,
-    ctx: &mut ResolutionContext<'_>,
-    errors: &mut Vec<CompilationError>,
-) -> Option<ValueSpec> {
-    let element_id = resolve::resolve_element_ptr(&e.element, &e.source_info, ctx, errors)?;
-    Some(build_packageable_element_ref(
-        element_id,
-        e.source_info.clone(),
-        ctx.model,
-    ))
-}
-
-/// Build a `PackageableElementRef` `ValueSpec` whose `type_info` carries
-/// the element's parametric metatype shape — e.g. a class element `P`
-/// produces `type_info = Class<P>[1]`. Mirrors Java's
-/// `InstanceValueProcessor.getGenericType` Class-instance branch
-/// (`InstanceValueProcessor.java:154-183`) which wraps the element as
-/// the metatype's type-argument.
-///
-/// Centralising this construction keeps every `PackageableElementRef`
-/// call site (lowering, `lower_new_instance`'s class arg + type-arg
-/// specs) producing the same shape so generic substitution against
-/// `new<T>(class:Class<T>[1], …)` always sees `T` bound to the actual
-/// element rather than the bare metatype.
-pub(crate) fn build_packageable_element_ref(
-    element_id: crate::ids::ElementId,
-    source_info: SourceInfo,
-    model: &crate::model::PureModel,
-) -> ValueSpec {
-    let type_info =
-        crate::bootstrap::metatype_of(model, model.get_element(element_id)).map(|metatype| {
-            let element_te = TypeExpr::Named {
-                element: element_id,
-                type_arguments: vec![],
-                multiplicity_arguments: Vec::new(),
-                value_arguments: vec![],
-            };
-            Box::new(ResolvedType {
-                type_expr: TypeExpr::Named {
-                    element: metatype,
-                    type_arguments: vec![element_te],
-                    multiplicity_arguments: Vec::new(),
-                    value_arguments: vec![],
-                },
-                multiplicity: Multiplicity::PureOne,
-            })
-        });
-    ValueSpec {
-        kind: Box::new(ExprKind::PackageableElementRef {
-            element: element_id,
-        }),
-        source_info,
-        type_info,
-    }
-}
+// `lower_type_reference`, `lower_packageable_element_ref`, and
+// `build_packageable_element_ref` live in `lower/type_ref.rs`. The
+// last is re-exported above so its `pub(crate)` path
+// (`crate::lower::build_packageable_element_ref`) stays stable.
 
 // ---------------------------------------------------------------------------
 // Lambda
@@ -1536,7 +1444,7 @@ fn classify_col_spec_kind(specs: &[ast_expr::ColumnSpec]) -> crate::types::ColSp
 
 /// Resolves AST `RelationColumn`s into the lowered triple form. Used by
 /// the `RelationLiteral` lowering path (`@(cols)`).
-fn lower_relation_columns(
+pub(super) fn lower_relation_columns(
     cols: &[ast_type::RelationColumn],
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
@@ -1617,7 +1525,9 @@ fn lower_relation_columns_from_specs(
         .collect()
 }
 
-fn resolve_relation_type_id(ctx: &mut ResolutionContext<'_>) -> Option<crate::ids::ElementId> {
+pub(super) fn resolve_relation_type_id(
+    ctx: &mut ResolutionContext<'_>,
+) -> Option<crate::ids::ElementId> {
     ctx.model.resolve_by_path(&[
         SmolStr::new("meta"),
         SmolStr::new("pure"),
@@ -1678,7 +1588,7 @@ fn lower_unit_instance(
     errors: &mut Vec<CompilationError>,
 ) -> Option<ValueSpec> {
     let value_vs = lower_expression(&e.value, ctx, errors)?;
-    let unit_ref = lower_packageable_element_ref(
+    let unit_ref = type_ref::lower_packageable_element_ref(
         &ast_expr::PackageableElementRef {
             element: e.unit.clone(),
             source_info: e.source_info.clone(),
