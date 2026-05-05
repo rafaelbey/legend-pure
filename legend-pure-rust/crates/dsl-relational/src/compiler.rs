@@ -322,6 +322,13 @@ impl CompilerExtension for RelationalExtension {
         // (Java errors with "Mapping Error! The target type:'X' is
         // not a data type but the relationalOperation is not a join").
         validate_class_mapping_property_types(&class_mappings, ctx.model, ctx.errors);
+        // Phase A6: Inline-target subtype check — when an embedded
+        // mapping carries an `Inline[setId]` trailer, the inline
+        // target's class must be a subtype of the property's
+        // declared target class. Java parity:
+        // "The inlineSetImplementationId '...' is implementing the
+        // class 'X' which is not a subType of 'Y'".
+        validate_inline_target_subtypes(&class_mappings, ctx.model, ctx.errors);
     }
 }
 
@@ -2610,4 +2617,222 @@ fn find_property_type(
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// Phase A6 — Inline-target subtype check
+// ---------------------------------------------------------------------------
+
+/// For every embedded class-mapping body that ends with an
+/// `Inline[setId]` trailer, validate that the inline target's class
+/// is a subtype of the property's declared target class. Java parity:
+///
+///   "Mapping Error! The inlineSetImplementationId 'X' is
+///    implementing the class 'Y' which is not a subType of 'Z'
+///    (return type of the mapped property 'P')"
+///
+/// Walks recursively into embedded bodies so deeply-nested Inline
+/// trailers are caught. E3 already validates the inline id resolves
+/// to a class mapping in the same Mapping; A6 layers the subtype
+/// check on top.
+fn validate_inline_target_subtypes(
+    class_mappings: &[RegisteredRelationalClassMapping],
+    model: &legend_pure_parser_pure::model::PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    // Build a (mapping_fqn, class_mapping_id) → class_fqn lookup so
+    // an Inline target's id resolves to the class FQN it implements.
+    let mut by_id: HashMap<(SmolStr, SmolStr), SmolStr> = HashMap::new();
+    for reg in class_mappings {
+        by_id.insert(
+            (reg.mapping_fqn.clone(), reg.class_mapping_id.clone()),
+            reg.class_fqn.clone(),
+        );
+    }
+
+    for reg in class_mappings {
+        // Skip association bodies — they don't carry embedded
+        // mappings on association ends in our grammar.
+        if reg.body.association_mapping.is_some() {
+            continue;
+        }
+        let Some(class_id) = resolve_class_by_fqn(model, &reg.class_fqn) else {
+            continue;
+        };
+        let owner = SmolStr::new(format!("Class mapping '{}'", reg.class_mapping_id.as_str()));
+
+        for elem in &reg.body.mapping_elements {
+            walk_for_inline_subtypes(
+                elem,
+                class_id,
+                &reg.mapping_fqn,
+                &by_id,
+                model,
+                &owner,
+                errors,
+            );
+        }
+    }
+}
+
+fn walk_for_inline_subtypes(
+    e: &crate::ast::MappingElement,
+    enclosing_class_id: legend_pure_parser_pure::ids::ElementId,
+    mapping_fqn: &SmolStr,
+    by_id: &HashMap<(SmolStr, SmolStr), SmolStr>,
+    model: &legend_pure_parser_pure::model::PureModel,
+    owner: &SmolStr,
+    errors: &mut Vec<CompilationError>,
+) {
+    match e {
+        crate::ast::MappingElement::Single(line) => {
+            walk_line_for_inline_subtypes(
+                line,
+                enclosing_class_id,
+                mapping_fqn,
+                by_id,
+                model,
+                owner,
+                errors,
+            );
+        }
+        crate::ast::MappingElement::Scope(s) => {
+            for line in &s.mapping_lines {
+                walk_line_for_inline_subtypes(
+                    line,
+                    enclosing_class_id,
+                    mapping_fqn,
+                    by_id,
+                    model,
+                    owner,
+                    errors,
+                );
+            }
+        }
+    }
+}
+
+fn walk_line_for_inline_subtypes(
+    line: &SingleMappingLine,
+    enclosing_class_id: legend_pure_parser_pure::ids::ElementId,
+    mapping_fqn: &SmolStr,
+    by_id: &HashMap<(SmolStr, SmolStr), SmolStr>,
+    model: &legend_pure_parser_pure::model::PureModel,
+    owner: &SmolStr,
+    errors: &mut Vec<CompilationError>,
+) {
+    use legend_pure_parser_pure::types::TypeExpr;
+
+    let SingleMappingLine::NonePlus(np) = line else {
+        return;
+    };
+    let NonePlusMappingValue::Embedded(em) = &np.value else {
+        return;
+    };
+
+    // (a) Recurse into the embedded body: nested mapping lines may
+    // themselves carry Inline trailers. The "enclosing class" for
+    // the recursion is the embedded property's TARGET class.
+    let property_name = &np.property.value;
+    let nested_class_id = find_property_type(model, enclosing_class_id, property_name)
+        .as_ref()
+        .and_then(|t| match t {
+            TypeExpr::Named { element, .. } => Some(*element),
+            _ => None,
+        })
+        .filter(|id| {
+            matches!(
+                model.try_get_element(*id),
+                Some(legend_pure_parser_pure::model::Element::Class(_))
+            )
+        });
+    if let Some(nested_id) = nested_class_id {
+        for inner in &em.mapping_lines {
+            walk_line_for_inline_subtypes(
+                inner,
+                nested_id,
+                mapping_fqn,
+                by_id,
+                model,
+                owner,
+                errors,
+            );
+        }
+    }
+
+    // (b) If this embedded body has an Inline trailer, run the
+    // subtype check against the property's declared target class.
+    let Some(EmbeddedMappingTrailer::Inline(inline)) = &em.trailer else {
+        return;
+    };
+    let Some(property_target_id) = nested_class_id else {
+        // No class-typed property → no Inline check applies (E3
+        // already validates the inline id resolution; class-property
+        // checks are A5's job).
+        return;
+    };
+    let inline_target_key = (mapping_fqn.clone(), inline.id.value.clone());
+    let Some(inline_class_fqn) = by_id.get(&inline_target_key) else {
+        // E3 emits the unresolved diagnostic.
+        return;
+    };
+    let Some(inline_class_id) = resolve_class_by_fqn(model, inline_class_fqn) else {
+        return;
+    };
+
+    if !is_subtype_of(model, inline_class_id, property_target_id) {
+        let target_fqn = SmolStr::new(
+            legend_pure_parser_pure::purem::fqn_path::element_fqn_path(model, property_target_id)
+                .join("::"),
+        );
+        errors.push(CompilationError {
+            message: format!(
+                "{owner}: Inline target '{}' implements class '{}' which is not a subtype of \
+                 '{}' (return type of the mapped property '{}')",
+                inline.id.value, inline_class_fqn, target_fqn, property_name
+            ),
+            source_info: inline.source_info.clone(),
+            kind: CompilationErrorKind::InvalidAssociation {
+                name: owner.clone(),
+                reason: SmolStr::new(format!(
+                    "Inline target '{}' is not a subtype of '{}'",
+                    inline_class_fqn, target_fqn
+                )),
+            },
+        });
+    }
+}
+
+/// Walk the supertype graph from `sub` looking for `sup`. Returns
+/// `true` when `sub == sup` or any transitive `super_types` chain
+/// reaches `sup`. Cycles terminate via `visited`.
+fn is_subtype_of(
+    model: &legend_pure_parser_pure::model::PureModel,
+    sub: legend_pure_parser_pure::ids::ElementId,
+    sup: legend_pure_parser_pure::ids::ElementId,
+) -> bool {
+    use legend_pure_parser_pure::model::Element as ModelElement;
+    use legend_pure_parser_pure::types::TypeExpr;
+    if sub == sup {
+        return true;
+    }
+    let mut visited: HashSet<legend_pure_parser_pure::ids::ElementId> = HashSet::new();
+    let mut stack: Vec<legend_pure_parser_pure::ids::ElementId> = vec![sub];
+    while let Some(id) = stack.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let Some(ModelElement::Class(c)) = model.try_get_element(id) else {
+            continue;
+        };
+        for st in &c.super_types {
+            if let TypeExpr::Named { element, .. } = st {
+                if *element == sup {
+                    return true;
+                }
+                stack.push(*element);
+            }
+        }
+    }
+    false
 }
