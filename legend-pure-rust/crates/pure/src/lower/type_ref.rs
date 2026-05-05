@@ -32,7 +32,8 @@ use crate::error::CompilationError;
 use crate::resolve::{self, ResolutionContext};
 use crate::types::{ExprKind, Multiplicity, ResolvedType, TypeExpr, ValueSpec};
 
-use super::{lower_relation_columns, resolve_relation_type_id, typed, untyped};
+use super::relation::{lower_relation_columns, resolve_relation_type_id};
+use super::{typed, untyped};
 
 /// Lowers `@MyType` → `TypeReference`.
 ///
