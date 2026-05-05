@@ -84,6 +84,7 @@ dependencies, so future contributors know what's safe to pick up.
 | Item | Priority | Status | Notes |
 |---|---|---|---|
 | Pass 2a/2b split | P0 | ✅ Done | Signatures resolved in 2a, bodies in 2b. |
+| Eager validators (Java-parity placement) | P0 | ✅ Done | Validators run next to the data they inspect across three seams: resolver-eager (`resolve_type_ref` does type-arg arity; `resolve_stereotypes`/`resolve_tagged_values` do profile-kind + name-existence), hydration-inline (`validate_super_types`, `validate_association`, `validate_duplicate_properties`, `validate_no_access_on_properties`, `validate_no_multiple_access_levels` called from `hydrate_element_signature`), and cross-chunk (`validate(model)` keeps only `validate_repo_visibility` + access-level Step B). Pass-1 `create_shell` populates `Class.type_parameters`/`multiplicity_parameters` + `Profile.stereotypes`/`tags` from the AST so resolver-eager checks are sound regardless of topo order. Adding a new element kind = one match arm in each. Commit `86fe8b9ea96`. |
 | Parallel Pass 2 | P3 | 🔲 Deferred | After 2a/2b, bodies can be parallelized per-element. |
 | Incremental compilation | P3 | 🔲 Deferred | Re-resolve only changed chunks. Chunk IDs enable this without rewriting. |
 
