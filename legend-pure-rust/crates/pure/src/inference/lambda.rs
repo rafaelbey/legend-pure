@@ -18,9 +18,9 @@
 //! at lines 108-148
 //! (`processParamTypesOfLambdaUsedAsAFunctionExpressionParamValue`).
 //!
-//! # Step 3e (current state)
+//! # Step 3e (consolidation complete)
 //!
-//! The **lower-side** half lives here:
+//! The **lower-side** half:
 //! [`compute_lambda_param_expectations`] +
 //! [`expectations_from_callee_params`]. They read the candidate's
 //! parameter type, find the embedded `FunctionType` slot, substitute
@@ -29,15 +29,19 @@
 //! `lower_lambda_with_expected_types` consumes. This is what makes
 //! `[1,2,3]->filter(x | $x->plus(1))` type `x` as `Integer[1]`.
 //!
-//! The **resolve-side** half — `crate::resolve::infer_generic_bindings`'s
-//! second pass and the `bind_from_lambda_body` helper — still lives
-//! in `resolve.rs`. Walks each lambda arg (or every Lambda inside a
-//! Collection arg), infers the lambda body's last expression with
-//! the lambda's params in scope, and binds the FunctionType's
-//! return-type variable from that body type. This is what closed
-//! `getAllTypeGeneralisations`'s inference precision and the
-//! `match([λ1, λ2])` pattern. It will move here in a follow-up
-//! sub-step once the lower-side cohabitation is verified.
+//! The **resolve-side** half:
+//! [`bind_from_lambda_body`]. Drills into a single lambda arg
+//! against an expected `FunctionType` shape, infers the lambda
+//! body's last expression's type with the lambda's params in scope,
+//! and `bind_type`-merges the result against the FunctionType's
+//! `return_type` variable. This closes `getAllTypeGeneralisations`'s
+//! inference precision and the `match([λ1, λ2])` pattern.
+//!
+//! Both halves live here so the lambda-parameter algorithm has one
+//! home. `crate::resolve::infer_generic_bindings`'s second pass
+//! still drives the dispatch (collecting lambda args from
+//! `Collection`-of-lambdas vs direct shapes) and calls
+//! [`bind_from_lambda_body`] per lambda.
 //!
 //! Both paths solve adjacent problems (typing the lambda's *params*
 //! at lower time vs. binding the FunctionType's *return* at infer
@@ -56,8 +60,10 @@
 //!
 //! Plan: `~/.claude/plans/do-we-have-enought-quiet-swing.md`.
 
-use crate::resolve::{self, ResolutionContext};
+use crate::resolve::{self, ResolutionContext, VarTypes};
 use crate::types::ValueSpec;
+
+use super::GenericBindings;
 
 /// Per-slot lambda expectations: an outer `Vec` indexed by argument
 /// position, with `Some(Vec<Option<(TypeExpr, Multiplicity)>>)` for
@@ -152,4 +158,76 @@ pub(crate) fn expectations_from_callee_params(
             Some(expected)
         })
         .collect()
+}
+
+/// Drill into a single lambda arg against an expected `FunctionType`
+/// shape, infer the lambda body's last expression's type with the
+/// lambda's params in scope, and `bind_type`-merge the result against
+/// the FunctionType's `return_type` variable.
+///
+/// Called from `crate::resolve::infer_generic_bindings`'s second
+/// pass, once for a direct-Lambda arg and once per `Lambda` inside a
+/// `Collection`-of-lambdas arg. The resolve-side dispatch that
+/// chooses which lambdas feed which slot stays in `resolve.rs`; this
+/// function owns the per-lambda binding step.
+pub(crate) fn bind_from_lambda_body(
+    function_type: &crate::types::TypeExpr,
+    arg: &ValueSpec,
+    model: &crate::model::PureModel,
+    var_types: &VarTypes,
+    bindings: &mut GenericBindings,
+) {
+    use crate::types::{ExprKind, Multiplicity, TypeExpr};
+    let TypeExpr::FunctionType {
+        parameters: ft_params,
+        return_type,
+        ..
+    } = function_type
+    else {
+        return;
+    };
+    let ExprKind::Lambda {
+        parameters: lambda_params,
+        body: lambda_body,
+    } = arg.kind.as_ref()
+    else {
+        return;
+    };
+    // Extend var_types with the lambda's own params, preferring the
+    // lambda's declared type when concrete (mirrors Java's "explicit
+    // annotation wins" rule). Without this, an explicitly-typed param
+    // like `{inc:MappingInclude[1], sub:Store[0..1] | …}` against
+    // `Function<{T[1], V[m] -> V[m]}>[1]` would have `sub` bound to
+    // `Generic("V")` whenever V hadn't bound from a sibling arg yet —
+    // and the lambda body would then type its uses against `Generic`
+    // rather than `Store[0..1]`.
+    let mut extended = var_types.clone();
+    for (lp, (ft_ty, ft_mult)) in lambda_params.iter().zip(ft_params.iter()) {
+        let lambda_ty_concrete =
+            !matches!(lp.type_expr, TypeExpr::Generic(_) | TypeExpr::Unresolved);
+        let ty = if lambda_ty_concrete {
+            lp.type_expr.clone()
+        } else {
+            resolve::substitute_type(ft_ty, &bindings.ty)
+        };
+        let mult = if !matches!(lp.multiplicity, Multiplicity::Variable(_)) {
+            lp.multiplicity.clone()
+        } else {
+            resolve::substitute_mult(ft_mult, &bindings.mult)
+        };
+        extended.insert(lp.name.clone(), (ty, mult));
+    }
+    let Some(last_expr) = lambda_body.last() else {
+        return;
+    };
+    let Some(body_eid) = resolve::infer_type_from_valuespec(last_expr, model, &extended) else {
+        return;
+    };
+    let body_te = TypeExpr::Named {
+        element: body_eid,
+        type_arguments: vec![],
+        multiplicity_arguments: Vec::new(),
+        value_arguments: vec![],
+    };
+    resolve::bind_type(return_type, &body_te, &mut bindings.ty, model);
 }
