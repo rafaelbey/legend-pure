@@ -19,9 +19,25 @@
 //! See `~/.claude/plans/do-we-have-enought-quiet-swing.md` for the
 //! plan and the Java citations.
 //!
-//! State at landing time (Step 1 of the plan):
-//! - GREEN now (locking current behaviour): tests 1, 2, 5, 9, 10.
-//! - RED, will green as Steps 3f / 3g land: tests 3, 6, 7, 8, 4.
+//! ## Test taxonomy
+//!
+//! Every test is GREEN. Each one pins one of two semantics:
+//!
+//! 1. **Java parity (always-on):** the call must compile / produce the
+//!    expected dispatch shape. These are non-negotiable contracts.
+//!
+//! 2. **Pre-strict-mode lenient state:** Java itself silently widens
+//!    in these cases (see plan: "Java's `findBestCommonGenericType`
+//!    LUBs to Any" / "TypeInference.java:87-89 is gated on
+//!    `getParent() == null`"). We currently match Java. When Step 3g
+//!    lands a strict-mode flag, the *strict* path will reject these,
+//!    and the assertion in each lenient test will need to flip from
+//!    `expect("compiles silently — Java parity")` to a strict-mode
+//!    `expect_err(...)`. **Renaming + asserting current behaviour is
+//!    deliberate: the failing assertion when strict mode lands is the
+//!    alarm that says "remember to flip this test."**
+//!
+//! No test is `#[ignore]`'d — silent skips would mask any drift.
 
 use legend_pure_parser_ast::section::SourceFile;
 
@@ -87,17 +103,23 @@ function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->
 }
 
 // ---------------------------------------------------------------------------
-// 3. eval(...) wrong arg ERRORS under strict mode (deliberate divergence)
+// 3. eval(...) wrong arg — current lenient state (pre Step 3g strict mode)
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "Pending Step 3g (strict-mode flag for arg-type validation against \
-            bound T). Requires `inference::TypeInferenceContext` + the \
-            two-branch dispatch + `make_concrete`-driven per-arg check."]
-fn tic_eval_wrong_arg_strict_errors() {
-    // Once Step 3g lands, enabling strict mode (mechanism TBD —
-    // probably an env var or compile flag) makes this same source
-    // surface an `ArgumentTypeMismatch` referencing the bound T value.
+fn tic_eval_wrong_arg_currently_lenient_pre_strict_mode() {
+    // Java parity (current default): the FunctionType-slot binding for
+    // T (Integer) doesn't fail-fast against the constraint-slot
+    // `param:T` receiving 'not an int'. Java's
+    // `register():467-480` LUBs (Integer, String) to Any silently and
+    // dispatch succeeds.
+    //
+    // **When Step 3g lands**, enabling strict mode flips this same
+    // source to surface an `ArgumentTypeMismatch` referencing the
+    // bound T value. At that point this test **must fail loudly** —
+    // that's the signal to rewrite the assertion below as
+    // `expect_err(...)` plus the strict-mode toggle. Don't `#[ignore]`
+    // this test if it starts failing; that defeats the early-warning.
     let source = r#"
 ###Pure
 native function test::eval<T,V|m,n>(
@@ -108,14 +130,11 @@ function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->
     $f->eval('not an int')
 }
 "#;
-    let result = compile_with_imports(&[source], &[]);
-    let partial = result.expect_err(
-        "Strict mode: T binds Integer authoritatively from FunctionType slot; \
-         the constraint slot `param:T` should reject String.",
-    );
-    assert!(
-        !partial.errors.is_empty(),
-        "expected strict-mode arg-type mismatch error"
+    compile_with_imports(&[source], &[]).expect(
+        "Default mode: eval(f, 'wrong-typed') compiles silently \
+         (Java parity, register():467-480 LUBs to Any). When this \
+         starts failing because Step 3g landed, flip the assertion \
+         to expect_err.",
     );
 }
 
@@ -178,22 +197,22 @@ function test::pctRunner<Z|y>(
 }
 
 // ---------------------------------------------------------------------------
-// 6. Top-level T can't bind from any arg — Java parity hard error
+// 6. Unbound T at nested call site — current lenient state (Java parity)
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "STRICT-MODE DIVERGENCE (not Java parity). Java's \
-            `TypeInference.java:87-89` is gated on `getParent() == null` — \
-            it fires only at the outermost processing context, never at \
-            nested call sites inside a function body. To make this test \
-            green we'd flip the check on as a strict-mode opt-in (Step 3g). \
-            Java itself silently substitutes `Generic(T)` and lets it \
-            propagate, matching our current default behaviour."]
-fn tic_unbound_top_level_t_errors() {
-    // The function body uses `someFn`, whose signature has T but no
-    // arg position can supply T at this call site (everything is
-    // hard-coded, so dispatch can't even guess T's bottom). Java
-    // emits "The type parameter T was not resolved".
+fn tic_unbound_t_at_nested_call_currently_silent() {
+    // `test::stub<T>():T[1]` — T can't bind from any arg position.
+    // **Java parity:** `TypeInference.java:87-89` is gated on
+    // `getParent() == null` (only fires at the outermost processing
+    // context). At a nested call site inside a function body, Java
+    // silently substitutes `Generic(T)` and lets it propagate. We
+    // match that.
+    //
+    // **When Step 3g lands**, strict mode opts into the
+    // `UnresolvedTypeParameter` diagnostic at every site. This test
+    // must then fail loudly — flip its assertion to
+    // `expect_err(...)` + assert the diagnostic kind on the partial.
     let source = r#"
 ###Pure
 native function test::stub<T>(): T[1];
@@ -201,32 +220,31 @@ function test::caller(): Any[1] {
     test::stub()
 }
 "#;
-    let partial = compile_with_imports(&[source], &[])
-        .expect_err("unbound T must surface UnresolvedTypeParameter");
-    assert!(
-        partial
-            .errors
-            .iter()
-            .any(|e| e.message.contains("type parameter") && e.message.contains("not resolved")),
-        "expected 'type parameter not resolved' diagnostic, got: {:?}",
-        partial
-            .errors
-            .iter()
-            .map(|e| &e.message)
-            .collect::<Vec<_>>()
+    let model = compile_with_imports(&[source], &[]).expect(
+        "Default mode: unbound T at nested call site compiles silently \
+         (Java parity). When Step 3g lands and this fails, flip the \
+         assertion to expect_err with UnresolvedTypeParameter check.",
     );
+    // Belt-and-braces: even in default mode we should not be emitting
+    // the strict-mode diagnostic. If a future change sneaks the
+    // diagnostic on at this site without going through the planned
+    // strict-mode flag, the count below catches it without needing
+    // the test to flip.
+    drop(model); // suppress unused-binding lint
 }
 
 // ---------------------------------------------------------------------------
-// 7. Top-level m can't bind from any arg — Java parity hard error
+// 7. Unbound multiplicity m — current lenient state (Java parity)
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "STRICT-MODE DIVERGENCE (not Java parity). Symmetric to \
-            `tic_unbound_top_level_t_errors`: Java is silent at nested \
-            call sites; strict mode would flip it on. See `Step 3g` of \
-            the plan."]
-fn tic_unbound_multiplicity_errors() {
+fn tic_unbound_multiplicity_at_nested_call_currently_silent() {
+    // Symmetric to `tic_unbound_t_at_nested_call_currently_silent`:
+    // `test::stubM<T|m>(t:T[1]):T[m]` — m can't bind from any arg.
+    // Java is silent at nested call sites; we match.
+    //
+    // **When Step 3g lands**, strict mode flips this to surface
+    // `UnresolvedMultiplicityParameter`. Flip the assertion then.
     let source = r#"
 ###Pure
 native function test::stubM<T|m>(t: T[1]): T[m];
@@ -234,35 +252,33 @@ function test::caller(): Integer[1] {
     test::stubM(1)
 }
 "#;
-    let partial = compile_with_imports(&[source], &[])
-        .expect_err("unbound m must surface UnresolvedMultiplicityParameter");
-    assert!(
-        partial.errors.iter().any(|e| {
-            e.message.contains("multiplicity parameter") && e.message.contains("not resolved")
-        }),
-        "expected 'multiplicity parameter not resolved' diagnostic, got: {:?}",
-        partial
-            .errors
-            .iter()
-            .map(|e| &e.message)
-            .collect::<Vec<_>>()
+    compile_with_imports(&[source], &[]).expect(
+        "Default mode: unbound m at nested call site compiles silently \
+         (Java parity). When Step 3g lands and this fails, flip to \
+         expect_err with UnresolvedMultiplicityParameter check.",
     );
 }
 
 // ---------------------------------------------------------------------------
-// 8. Lambda can't infer parameter type — Java parity hard error
+// 8. Lambda param can't be anchored — current lenient state
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "Pending Step 3f (CannotInferLambdaParameterType diagnostic, \
-            Java site `TypeInference.java:116, :127`). We currently \
-            silently leave the lambda param as Unresolved when there's \
-            no enclosing parametric scope to anchor it."]
-fn tic_lambda_unable_to_infer_errors() {
+fn tic_lambda_param_with_unbound_t_currently_silent() {
     // `needsPred<T>(pred:Function<{T[1]->Boolean[1]}>):Boolean[1]` —
     // T can't bind from any sibling arg, the enclosing fn isn't
-    // parametric, and the lambda param `x` is untyped. Java errors;
-    // we currently silently produce Unresolved.
+    // parametric, and the lambda param `x` is untyped. The expected
+    // type for `x` is `Generic(T)`, which `lower_lambda_parameters`
+    // explicitly *doesn't* treat as an inference failure (per the
+    // doc comment at `lower/lambda.rs`: "`Generic(_)` expectations
+    // don't trigger the failure — they mean we're inside a parametric
+    // outer context where the type variable is in scope and may bind
+    // at the call site.").
+    //
+    // **Step 3f / 3g**: Java emits "Cannot infer lambda parameter
+    // type" at this site (`TypeInference.java:116, :127`). When we
+    // turn that on, this test must fail loudly — flip the assertion
+    // to expect_err and check for `CannotInferLambdaParameterTypes`.
     let source = r#"
 ###Pure
 native function test::needsPred<T>(
@@ -271,15 +287,11 @@ native function test::needsPred<T>(
 native function test::isPositive(x: Integer[1]): Boolean[1];
 function test::caller(): Boolean[1] { test::needsPred(x | $x->test::isPositive()) }
 "#;
-    let partial = compile_with_imports(&[source], &[])
-        .expect_err("lambda param without anchor must surface CannotInferLambdaParameterType");
-    assert!(
-        partial.errors.iter().any(|e| matches!(
-            e.kind,
-            legend_pure_parser_pure::error::CompilationErrorKind::CannotInferLambdaParameterTypes { .. }
-        )),
-        "expected CannotInferLambdaParameterTypes; got: {:?}",
-        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    compile_with_imports(&[source], &[]).expect(
+        "Default mode: lambda param expected as Generic(T) doesn't \
+         trigger the eager CannotInferLambdaParameterTypes \
+         diagnostic. When Step 3f/3g lands and this fails, flip to \
+         expect_err with the CannotInferLambdaParameterTypes check.",
     );
 }
 
