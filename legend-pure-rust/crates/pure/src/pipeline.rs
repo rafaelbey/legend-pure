@@ -2209,9 +2209,9 @@ fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
                     };
                     for (qp_idx, qp) in c.qualified_properties.iter().enumerate() {
                         if !qp.body.is_empty() {
-                            let mut params: Vec<crate::types::Parameter> =
-                                Vec::with_capacity(qp.parameters.len() + 1
-                                    + c.type_variable_parameters.len());
+                            let mut params: Vec<crate::types::Parameter> = Vec::with_capacity(
+                                qp.parameters.len() + 1 + c.type_variable_parameters.len(),
+                            );
                             params.push(this_param.clone());
                             params.extend(c.type_variable_parameters.iter().cloned());
                             params.extend(qp.parameters.iter().cloned());

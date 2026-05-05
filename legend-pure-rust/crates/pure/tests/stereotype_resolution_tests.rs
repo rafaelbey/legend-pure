@@ -58,9 +58,8 @@ function <<test.Test>> test::myCheck(): Boolean[1]
     // No platform loaded, no auto-imports — exactly the conditions
     // that produced the original panic.
     let result = pipeline::compile(&[parsed], &[]);
-    let partial = result.expect_err(
-        "compile is expected to surface errors (the profile is not in scope)",
-    );
+    let partial =
+        result.expect_err("compile is expected to surface errors (the profile is not in scope)");
 
     // Must include at least one UnresolvedElement error.
     let unresolved: Vec<_> = partial
@@ -85,7 +84,10 @@ function <<test.Test>> test::myCheck(): Boolean[1]
     assert!(
         is_not_profile.is_empty(),
         "did not expect a 'is not a Profile' cascade after the resolver fix, got: {:?}",
-        is_not_profile.iter().map(|e| &e.message).collect::<Vec<_>>()
+        is_not_profile
+            .iter()
+            .map(|e| &e.message)
+            .collect::<Vec<_>>()
     );
 }
 

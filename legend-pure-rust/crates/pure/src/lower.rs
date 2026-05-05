@@ -1540,8 +1540,11 @@ fn infer_let_type(
             // `String[*]->contains(String[1])` going to
             // `string::contains(String[1], String[1])`).
             let target = data.arguments.first()?;
-            let target_te =
-                crate::resolve::infer_typeexpr_from_valuespec(target, ctx.model, &ctx.variable_types)?;
+            let target_te = crate::resolve::infer_typeexpr_from_valuespec(
+                target,
+                ctx.model,
+                &ctx.variable_types,
+            )?;
             let target_eid = match &target_te {
                 TypeExpr::Named { element, .. } => *element,
                 _ => return None,
@@ -1551,9 +1554,12 @@ fn infer_let_type(
                 ctx.model,
                 &ctx.variable_types,
             )?;
-            let prop_te =
-                crate::resolve::find_property_with_inheritance(target_eid, &data.function_name, ctx.model)?
-                    .0;
+            let prop_te = crate::resolve::find_property_with_inheritance(
+                target_eid,
+                &data.function_name,
+                ctx.model,
+            )?
+            .0;
             let prop_mult = crate::resolve::find_property_multiplicity(
                 target_eid,
                 &data.function_name,

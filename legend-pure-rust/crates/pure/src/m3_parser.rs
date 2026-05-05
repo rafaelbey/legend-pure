@@ -1009,7 +1009,8 @@ impl<'a> M3Parser<'a> {
                                     type_arguments = self.parse_type_argument_list();
                                 }
                                 "multiplicityArguments" => {
-                                    multiplicity_arguments = self.parse_multiplicity_argument_list();
+                                    multiplicity_arguments =
+                                        self.parse_multiplicity_argument_list();
                                 }
                                 "typeParameter" => {
                                     type_parameter_name = Some(self.parse_type_parameter_name());

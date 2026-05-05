@@ -222,7 +222,11 @@ fn walk_type_for_generics(
         TypeExpr::Generic(name) => {
             types.insert(name.clone());
         }
-        TypeExpr::Named { type_arguments, multiplicity_arguments, .. } => {
+        TypeExpr::Named {
+            type_arguments,
+            multiplicity_arguments,
+            ..
+        } => {
             for ta in type_arguments {
                 walk_type_for_generics(ta, types, mults);
             }
@@ -232,7 +236,11 @@ fn walk_type_for_generics(
                 }
             }
         }
-        TypeExpr::FunctionType { parameters, return_type, return_multiplicity } => {
+        TypeExpr::FunctionType {
+            parameters,
+            return_type,
+            return_multiplicity,
+        } => {
             for (p, m) in parameters {
                 walk_type_for_generics(p, types, mults);
                 if let Multiplicity::Variable(name) = m {
@@ -435,10 +443,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                 .flatten()
                 .map(|t| t.type_expr.clone())
                 .reduce(|acc, te| match (&acc, &te) {
-                    (
-                        TypeExpr::Named { element: a, .. },
-                        TypeExpr::Named { element: b, .. },
-                    ) => {
+                    (TypeExpr::Named { element: a, .. }, TypeExpr::Named { element: b, .. }) => {
                         let lub_id = crate::resolve::least_upper_bound_ids(*a, *b, ctx.model);
                         TypeExpr::Named {
                             element: lub_id,
@@ -653,54 +658,16 @@ fn infer_function_call(
     arg_types: &[Option<ResolvedType>],
     arg_source_infos: &[legend_pure_parser_ast::SourceInfo],
 ) -> Option<ResolvedType> {
-    // Handle `letFunction` — side effect: bind the variable in scope.
-    //
-    // Bind even when the value's type couldn't be inferred (None) —
-    // otherwise subsequent `$name` references downstream would
-    // false-positive the undeclared-variable check just because we
-    // couldn't infer the let-rhs's type. The placeholder is
-    // `TypeExpr::Unresolved` which type-compatibility helpers
-    // already treat as "matches anything".
-    if function_name == "letFunction"
-        && arg_types.len() == 2
-        && let Some((name, source_info)) = let_name
-    {
-        if let Some(scope) = ctx.scopes.last()
-            && scope.lookup(name).is_some()
-        {
-            ctx.errors.push(crate::error::CompilationError {
-                message: format!("'{name}' has already been defined!"),
-                source_info: (*source_info).clone(),
-                kind: crate::error::CompilationErrorKind::DuplicateVariable { name: name.clone() },
-            });
-        }
-        let bound = arg_types[1].clone().unwrap_or_else(|| ResolvedType {
-            type_expr: TypeExpr::Unresolved,
-            multiplicity: Multiplicity::PureOne,
-        });
-        if let Some(scope) = ctx.scopes.last_mut() {
-            scope.bind(name.clone(), bound);
-        }
-        // letFunction itself returns Nil[0] (it's a side-effect statement)
-        return Some(ResolvedType {
-            type_expr: TypeExpr::Named {
-                element: bootstrap::NIL_ID,
-                type_arguments: Vec::new(),
-                multiplicity_arguments: Vec::new(),
-                value_arguments: Vec::new(),
-            },
-            multiplicity: Multiplicity::Range {
-                lower: 0,
-                upper: Some(0),
-            },
-        });
+    // Phase 0: `letFunction` is a side-effect form — binds a variable
+    // into scope and returns `Nil[0]`. Routed via its own helper so the
+    // user-fn dispatch path below stays focused on the binding +
+    // substitution pipeline.
+    if let Some(let_result) = process_let_function_call(ctx, function_name, let_name, arg_types) {
+        return Some(let_result);
     }
 
-    // Resolved user function — apply generic substitution from arg
-    // types so `class<T>(T[*]):Class<T>[1]` called with `$l1: List<String>`
-    // produces `Class<List<String>>` instead of bare `Class<T>`. Without
-    // this, downstream calls like `new($l1->class(), '')` wouldn't see
-    // T's binding.
+    // Phase 1: resolved user function — bind generics, validate args,
+    // substitute the return signature.
     //
     // The substitution feeds on each arg's `arg_ty.type_expr`. That
     // type_expr must carry the parametric shape — e.g. `Named{LA_List,
@@ -722,176 +689,15 @@ fn infer_function_call(
         let bindings =
             crate::resolve::infer_generic_bindings(&f.parameters, arguments, ctx.model, &var_types);
 
-        // Type-check each argument against its parameter. The
-        // dispatcher's `narrow_candidates_by_type` short-circuits
-        // when there's only one candidate by name+arity, so a
-        // sole-overload function would otherwise silently accept
-        // mismatched argument types (e.g. `range(0.0, 5)` against
-        // `range(Integer[1], Integer[1])`). Run the same
-        // `is_type_compatible` check the dispatcher uses, but emit
-        // a diagnostic on failure rather than just filtering.
-        for (param, (arg_ty, arg_idx)) in f
-            .parameters
-            .iter()
-            .zip(arg_types.iter().zip(0usize..))
-        {
-            let Some(arg_ty) = arg_ty else { continue };
-            let arg_eid = match &arg_ty.type_expr {
-                TypeExpr::Named { element, .. } => Some(*element),
-                _ => None,
-            };
-            // Suppress when an alternative overload at this package
-            // would accept the actual arg type AND multiplicity —
-            // the dispatcher had a real choice; second-guessing its
-            // ranking is out of scope for this layer.
-            if has_compatible_sibling_overload(
-                ctx.model,
-                function,
-                function_name,
-                arg_idx,
-                arg_eid,
-                Some(&arg_ty.multiplicity),
-            ) {
-                continue;
-            }
-            // Imprecise-inference detector: when arg and param share
-            // the same element id but the param carries type-arguments
-            // (generic specialisation) and the arg doesn't, the arg's
-            // generic bindings — including its multiplicity — were
-            // never narrowed. Multiplicity inference for chained
-            // `cast<T|m>` and similar `m`-generic returns currently
-            // loses the binding; reporting an error here would just
-            // surface that upstream gap as a noisy false positive.
-            // Skip until generic-multiplicity binding propagates
-            // through the chain.
-            if let (
-                TypeExpr::Named {
-                    element: a_eid,
-                    type_arguments: a_args,
-                    ..
-                },
-                TypeExpr::Named {
-                    element: p_eid,
-                    type_arguments: p_args,
-                    ..
-                },
-            ) = (&arg_ty.type_expr, &param.type_expr)
-                && a_eid == p_eid
-                && a_args.is_empty()
-                && !p_args.is_empty()
-            {
-                continue;
-            }
-            if !crate::resolve::is_multiplicity_compatible(
-                Some(&arg_ty.multiplicity),
-                &param.multiplicity,
-            ) {
-                let arg_si = arg_source_infos
-                    .get(arg_idx)
-                    .cloned()
-                    .unwrap_or_else(|| arg_source_infos.first().cloned().unwrap_or_else(|| {
-                        legend_pure_parser_ast::SourceInfo::new("<unknown>", 0, 0, 0, 0)
-                    }));
-                ctx.errors.push(crate::error::CompilationError {
-                    message: format!(
-                        "Argument {} of '{}': expected multiplicity {}, got {}",
-                        arg_idx + 1,
-                        function_name,
-                        render_multiplicity(&param.multiplicity),
-                        render_multiplicity(&arg_ty.multiplicity),
-                    ),
-                    source_info: arg_si,
-                    kind: crate::error::CompilationErrorKind::UnresolvedElement {
-                        path: SmolStr::from(format!(
-                            "argument-multiplicity-mismatch:{function_name}:{arg_idx}"
-                        )),
-                    },
-                });
-            }
-            // Three cases this nominal check can't model — they
-            // need structural / lattice-aware matching that lives
-            // upstream and isn't this layer's concern. Skipping them
-            // is *not* the kind of "trustworthy" gate the user
-            // pushed back on (those suppressed real bugs); these are
-            // category mismatches the check fundamentally doesn't
-            // handle:
-            //
-            //   1. **Function references**: `myFn` as a value has
-            //      M3 metatype `ConcreteFunctionDefinition` /
-            //      `NativeFunctionDefinition`, both subtypes of the
-            //      `Function` metaclass. `is_subtype` walks Class
-            //      `super_types`, but the M3 metamodel hierarchy
-            //      isn't always loaded as Class supertypes, so a
-            //      function-arg vs `Function<{…}>` param falsely
-            //      fails. The proper fix is to teach `is_subtype`
-            //      about the metamodel hierarchy; until then the
-            //      structural `FunctionType` type-arg on the param
-            //      is enough to identify the callee shape.
-            //
-            //   2. **Structural `FunctionType` params**: the param's
-            //      type-expr is `TypeExpr::FunctionType { … }`
-            //      (lambda arrow type), not `Named { … }`. Nominal
-            //      element comparison is meaningless.
-            //
-            //   3. **`Nil` arg**: the empty-collection literal `[]`
-            //      lowers to `Nil[0..0]`. `Nil` is the bottom of
-            //      Pure's subtyping lattice, compatible with every
-            //      type. The platform passes it freely into Function
-            //      and other typed params.
-            if let Some(eid) = arg_eid
-                && matches!(ctx.model.try_get_element(eid), Some(Element::Function(_)))
-            {
-                continue;
-            }
-            // Package values (`meta::pure::functions::meta` passed
-            // as a `PackageableElement` arg) — same metaclass-
-            // hierarchy issue as function references. `is_subtype`
-            // walks `Class.super_types` but doesn't navigate the
-            // metaclass hierarchy of value-element-IDs, so the
-            // nominal check spuriously rejects every Package arg.
-            // Skip until `is_subtype` learns the metaclass story.
-            if matches!(arg_eid, Some(crate::ids::ElementId::Package(_))) {
-                continue;
-            }
-            if matches!(param.type_expr, TypeExpr::FunctionType { .. }) {
-                continue;
-            }
-            if arg_eid == Some(bootstrap::NIL_ID) {
-                continue;
-            }
-            if !crate::resolve::is_type_compatible(arg_eid, &param.type_expr, ctx.model) {
-                let arg_name = arg_eid
-                    .map(|e| ctx.model.element_name(e).to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string());
-                let param_name = match &param.type_expr {
-                    TypeExpr::Named { element, .. } => {
-                        ctx.model.element_name(*element).to_string()
-                    }
-                    _ => format!("{:?}", param.type_expr),
-                };
-                let arg_si = arg_source_infos
-                    .get(arg_idx)
-                    .cloned()
-                    .unwrap_or_else(|| arg_source_infos.first().cloned().unwrap_or_else(|| {
-                        legend_pure_parser_ast::SourceInfo::new("<unknown>", 0, 0, 0, 0)
-                    }));
-                ctx.errors.push(crate::error::CompilationError {
-                    message: format!(
-                        "Argument {} of '{}': expected {}, got {}",
-                        arg_idx + 1,
-                        function_name,
-                        param_name,
-                        arg_name,
-                    ),
-                    source_info: arg_si,
-                    kind: crate::error::CompilationErrorKind::UnresolvedElement {
-                        path: SmolStr::from(format!(
-                            "argument-type-mismatch:{function_name}:{arg_idx}"
-                        )),
-                    },
-                });
-            }
-        }
+        validate_call_arguments(
+            ctx,
+            function,
+            function_name,
+            &f.parameters,
+            arg_types,
+            arg_source_infos,
+        );
+
         // Reuse the up-front `bindings` to substitute the function's
         // declared return signature. The lambda second-pass
         // (`infer_generic_bindings` runs over `Function<{T->V}>` slots
@@ -927,6 +733,241 @@ fn infer_function_call(
 
     // Built-in operator return types
     infer_builtin_return_type(function_name, arg_types)
+}
+
+/// Phase 0 of the function-call processor: `letFunction` is a
+/// side-effect form that binds a variable into scope and returns
+/// `Nil[0]`. Returns `Some(...)` when this branch handled the call;
+/// `None` when the caller should continue with the user-fn dispatch
+/// path.
+///
+/// Bind even when the value's type couldn't be inferred (None) —
+/// otherwise subsequent `$name` references downstream would
+/// false-positive the undeclared-variable check just because we
+/// couldn't infer the let-rhs's type. The placeholder is
+/// `TypeExpr::Unresolved` which type-compatibility helpers already
+/// treat as "matches anything".
+fn process_let_function_call(
+    ctx: &mut InferCtx<'_>,
+    function_name: &SmolStr,
+    let_name: Option<(&SmolStr, &legend_pure_parser_ast::SourceInfo)>,
+    arg_types: &[Option<ResolvedType>],
+) -> Option<ResolvedType> {
+    if function_name != "letFunction" || arg_types.len() != 2 {
+        return None;
+    }
+    let (name, source_info) = let_name?;
+    if let Some(scope) = ctx.scopes.last()
+        && scope.lookup(name).is_some()
+    {
+        ctx.errors.push(crate::error::CompilationError {
+            message: format!("'{name}' has already been defined!"),
+            source_info: (*source_info).clone(),
+            kind: crate::error::CompilationErrorKind::DuplicateVariable { name: name.clone() },
+        });
+    }
+    let bound = arg_types[1].clone().unwrap_or_else(|| ResolvedType {
+        type_expr: TypeExpr::Unresolved,
+        multiplicity: Multiplicity::PureOne,
+    });
+    if let Some(scope) = ctx.scopes.last_mut() {
+        scope.bind(name.clone(), bound);
+    }
+    // `letFunction` itself returns `Nil[0]` (a side-effect statement).
+    Some(ResolvedType {
+        type_expr: TypeExpr::Named {
+            element: bootstrap::NIL_ID,
+            type_arguments: Vec::new(),
+            multiplicity_arguments: Vec::new(),
+            value_arguments: Vec::new(),
+        },
+        multiplicity: Multiplicity::Range {
+            lower: 0,
+            upper: Some(0),
+        },
+    })
+}
+
+/// Phase 2 of the function-call processor: per-argument type +
+/// multiplicity check. The dispatcher's `narrow_candidates_by_type`
+/// short-circuits when there's only one candidate by name + arity, so
+/// a sole-overload function would otherwise silently accept mismatched
+/// argument types (e.g. `range(0.0, 5)` against
+/// `range(Integer[1], Integer[1])`). Run the same `is_type_compatible`
+/// check the dispatcher uses, but emit a diagnostic on failure rather
+/// than just filtering.
+///
+/// Currently checks against the raw declared `param.type_expr` — i.e.
+/// without substituting collected bindings into it. Generic params
+/// stay `Generic(T)` and `is_type_compatible` returns permissive on
+/// `Generic`. Step 3g of the plan (strict-mode flag) flips the check
+/// to operate on the substituted form, which catches `eval(func, 'wrong')`
+/// style mismatches at the cost of diverging from Java parity (Java
+/// itself silently widens — see BACKLOG entry "eval strict arg
+/// validation").
+#[allow(clippy::too_many_arguments)]
+fn validate_call_arguments(
+    ctx: &mut InferCtx<'_>,
+    function: Option<crate::ids::ElementId>,
+    function_name: &SmolStr,
+    parameters: &[Parameter],
+    arg_types: &[Option<ResolvedType>],
+    arg_source_infos: &[legend_pure_parser_ast::SourceInfo],
+) {
+    for (param, (arg_ty, arg_idx)) in parameters.iter().zip(arg_types.iter().zip(0usize..)) {
+        let Some(arg_ty) = arg_ty else { continue };
+        let arg_eid = match &arg_ty.type_expr {
+            TypeExpr::Named { element, .. } => Some(*element),
+            _ => None,
+        };
+        // Suppress when an alternative overload at this package
+        // would accept the actual arg type AND multiplicity —
+        // the dispatcher had a real choice; second-guessing its
+        // ranking is out of scope for this layer.
+        if has_compatible_sibling_overload(
+            ctx.model,
+            function,
+            function_name,
+            arg_idx,
+            arg_eid,
+            Some(&arg_ty.multiplicity),
+        ) {
+            continue;
+        }
+        // Imprecise-inference detector: when arg and param share
+        // the same element id but the param carries type-arguments
+        // (generic specialisation) and the arg doesn't, the arg's
+        // generic bindings — including its multiplicity — were
+        // never narrowed. Multiplicity inference for chained
+        // `cast<T|m>` and similar `m`-generic returns currently
+        // loses the binding; reporting an error here would just
+        // surface that upstream gap as a noisy false positive.
+        // Skip until generic-multiplicity binding propagates
+        // through the chain.
+        if let (
+            TypeExpr::Named {
+                element: a_eid,
+                type_arguments: a_args,
+                ..
+            },
+            TypeExpr::Named {
+                element: p_eid,
+                type_arguments: p_args,
+                ..
+            },
+        ) = (&arg_ty.type_expr, &param.type_expr)
+            && a_eid == p_eid
+            && a_args.is_empty()
+            && !p_args.is_empty()
+        {
+            continue;
+        }
+        if !crate::resolve::is_multiplicity_compatible(
+            Some(&arg_ty.multiplicity),
+            &param.multiplicity,
+        ) {
+            let arg_si = arg_source_infos.get(arg_idx).cloned().unwrap_or_else(|| {
+                arg_source_infos.first().cloned().unwrap_or_else(|| {
+                    legend_pure_parser_ast::SourceInfo::new("<unknown>", 0, 0, 0, 0)
+                })
+            });
+            ctx.errors.push(crate::error::CompilationError {
+                message: format!(
+                    "Argument {} of '{}': expected multiplicity {}, got {}",
+                    arg_idx + 1,
+                    function_name,
+                    render_multiplicity(&param.multiplicity),
+                    render_multiplicity(&arg_ty.multiplicity),
+                ),
+                source_info: arg_si,
+                kind: crate::error::CompilationErrorKind::UnresolvedElement {
+                    path: SmolStr::from(format!(
+                        "argument-multiplicity-mismatch:{function_name}:{arg_idx}"
+                    )),
+                },
+            });
+        }
+        // Three cases this nominal check can't model — they
+        // need structural / lattice-aware matching that lives
+        // upstream and isn't this layer's concern. Skipping them
+        // is *not* the kind of "trustworthy" gate the user
+        // pushed back on (those suppressed real bugs); these are
+        // category mismatches the check fundamentally doesn't
+        // handle:
+        //
+        //   1. **Function references**: `myFn` as a value has
+        //      M3 metatype `ConcreteFunctionDefinition` /
+        //      `NativeFunctionDefinition`, both subtypes of the
+        //      `Function` metaclass. `is_subtype` walks Class
+        //      `super_types`, but the M3 metamodel hierarchy
+        //      isn't always loaded as Class supertypes, so a
+        //      function-arg vs `Function<{…}>` param falsely
+        //      fails. The proper fix is to teach `is_subtype`
+        //      about the metamodel hierarchy; until then the
+        //      structural `FunctionType` type-arg on the param
+        //      is enough to identify the callee shape.
+        //
+        //   2. **Structural `FunctionType` params**: the param's
+        //      type-expr is `TypeExpr::FunctionType { … }`
+        //      (lambda arrow type), not `Named { … }`. Nominal
+        //      element comparison is meaningless.
+        //
+        //   3. **`Nil` arg**: the empty-collection literal `[]`
+        //      lowers to `Nil[0..0]`. `Nil` is the bottom of
+        //      Pure's subtyping lattice, compatible with every
+        //      type. The platform passes it freely into Function
+        //      and other typed params.
+        if let Some(eid) = arg_eid
+            && matches!(ctx.model.try_get_element(eid), Some(Element::Function(_)))
+        {
+            continue;
+        }
+        // Package values (`meta::pure::functions::meta` passed
+        // as a `PackageableElement` arg) — same metaclass-
+        // hierarchy issue as function references. `is_subtype`
+        // walks `Class.super_types` but doesn't navigate the
+        // metaclass hierarchy of value-element-IDs, so the
+        // nominal check spuriously rejects every Package arg.
+        // Skip until `is_subtype` learns the metaclass story.
+        if matches!(arg_eid, Some(crate::ids::ElementId::Package(_))) {
+            continue;
+        }
+        if matches!(param.type_expr, TypeExpr::FunctionType { .. }) {
+            continue;
+        }
+        if arg_eid == Some(bootstrap::NIL_ID) {
+            continue;
+        }
+        if !crate::resolve::is_type_compatible(arg_eid, &param.type_expr, ctx.model) {
+            let arg_name = arg_eid
+                .map(|e| ctx.model.element_name(e).to_string())
+                .unwrap_or_else(|| "<unknown>".to_string());
+            let param_name = match &param.type_expr {
+                TypeExpr::Named { element, .. } => ctx.model.element_name(*element).to_string(),
+                _ => format!("{:?}", param.type_expr),
+            };
+            let arg_si = arg_source_infos.get(arg_idx).cloned().unwrap_or_else(|| {
+                arg_source_infos.first().cloned().unwrap_or_else(|| {
+                    legend_pure_parser_ast::SourceInfo::new("<unknown>", 0, 0, 0, 0)
+                })
+            });
+            ctx.errors.push(crate::error::CompilationError {
+                message: format!(
+                    "Argument {} of '{}': expected {}, got {}",
+                    arg_idx + 1,
+                    function_name,
+                    param_name,
+                    arg_name,
+                ),
+                source_info: arg_si,
+                kind: crate::error::CompilationErrorKind::UnresolvedElement {
+                    path: SmolStr::from(format!(
+                        "argument-type-mismatch:{function_name}:{arg_idx}"
+                    )),
+                },
+            });
+        }
+    }
 }
 
 /// Infers return types for well-known built-in operators.
@@ -997,7 +1038,6 @@ struct QpCandidate {
     /// Receiver class name (for diagnostics).
     receiver_type_name: SmolStr,
 }
-
 
 /// Inference helper for simple property access (`$x.name`). Shared by
 /// the legacy `ExprKind::PropertyAccess` arm and the new
@@ -1844,7 +1884,9 @@ pub fn check_body_return_signature(
     errors: &mut Vec<crate::error::CompilationError>,
 ) {
     let Some(last) = body.last() else { return };
-    let Some(rt) = last.type_info.as_ref() else { return };
+    let Some(rt) = last.type_info.as_ref() else {
+        return;
+    };
 
     // Pure semantics: a `let x = expr;` as the body's last
     // statement is treated as if the body returned `expr` itself —
@@ -1852,10 +1894,8 @@ pub fn check_body_return_signature(
     // (Java Pure's `letAsLastStatement` test names the rule.) Skip
     // the body-return check when we'd otherwise flag every
     // platform-side function whose tail is a `let`.
-    if let ExprKind::FunctionCall(crate::types::FunctionCallData {
-        function_name,
-        ..
-    }) = &*last.kind
+    if let ExprKind::FunctionCall(crate::types::FunctionCallData { function_name, .. }) =
+        &*last.kind
         && function_name == "letFunction"
     {
         return;
@@ -2063,10 +2103,7 @@ mod tests {
         // Bootstrap + a chunk containing a synthetic
         // `meta::test::takesInt(Integer[1]): Integer[1]` function.
         let mut model = model_with_bootstrap();
-        let pkg = model.get_or_create_package(&[
-            SmolStr::new("meta"),
-            SmolStr::new("test"),
-        ]);
+        let pkg = model.get_or_create_package(&[SmolStr::new("meta"), SmolStr::new("test")]);
         let chunk_id: u16 = 1;
         let mut chunk = ModelChunk::new(chunk_id);
         let func_si = SourceInfo::new("synth.pure", 1, 1, 3, 1);
@@ -2121,8 +2158,7 @@ mod tests {
         );
         let mismatch = errors.iter().find(|e| {
             let m = &e.message;
-            (m.contains("Integer") && m.contains("Float"))
-                || m.to_lowercase().contains("type")
+            (m.contains("Integer") && m.contains("Float")) || m.to_lowercase().contains("type")
         });
         assert!(
             mismatch.is_some(),
@@ -2139,10 +2175,7 @@ mod tests {
         use crate::nodes::function::Function;
 
         let mut model = model_with_bootstrap();
-        let pkg = model.get_or_create_package(&[
-            SmolStr::new("meta"),
-            SmolStr::new("test"),
-        ]);
+        let pkg = model.get_or_create_package(&[SmolStr::new("meta"), SmolStr::new("test")]);
         let chunk_id: u16 = 1;
         let mut chunk = ModelChunk::new(chunk_id);
         let func_si = SourceInfo::new("synth.pure", 1, 1, 3, 1);
@@ -2193,7 +2226,9 @@ mod tests {
                 function: Some(func_id),
                 function_name: SmolStr::new("takesInt"),
                 arguments: vec![untyped(
-                    ExprKind::Variable { name: SmolStr::new("x") },
+                    ExprKind::Variable {
+                        name: SmolStr::new("x"),
+                    },
                     SourceInfo::new("call.pure", 5, 10, 5, 12),
                 )],
             }),
@@ -2226,10 +2261,7 @@ mod tests {
         use crate::nodes::function::Function;
 
         let mut model = model_with_bootstrap();
-        let pkg = model.get_or_create_package(&[
-            SmolStr::new("meta"),
-            SmolStr::new("test"),
-        ]);
+        let pkg = model.get_or_create_package(&[SmolStr::new("meta"), SmolStr::new("test")]);
         let chunk_id: u16 = 1;
         let mut chunk = ModelChunk::new(chunk_id);
         let func_si = SourceInfo::new("synth.pure", 1, 1, 3, 1);
@@ -2281,7 +2313,9 @@ mod tests {
                 function: Some(func_id),
                 function_name: SmolStr::new("takes"),
                 arguments: vec![untyped(
-                    ExprKind::Variable { name: SmolStr::new("x") },
+                    ExprKind::Variable {
+                        name: SmolStr::new("x"),
+                    },
                     SourceInfo::new("call.pure", 5, 10, 5, 12),
                 )],
             }),
@@ -2301,7 +2335,8 @@ mod tests {
             m.contains("multiplicity")
         });
         assert_eq!(
-            got_error, expect_error,
+            got_error,
+            expect_error,
             "{scenario}: errors = {:?}",
             errors.iter().map(|e| &e.message).collect::<Vec<_>>()
         );
@@ -2311,77 +2346,162 @@ mod tests {
     /// range. None should error.
     #[test]
     fn mult_pure_one_arg_is_compatible_with_supertype_params() {
-        run_mult_check(Multiplicity::PureOne, Multiplicity::PureOne, false,
-            "[1] arg into [1] param");
-        run_mult_check(Multiplicity::ZeroOrOne, Multiplicity::PureOne, false,
-            "[1] arg into [0..1] param");
-        run_mult_check(Multiplicity::OneOrMany, Multiplicity::PureOne, false,
-            "[1] arg into [1..*] param");
-        run_mult_check(Multiplicity::ZeroOrMany, Multiplicity::PureOne, false,
-            "[1] arg into [*] param");
+        run_mult_check(
+            Multiplicity::PureOne,
+            Multiplicity::PureOne,
+            false,
+            "[1] arg into [1] param",
+        );
+        run_mult_check(
+            Multiplicity::ZeroOrOne,
+            Multiplicity::PureOne,
+            false,
+            "[1] arg into [0..1] param",
+        );
+        run_mult_check(
+            Multiplicity::OneOrMany,
+            Multiplicity::PureOne,
+            false,
+            "[1] arg into [1..*] param",
+        );
+        run_mult_check(
+            Multiplicity::ZeroOrMany,
+            Multiplicity::PureOne,
+            false,
+            "[1] arg into [*] param",
+        );
     }
 
     /// `[0..1]` arg is broader than `[1]` — must error when the
     /// param insists on `[1]`. Compatible with `[0..1]` and `[*]`.
     #[test]
     fn mult_zero_or_one_arg_against_various_params() {
-        run_mult_check(Multiplicity::PureOne, Multiplicity::ZeroOrOne, true,
-            "[0..1] arg into [1] param — must error");
-        run_mult_check(Multiplicity::ZeroOrOne, Multiplicity::ZeroOrOne, false,
-            "[0..1] arg into [0..1] param");
-        run_mult_check(Multiplicity::OneOrMany, Multiplicity::ZeroOrOne, true,
-            "[0..1] arg into [1..*] param — lower-bound mismatch");
-        run_mult_check(Multiplicity::ZeroOrMany, Multiplicity::ZeroOrOne, false,
-            "[0..1] arg into [*] param");
+        run_mult_check(
+            Multiplicity::PureOne,
+            Multiplicity::ZeroOrOne,
+            true,
+            "[0..1] arg into [1] param — must error",
+        );
+        run_mult_check(
+            Multiplicity::ZeroOrOne,
+            Multiplicity::ZeroOrOne,
+            false,
+            "[0..1] arg into [0..1] param",
+        );
+        run_mult_check(
+            Multiplicity::OneOrMany,
+            Multiplicity::ZeroOrOne,
+            true,
+            "[0..1] arg into [1..*] param — lower-bound mismatch",
+        );
+        run_mult_check(
+            Multiplicity::ZeroOrMany,
+            Multiplicity::ZeroOrOne,
+            false,
+            "[0..1] arg into [*] param",
+        );
     }
 
     /// `[1..*]` arg fits `[1..*]` and `[*]` but not `[1]` or `[0..1]`.
     #[test]
     fn mult_one_or_many_arg_against_various_params() {
-        run_mult_check(Multiplicity::PureOne, Multiplicity::OneOrMany, true,
-            "[1..*] arg into [1] param — must error");
-        run_mult_check(Multiplicity::ZeroOrOne, Multiplicity::OneOrMany, true,
-            "[1..*] arg into [0..1] param — must error");
-        run_mult_check(Multiplicity::OneOrMany, Multiplicity::OneOrMany, false,
-            "[1..*] arg into [1..*] param");
-        run_mult_check(Multiplicity::ZeroOrMany, Multiplicity::OneOrMany, false,
-            "[1..*] arg into [*] param");
+        run_mult_check(
+            Multiplicity::PureOne,
+            Multiplicity::OneOrMany,
+            true,
+            "[1..*] arg into [1] param — must error",
+        );
+        run_mult_check(
+            Multiplicity::ZeroOrOne,
+            Multiplicity::OneOrMany,
+            true,
+            "[1..*] arg into [0..1] param — must error",
+        );
+        run_mult_check(
+            Multiplicity::OneOrMany,
+            Multiplicity::OneOrMany,
+            false,
+            "[1..*] arg into [1..*] param",
+        );
+        run_mult_check(
+            Multiplicity::ZeroOrMany,
+            Multiplicity::OneOrMany,
+            false,
+            "[1..*] arg into [*] param",
+        );
     }
 
     /// `[*]` (zero-or-many) is the broadest — only fits `[*]`.
     #[test]
     fn mult_zero_or_many_arg_against_various_params() {
-        run_mult_check(Multiplicity::PureOne, Multiplicity::ZeroOrMany, true,
-            "[*] arg into [1] param — must error");
-        run_mult_check(Multiplicity::ZeroOrOne, Multiplicity::ZeroOrMany, true,
-            "[*] arg into [0..1] param — must error");
-        run_mult_check(Multiplicity::OneOrMany, Multiplicity::ZeroOrMany, true,
-            "[*] arg into [1..*] param — must error");
-        run_mult_check(Multiplicity::ZeroOrMany, Multiplicity::ZeroOrMany, false,
-            "[*] arg into [*] param");
+        run_mult_check(
+            Multiplicity::PureOne,
+            Multiplicity::ZeroOrMany,
+            true,
+            "[*] arg into [1] param — must error",
+        );
+        run_mult_check(
+            Multiplicity::ZeroOrOne,
+            Multiplicity::ZeroOrMany,
+            true,
+            "[*] arg into [0..1] param — must error",
+        );
+        run_mult_check(
+            Multiplicity::OneOrMany,
+            Multiplicity::ZeroOrMany,
+            true,
+            "[*] arg into [1..*] param — must error",
+        );
+        run_mult_check(
+            Multiplicity::ZeroOrMany,
+            Multiplicity::ZeroOrMany,
+            false,
+            "[*] arg into [*] param",
+        );
     }
 
     /// Bounded ranges. `[2..2]` = exactly two; fits `[2..2]`, `[1..*]`,
     /// `[2..3]`, `[*]` but not `[1]` or `[0..1]`.
     #[test]
     fn mult_fixed_range_arg_against_various_params() {
-        let two = Multiplicity::Range { lower: 2, upper: Some(2) };
-        run_mult_check(Multiplicity::PureOne, two.clone(), true,
-            "[2] arg into [1] param — must error");
-        run_mult_check(Multiplicity::ZeroOrOne, two.clone(), true,
-            "[2] arg into [0..1] param — must error");
-        run_mult_check(Multiplicity::OneOrMany, two.clone(), false,
-            "[2] arg into [1..*] param");
-        run_mult_check(two.clone(), two.clone(), false,
-            "[2] arg into [2] param");
+        let two = Multiplicity::Range {
+            lower: 2,
+            upper: Some(2),
+        };
         run_mult_check(
-            Multiplicity::Range { lower: 2, upper: Some(3) },
+            Multiplicity::PureOne,
+            two.clone(),
+            true,
+            "[2] arg into [1] param — must error",
+        );
+        run_mult_check(
+            Multiplicity::ZeroOrOne,
+            two.clone(),
+            true,
+            "[2] arg into [0..1] param — must error",
+        );
+        run_mult_check(
+            Multiplicity::OneOrMany,
+            two.clone(),
+            false,
+            "[2] arg into [1..*] param",
+        );
+        run_mult_check(two.clone(), two.clone(), false, "[2] arg into [2] param");
+        run_mult_check(
+            Multiplicity::Range {
+                lower: 2,
+                upper: Some(3),
+            },
             two.clone(),
             false,
             "[2] arg into [2..3] param",
         );
-        run_mult_check(Multiplicity::ZeroOrMany, two, false,
-            "[2] arg into [*] param");
+        run_mult_check(
+            Multiplicity::ZeroOrMany,
+            two,
+            false,
+            "[2] arg into [*] param",
+        );
     }
 
     /// Passing a collection literal `[1, 2]` (multiplicity `[2..2]`)
@@ -2446,10 +2566,7 @@ mod tests {
                 multiplicity: Multiplicity::PureOne,
             })),
         }];
-        let expected_return = (
-            named_type(bootstrap::INTEGER_ID),
-            Multiplicity::PureOne,
-        );
+        let expected_return = (named_type(bootstrap::INTEGER_ID), Multiplicity::PureOne);
 
         let mut errors = Vec::new();
         check_body_return_signature(
@@ -2482,17 +2599,16 @@ mod tests {
         let model = model_with_bootstrap();
         // High-confidence shape — `Variable` reference, mult [0..1].
         let body = vec![ValueSpec {
-            kind: Box::new(ExprKind::Variable { name: SmolStr::new("x") }),
+            kind: Box::new(ExprKind::Variable {
+                name: SmolStr::new("x"),
+            }),
             source_info: SourceInfo::new("x.pure", 3, 5, 3, 7),
             type_info: Some(Box::new(ResolvedType {
                 type_expr: named_type(bootstrap::INTEGER_ID),
                 multiplicity: Multiplicity::ZeroOrOne,
             })),
         }];
-        let expected_return = (
-            named_type(bootstrap::INTEGER_ID),
-            Multiplicity::PureOne,
-        );
+        let expected_return = (named_type(bootstrap::INTEGER_ID), Multiplicity::PureOne);
 
         let mut errors = Vec::new();
         check_body_return_signature(
@@ -2583,7 +2699,10 @@ mod tests {
         let mut errors = Vec::new();
         infer_function_body(&model, &[], &mut body, &mut errors);
 
-        let ti = body[0].type_info.as_ref().expect("collection must have type_info");
+        let ti = body[0]
+            .type_info
+            .as_ref()
+            .expect("collection must have type_info");
         // LUB(Integer, Float) = Number — that's what the platform
         // arithmetic dispatch needs to see.
         assert_eq!(
@@ -2605,10 +2724,7 @@ mod tests {
         use crate::nodes::function::Function;
 
         let mut model = model_with_bootstrap();
-        let pkg = model.get_or_create_package(&[
-            SmolStr::new("meta"),
-            SmolStr::new("test"),
-        ]);
+        let pkg = model.get_or_create_package(&[SmolStr::new("meta"), SmolStr::new("test")]);
         let chunk_id: u16 = 1;
         let mut chunk = ModelChunk::new(chunk_id);
         let si = SourceInfo::new("synth.pure", 1, 1, 3, 1);
@@ -2677,7 +2793,9 @@ mod tests {
                 function: Some(fn_id),
                 function_name: SmolStr::new("takesInt"),
                 arguments: vec![untyped(
-                    ExprKind::Variable { name: SmolStr::new("b") },
+                    ExprKind::Variable {
+                        name: SmolStr::new("b"),
+                    },
                     SourceInfo::new("call.pure", 5, 10, 5, 12),
                 )],
             }),
@@ -2713,10 +2831,7 @@ mod tests {
         use crate::nodes::class::Class;
 
         let mut model = model_with_bootstrap();
-        let pkg = model.get_or_create_package(&[
-            SmolStr::new("meta"),
-            SmolStr::new("test"),
-        ]);
+        let pkg = model.get_or_create_package(&[SmolStr::new("meta"), SmolStr::new("test")]);
         let chunk_id: u16 = 1;
         let mut chunk = ModelChunk::new(chunk_id);
         let si = SourceInfo::new("synth.pure", 1, 1, 3, 1);
@@ -2749,7 +2864,9 @@ mod tests {
         // Body's tail expression is a `$b: Box[1]` reference,
         // already type-info'd to Box[1].
         let body = vec![ValueSpec {
-            kind: Box::new(ExprKind::Variable { name: SmolStr::new("b") }),
+            kind: Box::new(ExprKind::Variable {
+                name: SmolStr::new("b"),
+            }),
             source_info: SourceInfo::new("c.pure", 3, 5, 3, 7),
             type_info: Some(Box::new(ResolvedType {
                 type_expr: named_type(box_id),

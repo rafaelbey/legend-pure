@@ -37,12 +37,10 @@ fn compile_with_imports(
         .iter()
         .enumerate()
         .map(|(i, s)| {
-            legend_pure_parser_parser::parse(s, &format!("tic_{i}.pure"))
-                .expect("parse failed")
+            legend_pure_parser_parser::parse(s, &format!("tic_{i}.pure")).expect("parse failed")
         })
         .collect();
-    let imports: Vec<smol_str::SmolStr> =
-        auto_imports.iter().map(smol_str::SmolStr::new).collect();
+    let imports: Vec<smol_str::SmolStr> = auto_imports.iter().map(smol_str::SmolStr::new).collect();
     legend_pure_parser_pure::pipeline::compile(&sfs, &imports)
 }
 
@@ -84,9 +82,8 @@ function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->
     $f->eval('not an int')
 }
 "#;
-    compile_with_imports(&[source], &[]).expect(
-        "Default mode matches Java: T LUBs to Any, eval-wrong-arg compiles silently",
-    );
+    compile_with_imports(&[source], &[])
+        .expect("Default mode matches Java: T LUBs to Any, eval-wrong-arg compiles silently");
 }
 
 // ---------------------------------------------------------------------------
@@ -212,7 +209,11 @@ function test::caller(): Any[1] {
             .iter()
             .any(|e| e.message.contains("type parameter") && e.message.contains("not resolved")),
         "expected 'type parameter not resolved' diagnostic, got: {:?}",
-        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        partial
+            .errors
+            .iter()
+            .map(|e| &e.message)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -240,7 +241,11 @@ function test::caller(): Integer[1] {
             e.message.contains("multiplicity parameter") && e.message.contains("not resolved")
         }),
         "expected 'multiplicity parameter not resolved' diagnostic, got: {:?}",
-        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        partial
+            .errors
+            .iter()
+            .map(|e| &e.message)
+            .collect::<Vec<_>>()
     );
 }
 

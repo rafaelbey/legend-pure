@@ -309,12 +309,7 @@ impl TypeInferenceContext {
     }
 
     /// Register a multiplicity-variable binding with the given mode.
-    pub fn register_mult(
-        &mut self,
-        name: &SmolStr,
-        value: Multiplicity,
-        mode: RegisterMode,
-    ) {
+    pub fn register_mult(&mut self, name: &SmolStr, value: Multiplicity, mode: RegisterMode) {
         match mode {
             RegisterMode::Authoritative => {
                 self.bindings.mult.insert(name.clone(), value);

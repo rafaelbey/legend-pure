@@ -2207,15 +2207,19 @@ native function test::head<T>(c: T[*]): T[0..1];
 function test::caller(): String[0..1] { [1, 2, 3]->head() }
 ";
     let result = compile_with_imports(&[source], &[]);
-    let partial = result.expect_err(
-        "head on Integer[*] returns Integer — declaring String[0..1] must error",
-    );
+    let partial =
+        result.expect_err("head on Integer[*] returns Integer — declaring String[0..1] must error");
     assert!(
-        partial.errors.iter().any(|e| {
-            e.message.contains("return") || e.message.contains("Argument")
-        }),
+        partial
+            .errors
+            .iter()
+            .any(|e| { e.message.contains("return") || e.message.contains("Argument") }),
         "expected return-type or argument error, got: {:?}",
-        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        partial
+            .errors
+            .iter()
+            .map(|e| &e.message)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -2243,8 +2247,7 @@ fn generic_subst_two_arg_homogeneous_returns_concrete_t() {
 native function test::pick<T>(a: T[1], b: T[1]): T[1];
 function test::caller(): Integer[1] { pick(1, 2) }
 ";
-    compile_with_imports(&[source], &[])
-        .expect("homogeneous Integer args must bind T:=Integer");
+    compile_with_imports(&[source], &[]).expect("homogeneous Integer args must bind T:=Integer");
 }
 
 #[test]
@@ -2270,9 +2273,8 @@ native function test::pick<T>(a: T[1], b: T[1]): T[1];
 function test::caller(): Integer[1] { pick(1, 1.5) }
 ";
     let result = compile_with_imports(&[source], &[]);
-    let partial = result.expect_err(
-        "T:=Number from Integer+Float LUB is incompatible with declared Integer[1]",
-    );
+    let partial = result
+        .expect_err("T:=Number from Integer+Float LUB is incompatible with declared Integer[1]");
     assert!(
         !partial.errors.is_empty(),
         "expected at least one return/type error"
@@ -2317,9 +2319,8 @@ native function test::ident<T|m>(p: T[m]): T[m];
 function test::caller(): Integer[1] { ident([1, 2]) }
 ";
     let result = compile_with_imports(&[source], &[]);
-    let partial = result.expect_err(
-        "Integer[2..2] from ident([1,2]) cannot satisfy declared Integer[1]",
-    );
+    let partial =
+        result.expect_err("Integer[2..2] from ident([1,2]) cannot satisfy declared Integer[1]");
     assert!(!partial.errors.is_empty());
 }
 
@@ -2336,9 +2337,8 @@ fn generic_subst_property_chain_through_generic_class() {
 Class test::Box<T> { value: T[1]; }
 function test::caller(b: test::Box<String>[1]): String[1] { $b.value }
 ";
-    compile_with_imports(&[source], &[]).expect(
-        "$b.value on Box<String> must produce String[1] via class-generic substitution",
-    );
+    compile_with_imports(&[source], &[])
+        .expect("$b.value on Box<String> must produce String[1] via class-generic substitution");
 }
 
 #[test]
@@ -2355,9 +2355,8 @@ Class test::Box<T> { value: T[1]; }
 native function test::makeBox(): test::Box<String>[1];
 function test::caller(): String[1] { makeBox().value }
 ";
-    compile_with_imports(&[source], &[]).expect(
-        "Chained receiver makeBox().value must thread Box<String>'s T:=String through",
-    );
+    compile_with_imports(&[source], &[])
+        .expect("Chained receiver makeBox().value must thread Box<String>'s T:=String through");
 }
 
 #[test]
@@ -2374,9 +2373,8 @@ native function test::makeBox(): test::Box<String>[1];
 function test::caller(): Integer[1] { makeBox().value }
 ";
     let result = compile_with_imports(&[source], &[]);
-    let partial = result.expect_err(
-        "Box<String>.value resolves to String[1]; declaring Integer[1] must error",
-    );
+    let partial = result
+        .expect_err("Box<String>.value resolves to String[1]; declaring Integer[1] must error");
     assert!(
         !partial.errors.is_empty(),
         "expected at least one error from chained generic substitution"
@@ -2395,9 +2393,8 @@ fn generic_subst_property_chain_with_mult_variable() {
 Class test::Holder<T|m> { items: T[m]; }
 function test::caller(h: test::Holder<String|*>[1]): String[*] { $h.items }
 ";
-    compile_with_imports(&[source], &[]).expect(
-        "$h.items on Holder<String|*> must flow String[*] through class-mult substitution",
-    );
+    compile_with_imports(&[source], &[])
+        .expect("$h.items on Holder<String|*> must flow String[*] through class-mult substitution");
 }
 
 #[test]
@@ -2651,8 +2648,9 @@ native function test::pickItems<T>(h: test::Holder<T>[1], pred: meta::pure::meta
 native function test::isEmpty(s: String[1]): Boolean[1];
 function test::caller(h: test::Holder<String>[1]): String[*] { pickItems($h, x | $x->isEmpty()) }
 ";
-    compile_with_imports(&[source], &[])
-        .expect("pickItems must bind T:=String from Holder<String> and type lambda param x as String[1]");
+    compile_with_imports(&[source], &[]).expect(
+        "pickItems must bind T:=String from Holder<String> and type lambda param x as String[1]",
+    );
 }
 
 #[test]
