@@ -1078,6 +1078,45 @@ fn validate_relational_class_mappings(
             });
         }
 
+        // A8: extends rules on class mappings (Java parity:
+        // `TestExtendGrammar.testExtendInvalidSetCannotBeSelf` +
+        // `testExtendInvalidIdWithInclude`).
+        if let Some(parent_id) = &reg.extends {
+            // A8a: a class mapping cannot extend itself.
+            if parent_id == &reg.class_mapping_id {
+                errors.push(CompilationError {
+                    message: format!(
+                        "Class mapping '{}' cannot extend itself",
+                        reg.class_mapping_id
+                    ),
+                    source_info: reg.class_mapping_source_info.clone(),
+                    kind: CompilationErrorKind::InvalidAssociation {
+                        name: reg.class_mapping_id.clone(),
+                        reason: SmolStr::new("class mapping extends itself"),
+                    },
+                });
+            } else {
+                // A8b: extends id must resolve to a class mapping in
+                // the same `Mapping`.
+                let known = ids_by_mapping
+                    .get(&reg.mapping_fqn)
+                    .is_some_and(|set| set.contains(parent_id));
+                if !known {
+                    errors.push(CompilationError {
+                        message: format!(
+                            "Class mapping '{}' extends unknown id '{}' (no class mapping with \
+                             that id in '{}')",
+                            reg.class_mapping_id, parent_id, reg.mapping_fqn,
+                        ),
+                        source_info: reg.class_mapping_source_info.clone(),
+                        kind: CompilationErrorKind::UnresolvedElement {
+                            path: parent_id.clone(),
+                        },
+                    });
+                }
+            }
+        }
+
         // D: ~filter must reference a Filter visible to the database.
         if let Some(filter_block) = &reg.body.filter {
             let db_fqn = packageable_fqn(&filter_block.db);
