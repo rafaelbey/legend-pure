@@ -160,6 +160,26 @@ The higher-level derive generates the lower-level impls automatically.
 - **Pass 2a/2b split is load-bearing.** Pass 2a resolves all function *signatures*
   before Pass 2b compiles *bodies*. Type-based dispatch requires every signature to be
   visible in `PureModel` at body-lowering time. Do not merge these passes.
+- **Pass-1 shells carry every syntactic AST field.** `create_shell` (Pass 1) populates
+  `Class.type_parameters`/`multiplicity_parameters` and `Profile.stereotypes`/`tags`
+  directly from the AST. This is what makes resolver-eager validation sound regardless
+  of topological hydration order. Do not regress to empty placeholders — it's the
+  unlock for the whole validator architecture below.
+- **Validators run next to the data they inspect (Java-parity).** Three seams:
+  - **Resolver-eager** (`crate::resolve`): `resolve_type_ref` checks generic-class
+    type-arg arity; `resolve_stereotypes` / `resolve_tagged_values` check profile-kind
+    and name-existence. All sound thanks to populated Pass-1 shells.
+  - **Hydration-inline** (`hydrate_element_signature`): `validate_super_types`,
+    `validate_association`, `validate_duplicate_properties`,
+    `validate_no_access_on_properties`, `validate_no_multiple_access_levels` —
+    each fires the moment its inputs (slice of super-types / properties /
+    stereotypes / …) are built, before the parent `Element` value is constructed.
+  - **Cross-chunk** (`crate::validate::validate`, called from `finalize_model`):
+    only validators whose inputs *genuinely* span multiple chunks —
+    `validate_repo_visibility` and the access-level use-site walker (Step B).
+  Adding a new element kind = one match arm in `create_shell` + one in
+  `hydrate_element_signature` calling whichever piecewise validators apply. No
+  batch validator to update.
 - **Two resolution entry points** — don't confuse them:
   - `resolve_element_ptr` — exact mangled-name lookup. Used for type references,
     annotations, property access.
