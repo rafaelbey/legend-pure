@@ -70,5 +70,9 @@ pub fn error_code(kind: &CompilationErrorKind) -> &'static str {
         CompilationErrorKind::NotAccessible { .. } => "notAccessible",
         CompilationErrorKind::MultipleAccessLevels { .. } => "multipleAccessLevels",
         CompilationErrorKind::AccessLevelNotAllowed { .. } => "accessLevelNotAllowed",
+        CompilationErrorKind::UnresolvedTypeParameter { .. } => "unresolvedTypeParameter",
+        CompilationErrorKind::UnresolvedMultiplicityParameter { .. } => {
+            "unresolvedMultiplicityParameter"
+        }
     }
 }
