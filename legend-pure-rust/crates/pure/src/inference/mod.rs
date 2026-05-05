@@ -50,5 +50,9 @@
 //! `FunctionCallProcessor` phases.
 
 pub(crate) mod context;
+#[allow(dead_code)] // placeholder docs; Step 3d-cont fills in
+pub(crate) mod lambda;
+#[allow(dead_code)] // placeholder docs; Step 3d-cont fills in
+pub(crate) mod processor;
 
 pub(crate) use context::GenericBindings;
