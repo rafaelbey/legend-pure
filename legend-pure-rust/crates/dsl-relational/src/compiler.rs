@@ -118,6 +118,11 @@ struct RegisteredRelationalClassMapping {
     mapping_fqn: SmolStr,
     /// Class-mapping id — the explicit `[id]` if set, else the class FQN.
     class_mapping_id: SmolStr,
+    /// FQN of the class this mapping implements — taken verbatim from
+    /// the AST `ClassMapping.class` pointer. Used by per-property
+    /// validators that look up the class on `ctx.model` to inspect
+    /// declared properties' types.
+    class_fqn: SmolStr,
     /// `extends [superId]` — captured so Stage-8 can validate
     /// extends-on-association forbidden (G3).
     extends: Option<SmolStr>,
@@ -217,20 +222,13 @@ impl CompilerExtension for RelationalExtension {
                                 else {
                                     continue;
                                 };
-                                let class_mapping_id = cm.id.clone().unwrap_or_else(|| {
-                                    let mut s = String::new();
-                                    if let Some(pkg) = cm.class.package.as_ref() {
-                                        for seg in pkg.segments() {
-                                            s.push_str(seg.as_str());
-                                            s.push_str("::");
-                                        }
-                                    }
-                                    s.push_str(cm.class.name.as_str());
-                                    SmolStr::new(&s)
-                                });
+                                let class_fqn = packageable_fqn(&cm.class);
+                                let class_mapping_id =
+                                    cm.id.clone().unwrap_or_else(|| class_fqn.clone());
                                 relational_class_mappings.push(RegisteredRelationalClassMapping {
                                     mapping_fqn: mapping_fqn.clone(),
                                     class_mapping_id,
+                                    class_fqn,
                                     extends: cm.extends.clone(),
                                     class_mapping_source_info: cm.source_info.clone(),
                                     body: body.clone(),
@@ -316,6 +314,14 @@ impl CompilerExtension for RelationalExtension {
         // must (a) reference a join sequence, and (b) form a chain
         // from the source class mapping's main table to the target's.
         validate_association_mapping_joins(&class_mappings, &resolved_cms, &resolved, ctx.errors);
+        // Phase A5: RelationalInstanceSetImplementationValidator
+        // parity — per-property checks against the target class's
+        // declared property types: data-type properties forbid
+        // `[targetId]`; enum properties require an EnumerationMapping
+        // transformer; class-typed properties require a join sequence
+        // (Java errors with "Mapping Error! The target type:'X' is
+        // not a data type but the relationalOperation is not a join").
+        validate_class_mapping_property_types(&class_mappings, ctx.model, ctx.errors);
     }
 }
 
@@ -2321,4 +2327,287 @@ fn validate_association_mapping_joins(
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase A5 — RelationalInstanceSetImplementationValidator parity
+// (per-property type-driven checks)
+// ---------------------------------------------------------------------------
+
+/// For every relational class mapping (NOT association), inspect each
+/// property mapping line and apply the property-type checks Java's
+/// `RelationalInstanceSetImplementationValidator.validatePropertyMappings`
+/// runs:
+///
+/// - **Data-type with `[targetId]`** (Java: "The property 'X' returns
+///   a data type and thus should not have a targetId").
+/// - **Enum without EnumerationMapping** (Java: "Missing an
+///   EnumerationMapping for the enum property 'X'. Enum properties
+///   require an EnumerationMapping ...").
+/// - **Class-typed property without join sequence** (Java: "Mapping
+///   Error! The target type:'X' is not a data type but the
+///   relationalOperation is not a join").
+///
+/// Reads the property's declared type via
+/// `legend_pure_parser_pure::model::PureModel`. When the class can't
+/// be resolved on the model (test fixtures that don't compile real
+/// classes), the validator no-ops — the existing per-class-mapping
+/// validators already surface the missing-class case.
+fn validate_class_mapping_property_types(
+    class_mappings: &[RegisteredRelationalClassMapping],
+    model: &legend_pure_parser_pure::model::PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    use legend_pure_parser_pure::model::Element as ModelElement;
+    use legend_pure_parser_pure::types::TypeExpr;
+
+    for reg in class_mappings {
+        // Skip association bodies — A4 handles those.
+        if reg.body.association_mapping.is_some() {
+            continue;
+        }
+        let Some(class_id) = resolve_class_by_fqn(model, &reg.class_fqn) else {
+            // Class not resolvable on the model (fixtures without
+            // pure source, etc.) — no per-property type info to
+            // check against.
+            continue;
+        };
+
+        let owner = SmolStr::new(format!("Class mapping '{}'", reg.class_mapping_id.as_str()));
+
+        // Walk top-level + scope-wrapped lines (both flatten into
+        // class-mapping property scope).
+        let visit_line = |line: &SingleMappingLine, errors: &mut Vec<CompilationError>| {
+            check_property_line(line, class_id, model, &reg.class_mapping_id, &owner, errors);
+        };
+        for elem in &reg.body.mapping_elements {
+            match elem {
+                crate::ast::MappingElement::Single(line) => visit_line(line, errors),
+                crate::ast::MappingElement::Scope(s) => {
+                    for line in &s.mapping_lines {
+                        visit_line(line, errors);
+                    }
+                }
+            }
+        }
+
+        // Suppress warnings — TypeExpr / ModelElement are referenced
+        // through `check_property_line` below.
+        let _ = std::marker::PhantomData::<(TypeExpr, ModelElement)>;
+    }
+}
+
+fn check_property_line(
+    line: &SingleMappingLine,
+    class_id: legend_pure_parser_pure::ids::ElementId,
+    model: &legend_pure_parser_pure::model::PureModel,
+    class_mapping_id: &SmolStr,
+    owner: &SmolStr,
+    errors: &mut Vec<CompilationError>,
+) {
+    use crate::ast::NonePlusMappingValue;
+
+    // Plus lines declare a *local* property — by definition not on
+    // the underlying class, so the class's declared property types
+    // don't apply. Java's validator skips them too (the local
+    // property's type comes from the line's own LocalMappingProperty).
+    let SingleMappingLine::NonePlus(np) = line else {
+        return;
+    };
+
+    let property_name = &np.property.value;
+
+    // Resolve the property's declared type by walking the class
+    // hierarchy.
+    let Some(prop_type) = find_property_type(model, class_id, property_name) else {
+        // No such property on the class. dsl-mapping's validators
+        // surface the unknown-property error; we just skip type
+        // checks here.
+        return;
+    };
+
+    let target_kind = classify_type_target(model, &prop_type);
+
+    match &np.value {
+        NonePlusMappingValue::Relational(rm) => {
+            check_relational_value_against_type(
+                np,
+                rm,
+                target_kind,
+                class_mapping_id,
+                owner,
+                errors,
+            );
+        }
+        NonePlusMappingValue::Embedded(_) => {
+            // Embedded mappings always target a class (the embedded
+            // class) — Java's validator recurses into them. Property
+            // mappings inside the embedded body get visited at the
+            // top level of the per-class-mapping walk anyway, so
+            // nothing extra to do here.
+        }
+    }
+}
+
+/// Categorise a property's resolved [`TypeExpr`] into the three
+/// buckets Java's validator distinguishes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PropertyTargetKind {
+    /// `Integer`, `String`, `Date`, …
+    DataType,
+    /// `meta::pure::metamodel::type::Enumeration<…>`.
+    Enumeration,
+    /// Any other class.
+    Class,
+    /// Type didn't resolve to a known element — bail out of the
+    /// per-property-type checks for this line.
+    Unknown,
+}
+
+fn classify_type_target(
+    model: &legend_pure_parser_pure::model::PureModel,
+    ty: &legend_pure_parser_pure::types::TypeExpr,
+) -> PropertyTargetKind {
+    use legend_pure_parser_pure::model::Element as ModelElement;
+    use legend_pure_parser_pure::types::TypeExpr;
+    let TypeExpr::Named { element, .. } = ty else {
+        return PropertyTargetKind::Unknown;
+    };
+    match model.try_get_element(*element) {
+        Some(ModelElement::PrimitiveType(_)) => PropertyTargetKind::DataType,
+        Some(ModelElement::Enumeration(_)) => PropertyTargetKind::Enumeration,
+        Some(ModelElement::Class(_)) => PropertyTargetKind::Class,
+        _ => PropertyTargetKind::Unknown,
+    }
+}
+
+fn check_relational_value_against_type(
+    np: &crate::ast::NonePlusMappingLine,
+    rm: &crate::ast::RelationalMapping,
+    target_kind: PropertyTargetKind,
+    class_mapping_id: &SmolStr,
+    owner: &SmolStr,
+    errors: &mut Vec<CompilationError>,
+) {
+    let property_name = &np.property.value;
+
+    match target_kind {
+        PropertyTargetKind::DataType => {
+            // (1) `[srcId, tgtId]` is illegal for data-type-typed
+            // properties — Java errors with "should not have a
+            // targetId".
+            if let Some(target_id) = &np.target_id {
+                errors.push(CompilationError {
+                    message: format!(
+                        "{owner}: property '{property_name}' returns a data type and \
+                         thus should not have a targetId ('{}')",
+                        target_id.value,
+                    ),
+                    source_info: target_id.source_info.clone(),
+                    kind: CompilationErrorKind::InvalidAssociation {
+                        name: class_mapping_id.clone(),
+                        reason: SmolStr::new(format!(
+                            "data-type property '{property_name}' carries a targetId"
+                        )),
+                    },
+                });
+            }
+        }
+        PropertyTargetKind::Enumeration => {
+            // (2) Enum properties require an EnumerationMapping
+            // transformer — Java errors with "Missing an
+            // EnumerationMapping for the enum property".
+            if rm.transformer.is_none() {
+                errors.push(CompilationError {
+                    message: format!(
+                        "{owner}: property '{property_name}' is an enum-typed property and \
+                         requires an EnumerationMapping transformer (Java parity: \
+                         'Missing an EnumerationMapping for the enum property')"
+                    ),
+                    source_info: np.source_info.clone(),
+                    kind: CompilationErrorKind::InvalidAssociation {
+                        name: class_mapping_id.clone(),
+                        reason: SmolStr::new(format!(
+                            "enum property '{property_name}' missing EnumerationMapping"
+                        )),
+                    },
+                });
+            }
+        }
+        PropertyTargetKind::Class => {
+            // (3) Class-typed properties must be mapped to a join
+            // sequence (Java: "The target type:'X' is not a data
+            // type but the relationalOperation is not a join").
+            if rm.value.join.is_none() && rm.value.literal.is_none() {
+                errors.push(CompilationError {
+                    message: format!(
+                        "{owner}: property '{property_name}' targets a class but its \
+                         relational operation is not a join sequence (Java parity: \
+                         'is not a data type but the relationalOperation is not a join')"
+                    ),
+                    source_info: rm.value.source_info.clone(),
+                    kind: CompilationErrorKind::InvalidAssociation {
+                        name: class_mapping_id.clone(),
+                        reason: SmolStr::new(format!(
+                            "class-typed property '{property_name}' missing join"
+                        )),
+                    },
+                });
+            }
+        }
+        PropertyTargetKind::Unknown => {}
+    }
+}
+
+/// Resolve a class FQN to its model `ElementId`, returning `None`
+/// when no such class exists. Mirrors dsl-mapping's `resolve_class`
+/// helper — kept inline so dsl-relational doesn't need to reach into
+/// dsl-mapping internals.
+fn resolve_class_by_fqn(
+    model: &legend_pure_parser_pure::model::PureModel,
+    fqn: &str,
+) -> Option<legend_pure_parser_pure::ids::ElementId> {
+    use legend_pure_parser_pure::model::Element as ModelElement;
+    let segments: Vec<SmolStr> = fqn.split("::").map(SmolStr::new).collect();
+    if segments.is_empty() || segments.iter().any(SmolStr::is_empty) {
+        return None;
+    }
+    let id = model.resolve_by_path(&segments)?;
+    matches!(model.try_get_element(id)?, ModelElement::Class(_)).then_some(id)
+}
+
+/// Walk a class and its supertypes looking for a simple property
+/// named `prop_name`. Returns the property's declared type when found.
+/// Qualified properties resolve as "exists" but their
+/// function-typed shape isn't useful for the per-property checks
+/// here — return `None` so the caller skips them.
+fn find_property_type(
+    model: &legend_pure_parser_pure::model::PureModel,
+    class_id: legend_pure_parser_pure::ids::ElementId,
+    prop_name: &str,
+) -> Option<legend_pure_parser_pure::types::TypeExpr> {
+    use legend_pure_parser_pure::model::Element as ModelElement;
+    use legend_pure_parser_pure::types::TypeExpr;
+    let mut visited: HashSet<legend_pure_parser_pure::ids::ElementId> = HashSet::new();
+    let mut stack: Vec<legend_pure_parser_pure::ids::ElementId> = vec![class_id];
+    while let Some(id) = stack.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let Some(ModelElement::Class(c)) = model.try_get_element(id) else {
+            continue;
+        };
+        if let Some(p) = c.properties.iter().find(|p| p.name == prop_name) {
+            return Some(p.type_expr.clone());
+        }
+        if c.qualified_properties.iter().any(|q| q.name == prop_name) {
+            return None;
+        }
+        for st in &c.super_types {
+            if let TypeExpr::Named { element, .. } = st {
+                stack.push(*element);
+            }
+        }
+    }
+    None
 }
