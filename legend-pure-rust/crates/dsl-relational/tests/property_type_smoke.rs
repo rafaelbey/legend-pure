@@ -253,6 +253,177 @@ fn class_typed_property_without_join_errors() {
 }
 
 // ---------------------------------------------------------------------------
+// A7: AssociationMapping target must be an Association, no duplicates
+// ---------------------------------------------------------------------------
+
+#[test]
+fn association_mapping_targeting_class_errors() {
+    let errors = compile_errors(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table tradeT (id INT PRIMARY KEY, prodId INT)
+          Table prodT (id INT PRIMARY KEY)
+          Join tradeProd (tradeT.prodId = prodT.id)
+        )
+
+        ###Pure
+        Class pkg::Trade { id : Integer[1]; }
+        Class pkg::Product { id : Integer[1]; }
+        // pkg::NotAnAssociation is a Class, but the body below
+        // declares AssociationMapping(...) on it.
+        Class pkg::NotAnAssociation { x : Integer[1]; }
+
+        ###Mapping
+        Mapping pkg::M
+        (
+          pkg::Trade[tradeMap] : Relational
+          {
+            ~mainTable [pkg::db]tradeT
+            (id : tradeT.id)
+          }
+
+          pkg::Product[prodMap] : Relational
+          {
+            ~mainTable [pkg::db]prodT
+            (id : prodT.id)
+          }
+
+          pkg::NotAnAssociation : Relational
+          {
+            AssociationMapping
+            (
+              x[prodMap, tradeMap] : [pkg::db]@tradeProd | tradeT.id,
+              x[tradeMap, prodMap] : [pkg::db]@tradeProd | prodT.id
+            )
+          }
+        )
+    "});
+    assert!(
+        errors.iter().any(|m| m.contains("AssociationMapping body")
+            && m.contains("Class")
+            && m.contains("not an Association")),
+        "expected association-targets-class error; got {errors:#?}"
+    );
+}
+
+#[test]
+fn duplicate_association_mapping_errors() {
+    let errors = compile_errors(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table tradeT (id INT PRIMARY KEY, prodId INT)
+          Table prodT (id INT PRIMARY KEY)
+          Join tradeProd (tradeT.prodId = prodT.id)
+        )
+
+        ###Pure
+        Class pkg::Trade { id : Integer[1]; }
+        Class pkg::Product { id : Integer[1]; }
+        Association pkg::TradeProd
+        {
+          trade : pkg::Trade[1];
+          product : pkg::Product[1];
+        }
+
+        ###Mapping
+        Mapping pkg::M
+        (
+          pkg::Trade[tradeMap] : Relational
+          {
+            ~mainTable [pkg::db]tradeT
+            (id : tradeT.id)
+          }
+
+          pkg::Product[prodMap] : Relational
+          {
+            ~mainTable [pkg::db]prodT
+            (id : prodT.id)
+          }
+
+          pkg::TradeProd : Relational
+          {
+            AssociationMapping
+            (
+              trade[prodMap, tradeMap] : [pkg::db]@tradeProd | tradeT.id,
+              product[tradeMap, prodMap] : [pkg::db]@tradeProd | prodT.id
+            )
+          }
+
+          pkg::TradeProd : Relational
+          {
+            AssociationMapping
+            (
+              trade[prodMap, tradeMap] : [pkg::db]@tradeProd | tradeT.id,
+              product[tradeMap, prodMap] : [pkg::db]@tradeProd | prodT.id
+            )
+          }
+        )
+    "});
+    assert!(
+        errors
+            .iter()
+            .any(|m| m.contains("Duplicate AssociationMapping") && m.contains("pkg::TradeProd")),
+        "expected duplicate-association error; got {errors:#?}"
+    );
+}
+
+#[test]
+fn association_mapping_targeting_real_association_passes() {
+    let errors = compile_errors(indoc! {r"
+        ###Relational
+        Database pkg::db
+        (
+          Table tradeT (id INT PRIMARY KEY, prodId INT)
+          Table prodT (id INT PRIMARY KEY)
+          Join tradeProd (tradeT.prodId = prodT.id)
+        )
+
+        ###Pure
+        Class pkg::Trade { id : Integer[1]; }
+        Class pkg::Product { id : Integer[1]; }
+        Association pkg::TradeProd
+        {
+          trade : pkg::Trade[1];
+          product : pkg::Product[1];
+        }
+
+        ###Mapping
+        Mapping pkg::M
+        (
+          pkg::Trade[tradeMap] : Relational
+          {
+            ~mainTable [pkg::db]tradeT
+            (id : tradeT.id)
+          }
+
+          pkg::Product[prodMap] : Relational
+          {
+            ~mainTable [pkg::db]prodT
+            (id : prodT.id)
+          }
+
+          pkg::TradeProd : Relational
+          {
+            AssociationMapping
+            (
+              trade[prodMap, tradeMap] : [pkg::db]@tradeProd | tradeT.id,
+              product[tradeMap, prodMap] : [pkg::db]@tradeProd | prodT.id
+            )
+          }
+        )
+    "});
+    assert!(
+        !errors
+            .iter()
+            .any(|m| m.contains("AssociationMapping body")
+                || m.contains("Duplicate AssociationMapping")),
+        "expected clean assoc mapping; got {errors:#?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // A6: Inline target's class must be a subtype of the property's target class
 // ---------------------------------------------------------------------------
 
