@@ -565,9 +565,8 @@ fn resolve_unqualified(
         if let Some(elem) = ctx.model.try_get_element(id) {
             if matches!(
                 elem,
-                crate::model::Element::PrimitiveType(_)
-                    | crate::model::Element::Class(_) // captures `Any` / `Nil` only via the
-                                                      // `is_root_class_alias` filter below
+                crate::model::Element::PrimitiveType(_) | crate::model::Element::Class(_) // captures `Any` / `Nil` only via the
+                                                                                          // `is_root_class_alias` filter below
             ) {
                 use crate::ids::ElementId as Eid;
                 let is_any_or_nil = matches!(
@@ -715,10 +714,7 @@ pub(crate) fn resolve_stereotypes(
             let profile_id = resolve_element_ptr(&s.profile, &s.source_info, ctx, errors)?;
             if matches!(profile_id, ElementId::Package(_)) {
                 errors.push(CompilationError {
-                    message: format!(
-                        "Cannot resolve stereotype profile '{}'",
-                        s.profile.name()
-                    ),
+                    message: format!("Cannot resolve stereotype profile '{}'", s.profile.name()),
                     source_info: s.source_info.clone(),
                     kind: CompilationErrorKind::UnresolvedElement {
                         path: s.profile.name().clone(),
@@ -746,10 +742,7 @@ pub(crate) fn resolve_stereotypes(
                             source_info: s.source_info.clone(),
                             kind: CompilationErrorKind::InvalidAnnotation {
                                 element_name: ctx.model.element_name(profile_id).clone(),
-                                reason: SmolStr::new(format!(
-                                    "stereotype '{}' not found",
-                                    s.value
-                                )),
+                                reason: SmolStr::new(format!("stereotype '{}' not found", s.value)),
                             },
                         });
                     }
@@ -757,15 +750,11 @@ pub(crate) fn resolve_stereotypes(
                 Some(_) => {
                     let target_name = ctx.model.element_name(profile_id).clone();
                     errors.push(CompilationError {
-                        message: format!(
-                            "Stereotype target '{target_name}' is not a Profile"
-                        ),
+                        message: format!("Stereotype target '{target_name}' is not a Profile"),
                         source_info: s.source_info.clone(),
                         kind: CompilationErrorKind::InvalidAnnotation {
                             element_name: target_name.clone(),
-                            reason: SmolStr::new(format!(
-                                "'{target_name}' is not a Profile"
-                            )),
+                            reason: SmolStr::new(format!("'{target_name}' is not a Profile")),
                         },
                     });
                 }
@@ -826,10 +815,7 @@ pub(crate) fn resolve_tagged_values(
                             source_info: tv.source_info.clone(),
                             kind: CompilationErrorKind::InvalidAnnotation {
                                 element_name: ctx.model.element_name(profile_id).clone(),
-                                reason: SmolStr::new(format!(
-                                    "tag '{}' not found",
-                                    tv.tag.value
-                                )),
+                                reason: SmolStr::new(format!("tag '{}' not found", tv.tag.value)),
                             },
                         });
                     }
@@ -837,15 +823,11 @@ pub(crate) fn resolve_tagged_values(
                 Some(_) => {
                     let target_name = ctx.model.element_name(profile_id).clone();
                     errors.push(CompilationError {
-                        message: format!(
-                            "Tag target '{target_name}' is not a Profile"
-                        ),
+                        message: format!("Tag target '{target_name}' is not a Profile"),
                         source_info: tv.source_info.clone(),
                         kind: CompilationErrorKind::InvalidAnnotation {
                             element_name: target_name.clone(),
-                            reason: SmolStr::new(format!(
-                                "'{target_name}' is not a Profile"
-                            )),
+                            reason: SmolStr::new(format!("'{target_name}' is not a Profile")),
                         },
                     });
                 }
@@ -2082,13 +2064,7 @@ pub(crate) fn infer_generic_bindings(
             _ => continue,
         };
         for lambda_arg in lambda_args {
-            bind_from_lambda_body(
-                function_type,
-                lambda_arg,
-                model,
-                var_types,
-                &mut bindings,
-            );
+            bind_from_lambda_body(function_type, lambda_arg, model, var_types, &mut bindings);
         }
     }
 
@@ -2867,54 +2843,45 @@ mod tests {
         use crate::types::Multiplicity::*;
 
         // Identity: [1] × [1] = [1]
-        assert_eq!(
-            multiplicity_product(&PureOne, &PureOne),
-            PureOne
-        );
+        assert_eq!(multiplicity_product(&PureOne, &PureOne), PureOne);
         // [1] × [0..1] = [0..1]
-        assert_eq!(
-            multiplicity_product(&PureOne, &ZeroOrOne),
-            ZeroOrOne
-        );
+        assert_eq!(multiplicity_product(&PureOne, &ZeroOrOne), ZeroOrOne);
         // [0..1] × [1] = [0..1]
-        assert_eq!(
-            multiplicity_product(&ZeroOrOne, &PureOne),
-            ZeroOrOne
-        );
+        assert_eq!(multiplicity_product(&ZeroOrOne, &PureOne), ZeroOrOne);
         // [*] absorbs anything → [*]
-        assert_eq!(
-            multiplicity_product(&ZeroOrMany, &PureOne),
-            ZeroOrMany
-        );
-        assert_eq!(
-            multiplicity_product(&PureOne, &ZeroOrMany),
-            ZeroOrMany
-        );
+        assert_eq!(multiplicity_product(&ZeroOrMany, &PureOne), ZeroOrMany);
+        assert_eq!(multiplicity_product(&PureOne, &ZeroOrMany), ZeroOrMany);
         // [1..*] × [1] = [1..*] (lower 1*1=1, upper *=*).
-        assert_eq!(
-            multiplicity_product(&OneOrMany, &PureOne),
-            OneOrMany
-        );
+        assert_eq!(multiplicity_product(&OneOrMany, &PureOne), OneOrMany);
         // [1..*] × [0..1] = [*] (lower 1*0=0, upper *).
-        assert_eq!(
-            multiplicity_product(&OneOrMany, &ZeroOrOne),
-            ZeroOrMany
-        );
+        assert_eq!(multiplicity_product(&OneOrMany, &ZeroOrOne), ZeroOrMany);
         // [2] × [1] = [2]
         assert_eq!(
             multiplicity_product(
-                &Range { lower: 2, upper: Some(2) },
+                &Range {
+                    lower: 2,
+                    upper: Some(2)
+                },
                 &PureOne,
             ),
-            Range { lower: 2, upper: Some(2) },
+            Range {
+                lower: 2,
+                upper: Some(2)
+            },
         );
         // [2..3] × [1..*] = [2..*]
         assert_eq!(
             multiplicity_product(
-                &Range { lower: 2, upper: Some(3) },
+                &Range {
+                    lower: 2,
+                    upper: Some(3)
+                },
                 &OneOrMany,
             ),
-            Range { lower: 2, upper: None },
+            Range {
+                lower: 2,
+                upper: None
+            },
         );
     }
 
@@ -3064,8 +3031,12 @@ mod tests {
             island_lowerers: &[],
         };
         let mut errors = Vec::new();
-        let resolved =
-            resolve_unqualified(&SmolStr::new("Foo"), &SourceInfo::new("t.pure", 1, 1, 1, 1), &ctx, &mut errors);
+        let resolved = resolve_unqualified(
+            &SmolStr::new("Foo"),
+            &SourceInfo::new("t.pure", 1, 1, 1, 1),
+            &ctx,
+            &mut errors,
+        );
         assert_eq!(resolved, Some(import_foo_id));
         assert!(errors.is_empty());
 
