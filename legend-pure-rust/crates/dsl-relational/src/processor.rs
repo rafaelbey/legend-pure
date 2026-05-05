@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Phase B1+B2+B3+B4+B5+B6 (and B7 in compiler.rs): post-processor
-//! for the relational DSL.
+//! Phase B1+B2+B3+B4+B5+B6+C (and B7 + A3' in compiler.rs):
+//! post-processor for the relational DSL.
 //!
 //! `RelationalExtension::define_bodies` runs this module against every
 //! registered [`DatabaseDef`] to produce a [`ResolvedDatabase`] — a
@@ -61,15 +61,23 @@
 //!   resolution as class-mapping properties. Each end's
 //!   `[srcId, tgtId]` tags are preserved for downstream consumers.
 //!
+//! - **Milestoning auto-rewrite** (Phase C) — for every class mapping
+//!   whose effective main table declares a `milestoning(...)` spec,
+//!   `apply_milestoning_synthesis` populates
+//!   `synthesized_milestoning` with the embedded property mapping
+//!   Java's `MilestoningPropertyMappingProcessor` would emit. Maps
+//!   `BUS_FROM`/`BUS_THRU` → `from`/`thru`, `PROCESSING_IN`/
+//!   `PROCESSING_OUT` → `in`/`out`, and snapshot variants both onto
+//!   the single `*_SNAPSHOT_DATE` column.
+//!
 //! What this module deliberately defers:
 //!
 //! - Embedded-body recursion (depends on broader plumbing)
-//! - Milestoning auto-rewrite (Phase C)
 //!
-//! Phase B7 (implicit-db `@join` resolution) lives in
-//! `compiler.rs::validate_class_mapping_join_refs` rather than
-//! producing a parallel resolved structure here, since it just
-//! threads the contextual db through the existing validator.
+//! Phase B7 (implicit-db `@join` resolution) and A3'
+//! (JoinTreeNodeValidation) live in `compiler.rs` since they emit
+//! validator diagnostics rather than building parallel resolved
+//! state.
 
 use std::collections::{HashMap, HashSet};
 
@@ -79,7 +87,8 @@ use legend_pure_parser_ast::SourceInfo;
 
 use crate::ast::{
     ColumnDef, DatabaseDef, DatabaseElement, JoinColWithDbOrConstant, MappingElement,
-    NonePlusMappingValue, OpColumn, OpExpr, RelationalClassMappingBody, SingleMappingLine, View,
+    MilestoneSpec, MilestoneValue, NonePlusMappingValue, OpColumn, OpExpr,
+    RelationalClassMappingBody, SingleMappingLine, View,
 };
 
 // ---------------------------------------------------------------------------
@@ -244,6 +253,67 @@ pub struct ResolvedTable {
     /// Column-name → index into `columns`. Built once at process
     /// time so column lookups are O(1).
     pub columns_by_name: HashMap<SmolStr, usize>,
+    /// Resolved milestoning spec when the table declares
+    /// `milestoning(...)`. Phase C uses this to drive synthesised
+    /// property mappings on class mappings that target this table.
+    pub milestoning: Option<ResolvedMilestoning>,
+}
+
+/// Java-parity milestoning kind, derived from the `MilestoneDef.kind`
+/// keyword (`business`, `processing`, etc.). Snapshot variants are
+/// flagged separately so synthesis can pick the right property →
+/// column mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum MilestoningKind {
+    /// `business( BUS_FROM=col, BUS_THRU=col, ... )`. Java
+    /// `MilestoningStereotypeEnum.businesstemporal`.
+    Business,
+    /// `business( BUS_SNAPSHOT_DATE=col, ... )`. Java relational
+    /// `BusinessSnapshotMilestoning`.
+    BusinessSnapshot,
+    /// `processing( PROCESSING_IN=col, PROCESSING_OUT=col, ... )`.
+    /// Java `MilestoningStereotypeEnum.processingtemporal`.
+    Processing,
+    /// `processing( PROCESSING_SNAPSHOT_DATE=col, ... )`. Java
+    /// relational `ProcessingSnapshotMilestoning`.
+    ProcessingSnapshot,
+}
+
+/// Resolved milestoning spec on a [`ResolvedTable`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedMilestoning {
+    /// One entry per `MilestoneDef` on the table — typically one
+    /// (e.g. `business`) or two (`business` + `processing` for
+    /// bitemporal). Each entry carries its kind + identifier-valued
+    /// fields.
+    pub definitions: Vec<ResolvedMilestoningDef>,
+}
+
+/// One milestoning flavour entry — `business(...)`, `processing(...)`,
+/// etc.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedMilestoningDef {
+    /// Kind tag derived from the `MilestoneDef.kind` keyword + which
+    /// fields are set.
+    pub kind: MilestoningKind,
+    /// Identifier-valued field bindings (e.g. `BUS_FROM=col` →
+    /// `(key="BUS_FROM", column_name="col", column_index=Some(i))`).
+    /// Date / boolean literal fields are filtered out — they have no
+    /// column to bind.
+    pub fields: Vec<ResolvedMilestoningField>,
+}
+
+/// One identifier-valued milestoning field binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedMilestoningField {
+    /// Field key (e.g. `"BUS_FROM"`, `"PROCESSING_IN"`).
+    pub key: SmolStr,
+    /// Column name on the table.
+    pub column_name: SmolStr,
+    /// Column index into [`ResolvedTable::columns`]. `None` when the
+    /// referenced column couldn't be resolved.
+    pub column_index: Option<usize>,
 }
 
 impl ResolvedTable {
@@ -450,6 +520,33 @@ pub struct ResolvedClassMapping {
     /// into this list (the scope's `[db]` is honoured during
     /// resolution but the wrapping is not preserved here).
     pub properties: Vec<ResolvedClassMappingProperty>,
+    /// Synthesised milestoning embedded mapping (Phase C). Populated
+    /// when the effective main table declares a `milestoning(...)`
+    /// spec — Java's
+    /// `MilestoningPropertyMappingProcessor.createMilestoningPropertyMapping`
+    /// inserts a synthetic embedded `RelationalInstanceSetImplementation`
+    /// at id `<parent>_milestoning`. We carry the parallel data here.
+    pub synthesized_milestoning: Option<SynthesizedMilestoningMapping>,
+}
+
+/// Synthesized embedded milestoning mapping produced by Phase C.
+///
+/// Java parity: `EmbeddedRelationalInstanceSetImplementation` with
+/// `id = "<parent>_milestoning"`, `_property` named `milestoning`,
+/// and one `RelationalPropertyMapping` per Pure milestoning property
+/// (`from`, `thru`, `in`, `out`) bound to the corresponding
+/// `MilestoneSpec` field's column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SynthesizedMilestoningMapping {
+    /// `<parent_class_mapping_id>_milestoning`.
+    pub id: SmolStr,
+    /// Parent class mapping id this milestoning embedded belongs to.
+    pub source_set_implementation_id: SmolStr,
+    /// `(property_name, OpColumnBinding)` pairs in canonical order
+    /// (`in` before `out` before `from` before `thru`, matching
+    /// Java's `compareTemporalDatePropertyNames`). Each binding
+    /// resolves to a column on the effective main table.
+    pub property_bindings: Vec<(SmolStr, OpColumnBinding)>,
 }
 
 /// Per-database resolved snapshot produced by [`process_database`].
@@ -1061,11 +1158,68 @@ fn resolve_table(t: &crate::ast::Table, schema: Option<SmolStr>) -> ResolvedTabl
         columns.push(resolve_column(c));
         columns_by_name.insert(c.name.value.clone(), i);
     }
+    let milestoning = t
+        .milestoning
+        .as_ref()
+        .map(|spec| resolve_milestoning(spec, &columns_by_name));
     ResolvedTable {
         schema,
         name: t.name.value.clone(),
         columns,
         columns_by_name,
+        milestoning,
+    }
+}
+
+fn resolve_milestoning(
+    spec: &MilestoneSpec,
+    columns_by_name: &HashMap<SmolStr, usize>,
+) -> ResolvedMilestoning {
+    let mut definitions: Vec<ResolvedMilestoningDef> = Vec::with_capacity(spec.definitions.len());
+    for def in &spec.definitions {
+        let mut fields: Vec<ResolvedMilestoningField> = Vec::new();
+        let mut keys: HashSet<SmolStr> = HashSet::new();
+        for f in &def.fields {
+            keys.insert(f.key.value.clone());
+            if let MilestoneValue::Identifier(id) = &f.value {
+                fields.push(ResolvedMilestoningField {
+                    key: f.key.value.clone(),
+                    column_name: id.value.clone(),
+                    column_index: columns_by_name.get(&id.value).copied(),
+                });
+            }
+        }
+        let kind = milestoning_kind(def.kind.value.as_str(), &keys);
+        definitions.push(ResolvedMilestoningDef { kind, fields });
+    }
+    ResolvedMilestoning { definitions }
+}
+
+/// Map the `MilestoneDef.kind` keyword + the set of declared field
+/// keys onto a [`MilestoningKind`]. Snapshot variants are detected
+/// when a `*_SNAPSHOT_DATE` field is present (mirrors Java's
+/// relational metamodel which has dedicated `*SnapshotMilestoning`
+/// classes for those shapes).
+fn milestoning_kind(kw: &str, keys: &HashSet<SmolStr>) -> MilestoningKind {
+    match kw {
+        "business" => {
+            if keys.contains("BUS_SNAPSHOT_DATE") {
+                MilestoningKind::BusinessSnapshot
+            } else {
+                MilestoningKind::Business
+            }
+        }
+        "processing" => {
+            if keys.contains("PROCESSING_SNAPSHOT_DATE") {
+                MilestoningKind::ProcessingSnapshot
+            } else {
+                MilestoningKind::Processing
+            }
+        }
+        // Unknown kind keyword → default to Business as a fallback.
+        // Stage-3 validators reject unknown kinds with a structured
+        // diagnostic; we never reach this branch on a clean compile.
+        _ => MilestoningKind::Business,
     }
 }
 
@@ -1210,6 +1364,7 @@ pub fn resolve_class_mapping(
         inferred_main_table,
         referenced_tables: referenced,
         properties,
+        synthesized_milestoning: None,
     }
 }
 
@@ -1394,4 +1549,230 @@ fn resolve_join_col_value(
         unresolved_column,
         source_info: source_info.clone(),
     })
+}
+
+// ---------------------------------------------------------------------------
+// Phase C — milestoning auto-rewrite
+// ---------------------------------------------------------------------------
+
+/// For each class mapping whose effective main table declares a
+/// `milestoning(...)` spec, synthesise the embedded property mapping
+/// Java's `MilestoningPropertyMappingProcessor.createMilestoningPropertyMapping`
+/// inserts. The resulting [`SynthesizedMilestoningMapping`] lives on
+/// `ResolvedClassMapping.synthesized_milestoning`.
+///
+/// Property → field mapping (Java parity):
+/// - `business` → `from` ← `BUS_FROM`, `thru` ← `BUS_THRU`
+/// - `business` snapshot → `from` ← `BUS_SNAPSHOT_DATE`, `thru` ← `BUS_SNAPSHOT_DATE`
+/// - `processing` → `in` ← `PROCESSING_IN`, `out` ← `PROCESSING_OUT`
+/// - `processing` snapshot → `in` ← `PROCESSING_SNAPSHOT_DATE`, `out` ← `PROCESSING_SNAPSHOT_DATE`
+/// - bitemporal (both `business` + `processing` defs) → all four
+///
+/// Property names are emitted in canonical order (`in`, `out`, `from`,
+/// `thru`) to match Java's
+/// `MilestoningStereotypeEnum.compareTemporalDatePropertyNames`.
+///
+/// Children of an extending parent skip synthesis when the parent
+/// also has a milestoned main table — Java's
+/// `shouldCreateMilestoningPropertyMapping` checks
+/// `superSetImplementationId == null`. Children with their own
+/// non-milestoned main table (or whose extends chain has no
+/// milestoning) get their own synthesised mapping.
+pub fn apply_milestoning_synthesis(
+    class_mappings: &mut [ResolvedClassMapping],
+    snapshots: &HashMap<SmolStr, ResolvedDatabase>,
+) {
+    let mut by_id: HashMap<(SmolStr, SmolStr), bool> = HashMap::new();
+    for cm in class_mappings.iter() {
+        by_id.insert(
+            (cm.mapping_fqn.clone(), cm.class_mapping_id.clone()),
+            class_mapping_has_milestoned_main_table(cm, snapshots),
+        );
+    }
+
+    for i in 0..class_mappings.len() {
+        let cm = &class_mappings[i];
+        if let Some(parent_id) = &cm.extends {
+            let parent_key = (cm.mapping_fqn.clone(), parent_id.clone());
+            if by_id.get(&parent_key).copied().unwrap_or(false) {
+                continue;
+            }
+        }
+        let Some(synthesised) = synthesise_milestoning_for_class_mapping(cm, snapshots) else {
+            continue;
+        };
+        class_mappings[i].synthesized_milestoning = Some(synthesised);
+    }
+}
+
+fn class_mapping_has_milestoned_main_table(
+    cm: &ResolvedClassMapping,
+    snapshots: &HashMap<SmolStr, ResolvedDatabase>,
+) -> bool {
+    let Some(main_table) = &cm.effective_main_table else {
+        return false;
+    };
+    let Some(db_fqn) = &cm.effective_primary_database else {
+        return false;
+    };
+    let Some(snapshot) = snapshots.get(db_fqn) else {
+        return false;
+    };
+    let Some(table) = snapshot.tables_by_name.get(main_table) else {
+        return false;
+    };
+    table.milestoning.is_some()
+}
+
+fn synthesise_milestoning_for_class_mapping(
+    cm: &ResolvedClassMapping,
+    snapshots: &HashMap<SmolStr, ResolvedDatabase>,
+) -> Option<SynthesizedMilestoningMapping> {
+    let main_table_name = cm.effective_main_table.as_ref()?;
+    let db_fqn = cm.effective_primary_database.as_ref()?;
+    let snapshot = snapshots.get(db_fqn)?;
+    let table = snapshot.tables_by_name.get(main_table_name)?;
+    let milestoning = table.milestoning.as_ref()?;
+
+    let mut by_key: HashMap<SmolStr, &ResolvedMilestoningField> = HashMap::new();
+    let mut has_business = false;
+    let mut has_business_snapshot = false;
+    let mut has_processing = false;
+    let mut has_processing_snapshot = false;
+    for def in &milestoning.definitions {
+        match def.kind {
+            MilestoningKind::Business => has_business = true,
+            MilestoningKind::BusinessSnapshot => has_business_snapshot = true,
+            MilestoningKind::Processing => has_processing = true,
+            MilestoningKind::ProcessingSnapshot => has_processing_snapshot = true,
+        }
+        for f in &def.fields {
+            by_key.insert(f.key.clone(), f);
+        }
+    }
+
+    let mut bindings: Vec<(SmolStr, OpColumnBinding)> = Vec::new();
+
+    if has_processing {
+        push_synth_binding(
+            &mut bindings,
+            "in",
+            by_key.get("PROCESSING_IN").copied(),
+            db_fqn,
+            main_table_name,
+            cm,
+        );
+        push_synth_binding(
+            &mut bindings,
+            "out",
+            by_key.get("PROCESSING_OUT").copied(),
+            db_fqn,
+            main_table_name,
+            cm,
+        );
+    } else if has_processing_snapshot {
+        if let Some(field) = by_key.get("PROCESSING_SNAPSHOT_DATE").copied() {
+            push_synth_binding(
+                &mut bindings,
+                "in",
+                Some(field),
+                db_fqn,
+                main_table_name,
+                cm,
+            );
+            push_synth_binding(
+                &mut bindings,
+                "out",
+                Some(field),
+                db_fqn,
+                main_table_name,
+                cm,
+            );
+        }
+    }
+    if has_business {
+        push_synth_binding(
+            &mut bindings,
+            "from",
+            by_key.get("BUS_FROM").copied(),
+            db_fqn,
+            main_table_name,
+            cm,
+        );
+        push_synth_binding(
+            &mut bindings,
+            "thru",
+            by_key.get("BUS_THRU").copied(),
+            db_fqn,
+            main_table_name,
+            cm,
+        );
+    } else if has_business_snapshot {
+        if let Some(field) = by_key.get("BUS_SNAPSHOT_DATE").copied() {
+            push_synth_binding(
+                &mut bindings,
+                "from",
+                Some(field),
+                db_fqn,
+                main_table_name,
+                cm,
+            );
+            push_synth_binding(
+                &mut bindings,
+                "thru",
+                Some(field),
+                db_fqn,
+                main_table_name,
+                cm,
+            );
+        }
+    }
+
+    if bindings.is_empty() {
+        return None;
+    }
+
+    Some(SynthesizedMilestoningMapping {
+        id: SmolStr::new(format!("{}_milestoning", cm.class_mapping_id.as_str())),
+        source_set_implementation_id: cm.class_mapping_id.clone(),
+        property_bindings: bindings,
+    })
+}
+
+fn push_synth_binding(
+    out: &mut Vec<(SmolStr, OpColumnBinding)>,
+    property_name: &str,
+    field: Option<&ResolvedMilestoningField>,
+    db_fqn: &SmolStr,
+    table_name: &SmolStr,
+    cm: &ResolvedClassMapping,
+) {
+    let Some(field) = field else {
+        return;
+    };
+    let source_info = cm
+        .properties
+        .first()
+        .and_then(|p| match &p.kind {
+            ResolvedClassMappingPropertyKind::Single { binding } => {
+                binding.as_ref().map(|b| b.source_info.clone())
+            }
+            ResolvedClassMappingPropertyKind::Plus { binding } => {
+                binding.as_ref().map(|b| b.source_info.clone())
+            }
+            ResolvedClassMappingPropertyKind::Embedded => None,
+        })
+        .unwrap_or_else(|| SourceInfo::new("", 0, 0, 0, 0));
+    out.push((
+        SmolStr::new(property_name),
+        OpColumnBinding {
+            database_fqn: db_fqn.clone(),
+            table_name: table_name.clone(),
+            column_index: field.column_index,
+            unresolved_database: false,
+            unresolved_table: false,
+            unresolved_column: field.column_index.is_none(),
+            source_info,
+        },
+    ));
 }

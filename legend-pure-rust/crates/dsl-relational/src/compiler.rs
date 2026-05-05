@@ -281,6 +281,10 @@ impl CompilerExtension for RelationalExtension {
         // Phase B5: inherit main-table / primary-database through the
         // `extends` chain.
         crate::processor::apply_extends_inheritance(&mut resolved_cms);
+        // Phase C: synthesise milestoning embedded mappings for class
+        // mappings whose effective main table declares a
+        // `milestoning(...)` spec.
+        crate::processor::apply_milestoning_synthesis(&mut resolved_cms, &resolved);
     }
 
     fn validate(&self, ctx: &mut ValidateCtx<'_>) {
