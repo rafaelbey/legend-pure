@@ -308,13 +308,13 @@ pub fn metatype_of(model: &crate::model::PureModel, element: &Element) -> Option
         Element::Class(_) => &["meta", "pure", "metamodel", "type", "Class"],
         Element::Enumeration(_) => &["meta", "pure", "metamodel", "type", "Enumeration"],
         Element::PrimitiveType(_) => &["meta", "pure", "metamodel", "type", "PrimitiveType"],
-        Element::Function(f) if f.is_native => &[
-            "meta",
-            "pure",
-            "metamodel",
-            "function",
-            "NativeFunctionDefinition",
-        ],
+        // Native functions: m3.pure declares `NativeFunction` (not
+        // `NativeFunctionDefinition` — Java's runtime distinguishes
+        // those, but our compiler-side metatype lookup uses the M3
+        // metaclass that actually exists in m3.pure).
+        Element::Function(f) if f.is_native => {
+            &["meta", "pure", "metamodel", "function", "NativeFunction"]
+        }
         Element::Function(_) => &[
             "meta",
             "pure",
