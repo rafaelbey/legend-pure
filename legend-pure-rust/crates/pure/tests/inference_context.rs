@@ -554,6 +554,42 @@ function test::handler(b: test::Box<Integer>[1]): Integer[1] {
 }
 
 // ---------------------------------------------------------------------------
+// 11. Subtype-view binding — Function param binds against Property arg
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tic_subtype_view_binds_function_against_property_subtype() {
+    // The platform pattern: `getProperty('a')->toOne()->eval($r)` where
+    // the eval overload's `func: Function<{T[n]->V[m]}>` parameter
+    // receives a `Property<...>`-typed arg. Property is a subtype of
+    // Function, so binding requires walking arg's supertype chain to
+    // find the Function-shaped ancestor with concrete substituted
+    // type/mult args. Synthetic version: `MyProp<L,R|m>` extends
+    // `MyFunc<{L[1]->R[m]}>`; calling
+    // `myEval(p:MyFunc<{T[n]->V[k]}>):V[k]` against a `MyProp<Int,Str|*>`
+    // should bind T:=Int, V:=Str, k:=*, and the return type becomes
+    // Str[*]. Without the supertype-view, T/V/k stay Variable/Generic
+    // and strict mode reports unresolved generics.
+    let source = r#"
+###Pure
+Class test::MyFunc<F> {}
+Class test::MyProp<L> extends test::MyFunc<L> {}
+native function test::myEval<T>(p: test::MyFunc<T>[1]): T[1];
+function test::caller(p: test::MyProp<Integer>[1]): Integer[1] {
+    test::myEval($p)
+}
+"#;
+    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[]).expect(
+            "Subtype-view binding: MyFunc<T> param against MyProp<L> \
+             arg must walk MyProp's supertype chain to extract \
+             T:=Integer. Without subtype_view, T stays Generic and \
+             strict mode reports unresolved.",
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
 // 10b. Two-branch dispatch — converged-args path (all converge, LUB)
 // ---------------------------------------------------------------------------
 

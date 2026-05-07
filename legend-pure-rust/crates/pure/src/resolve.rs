@@ -2227,22 +2227,40 @@ pub(crate) fn bind_type_with_mode(
             }
         }
         TypeExpr::Named {
+            element: p_eid,
             type_arguments: p_args,
             multiplicity_arguments: p_margs,
             ..
         } => {
             if let TypeExpr::Named {
+                element: a_eid,
                 type_arguments: a_args,
                 multiplicity_arguments: a_margs,
                 ..
             } = arg_ty
             {
-                for (p, a) in p_args.iter().zip(a_args.iter()) {
-                    bind_type_with_mode(p, a, out, mult_out, model, mode);
+                if p_eid == a_eid {
+                    // Same element — pairwise bind type-args + mult-args.
+                    for (p, a) in p_args.iter().zip(a_args.iter()) {
+                        bind_type_with_mode(p, a, out, mult_out, model, mode);
+                    }
+                    for (p, a) in p_margs.iter().zip(a_margs.iter()) {
+                        bind_mult_with_mode(p, a, mult_out, mode);
+                    }
+                } else if is_subtype(*a_eid, *p_eid, model) {
+                    // Different elements but arg is a subtype of param —
+                    // walk arg's supertype chain to find the
+                    // parameter-shaped ancestor with substituted
+                    // type/mult arguments, then recurse against that
+                    // view. Java's `GenericType.makeTypeArgumentAsConcreteAsPossible`
+                    // applies this kind of generalisation when binding
+                    // `Function<{T[n]->V[m]}>` against
+                    // `Property<Nil,Any|*>` (Property extends Function).
+                    if let Some(view) = subtype_view(*a_eid, a_args, a_margs, *p_eid, model) {
+                        bind_type_with_mode(param_ty, &view, out, mult_out, model, mode);
+                    }
                 }
-                for (p, a) in p_margs.iter().zip(a_margs.iter()) {
-                    bind_mult_with_mode(p, a, mult_out, mode);
-                }
+                // else: incompatible elements, nothing to bind.
             }
         }
         TypeExpr::FunctionType {
@@ -2266,6 +2284,112 @@ pub(crate) fn bind_type_with_mode(
         }
         _ => {}
     }
+}
+
+/// Walks `arg_eid`'s supertype chain looking for `target_eid`, applying
+/// type-argument and multiplicity-argument substitution at each hop.
+/// Returns the ancestor `TypeExpr` (always a `Named { element: target_eid, … }`)
+/// with concrete substituted args, or `None` if `target_eid` isn't
+/// reachable.
+///
+/// Java analog: `GenericType.makeTypeArgumentAsConcreteAsPossible`'s
+/// supertype-resolution branch — when matching `Function<{T->X}>`
+/// against `Property<Nil,Any|*>`, Java navigates Property's
+/// `Function<{Nil[1]->Any[*]}>` generalisation and uses that for
+/// inference. The platform corpus depends on this for
+/// `getProperty('a')->toOne()->eval($r)`-style reflective access where
+/// the `eval` overload's `Function<{T[n]->V[m]}>` parameter must bind
+/// against a Property arg.
+///
+/// Returns `None` for non-Class elements, for class hierarchies that
+/// don't reach `target_eid`, and for type-argument count mismatches
+/// between a class declaration's `type_parameters` and the supplied
+/// `arg_type_args` (defensive — should not happen with well-formed
+/// types).
+fn subtype_view(
+    arg_eid: ElementId,
+    arg_type_args: &[crate::types::TypeExpr],
+    arg_mult_args: &[crate::types::Multiplicity],
+    target_eid: ElementId,
+    model: &crate::model::PureModel,
+) -> Option<crate::types::TypeExpr> {
+    use crate::types::{Multiplicity, TypeExpr};
+
+    if arg_eid == target_eid {
+        // Caller already knows arg_eid != target_eid in the bind_type
+        // site, but this handles the recursive walk's terminal case
+        // when an intermediate ancestor IS the target.
+        return Some(TypeExpr::Named {
+            element: arg_eid,
+            type_arguments: arg_type_args.to_vec(),
+            multiplicity_arguments: arg_mult_args.to_vec(),
+            value_arguments: vec![],
+        });
+    }
+
+    let Element::Class(c) = model.get_element(arg_eid) else {
+        return None;
+    };
+
+    // Build substitution maps from the class declaration's parameter
+    // names → caller-supplied concrete args. Fall back gracefully when
+    // arities don't match (defensive — emit nothing rather than wrong
+    // bindings).
+    let ty_subst: HashMap<SmolStr, TypeExpr> =
+        if c.type_parameters.len() == arg_type_args.len() {
+            c.type_parameters
+                .iter()
+                .zip(arg_type_args.iter())
+                .map(|(name, te)| (name.clone(), te.clone()))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+    let mult_subst: HashMap<SmolStr, Multiplicity> =
+        if c.multiplicity_parameters.len() == arg_mult_args.len() {
+            c.multiplicity_parameters
+                .iter()
+                .zip(arg_mult_args.iter())
+                .map(|(name, m)| (name.clone(), m.clone()))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+
+    // BFS up `super_types`, looking for `target_eid`. At each hop,
+    // substitute the current frame's bindings into the supertype's
+    // type/mult args before recursing.
+    for st in &c.super_types {
+        let TypeExpr::Named {
+            element: st_eid,
+            type_arguments: st_args,
+            multiplicity_arguments: st_margs,
+            ..
+        } = st
+        else {
+            continue;
+        };
+        let substituted_args: Vec<TypeExpr> = st_args
+            .iter()
+            .map(|t| substitute_type(t, &ty_subst))
+            .collect();
+        let substituted_margs: Vec<Multiplicity> = st_margs
+            .iter()
+            .map(|m| substitute_mult(m, &mult_subst))
+            .collect();
+        if *st_eid == target_eid {
+            return Some(TypeExpr::Named {
+                element: target_eid,
+                type_arguments: substituted_args,
+                multiplicity_arguments: substituted_margs,
+                value_arguments: vec![],
+            });
+        }
+        if let Some(view) = subtype_view(*st_eid, &substituted_args, &substituted_margs, target_eid, model) {
+            return Some(view);
+        }
+    }
+    None
 }
 
 /// Bind a multiplicity-variable (`Multiplicity::Variable(name)`) against
