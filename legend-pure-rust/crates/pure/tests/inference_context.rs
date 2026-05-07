@@ -589,6 +589,44 @@ function test::caller(): Integer[1] {
 }
 
 // ---------------------------------------------------------------------------
+// 16. M3 metamodel chain: ($h.gt->toOne().typeArguments->at(0)).rawType
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tic_m3_metamodel_chain_binds_through_property_steps() {
+    // Synthetic version of the platform's `functionType.pure:20` chain:
+    //   $f.classifierGenericType
+    //     ->toOne()
+    //     .typeArguments
+    //     ->at(0)
+    //     .rawType
+    //     ->toOne()
+    //
+    // Each link's type-info must flow into the next call's binding
+    // pass. Synthetic shape uses `G { rawType, typeArguments }` (a
+    // GenericType-shaped class) and `Holder { gt: G[0..1] }`. Every
+    // generic call (`myToOne`, `myAt`) must bind its T from the
+    // chain.
+    let source = r#"
+###Pure
+Class test::G { rawType: test::T[0..1]; typeArguments: test::G[*]; }
+Class test::T {}
+Class test::Holder { gt: test::G[0..1]; }
+native function test::myToOne<X>(coll: X[*]): X[1];
+native function test::myAt<X>(coll: X[*], i: Integer[1]): X[1];
+function test::caller(h: test::Holder[1]): test::T[1] {
+    $h.gt->test::myToOne().typeArguments->test::myAt(0).rawType->test::myToOne()
+}
+"#;
+    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[]).expect(
+            "M3 chain: each step's type binds through; X resolves \
+             at every toOne/at call.",
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
 // 14. let-bound copy carries source's type to property/method chains
 // ---------------------------------------------------------------------------
 
