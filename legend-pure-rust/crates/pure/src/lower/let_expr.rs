@@ -179,16 +179,56 @@ fn infer_let_type(
                             // Compute LUB at TypeExpr level — extract ElementIds and
                             // find the common supertype.
                             if let (
-                                TypeExpr::Named { element: a, .. },
-                                TypeExpr::Named { element: b, .. },
+                                TypeExpr::Named {
+                                    element: a,
+                                    type_arguments: a_args,
+                                    multiplicity_arguments: a_margs,
+                                    ..
+                                },
+                                TypeExpr::Named {
+                                    element: b,
+                                    type_arguments: b_args,
+                                    multiplicity_arguments: b_margs,
+                                    ..
+                                },
                             ) = (&current, &te)
                             {
                                 let lub_id =
                                     crate::resolve::least_upper_bound_ids(*a, *b, ctx.model);
+                                // Same element → preserve type / mult
+                                // arguments by recursively LUBing each
+                                // slot. Without this, `let lambdas =
+                                // [{a:Integer|...}, {a:String|...}]`
+                                // dropped the
+                                // `Named<LambdaFunction>{[FunctionType]}`
+                                // type-arg, leaving downstream
+                                // `match($lambdas)` with no
+                                // FunctionType slot to bind T from
+                                // (Pass-1 binding fell off the cliff).
+                                // Different elements → no slot
+                                // alignment; drop args (existing
+                                // behaviour).
+                                let (lub_args, lub_margs) = if *a == *b && a == &lub_id {
+                                    let args: Vec<TypeExpr> = a_args
+                                        .iter()
+                                        .zip(b_args.iter())
+                                        .map(|(x, y)| {
+                                            crate::resolve::type_lub(x, y, ctx.model)
+                                        })
+                                        .collect();
+                                    let margs: Vec<crate::types::Multiplicity> = a_margs
+                                        .iter()
+                                        .zip(b_margs.iter())
+                                        .map(|(x, y)| crate::resolve::mult_lub(x, y))
+                                        .collect();
+                                    (args, margs)
+                                } else {
+                                    (vec![], vec![])
+                                };
                                 TypeExpr::Named {
                                     element: lub_id,
-                                    type_arguments: vec![],
-                                    multiplicity_arguments: Vec::new(),
+                                    type_arguments: lub_args,
+                                    multiplicity_arguments: lub_margs,
                                     value_arguments: vec![],
                                 }
                             } else {
