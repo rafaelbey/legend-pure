@@ -226,6 +226,26 @@ Generic-typed property/QP returns on generated interfaces (e.g.
 under a `GenericPolicy::AsObject` mode; static-facade function
 signatures still hard-fail on generics (`GenericPolicy::Reject`).
 
+`[0..1]` / `[*]` properties get `default` bodies returning
+`Optional.empty()` / `Collections.emptyList()`, so user `implements`
+classes only override the fields they care about. Proxies always go
+native, bypassing the default body.
+
+`PureProxyFactory.create(userImpl, iface, eval)` materialises a
+hand-written interface implementation as a real heap object via a new
+`nativeNew` JNI native (`crates/jni/src/lib.rs` →
+`JniContext::new_object` → `RuntimeHeap::alloc_dynamic` +
+`mutate_set`). Recursive: nested user impls become heap children,
+`Optional` and `Iterable` are unpacked, existing proxies pass through
+without re-materialisation. Cycle / sharing detection uses an
+`IdentityHashMap` keyed by user object identity.
+
+Known limitation (advisor follow-up): `pickGeneratedInterface` only
+walks declared interfaces of the user class (not the inherited
+chain), so a user class whose *parent* implements the generated
+interface won't resolve. Adequate for the `class MyPerson implements
+Person` case, needs a fix for deeper hierarchies.
+
 Verification: 16 codegen unit + integration tests (`-p
 legend-pure-java-codegen`), including a `javac --release 11` round-trip
 on the generated set + the runtime support classes

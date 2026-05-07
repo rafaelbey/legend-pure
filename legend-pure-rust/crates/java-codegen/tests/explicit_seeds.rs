@@ -53,8 +53,10 @@ fn extra_class_seed_emits_interface_with_no_function_request() {
     );
     assert!(src.contains("String label();"), "label() missing: {src}");
     assert!(
-        src.contains("java.util.Optional<Long> count();"),
-        "count() must be Optional<Long>: {src}"
+        src.contains(
+            "default java.util.Optional<Long> count() { return java.util.Optional.empty(); }"
+        ),
+        "count() must default to Optional.empty(): {src}"
     );
 
     let facade = files
@@ -112,17 +114,19 @@ fn association_seed_pulls_in_both_endpoint_classes() {
     // `accounts` should surface on Trader. The closure walker already
     // pulls those in once the participating class is in the seed set.
     assert!(
-        account
-            .contents
-            .contains("Iterable<com.example.gen.user_test.Trader> traders();"),
-        "Account.traders() association property missing: {}",
+        account.contents.contains(
+            "default Iterable<com.example.gen.user_test.Trader> traders() { \
+             return java.util.Collections.emptyList(); }"
+        ),
+        "Account.traders() association property missing or wrong default: {}",
         account.contents
     );
     assert!(
-        trader
-            .contents
-            .contains("Iterable<com.example.gen.user_test.Account> accounts();"),
-        "Trader.accounts() association property missing: {}",
+        trader.contents.contains(
+            "default Iterable<com.example.gen.user_test.Account> accounts() { \
+             return java.util.Collections.emptyList(); }"
+        ),
+        "Trader.accounts() association property missing or wrong default: {}",
         trader.contents
     );
 }

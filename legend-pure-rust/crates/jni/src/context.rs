@@ -196,6 +196,36 @@ impl JniContext {
         Ok(Value::from_vec(collected))
     }
 
+    /// Allocate a new dynamic heap object with the given classifier and
+    /// seed it with the supplied properties. Returns the encoded `i64`
+    /// instance pointer Java should treat as opaque.
+    ///
+    /// Java passes properties as parallel `(name, value)` arrays; each
+    /// `value` is a Pure-side `Value` — already a flat `Value::Object`
+    /// for instances, a primitive, or a `Value::Collection` for
+    /// `[*]`-cardinality fields. We unpack the latter so `mutate_set`
+    /// stores the flat list.
+    pub fn new_object(
+        &mut self,
+        classifier_fqn: &str,
+        properties: &[(String, Value)],
+    ) -> Result<i64, String> {
+        let evaluator = unsafe { &mut *self.evaluator };
+        let handle = evaluator.heap_mut().alloc_dynamic(classifier_fqn);
+        for (name, value) in properties {
+            let values = match value {
+                Value::Unit => Vec::new(),
+                Value::Collection(pv) => pv.iter().cloned().collect::<Vec<_>>(),
+                v => vec![v.clone()],
+            };
+            handle
+                .borrow_mut()
+                .mutate_set(name, &values)
+                .map_err(|e| format!("setting `{name}` on `{classifier_fqn}`: {e}"))?;
+        }
+        Ok(self.emit_handle(handle))
+    }
+
     pub fn get_classifier(&mut self, complex_ptr: i64) -> Result<String, String> {
         let handle = self
             .resolve_i64(complex_ptr)
