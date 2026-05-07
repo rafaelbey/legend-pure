@@ -18,7 +18,7 @@ use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
 use legend_pure_parser_pure::types::{Multiplicity, TypeExpr};
 
-use crate::model::{CodegenError, Options};
+use crate::model::{Bootstrap, CodegenError, Options};
 use crate::naming::{
     join_java_package, pure_fqn_segments, pure_package_segments_of, safe_java_identifier,
 };
@@ -52,6 +52,24 @@ pub(crate) struct JavaType {
     pub(crate) carries_user_type: bool,
 }
 
+/// How to handle a `TypeExpr::Generic` (a type-variable reference).
+///
+/// Static-facade function signatures hard-fail when a generic type
+/// shows up — there's no way to wrap a function whose signature can't
+/// be made concrete in Java. Class properties / qualified properties
+/// on generated interfaces are rendered with a relaxed mode that maps
+/// generics to `Object`, which is lossy but keeps codegen running for
+/// generic classes (`Enumeration<E>.values: E[*]` →
+/// `Iterable<Object> values()`). Future v2 generic-arg propagation
+/// will replace this with parameterised interfaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GenericPolicy {
+    /// Reject generic types with `CodegenError::GenericTyped`.
+    Reject,
+    /// Render generic types as `Object`.
+    AsObject,
+}
+
 /// Render the Java type for a Pure (TypeExpr, Multiplicity) pair.
 ///
 /// `function_fqn` is included only so error variants can attribute the
@@ -63,8 +81,18 @@ pub(crate) fn render_java_type(
     function_fqn: &str,
     position: TypePosition<'_>,
     opts: &Options,
+    generic_policy: GenericPolicy,
+    bootstrap: Bootstrap,
 ) -> Result<JavaType, CodegenError> {
-    let inner = render_inner_type(model, type_expr, function_fqn, position, opts)?;
+    let inner = render_inner_type(
+        model,
+        type_expr,
+        function_fqn,
+        position,
+        opts,
+        generic_policy,
+        bootstrap,
+    )?;
     Ok(wrap_multiplicity(inner, mult))
 }
 
@@ -104,12 +132,14 @@ fn render_inner_type(
     function_fqn: &str,
     position: TypePosition<'_>,
     opts: &Options,
+    generic_policy: GenericPolicy,
+    bootstrap: Bootstrap,
 ) -> Result<JavaType, CodegenError> {
     // Reject any nested function-type (e.g. `Function<{T[1]->V[1]}>`) before
     // we even try to render the outer Named ref.
     reject_nested_function_types(type_expr, function_fqn, position)?;
     match type_expr {
-        TypeExpr::Named { element, .. } => render_named(model, *element, opts),
+        TypeExpr::Named { element, .. } => render_named(model, *element, opts, bootstrap),
         TypeExpr::FunctionType { .. } => Err(CodegenError::FunctionTypedParameter {
             fqn: function_fqn.to_owned(),
             position: position.describe(),
@@ -118,20 +148,32 @@ fn render_inner_type(
             fqn: function_fqn.to_owned(),
             position: position.describe(),
         }),
-        TypeExpr::Generic(name) => Err(CodegenError::GenericTyped {
-            fqn: function_fqn.to_owned(),
-            position: position.describe(),
-            ty: name.to_string(),
-        }),
+        TypeExpr::Generic(name) => match generic_policy {
+            GenericPolicy::Reject => Err(CodegenError::GenericTyped {
+                fqn: function_fqn.to_owned(),
+                position: position.describe(),
+                ty: name.to_string(),
+            }),
+            GenericPolicy::AsObject => Ok(JavaType {
+                source: "Object".to_owned(),
+                carries_user_type: false,
+            }),
+        },
         TypeExpr::AlgebraUnion(_, _) => Err(CodegenError::RelationTyped {
             fqn: function_fqn.to_owned(),
             position: position.describe(),
         }),
-        TypeExpr::Unresolved => Err(CodegenError::GenericTyped {
-            fqn: function_fqn.to_owned(),
-            position: position.describe(),
-            ty: "<unresolved>".to_owned(),
-        }),
+        TypeExpr::Unresolved => match generic_policy {
+            GenericPolicy::Reject => Err(CodegenError::GenericTyped {
+                fqn: function_fqn.to_owned(),
+                position: position.describe(),
+                ty: "<unresolved>".to_owned(),
+            }),
+            GenericPolicy::AsObject => Ok(JavaType {
+                source: "Object".to_owned(),
+                carries_user_type: false,
+            }),
+        },
     }
 }
 
@@ -139,10 +181,28 @@ fn render_named(
     model: &PureModel,
     id: ElementId,
     opts: &Options,
+    bootstrap: Bootstrap,
 ) -> Result<JavaType, CodegenError> {
     let element = model.get_element(id);
     let segments = pure_fqn_segments(model, id);
     let leaf_name = segments.last().map(smol_str::SmolStr::as_str).unwrap_or("");
+
+    // Special-case the M3 bootstrap supertypes by canonical ID. The
+    // FQN-walk-based check below misses them because their
+    // `parent_package` points at root, but they're routed cleanly by
+    // identity.
+    if bootstrap.is_any(id) {
+        return Ok(JavaType {
+            source: "Object".to_owned(),
+            carries_user_type: false,
+        });
+    }
+    if bootstrap.is_nil(id) {
+        return Ok(JavaType {
+            source: "Void".to_owned(),
+            carries_user_type: false,
+        });
+    }
 
     if let Some(java) = primitive_java_type(element, leaf_name, &segments) {
         return Ok(JavaType {
@@ -256,7 +316,15 @@ fn primitive_java_type(
             _ => return None,
         });
     }
-    // `Any`/`Nil` are M3 classes, not primitives.
+    // `Any` / `Nil` are M3 classes, not primitives. Map them so the
+    // emitted Java surface stays sensible:
+    //   * `Any`  → `Object` (a Pure `Any` can carry primitives, instances,
+    //              or anything — the supertype lattice already gives the
+    //              user the hand-written `proxy.Any` interface for typed
+    //              traversal of instance returns).
+    //   * `Nil`  → `Void` (the bottom type — a `Nil`-typed value can never
+    //              carry data, so `Void` / `null` is the most accurate
+    //              Java surface).
     if let Element::Class(_) = element {
         let fqn_matches = |suffix: &[&str]| -> bool {
             segments.len() == suffix.len()
@@ -265,10 +333,11 @@ fn primitive_java_type(
                     .zip(suffix.iter())
                     .all(|(a, b)| a.as_str() == *b)
         };
-        if fqn_matches(&["meta", "pure", "metamodel", "type", "Any"])
-            || fqn_matches(&["meta", "pure", "metamodel", "type", "Nil"])
-        {
+        if fqn_matches(&["meta", "pure", "metamodel", "type", "Any"]) {
             return Some("Object");
+        }
+        if fqn_matches(&["meta", "pure", "metamodel", "type", "Nil"]) {
+            return Some("Void");
         }
     }
     None

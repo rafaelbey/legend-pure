@@ -22,7 +22,7 @@ use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
 use legend_pure_parser_pure::types::TypeExpr;
 
-use crate::model::ResolvedFn;
+use crate::model::{Bootstrap, ResolvedFn};
 use crate::naming::pure_fqn_segments;
 use crate::types::is_platform_class;
 
@@ -47,12 +47,26 @@ impl ReachableSet {
 }
 
 /// Build the reachability set starting from the parameter and return
-/// types of every requested function.
-pub(crate) fn reachable_types(model: &PureModel, fns: &[ResolvedFn]) -> ReachableSet {
+/// types of every requested function plus any explicitly-requested
+/// `--classes` / `--associations` seeds.
+///
+/// `extra_class_seeds` are emitted unconditionally even if their FQN
+/// would normally be filtered as a platform class — the user opted in by
+/// name, so we honour it. Transitive types reached *through* those seeds
+/// still go through the platform filter.
+pub(crate) fn reachable_types(
+    model: &PureModel,
+    fns: &[ResolvedFn],
+    extra_class_seeds: &[ElementId],
+    bootstrap: Bootstrap,
+) -> ReachableSet {
     let mut visited: HashSet<ElementId> = HashSet::new();
     let mut queue: Vec<ElementId> = Vec::new();
     let mut classes: Vec<ElementId> = Vec::new();
     let mut enums: Vec<ElementId> = Vec::new();
+    // Explicit seeds bypass the platform filter (only the seeds
+    // themselves; transitive walking from them still filters).
+    let bypass_filter: HashSet<ElementId> = extra_class_seeds.iter().copied().collect();
 
     for resolved in fns {
         if let Element::Function(f) = model.get_element(resolved.element_id) {
@@ -62,15 +76,20 @@ pub(crate) fn reachable_types(model: &PureModel, fns: &[ResolvedFn]) -> Reachabl
             seed_from_type_expr(&f.return_type, &mut queue);
         }
     }
+    for id in extra_class_seeds {
+        queue.push(*id);
+    }
 
     while let Some(id) = queue.pop() {
         if !visited.insert(id) {
             continue;
         }
         // Skip the M3 metamodel — we render those as opaque `Object` and
-        // do not auto-generate interfaces for them in v1.
+        // do not auto-generate interfaces for them in v1, unless the
+        // caller explicitly asked for this id via `--classes` /
+        // `--associations`.
         let segments = pure_fqn_segments(model, id);
-        if is_platform_class(&segments) {
+        if !bypass_filter.contains(&id) && is_platform_class(&segments) {
             continue;
         }
         match model.get_element(id) {
@@ -88,11 +107,15 @@ pub(crate) fn reachable_types(model: &PureModel, fns: &[ResolvedFn]) -> Reachabl
                         seed_from_type_expr(&param.type_expr, &mut queue);
                     }
                 }
-                for (assoc_id, prop_idx) in model.association_properties(id) {
+                // The injected property visible from `id` is the OTHER
+                // end of the association — `1 - prop_idx_pointing_to_self`.
+                // We follow that end's type to walk the graph correctly.
+                for (assoc_id, prop_idx_pointing_to_self) in model.association_properties(id) {
                     if let Element::Association(assoc) = model.get_element(*assoc_id)
-                        && let Some(prop) = assoc.properties.get(*prop_idx)
+                        && assoc.properties.len() == 2
+                        && let Some(injected) = assoc.properties.get(1 - *prop_idx_pointing_to_self)
                     {
-                        seed_from_type_expr(&prop.type_expr, &mut queue);
+                        seed_from_type_expr(&injected.type_expr, &mut queue);
                     }
                 }
             }
@@ -103,6 +126,16 @@ pub(crate) fn reachable_types(model: &PureModel, fns: &[ResolvedFn]) -> Reachabl
             _ => {}
         }
     }
+
+    // Drop the universal-supertype `Any` and the bottom type `Nil`
+    // from the reachable set — the hand-written
+    // `org.finos.legend.pure.rust.proxy.Any` interface stands in for
+    // Any, and Nil is rendered as Java `Void` directly. Identity
+    // comparison via the canonical bootstrap IDs (FQN-string match
+    // would miss because M3 bootstrap classes carry
+    // `parent_package = root` and so `pure_fqn_segments` returns just
+    // the leaf name).
+    classes.retain(|id| !bootstrap.is_any(*id) && !bootstrap.is_nil(*id));
 
     let class_set: HashSet<ElementId> = classes.iter().copied().collect();
     ReachableSet {

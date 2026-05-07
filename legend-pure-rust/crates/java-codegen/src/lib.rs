@@ -41,7 +41,14 @@ pub use crate::model::{CodegenError, FqnInput, JavaFile, Options};
 
 use legend_pure_parser_pure::model::PureModel;
 
-/// Generate Java wrapper sources for the requested Pure functions.
+/// Generate Java wrapper sources for the requested Pure elements.
+///
+/// `fns` populates the static-method facade. `extra_classes` and
+/// `extra_associations` extend the reachability seed set so callers can
+/// request interfaces for elements that aren't referenced by any
+/// requested function (e.g. a class consumed only by user code, or an
+/// association whose endpoints would otherwise be dropped). For an
+/// association seed, both participating classes are added to the seed set.
 ///
 /// Returns one [`JavaFile`] per emitted Java source. The caller is
 /// responsible for materializing those files on disk.
@@ -49,29 +56,36 @@ use legend_pure_parser_pure::model::PureModel;
 /// # Errors
 ///
 /// Returns [`CodegenError`] when:
-/// - a requested FQN does not resolve to a function (`UnresolvedFunction`)
-/// - a requested function has a `Function<{...}>`-typed parameter or return
-///   (`FunctionTypedParameter`) — deferred to v2
-/// - a requested function has a relation-typed parameter or return
-///   (`RelationTyped`)
-/// - the generic-typed name set is otherwise malformed (`Internal`)
+/// - a requested function FQN does not resolve (`UnresolvedFunction`),
+///   resolves to a non-function (`NotAFunction`), or has unsupported
+///   parameter/return types (`FunctionTypedParameter`, `RelationTyped`,
+///   `GenericTyped`);
+/// - a class FQN passed via `extra_classes` does not resolve
+///   (`UnresolvedClass`) or resolves to a non-class (`NotAClass`);
+/// - an association FQN passed via `extra_associations` does not resolve
+///   (`UnresolvedAssociation`) or resolves to a non-association
+///   (`NotAnAssociation`).
 pub fn generate(
     model: &PureModel,
     fns: &[FqnInput],
+    extra_classes: &[FqnInput],
+    extra_associations: &[FqnInput],
     opts: &Options,
 ) -> Result<Vec<JavaFile>, CodegenError> {
+    let bootstrap = model::Bootstrap::resolve(model);
     let resolved = model::resolve_requested(model, fns)?;
-    let closure = closure::reachable_types(model, &resolved);
+    let extra_seeds = model::resolve_extra_seeds(model, extra_classes, extra_associations)?;
+    let closure = closure::reachable_types(model, &resolved, &extra_seeds, bootstrap);
 
     let mut files: Vec<JavaFile> =
         Vec::with_capacity(2 + closure.classes.len() + closure.enums.len());
 
     files.push(functions::emit_functions_class(
-        model, &resolved, &closure, opts,
+        model, &resolved, &closure, opts, bootstrap,
     )?);
     for cls_id in &closure.classes {
         files.push(interfaces::emit_class_interface(
-            model, *cls_id, &closure, opts,
+            model, *cls_id, &closure, opts, bootstrap,
         )?);
     }
     for enum_id in &closure.enums {

@@ -202,10 +202,67 @@ hand-written runtime support lives in
 org/finos/legend/pure/rust/proxy/` (`PureRegistered`,
 `PureProxyFactory`, `PureInvocationHandler`, `PureLambda` placeholder).
 
-Verification: 11 codegen unit + integration tests (`-p
+Reachability is seeded from `--functions` parameter and return types,
+plus optional `--classes <FQN>` / `--associations <FQN>` flags that
+extend the seed set with explicit Pure elements (an association seed
+unfolds into both participating classes). Explicit class seeds bypass
+the `meta::pure::*` platform-class filter; transitive walks from them
+still apply the filter.
+
+For Maven-style "bootstrap an evaluator" workflows there is also
+`--bindings-file <PATH>` — one FQN per line, kind auto-detected by the
+CLI from the model. The
+`legend-pure-runtime-rust-evaluator` Maven module wires this into its
+`generate-sources` phase via `exec-maven-plugin` + `build-helper-maven-plugin`,
+so `mvn compile` regenerates a curated M3 metamodel surface
+(`src/main/pure-bindings/m3-bindings.txt`, ~30 classes + a handful of
+metadata functions like `type()` / `genericType()` / `elementToPath()`)
+into `target/generated-sources/java-bindings/` and adds it to the
+compile path. Set `-Dlegend.skipBindings=true` to skip on a host
+without a Rust toolchain.
+
+Generic-typed property/QP returns on generated interfaces (e.g.
+`Enumeration<E>.values: E[*]`) render as `Object` / `Iterable<Object>`
+under a `GenericPolicy::AsObject` mode; static-facade function
+signatures still hard-fail on generics (`GenericPolicy::Reject`).
+
+`[0..1]` / `[*]` properties get `default` bodies returning
+`Optional.empty()` / `Collections.emptyList()`, so user `implements`
+classes only override the fields they care about. Proxies always go
+native, bypassing the default body.
+
+`PureProxyFactory.create(userImpl, iface, eval)` materialises a
+hand-written interface implementation as a real heap object via a new
+`nativeNew` JNI native (`crates/jni/src/lib.rs` →
+`JniContext::new_object` → `RuntimeHeap::alloc_dynamic` +
+`mutate_set`). Recursive: nested user impls become heap children,
+`Optional` and `Iterable` are unpacked, existing proxies pass through
+without re-materialisation. Cycle / sharing detection uses an
+`IdentityHashMap` keyed by user object identity.
+
+The hand-written `org.finos.legend.pure.rust.proxy.Any` interface
+mirrors Pure's `meta::pure::metamodel::type::Any` as the universal
+proxy supertype: every generated interface extends it (transitively),
+the codegen substitutes references to the Pure FQN at emission time
+and never emits an `Any.java`, and `pickInterface` falls back to
+`Any.class` whenever the runtime classifier isn't registered for any
+more-specific generated interface — so `wrap(...)` always returns a
+typed proxy with a `$rustInstance()` drop-down to dynamic dispatch
+via `PureRustInstance.getProperty(...)`.
+
+Known limitation (advisor follow-up): `pickGeneratedInterface` only
+walks declared interfaces of the user class (not the inherited
+chain), so a user class whose *parent* implements the generated
+interface won't resolve. Adequate for the `class MyPerson implements
+Person` case, needs a fix for deeper hierarchies.
+
+Verification: 16 codegen unit + integration tests (`-p
 legend-pure-java-codegen`), including a `javac --release 11` round-trip
 on the generated set + the runtime support classes
-(`tests/javac_compiles.rs`).
+(`tests/javac_compiles.rs`). Live `mvn compile` of
+`legend-pure-runtime-rust-evaluator` regenerates 52 Java sources from
+the curated M3 manifest and compiles them clean alongside the 9
+hand-written runtime classes.
 
 ### Open Work (v2)
 

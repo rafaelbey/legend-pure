@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
+use legend_pure_parser_pure::types::TypeExpr;
 use smol_str::SmolStr;
 use thiserror::Error;
 
@@ -127,6 +128,65 @@ pub enum CodegenError {
         /// Rendered type (typically the type variable name).
         ty: String,
     },
+    /// A `--classes <FQN>` argument did not resolve.
+    #[error("class `{fqn}` could not be resolved in the model")]
+    UnresolvedClass {
+        /// The offending FQN.
+        fqn: String,
+    },
+    /// A `--classes <FQN>` argument resolved to something that isn't a Class.
+    #[error("`{fqn}` resolved to a non-class element ({kind})")]
+    NotAClass {
+        /// The offending FQN.
+        fqn: String,
+        /// The element kind that was found.
+        kind: &'static str,
+    },
+    /// A `--associations <FQN>` argument did not resolve.
+    #[error("association `{fqn}` could not be resolved in the model")]
+    UnresolvedAssociation {
+        /// The offending FQN.
+        fqn: String,
+    },
+    /// A `--associations <FQN>` argument resolved to something that isn't an
+    /// Association.
+    #[error("`{fqn}` resolved to a non-association element ({kind})")]
+    NotAnAssociation {
+        /// The offending FQN.
+        fqn: String,
+        /// The element kind that was found.
+        kind: &'static str,
+    },
+}
+
+/// Canonical bootstrap-element IDs the codegen needs to recognise by
+/// identity. The M3 bootstrap classes carry `parent_package = root` in
+/// the model, so `pure_fqn_segments` returns just the leaf name for
+/// them (`["Any"]`, `["Nil"]`) instead of the full
+/// `meta::pure::metamodel::type::*` path; an FQN-based string match
+/// would always miss. Resolving via `resolve_fqn_str` walks the package
+/// tree top-down and finds the canonical element regardless.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Bootstrap {
+    pub(crate) any_id: Option<ElementId>,
+    pub(crate) nil_id: Option<ElementId>,
+}
+
+impl Bootstrap {
+    pub(crate) fn resolve(model: &PureModel) -> Self {
+        Self {
+            any_id: model.resolve_fqn_str("meta::pure::metamodel::type::Any"),
+            nil_id: model.resolve_fqn_str("meta::pure::metamodel::type::Nil"),
+        }
+    }
+
+    pub(crate) fn is_any(self, id: ElementId) -> bool {
+        self.any_id == Some(id)
+    }
+
+    pub(crate) fn is_nil(self, id: ElementId) -> bool {
+        self.nil_id == Some(id)
+    }
 }
 
 /// One resolved requested function — carries the looked-up `ElementId`
@@ -163,6 +223,70 @@ pub(crate) fn resolve_requested(
             }
         }
     }
+    Ok(out)
+}
+
+/// Resolve `--classes` and `--associations` FQNs into a deduplicated
+/// list of `Class` element IDs to seed the reachability walk with.
+///
+/// Each `--classes <FQN>` contributes its own ID. Each
+/// `--associations <FQN>` unfolds into the participating-class IDs
+/// (typically two — one per end). Order follows the input order; duplicate
+/// IDs are dropped on first reuse.
+pub(crate) fn resolve_extra_seeds(
+    model: &PureModel,
+    classes: &[FqnInput],
+    associations: &[FqnInput],
+) -> Result<Vec<ElementId>, CodegenError> {
+    let mut seen = std::collections::HashSet::<ElementId>::new();
+    let mut out = Vec::with_capacity(classes.len() + associations.len() * 2);
+
+    for cls in classes {
+        let id = model
+            .resolve_fqn_str(&cls.raw)
+            .ok_or_else(|| CodegenError::UnresolvedClass {
+                fqn: cls.raw.clone(),
+            })?;
+        match model.get_element(id) {
+            Element::Class(_) => {
+                if seen.insert(id) {
+                    out.push(id);
+                }
+            }
+            other => {
+                return Err(CodegenError::NotAClass {
+                    fqn: cls.raw.clone(),
+                    kind: element_kind(other),
+                });
+            }
+        }
+    }
+
+    for assoc in associations {
+        let id = model.resolve_fqn_str(&assoc.raw).ok_or_else(|| {
+            CodegenError::UnresolvedAssociation {
+                fqn: assoc.raw.clone(),
+            }
+        })?;
+        let association = match model.get_element(id) {
+            Element::Association(a) => a,
+            other => {
+                return Err(CodegenError::NotAnAssociation {
+                    fqn: assoc.raw.clone(),
+                    kind: element_kind(other),
+                });
+            }
+        };
+        for prop in &association.properties {
+            if let TypeExpr::Named { element, .. } = &prop.type_expr
+                && matches!(model.get_element(*element), Element::Class(_))
+                && seen.insert(*element)
+            {
+                out.push(*element);
+            }
+        }
+    }
+
     Ok(out)
 }
 

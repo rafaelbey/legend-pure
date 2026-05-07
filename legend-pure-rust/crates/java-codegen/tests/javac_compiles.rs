@@ -73,7 +73,7 @@ fn generated_java_compiles_with_runtime_support() {
         FqnInput::new("user_test::makePerson_String_1__Person_1_"),
         FqnInput::new("meta::pure::functions::math::plus_Integer_MANY__Integer_1_"),
     ];
-    let files = generate(&model, &fns, &opts).expect("codegen succeeds");
+    let files = generate(&model, &fns, &[], &[], &opts).expect("codegen succeeds");
 
     let tmp = tempdir_for_test("legend-codegen-javac");
     let out_root = tmp.join("gen");
@@ -102,6 +102,7 @@ fn generated_java_compiles_with_runtime_support() {
         "org/finos/legend/pure/rust/PureRustInstance.java",
         "org/finos/legend/pure/rust/PureRustResult.java",
         "org/finos/legend/pure/rust/proxy/PureRegistered.java",
+        "org/finos/legend/pure/rust/proxy/Any.java",
         "org/finos/legend/pure/rust/proxy/PureProxyFactory.java",
         "org/finos/legend/pure/rust/proxy/PureInvocationHandler.java",
         "org/finos/legend/pure/rust/proxy/PureLambda.java",

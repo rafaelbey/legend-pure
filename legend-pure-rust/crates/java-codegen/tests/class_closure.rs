@@ -40,7 +40,7 @@ fn class_closure_emits_person_and_address_interfaces() {
     let model = common::compile_with_platform(Some(SOURCE));
     let opts = Options::new("com.example.gen");
     let fns = vec![FqnInput::new("user_test::makePerson_String_1__Person_1_")];
-    let files = generate(&model, &fns, &opts).expect("codegen succeeds");
+    let files = generate(&model, &fns, &[], &[], &opts).expect("codegen succeeds");
 
     let person = files
         .iter()
@@ -60,21 +60,30 @@ fn class_closure_emits_person_and_address_interfaces() {
         person_src.contains("package com.example.gen.user_test;"),
         "Person package wrong: {person_src}"
     );
+    // Every generated interface ultimately extends the hand-written
+    // `org.finos.legend.pure.rust.proxy.Any`.
     assert!(
-        person_src.contains("public interface Person extends "),
-        "Person should be an interface with extends clause: {person_src}"
+        person_src.contains("public interface Person extends org.finos.legend.pure.rust.proxy.Any"),
+        "Person must extend the hand-written Any: {person_src}"
     );
+    // [1] stays abstract; [0..1] / [*] get default empty bodies so
+    // user impls don't need to override every property.
     assert!(
         person_src.contains("String firstName();"),
-        "Person.firstName() missing: {person_src}"
+        "Person.firstName() (multiplicity [1]) must stay abstract: {person_src}"
     );
     assert!(
-        person_src.contains("java.util.Optional<Long> age();"),
-        "Person.age() must be Optional<Long> for Integer[0..1]: {person_src}"
+        person_src.contains(
+            "default java.util.Optional<Long> age() { return java.util.Optional.empty(); }"
+        ),
+        "Person.age() must default to Optional.empty(): {person_src}"
     );
     assert!(
-        person_src.contains("Iterable<com.example.gen.user_test.Address> addresses();"),
-        "Person.addresses() must reference fully-qualified Address: {person_src}"
+        person_src.contains(
+            "default Iterable<com.example.gen.user_test.Address> addresses() { \
+             return java.util.Collections.emptyList(); }"
+        ),
+        "Person.addresses() must default to emptyList(): {person_src}"
     );
     assert!(
         person_src.contains("PureProxyFactory.register(\"user_test::Person\", Person.class)"),
@@ -83,8 +92,9 @@ fn class_closure_emits_person_and_address_interfaces() {
 
     let address_src = &address.contents;
     assert!(
-        address_src.contains("public interface Address extends "),
-        "Address must be an interface: {address_src}"
+        address_src
+            .contains("public interface Address extends org.finos.legend.pure.rust.proxy.Any"),
+        "Address must extend the hand-written Any: {address_src}"
     );
     assert!(
         address_src.contains("String street();"),

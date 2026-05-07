@@ -23,7 +23,7 @@ fn primitive_plus_emits_typed_wrapper() {
     let fns = vec![FqnInput::new(
         "meta::pure::functions::math::plus_Integer_MANY__Integer_1_",
     )];
-    let files = generate(&model, &fns, &opts).expect("codegen succeeds");
+    let files = generate(&model, &fns, &[], &[], &opts).expect("codegen succeeds");
 
     let facade = files
         .iter()
@@ -61,7 +61,7 @@ fn unresolved_fqn_returns_error() {
     let model = common::compile_with_platform(None);
     let opts = Options::new("com.example.gen");
     let fns = vec![FqnInput::new("does::not::exist__Any_1_")];
-    let err = generate(&model, &fns, &opts).expect_err("expected error");
+    let err = generate(&model, &fns, &[], &[], &opts).expect_err("expected error");
     assert!(
         err.to_string().contains("does::not::exist__Any_1_"),
         "error must mention the offending FQN: {err}"
