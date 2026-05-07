@@ -26,9 +26,9 @@ use smol_str::SmolStr;
 
 use crate::error::CompilationError;
 use crate::resolve::ResolutionContext;
-use crate::types::{ExprKind, FunctionCallData, ValueSpec};
+use crate::types::{ExprKind, FunctionCallData, ResolvedType, ValueSpec};
 
-use super::{lower_expression, untyped};
+use super::{lower_expression, typed, untyped};
 
 /// Lowers `^$source(prop='val', other += $vals)` →
 /// `FunctionCall("copy", [$source, key1, val1, augmented1, ...])`.
@@ -71,14 +71,32 @@ pub(super) fn lower_copy(
         ));
     }
 
-    untyped(
-        ExprKind::FunctionCall(FunctionCallData {
-            function: None,
-            function_name: SmolStr::new_static("copy"),
-            arguments,
-        }),
-        e.source_info.clone(),
-    )
+    // Pre-set `type_info` from the source variable's declared type
+    // when we know it. `^$x(field=val)` is a structural clone, so the
+    // result's type is exactly `$x`'s type. Capturing it at lower
+    // time means downstream consumers (`set_and_return`'s honour-
+    // pre-set rule, `infer_typeexpr_from_valuespec`'s early-return,
+    // `infer_let_type`'s preset path) all see the right type without
+    // any of them needing to special-case the `function_name == "copy"`
+    // branch. This is the canonical "lowering captures type;
+    // consumers read from `type_info`" pattern documented at
+    // `reference_type_info_capture.md`.
+    let kind = ExprKind::FunctionCall(FunctionCallData {
+        function: None,
+        function_name: SmolStr::new_static("copy"),
+        arguments,
+    });
+    if let Some((source_te, source_mult)) = ctx.variable_types.get(&e.source).cloned() {
+        return typed(
+            kind,
+            e.source_info.clone(),
+            ResolvedType {
+                type_expr: source_te,
+                multiplicity: source_mult,
+            },
+        );
+    }
+    untyped(kind, e.source_info.clone())
 }
 
 /// Lowers `[start:stop]` or `[start:stop:step]` → `FunctionCall("range", args)`.
