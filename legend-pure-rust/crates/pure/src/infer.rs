@@ -438,18 +438,49 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
             // dispatch on the collection's element type) silently
             // accepted heterogeneous numeric literals as the
             // first element's type.
+            //
+            // Preserve type_arguments when both elements share the
+            // same head element id and arity. `[pair(1,'a'), pair(2,'b')]`
+            // must keep its `Pair<Integer,String>` shape so callers
+            // like `newMap<U,V>(pairs:Pair<U,V>[*])` can bind U/V from
+            // the collection arg's parametric form. Drop type_args
+            // only when elements have different head elements (the
+            // hierarchy LUB takes over there).
             let type_expr = elem_types
                 .iter()
                 .flatten()
                 .map(|t| t.type_expr.clone())
                 .reduce(|acc, te| match (&acc, &te) {
-                    (TypeExpr::Named { element: a, .. }, TypeExpr::Named { element: b, .. }) => {
-                        let lub_id = crate::resolve::least_upper_bound_ids(*a, *b, ctx.model);
+                    (
                         TypeExpr::Named {
-                            element: lub_id,
-                            type_arguments: Vec::new(),
-                            multiplicity_arguments: Vec::new(),
-                            value_arguments: Vec::new(),
+                            element: a,
+                            type_arguments: a_args,
+                            multiplicity_arguments: a_margs,
+                            ..
+                        },
+                        TypeExpr::Named {
+                            element: b,
+                            type_arguments: b_args,
+                            multiplicity_arguments: b_margs,
+                            ..
+                        },
+                    ) => {
+                        if a == b
+                            && a_args.len() == b_args.len()
+                            && a_margs.len() == b_margs.len()
+                            && a_args == b_args
+                            && a_margs == b_margs
+                        {
+                            // Same shape — preserve fully.
+                            acc
+                        } else {
+                            let lub_id = crate::resolve::least_upper_bound_ids(*a, *b, ctx.model);
+                            TypeExpr::Named {
+                                element: lub_id,
+                                type_arguments: Vec::new(),
+                                multiplicity_arguments: Vec::new(),
+                                value_arguments: Vec::new(),
+                            }
                         }
                     }
                     _ => acc,
