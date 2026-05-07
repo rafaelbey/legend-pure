@@ -554,6 +554,41 @@ function test::handler(b: test::Box<Integer>[1]): Integer[1] {
 }
 
 // ---------------------------------------------------------------------------
+// 15. function-ref-to-eval binds T/V/m through lifted FunctionType
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "Function-ref via mangled name + 2-arg eval still leaves V/m \
+            unresolved under strict mode. The function-ref lift in \
+            build_packageable_element_ref produces the right FunctionType, \
+            but the bind chain Function<{T[n],U[p]→V[m]}> against \
+            Named<NativeFunctionDefinition>{[FunctionType{(Int,1),(Int,1)→Int[1]}]} \
+            doesn't currently extract T/V/m through the metatype's \
+            supertype chain. Tracked: NativeFunctionDefinition→Function \
+            walk in subtype_view needs the metatype hierarchy, not just \
+            user-class hierarchy."]
+fn tic_function_ref_eval_two_args_binds_through_lift() {
+    let source = r#"
+###Pure
+native function test::myrem(a: Integer[1], b: Integer[1]): Integer[1];
+native function test::myEval2<T,U,V|m,n,p>(
+    func: meta::pure::metamodel::function::Function<{T[n],U[p]->V[m]}>[1],
+    a: T[n],
+    b: U[p]
+): V[m];
+function test::caller(): Integer[1] {
+    test::myrem_Integer_1__Integer_1__Integer_1_->test::myEval2(12, 5)
+}
+"#;
+    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[]).expect(
+            "Function-ref + 2-arg eval: T/U/V/m/n/p all bind from \
+             the lifted FunctionType.",
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
 // 14. let-bound copy carries source's type to property/method chains
 // ---------------------------------------------------------------------------
 
