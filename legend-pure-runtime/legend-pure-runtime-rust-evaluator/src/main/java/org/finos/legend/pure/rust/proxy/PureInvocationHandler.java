@@ -95,17 +95,13 @@ public final class PureInvocationHandler implements InvocationHandler
             }
         }
 
-        // v1 codegen never emits default methods on generated
-        // interfaces; reject explicitly so future regressions surface
-        // immediately rather than dropping silently into the property
-        // path below.
-        if (method.isDefault())
-        {
-            throw new UnsupportedOperationException(
-                    "Default method invocation is not supported on PureProxy: "
-                            + method.getName());
-        }
-
+        // Generated interfaces ship `default` bodies for `[0..1]` and
+        // `[*]` properties (Optional.empty / emptyList) so user
+        // implementations of the interface don't have to override every
+        // field. For a *proxy* those defaults are irrelevant — the
+        // runtime heap is the source of truth, so we always go native
+        // here. The default body only matters for user `implements`
+        // classes that inherit it.
         Object[] unwrapped = unwrapArgs(args);
         // Use the public `getProperty(...)` entry point on PureRustInstance
         // — `evaluator.evaluateProperty(...)` is intentionally protected.

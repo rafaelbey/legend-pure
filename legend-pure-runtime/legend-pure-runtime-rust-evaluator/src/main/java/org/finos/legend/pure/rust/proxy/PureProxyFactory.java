@@ -17,14 +17,17 @@ package org.finos.legend.pure.rust.proxy;
 import org.finos.legend.pure.rust.PureRustEvaluator;
 import org.finos.legend.pure.rust.PureRustInstance;
 
+import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Proxy;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -50,6 +53,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class PureProxyFactory
 {
     private static final Map<String, Class<?>> CLASSIFIER_REGISTRY = new ConcurrentHashMap<>();
+    private static final Map<Class<?>, String> INTERFACE_TO_CLASSIFIER = new ConcurrentHashMap<>();
 
     private PureProxyFactory() {}
 
@@ -65,6 +69,239 @@ public final class PureProxyFactory
     public static void register(String classifierFqn, Class<?> iface)
     {
         CLASSIFIER_REGISTRY.put(classifierFqn, iface);
+        INTERFACE_TO_CLASSIFIER.put(iface, classifierFqn);
+    }
+
+    /**
+     * Materialise a user implementation of a generated interface as a
+     * real heap object, and return a proxy backed by the new instance.
+     * <p>
+     * The factory walks {@code iface}'s 0-arg property methods,
+     * invokes each on {@code userImpl} (default methods on
+     * {@code [0..1]}/{@code [*]} properties return empty unless the
+     * user overrode them), recursively materialises any nested
+     * {@link PureRegistered} values that aren't already proxies, and
+     * unwraps proxy arguments to handle pointers via
+     * {@link #unwrap(Object)}.
+     * <p>
+     * Qualified properties (methods with parameters) are skipped —
+     * their semantics is computed and can't be stored as a value.
+     *
+     * @param userImpl an instance of {@code iface} the caller wrote
+     *                 by hand
+     * @param iface    the generated interface declaring the schema
+     * @param eval     the evaluator that owns the resulting heap
+     *                 pointer
+     * @param <T>      the interface type
+     * @return a proxy backed by the freshly-allocated heap object
+     */
+    @SuppressWarnings("unchecked")
+    public static <T extends PureRegistered> T create(T userImpl, Class<T> iface, PureRustEvaluator eval)
+    {
+        // Top-level entry: cycle-detection cache is fresh per call.
+        IdentityHashMap<PureRegistered, PureRustInstance> visited = new IdentityHashMap<>();
+        PureRustInstance instance = createInstance(userImpl, iface, eval, visited);
+        return (T) Proxy.newProxyInstance(
+                iface.getClassLoader(),
+                new Class<?>[] {iface},
+                new PureInvocationHandler(instance, eval, iface));
+    }
+
+    /**
+     * Materialise a user impl as a {@link PureRustInstance} (raw heap
+     * pointer, no proxy wrap). The recursive path uses this so nested
+     * results land on the JNI side as {@code PureRustInstance} — which
+     * {@link PureRustEvaluator#create} knows how to marshal — rather
+     * than as a {@link Proxy} that {@code wrapRustResult} doesn't
+     * recognise.
+     */
+    private static PureRustInstance createInstance(
+            PureRegistered userImpl,
+            Class<?> iface,
+            PureRustEvaluator eval,
+            IdentityHashMap<PureRegistered, PureRustInstance> visited)
+    {
+        if (userImpl == null) throw new IllegalArgumentException("userImpl is null");
+        if (iface == null) throw new IllegalArgumentException("iface is null");
+
+        // Cycle / sharing guard: if we've already materialised this
+        // exact user object (identity, not equals), reuse the existing
+        // heap instance so reference structure is preserved and
+        // self-references don't blow the stack.
+        PureRustInstance existing = visited.get(userImpl);
+        if (existing != null) return existing;
+
+        // If the input is itself a proxy, its handle is already on the
+        // heap — return that, no re-materialisation needed.
+        if (Proxy.isProxyClass(userImpl.getClass()))
+        {
+            // PureInvocationHandler stores the underlying instance;
+            // unwrap to recover it.
+            Object unwrapped = unwrap(userImpl);
+            if (unwrapped instanceof PureRustInstance)
+            {
+                return (PureRustInstance) unwrapped;
+            }
+        }
+
+        String classifierFqn = lookupClassifier(iface);
+
+        List<Method> propertyMethods = collectStorableProperties(iface);
+        String[] names = new String[propertyMethods.size()];
+        Object[] values = new Object[propertyMethods.size()];
+
+        for (int i = 0; i < propertyMethods.size(); i++)
+        {
+            Method m = propertyMethods.get(i);
+            names[i] = pureNameOf(m);
+            Object raw;
+            try
+            {
+                raw = m.invoke(userImpl);
+            }
+            catch (ReflectiveOperationException e)
+            {
+                throw new RuntimeException(
+                        "failed to invoke `" + m.getName() + "` on user impl of " + iface.getName(),
+                        e.getCause() != null ? e.getCause() : e);
+            }
+            values[i] = materialiseValue(raw, eval, visited);
+        }
+
+        PureRustInstance instance = eval.create(classifierFqn, names, values);
+        visited.put(userImpl, instance);
+        return instance;
+    }
+
+    private static String lookupClassifier(Class<?> iface)
+    {
+        String classifierFqn = INTERFACE_TO_CLASSIFIER.get(iface);
+        if (classifierFqn == null)
+        {
+            // Force interface initialisation so the registry populates
+            // (`$REGISTERED` is a side-effect-init field; reading any
+            // static-final on the interface triggers it).
+            try { Class.forName(iface.getName(), true, iface.getClassLoader()); }
+            catch (ClassNotFoundException ignored) { }
+            classifierFqn = INTERFACE_TO_CLASSIFIER.get(iface);
+        }
+        if (classifierFqn == null)
+        {
+            throw new IllegalStateException(
+                    "no classifier registered for " + iface.getName()
+                            + " — was the interface generated by legend java-bindings?");
+        }
+        return classifierFqn;
+    }
+
+    /**
+     * Recursively realise a value returned from a user impl method.
+     * Returns Java-side values that {@link PureRustEvaluator#create}
+     * already knows how to marshal: primitives/strings pass through,
+     * {@link PureRegistered} impls become {@link PureRustInstance}
+     * via {@link #createInstance}, lists become lists of marshalled
+     * elements.
+     */
+    private static Object materialiseValue(
+            Object raw,
+            PureRustEvaluator eval,
+            IdentityHashMap<PureRegistered, PureRustInstance> visited)
+    {
+        if (raw == null) return null;
+        if (raw instanceof Optional)
+        {
+            return ((Optional<?>) raw).map(v -> materialiseValue(v, eval, visited)).orElse(null);
+        }
+        if (raw instanceof PureRegistered)
+        {
+            PureRegistered reg = (PureRegistered) raw;
+            // Already on the heap — pull the underlying instance so
+            // wrapRustResult sees a PureRustInstance, not the proxy.
+            if (Proxy.isProxyClass(raw.getClass()))
+            {
+                return new PureRustInstanceHandle(reg.$instancePointer());
+            }
+            // Pick the most-specific generated interface this user
+            // class implements so the recursive create finds the right
+            // classifier. NOTE: the picker walks declared interfaces
+            // only — a user class with a deeper hierarchy may need
+            // refinement (advisor follow-up).
+            Class<?> targetIface = pickGeneratedInterface(raw.getClass());
+            if (targetIface == null)
+            {
+                throw new IllegalStateException(
+                        raw.getClass().getName()
+                                + " implements PureRegistered but no generated interface is "
+                                + "registered for it");
+            }
+            return createInstance(reg, targetIface, eval, visited);
+        }
+        if (raw instanceof Iterable && !(raw instanceof PureRustInstance))
+        {
+            List<Object> out = new ArrayList<>();
+            for (Object element : (Iterable<?>) raw)
+            {
+                out.add(materialiseValue(element, eval, visited));
+            }
+            return out;
+        }
+        return raw;
+    }
+
+    private static Class<?> pickGeneratedInterface(Class<?> userClass)
+    {
+        Class<?> best = null;
+        for (Class<?> c = userClass; c != null; c = c.getSuperclass())
+        {
+            for (Class<?> i : c.getInterfaces())
+            {
+                if (PureRegistered.class.isAssignableFrom(i)
+                        && INTERFACE_TO_CLASSIFIER.containsKey(i)
+                        && (best == null || best.isAssignableFrom(i)))
+                {
+                    best = i;
+                }
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Return the property methods on {@code iface} (and its supertypes)
+     * that we know how to store: zero-arg, declared on a generated
+     * interface, not a sentinel, not a Java {@link Object} method.
+     * Qualified properties (methods with parameters) are filtered out
+     * — we can only persist storage-shaped properties.
+     */
+    private static List<Method> collectStorableProperties(Class<?> iface)
+    {
+        List<Method> out = new ArrayList<>();
+        Set<String> seenNames = new java.util.HashSet<>();
+        for (Method m : iface.getMethods())
+        {
+            if (m.getParameterCount() != 0) continue;
+            if (java.lang.reflect.Modifier.isStatic(m.getModifiers())) continue;
+            if (m.getDeclaringClass() == Object.class) continue;
+            if (m.getDeclaringClass() == PureRegistered.class) continue;
+            String name = m.getName();
+            if (name.equals("$instancePointer") || name.equals("$evaluator")) continue;
+            if (name.equals("__register")) continue;
+            if (!seenNames.add(name)) continue; // dedup overrides
+            out.add(m);
+        }
+        return out;
+    }
+
+    /**
+     * Strip the trailing {@code _} added by the codegen for properties
+     * whose Pure name collides with a Java keyword (e.g.
+     * {@code class_} → {@code class}).
+     */
+    private static String pureNameOf(Method m)
+    {
+        String n = m.getName();
+        if (n.length() > 1 && n.endsWith("_")) return n.substring(0, n.length() - 1);
+        return n;
     }
 
     /**

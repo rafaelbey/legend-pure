@@ -205,6 +205,76 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeG
     }
 }
 
+/// Allocate a new heap object from Java-side property values.
+///
+/// Used by `PureProxyFactory.create(userImpl, iface, eval)` to
+/// materialise a hand-written interface implementation as a real
+/// runtime instance. `property_names` and `property_values` are
+/// parallel arrays — entry `i` of one corresponds to entry `i` of the
+/// other.
+///
+/// # Panics
+/// Internal Rust panics are caught and rethrown as `PureRustException`
+/// across the FFI; the Java side never observes a Rust unwind.
+#[allow(clippy::unwrap_used)] // inside catch_unwind — panics translate to Java exceptions
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeNew<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    context_ptr: jlong,
+    classifier_fqn: JString<'local>,
+    property_names: JObjectArray<'local>,
+    property_values: JObjectArray<'local>,
+) -> jlong {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let context = unsafe { &mut *(context_ptr as *mut JniContext) };
+        let classifier: String = env.get_string(&classifier_fqn).unwrap().into();
+
+        // Parallel-array length check up-front so Java sees a clear
+        // error instead of a silent zip().
+        let names_len = env.get_array_length(&property_names).unwrap_or(0);
+        let values_len = env.get_array_length(&property_values).unwrap_or(0);
+        if names_len != values_len {
+            return Err(format!(
+                "nativeNew: property name/value array length mismatch ({names_len} vs {values_len})"
+            ));
+        }
+
+        let values = conversion::java_to_rust_args(&mut env, &property_values, context_ptr)
+            .unwrap_or_default();
+        let mut props: Vec<(String, legend_pure_runtime::value::Value)> =
+            Vec::with_capacity(values.len());
+        for (i, value) in values.into_iter().enumerate() {
+            let name_obj = env
+                .get_object_array_element(&property_names, i as jni::sys::jsize)
+                .unwrap();
+            let name_jstr = jni::objects::JString::from(name_obj);
+            let name: String = env.get_string(&name_jstr).unwrap().into();
+            props.push((name, value));
+        }
+
+        context.new_object(&classifier, &props)
+    }));
+
+    match result {
+        Ok(Ok(handle)) => handle,
+        Ok(Err(err)) => {
+            let _ = env.throw_new(
+                "org/finos/legend/pure/rust/PureRustEvaluationException",
+                err,
+            );
+            0
+        }
+        Err(_) => {
+            let _ = env.throw_new(
+                "org/finos/legend/pure/rust/PureRustException",
+                "Rust paniced during nativeNew",
+            );
+            0
+        }
+    }
+}
+
 /// Frees the Evaluator context.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeFreeContext<

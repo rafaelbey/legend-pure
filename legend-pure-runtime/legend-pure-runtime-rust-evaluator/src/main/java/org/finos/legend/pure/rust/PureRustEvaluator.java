@@ -235,6 +235,45 @@ public class PureRustEvaluator implements Closeable
         this.cleanable.clean();
     }
 
+    /**
+     * Materialize a fresh Pure object on the runtime heap from
+     * Java-side property values, and return a {@link PureRustInstance}
+     * pointing at the new instance.
+     * <p>
+     * Used by {@link org.finos.legend.pure.rust.proxy.PureProxyFactory#create}
+     * after walking a user's {@code implements} class — each
+     * {@code propertyNames[i]} is a Pure property name, and the
+     * matching {@code propertyValues[i]} is the value (already unwrapped
+     * for proxies, or recursively materialized for nested impls).
+     *
+     * @param classifierFqn the Pure classifier (e.g.
+     *                      {@code "user_test::Person"})
+     * @param propertyNames property names in declaration order
+     * @param propertyValues parallel-array of property values
+     * @return a {@link PureRustInstance} owning the new heap pointer
+     */
+    public synchronized PureRustInstance create(String classifierFqn, String[] propertyNames, Object[] propertyValues)
+    {
+        if (this.closed)
+        {
+            throw new PureRustEvaluationException("Evaluator has been closed");
+        }
+        if (propertyNames.length != propertyValues.length)
+        {
+            throw new IllegalArgumentException(
+                    "create: property names/values length mismatch ("
+                            + propertyNames.length + " vs " + propertyValues.length + ")");
+        }
+
+        PureRustResult[] wrapped = wrapRustResults(propertyValues);
+        long instancePointer = nativeNew(this.contextPointer, classifierFqn, propertyNames, wrapped);
+        PureRustInstance instance = new PureRustInstance(instancePointer, this);
+        this.instanceCleanables.put(
+                instancePointer,
+                cleaner.register(instance, () -> nativeFreeInstance(this.contextPointer, instancePointer)));
+        return instance;
+    }
+
     // --- JNI Native Methods ---
     private native static long nativeInitContext();
     private native static void nativeFreeContext(long contextPtr);
@@ -242,4 +281,5 @@ public class PureRustEvaluator implements Closeable
     private native static PureRustResult nativeEvaluate(long contextPtr, String functionPath, PureRustResult[] args);
     private native static PureRustResult nativeGetProperty(long contextPtr, long instancePtr, String propertyName, PureRustResult[] args);
     private native static String nativeGetClassifier(long contextPtr, long instancePtr);
+    private native static long nativeNew(long contextPtr, String classifierFqn, String[] propertyNames, PureRustResult[] propertyValues);
 }

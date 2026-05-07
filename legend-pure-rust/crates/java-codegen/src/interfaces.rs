@@ -29,7 +29,7 @@ use std::path::PathBuf;
 
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
-use legend_pure_parser_pure::types::TypeExpr;
+use legend_pure_parser_pure::types::{Multiplicity, TypeExpr};
 
 use crate::closure::ReachableSet;
 use crate::model::{CodegenError, JavaFile, Options};
@@ -101,14 +101,14 @@ pub(crate) fn emit_class_interface(
             opts,
             GenericPolicy::AsObject,
         )?;
-        body.push_str(&format!(
-            "    {} {}();\n",
-            return_ty.source,
-            safe_java_identifier(prop.name.as_str())
-        ));
+        let java_name = safe_java_identifier(prop.name.as_str());
+        emit_property_decl(&return_ty.source, &java_name, &prop.multiplicity, &mut body);
     }
 
-    // Qualified properties.
+    // Qualified properties — keep abstract regardless of multiplicity.
+    // The user *must* implement them since their semantics is computed,
+    // not a stored value; defaulting them to empty would silently
+    // pretend they returned nothing.
     for qp in &class.qualified_properties {
         let return_ty = render_java_type(
             model,
@@ -163,11 +163,13 @@ pub(crate) fn emit_class_interface(
                 opts,
                 GenericPolicy::AsObject,
             )?;
-            body.push_str(&format!(
-                "    {} {}();\n",
-                return_ty.source,
-                safe_java_identifier(injected.name.as_str())
-            ));
+            let java_name = safe_java_identifier(injected.name.as_str());
+            emit_property_decl(
+                &return_ty.source,
+                &java_name,
+                &injected.multiplicity,
+                &mut body,
+            );
         }
     }
 
@@ -198,6 +200,49 @@ pub(crate) fn emit_class_interface(
         relative_path: path,
         contents: body,
     })
+}
+
+/// Emit one property declaration (simple property or
+/// association-injected). Properties with `[1]` multiplicity stay
+/// abstract — the user must supply a value. Properties with `[0..1]`
+/// or any "many" multiplicity get a default body returning empty, so
+/// hand-written impls of the interface only need to override the
+/// fields they care about.
+///
+/// Generated proxies always route through the invocation handler
+/// (which goes native), so the default body is never invoked for a
+/// proxy — it only matters for user-written `implements` classes.
+fn emit_property_decl(java_type: &str, java_name: &str, mult: &Multiplicity, out: &mut String) {
+    match default_body_for(mult) {
+        None => {
+            out.push_str(&format!("    {java_type} {java_name}();\n"));
+        }
+        Some(body) => {
+            out.push_str(&format!(
+                "    default {java_type} {java_name}() {{ return {body}; }}\n"
+            ));
+        }
+    }
+}
+
+/// Return the Java expression to use as the default-method body for a
+/// given Pure multiplicity, or `None` when the property must remain
+/// abstract.
+fn default_body_for(mult: &Multiplicity) -> Option<&'static str> {
+    match mult {
+        Multiplicity::PureOne => None,
+        Multiplicity::ZeroOrOne => Some("java.util.Optional.empty()"),
+        Multiplicity::ZeroOrMany | Multiplicity::OneOrMany | Multiplicity::Variable(_) => {
+            Some("java.util.Collections.emptyList()")
+        }
+        Multiplicity::Range { lower, upper } => {
+            if *lower == 1 && *upper == Some(1) {
+                None
+            } else {
+                Some("java.util.Collections.emptyList()")
+            }
+        }
+    }
 }
 
 fn escape_java_string(s: &str) -> String {
