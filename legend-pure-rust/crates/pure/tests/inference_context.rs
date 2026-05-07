@@ -554,12 +554,6 @@ function test::handler(b: test::Box<Integer>[1]): Integer[1] {
 }
 
 #[test]
-#[ignore = "Deep chain inference: $result.first.values->first() where $result \
-            comes from a let-bound fold(...)->cast(@Pair<List<X>,List<X>>) — \
-            the parametric let-type doesn't propagate through .first.values \
-            with full precision. Tracked under 'Generic unification (Z \
-            propagation)' P2 in BACKLOG. Targets \
-            PropertyMappingsImplementation:137 (4 platform errors)."]
 fn tic_pair_via_fold_then_chain() {
     // Closer to PropertyMappingsImplementation:137 — the chain
     // receiver comes from a let-bound `fold(...)->cast(@Pair<...>)`
@@ -581,7 +575,7 @@ Class test::Pair<U, V> {
 Class test::List<T> {
     values: T[*];
 }
-native function test::myFold<T,V|m>(value: test::PM[*], func: meta::pure::metamodel::function::Function<{T[1],V[m]->V[m]}>[1], accumulator: V[m]): V[m];
+native function test::myFold<T,V|m>(value: T[*], func: meta::pure::metamodel::function::Function<{T[1],V[m]->V[m]}>[1], accumulator: V[m]): V[m];
 native function test::myFirst<T|m>(coll: T[m]): T[0..1];
 function test::caller(items: test::PM[*], seed: test::Pair<test::List<test::PM>, test::List<test::PM>>[1]): test::PM[0..1] {
     let result = test::myFold($items, {pm, a | $a}, $seed);
