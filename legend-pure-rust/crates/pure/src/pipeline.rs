@@ -1512,6 +1512,10 @@ fn create_shell(element: &ast::Element) -> Element {
         // hydration order: the *target* of the reference already
         // advertises its declared arity / name list at Pass 1.
         ast::Element::Class(c) => Element::Class(Class {
+            type_parameter_variances: vec![
+                crate::nodes::class::Variance::default();
+                c.type_parameters.len()
+            ],
             type_parameters: c.type_parameters.clone(),
             multiplicity_parameters: c.multiplicity_parameters.clone(),
             type_variable_parameters: vec![],
@@ -1704,6 +1708,10 @@ fn hydrate_element_signature(
             let type_variable_parameters =
                 lower_type_variable_parameters(&class_def.type_variable_parameters, ctx, errors);
             Element::Class(Class {
+                type_parameter_variances: vec![
+                    crate::nodes::class::Variance::default();
+                    class_def.type_parameters.len()
+                ],
                 type_parameters: class_def.type_parameters.clone(),
                 multiplicity_parameters: class_def.multiplicity_parameters.clone(),
                 type_variable_parameters,

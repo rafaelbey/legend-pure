@@ -726,6 +726,7 @@ mod tests {
     fn empty_class() -> Class {
         class::Class {
             type_parameters: vec![],
+            type_parameter_variances: vec![],
             multiplicity_parameters: Vec::new(),
             type_variable_parameters: vec![],
             super_types: vec![],

@@ -28,6 +28,39 @@ use crate::annotations::{StereotypeRef, TaggedValueRef};
 use crate::types::{Expression, Multiplicity, Parameter, TypeExpr};
 
 // ---------------------------------------------------------------------------
+// Variance
+// ---------------------------------------------------------------------------
+
+/// Variance of a class type-parameter slot. Mirrors Java's
+/// `TypeParameter.contravariant` flag (the metamodel-level form) and
+/// the surface syntax `<-T>` / `<+T>` (the class-level form). Default
+/// `Invariant`.
+///
+/// Java declares `Property<U[contravariant], V>`,
+/// `Column<U[contravariant], V>`, and
+/// `NewPropertyRouteNodeFunctionDefinition<U[contravariant], V>` via
+/// the metamodel-level `^TypeParameter{contravariant: true}` syntax —
+/// `<-U>` prefix syntax is a separate path used only by `Path<-U,V|m>`
+/// in path.pure. Both forms collapse onto the same compiled
+/// `Variance` here so consumers (`bind_type_with_mode`,
+/// `is_type_compatible`) can dispatch uniformly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum Variance {
+    /// Default: invariant. `Container<Integer>` is neither sub- nor
+    /// super-type of `Container<Number>`.
+    #[default]
+    Invariant,
+    /// Covariant `<+T>`. `Producer<Integer>` is a subtype of
+    /// `Producer<Number>` (output position).
+    Covariant,
+    /// Contravariant `<-T>`. `Consumer<Number>` is a subtype of
+    /// `Consumer<Integer>` (input position). Pure's metamodel uses
+    /// this for `Property`'s owner slot, `Column`'s row slot, and
+    /// `NewPropertyRouteNodeFunctionDefinition`.
+    Contravariant,
+}
+
+// ---------------------------------------------------------------------------
 // Class
 // ---------------------------------------------------------------------------
 
@@ -40,6 +73,16 @@ use crate::types::{Expression, Multiplicity, Parameter, TypeExpr};
 pub struct Class {
     /// Type parameters (e.g., `["T", "U"]`).
     pub type_parameters: Vec<SmolStr>,
+    /// Variance of each type parameter, position-aligned with
+    /// `type_parameters`. Default `Invariant` for empty / pre-existing
+    /// serialized blobs that don't carry this field
+    /// (`#[serde(default)]`). Populated from m3's
+    /// `^TypeParameter{contravariant: true}` instance form (Property /
+    /// Column / NewPropertyRouteNodeFunctionDefinition) and from the
+    /// surface `<-T>` / `<+T>` prefix syntax (path.pure's
+    /// `Path<-U,V|m>`).
+    #[serde(default)]
+    pub type_parameter_variances: Vec<Variance>,
     /// Multiplicity parameters declared on a parametric class —
     /// `Class Holder<T|m>` carries one parameter named `m`. Position-
     /// aligned with use-site `TypeExpr::Named.multiplicity_arguments`

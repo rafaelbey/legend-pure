@@ -2894,6 +2894,7 @@ mod tests {
             },
             ModelElement::Class(Class {
                 type_parameters: Vec::new(),
+                type_parameter_variances: Vec::new(),
                 multiplicity_parameters: Vec::new(),
                 type_variable_parameters: Vec::new(),
                 super_types: Vec::new(),
@@ -2999,6 +3000,7 @@ mod tests {
             },
             ModelElement::Class(Class {
                 type_parameters: Vec::new(),
+                type_parameter_variances: Vec::new(),
                 multiplicity_parameters: Vec::new(),
                 type_variable_parameters: Vec::new(),
                 super_types: Vec::new(),
