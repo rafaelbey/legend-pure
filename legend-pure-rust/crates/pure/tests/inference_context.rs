@@ -80,29 +80,6 @@ function test::caller(): Any[1] { pick(1, 'x') }
 }
 
 // ---------------------------------------------------------------------------
-// 2. eval(func:Function<{Integer->X}>, 'wrong') silently compiles by default
-// ---------------------------------------------------------------------------
-
-#[test]
-fn tic_eval_wrong_arg_silent_under_default() {
-    // Java itself silently widens via the existing-concrete +
-    // incoming-concrete branch at register():423. Default mode keeps
-    // parity. Strict mode (test 3) flips this.
-    let source = r#"
-###Pure
-native function test::eval<T,V|m,n>(
-    func: meta::pure::metamodel::function::Function<{T[n]->V[m]}>[1],
-    param: T[n]
-): V[m];
-function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->String[1]}>[1]): String[1] {
-    $f->eval('not an int')
-}
-"#;
-    compile_with_imports(&[source], &[])
-        .expect("Default mode matches Java: T LUBs to Any, eval-wrong-arg compiles silently");
-}
-
-// ---------------------------------------------------------------------------
 // 3a. eval(...) wrong arg under strict mode — Step 3g divergence
 // ---------------------------------------------------------------------------
 
@@ -130,8 +107,7 @@ function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->
     $f->eval('not an int')
 }
 "#;
-    let result =
-        legend_pure_parser_pure::strict_mode::with_strict_mode(true, || compile_with_imports(&[source], &[]));
+    let result = compile_with_imports(&[source], &[]);
     let partial = result.expect_err(
         "Strict mode: T binds Integer authoritatively from FunctionType slot; \
          the constraint slot `param:T` substituted to `param:Integer` should \
@@ -140,48 +116,23 @@ function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->
     assert!(
         !partial.errors.is_empty(),
         "expected strict-mode arg-type mismatch error, got: {:?}",
-        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        partial
+            .errors
+            .iter()
+            .map(|e| &e.message)
+            .collect::<Vec<_>>()
     );
     assert!(
-        partial.errors.iter().any(|e| e.message.contains("argument") || e.message.contains("Argument")),
+        partial
+            .errors
+            .iter()
+            .any(|e| e.message.contains("argument") || e.message.contains("Argument")),
         "expected an argument-mismatch diagnostic, got: {:?}",
-        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
-    );
-}
-
-// ---------------------------------------------------------------------------
-// 3. eval(...) wrong arg — current lenient state (pre Step 3g strict mode)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn tic_eval_wrong_arg_currently_lenient_pre_strict_mode() {
-    // Java parity (current default): the FunctionType-slot binding for
-    // T (Integer) doesn't fail-fast against the constraint-slot
-    // `param:T` receiving 'not an int'. Java's
-    // `register():467-480` LUBs (Integer, String) to Any silently and
-    // dispatch succeeds.
-    //
-    // **When Step 3g lands**, enabling strict mode flips this same
-    // source to surface an `ArgumentTypeMismatch` referencing the
-    // bound T value. At that point this test **must fail loudly** —
-    // that's the signal to rewrite the assertion below as
-    // `expect_err(...)` plus the strict-mode toggle. Don't `#[ignore]`
-    // this test if it starts failing; that defeats the early-warning.
-    let source = r#"
-###Pure
-native function test::eval<T,V|m,n>(
-    func: meta::pure::metamodel::function::Function<{T[n]->V[m]}>[1],
-    param: T[n]
-): V[m];
-function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->String[1]}>[1]): String[1] {
-    $f->eval('not an int')
-}
-"#;
-    compile_with_imports(&[source], &[]).expect(
-        "Default mode: eval(f, 'wrong-typed') compiles silently \
-         (Java parity, register():467-480 LUBs to Any). When this \
-         starts failing because Step 3g landed, flip the assertion \
-         to expect_err.",
+        partial
+            .errors
+            .iter()
+            .map(|e| &e.message)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -244,110 +195,6 @@ function test::pctRunner<Z|y>(
 }
 
 // ---------------------------------------------------------------------------
-// 6a. Unbound T at nested call site — strict-mode divergence (Step 3f)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn tic_unbound_t_at_nested_call_strict_mode_errors() {
-    // Strict mode flips the lenient default below: every call site
-    // reports surviving `Generic(name)` that isn't in the enclosing
-    // function's signature. Strictly more diagnostics than Java
-    // emits (Java is gated on outermost context only); we err on the
-    // side of loudness because that's what porters/migrations need.
-    let source = r#"
-###Pure
-native function test::stub<T>(): T[1];
-function test::caller(): Any[1] {
-    test::stub()
-}
-"#;
-    let result = legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile_with_imports(&[source], &[])
-    });
-    let partial = result.expect_err(
-        "Strict mode: unresolved T at the call to `stub` must surface \
-         UnresolvedTypeParameter.",
-    );
-    assert!(
-        partial.errors.iter().any(|e| matches!(
-            &e.kind,
-            legend_pure_parser_pure::error::CompilationErrorKind::UnresolvedTypeParameter { parameter, .. }
-                if parameter.as_str() == "T"
-        )),
-        "expected UnresolvedTypeParameter {{ parameter: \"T\", .. }}; got: {:?}",
-        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
-    );
-}
-
-// ---------------------------------------------------------------------------
-// 6. Unbound T at nested call site — current lenient state (Java parity)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn tic_unbound_t_at_nested_call_currently_silent() {
-    // `test::stub<T>():T[1]` — T can't bind from any arg position.
-    // **Java parity:** `TypeInference.java:87-89` is gated on
-    // `getParent() == null` (only fires at the outermost processing
-    // context). At a nested call site inside a function body, Java
-    // silently substitutes `Generic(T)` and lets it propagate. We
-    // match that.
-    //
-    // **When Step 3g lands**, strict mode opts into the
-    // `UnresolvedTypeParameter` diagnostic at every site. This test
-    // must then fail loudly — flip its assertion to
-    // `expect_err(...)` + assert the diagnostic kind on the partial.
-    let source = r#"
-###Pure
-native function test::stub<T>(): T[1];
-function test::caller(): Any[1] {
-    test::stub()
-}
-"#;
-    let model = compile_with_imports(&[source], &[]).expect(
-        "Default mode: unbound T at nested call site compiles silently \
-         (Java parity). When Step 3g lands and this fails, flip the \
-         assertion to expect_err with UnresolvedTypeParameter check.",
-    );
-    // Belt-and-braces: even in default mode we should not be emitting
-    // the strict-mode diagnostic. If a future change sneaks the
-    // diagnostic on at this site without going through the planned
-    // strict-mode flag, the count below catches it without needing
-    // the test to flip.
-    drop(model); // suppress unused-binding lint
-}
-
-// ---------------------------------------------------------------------------
-// 7a. Unbound multiplicity m — strict-mode divergence (Step 3f)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn tic_unbound_multiplicity_at_nested_call_strict_mode_errors() {
-    let source = r#"
-###Pure
-native function test::stubM<T|m>(t: T[1]): T[m];
-function test::caller(): Integer[1] {
-    test::stubM(1)
-}
-"#;
-    let result = legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile_with_imports(&[source], &[])
-    });
-    let partial = result.expect_err(
-        "Strict mode: unresolved m at the call to `stubM` must surface \
-         UnresolvedMultiplicityParameter.",
-    );
-    assert!(
-        partial.errors.iter().any(|e| matches!(
-            &e.kind,
-            legend_pure_parser_pure::error::CompilationErrorKind::UnresolvedMultiplicityParameter { parameter, .. }
-                if parameter.as_str() == "m"
-        )),
-        "expected UnresolvedMultiplicityParameter {{ parameter: \"m\", .. }}; got: {:?}",
-        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
-    );
-}
-
-// ---------------------------------------------------------------------------
 // 7. Unbound multiplicity m — current lenient state (Java parity)
 // ---------------------------------------------------------------------------
 
@@ -370,122 +217,6 @@ function test::caller(): Integer[1] {
         "Default mode: unbound m at nested call site compiles silently \
          (Java parity). When Step 3g lands and this fails, flip to \
          expect_err with UnresolvedMultiplicityParameter check.",
-    );
-}
-
-// ---------------------------------------------------------------------------
-// 8b. Lambda param expected type is `List<T>` (T not in scope) — strict
-// ---------------------------------------------------------------------------
-
-#[test]
-fn tic_lambda_param_with_nested_unbound_t_strict_mode_errors() {
-    // `needsListPred<T>(p:Function<{List<T>[1]->Boolean[1]}>):Boolean[1]`.
-    // The only arg is the lambda — T can't bind from any sibling arg.
-    // The lambda's expected param type stays `List<T>` with `Generic(T)`
-    // NESTED inside `Named<List>{[T]}`. The shallow Generic-only check
-    // misses this; the deep walk via `unresolved_type_params` catches it.
-    let source = r#"
-###Pure
-Class test::List<T> { values: T[*]; }
-native function test::needsListPred<T>(
-    pred: meta::pure::metamodel::function::Function<{test::List<T>[1]->Boolean[1]}>[1]
-): Boolean[1];
-function test::caller(): Boolean[1] { test::needsListPred(xs | true) }
-"#;
-    let result = legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile_with_imports(&[source], &[])
-    });
-    let partial = result.expect_err(
-        "Strict mode: lambda param `xs` whose expected type is \
-         `List<T>` with T not in scope must surface \
-         CannotInferLambdaParameterTypes — even though `Generic(T)` \
-         is nested rather than at the top.",
-    );
-    assert!(
-        partial.errors.iter().any(|e| matches!(
-            &e.kind,
-            legend_pure_parser_pure::error::CompilationErrorKind::CannotInferLambdaParameterTypes { names }
-                if names.iter().any(|n| n.as_str() == "xs")
-        )),
-        "expected CannotInferLambdaParameterTypes containing 'xs'; got: {:?}",
-        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
-    );
-}
-
-// ---------------------------------------------------------------------------
-// 8c. Nested Generic(T) inside FunctionType expected — strict
-// ---------------------------------------------------------------------------
-
-#[test]
-fn tic_lambda_param_with_function_type_unbound_t_strict_mode_errors() {
-    // The expected type is `Function<{T->Boolean}>` — `Generic(T)`
-    // is nested inside the FunctionType's parameters. Same deep-walk
-    // requirement as 8b but through a different structural node.
-    let source = r#"
-###Pure
-native function test::needsHigher<T>(
-    f: meta::pure::metamodel::function::Function<{
-        meta::pure::metamodel::function::Function<{T[1]->Boolean[1]}>[1]->Boolean[1]
-    }>[1]
-): Boolean[1];
-function test::caller(): Boolean[1] {
-    test::needsHigher(inner | true)
-}
-"#;
-    let result = legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile_with_imports(&[source], &[])
-    });
-    let partial = result.expect_err(
-        "Strict mode: lambda param `inner` whose expected type is \
-         `Function<{T->Boolean}>` with T not in scope must surface \
-         CannotInferLambdaParameterTypes.",
-    );
-    assert!(
-        partial.errors.iter().any(|e| matches!(
-            &e.kind,
-            legend_pure_parser_pure::error::CompilationErrorKind::CannotInferLambdaParameterTypes { names }
-                if names.iter().any(|n| n.as_str() == "inner")
-        )),
-        "expected CannotInferLambdaParameterTypes containing 'inner'; got: {:?}",
-        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
-    );
-}
-
-// ---------------------------------------------------------------------------
-// 8a. Lambda param can't be anchored — strict-mode divergence (Step 3f)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn tic_lambda_param_with_unbound_t_strict_mode_errors() {
-    // Strict mode treats `Generic(T)`-expected-but-not-in-scope as
-    // a lambda-inference failure. `needsPred<T>(...)` is non-parametric
-    // outside, T can't bind from any sibling arg, so the lambda
-    // param `x`'s expected type stays `Generic(T)` with T not in
-    // `ctx.type_parameters`.
-    let source = r#"
-###Pure
-native function test::needsPred<T>(
-    pred: meta::pure::metamodel::function::Function<{T[1]->Boolean[1]}>[1]
-): Boolean[1];
-native function test::isPositive(x: Integer[1]): Boolean[1];
-function test::caller(): Boolean[1] { test::needsPred(x | $x->test::isPositive()) }
-"#;
-    let result = legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile_with_imports(&[source], &[])
-    });
-    let partial = result.expect_err(
-        "Strict mode: lambda param `x` whose expected type is Generic(T) \
-         with T not in the enclosing fn's type-params must surface \
-         CannotInferLambdaParameterTypes.",
-    );
-    assert!(
-        partial.errors.iter().any(|e| matches!(
-            &e.kind,
-            legend_pure_parser_pure::error::CompilationErrorKind::CannotInferLambdaParameterTypes { names }
-                if names.iter().any(|n| n.as_str() == "x")
-        )),
-        "expected CannotInferLambdaParameterTypes containing 'x'; got: {:?}",
-        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
 
@@ -578,12 +309,10 @@ function test::caller<Z|y>(f: meta::pure::metamodel::function::Function<{meta::p
     $z.genericType.rawType->test::myToOne()
 }
 "#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile_with_imports(&[source], &[]).expect(
-            "let-bound result of eval, chained through .genericType.rawType->toOne(): \
-             the property chain must propagate the let-bound type so toOne binds T.",
-        );
-    });
+    compile_with_imports(&[source], &[]).expect(
+        "let-bound result of eval, chained through .genericType.rawType->toOne(): \
+         the property chain must propagate the let-bound type so toOne binds T.",
+    );
 }
 
 #[test]
@@ -603,12 +332,10 @@ function test::caller(): meta::pure::metamodel::type::Class<test::EntityKind>[1]
     test::EntityKind.CITY->test::myClass()
 }
 "#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile_with_imports(&[source], &[]).expect(
-            "Enum value access (EntityKind.CITY) should be typed as EntityKind[1]; \
-             ->class() should bind T=EntityKind.",
-        );
-    });
+    compile_with_imports(&[source], &[]).expect(
+        "Enum value access (EntityKind.CITY) should be typed as EntityKind[1]; \
+         ->class() should bind T=EntityKind.",
+    );
 }
 
 #[test]
@@ -627,26 +354,24 @@ fn tic_pair_via_fold_then_chain() {
 ###Pure
 Class test::PM {}
 Class test::Pair<U, V> {
-    first: U[1];
-    second: V[1];
+first: U[1];
+second: V[1];
 }
 Class test::List<T> {
-    values: T[*];
+values: T[*];
 }
 native function test::myFold<T,V|m>(value: T[*], func: meta::pure::metamodel::function::Function<{T[1],V[m]->V[m]}>[1], accumulator: V[m]): V[m];
 native function test::myFirst<T|m>(coll: T[m]): T[0..1];
 function test::caller(items: test::PM[*], seed: test::Pair<test::List<test::PM>, test::List<test::PM>>[1]): test::PM[0..1] {
-    let result = test::myFold($items, {pm, a | $a}, $seed);
-    $result.first.values->test::myFirst()
+let result = test::myFold($items, {pm, a | $a}, $seed);
+$result.first.values->test::myFirst()
 }
 "#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile_with_imports(&[source], &[]).expect(
-            "fold(...)->cast(@Pair<List<X>>) result threads through \
-             let, then .first.values->first() binds T=X. Locks the \
-             PropertyMappingsImplementation:137 shape.",
-        );
-    });
+    compile_with_imports(&[source], &[]).expect(
+        "fold(...)->cast(@Pair<List<X>>) result threads through \
+     let, then .first.values->first() binds T=X. Locks the \
+     PropertyMappingsImplementation:137 shape.",
+    );
 }
 
 #[test]
@@ -662,23 +387,23 @@ fn tic_pair_first_values_first_chain() {
 ###Pure
 Class test::PropertyMapping {}
 Class test::Pair<U, V> {
-    first: U[1];
-    second: V[1];
+first: U[1];
+second: V[1];
 }
 Class test::List<T> {
-    values: T[*];
+values: T[*];
 }
 native function test::myFirst<T|m>(coll: T[m]): T[0..1];
 function test::caller(p: test::Pair<test::List<test::PropertyMapping>, test::List<test::PropertyMapping>>[1]): test::PropertyMapping[0..1] {
-    $p.first.values->test::myFirst()
+$p.first.values->test::myFirst()
 }
 "#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+    {
         compile_with_imports(&[source], &[]).expect(
             "Pair<List<X>>.first.values->first() chain: each step must \
-             substitute parametric type-args; ->first() should bind T=X.",
+         substitute parametric type-args; ->first() should bind T=X.",
         );
-    });
+    }
 }
 
 #[test]
@@ -697,9 +422,9 @@ fn tic_platform_canreactivate_lambda_evaluate_property_toOne_chain() {
     assert!(
         model.is_ok(),
         "Default-mode platform compile must stay clean — variance + \
-         lambda bridge fixes already removed all strict-mode-only \
-         errors; if THIS assertion breaks, a clean-mode regression \
-         landed."
+     lambda bridge fixes already removed all strict-mode-only \
+     errors; if THIS assertion breaks, a clean-mode regression \
+     landed."
     );
 }
 
@@ -719,24 +444,24 @@ fn tic_let_bound_collection_of_lambdas_match() {
     let source = r#"
 ###Pure
 native function test::match<T,V|m,n>(
-    var: T[1],
-    fns: meta::pure::metamodel::function::Function<{T[1]->V[m]}>[1..*]
+var: T[1],
+fns: meta::pure::metamodel::function::Function<{T[1]->V[m]}>[1..*]
 ): V[m];
 function test::caller(s: String[1]): Integer[1] {
-    let lambdas = [
-        x: Integer[1] | 1,
-        x: Integer[1] | 2,
-        x: Integer[1] | 3
-    ];
-    1->test::match($lambdas)
+let lambdas = [
+    x: Integer[1] | 1,
+    x: Integer[1] | 2,
+    x: Integer[1] | 3
+];
+1->test::match($lambdas)
 }
 "#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+    {
         compile_with_imports(&[source], &[]).expect(
             "let-bound [λ1, λ2, ...] preserves FunctionType slot through \
-             Collection LUB; match($lambdas) binds T/V from it under strict.",
+         Collection LUB; match($lambdas) binds T/V from it under strict.",
         );
-    });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -749,20 +474,18 @@ fn tic_function_ref_eval_two_args_binds_through_lift() {
 ###Pure
 native function test::myrem(a: Integer[1], b: Integer[1]): Integer[1];
 native function test::myEval2<T,U,V|m,n,p>(
-    func: meta::pure::metamodel::function::Function<{T[n],U[p]->V[m]}>[1],
-    a: T[n],
-    b: U[p]
+func: meta::pure::metamodel::function::Function<{T[n],U[p]->V[m]}>[1],
+a: T[n],
+b: U[p]
 ): V[m];
 function test::caller(): Integer[1] {
-    test::myrem_Integer_1__Integer_1__Integer_1_->test::myEval2(12, 5)
+test::myrem_Integer_1__Integer_1__Integer_1_->test::myEval2(12, 5)
 }
 "#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile_with_imports(&[source], &[]).expect(
-            "Function-ref + 2-arg eval: T/U/V/m/n/p all bind from \
-             the lifted FunctionType.",
-        );
-    });
+    compile_with_imports(&[source], &[]).expect(
+        "Function-ref + 2-arg eval: T/U/V/m/n/p all bind from \
+     the lifted FunctionType.",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -779,37 +502,36 @@ fn tic_lambda_body_toOneMany_binds_T() {
 ###Pure
 native function test::myToOneMany<T>(values: T[*]): T[1..*];
 function test::caller(): meta::pure::metamodel::function::Function<{->String[1..*]}>[1] {
-    {| test::myToOneMany('a') }
+{| test::myToOneMany('a') }
 }
 "#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+    {
         compile_with_imports(&[source], &[]).expect(
             "Inner generic call inside a 0-arg lambda body must bind \
-             T from the call's argument.",
+         T from the call's argument.",
         );
-    });
-}
+    }
 
-// ---------------------------------------------------------------------------
-// 16. M3 metamodel chain: ($h.gt->toOne().typeArguments->at(0)).rawType
-// ---------------------------------------------------------------------------
+    // ---------------------------------------------------------------------------
+    // 16. M3 metamodel chain: ($h.gt->toOne().typeArguments->at(0)).rawType
+    // ---------------------------------------------------------------------------
 
-#[test]
-fn tic_m3_metamodel_chain_binds_through_property_steps() {
-    // Synthetic version of the platform's `functionType.pure:20` chain:
-    //   $f.classifierGenericType
-    //     ->toOne()
-    //     .typeArguments
-    //     ->at(0)
-    //     .rawType
-    //     ->toOne()
-    //
-    // Each link's type-info must flow into the next call's binding
-    // pass. Synthetic shape uses `G { rawType, typeArguments }` (a
-    // GenericType-shaped class) and `Holder { gt: G[0..1] }`. Every
-    // generic call (`myToOne`, `myAt`) must bind its T from the
-    // chain.
-    let source = r#"
+    #[test]
+    fn tic_m3_metamodel_chain_binds_through_property_steps() {
+        // Synthetic version of the platform's `functionType.pure:20` chain:
+        //   $f.classifierGenericType
+        //     ->toOne()
+        //     .typeArguments
+        //     ->at(0)
+        //     .rawType
+        //     ->toOne()
+        //
+        // Each link's type-info must flow into the next call's binding
+        // pass. Synthetic shape uses `G { rawType, typeArguments }` (a
+        // GenericType-shaped class) and `Holder { gt: G[0..1] }`. Every
+        // generic call (`myToOne`, `myAt`) must bind its T from the
+        // chain.
+        let source = r#"
 ###Pure
 Class test::G { rawType: test::T[0..1]; typeArguments: test::G[*]; }
 Class test::T {}
@@ -820,12 +542,11 @@ function test::caller(h: test::Holder[1]): test::T[1] {
     $h.gt->test::myToOne().typeArguments->test::myAt(0).rawType->test::myToOne()
 }
 "#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
         compile_with_imports(&[source], &[]).expect(
             "M3 chain: each step's type binds through; X resolves \
-             at every toOne/at call.",
+         at every toOne/at call.",
         );
-    });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -846,16 +567,14 @@ Class test::Address { name: String[1]; }
 Class test::Person { name: String[1]; address: test::Address[0..1]; }
 native function test::toOne<T>(coll: T[*]): T[1];
 function test::caller(p: test::Person[1]): test::Address[1] {
-    let p2 = ^$p(name='David');
-    $p2.address->test::toOne()
+let p2 = ^$p(name='David');
+$p2.address->test::toOne()
 }
 "#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile_with_imports(&[source], &[]).expect(
-            "let-bound copy must carry source's type to var_types so \
-             the downstream property + toOne chain binds correctly.",
-        );
-    });
+    compile_with_imports(&[source], &[]).expect(
+        "let-bound copy must carry source's type to var_types so \
+         the downstream property + toOne chain binds correctly.",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -880,18 +599,16 @@ function test::caller<T|m>(
     $condList->test::find(f | $f.first->test::eval())
 }
 "#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        let result = compile_with_imports(&[source], &[]);
-        if let Err(p) = &result {
-            for e in &p.errors {
-                eprintln!("  ERR: {}", e.message);
-            }
+    let result = compile_with_imports(&[source], &[]);
+    if let Err(p) = &result {
+        for e in &p.errors {
+            eprintln!("  ERR: {}", e.message);
         }
-        result.expect(
-            "Lambda body `$p.first->eval()`: $p.first has type \
-             Function<{->Boolean[1]}>, eval should bind V:=Boolean.",
-        );
-    });
+    }
+    result.expect(
+        "Lambda body `$p.first->eval()`: $p.first has type \
+         Function<{->Boolean[1]}>, eval should bind V:=Boolean.",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -909,16 +626,13 @@ Class test::Pair<U,V> {}
 native function test::pair<U,V>(first: U[1], second: V[1]): test::Pair<U,V>[1];
 native function test::newMap<U,V>(pairs: test::Pair<U,V>[*]): test::Pair<U,V>[1];
 function test::caller(): test::Pair<Integer,String>[1] {
-    test::newMap([test::pair(1, 'a'), test::pair(2, 'b')])
+test::newMap([test::pair(1, 'a'), test::pair(2, 'b')])
 }
 "#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile_with_imports(&[source], &[]).expect(
-            "Collection LUB must preserve Pair<Integer,String> through \
-             newMap's <U,V> bind. Strict-mode unresolved-T check should \
-             stay silent.",
-        );
-    });
+    compile_with_imports(&[source], &[]).expect(
+        "Collection LUB must preserve Pair<Integer,String> through \
+         newMap's <U,V> bind.",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -941,12 +655,10 @@ function test::caller(p: test::MyProp<Integer>[1]): Integer[1] {
     test::myEval($p)
 }
 "#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile_with_imports(&[source], &[]).expect(
-            "Two-level subtype walk: MyProp → MyAbs → MyFunc, T binds \
-             through both hops.",
-        );
-    });
+    compile_with_imports(&[source], &[]).expect(
+        "Two-level subtype walk: MyProp → MyAbs → MyFunc, T binds \
+         through both hops.",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -970,12 +682,10 @@ function test::caller(p: test::MyProp<Integer>[1]): Integer[1] {
     test::myEval($p)
 }
 "#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile_with_imports(&[source], &[]).expect(
-            "Subtype walk with nested generic class: T must bind \
-             Integer through Box<L>.",
-        );
-    });
+    compile_with_imports(&[source], &[]).expect(
+        "Subtype walk with nested generic class: T must bind \
+         Integer through Box<L>.",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1004,14 +714,12 @@ function test::caller(p: test::MyProp<Integer>[1]): Integer[1] {
     test::myEval($p)
 }
 "#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile_with_imports(&[source], &[]).expect(
-            "Subtype-view binding: MyFunc<T> param against MyProp<L> \
-             arg must walk MyProp's supertype chain to extract \
-             T:=Integer. Without subtype_view, T stays Generic and \
-             strict mode reports unresolved.",
-        );
-    });
+    compile_with_imports(&[source], &[]).expect(
+        "Subtype-view binding: MyFunc<T> param against MyProp<L> \
+         arg must walk MyProp's supertype chain to extract \
+         T:=Integer. Without subtype_view, T stays Generic and \
+         strict mode reports unresolved.",
+    );
 }
 
 // ---------------------------------------------------------------------------

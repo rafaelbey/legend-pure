@@ -104,13 +104,11 @@ function test::caller(r: test::D_A[1]): meta::pure::metamodel::type::Any[1] {
     test::myEval(test::myToOne(test::myGetProperty(test::D_A, 'a')), $r)
 }
 "#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile_with_imports(&[source]).expect(
-            "Property<Nil,Any> contravariant lift through subtype_view \
-             must produce Function<{Any->Any}>; eval binds T=Any so \
-             arg D_A passes the strict-mode arg-type check.",
-        );
-    });
+    compile_with_imports(&[source]).expect(
+        "Property<Nil,Any> contravariant lift through subtype_view \
+         must produce Function<{Any->Any}>; eval binds T=Any so \
+         arg D_A passes the arg-type check.",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -186,12 +184,10 @@ function test::caller(r: test::D_A[1]): meta::pure::metamodel::type::Any[1] {
 "#;
     // MyProperty doesn't extend Function so the structural lift via
     // subtype_view returns None — eval's binding has no
-    // FunctionType to extract from arg 0. T is unbound; under
-    // strict, the `UnresolvedTypeParameter` diagnostic fires
-    // (default mode silently widens, Java parity).
-    let result = legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile_with_imports(&[source])
-    });
+    // FunctionType to extract from arg 0. T is unbound; the
+    // `UnresolvedTypeParameter` diagnostic fires (a deliberate
+    // divergence over Java's silent widen-to-Any).
+    let result = compile_with_imports(&[source]);
     // We expect at least one compile error. The exact diagnostic
     // varies — it might be "type parameter T was not resolved" or
     // an arg-type mismatch — but it must not silently succeed,
@@ -199,8 +195,7 @@ function test::caller(r: test::D_A[1]): meta::pure::metamodel::type::Any[1] {
     assert!(
         result.is_err(),
         "synthetic MyProperty (no contravariant flag) — eval must \
-         not silently bind through it; expected a strict-mode \
-         diagnostic."
+         not silently bind through it; expected a diagnostic."
     );
 }
 

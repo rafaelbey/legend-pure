@@ -96,7 +96,7 @@ pub(crate) fn lower_lambda_with_expected_types(
 ///
 /// When `expected_types` is provided, an untyped parameter (no `type_ref`)
 /// adopts the corresponding `Some((ty, mult))` entry — but only when the
-/// expected type is *concrete* (a `Named { .. }` other than `Any`, with no
+/// expected type is *concrete* (a `Named {.. }` other than `Any`, with no
 /// remaining `Generic(_)` substructure). This keeps dispatch precise without
 /// overcommitting on still-generic call sites.
 ///
@@ -123,7 +123,6 @@ fn lower_lambda_parameters(
 ) -> Vec<crate::types::Parameter> {
     let mut uninferred: Vec<SmolStr> = Vec::new();
     let mut anchor: Option<SourceInfo> = None;
-    let strict = crate::strict_mode::is_enabled();
 
     let lowered: Vec<crate::types::Parameter> = params
         .iter()
@@ -138,42 +137,17 @@ fn lower_lambda_parameters(
                 .and_then(|s| s.get(idx))
                 .and_then(|o| o.as_ref());
 
-            // Default mode (Java parity): "uninferred" only when there's
-            // neither a declaration nor any caller-side expectation.
-            // `Generic(T)` expectations stay silent because they may
-            // bind at the call site if the enclosing fn is parametric.
-            //
-            // Strict mode adds: an expectation containing ANY
-            // `Generic(name)` whose `name` isn't a transitive parameter
-            // of the enclosing element (`ctx.type_parameters`) — at any
-            // depth — is also a failure. Walks the full type via
-            // `unresolved_type_params` so `List<T>`, `Function<{T->X}>`,
-            // and arbitrarily nested cases all fail when T (or X) isn't
-            // in the enclosing fn's scope. Catches `needsPred(x | …)`,
-            // `mapToList(x | …)`, and `compose(f, g)`-style chains where
-            // the propagating Generic can't bind from any sibling arg.
-            let expected_unbindable_in_strict = strict
-                && match expected {
-                    Some((te, _)) => {
-                        // Deep walk: detect Generics nested inside
-                        // `Function<{T→Boolean}>`-shaped expected
-                        // types (locked by
-                        // `tic_lambda_param_with_function_type_unbound_t_strict_mode_errors`).
-                        // The shallow `unresolved_type_params` skips
-                        // FunctionType to keep the strict-mode
-                        // *return*-check from misfiring on
-                        // function-ref args; this site needs the
-                        // opposite (do recurse).
-                        let unresolved =
-                            crate::inference::context::unresolved_type_params_deep(te);
-                        unresolved
-                            .iter()
-                            .any(|name| !ctx.type_parameters.iter().any(|t| t == name))
-                    }
-                    None => false,
-                };
+            // A param is "uninferred" only when there's neither a
+            // declaration nor any caller-side expectation. When
+            // expected is `Some(Generic(T))`, the lambda's T may
+            // bind at the call site via the enclosing function's
+            // dispatch (Java parity — `map<T,V>(coll:T[*],
+            // func:Function<{T[1]→V[*]}>[1])`'s lambda param
+            // expects `Generic("T")`, which binds from the
+            // sibling `coll` arg's type at the use site).
+            let expected_unbindable = false;
             let is_uninferred = (declared_type.is_none() && expected.is_none())
-                || (declared_type.is_none() && expected_unbindable_in_strict);
+                || (declared_type.is_none() && expected_unbindable);
             if is_uninferred {
                 uninferred.push(p.name.clone());
                 if anchor.is_none() {

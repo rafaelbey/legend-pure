@@ -39,18 +39,18 @@ use crate::types::{Multiplicity, TypeExpr};
 /// bindings are invariant in Pure (a function declared
 /// `Function<{Integer→X}>` cannot be upcast to
 /// `Function<{Number→X}>`), so they're treated as authoritative for
-/// the strict-mode wrong-arg check that matches an arg's type
+/// the wrong-arg check that matches an arg's type
 /// against a frozen-by-FunctionType T.
 ///
 /// Strict-mode catches `eval(intFunc, 'wrong')` because arg 0's
 /// `Function<{T→V}>` slot binds T=Integer authoritatively, while
 /// arg 1's top-level `T` binds T=String as a constraint. The
 /// LUB-merged view widens to Any (Java parity, default mode passes);
-/// the auth-only view keeps T=Integer (strict mode rejects). For
+/// the auth-only view keeps T=Integer ( rejects). For
 /// `compare<T>(a:T, b:T)`-style calls, both bindings are top-level
 /// constraint, `ty_auth` is empty, the auth-only view leaves T as
 /// `Generic("T")` which `is_type_compatible`'s wildcard arm accepts
-/// — so strict mode doesn't false-positive on `compare(1, 'a')`.
+/// — so doesn't false-positive on `compare(1, 'a')`.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct GenericBindings {
     /// Type-variable bindings, LUB-merged across all sources
@@ -61,7 +61,7 @@ pub(crate) struct GenericBindings {
     /// constraint contribute to the same `T`, auth wins absolutely
     /// — `ty_auth[T]` is the auth value, `ty[T]` is the LUB-merged
     /// (Java parity) value. Used by [`make_concrete_type_strict`] to
-    /// produce the strict-mode substituted view.
+    /// produce the substituted view.
     pub ty_auth: HashMap<SmolStr, TypeExpr>,
     /// Multiplicity-variable bindings: `m` → `Multiplicity::PureOne`.
     pub mult: HashMap<SmolStr, Multiplicity>,
@@ -105,14 +105,14 @@ impl GenericBindings {
     /// arg type against them, matching Java's LUB-to-supertype semantics
     /// for top-level Generic params without LUB-widening auth slots.
     ///
-    /// Used by the strict-mode arg-type check in
+    /// Used by the arg-type check in
     /// `validate_call_arguments`. The catch surface: any `T` whose value
     /// was set authoritatively by another arg's structural FunctionType
     /// slot (most prominently `eval`'s `func:Function<{T[n]→V[m]}>`
     /// signature). The non-catch surface: `compare<T>(a:T,b:T)`-style
     /// calls where both args are top-level Generic-typed; `ty_auth` is
     /// empty for those, the substituted param remains `Generic("T")`,
-    /// strict-mode silently accepts.
+    /// silently accepts.
     ///
     /// Auth-Generic-fallback: when `ty_auth[name]` is itself a
     /// `Generic(...)` placeholder (e.g. `$f`'s structural slot is
@@ -146,102 +146,6 @@ impl GenericBindings {
     }
 }
 
-/// Walk a (presumed already-substituted) `TypeExpr` and collect every
-/// `Generic(name)` that survived **at the outer caller's scope**.
-///
-/// Used by the strict-mode return-type check (Java parity for
-/// `TypeInference.java:87-89` "The type parameter X was not
-/// resolved") — emitted when a callee declares `<T>` but no
-/// call-site argument supplied a value for `T`.
-///
-/// Recurses through `Named { type_arguments }`, `AlgebraUnion`, and
-/// `Relation` columns so a parametric position (`Class<T>`) doesn't
-/// hide an unresolved generic. Does NOT recurse into `FunctionType`
-/// — the Generics inside a `FunctionType` slot belong to that
-/// function-ref's local scope (e.g.
-/// `removeDuplicates_T_MANY__T_MANY_` lifts to
-/// `Function<{Generic("T")[m]→Generic("T")[m]}>`); they're separate
-/// from the outer caller's type-parameters and reporting them as
-/// unresolved misfires whenever a function-ref is passed as an arg.
-/// (The function-ref's own scope binds those Generics at the
-/// FunctionType's eventual call site, not at the outer dispatch.)
-///
-/// For the *deep* walk (used by the lambda-parameter unbindable
-/// check, which needs to detect Generics nested inside expected
-/// FunctionType slots like `Function<{T→Boolean}>`), see
-/// [`unresolved_type_params_deep`].
-#[must_use]
-pub fn unresolved_type_params(ty: &TypeExpr) -> Vec<SmolStr> {
-    let mut out = Vec::new();
-    walk_type_for_unresolved(ty, &mut out, /* deep */ false);
-    out
-}
-
-/// Like [`unresolved_type_params`] but also recurses into
-/// `FunctionType` parameters and return types. Used by the
-/// lambda-parameter unbindable diagnostic in
-/// `lower::lambda::lower_lambda_parameters` — a lambda whose
-/// expected type is `Function<{T→Boolean}>` (with T not in scope)
-/// needs to detect the nested T to surface
-/// `CannotInferLambdaParameterTypes`.
-#[must_use]
-pub fn unresolved_type_params_deep(ty: &TypeExpr) -> Vec<SmolStr> {
-    let mut out = Vec::new();
-    walk_type_for_unresolved(ty, &mut out, /* deep */ true);
-    out
-}
-
-fn walk_type_for_unresolved(ty: &TypeExpr, out: &mut Vec<SmolStr>, deep: bool) {
-    match ty {
-        TypeExpr::Generic(name) => {
-            if !out.contains(name) {
-                out.push(name.clone());
-            }
-        }
-        TypeExpr::Named { type_arguments, .. } => {
-            for ta in type_arguments {
-                walk_type_for_unresolved(ta, out, deep);
-            }
-        }
-        TypeExpr::FunctionType {
-            parameters,
-            return_type,
-            ..
-        } => {
-            if deep {
-                for (p, _) in parameters {
-                    walk_type_for_unresolved(p, out, deep);
-                }
-                walk_type_for_unresolved(return_type, out, deep);
-            }
-            // Else: skip — see fn doc-comment above.
-        }
-        TypeExpr::AlgebraUnion(a, b) => {
-            walk_type_for_unresolved(a, out, deep);
-            walk_type_for_unresolved(b, out, deep);
-        }
-        TypeExpr::Relation(cols) => {
-            for c in cols {
-                walk_type_for_unresolved(&c.type_expr, out, deep);
-            }
-        }
-        TypeExpr::Unresolved => {}
-    }
-}
-
-/// Returns the variable name if `m` is `Multiplicity::Variable`,
-/// otherwise `None`. Used at the same site as
-/// [`unresolved_type_params`] to detect unresolved multiplicity
-/// generics — Java parity for `TypeInference.java:102` ("The
-/// multiplicity parameter X was not resolved").
-#[must_use]
-pub fn unresolved_mult_param(m: &Multiplicity) -> Option<SmolStr> {
-    match m {
-        Multiplicity::Variable(name) => Some(name.clone()),
-        _ => None,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // TypeInferenceContext — Java port skeleton
 // ---------------------------------------------------------------------------
@@ -255,18 +159,18 @@ pub fn unresolved_mult_param(m: &Multiplicity) -> Option<SmolStr> {
 /// argument:
 ///
 /// - [`RegisterMode::Authoritative`] — `merge=false`. Used by
-///   `potentiallyUpdateTypeInferenceContextUsingFunctionSignature`
-///   (`:567-584`) when at least one argument failed to converge in
-///   the first pass. Only the *succeeded* arg pairs are walked, and
-///   each binding is treated as the canonical value for the type
-///   parameter — an existing non-concrete entry can be replaced
-///   outright by a concrete incoming value.
+/// `potentiallyUpdateTypeInferenceContextUsingFunctionSignature`
+/// (`:567-584`) when at least one argument failed to converge in
+/// the first pass. Only the *succeeded* arg pairs are walked, and
+/// each binding is treated as the canonical value for the type
+/// parameter — an existing non-concrete entry can be replaced
+/// outright by a concrete incoming value.
 /// - [`RegisterMode::Constraint`] — `merge=true`. Used by
-///   `updateTypeInferenceContextUsingFunctionSignature` (`:586-594`)
-///   when every argument converged. All pairs are walked
-///   left-to-right and each registration LUB-merges with the
-///   existing binding (Java acknowledges a known-broken
-///   widen-to-Any-then-drop case at `register():474-478`).
+/// `updateTypeInferenceContextUsingFunctionSignature` (`:586-594`)
+/// when every argument converged. All pairs are walked
+/// left-to-right and each registration LUB-merges with the
+/// existing binding (Java acknowledges a known-broken
+/// widen-to-Any-then-drop case at `register():474-478`).
 ///
 /// Today `bind_type` always behaves like `Constraint` (LUB-merge
 /// unconditionally). Step 3d of the plan will route the two-branch
@@ -291,28 +195,28 @@ pub enum RegisterMode {
 /// `infer_generic_bindings` — Step 3d of the plan does that. This
 /// commit lands the structure so subsequent steps have a stable home
 /// for the merge-aware register semantics, the lambda-body second-
-/// pass, and the strict-mode arg-type checks.
+/// pass, and the arg-type checks.
 ///
 /// Java fields mirrored:
 /// - `id` — sequential identifier; useful for the
-///   `TypeInferenceObserver` trace.
+/// `TypeInferenceObserver` trace.
 /// - `parent` — pointer to the enclosing context. Recursive generic
-///   functions like `getAllTypeGeneralisations` rely on the parent
-///   chain to resolve a type parameter that's bound in an outer
-///   call.
+/// functions like `getAllTypeGeneralisations` rely on the parent
+/// chain to resolve a type parameter that's bound in an outer
+/// call.
 /// - `scope` — the M3 element being processed (function, class).
-///   Surfaces in error messages.
+/// Surfaces in error messages.
 /// - `bindings` — the current frame's `(types, mults)` map pair. Two
-///   per-state Java fields (`ahead`, `ahead_consumed`) are *not*
-///   ported yet — they cover the deferred-lambda-body case and land
-///   together with [`crate::inference::lambda::LambdaParamFiller`]
-///   (Step 3e).
+/// per-state Java fields (`ahead`, `ahead_consumed`) are *not*
+/// ported yet — they cover the deferred-lambda-body case and land
+/// together with [`crate::inference::lambda::LambdaParamFiller`]
+/// (Step 3e).
 /// - `tops` — set of type-parameter names that are *top-level* in
-///   this context (declared on the M3 element being processed). A
-///   `Generic(name)` whose name is in `tops` MUST stay generic
-///   through `make_concrete` — substituting it would conflate
-///   distinct outer-scope parameters with bindings collected at this
-///   call site.
+/// this context (declared on the M3 element being processed). A
+/// `Generic(name)` whose name is in `tops` MUST stay generic
+/// through `make_concrete` — substituting it would conflate
+/// distinct outer-scope parameters with bindings collected at this
+/// call site.
 ///
 /// The struct deliberately uses owned values (no `Rc`/`Weak`) until
 /// Step 3d shows whether shared ownership is required. Most call

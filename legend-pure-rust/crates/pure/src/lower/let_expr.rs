@@ -212,9 +212,7 @@ fn infer_let_type(
                                     let args: Vec<TypeExpr> = a_args
                                         .iter()
                                         .zip(b_args.iter())
-                                        .map(|(x, y)| {
-                                            crate::resolve::type_lub(x, y, ctx.model)
-                                        })
+                                        .map(|(x, y)| crate::resolve::type_lub(x, y, ctx.model))
                                         .collect();
                                     let margs: Vec<crate::types::Multiplicity> = a_margs
                                         .iter()
@@ -282,24 +280,23 @@ fn infer_let_type(
                 .iter()
                 .map(|p| (p.type_expr.clone(), p.multiplicity.clone()))
                 .collect();
-            let (return_type, return_multiplicity) =
-                if let Some(last) = body.last() {
-                    let ret_te = crate::resolve::infer_typeexpr_from_valuespec(
-                        last,
-                        ctx.model,
-                        &ctx.variable_types,
-                    )
-                    .unwrap_or(crate::types::TypeExpr::Unresolved);
-                    let ret_mult = crate::resolve::infer_multiplicity_from_valuespec(
-                        last,
-                        ctx.model,
-                        &ctx.variable_types,
-                    )
-                    .unwrap_or(crate::types::Multiplicity::PureOne);
-                    (ret_te, ret_mult)
-                } else {
-                    (crate::types::TypeExpr::Unresolved, Multiplicity::PureOne)
-                };
+            let (return_type, return_multiplicity) = if let Some(last) = body.last() {
+                let ret_te = crate::resolve::infer_typeexpr_from_valuespec(
+                    last,
+                    ctx.model,
+                    &ctx.variable_types,
+                )
+                .unwrap_or(crate::types::TypeExpr::Unresolved);
+                let ret_mult = crate::resolve::infer_multiplicity_from_valuespec(
+                    last,
+                    ctx.model,
+                    &ctx.variable_types,
+                )
+                .unwrap_or(crate::types::Multiplicity::PureOne);
+                (ret_te, ret_mult)
+            } else {
+                (crate::types::TypeExpr::Unresolved, Multiplicity::PureOne)
+            };
             let function_type = crate::types::TypeExpr::FunctionType {
                 parameters: ft_params,
                 return_type: Box::new(return_type),

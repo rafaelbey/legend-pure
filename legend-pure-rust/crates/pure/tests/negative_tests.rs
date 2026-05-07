@@ -130,8 +130,10 @@ function test::caller(b: test::Box[1]): Integer[1] { $b.nonExistent }
     expect_diagnostic_kind(
         &[source],
         "$b.nonExistent on a user class must surface UnknownProperty",
-        |k| matches!(k, CompilationErrorKind::UnknownProperty { property_name, .. }
-            if property_name.as_str() == "nonExistent"),
+        |k| {
+            matches!(k, CompilationErrorKind::UnknownProperty { property_name, .. }
+            if property_name.as_str() == "nonExistent")
+        },
     );
 }
 
@@ -151,7 +153,12 @@ function test::caller(b: test::Box[1]): Integer[1] {
     expect_diagnostic_kind(
         &[source],
         "QP called with too many args must surface QualifiedPropertyArityMismatch",
-        |k| matches!(k, CompilationErrorKind::QualifiedPropertyArityMismatch { .. }),
+        |k| {
+            matches!(
+                k,
+                CompilationErrorKind::QualifiedPropertyArityMismatch { .. }
+            )
+        },
     );
 }
 
@@ -256,7 +263,12 @@ function test::makesLambda(): meta::pure::metamodel::function::Function<{Any[1]-
         &[source],
         "lambda with untyped param + no caller expectation must surface \
          CannotInferLambdaParameterTypes",
-        |k| matches!(k, CompilationErrorKind::CannotInferLambdaParameterTypes { .. }),
+        |k| {
+            matches!(
+                k,
+                CompilationErrorKind::CannotInferLambdaParameterTypes { .. }
+            )
+        },
     );
 }
 
@@ -269,11 +281,14 @@ function test::makesLambda(): meta::pure::metamodel::function::Function<{Any[1]-
 // pins; cross-referenced here for consolidated visibility.
 
 #[test]
-fn neg_strict_only_eval_wrong_arg_compiles_under_default() {
-    // *Negative of a negative* — under default mode, this MUST
-    // compile (Java parity). If a future change makes it fail under
-    // default mode, that's a parity regression and this test is the
-    // alarm.
+fn neg_eval_wrong_arg_errors() {
+    // Deliberate divergence over Java semantics: `eval(intFunc,
+    // 'wrong')` errors. T binds Integer authoritatively from the
+    // structural FunctionType slot; the constraint slot
+    // `param:T` substituted to `param:Integer` rejects the String
+    // arg. Java would silently widen via
+    // `findBestCommonGenericType`, accepting the call — a known
+    // parity hole this rejects.
     let source = r#"
 ###Pure
 native function test::eval<T,V|m,n>(
@@ -286,34 +301,11 @@ function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->
 "#;
     let result = compile(&[source]);
     assert!(
-        result.is_ok(),
-        "Default mode (Java parity): eval(f, 'wrong-typed') must compile. \
-         If this fails, strict mode leaked into the default — see \
-         `parity_semantics.md` and `crate::strict_mode`."
+        result.is_err(),
+        "eval(f, 'wrong-typed') must error. T binds Integer \
+         authoritatively from the FunctionType slot; the param:T \
+         slot substituted to param:Integer rejects the String arg."
     );
-}
-
-#[test]
-fn neg_strict_only_eval_wrong_arg_errors_under_strict() {
-    let source = r#"
-###Pure
-native function test::eval<T,V|m,n>(
-    func: meta::pure::metamodel::function::Function<{T[n]->V[m]}>[1],
-    param: T[n]
-): V[m];
-function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->String[1]}>[1]): String[1] {
-    $f->eval('not an int')
-}
-"#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        let result = compile(&[source]);
-        assert!(
-            result.is_err(),
-            "Strict mode: eval(f, 'wrong-typed') must error. \
-             T binds Integer authoritatively from the FunctionType slot; \
-             excluded-self bindings reject the String constraint."
-        );
-    });
 }
 
 // ===========================================================================
@@ -357,13 +349,12 @@ function test::caller<T>(): Boolean[1] {
     test::needsPred(x | $x->test::isType())
 }
 "#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile(&[source]).expect(
-            "Strict mode: lambda param with `Generic(T)` expected MUST \
+
+    compile(&[source]).expect(
+        "Strict mode: lambda param with `Generic(T)` expected MUST \
              compile when T is in the enclosing fn's `type_parameters` \
              — that's the parametric-scope-anchor case.",
-        );
-    });
+    );
 }
 
 #[test]
@@ -383,13 +374,12 @@ function test::getAllTypeGeneralisations(class: test::T[1]): test::T[*] {
     $class->test::concatenate($generalisations);
 }
 "#;
-    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
-        compile(&[source]).expect(
-            "Strict mode: recursive generic fn must NOT surface a \
+
+    compile(&[source]).expect(
+        "Strict mode: recursive generic fn must NOT surface a \
              spurious unbound-T diagnostic — T is in the enclosing fn's \
              `type_params_in_scope`.",
-        );
-    });
+    );
 }
 
 // ===========================================================================

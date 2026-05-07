@@ -53,6 +53,5 @@ pub(crate) mod context;
 pub(crate) mod lambda;
 #[allow(dead_code)] // placeholder docs; Step 3d-cont fills in
 pub(crate) mod processor;
-pub mod strict_mode;
 
 pub(crate) use context::GenericBindings;

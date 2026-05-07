@@ -1158,8 +1158,7 @@ impl<'a> M3Parser<'a> {
                                 type_arguments = self.parse_type_argument_list();
                             }
                             "multiplicityArguments" => {
-                                multiplicity_arguments =
-                                    self.parse_multiplicity_argument_list();
+                                multiplicity_arguments = self.parse_multiplicity_argument_list();
                             }
                             "typeParameter" => {
                                 type_parameter_name = Some(self.parse_type_parameter_name());
@@ -1255,9 +1254,7 @@ impl<'a> M3Parser<'a> {
     /// `^VariableExpression { name, genericType: ^GenericType{...},
     /// multiplicity: ^Multiplicity{...} | <ref> }`. Discards the name
     /// (our internal FunctionType doesn't carry param names).
-    fn parse_function_type_parameters(
-        &mut self,
-    ) -> Vec<(crate::types::TypeExpr, Multiplicity)> {
+    fn parse_function_type_parameters(&mut self) -> Vec<(crate::types::TypeExpr, Multiplicity)> {
         let mut out = Vec::new();
         if self.at(&Token::Caret) {
             // Single VariableExpression (no surrounding brackets).
