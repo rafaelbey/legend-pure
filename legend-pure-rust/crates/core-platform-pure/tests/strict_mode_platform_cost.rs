@@ -69,6 +69,19 @@ fn strict_mode_platform_cost_report() {
                     );
                 }
 
+                // Sample errors from compare.pure
+                println!("\n=== Sample from compare.pure (top file) ===");
+                let mut count = 0;
+                for e in &p.errors {
+                    if e.source_info.source.contains("compare.pure") {
+                        println!("  L{}: {}", e.source_info.start_line, e.message);
+                        count += 1;
+                        if count >= 5 {
+                            break;
+                        }
+                    }
+                }
+
                 // Sample one error per top file.
                 println!("\n=== Sample per file ===");
                 let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();

@@ -554,6 +554,42 @@ function test::handler(b: test::Box<Integer>[1]): Integer[1] {
 }
 
 // ---------------------------------------------------------------------------
+// 13. Lambda body extracts type-arg from a generic property
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tic_lambda_body_property_of_pair_eval() {
+    // Mirror of `if.pure:26` shape: filter a collection of `Pair<F1, F2>`,
+    // accessing `.first` (which is F1) inside the predicate. The
+    // first lambda body's `$f.first->eval()` requires `eval<V|m>(func:Function<{->V[m]}>):V[m]`
+    // to bind V from the property's substituted type.
+    let source = r#"
+###Pure
+Class test::Pair<U,V> { first: U[1]; second: V[1]; }
+native function test::pair<U,V>(first: U[1], second: V[1]): test::Pair<U,V>[1];
+native function test::find<T>(coll: T[*], pred: meta::pure::metamodel::function::Function<{T[1]->Boolean[1]}>[1]): T[0..1];
+native function test::eval<V|m>(func: meta::pure::metamodel::function::Function<{->V[m]}>[1]): V[m];
+function test::caller<T|m>(
+    condList: test::Pair<meta::pure::metamodel::function::Function<{->Boolean[1]}>, meta::pure::metamodel::function::Function<{->T[m]}>>[*]
+): test::Pair<meta::pure::metamodel::function::Function<{->Boolean[1]}>, meta::pure::metamodel::function::Function<{->T[m]}>>[0..1] {
+    $condList->test::find(f | $f.first->test::eval())
+}
+"#;
+    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        let result = compile_with_imports(&[source], &[]);
+        if let Err(p) = &result {
+            for e in &p.errors {
+                eprintln!("  ERR: {}", e.message);
+            }
+        }
+        result.expect(
+            "Lambda body `$p.first->eval()`: $p.first has type \
+             Function<{->Boolean[1]}>, eval should bind V:=Boolean.",
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
 // 12. Collection LUB preserves type-arguments
 // ---------------------------------------------------------------------------
 
