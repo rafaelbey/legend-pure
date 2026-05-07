@@ -589,6 +589,31 @@ function test::caller(): Integer[1] {
 }
 
 // ---------------------------------------------------------------------------
+// 17. Lambda-wrapped generic call: `{|toOneMany('a')}` inside a chain
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tic_lambda_body_toOneMany_binds_T() {
+    // Mirror of `{|toOneMany('a')}.expressionSequence->at(0)`-style
+    // platform pattern. A 0-arg lambda whose body is a generic call.
+    // The inner generic must bind even when the lambda is a value
+    // passed elsewhere.
+    let source = r#"
+###Pure
+native function test::myToOneMany<T>(values: T[*]): T[1..*];
+function test::caller(): meta::pure::metamodel::function::Function<{->String[1..*]}>[1] {
+    {| test::myToOneMany('a') }
+}
+"#;
+    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[]).expect(
+            "Inner generic call inside a 0-arg lambda body must bind \
+             T from the call's argument.",
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
 // 16. M3 metamodel chain: ($h.gt->toOne().typeArguments->at(0)).rawType
 // ---------------------------------------------------------------------------
 

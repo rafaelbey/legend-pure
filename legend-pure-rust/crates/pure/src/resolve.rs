@@ -1361,6 +1361,24 @@ pub(crate) fn infer_type_from_valuespec(
                 SmolStr::new(class_name),
             ])
         }
+        // Lambda values: their M3 metaclass is `LambdaFunction`.
+        // Property access on a lambda (e.g.,
+        // `{|toOneMany('a')}.expressionSequence`) needs this so
+        // `find_property_with_inheritance(LambdaFunction, …)` walks
+        // up to find `expressionSequence` (declared on
+        // `FunctionDefinition`). Without this, lambda values had
+        // no element id and downstream chains
+        // (`{|…}.expressionSequence->at(0)->evaluateAndDeactivate()`)
+        // saw type-less arguments — strict mode then fired
+        // 16+ "T not resolved at at" / "at evaluateAndDeactivate"
+        // errors at platform reflection sites.
+        ExprKind::Lambda { .. } => model.resolve_by_path(&[
+            SmolStr::new("meta"),
+            SmolStr::new("pure"),
+            SmolStr::new("metamodel"),
+            SmolStr::new("function"),
+            SmolStr::new("LambdaFunction"),
+        ]),
         // PropertyCall / QualifiedPropertyCall arms live above — property
         // invocation is handled before the FunctionCall arm.
         _ => None,

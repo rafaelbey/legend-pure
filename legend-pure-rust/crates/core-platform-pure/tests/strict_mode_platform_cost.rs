@@ -144,6 +144,18 @@ fn strict_mode_platform_cost_report() {
                     }
                 }
 
+                println!("\n=== Sample from toOneMany.pure ===");
+                count = 0;
+                for e in &p.errors {
+                    if e.source_info.source.contains("toOneMany.pure") {
+                        println!("  L{}: {}", e.source_info.start_line, e.message);
+                        count += 1;
+                        if count >= 8 {
+                            break;
+                        }
+                    }
+                }
+
                 // Sample one error per top file.
                 println!("\n=== Sample per file ===");
                 let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
