@@ -69,6 +69,55 @@ fn strict_mode_platform_cost_report() {
                     );
                 }
 
+                // Sample one error per top file.
+                println!("\n=== Sample per file ===");
+                let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+                for e in &p.errors {
+                    let s = e.source_info.source.to_string();
+                    if seen.insert(s.clone()) {
+                        println!(
+                            "  {}:{} → {}",
+                            s, e.source_info.start_line, e.message
+                        );
+                        if seen.len() >= 12 {
+                            break;
+                        }
+                    }
+                }
+
+                // Distribution by source file (which files account for most errors).
+                println!("\n=== Top 10 error-heavy source files ===");
+                let mut by_source: HashMap<String, usize> = HashMap::new();
+                for e in &p.errors {
+                    *by_source
+                        .entry(e.source_info.source.to_string())
+                        .or_default() += 1;
+                }
+                let mut sources: Vec<_> = by_source.into_iter().collect();
+                sources.sort_by(|a, b| b.1.cmp(&a.1));
+                for (s, c) in sources.iter().take(10) {
+                    println!("  {c:5}  {s}");
+                }
+
+                // Distribution by callee function name (extracted from message).
+                println!("\n=== Top 10 callees by error count ===");
+                let mut by_callee: HashMap<String, usize> = HashMap::new();
+                for e in &p.errors {
+                    if let Some(name) = e
+                        .message
+                        .split("call to '")
+                        .nth(1)
+                        .and_then(|s| s.split('\'').next())
+                    {
+                        *by_callee.entry(name.to_string()).or_default() += 1;
+                    }
+                }
+                let mut callees: Vec<_> = by_callee.into_iter().collect();
+                callees.sort_by(|a, b| b.1.cmp(&a.1));
+                for (n, c) in callees.iter().take(10) {
+                    println!("  {c:5}  {n}");
+                }
+
                 println!(
                     "\nDelta vs default: +{} errors under strict mode",
                     total - default_errors
