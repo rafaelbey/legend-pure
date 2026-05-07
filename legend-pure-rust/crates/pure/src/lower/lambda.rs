@@ -235,20 +235,32 @@ fn format_uninferred_lambda_message(names: &[SmolStr]) -> String {
 fn is_concrete_type(ty: &crate::types::TypeExpr) -> bool {
     use crate::types::TypeExpr;
     match ty {
-        TypeExpr::Named {
-            element,
-            type_arguments,
-            ..
-        } => *element != crate::bootstrap::ANY_ID && type_arguments.iter().all(is_concrete_type),
-        TypeExpr::FunctionType {
-            parameters,
-            return_type,
-            ..
-        } => parameters.iter().all(|(t, _)| is_concrete_type(t)) && is_concrete_type(return_type),
+        // A `Named { element: X, … }` is concrete enough to use as a
+        // lambda-param expectation as long as the head element is
+        // resolved (not `Any`). The type_arguments may still contain
+        // `Generic(_)` nodes — those are typically transitive
+        // generics from the enclosing function (e.g.,
+        // `condList: Pair<Function<{->Boolean[1]}>, Function<{->T[m]}>>[*]`
+        // where `T`/`m` are the outer fn's params). Property access
+        // and function dispatch work fine with the concrete head;
+        // any contained Generic substitutes naturally at the
+        // enclosing scope's binding pass.
+        //
+        // The previous `type_arguments.iter().all(is_concrete_type)`
+        // gate falsely rejected such types, falling back to
+        // `Unresolved` — which then propagated through the lambda
+        // body's property accesses and erased the type info needed
+        // for downstream `eval`/`map`/`filter` to bind their own T/V.
+        TypeExpr::Named { element, .. } => *element != crate::bootstrap::ANY_ID,
+        // FunctionType is concrete when its outer shape is known —
+        // same logic. Type-arguments and inner generics can survive.
+        TypeExpr::FunctionType { .. } => true,
         TypeExpr::Relation(_) => true,
-        // `Generic` and `AlgebraUnion` are not concrete — they may bind
-        // later. `Unresolved` is by definition not concrete: it's the
-        // type-hole marker for an un-inferred lambda parameter.
+        // `Generic` and `AlgebraUnion` are not concrete *at the head*
+        // — the lambda lowering can't produce a useful expected type
+        // from them (the enclosing scope may bind later, but the
+        // lambda's own dispatch needs a concrete head). `Unresolved`
+        // is the type-hole marker.
         TypeExpr::Generic(_) | TypeExpr::AlgebraUnion(_, _) | TypeExpr::Unresolved => false,
     }
 }
