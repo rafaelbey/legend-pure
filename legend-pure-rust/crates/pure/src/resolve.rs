@@ -1213,8 +1213,25 @@ pub(crate) fn infer_type_from_valuespec(
 
             let target_eid = infer_type_from_valuespec(target, model, var_types)?;
             let receiver_type_args = extract_receiver_type_args(target, var_types);
-            let (prop_ty_owned, type_params_owned) =
-                find_property_with_inheritance(target_eid, &data.function_name, model)?;
+            // Property-not-found fallback: when target is `Any` or
+            // resolved through a Generic-typed receiver,
+            // permissively return `Any` so chained property access
+            // transits (mirrors `infer_typeexpr_from_valuespec`'s
+            // PropertyCall fallback). Without this, the chain at
+            // `match.pure:185 $z.genericType.rawType->toOne()` left
+            // T unresolved at the strict-mode return-check.
+            let permissive = target_eid == crate::bootstrap::ANY_ID
+                || matches!(
+                    target_te.as_ref(),
+                    Some(crate::types::TypeExpr::Generic(_))
+                );
+            let lookup =
+                find_property_with_inheritance(target_eid, &data.function_name, model);
+            let (prop_ty_owned, type_params_owned) = match lookup {
+                Some(p) => p,
+                None if permissive => return Some(crate::bootstrap::ANY_ID),
+                None => return None,
+            };
             let resolved =
                 substitute_class_generics(&prop_ty_owned, &type_params_owned, &receiver_type_args);
             match resolved {
@@ -1285,9 +1302,14 @@ pub(crate) fn infer_type_from_valuespec(
             None
         }
         ExprKind::Variable { name } => {
-            // Look up declared type from function params / let / lambda
+            // Look up declared type from function params / let / lambda.
+            // Generic-typed variables (e.g. `$z` whose type is the
+            // enclosing function's outer Generic("Z")) map to `Any` —
+            // matches `infer_property_access`'s permissive Generic
+            // handling so chains transit through.
             var_types.get(name).and_then(|(te, _)| match te {
                 crate::types::TypeExpr::Named { element, .. } => Some(*element),
+                crate::types::TypeExpr::Generic(_) => Some(crate::bootstrap::ANY_ID),
                 _ => None,
             })
         }
@@ -1475,13 +1497,31 @@ pub(crate) fn infer_typeexpr_from_valuespec(
 
             let target_eid = infer_type_from_valuespec(target, model, var_types)?;
             let receiver_type_args = extract_receiver_type_args(target, var_types);
-            let (prop_ty_owned, type_params_owned) =
-                find_property_with_inheritance(target_eid, &data.function_name, model)?;
-            Some(substitute_class_generics(
-                &prop_ty_owned,
-                &type_params_owned,
-                &receiver_type_args,
-            ))
+            // Property-not-found on `Any` or a Generic-typed receiver
+            // is permissive: return `Any` so chains transit through.
+            // Mirrors `infer_property_access`'s Generic / Any
+            // fallbacks. Without this, `$z.genericType.rawType` on a
+            // Generic-typed `$z` left intermediate types as None and
+            // downstream `->toOne()` couldn't bind T.
+            let permissive = target_eid == crate::bootstrap::ANY_ID
+                || matches!(
+                    target_te.as_ref(),
+                    Some(crate::types::TypeExpr::Generic(_))
+                );
+            match find_property_with_inheritance(target_eid, &data.function_name, model) {
+                Some((prop_ty_owned, type_params_owned)) => Some(substitute_class_generics(
+                    &prop_ty_owned,
+                    &type_params_owned,
+                    &receiver_type_args,
+                )),
+                None if permissive => Some(crate::types::TypeExpr::Named {
+                    element: crate::bootstrap::ANY_ID,
+                    type_arguments: vec![],
+                    multiplicity_arguments: Vec::new(),
+                    value_arguments: vec![],
+                }),
+                None => None,
+            }
         }
         // Collection: compute LUB at the TypeExpr level so a
         // homogeneous `[pair(1,'a'), pair(2,'b')]` (all

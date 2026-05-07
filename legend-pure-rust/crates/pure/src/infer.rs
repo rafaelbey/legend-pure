@@ -1552,6 +1552,19 @@ fn infer_property_access(
     // T to bind. Mirrors the lower-time wrapping in
     // `infer_let_type`'s Lambda branch — the two paths produce the
     // same shape for property access purposes.
+    //
+    // `Generic(name)` receivers — a let-bound or substitution result
+    // that landed on a still-unbound type-parameter (commonly the
+    // enclosing function's outer Generic, e.g.
+    // `testFn<Z|y>(...) { let z = $f->eval(...); $z.genericType... }`
+    // where Z survives in $z's stored type) — are treated as `Any`
+    // for property lookup. Java's runtime defers reflection on
+    // Generic-typed receivers; our compiler does the same so the
+    // chain doesn't fall off and downstream calls (`->toOne()` etc.)
+    // can still bind T from the *property's* declared return type.
+    // Without this, `$z.genericType.rawType->toOne()` left T
+    // unresolved at the strict-mode return-check
+    // (match.pure:185).
     let (receiver_id, receiver_type_args, receiver_mult_args) = match &target.type_expr {
         TypeExpr::Named {
             element,
@@ -1575,6 +1588,28 @@ fn infer_property_access(
                 Some(eid) => (eid, vec![target.type_expr.clone()], Vec::new()),
                 None => return PropertyLookup::UnknownTarget,
             }
+        }
+        // Generic receiver: defer to runtime-flexible Any-result.
+        // Property access on a still-unbound type-parameter (the
+        // enclosing function's outer Generic, e.g. `$z` typed
+        // `Generic("Z")` from `let z = $f->eval(…)`) can't compile-
+        // time-resolve a property. Java treats this permissively:
+        // the chain compiles, the result is Any, and downstream
+        // generic calls can still bind T from the property's
+        // declared return type. Return a synthetic
+        // `FoundProperty(Any[*])` so the chain continues; the
+        // strict-mode check then fires on whatever the next call
+        // does with this Any.
+        TypeExpr::Generic(_) => {
+            return PropertyLookup::FoundProperty(ResolvedType {
+                type_expr: TypeExpr::Named {
+                    element: bootstrap::ANY_ID,
+                    type_arguments: vec![],
+                    multiplicity_arguments: Vec::new(),
+                    value_arguments: vec![],
+                },
+                multiplicity: Multiplicity::ZeroOrMany,
+            });
         }
         _ => return PropertyLookup::UnknownTarget,
     };
@@ -1611,6 +1646,42 @@ fn infer_property_access(
         return found;
     }
 
+    // Enum-value access shortcut. `MyEnum.RED` lowers to a
+    // PropertyCall whose receiver type is
+    // `Named<Enumeration>{[Named<MyEnum>{}]}` (per the bare-element
+    // ref's metatype lift). The property name `RED` isn't a real
+    // property of Enumeration — it's a value of MyEnum. Look for it
+    // there so downstream `enum.RED->class()` etc. flows the
+    // enum's element type rather than falling off as
+    // UnknownTarget. Java's
+    // `meta::pure::functions::meta::class<T>(any:T[*]):Class<T>[1]`
+    // depends on this (`class.pure:49 enum_value->class()`).
+    let enumeration_eid = ctx.model.resolve_by_path(&[
+        SmolStr::new("meta"),
+        SmolStr::new("pure"),
+        SmolStr::new("metamodel"),
+        SmolStr::new("type"),
+        SmolStr::new("Enumeration"),
+    ]);
+    if Some(receiver_id) == enumeration_eid
+        && let [TypeExpr::Named { element: enum_eid, .. }] = receiver_type_args.as_slice()
+        && let Some(Element::Enumeration(enum_def)) = ctx.model.try_get_element(*enum_eid)
+        && enum_def
+            .values
+            .iter()
+            .any(|v| v.name.as_str() == property_name)
+    {
+        return PropertyLookup::FoundProperty(ResolvedType {
+            type_expr: TypeExpr::Named {
+                element: *enum_eid,
+                type_arguments: vec![],
+                multiplicity_arguments: Vec::new(),
+                value_arguments: vec![],
+            },
+            multiplicity: Multiplicity::PureOne,
+        });
+    }
+
     // Defer to runtime reflection ONLY when the receiver is a
     // parametric metatype carrier (Class<X>, Enumeration<X>,
     // Function<…>) or `Any`. For these:
@@ -1620,11 +1691,29 @@ fn infer_property_access(
     //     without a metatype-aware inner-element walk + improved
     //     lambda-param inference.
     //
+    // For `Any` specifically, Java allows arbitrary property access
+    // and yields `Any[*]` at runtime — used by reflective chains
+    // like `$x.genericType.rawType->toOne()` where the receiver
+    // chain transits through Any-typed intermediate values. Return
+    // `FoundProperty(Any[*])` so the chain compiles; downstream
+    // generic calls then see a Any-typed arg and can bind T=Any.
+    //
     // Non-parametric chunk-0 classes (`GenericType`, `Property`,
     // `FunctionType`, `MultiplicityValue`, `SimpleFunctionExpression`,
     // …) are real M3 classes with declared properties — validate
     // them normally so typos like `pair(1,2)->genericType().rawTyp`
     // produce a compile error instead of silently returning Unit.
+    if receiver_id == bootstrap::ANY_ID {
+        return PropertyLookup::FoundProperty(ResolvedType {
+            type_expr: TypeExpr::Named {
+                element: bootstrap::ANY_ID,
+                type_arguments: vec![],
+                multiplicity_arguments: Vec::new(),
+                value_arguments: vec![],
+            },
+            multiplicity: Multiplicity::ZeroOrMany,
+        });
+    }
     if is_metatype_carrier(ctx.model, receiver_id) {
         return PropertyLookup::UnknownTarget;
     }

@@ -113,9 +113,36 @@ impl GenericBindings {
     /// calls where both args are top-level Generic-typed; `ty_auth` is
     /// empty for those, the substituted param remains `Generic("T")`,
     /// strict-mode silently accepts.
+    ///
+    /// Auth-Generic-fallback: when `ty_auth[name]` is itself a
+    /// `Generic(...)` placeholder (e.g. `$f`'s structural slot is
+    /// `Function<{->Z[y]}>` where `Z` is the *caller's* outer generic —
+    /// the auth value carries Z's name verbatim, not a concrete type),
+    /// the constraint LUB in `self.ty` typically has more information
+    /// (e.g. the lambda body's V resolved to `ValueSpecification`).
+    /// Prefer the constraint side then. This unblocks
+    /// `match.pure:185 $z.genericType.rawType->toOne()` where `$z` is a
+    /// let-bound result of `$f->eval(|…->deactivate())` — the auth
+    /// V=Generic("Z") would otherwise freeze the chain receiver as
+    /// Generic and break property-access.
     #[must_use]
     pub fn make_concrete_type_strict(&self, ty: &TypeExpr) -> TypeExpr {
-        crate::resolve::substitute_type(ty, &self.ty_auth)
+        let merged: HashMap<SmolStr, TypeExpr> = self
+            .ty_auth
+            .iter()
+            .map(|(k, v)| {
+                let value = if matches!(v, TypeExpr::Generic(_))
+                    && let Some(constraint) = self.ty.get(k)
+                    && !matches!(constraint, TypeExpr::Generic(_))
+                {
+                    constraint.clone()
+                } else {
+                    v.clone()
+                };
+                (k.clone(), value)
+            })
+            .collect();
+        crate::resolve::substitute_type(ty, &merged)
     }
 }
 
