@@ -554,6 +554,103 @@ function test::handler(b: test::Box<Integer>[1]): Integer[1] {
 }
 
 // ---------------------------------------------------------------------------
+// 10b. Two-branch dispatch — converged-args path (all converge, LUB)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tic_two_branch_all_converge_lubs_to_any() {
+    // Every arg converges in pass 1 → constraint (merge=true) path.
+    // Java behaviour: `pick<T>(1, 'x')` LUBs T to Any — that's
+    // already locked by `tic_pick_t_t_with_unrelated_args_lubs_silently`.
+    // Re-pin here as the explicit "all-converged → constraint mode"
+    // assertion so a future change that flips the dispatch
+    // direction breaks loudly.
+    let source = r#"
+###Pure
+native function test::pick<T>(a: T[1], b: T[1]): T[1];
+function test::caller(): Any[1] { test::pick(1, 'x') }
+"#;
+    compile_with_imports(&[source], &[]).expect(
+        "Two-branch dispatch (all-converged → Constraint mode): \
+         pick<T>(1, 'x') LUBs T to Any silently. If this fails, the \
+         dispatch picked Authoritative mode for an all-converged \
+         call — Java parity is broken.",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 10c. Two-branch dispatch — authoritative path (lambda blocks pass 1)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tic_two_branch_lambda_unconverged_uses_authoritative() {
+    // The lambda arg doesn't converge in pass 1
+    // (`infer_typeexpr_from_valuespec` returns None for `Lambda`).
+    // Java's `potentiallyUpdate…` path engages → converged args bind
+    // authoritatively. The non-lambda concrete arg's T-binding
+    // can't be widened by subsequent concrete bindings.
+    //
+    // For `evalWithSeed<T>(t:T[1], f:Function<{T[1]->T[1]}>):T[1]`
+    // called as `evalWithSeed(7, x | $x)`, T binds Integer
+    // authoritatively from the seed; the lambda's later contribution
+    // (when its body is processed in pass 2) doesn't widen T to Any.
+    let source = r#"
+###Pure
+native function test::evalWithSeed<T>(
+    seed: T[1],
+    f: meta::pure::metamodel::function::Function<{T[1]->T[1]}>[1]
+): T[1];
+function test::caller(): Integer[1] {
+    test::evalWithSeed(7, x | $x)
+}
+"#;
+    compile_with_imports(&[source], &[]).expect(
+        "Two-branch dispatch (lambda unconverged → Authoritative \
+         mode): T binds Integer from the seed; the lambda's body \
+         binding doesn't conflict.",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 10d. Authoritative protects fold-style accumulator
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tic_two_branch_fold_accumulator_preserved_under_authoritative() {
+    // The classic fold pattern. Pass 1: arg 0 ([1,2,3]) converges
+    // T:=Integer; arg 1 (lambda) unconverged; arg 2 (the accumulator
+    // [], type Nil[0..0]) converges. Authoritative mode means T
+    // stays Integer (insert), V stays Nil (insert). Pass 2 binds
+    // the lambda body's return — that path uses constraint LUB
+    // against existing V via bind_from_lambda_body, which the
+    // platform's add() chain depends on.
+    //
+    // Locks the case both prior spikes broke. If this fails after a
+    // structural change, the lambda-body-as-V-source pathway is
+    // mis-classified.
+    let source = r#"
+###Pure
+native function test::cast<T>(any: Any[*], t: T[1]): T[*];
+native function test::fold<T,V|m>(
+    value: T[*],
+    func: meta::pure::metamodel::function::Function<{T[1],V[m]->V[m]}>[1],
+    accumulator: V[m]
+): V[m];
+native function test::add<T>(set: T[*], val: T[1]): T[1..*];
+function test::caller(): Any[*] {
+    [1, 2, 3]->test::fold({val: Integer[1], acc: Any[*] | test::add($acc, $val)}, [])
+}
+"#;
+    compile_with_imports(&[source], &[]).expect(
+        "Two-branch dispatch must NOT regress fold-style chains. \
+         T:=Integer authoritatively from arg 0; V:=Nil from arg 2; \
+         lambda body LUBs V → Any (constraint mode in pass 2). \
+         Both prior spikes (c17a06, reverted 3f1a64) broke this; \
+         locked here.",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 10. fold + lambda-body-as-V-source — the case both prior spikes broke
 // ---------------------------------------------------------------------------
 

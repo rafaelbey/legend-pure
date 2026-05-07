@@ -2000,43 +2000,70 @@ pub(crate) fn infer_generic_bindings(
     use crate::inference::context::{RegisterMode, TypeInferenceContext};
     use crate::types::{ExprKind, Multiplicity, TypeExpr};
 
-    // Step 3d-cont: thread the binding pass through the
-    // TypeInferenceContext skeleton. `root(None, …)` creates a
-    // top-level frame with no parent — once stack semantics are
-    // exercised (recursive generic helpers, let-bound lambda
-    // specialisation), `enter_child` will push frames as the
-    // orchestrator descends into nested call sites.
+    // Step 3d-cont (Phase B): two-branch dispatch.
     //
-    // The carrier change is structural; behaviour is identical
-    // because both `register_mult(Constraint)` and the existing
-    // bind_type call have the same Vacant=insert / Occupied=LUB
-    // semantics. Tests `tic_*` + `neg_*` + `pos_*` lock the
-    // unchanged behaviour.
+    // Java's `FunctionExpressionProcessor.process` walks args in
+    // `firstPassTypeInference` (`:794`) and decides at lines 567-594:
+    //   - If every arg converged → `update…` path, registers all args
+    //     with `merge=true` (constraint, LUB-merging on conflict).
+    //   - If any arg failed → `potentiallyUpdate…` path, registers
+    //     ONLY the converged args with `merge=false` (authoritative —
+    //     concrete bindings can't be widened by later constraints
+    //     because the unconverged arg never re-enters the binding
+    //     pass).
+    //
+    // We map "didn't converge" to `infer_typeexpr_from_valuespec`
+    // returning `None` — typically the lambda case (the lambda's
+    // structural type isn't determinable until pass 2 runs the
+    // lambda body). Same shape applies to args whose structure
+    // doesn't yield a TypeExpr in pass 1 (rare; mostly defensive).
+    //
+    // Pre-pass: classify per-arg convergence. We collect the type
+    // results once here so the binding loop doesn't recompute them.
+    let arg_type_exprs: Vec<Option<TypeExpr>> = args
+        .iter()
+        .map(|arg| infer_typeexpr_from_valuespec(arg, model, var_types))
+        .collect();
+    let any_unconverged = arg_type_exprs.iter().any(Option::is_none);
+    let bind_mode = if any_unconverged {
+        RegisterMode::Authoritative
+    } else {
+        RegisterMode::Constraint
+    };
+
     let mut ctx = TypeInferenceContext::root(None, std::collections::HashSet::new());
-    for (param, arg) in params.iter().zip(args.iter()) {
-        // Multiplicity binding now flows through the context's
-        // register_mult API (Constraint = Vacant insert / Occupied
-        // LUB-merge — Java's `merge=true` shape).
+    for ((param, arg), arg_type_expr) in
+        params.iter().zip(args.iter()).zip(arg_type_exprs.into_iter())
+    {
+        // Multiplicity binding flows through the context's
+        // register_mult API. Multiplicity LUB stays in the range
+        // lattice (it doesn't widen-to-Any the way type LUB can), so
+        // we always use Constraint mode here regardless of
+        // convergence — preserves prior behaviour for the platform's
+        // `cast<T|m>` and similar `m`-generic chains.
         if let Multiplicity::Variable(name) = &param.multiplicity
             && let Some(arg_mult) = infer_multiplicity_from_valuespec(arg, model, var_types)
         {
             ctx.register_mult(name, arg_mult, RegisterMode::Constraint);
         }
-        // Type binding stays in bind_type because of the recursive
-        // structural match — a param like `Named<Foo>{[T]}` against
-        // an arg `Named<Foo>{[String]}` walks both type-argument
-        // slots in lock-step. `register_type(Generic(name), value)`
-        // only handles the leaf case. We pass `ctx.bindings.ty` as
-        // the destination so the context is the actual carrier.
+        // Type binding goes through `bind_type_with_mode`, branching
+        // on the dispatch decision above. Authoritative mode prevents
+        // existing concrete bindings from being LUB-widened by
+        // subsequent concrete bindings on the same variable — exactly
+        // what protects fold-style chains where a sibling arg's
+        // contribution would otherwise widen T back to Any.
         //
-        // The previous version dropped `type_arguments`
-        // unconditionally, which made `class<T>(T[*]):Class<T>[1]` bind
-        // T to the bare element rather than the parametric TypeExpr.
-        // Now `$l1: List<String>` flows through as `Named{List, [String]}`
-        // and the substituted return type comes out `Class<List<String>>`.
-        let arg_type_expr: Option<TypeExpr> = infer_typeexpr_from_valuespec(arg, model, var_types);
+        // `Named<Foo>{[T]}` against `Named<Foo>{[String]}` recursion
+        // is identical between modes; only the leaf `Generic(name)`
+        // step differs.
         if let Some(arg_ty) = arg_type_expr {
-            bind_type(&param.type_expr, &arg_ty, &mut ctx.bindings.ty, model);
+            bind_type_with_mode(
+                &param.type_expr,
+                &arg_ty,
+                &mut ctx.bindings.ty,
+                model,
+                bind_mode,
+            );
         }
     }
 
@@ -2103,12 +2130,57 @@ pub(crate) fn infer_generic_bindings(
 ///
 /// If `T` is already bound and a second arg binds `T` to a different type,
 /// the binding is updated to the LUB of the two types rather than first-wins.
+/// (Constraint mode — Java's `merge=true`.)
+///
+/// Public-API entry point preserved for stable call sites; routes to
+/// [`bind_type_with_mode`] in Constraint mode. Use the more-explicit form
+/// when the caller knows the binding is authoritative
+/// (e.g. `infer_generic_bindings`'s first-pass when some args didn't
+/// converge — see Java
+/// `FunctionExpressionProcessor.potentiallyUpdate…:567-584`).
 pub(crate) fn bind_type(
     param_ty: &crate::types::TypeExpr,
     arg_ty: &crate::types::TypeExpr,
     out: &mut HashMap<SmolStr, crate::types::TypeExpr>,
     model: &crate::model::PureModel,
 ) {
+    bind_type_with_mode(
+        param_ty,
+        arg_ty,
+        out,
+        model,
+        crate::inference::context::RegisterMode::Constraint,
+    );
+}
+
+/// Mode-aware binding. Java's `register(...)` `merge` flag mapped onto
+/// our two-branch dispatch:
+///
+/// - **`RegisterMode::Constraint`** (Java `merge=true`) — the existing
+///   LUB-merging shape. Used when every arg converged in
+///   `firstPassTypeInference` (Java `:794`); platform corpus depends on
+///   this for `pick<T>(unrelated)` style calls.
+///
+/// - **`RegisterMode::Authoritative`** (Java `merge=false`) — first
+///   concrete binding wins. An existing-Generic + incoming-concrete
+///   entry is replaced (the concrete propagates over the placeholder);
+///   an existing-concrete + incoming-concrete entry keeps the existing.
+///   Used when at least one arg failed to converge in pass 1 (typically
+///   a lambda before body inference): the converged args bind
+///   authoritatively so the unconverged arg's later contribution can't
+///   widen them away.
+///
+/// The structural recursion through `Named { type_arguments }` and
+/// `FunctionType { parameters, return_type }` is identical between the
+/// two modes; only the leaf `Generic(name)` step differs.
+pub(crate) fn bind_type_with_mode(
+    param_ty: &crate::types::TypeExpr,
+    arg_ty: &crate::types::TypeExpr,
+    out: &mut HashMap<SmolStr, crate::types::TypeExpr>,
+    model: &crate::model::PureModel,
+    mode: crate::inference::context::RegisterMode,
+) {
+    use crate::inference::context::RegisterMode;
     use crate::types::TypeExpr;
     if matches!(arg_ty, TypeExpr::Unresolved) {
         return;
@@ -2120,10 +2192,23 @@ pub(crate) fn bind_type(
                 Entry::Vacant(e) => {
                     e.insert(arg_ty.clone());
                 }
-                Entry::Occupied(mut e) => {
-                    let lub = type_lub(e.get(), arg_ty, model);
-                    *e.get_mut() = lub;
-                }
+                Entry::Occupied(mut e) => match mode {
+                    RegisterMode::Constraint => {
+                        let lub = type_lub(e.get(), arg_ty, model);
+                        *e.get_mut() = lub;
+                    }
+                    RegisterMode::Authoritative => {
+                        // Existing-Generic + incoming-concrete →
+                        // replace (concrete propagates over the
+                        // placeholder). Existing-concrete + incoming
+                        // concrete → keep existing (first-wins).
+                        // `Unresolved` is short-circuited at function
+                        // entry so it never reaches this branch.
+                        if matches!(e.get(), TypeExpr::Generic(_)) {
+                            *e.get_mut() = arg_ty.clone();
+                        }
+                    }
+                },
             }
         }
         TypeExpr::Named {
@@ -2136,7 +2221,7 @@ pub(crate) fn bind_type(
             } = arg_ty
             {
                 for (p, a) in p_args.iter().zip(a_args.iter()) {
-                    bind_type(p, a, out, model);
+                    bind_type_with_mode(p, a, out, model, mode);
                 }
             }
         }
@@ -2152,9 +2237,9 @@ pub(crate) fn bind_type(
             } = arg_ty
             {
                 for ((p_ty, _), (a_ty, _)) in p_params.iter().zip(a_params.iter()) {
-                    bind_type(p_ty, a_ty, out, model);
+                    bind_type_with_mode(p_ty, a_ty, out, model, mode);
                 }
-                bind_type(p_ret, a_ret, out, model);
+                bind_type_with_mode(p_ret, a_ret, out, model, mode);
             }
         }
         _ => {}
