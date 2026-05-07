@@ -1160,6 +1160,13 @@ fn infer_builtin_return_type(
         // String concatenation
         "joinStrings" => Some(primitive(bootstrap::STRING_ID)),
 
+        // `copy` returns the source's type — `^$x(...)` is a structural
+        // clone, so its type-info comes from `arguments[0]`. Without
+        // this, `let p2 = ^$pierre(...)` left p2 with Unresolved type
+        // and downstream `$p2.address->toOne()` strict-checks failed
+        // because p2 had no class to look up `address` on.
+        "copy" => arg_types.iter().flatten().next().cloned(),
+
         _ => None,
     }
 }
