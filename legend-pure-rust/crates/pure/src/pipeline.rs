@@ -691,6 +691,38 @@ fn resolve_m3_supertypes(model: &mut PureModel) {
             }
         }
     }
+
+    // Pure semantics: every class implicitly extends `Any` unless it
+    // declares an explicit generalization. m3.pure has classes like
+    // `Referenceable`, `ProtocolInfo`, `AggregationKind` etc. with no
+    // `generalizations` slot — Java's compiler treats them as
+    // extending `Any` automatically. Without this, our supertype
+    // walk from `Function → Referenceable → ?` stops short and
+    // `Function.classifierGenericType` (declared on `Any`) becomes
+    // unfindable. Inject `Any` as the default supertype here.
+    let any_id = crate::bootstrap::ANY_ID;
+    let chunk = &mut model.chunks[BOOTSTRAP_CHUNK_ID as usize];
+    for local_idx in 0..m3_count {
+        let element = chunk.elements.get_mut(local_idx);
+        let Element::Class(c) = element else {
+            continue;
+        };
+        let eid = ElementId::InstanceId {
+            chunk_id: BOOTSTRAP_CHUNK_ID,
+            local_idx,
+        };
+        if eid == any_id {
+            continue;
+        }
+        if c.super_types.is_empty() {
+            c.super_types.push(TypeExpr::Named {
+                element: any_id,
+                type_arguments: vec![],
+                multiplicity_arguments: Vec::new(),
+                value_arguments: vec![],
+            });
+        }
+    }
 }
 
 #[tracing::instrument(
