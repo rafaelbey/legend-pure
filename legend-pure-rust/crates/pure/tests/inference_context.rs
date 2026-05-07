@@ -594,15 +594,6 @@ function test::caller(s: String[1]): Integer[1] {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "Function-ref via mangled name + 2-arg eval still leaves V/m \
-            unresolved under strict mode. The function-ref lift in \
-            build_packageable_element_ref produces the right FunctionType, \
-            but the bind chain Function<{T[n],U[p]→V[m]}> against \
-            Named<NativeFunctionDefinition>{[FunctionType{(Int,1),(Int,1)→Int[1]}]} \
-            doesn't currently extract T/V/m through the metatype's \
-            supertype chain. Tracked: NativeFunctionDefinition→Function \
-            walk in subtype_view needs the metatype hierarchy, not just \
-            user-class hierarchy."]
 fn tic_function_ref_eval_two_args_binds_through_lift() {
     let source = r#"
 ###Pure
