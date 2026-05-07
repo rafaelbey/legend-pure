@@ -120,23 +120,51 @@ impl GenericBindings {
 }
 
 /// Walk a (presumed already-substituted) `TypeExpr` and collect every
-/// `Generic(name)` that survived. A non-empty result is the Java
-/// parity signal for `TypeInference.java:87-89` ("The type parameter
-/// X was not resolved") — emitted when a callee declares `<T>` but
-/// no call-site argument supplied a value for `T`.
+/// `Generic(name)` that survived **at the outer caller's scope**.
 ///
-/// Recurses through `Named { type_arguments }`, `FunctionType`,
-/// `AlgebraUnion`, and `Relation` columns so a parametric position
-/// (`Class<T>`, `Function<{T->X}>`) doesn't hide an unresolved
-/// generic.
+/// Used by the strict-mode return-type check (Java parity for
+/// `TypeInference.java:87-89` "The type parameter X was not
+/// resolved") — emitted when a callee declares `<T>` but no
+/// call-site argument supplied a value for `T`.
+///
+/// Recurses through `Named { type_arguments }`, `AlgebraUnion`, and
+/// `Relation` columns so a parametric position (`Class<T>`) doesn't
+/// hide an unresolved generic. Does NOT recurse into `FunctionType`
+/// — the Generics inside a `FunctionType` slot belong to that
+/// function-ref's local scope (e.g.
+/// `removeDuplicates_T_MANY__T_MANY_` lifts to
+/// `Function<{Generic("T")[m]→Generic("T")[m]}>`); they're separate
+/// from the outer caller's type-parameters and reporting them as
+/// unresolved misfires whenever a function-ref is passed as an arg.
+/// (The function-ref's own scope binds those Generics at the
+/// FunctionType's eventual call site, not at the outer dispatch.)
+///
+/// For the *deep* walk (used by the lambda-parameter unbindable
+/// check, which needs to detect Generics nested inside expected
+/// FunctionType slots like `Function<{T→Boolean}>`), see
+/// [`unresolved_type_params_deep`].
 #[must_use]
 pub fn unresolved_type_params(ty: &TypeExpr) -> Vec<SmolStr> {
     let mut out = Vec::new();
-    walk_type_for_unresolved(ty, &mut out);
+    walk_type_for_unresolved(ty, &mut out, /* deep */ false);
     out
 }
 
-fn walk_type_for_unresolved(ty: &TypeExpr, out: &mut Vec<SmolStr>) {
+/// Like [`unresolved_type_params`] but also recurses into
+/// `FunctionType` parameters and return types. Used by the
+/// lambda-parameter unbindable diagnostic in
+/// `lower::lambda::lower_lambda_parameters` — a lambda whose
+/// expected type is `Function<{T→Boolean}>` (with T not in scope)
+/// needs to detect the nested T to surface
+/// `CannotInferLambdaParameterTypes`.
+#[must_use]
+pub fn unresolved_type_params_deep(ty: &TypeExpr) -> Vec<SmolStr> {
+    let mut out = Vec::new();
+    walk_type_for_unresolved(ty, &mut out, /* deep */ true);
+    out
+}
+
+fn walk_type_for_unresolved(ty: &TypeExpr, out: &mut Vec<SmolStr>, deep: bool) {
     match ty {
         TypeExpr::Generic(name) => {
             if !out.contains(name) {
@@ -145,7 +173,7 @@ fn walk_type_for_unresolved(ty: &TypeExpr, out: &mut Vec<SmolStr>) {
         }
         TypeExpr::Named { type_arguments, .. } => {
             for ta in type_arguments {
-                walk_type_for_unresolved(ta, out);
+                walk_type_for_unresolved(ta, out, deep);
             }
         }
         TypeExpr::FunctionType {
@@ -153,18 +181,21 @@ fn walk_type_for_unresolved(ty: &TypeExpr, out: &mut Vec<SmolStr>) {
             return_type,
             ..
         } => {
-            for (p, _) in parameters {
-                walk_type_for_unresolved(p, out);
+            if deep {
+                for (p, _) in parameters {
+                    walk_type_for_unresolved(p, out, deep);
+                }
+                walk_type_for_unresolved(return_type, out, deep);
             }
-            walk_type_for_unresolved(return_type, out);
+            // Else: skip — see fn doc-comment above.
         }
         TypeExpr::AlgebraUnion(a, b) => {
-            walk_type_for_unresolved(a, out);
-            walk_type_for_unresolved(b, out);
+            walk_type_for_unresolved(a, out, deep);
+            walk_type_for_unresolved(b, out, deep);
         }
         TypeExpr::Relation(cols) => {
             for c in cols {
-                walk_type_for_unresolved(&c.type_expr, out);
+                walk_type_for_unresolved(&c.type_expr, out, deep);
             }
         }
         TypeExpr::Unresolved => {}
@@ -351,13 +382,46 @@ impl TypeInferenceContext {
             }
             RegisterMode::Constraint => {
                 use std::collections::hash_map::Entry;
-                match self.bindings.mult.entry(name.clone()) {
-                    Entry::Vacant(e) => {
-                        e.insert(value);
-                    }
-                    Entry::Occupied(mut e) => {
-                        let lub = crate::resolve::mult_lub(e.get(), &value);
-                        *e.get_mut() = lub;
+                let promotion: Option<(SmolStr, Multiplicity)> =
+                    match self.bindings.mult.entry(name.clone()) {
+                        Entry::Vacant(e) => {
+                            e.insert(value);
+                            None
+                        }
+                        Entry::Occupied(mut e) => {
+                            let prev = e.get().clone();
+                            let lub = crate::resolve::mult_lub(&prev, &value);
+                            *e.get_mut() = lub.clone();
+                            // See `bind_mult_with_mode`'s
+                            // promote-and-propagate doc-comment.
+                            // When a function-ref's lifted
+                            // FunctionType binds eval's `n_eval` and
+                            // `m_eval` BOTH to the same callee
+                            // `Variable("m")`, the next arg's
+                            // top-level mult bind promotes `n_eval`
+                            // here and we have to propagate to
+                            // `m_eval` so eval's return-mult
+                            // resolves.
+                            if matches!(prev, Multiplicity::Variable(_))
+                                && !matches!(lub, Multiplicity::Variable(_))
+                            {
+                                if let Multiplicity::Variable(prev_name) = prev {
+                                    Some((prev_name, lub))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                    };
+                if let Some((prev_var, concrete)) = promotion {
+                    for v in self.bindings.mult.values_mut() {
+                        if let Multiplicity::Variable(n) = v
+                            && n == &prev_var
+                        {
+                            *v = concrete.clone();
+                        }
                     }
                 }
             }

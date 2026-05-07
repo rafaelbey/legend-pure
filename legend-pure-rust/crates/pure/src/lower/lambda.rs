@@ -155,7 +155,17 @@ fn lower_lambda_parameters(
             let expected_unbindable_in_strict = strict
                 && match expected {
                     Some((te, _)) => {
-                        let unresolved = crate::inference::context::unresolved_type_params(te);
+                        // Deep walk: detect Generics nested inside
+                        // `Function<{T→Boolean}>`-shaped expected
+                        // types (locked by
+                        // `tic_lambda_param_with_function_type_unbound_t_strict_mode_errors`).
+                        // The shallow `unresolved_type_params` skips
+                        // FunctionType to keep the strict-mode
+                        // *return*-check from misfiring on
+                        // function-ref args; this site needs the
+                        // opposite (do recurse).
+                        let unresolved =
+                            crate::inference::context::unresolved_type_params_deep(te);
                         unresolved
                             .iter()
                             .any(|name| !ctx.type_parameters.iter().any(|t| t == name))
