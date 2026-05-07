@@ -240,6 +240,16 @@ hand-written interface implementation as a real heap object via a new
 without re-materialisation. Cycle / sharing detection uses an
 `IdentityHashMap` keyed by user object identity.
 
+The hand-written `org.finos.legend.pure.rust.proxy.Any` interface
+mirrors Pure's `meta::pure::metamodel::type::Any` as the universal
+proxy supertype: every generated interface extends it (transitively),
+the codegen substitutes references to the Pure FQN at emission time
+and never emits an `Any.java`, and `pickInterface` falls back to
+`Any.class` whenever the runtime classifier isn't registered for any
+more-specific generated interface — so `wrap(...)` always returns a
+typed proxy with a `$rustInstance()` drop-down to dynamic dispatch
+via `PureRustInstance.getProperty(...)`.
+
 Known limitation (advisor follow-up): `pickGeneratedInterface` only
 walks declared interfaces of the user class (not the inherited
 chain), so a user class whose *parent* implements the generated

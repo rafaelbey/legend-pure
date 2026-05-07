@@ -17,9 +17,15 @@ is the I/O driver.
 | `<root>/<pure-pkg>/<Class>.java` | one per reachable user `Class` | `public interface <Class> extends <Supertypes…>` with one method per property. `[1]` abstract; `[0..1]` defaults to `Optional.empty()`; `[*]` defaults to `Collections.emptyList()`. Self-registers with `PureProxyFactory` on first init. |
 | `<root>/<pure-pkg>/<Enum>.java`  | one per reachable Enumeration | `public enum <Enum>` with `fromPure(String)` lookup.                |
 
-`eval` is always the last static-method parameter. Generated interfaces
-inherit the two sentinel accessors (`$instancePointer()`, `$evaluator()`)
-from `org.finos.legend.pure.rust.proxy.PureRegistered`.
+`eval` is always the last static-method parameter. Every generated
+interface (transitively) extends
+`org.finos.legend.pure.rust.proxy.Any` — the hand-written universal
+supertype that mirrors Pure's `meta::pure::metamodel::type::Any`. The
+codegen recognises that FQN and substitutes references to it with the
+hand-written interface; it is never emitted as Java source. Generated
+interfaces inherit `$instancePointer()` / `$evaluator()` (from
+`PureRegistered`) plus `$rustInstance()` (from `Any`) so callers can
+always drop down to dynamic property access.
 
 ## Public API
 

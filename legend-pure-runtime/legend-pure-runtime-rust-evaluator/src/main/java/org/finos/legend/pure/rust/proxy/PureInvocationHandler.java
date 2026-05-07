@@ -82,7 +82,9 @@ public final class PureInvocationHandler implements InvocationHandler
             }
         }
 
-        // PureRegistered sentinel methods.
+        // Sentinel methods on the proxy supertype lattice. Routed by
+        // declaring class so they don't accidentally collide with a
+        // Pure property of the same name.
         if (declaringClass == PureRegistered.class)
         {
             if ("$instancePointer".equals(name))
@@ -92,6 +94,13 @@ public final class PureInvocationHandler implements InvocationHandler
             if ("$evaluator".equals(name))
             {
                 return evaluator;
+            }
+        }
+        if (declaringClass == Any.class)
+        {
+            if ("$rustInstance".equals(name))
+            {
+                return instance;
             }
         }
 

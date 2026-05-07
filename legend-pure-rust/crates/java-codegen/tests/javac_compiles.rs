@@ -102,6 +102,7 @@ fn generated_java_compiles_with_runtime_support() {
         "org/finos/legend/pure/rust/PureRustInstance.java",
         "org/finos/legend/pure/rust/PureRustResult.java",
         "org/finos/legend/pure/rust/proxy/PureRegistered.java",
+        "org/finos/legend/pure/rust/proxy/Any.java",
         "org/finos/legend/pure/rust/proxy/PureProxyFactory.java",
         "org/finos/legend/pure/rust/proxy/PureInvocationHandler.java",
         "org/finos/legend/pure/rust/proxy/PureLambda.java",

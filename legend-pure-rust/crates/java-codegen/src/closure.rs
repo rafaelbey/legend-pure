@@ -126,12 +126,34 @@ pub(crate) fn reachable_types(
         }
     }
 
+    // Drop `meta::pure::metamodel::type::Any` from the reachable set
+    // — the hand-written `org.finos.legend.pure.rust.proxy.Any`
+    // interface stands in for it, and the codegen substitutes
+    // supertype references at emission time.
+    classes.retain(|id| {
+        let segs = pure_fqn_segments(model, *id);
+        !is_any_fqn(&segs)
+    });
+
     let class_set: HashSet<ElementId> = classes.iter().copied().collect();
     ReachableSet {
         classes,
         enums,
         class_set,
     }
+}
+
+/// True when the FQN segments are exactly
+/// `meta::pure::metamodel::type::Any`. The hand-written
+/// `org.finos.legend.pure.rust.proxy.Any` interface stands in for this
+/// element; the codegen never emits an interface for it.
+pub(crate) fn is_any_fqn(segments: &[smol_str::SmolStr]) -> bool {
+    segments.len() == 5
+        && segments[0].as_str() == "meta"
+        && segments[1].as_str() == "pure"
+        && segments[2].as_str() == "metamodel"
+        && segments[3].as_str() == "type"
+        && segments[4].as_str() == "Any"
 }
 
 fn seed_from_type_expr(ty: &TypeExpr, queue: &mut Vec<ElementId>) {
