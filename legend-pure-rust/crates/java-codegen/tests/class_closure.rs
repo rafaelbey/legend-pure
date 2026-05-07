@@ -40,7 +40,7 @@ fn class_closure_emits_person_and_address_interfaces() {
     let model = common::compile_with_platform(Some(SOURCE));
     let opts = Options::new("com.example.gen");
     let fns = vec![FqnInput::new("user_test::makePerson_String_1__Person_1_")];
-    let files = generate(&model, &fns, &opts).expect("codegen succeeds");
+    let files = generate(&model, &fns, &[], &[], &opts).expect("codegen succeeds");
 
     let person = files
         .iter()

@@ -28,7 +28,8 @@ fn function_typed_parameter_is_rejected_in_v1() {
     let model = common::compile_with_platform(Some(FUNCTION_TYPED_SOURCE));
     let opts = Options::new("com.example.gen");
     let fns = vec![FqnInput::new("user_test::callIt_Function_1__String_1_")];
-    let err = generate(&model, &fns, &opts).expect_err("function-typed param must be rejected");
+    let err =
+        generate(&model, &fns, &[], &[], &opts).expect_err("function-typed param must be rejected");
     match err {
         CodegenError::FunctionTypedParameter { fqn, position } => {
             assert!(fqn.contains("callIt"), "wrong fqn in error: {fqn}");
@@ -50,6 +51,6 @@ fn generic_typed_return_is_rejected_in_v1() {
     let fns = vec![FqnInput::new(
         "meta::pure::functions::collection::map_T_MANY__Function_1__V_MANY_",
     )];
-    let result = generate(&model, &fns, &opts);
+    let result = generate(&model, &fns, &[], &[], &opts);
     assert!(result.is_err(), "generic-heavy fn must not codegen");
 }

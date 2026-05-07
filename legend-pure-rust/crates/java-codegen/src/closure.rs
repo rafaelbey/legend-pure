@@ -47,12 +47,25 @@ impl ReachableSet {
 }
 
 /// Build the reachability set starting from the parameter and return
-/// types of every requested function.
-pub(crate) fn reachable_types(model: &PureModel, fns: &[ResolvedFn]) -> ReachableSet {
+/// types of every requested function plus any explicitly-requested
+/// `--classes` / `--associations` seeds.
+///
+/// `extra_class_seeds` are emitted unconditionally even if their FQN
+/// would normally be filtered as a platform class — the user opted in by
+/// name, so we honour it. Transitive types reached *through* those seeds
+/// still go through the platform filter.
+pub(crate) fn reachable_types(
+    model: &PureModel,
+    fns: &[ResolvedFn],
+    extra_class_seeds: &[ElementId],
+) -> ReachableSet {
     let mut visited: HashSet<ElementId> = HashSet::new();
     let mut queue: Vec<ElementId> = Vec::new();
     let mut classes: Vec<ElementId> = Vec::new();
     let mut enums: Vec<ElementId> = Vec::new();
+    // Explicit seeds bypass the platform filter (only the seeds
+    // themselves; transitive walking from them still filters).
+    let bypass_filter: HashSet<ElementId> = extra_class_seeds.iter().copied().collect();
 
     for resolved in fns {
         if let Element::Function(f) = model.get_element(resolved.element_id) {
@@ -62,15 +75,20 @@ pub(crate) fn reachable_types(model: &PureModel, fns: &[ResolvedFn]) -> Reachabl
             seed_from_type_expr(&f.return_type, &mut queue);
         }
     }
+    for id in extra_class_seeds {
+        queue.push(*id);
+    }
 
     while let Some(id) = queue.pop() {
         if !visited.insert(id) {
             continue;
         }
         // Skip the M3 metamodel — we render those as opaque `Object` and
-        // do not auto-generate interfaces for them in v1.
+        // do not auto-generate interfaces for them in v1, unless the
+        // caller explicitly asked for this id via `--classes` /
+        // `--associations`.
         let segments = pure_fqn_segments(model, id);
-        if is_platform_class(&segments) {
+        if !bypass_filter.contains(&id) && is_platform_class(&segments) {
             continue;
         }
         match model.get_element(id) {
