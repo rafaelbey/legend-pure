@@ -45,6 +45,45 @@ fn debug_property_supertypes() {
             smol_str::SmolStr::new("GenericType"),
         ])
         .expect("GenericType element should resolve");
+    // NativeFunction
+    let nf_eid = model
+        .resolve_by_path(&[
+            smol_str::SmolStr::new("meta"),
+            smol_str::SmolStr::new("pure"),
+            smol_str::SmolStr::new("metamodel"),
+            smol_str::SmolStr::new("function"),
+            smol_str::SmolStr::new("NativeFunction"),
+        ])
+        .expect("NativeFunction element should resolve");
+    println!("\n=== NativeFunction supertype chain ===");
+    let mut current = Some(nf_eid);
+    let mut depth = 0;
+    while let Some(eid) = current
+        && depth < 8
+    {
+        let node = model.get_node(eid);
+        let element = model.get_element(eid);
+        let supers = match element {
+            legend_pure_parser_pure::model::Element::Class(c) => &c.super_types[..],
+            _ => &[],
+        };
+        println!("  [d={depth}] {} → {} super(s)", node.name, supers.len());
+        for st in supers {
+            let n = match st {
+                legend_pure_parser_pure::types::TypeExpr::Named { element, .. } => {
+                    model.get_node(*element).name.to_string()
+                }
+                other => format!("{other:?}"),
+            };
+            println!("    {n}");
+        }
+        current = supers.iter().find_map(|st| match st {
+            legend_pure_parser_pure::types::TypeExpr::Named { element, .. } => Some(*element),
+            _ => None,
+        });
+        depth += 1;
+    }
+
     let any_eid = model
         .resolve_by_path(&[
             smol_str::SmolStr::new("meta"),
