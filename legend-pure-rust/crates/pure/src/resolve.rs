@@ -2562,12 +2562,53 @@ fn subtype_view(
     // names → caller-supplied concrete args. Fall back gracefully when
     // arities don't match (defensive — emit nothing rather than wrong
     // bindings).
+    //
+    // Contravariance lift (Java parity): when a slot is declared
+    // `^TypeParameter{contravariant: true}` and the use-site's value
+    // is `Nil` (the bottom — the canonical placeholder for "any
+    // owner"), substitute `Any` (the top) instead. Contravariance
+    // means `Property<Nil, V>` is a SUPERTYPE of every concrete
+    // `Property<C, V>` — so when we lift it through subtype_view to
+    // its `Function<{X→V}>` ancestor for structural binding, the
+    // input slot X should be the most-permissive type the property
+    // accepts, not the literal Nil. Without this, `eval(prop, $r:D_A)`
+    // bound T to Nil from the contravariant slot and rejected
+    // arg `$r:D_A` against `expected Nil`. m3.pure declares Property,
+    // Column, and NewPropertyRouteNodeFunctionDefinition with
+    // contravariant U — all three are touched by the platform's
+    // reflective-dispatch chains (`getProperty`, `dynamicNew`,
+    // mapping reflection).
+    let any_te = TypeExpr::Named {
+        element: crate::bootstrap::ANY_ID,
+        type_arguments: vec![],
+        multiplicity_arguments: Vec::new(),
+        value_arguments: vec![],
+    };
+    let nil_eid = crate::bootstrap::NIL_ID;
+    let lift_for_variance = |variance: crate::nodes::class::Variance, te: &TypeExpr| -> TypeExpr {
+        if variance == crate::nodes::class::Variance::Contravariant
+            && let TypeExpr::Named { element, .. } = te
+            && *element == nil_eid
+        {
+            any_te.clone()
+        } else {
+            te.clone()
+        }
+    };
     let ty_subst: HashMap<SmolStr, TypeExpr> =
         if c.type_parameters.len() == arg_type_args.len() {
             c.type_parameters
                 .iter()
                 .zip(arg_type_args.iter())
-                .map(|(name, te)| (name.clone(), te.clone()))
+                .enumerate()
+                .map(|(i, (name, te))| {
+                    let variance = c
+                        .type_parameter_variances
+                        .get(i)
+                        .copied()
+                        .unwrap_or_default();
+                    (name.clone(), lift_for_variance(variance, te))
+                })
                 .collect()
         } else {
             HashMap::new()
@@ -3564,6 +3605,7 @@ mod tests {
             },
             Element::Class(Class {
                 type_parameters: vec![SmolStr::new("T")],
+                type_parameter_variances: vec![crate::nodes::class::Variance::default()],
                 multiplicity_parameters: Vec::new(),
                 type_variable_parameters: Vec::new(),
                 super_types: Vec::new(),
@@ -3585,6 +3627,7 @@ mod tests {
             },
             Element::Class(Class {
                 type_parameters: Vec::new(),
+                type_parameter_variances: Vec::new(),
                 multiplicity_parameters: Vec::new(),
                 type_variable_parameters: Vec::new(),
                 super_types: Vec::new(),

@@ -511,6 +511,7 @@ impl<'a> M3Parser<'a> {
         let mut properties = Vec::new();
         let mut super_types = Vec::new();
         let mut type_parameters: Vec<SmolStr> = Vec::new();
+        let mut type_parameter_variances: Vec<crate::nodes::class::Variance> = Vec::new();
         let mut multiplicity_parameters: Vec<SmolStr> = Vec::new();
 
         if !self.at(&Token::LBrace) {
@@ -520,6 +521,7 @@ impl<'a> M3Parser<'a> {
                 package_segments,
                 Element::Class(Class {
                     type_parameters: vec![],
+                    type_parameter_variances: vec![],
                     multiplicity_parameters: Vec::new(),
                     type_variable_parameters: vec![],
                     super_types: vec![],
@@ -569,7 +571,16 @@ impl<'a> M3Parser<'a> {
                         }
                         "typeParameters" => {
                             // Class.properties[typeParameters] : [...]
-                            type_parameters = self.parse_type_parameters();
+                            // Captures both the parameter names and
+                            // their variance flags
+                            // (`contravariant: true` /
+                            // `covariant: true`). m3.pure declares
+                            // Property's U and Column's U as
+                            // contravariant via this metamodel-level
+                            // form.
+                            let (params, variances) = self.parse_type_parameters();
+                            type_parameters = params;
+                            type_parameter_variances = variances;
                         }
                         "multiplicityParameters" => {
                             // Class.properties[multiplicityParameters] :
@@ -605,6 +616,7 @@ impl<'a> M3Parser<'a> {
             package_segments,
             Element::Class(Class {
                 type_parameters,
+                type_parameter_variances,
                 multiplicity_parameters,
                 type_variable_parameters: vec![],
                 super_types,
@@ -964,17 +976,27 @@ impl<'a> M3Parser<'a> {
         general_type.map(|g| (g, specific_type))
     }
 
-    /// Parses a type parameters list: `[^TypeParameter{name:'T'}, ...]`
-    fn parse_type_parameters(&mut self) -> Vec<SmolStr> {
+    /// Parses a type parameters list: `[^TypeParameter{name:'T'}, ...]`.
+    /// Returns parallel vectors of names and variances. Variance comes
+    /// from the optional `contravariant: true` / `covariant: true`
+    /// fields on the TypeParameter instance — m3.pure declares
+    /// `Property<U[contravariant], V>`,
+    /// `Column<U[contravariant], V>`, and
+    /// `NewPropertyRouteNodeFunctionDefinition<U[contravariant], V>`
+    /// via this metamodel-level form. (The class-level `<-T>` /
+    /// `<+T>` prefix syntax is a separate path used only by path.pure.)
+    fn parse_type_parameters(&mut self) -> (Vec<SmolStr>, Vec<crate::nodes::class::Variance>) {
         let mut params = Vec::new();
+        let mut variances = Vec::new();
 
         if self.eat(&Token::LBrack) {
             loop {
                 match self.peek() {
                     Token::RBrack | Token::Eof => break,
                     Token::Caret => {
-                        if let Some(name) = self.parse_type_parameter_instance() {
+                        if let Some((name, variance)) = self.parse_type_parameter_instance() {
                             params.push(name);
+                            variances.push(variance);
                         }
                     }
                     _ => {
@@ -985,22 +1007,29 @@ impl<'a> M3Parser<'a> {
             }
             self.eat(&Token::RBrack);
         } else if self.at(&Token::Caret) {
-            if let Some(name) = self.parse_type_parameter_instance() {
+            if let Some((name, variance)) = self.parse_type_parameter_instance() {
                 params.push(name);
+                variances.push(variance);
             }
         } else {
             self.skip_value();
         }
 
-        params
+        (params, variances)
     }
 
-    /// Parses `^TypeParameter{name:'T', ...}` and returns `"T"`.
-    fn parse_type_parameter_instance(&mut self) -> Option<SmolStr> {
+    /// Parses `^TypeParameter{name:'T', contravariant:true, ...}` and
+    /// returns `(name, variance)`. Variance defaults to `Invariant`
+    /// when neither `contravariant` nor `covariant` flags are present.
+    fn parse_type_parameter_instance(
+        &mut self,
+    ) -> Option<(SmolStr, crate::nodes::class::Variance)> {
+        use crate::nodes::class::Variance;
         self.expect(&Token::Caret);
         let _classifier = self.parse_classifier_path();
 
         let mut name = None;
+        let mut variance = Variance::Invariant;
 
         if self.eat(&Token::LBrace) {
             loop {
@@ -1013,12 +1042,29 @@ impl<'a> M3Parser<'a> {
                             continue;
                         }
 
-                        if path_tail.as_str() == "name" {
-                            if let Token::StringLit(s) = self.advance() {
-                                name = Some(s);
+                        match path_tail.as_str() {
+                            "name" => {
+                                if let Token::StringLit(s) = self.advance() {
+                                    name = Some(s);
+                                }
                             }
-                        } else {
-                            self.skip_value();
+                            "contravariant" => {
+                                // The lexer maps the literal `true` /
+                                // `false` to Ident; check the spelling
+                                // explicitly. Treat any non-`true`
+                                // value as the absence of the flag.
+                                if matches!(&self.advance(), Token::Ident(s) if s.as_str() == "true")
+                                {
+                                    variance = Variance::Contravariant;
+                                }
+                            }
+                            "covariant" => {
+                                if matches!(&self.advance(), Token::Ident(s) if s.as_str() == "true")
+                                {
+                                    variance = Variance::Covariant;
+                                }
+                            }
+                            _ => self.skip_value(),
                         }
                     }
                 }
@@ -1027,7 +1073,7 @@ impl<'a> M3Parser<'a> {
             self.eat(&Token::RBrace);
         }
 
-        name
+        name.map(|n| (n, variance))
     }
 
     /// Extracts the raw type name from a `^GenericType{rawType: X}` or

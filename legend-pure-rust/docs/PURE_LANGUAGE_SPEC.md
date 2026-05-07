@@ -253,6 +253,100 @@ Any
 └── Nil  ← bottom type (subtype of everything)
 ```
 
+### 4.5 Variance (covariant / contravariant / invariant)
+
+A class type-parameter slot has one of three variances:
+
+| Variance | Surface syntax | Subtype rule on `Container<X>` |
+|----------|----------------|--------------------------------|
+| **Invariant** (default) | `Class C<T>` | `Container<X>` and `Container<Y>` are unrelated unless `X == Y` exactly. |
+| **Covariant** | `Class C<+T>` | `X <: Y` ⇒ `Container<X> <: Container<Y>`. Output position. |
+| **Contravariant** | `Class C<-T>` | `X <: Y` ⇒ `Container<Y> <: Container<X>` (flipped). Input position. |
+
+Pure has TWO surface forms for declaring variance — both compile to
+the same `Variance` flag on the class's type-parameter slot, and
+behave identically downstream:
+
+1. **Class-level prefix syntax** — `Class C<-T, +U, V>` puts the
+   marker on the class declaration. Used by `path.pure`'s
+   `Path<-U, V|m>` to mark Path's owner slot contravariant.
+
+2. **Metamodel instance form** — `^TypeParameter{name:'T',
+   contravariant:true}` declares variance from inside the M3
+   metamodel. m3.pure uses this form for the platform's built-in
+   contravariant classes:
+   - `Property<U[contravariant], V>` — every reflective property
+     access depends on this.
+   - `Column<U[contravariant], V>` — relation/Column.
+   - `NewPropertyRouteNodeFunctionDefinition<U[contravariant], V>`
+     — Path's treepath machinery.
+
+Both forms reach the compiler as
+`crate::nodes::class::Variance::Contravariant`.
+
+#### Why Property's contravariant U matters at platform scale
+
+`Property<U, V>` represents a property whose owner type is `U`.
+Contravariance says `Property<D_A, V>` is a SUBTYPE of
+`Property<Nil, V>` (because `Nil <: D_A` in the contravariant slot
+flips), so a Property-of-D_A can be passed wherever a
+Property-of-Nil is expected.
+
+The platform's reflective dispatch chains exploit this:
+
+```pure
+function getProperty(class: Class<Any>[1], name: String[1]):
+    Property<Nil, Any|*>[0..1] { ... }
+
+// Use site (dynamicNew.pure):
+D_A->getProperty('a')->toOne()->eval($r)
+```
+
+`getProperty` returns `Property<Nil, Any|*>[0..1]` — the most-generic
+Property type. Without contravariance, eval'ing that property against
+a `D_A`-typed receiver `$r` would freeze `T` to `Nil` from the
+structural lift and reject the arg as "expected Nil, got D_A". The
+contravariance rule lifts the `Nil` to `Any` (the dual under
+contravariance — a property-of-Nil accepts any owner), letting the
+chain dispatch.
+
+Three platform files exercise this pattern heavily:
+
+- `dynamicNew.pure` — dynamic instance construction + reflection.
+- `eval/eval.pure` — eval-against-property tests.
+- `meta/reflect/canReactivateDynamically.pure` — value-spec
+  reactivation chains.
+- `dsl-mapping/PropertyMappingsImplementation.pure` — mapping reflection.
+
+This is why the Rust port's variance support spans both surface
+forms: forgetting contravariance silently breaks the entire
+metamodel-reflection chain. The feature is sparsely-documented in
+Java's source and easy to miss.
+
+#### Compiler implementation notes
+
+- `Class.type_parameter_variances: Vec<Variance>` is position-aligned
+  with `Class.type_parameters` (Vec<SmolStr>). `#[serde(default)]`
+  on the field lets old `.purem` blobs deserialize as all-Invariant
+  while new builds capture the metadata.
+- The m3 parser at `crates/pure/src/m3_parser.rs` reads
+  `contravariant: true` / `covariant: true` from
+  `^TypeParameter{...}` instance forms (the lexer maps the literal
+  `true` to `Token::Ident("true")`).
+- The class-level `<-T>` / `<+T>` prefix parsing in
+  `crates/parser/src/parser/type_ref.rs` accepts the markers; the
+  AST → compiled-Class wiring stamps the resulting `Variance` flags.
+- `subtype_view` (the supertype-walk used during structural binding)
+  applies the Nil-→-Any lift for contravariant slots when
+  substituting a class's type-args into its super-types. This is the
+  single hot spot that makes contravariance flow through the
+  reflective-dispatch chain without touching every consumer.
+- Tests: `crates/pure/tests/variance_tests.rs` has 5 tests covering
+  positive contravariance through Property, the negative case
+  (invariant user-class rejects the same shape), default-mode Java
+  parity, and a wire-level pin that the loaded platform's Property
+  carries the contravariant flag.
+
 ---
 
 ## 5. Expression Grammar
