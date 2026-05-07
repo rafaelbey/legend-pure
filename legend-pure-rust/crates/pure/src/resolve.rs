@@ -1997,35 +1997,46 @@ pub(crate) fn infer_generic_bindings(
     model: &crate::model::PureModel,
     var_types: &VarTypes,
 ) -> GenericBindings {
+    use crate::inference::context::{RegisterMode, TypeInferenceContext};
     use crate::types::{ExprKind, Multiplicity, TypeExpr};
-    let mut bindings = GenericBindings::default();
+
+    // Step 3d-cont: thread the binding pass through the
+    // TypeInferenceContext skeleton. `root(None, …)` creates a
+    // top-level frame with no parent — once stack semantics are
+    // exercised (recursive generic helpers, let-bound lambda
+    // specialisation), `enter_child` will push frames as the
+    // orchestrator descends into nested call sites.
+    //
+    // The carrier change is structural; behaviour is identical
+    // because both `register_mult(Constraint)` and the existing
+    // bind_type call have the same Vacant=insert / Occupied=LUB
+    // semantics. Tests `tic_*` + `neg_*` + `pos_*` lock the
+    // unchanged behaviour.
+    let mut ctx = TypeInferenceContext::root(None, std::collections::HashSet::new());
     for (param, arg) in params.iter().zip(args.iter()) {
-        // Bind the param's multiplicity variable from the arg's multiplicity.
+        // Multiplicity binding now flows through the context's
+        // register_mult API (Constraint = Vacant insert / Occupied
+        // LUB-merge — Java's `merge=true` shape).
         if let Multiplicity::Variable(name) = &param.multiplicity
             && let Some(arg_mult) = infer_multiplicity_from_valuespec(arg, model, var_types)
         {
-            use std::collections::hash_map::Entry;
-            match bindings.mult.entry(name.clone()) {
-                Entry::Vacant(e) => {
-                    e.insert(arg_mult);
-                }
-                Entry::Occupied(mut e) => {
-                    // m already bound — compute LUB (widest range covering both).
-                    let lub = mult_lub(e.get(), &arg_mult);
-                    *e.get_mut() = lub;
-                }
-            }
+            ctx.register_mult(name, arg_mult, RegisterMode::Constraint);
         }
-        // Derive the arg's "type expression" — preserve `type_arguments`
-        // through the inference so generic substitution sees the FULL
-        // parametric shape. The previous version dropped `type_arguments`
+        // Type binding stays in bind_type because of the recursive
+        // structural match — a param like `Named<Foo>{[T]}` against
+        // an arg `Named<Foo>{[String]}` walks both type-argument
+        // slots in lock-step. `register_type(Generic(name), value)`
+        // only handles the leaf case. We pass `ctx.bindings.ty` as
+        // the destination so the context is the actual carrier.
+        //
+        // The previous version dropped `type_arguments`
         // unconditionally, which made `class<T>(T[*]):Class<T>[1]` bind
         // T to the bare element rather than the parametric TypeExpr.
         // Now `$l1: List<String>` flows through as `Named{List, [String]}`
         // and the substituted return type comes out `Class<List<String>>`.
         let arg_type_expr: Option<TypeExpr> = infer_typeexpr_from_valuespec(arg, model, var_types);
         if let Some(arg_ty) = arg_type_expr {
-            bind_type(&param.type_expr, &arg_ty, &mut bindings.ty, model);
+            bind_type(&param.type_expr, &arg_ty, &mut ctx.bindings.ty, model);
         }
     }
 
@@ -2069,12 +2080,12 @@ pub(crate) fn infer_generic_bindings(
                 lambda_arg,
                 model,
                 var_types,
-                &mut bindings,
+                &mut ctx.bindings,
             );
         }
     }
 
-    bindings
+    ctx.bindings
 }
 
 // `bind_from_lambda_body` lives in `crate::inference::lambda`
