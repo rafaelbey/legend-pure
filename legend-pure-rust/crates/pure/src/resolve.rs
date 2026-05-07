@@ -2056,11 +2056,20 @@ pub(crate) fn infer_generic_bindings(
         // `Named<Foo>{[T]}` against `Named<Foo>{[String]}` recursion
         // is identical between modes; only the leaf `Generic(name)`
         // step differs.
+        //
+        // The structural recursion ALSO walks multiplicity slots
+        // inside FunctionType (`(T[n], …) → V[m]`) and Named
+        // (`Map<K|m>` against `Map<String|1>`). Without this, the
+        // platform-pervasive `eval<V|m>(func:Function<{->V[m]}>)`
+        // pattern leaves `m` Variable and the strict-mode
+        // unresolved-multiplicity check fires falsely (1,628 cases
+        // confirmed before this fix).
         if let Some(arg_ty) = arg_type_expr {
             bind_type_with_mode(
                 &param.type_expr,
                 &arg_ty,
                 &mut ctx.bindings.ty,
+                &mut ctx.bindings.mult,
                 model,
                 bind_mode,
             );
@@ -2122,61 +2131,67 @@ pub(crate) fn infer_generic_bindings(
 // only the per-lambda binding step moved.
 
 /// Recursively match `param_ty` against `arg_ty`, collecting type-variable
-/// bindings. Handles:
+/// AND multiplicity-variable bindings. Handles:
 /// - `Generic(T)` vs anything → bind `T := arg_ty`.
-/// - `Named { type_arguments: [...] }` vs `Named { type_arguments: [...] }`
-///   → recurse pairwise so `List<T>` against `List<String>` binds
-///   `T := String`.
+/// - `Named { type_arguments, multiplicity_arguments }` vs same → recurse
+///   pairwise so `List<T>` against `List<String>` binds `T := String`,
+///   and `Map<K|m>` against `Map<String|1>` binds `K := String`, `m := 1`.
+/// - `FunctionType { parameters: [(ty, mult), …], return_type, return_multiplicity }`
+///   vs same → recurse pairwise on parameter types AND multiplicities,
+///   plus return-type and return-multiplicity. This is the load-bearing
+///   case for `eval<T,V|m,n>(func:Function<{T[n]->V[m]}>, param:T[n]):V[m]`
+///   — without inner-multiplicity binding, `m` and `n` are left
+///   `Variable(_)` and the strict-mode unresolved-multiplicity check
+///   fires falsely (1,628 times across the platform — confirmed
+///   regression).
 ///
-/// If `T` is already bound and a second arg binds `T` to a different type,
-/// the binding is updated to the LUB of the two types rather than first-wins.
-/// (Constraint mode — Java's `merge=true`.)
+/// **Constraint mode** (Java `merge=true`): existing-concrete +
+/// incoming-concrete → LUB. Used when every arg converged.
 ///
-/// Public-API entry point preserved for stable call sites; routes to
-/// [`bind_type_with_mode`] in Constraint mode. Use the more-explicit form
-/// when the caller knows the binding is authoritative
-/// (e.g. `infer_generic_bindings`'s first-pass when some args didn't
-/// converge — see Java
-/// `FunctionExpressionProcessor.potentiallyUpdate…:567-584`).
+/// **Authoritative mode** (Java `merge=false`): existing-Generic +
+/// incoming-concrete → replace; existing-concrete + incoming-concrete
+/// → keep existing (first-wins). Used when any arg failed pass-1
+/// convergence.
+///
+/// `bind_type` is the public-API entry that routes to Constraint mode;
+/// stable for stable callers. Internal call sites that know their
+/// authoritative-vs-constraint posture call [`bind_type_with_mode`]
+/// directly.
 pub(crate) fn bind_type(
     param_ty: &crate::types::TypeExpr,
     arg_ty: &crate::types::TypeExpr,
     out: &mut HashMap<SmolStr, crate::types::TypeExpr>,
     model: &crate::model::PureModel,
 ) {
+    let mut mult_out: HashMap<SmolStr, crate::types::Multiplicity> = HashMap::new();
     bind_type_with_mode(
         param_ty,
         arg_ty,
         out,
+        &mut mult_out,
         model,
         crate::inference::context::RegisterMode::Constraint,
     );
+    // Discard mult_out — callers using this thin entry don't ask for
+    // multiplicity bindings (they manage them separately at the outer
+    // parameter level). Internal call sites that need the inner
+    // FunctionType / Named multiplicity bindings call
+    // `bind_type_with_mode` directly with their own `mult_out`.
 }
 
-/// Mode-aware binding. Java's `register(...)` `merge` flag mapped onto
-/// our two-branch dispatch:
+/// Mode-aware binding (Java's `register(...)` `merge` flag mapped onto
+/// our two-branch dispatch). See [`bind_type`] for semantic details.
 ///
-/// - **`RegisterMode::Constraint`** (Java `merge=true`) — the existing
-///   LUB-merging shape. Used when every arg converged in
-///   `firstPassTypeInference` (Java `:794`); platform corpus depends on
-///   this for `pick<T>(unrelated)` style calls.
-///
-/// - **`RegisterMode::Authoritative`** (Java `merge=false`) — first
-///   concrete binding wins. An existing-Generic + incoming-concrete
-///   entry is replaced (the concrete propagates over the placeholder);
-///   an existing-concrete + incoming-concrete entry keeps the existing.
-///   Used when at least one arg failed to converge in pass 1 (typically
-///   a lambda before body inference): the converged args bind
-///   authoritatively so the unconverged arg's later contribution can't
-///   widen them away.
-///
-/// The structural recursion through `Named { type_arguments }` and
-/// `FunctionType { parameters, return_type }` is identical between the
-/// two modes; only the leaf `Generic(name)` step differs.
+/// `out` accumulates type-variable bindings; `mult_out` accumulates
+/// multiplicity-variable bindings extracted from the structural recursion
+/// (`Named.multiplicity_arguments`, `FunctionType.parameters[i].mult`,
+/// `FunctionType.return_multiplicity`). The structural recursion is
+/// identical between modes; only the leaf-binding step differs.
 pub(crate) fn bind_type_with_mode(
     param_ty: &crate::types::TypeExpr,
     arg_ty: &crate::types::TypeExpr,
     out: &mut HashMap<SmolStr, crate::types::TypeExpr>,
+    mult_out: &mut HashMap<SmolStr, crate::types::Multiplicity>,
     model: &crate::model::PureModel,
     mode: crate::inference::context::RegisterMode,
 ) {
@@ -2213,36 +2228,82 @@ pub(crate) fn bind_type_with_mode(
         }
         TypeExpr::Named {
             type_arguments: p_args,
+            multiplicity_arguments: p_margs,
             ..
         } => {
             if let TypeExpr::Named {
                 type_arguments: a_args,
+                multiplicity_arguments: a_margs,
                 ..
             } = arg_ty
             {
                 for (p, a) in p_args.iter().zip(a_args.iter()) {
-                    bind_type_with_mode(p, a, out, model, mode);
+                    bind_type_with_mode(p, a, out, mult_out, model, mode);
+                }
+                for (p, a) in p_margs.iter().zip(a_margs.iter()) {
+                    bind_mult_with_mode(p, a, mult_out, mode);
                 }
             }
         }
         TypeExpr::FunctionType {
             parameters: p_params,
             return_type: p_ret,
-            ..
+            return_multiplicity: p_ret_mult,
         } => {
             if let TypeExpr::FunctionType {
                 parameters: a_params,
                 return_type: a_ret,
-                ..
+                return_multiplicity: a_ret_mult,
             } = arg_ty
             {
-                for ((p_ty, _), (a_ty, _)) in p_params.iter().zip(a_params.iter()) {
-                    bind_type_with_mode(p_ty, a_ty, out, model, mode);
+                for ((p_ty, p_mult), (a_ty, a_mult)) in p_params.iter().zip(a_params.iter()) {
+                    bind_type_with_mode(p_ty, a_ty, out, mult_out, model, mode);
+                    bind_mult_with_mode(p_mult, a_mult, mult_out, mode);
                 }
-                bind_type_with_mode(p_ret, a_ret, out, model, mode);
+                bind_type_with_mode(p_ret, a_ret, out, mult_out, model, mode);
+                bind_mult_with_mode(p_ret_mult, a_ret_mult, mult_out, mode);
             }
         }
         _ => {}
+    }
+}
+
+/// Bind a multiplicity-variable (`Multiplicity::Variable(name)`) against
+/// a concrete (or otherwise-Variable) multiplicity, honouring the same
+/// Authoritative-vs-Constraint mode distinction as `bind_type_with_mode`.
+///
+/// - Vacant entry → insert.
+/// - Occupied + Constraint → `mult_lub` (existing behaviour for the
+///   outer-level parameter-multiplicity bind in `infer_generic_bindings`).
+/// - Occupied + Authoritative → existing-Variable + incoming-concrete
+///   replaces; both-concrete keeps existing.
+fn bind_mult_with_mode(
+    p: &crate::types::Multiplicity,
+    a: &crate::types::Multiplicity,
+    mult_out: &mut HashMap<SmolStr, crate::types::Multiplicity>,
+    mode: crate::inference::context::RegisterMode,
+) {
+    use crate::inference::context::RegisterMode;
+    use crate::types::Multiplicity;
+    let Multiplicity::Variable(name) = p else {
+        return;
+    };
+    use std::collections::hash_map::Entry;
+    match mult_out.entry(name.clone()) {
+        Entry::Vacant(e) => {
+            e.insert(a.clone());
+        }
+        Entry::Occupied(mut e) => match mode {
+            RegisterMode::Constraint => {
+                let lub = mult_lub(e.get(), a);
+                *e.get_mut() = lub;
+            }
+            RegisterMode::Authoritative => {
+                if matches!(e.get(), Multiplicity::Variable(_)) {
+                    *e.get_mut() = a.clone();
+                }
+            }
+        },
     }
 }
 
