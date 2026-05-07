@@ -88,11 +88,15 @@ pub(crate) fn reachable_types(model: &PureModel, fns: &[ResolvedFn]) -> Reachabl
                         seed_from_type_expr(&param.type_expr, &mut queue);
                     }
                 }
-                for (assoc_id, prop_idx) in model.association_properties(id) {
+                // The injected property visible from `id` is the OTHER
+                // end of the association — `1 - prop_idx_pointing_to_self`.
+                // We follow that end's type to walk the graph correctly.
+                for (assoc_id, prop_idx_pointing_to_self) in model.association_properties(id) {
                     if let Element::Association(assoc) = model.get_element(*assoc_id)
-                        && let Some(prop) = assoc.properties.get(*prop_idx)
+                        && assoc.properties.len() == 2
+                        && let Some(injected) = assoc.properties.get(1 - *prop_idx_pointing_to_self)
                     {
-                        seed_from_type_expr(&prop.type_expr, &mut queue);
+                        seed_from_type_expr(&injected.type_expr, &mut queue);
                     }
                 }
             }
