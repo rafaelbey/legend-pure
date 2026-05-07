@@ -554,6 +554,28 @@ function test::handler(b: test::Box<Integer>[1]): Integer[1] {
 }
 
 #[test]
+fn tic_platform_canreactivate_lambda_evaluate_property_toOne_chain() {
+    // Lock the canReactivateDynamically.pure:21 platform pattern at
+    // the LOADED-PLATFORM level (rather than synthetic) since this
+    // exact chain depends on real m3 LambdaFunction →
+    // FunctionDefinition supertype walk + the `.expressionSequence`
+    // property declared on FunctionDefinition. The bare-FunctionType
+    // → Named<LambdaFunction>{[FunctionType]} bridge in
+    // `infer_property_access` makes property access on a 0-arg
+    // lambda literal resolve through LambdaFunction's supertype
+    // chain. Without it, the chain fell off and downstream
+    // `toOne` had no T to bind.
+    let model = legend_pure_core_platform::platform::load_platform();
+    assert!(
+        model.is_ok(),
+        "Default-mode platform compile must stay clean — variance + \
+         lambda bridge fixes already removed all strict-mode-only \
+         errors; if THIS assertion breaks, a clean-mode regression \
+         landed."
+    );
+}
+
+#[test]
 fn tic_let_bound_collection_of_lambdas_match() {
     // Mirror of `match.pure:80-83` platform pattern:
     //   let lambdas = [λ1, λ2, ...];

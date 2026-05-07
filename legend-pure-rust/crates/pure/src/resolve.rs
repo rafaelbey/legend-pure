@@ -2681,21 +2681,60 @@ fn bind_mult_with_mode(
         return;
     };
     use std::collections::hash_map::Entry;
-    match mult_out.entry(name.clone()) {
+    let new_value = match mult_out.entry(name.clone()) {
         Entry::Vacant(e) => {
             e.insert(a.clone());
+            None
         }
         Entry::Occupied(mut e) => match mode {
             RegisterMode::Constraint => {
-                let lub = mult_lub(e.get(), a);
-                *e.get_mut() = lub;
+                let prev = e.get().clone();
+                let lub = mult_lub(&prev, a);
+                *e.get_mut() = lub.clone();
+                // Promote-and-propagate: if `prev` was a `Variable(X)`
+                // alias (typically a function-ref's lifted mult slot —
+                // e.g. `reverse_T_m__T_m_` lifts to
+                // `Function<{T[m]→T[m]}>` carrying the callee's `m`
+                // verbatim) AND the LUB collapsed it to a concrete
+                // value, propagate that concretisation to every
+                // sibling key currently aliased to the same `X`. This
+                // is the multiplicity-side analogue of
+                // `substitute_type`'s Generic→Generic alias chain
+                // walk (commit `48d4081`); without it, eval's
+                // return-mult `m` stays `Variable("m")` even after
+                // its sibling input-mult `n` resolves to a concrete
+                // multiplicity from the param-arg, leaving the
+                // strict-mode return-check emitting "multiplicity
+                // parameter m was not resolved".
+                if matches!(prev, Multiplicity::Variable(_))
+                    && !matches!(lub, Multiplicity::Variable(_))
+                {
+                    if let Multiplicity::Variable(prev_name) = prev {
+                        Some((prev_name, lub))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
             }
             RegisterMode::Authoritative => {
                 if matches!(e.get(), Multiplicity::Variable(_)) {
                     *e.get_mut() = a.clone();
                 }
+                None
             }
         },
+    };
+    if let Some((prev_var, concrete)) = new_value {
+        // Borrow of `e` is released by the match's scope ending.
+        for v in mult_out.values_mut() {
+            if let Multiplicity::Variable(n) = v
+                && n == &prev_var
+            {
+                *v = concrete.clone();
+            }
+        }
     }
 }
 
@@ -2965,8 +3004,34 @@ pub(crate) fn substitute_mult(
     bindings: &HashMap<SmolStr, crate::types::Multiplicity>,
 ) -> crate::types::Multiplicity {
     use crate::types::Multiplicity;
+    // Follow `Variable → Variable` alias chains, mirroring
+    // `substitute_type`'s Generic→Generic alias handling. Function-ref
+    // lifts (e.g. `reverse_T_m__T_m_`) carry the callee's mult-params
+    // verbatim as `Variable("m")` placeholders; binding eval against
+    // such a function-ref records eval's `m` → `Variable("m_callee")`
+    // as an alias. When eval's own `m` later binds concretely (or
+    // when the chain references a downstream concrete mult), we need
+    // to walk through the alias to resolve.
+    //
+    // Cycle guard: if a chain loops, return the last-seen Variable —
+    // degrades to current behaviour rather than infinite recurse.
     match m {
-        Multiplicity::Variable(name) => bindings.get(name).cloned().unwrap_or_else(|| m.clone()),
+        Multiplicity::Variable(name) => {
+            let mut current_name = name.clone();
+            let mut seen = std::collections::HashSet::new();
+            loop {
+                if !seen.insert(current_name.clone()) {
+                    return Multiplicity::Variable(current_name);
+                }
+                match bindings.get(&current_name) {
+                    Some(Multiplicity::Variable(next_name)) if next_name != &current_name => {
+                        current_name = next_name.clone();
+                    }
+                    Some(non_var) => return non_var.clone(),
+                    None => return Multiplicity::Variable(current_name),
+                }
+            }
+        }
         _ => m.clone(),
     }
 }

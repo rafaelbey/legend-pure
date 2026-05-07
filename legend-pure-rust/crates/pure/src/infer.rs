@@ -1541,6 +1541,17 @@ fn infer_property_access(
     };
 
     // Receiver must be a `Named` type whose element resolves to a Class.
+    // Bare `FunctionType` receivers — produced by `infer_expr`'s Lambda
+    // branch for inline lambdas like `{|1}` — are bridged to
+    // `Named<LambdaFunction>{[FunctionType]}` for property lookup so
+    // metamodel-reflection chains like
+    // `{|1}->evaluateAndDeactivate().expressionSequence->toOne()` can
+    // navigate through `LambdaFunction → FunctionDefinition` to find
+    // `expressionSequence`. Without this bridge, the receiver fell off
+    // the cliff at `.expressionSequence` and downstream `toOne` had no
+    // T to bind. Mirrors the lower-time wrapping in
+    // `infer_let_type`'s Lambda branch — the two paths produce the
+    // same shape for property access purposes.
     let (receiver_id, receiver_type_args, receiver_mult_args) = match &target.type_expr {
         TypeExpr::Named {
             element,
@@ -1552,6 +1563,19 @@ fn infer_property_access(
             type_arguments.clone(),
             multiplicity_arguments.clone(),
         ),
+        TypeExpr::FunctionType { .. } => {
+            let lambda_metaclass = ctx.model.resolve_by_path(&[
+                SmolStr::new("meta"),
+                SmolStr::new("pure"),
+                SmolStr::new("metamodel"),
+                SmolStr::new("function"),
+                SmolStr::new("LambdaFunction"),
+            ]);
+            match lambda_metaclass {
+                Some(eid) => (eid, vec![target.type_expr.clone()], Vec::new()),
+                None => return PropertyLookup::UnknownTarget,
+            }
+        }
         _ => return PropertyLookup::UnknownTarget,
     };
     let Some(receiver_elem) = ctx.model.try_get_element(receiver_id) else {
