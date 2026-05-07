@@ -109,24 +109,49 @@ pub(crate) fn build_packageable_element_ref(
     source_info: SourceInfo,
     model: &crate::model::PureModel,
 ) -> ValueSpec {
-    let type_info =
-        crate::bootstrap::metatype_of(model, model.get_element(element_id)).map(|metatype| {
-            let element_te = TypeExpr::Named {
+    let element = model.get_element(element_id);
+    let type_info = crate::bootstrap::metatype_of(model, element).map(|metatype| {
+        // For Function elements, lift the function's signature into a
+        // structural `FunctionType` so callers like
+        // `eval<T,V|m,n>(func:Function<{T[n]->V[m]}>, param:T[n]):V[m]`
+        // can extract T/V/m/n from the function-ref's expected
+        // FunctionType slot. Without this, the `type_arguments` carries
+        // only a bare `Named<element_id>{}` and the eval/apply binding
+        // pass falls through to no-op.
+        //
+        // Mirror of Java's `InstanceValueProcessor.getGenericType` which
+        // produces `Function<{param_types -> return_type}>` when the
+        // referent is a function definition.
+        let inner_te = match element {
+            crate::model::Element::Function(f) => {
+                let parameters: Vec<(TypeExpr, Multiplicity)> = f
+                    .parameters
+                    .iter()
+                    .map(|p| (p.type_expr.clone(), p.multiplicity.clone()))
+                    .collect();
+                TypeExpr::FunctionType {
+                    parameters,
+                    return_type: Box::new(f.return_type.clone()),
+                    return_multiplicity: f.return_multiplicity.clone(),
+                }
+            }
+            _ => TypeExpr::Named {
                 element: element_id,
                 type_arguments: vec![],
                 multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
-            };
-            Box::new(ResolvedType {
-                type_expr: TypeExpr::Named {
-                    element: metatype,
-                    type_arguments: vec![element_te],
-                    multiplicity_arguments: Vec::new(),
-                    value_arguments: vec![],
-                },
-                multiplicity: Multiplicity::PureOne,
-            })
-        });
+            },
+        };
+        Box::new(ResolvedType {
+            type_expr: TypeExpr::Named {
+                element: metatype,
+                type_arguments: vec![inner_te],
+                multiplicity_arguments: Vec::new(),
+                value_arguments: vec![],
+            },
+            multiplicity: Multiplicity::PureOne,
+        })
+    });
     ValueSpec {
         kind: Box::new(ExprKind::PackageableElementRef {
             element: element_id,
