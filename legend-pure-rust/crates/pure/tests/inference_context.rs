@@ -554,6 +554,36 @@ function test::handler(b: test::Box<Integer>[1]): Integer[1] {
 }
 
 // ---------------------------------------------------------------------------
+// 14. let-bound copy carries source's type to property/method chains
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tic_let_copy_carries_type_for_method_chain() {
+    // `let p2 = ^$p(...); $p2.address->toOne()` — p2's type should
+    // be Person (same as $p), so .address resolves and toOne's T
+    // binds Address. Without this, var_types[p2] stays empty,
+    // .address fails type-resolution, and downstream toOne reports
+    // "T was not resolved" under strict mode (~22 platform errors
+    // in copy.pure pre-fix).
+    let source = r#"
+###Pure
+Class test::Address { name: String[1]; }
+Class test::Person { name: String[1]; address: test::Address[0..1]; }
+native function test::toOne<T>(coll: T[*]): T[1];
+function test::caller(p: test::Person[1]): test::Address[1] {
+    let p2 = ^$p(name='David');
+    $p2.address->test::toOne()
+}
+"#;
+    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[]).expect(
+            "let-bound copy must carry source's type to var_types so \
+             the downstream property + toOne chain binds correctly.",
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
 // 13. Lambda body extracts type-arg from a generic property
 // ---------------------------------------------------------------------------
 
