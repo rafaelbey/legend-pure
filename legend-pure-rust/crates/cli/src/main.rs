@@ -102,6 +102,9 @@ enum Commands {
     /// Initialize a new Legend project
     Init(commands::init::InitArgs),
 
+    /// Generate Java wrappers around the JNI evaluator
+    JavaBindings(commands::java_bindings::JavaBindingsArgs),
+
     /// Generate shell completion scripts
     Completions(commands::completions::CompletionsArgs),
 
@@ -132,6 +135,7 @@ fn main() {
         Commands::Package(args) => commands::package::run(args),
         Commands::Publish(args) => commands::publish::run(args),
         Commands::Init(args) => commands::init::run(args),
+        Commands::JavaBindings(args) => commands::java_bindings::run(args),
         Commands::Completions(args) => commands::completions::run(args),
         Commands::Repl(args) => commands::repl::run(args, classpath),
         Commands::Snapshot(args) => commands::snapshot::run(args, classpath),

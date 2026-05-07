@@ -48,6 +48,18 @@ public class PureRustInstance implements Closeable
     }
 
     /**
+     * The underlying native instance handle.
+     * <p>
+     * Exposed publicly so the proxy support code in
+     * {@code org.finos.legend.pure.rust.proxy} can read the pointer
+     * without joining this package.
+     */
+    public long instancePointer()
+    {
+        return this.instancePointer;
+    }
+
+    /**
      * Retrieves a property value from this instance.
      *
      * @param propertyName the name of the property

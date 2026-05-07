@@ -12,26 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! CLI subcommand modules.
-//!
-//! Each subcommand lives in its own module with:
-//! - A `*Args` struct for clap argument parsing
-//! - A `run()` function that executes the command
+package org.finos.legend.pure.rust.proxy;
 
-pub mod check;
-pub mod compile;
-pub mod completions;
-pub mod coverage;
-pub mod coverage_cmd;
-pub mod coverage_report;
-pub mod emit;
-pub mod init;
-pub mod java_bindings;
-pub mod lsp;
-pub mod package;
-pub mod parse;
-pub mod plan;
-pub mod publish;
-pub mod repl;
-pub mod snapshot;
-pub mod test;
+/**
+ * Placeholder for v2 — function-typed parameter support.
+ * <p>
+ * The current code generator (v1) refuses to emit wrappers for Pure
+ * functions whose signatures take {@code Function<{...}>} parameters.
+ * In v2 this interface will be the Java-side functional interface that
+ * marshals a Java lambda into a Pure callable through a JNI callback
+ * path. It is intentionally empty today so generated code can reference
+ * the type without forward-compatibility break.
+ */
+public interface PureLambda
+{
+}
