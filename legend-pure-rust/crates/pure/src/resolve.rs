@@ -1465,13 +1465,112 @@ pub(crate) fn infer_typeexpr_from_valuespec(
                 &receiver_type_args,
             ))
         }
+        // Collection: compute LUB at the TypeExpr level so a
+        // homogeneous `[pair(1,'a'), pair(2,'b')]` (all
+        // `Pair<Integer,String>`) preserves its parametric shape
+        // through the binding pass. Without this, the cheap fallback
+        // below maps `Collection` to `Named<Pair>{type_args: []}` —
+        // which means `newMap<U,V>(pairs:Pair<U,V>[*])` can't bind
+        // U:=Integer, V:=String because the arg's type_args are gone.
+        // Java parity here: the platform corpus depends on this for
+        // `newMap`, `put`, `at`, and similar map/list constructors.
+        ExprKind::Collection { elements } => {
+            let mut lub: Option<TypeExpr> = None;
+            for elem in elements {
+                let Some(elem_te) = infer_typeexpr_from_valuespec(elem, model, var_types) else {
+                    // Element type unknown — fall back to bare LUB
+                    // via the element-id path so we at least produce
+                    // something downstream can dispatch on.
+                    return infer_type_from_valuespec(vs, model, var_types).map(bare);
+                };
+                lub = Some(match lub {
+                    None => elem_te,
+                    Some(prev) => typeexpr_lub(&prev, &elem_te, model),
+                });
+            }
+            lub.or_else(|| infer_type_from_valuespec(vs, model, var_types).map(bare))
+        }
         // Everything else — degrade to the cheap fn and wrap as a bare
         // Named TypeExpr (no type_args, no value_args). Literals,
-        // PackageableElementRef, EnumValue, Collection LUB all fall
-        // here. Lane B doesn't currently need type_args for any of
-        // these; if a future caller does, this is the place to refine.
+        // PackageableElementRef, EnumValue all fall here. Lane B
+        // doesn't currently need type_args for any of these; if a
+        // future caller does, this is the place to refine.
         _ => infer_type_from_valuespec(vs, model, var_types).map(bare),
     }
+}
+
+/// LUB at the TypeExpr level. For two `Named` types with the same
+/// element id and equal type_arguments, returns one of them
+/// (preserves parametrics). For different element ids, walks the
+/// element-level hierarchy via [`least_upper_bound`] and wraps as a
+/// bare Named (drops type_args — a precision loss but matches Java
+/// in the heterogeneous case). For mixed structural shapes,
+/// FunctionType, Generic, Relation, etc., falls back to bare-element
+/// LUB.
+///
+/// Used inside `infer_typeexpr_from_valuespec`'s Collection arm so
+/// `[pair(1,'a'), pair(2,'b')]` flows through as
+/// `Named<Pair>{type_args:[Integer, String]}` — the load-bearing
+/// shape for parametric Map/List/Pair constructors at platform
+/// `newMap`/`put`/`at` call sites.
+fn typeexpr_lub(
+    a: &crate::types::TypeExpr,
+    b: &crate::types::TypeExpr,
+    model: &crate::model::PureModel,
+) -> crate::types::TypeExpr {
+    use crate::types::TypeExpr;
+    if a == b {
+        return a.clone();
+    }
+    if let (
+        TypeExpr::Named {
+            element: a_eid,
+            type_arguments: a_args,
+            multiplicity_arguments: a_margs,
+            ..
+        },
+        TypeExpr::Named {
+            element: b_eid,
+            type_arguments: b_args,
+            multiplicity_arguments: b_margs,
+            ..
+        },
+    ) = (a, b)
+    {
+        if a_eid == b_eid && a_args.len() == b_args.len() && a_margs.len() == b_margs.len() {
+            // Same element, same arity — recurse on type_arguments.
+            // Multiplicity arguments stay LUBed via mult_lub.
+            let lub_args: Vec<TypeExpr> = a_args
+                .iter()
+                .zip(b_args.iter())
+                .map(|(x, y)| typeexpr_lub(x, y, model))
+                .collect();
+            let lub_margs: Vec<crate::types::Multiplicity> = a_margs
+                .iter()
+                .zip(b_margs.iter())
+                .map(|(x, y)| mult_lub(x, y))
+                .collect();
+            return TypeExpr::Named {
+                element: *a_eid,
+                type_arguments: lub_args,
+                multiplicity_arguments: lub_margs,
+                value_arguments: vec![],
+            };
+        }
+        // Different elements — fall back to element-level LUB
+        // (loses type_args but yields a usable result).
+        let lub_eid = least_upper_bound(*a_eid, *b_eid, model);
+        return TypeExpr::Named {
+            element: lub_eid,
+            type_arguments: vec![],
+            multiplicity_arguments: vec![],
+            value_arguments: vec![],
+        };
+    }
+    // Mixed structural / generic / non-Named — clone the first.
+    // Refining this further is future work; the common case for the
+    // Collection LUB is homogeneous Named.
+    a.clone()
 }
 
 /// Walk the class hierarchy searching for `property` starting at `eid`.

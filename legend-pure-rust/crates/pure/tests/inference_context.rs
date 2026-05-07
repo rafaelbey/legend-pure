@@ -554,6 +554,33 @@ function test::handler(b: test::Box<Integer>[1]): Integer[1] {
 }
 
 // ---------------------------------------------------------------------------
+// 12. Collection LUB preserves type-arguments
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tic_collection_lub_preserves_type_args() {
+    // Mirrors the platform's `newMap([pair(1,'a'), pair(2,'b')])`
+    // pattern. The Collection LUB must preserve `Pair<Integer,String>`
+    // so newMap's `<U,V>` bind from the arg.
+    let source = r#"
+###Pure
+Class test::Pair<U,V> {}
+native function test::pair<U,V>(first: U[1], second: V[1]): test::Pair<U,V>[1];
+native function test::newMap<U,V>(pairs: test::Pair<U,V>[*]): test::Pair<U,V>[1];
+function test::caller(): test::Pair<Integer,String>[1] {
+    test::newMap([test::pair(1, 'a'), test::pair(2, 'b')])
+}
+"#;
+    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[]).expect(
+            "Collection LUB must preserve Pair<Integer,String> through \
+             newMap's <U,V> bind. Strict-mode unresolved-T check should \
+             stay silent.",
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
 // 11b. Subtype-view-walking through TWO levels (Property → AbstractProperty → Function)
 // ---------------------------------------------------------------------------
 
