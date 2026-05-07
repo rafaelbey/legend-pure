@@ -374,6 +374,84 @@ function test::caller(): Integer[1] {
 }
 
 // ---------------------------------------------------------------------------
+// 8b. Lambda param expected type is `List<T>` (T not in scope) — strict
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tic_lambda_param_with_nested_unbound_t_strict_mode_errors() {
+    // `needsListPred<T>(p:Function<{List<T>[1]->Boolean[1]}>):Boolean[1]`.
+    // The only arg is the lambda — T can't bind from any sibling arg.
+    // The lambda's expected param type stays `List<T>` with `Generic(T)`
+    // NESTED inside `Named<List>{[T]}`. The shallow Generic-only check
+    // misses this; the deep walk via `unresolved_type_params` catches it.
+    let source = r#"
+###Pure
+Class test::List<T> { values: T[*]; }
+native function test::needsListPred<T>(
+    pred: meta::pure::metamodel::function::Function<{test::List<T>[1]->Boolean[1]}>[1]
+): Boolean[1];
+function test::caller(): Boolean[1] { test::needsListPred(xs | true) }
+"#;
+    let result = legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[])
+    });
+    let partial = result.expect_err(
+        "Strict mode: lambda param `xs` whose expected type is \
+         `List<T>` with T not in scope must surface \
+         CannotInferLambdaParameterTypes — even though `Generic(T)` \
+         is nested rather than at the top.",
+    );
+    assert!(
+        partial.errors.iter().any(|e| matches!(
+            &e.kind,
+            legend_pure_parser_pure::error::CompilationErrorKind::CannotInferLambdaParameterTypes { names }
+                if names.iter().any(|n| n.as_str() == "xs")
+        )),
+        "expected CannotInferLambdaParameterTypes containing 'xs'; got: {:?}",
+        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 8c. Nested Generic(T) inside FunctionType expected — strict
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tic_lambda_param_with_function_type_unbound_t_strict_mode_errors() {
+    // The expected type is `Function<{T->Boolean}>` — `Generic(T)`
+    // is nested inside the FunctionType's parameters. Same deep-walk
+    // requirement as 8b but through a different structural node.
+    let source = r#"
+###Pure
+native function test::needsHigher<T>(
+    f: meta::pure::metamodel::function::Function<{
+        meta::pure::metamodel::function::Function<{T[1]->Boolean[1]}>[1]->Boolean[1]
+    }>[1]
+): Boolean[1];
+function test::caller(): Boolean[1] {
+    test::needsHigher(inner | true)
+}
+"#;
+    let result = legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[])
+    });
+    let partial = result.expect_err(
+        "Strict mode: lambda param `inner` whose expected type is \
+         `Function<{T->Boolean}>` with T not in scope must surface \
+         CannotInferLambdaParameterTypes.",
+    );
+    assert!(
+        partial.errors.iter().any(|e| matches!(
+            &e.kind,
+            legend_pure_parser_pure::error::CompilationErrorKind::CannotInferLambdaParameterTypes { names }
+                if names.iter().any(|n| n.as_str() == "inner")
+        )),
+        "expected CannotInferLambdaParameterTypes containing 'inner'; got: {:?}",
+        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 8a. Lambda param can't be anchored — strict-mode divergence (Step 3f)
 // ---------------------------------------------------------------------------
 
