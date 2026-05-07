@@ -123,6 +123,7 @@ fn lower_lambda_parameters(
 ) -> Vec<crate::types::Parameter> {
     let mut uninferred: Vec<SmolStr> = Vec::new();
     let mut anchor: Option<SourceInfo> = None;
+    let strict = crate::strict_mode::is_enabled();
 
     let lowered: Vec<crate::types::Parameter> = params
         .iter()
@@ -137,7 +138,25 @@ fn lower_lambda_parameters(
                 .and_then(|s| s.get(idx))
                 .and_then(|o| o.as_ref());
 
-            let is_uninferred = declared_type.is_none() && expected.is_none();
+            // Default mode (Java parity): "uninferred" only when there's
+            // neither a declaration nor any caller-side expectation.
+            // `Generic(T)` expectations stay silent because they may
+            // bind at the call site if the enclosing fn is parametric.
+            //
+            // Strict mode adds: an expectation that's a `Generic(name)`
+            // whose `name` isn't a transitive parameter of the
+            // enclosing element (`ctx.type_parameters`) is also a
+            // failure. Catches `needsPred(x | …)` where T isn't in
+            // scope and no sibling arg can bind it.
+            let expected_unbindable_in_strict = strict
+                && match expected {
+                    Some((crate::types::TypeExpr::Generic(name), _)) => {
+                        !ctx.type_parameters.iter().any(|t| t == name)
+                    }
+                    _ => false,
+                };
+            let is_uninferred = (declared_type.is_none() && expected.is_none())
+                || (declared_type.is_none() && expected_unbindable_in_strict);
             if is_uninferred {
                 uninferred.push(p.name.clone());
                 if anchor.is_none() {
