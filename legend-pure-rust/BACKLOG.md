@@ -202,7 +202,14 @@ hand-written runtime support lives in
 org/finos/legend/pure/rust/proxy/` (`PureRegistered`,
 `PureProxyFactory`, `PureInvocationHandler`, `PureLambda` placeholder).
 
-Verification: 11 codegen unit + integration tests (`-p
+Reachability is seeded from `--functions` parameter and return types,
+plus optional `--classes <FQN>` / `--associations <FQN>` flags that
+extend the seed set with explicit Pure elements (an association seed
+unfolds into both participating classes). Explicit class seeds bypass
+the `meta::pure::*` platform-class filter; transitive walks from them
+still apply the filter.
+
+Verification: 16 codegen unit + integration tests (`-p
 legend-pure-java-codegen`), including a `javac --release 11` round-trip
 on the generated set + the runtime support classes
 (`tests/javac_compiles.rs`).

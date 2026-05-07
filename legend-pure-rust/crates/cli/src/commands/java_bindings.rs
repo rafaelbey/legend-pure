@@ -19,13 +19,22 @@
 //! generated sources target the JNI runtime support library at
 //! `org.finos.legend.pure.rust.proxy`.
 //!
+//! Reachability is seeded from the requested functions' parameter and
+//! return types. Use `--classes` and `--associations` to add more seeds
+//! for elements that aren't referenced by any wrapper function — e.g.
+//! when generating bindings for a model the user will populate via
+//! `evaluate(...)` returning generic values, or for an association whose
+//! endpoint classes wouldn't otherwise be pulled in.
+//!
 //! # Usage
 //!
 //! ```bash
 //! legend java-bindings \
 //!     --output ./gen-java \
 //!     --java-package com.example.gen \
-//!     --functions meta::pure::functions::math::plus_Integer_MANY__Integer_1_
+//!     --functions meta::pure::functions::math::plus_Integer_MANY__Integer_1_ \
+//!     --classes user_test::Person \
+//!     --associations user_test::PersonAddress
 //! ```
 
 use std::path::PathBuf;
@@ -59,6 +68,18 @@ pub struct JavaBindingsArgs {
     /// ignored).
     #[arg(long, value_name = "FILE")]
     pub functions_file: Option<PathBuf>,
+
+    /// FQN of a Pure `Class` to emit a Java interface for, beyond what
+    /// is reachable from `--functions`. Repeatable.
+    #[arg(long = "classes", value_name = "FQN", action = clap::ArgAction::Append)]
+    pub classes: Vec<String>,
+
+    /// FQN of a Pure `Association` to seed the reachability walk with.
+    /// Both participating classes are added to the seed set so the
+    /// association-injected properties surface on their generated
+    /// interfaces. Repeatable.
+    #[arg(long = "associations", value_name = "FQN", action = clap::ArgAction::Append)]
+    pub associations: Vec<String>,
 
     /// Simple class name for the generated static-functions facade.
     /// Defaults to `PureFunctions`.
@@ -96,9 +117,24 @@ pub fn run(args: JavaBindingsArgs) -> Result<(), CliError> {
         }
     }
 
-    if requested.is_empty() {
+    let extra_classes: Vec<FqnInput> = args
+        .classes
+        .iter()
+        .map(|s| FqnInput::new(s.trim()))
+        .filter(|f| !f.raw.is_empty())
+        .collect();
+    let extra_associations: Vec<FqnInput> = args
+        .associations
+        .iter()
+        .map(|s| FqnInput::new(s.trim()))
+        .filter(|f| !f.raw.is_empty())
+        .collect();
+
+    if requested.is_empty() && extra_classes.is_empty() && extra_associations.is_empty() {
         return Err(CliError::Custom(
-            "no functions requested — pass --functions or --functions-file".to_owned(),
+            "nothing to generate — pass --functions, --functions-file, --classes, or \
+             --associations"
+                .to_owned(),
         ));
     }
 
@@ -125,7 +161,14 @@ pub fn run(args: JavaBindingsArgs) -> Result<(), CliError> {
         opts.functions_class_name = Some(name);
     }
 
-    let files = generate(&model, &requested, &opts).map_err(|e| CliError::Custom(e.to_string()))?;
+    let files = generate(
+        &model,
+        &requested,
+        &extra_classes,
+        &extra_associations,
+        &opts,
+    )
+    .map_err(|e| CliError::Custom(e.to_string()))?;
 
     let mut written = 0usize;
     for file in &files {

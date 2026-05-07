@@ -73,7 +73,7 @@ fn generated_java_compiles_with_runtime_support() {
         FqnInput::new("user_test::makePerson_String_1__Person_1_"),
         FqnInput::new("meta::pure::functions::math::plus_Integer_MANY__Integer_1_"),
     ];
-    let files = generate(&model, &fns, &opts).expect("codegen succeeds");
+    let files = generate(&model, &fns, &[], &[], &opts).expect("codegen succeeds");
 
     let tmp = tempdir_for_test("legend-codegen-javac");
     let out_root = tmp.join("gen");
