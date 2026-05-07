@@ -125,7 +125,9 @@ pub(crate) fn lower_expression(
             Some(function_app::lower_arrow_function(e, ctx, errors))
         }
         ast_expr::Expression::MemberAccess(e) => member_access::lower_member_access(e, ctx, errors),
-        ast_expr::Expression::TypeReferenceExpr(e) => type_ref::lower_type_reference(e, ctx, errors),
+        ast_expr::Expression::TypeReferenceExpr(e) => {
+            type_ref::lower_type_reference(e, ctx, errors)
+        }
         ast_expr::Expression::PackageableElementRef(e) => {
             type_ref::lower_packageable_element_ref(e, ctx, errors)
         }
@@ -162,7 +164,9 @@ pub(crate) fn lower_expression(
         ast_expr::Expression::Copy(e) => Some(copy_slice::lower_copy(e, ctx, errors)),
         ast_expr::Expression::Slice(e) => copy_slice::lower_slice(e, ctx, errors),
         ast_expr::Expression::UnitInstance(e) => unit_navpath::lower_unit_instance(e, ctx, errors),
-        ast_expr::Expression::NavigationPath(e) => unit_navpath::lower_navigation_path(e, ctx, errors),
+        ast_expr::Expression::NavigationPath(e) => {
+            unit_navpath::lower_navigation_path(e, ctx, errors)
+        }
     }
 }
 
@@ -204,7 +208,6 @@ pub(crate) fn lower_expression_body(
 // `find_qp_params_for_arity` live in `lower/function_app.rs`.
 // `lower_qp_call_args` is reached via `super::function_app::*` from
 // `lower/member_access.rs` for the QP-call dispatch.
-
 
 // `compute_lambda_param_expectations` and `expectations_from_callee_params`
 // live in `crate::inference::lambda` (Step 3e). Their call sites above

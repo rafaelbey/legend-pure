@@ -139,7 +139,7 @@ pub(crate) struct ResolutionContext<'a> {
 /// Resolution order (matches Java `ImportStub.resolvePackageableElement`):
 /// 1. If qualified (has package): resolve via the AST Package tree directly
 /// 2. If unqualified: check memo cache, then bootstrap, then import packages,
-///    then root package fallback
+/// then root package fallback
 ///
 /// Returns `None` and pushes a `CompilationError` if the type cannot be resolved.
 pub(crate) fn resolve_type_ref(
@@ -269,10 +269,10 @@ pub(crate) fn resolve_type_ref(
 
 /// Decodes a `{FunctionType}` sentinel `TypeReference` into `TypeExpr::FunctionType`.
 ///
-/// The parser encodes function types `{ParamType[m], ... -> RetType[m]}` as a
+/// The parser encodes function types `{ParamType[m],... -> RetType[m]}` as a
 /// `TypeReference` with name `{FunctionType}`:
 /// - `type_arguments[0..n-1]` — parameter types, each with its multiplicity in
-///   `multiplicity_arguments[0]`
+/// `multiplicity_arguments[0]`
 /// - `type_arguments[n-1]` — the return type
 /// - top-level `multiplicity_arguments[0]` — the return multiplicity
 #[allow(clippy::unnecessary_wraps)]
@@ -1219,14 +1219,10 @@ pub(crate) fn infer_type_from_valuespec(
             // transits (mirrors `infer_typeexpr_from_valuespec`'s
             // PropertyCall fallback). Without this, the chain at
             // `match.pure:185 $z.genericType.rawType->toOne()` left
-            // T unresolved at the strict-mode return-check.
+            // T unresolved at the return-check.
             let permissive = target_eid == crate::bootstrap::ANY_ID
-                || matches!(
-                    target_te.as_ref(),
-                    Some(crate::types::TypeExpr::Generic(_))
-                );
-            let lookup =
-                find_property_with_inheritance(target_eid, &data.function_name, model);
+                || matches!(target_te.as_ref(), Some(crate::types::TypeExpr::Generic(_)));
+            let lookup = find_property_with_inheritance(target_eid, &data.function_name, model);
             let (prop_ty_owned, type_params_owned) = match lookup {
                 Some(p) => p,
                 None if permissive => return Some(crate::bootstrap::ANY_ID),
@@ -1347,8 +1343,8 @@ pub(crate) fn infer_type_from_valuespec(
         ExprKind::PackageableElementRef { element } => {
             // Bare element ref has its M3 metatype — a Class value has
             // metatype `meta::pure::metamodel::type::Class`, etc. Enables
-            // dispatch on overloads like `dynamicNew(Class<Any>[1], ...)`
-            // vs `dynamicNew(GenericType[1], ...)`.
+            // dispatch on overloads like `dynamicNew(Class<Any>[1],...)`
+            // vs `dynamicNew(GenericType[1],...)`.
             crate::bootstrap::metatype_of(model, model.get_element(*element))
         }
         // Relation-grammar column-spec literals: surface the
@@ -1391,7 +1387,7 @@ pub(crate) fn infer_type_from_valuespec(
         // `FunctionDefinition`). Without this, lambda values had
         // no element id and downstream chains
         // (`{|…}.expressionSequence->at(0)->evaluateAndDeactivate()`)
-        // saw type-less arguments — strict mode then fired
+        // saw type-less arguments — then fired
         // 16+ "T not resolved at at" / "at evaluateAndDeactivate"
         // errors at platform reflection sites.
         ExprKind::Lambda { .. } => model.resolve_by_path(&[
@@ -1504,10 +1500,7 @@ pub(crate) fn infer_typeexpr_from_valuespec(
             // Generic-typed `$z` left intermediate types as None and
             // downstream `->toOne()` couldn't bind T.
             let permissive = target_eid == crate::bootstrap::ANY_ID
-                || matches!(
-                    target_te.as_ref(),
-                    Some(crate::types::TypeExpr::Generic(_))
-                );
+                || matches!(target_te.as_ref(), Some(crate::types::TypeExpr::Generic(_)));
             match find_property_with_inheritance(target_eid, &data.function_name, model) {
                 Some((prop_ty_owned, type_params_owned)) => Some(substitute_class_generics(
                     &prop_ty_owned,
@@ -1708,13 +1701,13 @@ pub(crate) fn find_property_multiplicity(
 /// property's declared multiplicity.
 ///
 /// Rules (matching Java Pure's `propertyExpression` post-processor):
-///   - Either side `[*]` → `[*]`.
-///   - Either side `[0..*]` (zero-or-many) → `[*]`.
-///   - Either side has lower bound 0 → result lower bound 0.
-///   - Bounded × Bounded → product of bounds.
-///   - Variable / Generic on either side → fall back to the *receiver*
-///     multiplicity (best partial answer; better than `None` which
-///     dispatch treats as permissively compatible with everything).
+/// - Either side `[*]` → `[*]`.
+/// - Either side `[0..*]` (zero-or-many) → `[*]`.
+/// - Either side has lower bound 0 → result lower bound 0.
+/// - Bounded × Bounded → product of bounds.
+/// - Variable / Generic on either side → fall back to the *receiver*
+/// multiplicity (best partial answer; better than `None` which
+/// dispatch treats as permissively compatible with everything).
 pub(crate) fn multiplicity_product(
     receiver_mult: &crate::types::Multiplicity,
     property_mult: &crate::types::Multiplicity,
@@ -1821,9 +1814,9 @@ pub(crate) fn is_type_compatible(
 /// Recognises both shapes the resolver produces:
 /// - `Relation(cols)` directly.
 /// - `Named { RelationType_id, type_arguments: [Relation(cols)], … }`
-///   (the canonical wrapper form `RelationType<Relation(cols)>`).
+/// (the canonical wrapper form `RelationType<Relation(cols)>`).
 /// - `Named { _, type_arguments: [Named { RelationType_id, …, [Relation(cols)] }], … }`
-///   (e.g. `TDS<RelationType<Relation(cols)>>`).
+/// (e.g. `TDS<RelationType<Relation(cols)>>`).
 ///
 /// Returns `None` when no relation columns are reachable in this
 /// type's outer-or-first-type-argument layers.
@@ -1850,11 +1843,11 @@ fn extract_relation_columns(
 ///
 /// Compatible means:
 /// - Param has no specific columns (empty Relation list, or no Relation
-///   layer at all) — accept anything.
+/// layer at all) — accept anything.
 /// - Arg has no extractable columns — accept (can't eliminate).
 /// - Both have columns — every param column must appear in arg with a
-///   compatible type and a satisfiable multiplicity. Extra arg columns
-///   are allowed (subset semantics — `Relation<X⊆T>`).
+/// compatible type and a satisfiable multiplicity. Extra arg columns
+/// are allowed (subset semantics — `Relation<X⊆T>`).
 fn is_relation_columns_compatible(
     arg_te: &crate::types::TypeExpr,
     param: &crate::types::TypeExpr,
@@ -2058,11 +2051,11 @@ pub(crate) fn infer_multiplicity_from_valuespec(
     // "lowering captures parametric type info; consumers read from
     // type_info" pattern as `infer_typeexpr_from_valuespec`. Without
     // this, `^Class<T>(...)` new instances (lowered to
-    // `FunctionCall { function: None, function_name: "new", ... }`
+    // `FunctionCall { function: None, function_name: "new",... }`
     // with type_info carrying multiplicity = PureOne) returned `None`
     // here — leaving downstream `evaluateAndDeactivate(^Class<...>())`
     // unable to bind eval's `m` and emitting "multiplicity parameter
-    // m was not resolved" under strict mode (addColumns.pure:41).
+    // m was not resolved" under (addColumns.pure:41).
     if let Some(rt) = vs.type_info.as_deref() {
         return Some(rt.multiplicity.clone());
     }
@@ -2174,13 +2167,13 @@ pub(crate) fn infer_generic_bindings(
     //
     // Java's `FunctionExpressionProcessor.process` walks args in
     // `firstPassTypeInference` (`:794`) and decides at lines 567-594:
-    //   - If every arg converged → `update…` path, registers all args
-    //     with `merge=true` (constraint, LUB-merging on conflict).
-    //   - If any arg failed → `potentiallyUpdate…` path, registers
-    //     ONLY the converged args with `merge=false` (authoritative —
-    //     concrete bindings can't be widened by later constraints
-    //     because the unconverged arg never re-enters the binding
-    //     pass).
+    // - If every arg converged → `update…` path, registers all args
+    // with `merge=true` (constraint, LUB-merging on conflict).
+    // - If any arg failed → `potentiallyUpdate…` path, registers
+    // ONLY the converged args with `merge=false` (authoritative —
+    // concrete bindings can't be widened by later constraints
+    // because the unconverged arg never re-enters the binding
+    // pass).
     //
     // We map "didn't converge" to `infer_typeexpr_from_valuespec`
     // returning `None` — typically the lambda case (the lambda's
@@ -2202,8 +2195,10 @@ pub(crate) fn infer_generic_bindings(
     };
 
     let mut ctx = TypeInferenceContext::root(None, std::collections::HashSet::new());
-    for ((param, arg), arg_type_expr) in
-        params.iter().zip(args.iter()).zip(arg_type_exprs.into_iter())
+    for ((param, arg), arg_type_expr) in params
+        .iter()
+        .zip(args.iter())
+        .zip(arg_type_exprs.into_iter())
     {
         // Multiplicity binding flows through the context's
         // register_mult API. Multiplicity LUB stays in the range
@@ -2231,7 +2226,7 @@ pub(crate) fn infer_generic_bindings(
         // inside FunctionType (`(T[n], …) → V[m]`) and Named
         // (`Map<K|m>` against `Map<String|1>`). Without this, the
         // platform-pervasive `eval<V|m>(func:Function<{->V[m]}>)`
-        // pattern leaves `m` Variable and the strict-mode
+        // pattern leaves `m` Variable and the
         // unresolved-multiplicity check fires falsely (1,628 cases
         // confirmed before this fix).
         if let Some(arg_ty) = arg_type_expr {
@@ -2247,7 +2242,7 @@ pub(crate) fn infer_generic_bindings(
                 // The Generic("T") leaf-bind directly off `param.type_expr =
                 // Generic("T")` is a top-level constraint binding; it
                 // populates `ty` (Java parity LUB) but not `ty_auth`,
-                // letting `compare(1, 'a')` pass strict-mode without
+                // letting `compare(1, 'a')` pass without
                 // false-positive while `eval(intFunc, 'wrong')`'s
                 // arg 0 (Function<{T→V}> param) descends into the
                 // FunctionType and bumps `inside_structural=true`
@@ -2259,7 +2254,7 @@ pub(crate) fn infer_generic_bindings(
 
     // Second pass: for lambda args against Function<{T->V}>[1] params, infer
     // the lambda body's return type (with the lambda params in scope) and bind
-    // the FunctionType's return type variable.  This lets `map(coll, r | $r.x)`
+    // the FunctionType's return type variable. This lets `map(coll, r | $r.x)`
     // propagate the property type through `V` so downstream calls like `->plus()`
     // can resolve unambiguously.
     //
@@ -2315,16 +2310,16 @@ pub(crate) fn infer_generic_bindings(
 /// AND multiplicity-variable bindings. Handles:
 /// - `Generic(T)` vs anything → bind `T := arg_ty`.
 /// - `Named { type_arguments, multiplicity_arguments }` vs same → recurse
-///   pairwise so `List<T>` against `List<String>` binds `T := String`,
-///   and `Map<K|m>` against `Map<String|1>` binds `K := String`, `m := 1`.
+/// pairwise so `List<T>` against `List<String>` binds `T := String`,
+/// and `Map<K|m>` against `Map<String|1>` binds `K := String`, `m := 1`.
 /// - `FunctionType { parameters: [(ty, mult), …], return_type, return_multiplicity }`
-///   vs same → recurse pairwise on parameter types AND multiplicities,
-///   plus return-type and return-multiplicity. This is the load-bearing
-///   case for `eval<T,V|m,n>(func:Function<{T[n]->V[m]}>, param:T[n]):V[m]`
-///   — without inner-multiplicity binding, `m` and `n` are left
-///   `Variable(_)` and the strict-mode unresolved-multiplicity check
-///   fires falsely (1,628 times across the platform — confirmed
-///   regression).
+/// vs same → recurse pairwise on parameter types AND multiplicities,
+/// plus return-type and return-multiplicity. This is the load-bearing
+/// case for `eval<T,V|m,n>(func:Function<{T[n]->V[m]}>, param:T[n]):V[m]`
+/// — without inner-multiplicity binding, `m` and `n` are left
+/// `Variable(_)` and the unresolved-multiplicity check
+/// fires falsely (1,628 times across the platform — confirmed
+/// regression).
 ///
 /// **Constraint mode** (Java `merge=true`): existing-concrete +
 /// incoming-concrete → LUB. Used when every arg converged.
@@ -2373,7 +2368,7 @@ pub(crate) fn bind_type(
 ///
 /// `out` accumulates the LUB-merged Java-parity bindings; `ty_auth`
 /// accumulates the subset bound from inside a structural `FunctionType`
-/// slot (invariant in Pure → authoritative for strict-mode arg-type
+/// slot (invariant in Pure → authoritative for arg-type
 /// checks). `mult_out` accumulates multiplicity-variable bindings
 /// extracted from the structural recursion (`Named.multiplicity_arguments`,
 /// `FunctionType.parameters[i].mult`, `FunctionType.return_multiplicity`).
@@ -2423,7 +2418,7 @@ pub(crate) fn bind_type_with_mode(
                 },
             }
             // Structural-slot bindings ALSO populate ty_auth so the
-            // strict-mode substitution can distinguish a T frozen by
+            // substitution can distinguish a T frozen by
             // a `Function<{T→V}>` slot (catch `eval(intFunc,
             // 'wrong')`) from a T LUBed across top-level Generic
             // params (don't catch `compare(1, 'a')`). LUB across
@@ -2494,12 +2489,10 @@ pub(crate) fn bind_type_with_mode(
                         );
                     }
                 }
-                // else: incompatible elements, nothing to bind.
-            } else if matches!(arg_ty, TypeExpr::FunctionType { .. })
-                && crate::strict_mode::is_enabled()
-            {
-                // Strict-mode-only bridge: bare-`FunctionType` arg
-                // against `Named<Function-shaped>{[FT_param]}` param.
+            // else: incompatible elements, nothing to bind.
+            } else if matches!(arg_ty, TypeExpr::FunctionType { .. }) {
+                // Bare-`FunctionType` arg against
+                // `Named<Function-shaped>{[FT_param]}` param.
                 // Bare-FT arg is produced ONLY by the infer-time
                 // `infer_expr` Lambda branch — function-refs go
                 // through `build_packageable_element_ref` which
@@ -2538,35 +2531,31 @@ pub(crate) fn bind_type_with_mode(
                     if let TypeExpr::FunctionType {
                         parameters: a_params,
                         return_type: a_ret,
-                        return_multiplicity: a_ret_mult,
+                        return_multiplicity: _a_ret_mult,
                     } = arg_ty
                     {
-                        for ((p_ty, p_mult), (a_ty, a_mult)) in
-                            p_params.iter().zip(a_params.iter())
+                        for ((p_ty, p_mult), (a_ty, a_mult)) in p_params.iter().zip(a_params.iter())
                         {
                             bind_type_with_mode(
-                                p_ty,
-                                a_ty,
-                                out,
-                                ty_auth,
-                                mult_out,
-                                model,
-                                mode,
+                                p_ty, a_ty, out, ty_auth, mult_out, model, mode,
                                 /* inside_structural */ false,
                             );
                             bind_mult_with_mode(p_mult, a_mult, mult_out, mode);
                         }
                         bind_type_with_mode(
-                            p_ret,
-                            a_ret,
-                            out,
-                            ty_auth,
-                            mult_out,
-                            model,
-                            mode,
+                            p_ret, a_ret, out, ty_auth, mult_out, model, mode,
                             /* inside_structural */ false,
                         );
-                        bind_mult_with_mode(p_ret_mult, a_ret_mult, mult_out, mode);
+                        // Skip return-mult binding for the bridge:
+                        // the lambda's body return-mult would widen
+                        // the FT's `m`, regressing the platform's
+                        // QP-body shape `func():Float[1] {
+                        // if(true, |$this->map($valueFunc), |1.0) }`
+                        // (map returns Float[0..1] → m widens →
+                        // mismatches QP's Float[1]). Same Java
+                        // parity carve-out as
+                        // `inference::lambda::bind_from_lambda_body`.
+                        let _ = p_ret_mult;
                     }
                 }
             }
@@ -2588,14 +2577,10 @@ pub(crate) fn bind_type_with_mode(
                 // `true` for the entire subtree — Pure's FunctionType
                 // signature is invariant in both inputs and outputs.
                 for ((p_ty, p_mult), (a_ty, a_mult)) in p_params.iter().zip(a_params.iter()) {
-                    bind_type_with_mode(
-                        p_ty, a_ty, out, ty_auth, mult_out, model, mode, true,
-                    );
+                    bind_type_with_mode(p_ty, a_ty, out, ty_auth, mult_out, model, mode, true);
                     bind_mult_with_mode(p_mult, a_mult, mult_out, mode);
                 }
-                bind_type_with_mode(
-                    p_ret, a_ret, out, ty_auth, mult_out, model, mode, true,
-                );
+                bind_type_with_mode(p_ret, a_ret, out, ty_auth, mult_out, model, mode, true);
                 bind_mult_with_mode(p_ret_mult, a_ret_mult, mult_out, mode);
             }
         }
@@ -2685,24 +2670,23 @@ fn subtype_view(
             te.clone()
         }
     };
-    let ty_subst: HashMap<SmolStr, TypeExpr> =
-        if c.type_parameters.len() == arg_type_args.len() {
-            c.type_parameters
-                .iter()
-                .zip(arg_type_args.iter())
-                .enumerate()
-                .map(|(i, (name, te))| {
-                    let variance = c
-                        .type_parameter_variances
-                        .get(i)
-                        .copied()
-                        .unwrap_or_default();
-                    (name.clone(), lift_for_variance(variance, te))
-                })
-                .collect()
-        } else {
-            HashMap::new()
-        };
+    let ty_subst: HashMap<SmolStr, TypeExpr> = if c.type_parameters.len() == arg_type_args.len() {
+        c.type_parameters
+            .iter()
+            .zip(arg_type_args.iter())
+            .enumerate()
+            .map(|(i, (name, te))| {
+                let variance = c
+                    .type_parameter_variances
+                    .get(i)
+                    .copied()
+                    .unwrap_or_default();
+                (name.clone(), lift_for_variance(variance, te))
+            })
+            .collect()
+    } else {
+        HashMap::new()
+    };
     let mult_subst: HashMap<SmolStr, Multiplicity> =
         if c.multiplicity_parameters.len() == arg_mult_args.len() {
             c.multiplicity_parameters
@@ -2743,7 +2727,13 @@ fn subtype_view(
                 value_arguments: vec![],
             });
         }
-        if let Some(view) = subtype_view(*st_eid, &substituted_args, &substituted_margs, target_eid, model) {
+        if let Some(view) = subtype_view(
+            *st_eid,
+            &substituted_args,
+            &substituted_margs,
+            target_eid,
+            model,
+        ) {
             return Some(view);
         }
     }
@@ -2756,9 +2746,9 @@ fn subtype_view(
 ///
 /// - Vacant entry → insert.
 /// - Occupied + Constraint → `mult_lub` (existing behaviour for the
-///   outer-level parameter-multiplicity bind in `infer_generic_bindings`).
+/// outer-level parameter-multiplicity bind in `infer_generic_bindings`).
 /// - Occupied + Authoritative → existing-Variable + incoming-concrete
-///   replaces; both-concrete keeps existing.
+/// replaces; both-concrete keeps existing.
 fn bind_mult_with_mode(
     p: &crate::types::Multiplicity,
     a: &crate::types::Multiplicity,
@@ -2794,7 +2784,7 @@ fn bind_mult_with_mode(
                 // return-mult `m` stays `Variable("m")` even after
                 // its sibling input-mult `n` resolves to a concrete
                 // multiplicity from the param-arg, leaving the
-                // strict-mode return-check emitting "multiplicity
+                // return-check emitting "multiplicity
                 // parameter m was not resolved".
                 if matches!(prev, Multiplicity::Variable(_))
                     && !matches!(lub, Multiplicity::Variable(_))
@@ -2851,7 +2841,7 @@ pub(crate) fn type_lub(
     // widen the caller's binding to Any when it later LUBs with the
     // concrete contribution from a sibling arg (`[1,2,3]` →
     // Integer). Without this, eval's T LUB(Generic("T"), Integer)
-    // = Any, leaving V/m unresolved at the strict-mode return-check.
+    // = Any, leaving V/m unresolved at the return-check.
     //
     // Java analog: `findBestCommonGenericType` — Java's LUB also
     // skips the parameter-name placeholder side when one side is a
@@ -2935,14 +2925,14 @@ pub(crate) fn type_lub(
         }
         // FunctionType LUB preserves the structural shape so downstream
         // bind_type_with_mode can still walk the slots:
-        //   - Param types are contravariant in Pure's function type;
-        //     fall back to `Nil` (the bottom) for unmatched param
-        //     positions. This is what `match`'s declared
-        //     `Function<{Nil[n]→T[m]}>[1..*]` expects anyway, and
-        //     keeps the FunctionType usable as a binding target.
-        //   - Return type is covariant; LUB recursively.
-        //   - Multiplicities use the standard `mult_lub` (param) and
-        //     return-slot LUB.
+        // - Param types are contravariant in Pure's function type;
+        // fall back to `Nil` (the bottom) for unmatched param
+        // positions. This is what `match`'s declared
+        // `Function<{Nil[n]→T[m]}>[1..*]` expects anyway, and
+        // keeps the FunctionType usable as a binding target.
+        // - Return type is covariant; LUB recursively.
+        // - Multiplicities use the standard `mult_lub` (param) and
+        // return-slot LUB.
         // Without this, two lambdas in a let-bound `[λ1, λ2]`
         // collapsed their FunctionTypes to `Any`, leaving downstream
         // `match($lambdas)` no slot to bind T from.
@@ -3052,7 +3042,7 @@ pub(crate) fn substitute_type_with_mults(
         // `[1,2,3]`), we want V to resolve through the alias chain to
         // the same concrete type. Without this, `eval(reverseRef,
         // [1,2,3])` left V as `Generic("T")` even though T was bound
-        // to Integer, and strict-mode emitted "type parameter V was
+        // to Integer, and emitted "type parameter V was
         // not resolved at call to 'eval'".
         //
         // Walk Generic→Generic aliases only (never structural — that
@@ -3135,11 +3125,7 @@ pub(crate) fn substitute_type_with_mults(
             cols.iter()
                 .map(|c| crate::types::RelationColumnTypeExpr {
                     name: c.name.clone(),
-                    type_expr: substitute_type_with_mults(
-                        &c.type_expr,
-                        bindings,
-                        mult_bindings,
-                    ),
+                    type_expr: substitute_type_with_mults(&c.type_expr, bindings, mult_bindings),
                     multiplicity: substitute_mult(&c.multiplicity, mult_bindings),
                 })
                 .collect(),
@@ -3264,7 +3250,7 @@ fn mult_specificity(m: &crate::types::Multiplicity) -> i32 {
 
 /// Extracts the return multiplicity from a `Function<{...->V[m]}>` param type.
 ///
-/// Returns `Some(m)` if the param type is `Named { type_arguments: [FunctionType { return_multiplicity: m, .. }] }`
+/// Returns `Some(m)` if the param type is `Named { type_arguments: [FunctionType { return_multiplicity: m,.. }] }`
 /// or a direct `FunctionType`, otherwise `None`.
 fn extract_function_type_return_mult(
     param_type: &crate::types::TypeExpr,
@@ -3360,18 +3346,18 @@ fn is_lambda_compatible(
 /// **Phase 1 — Filter**: Eliminate candidates whose parameter types or
 /// multiplicities are incompatible with the inferred argument types.
 /// A candidate is compatible if, for every parameter position:
-///   - The arg type is unknown (treated as Any — matches everything), OR
-///   - The arg type exactly matches or is a subtype of the param type
-///   - The arg multiplicity is unknown (matches everything), OR
-///   - The arg multiplicity fits within the param's multiplicity range
+/// - The arg type is unknown (treated as Any — matches everything), OR
+/// - The arg type exactly matches or is a subtype of the param type
+/// - The arg multiplicity is unknown (matches everything), OR
+/// - The arg multiplicity fits within the param's multiplicity range
 ///
 /// **Phase 2 — Rank**: Among compatible candidates, score each by
 /// specificity to pick the best fit:
-///   - Exact type match: +3 per param
-///   - Subtype match: +1 per param
-///   - Generic/Any param: +0 (matches but non-specific)
-///   - Exact multiplicity match: +4 per param
-///   - Compatible multiplicity: +specificity bonus (narrower = higher)
+/// - Exact type match: +3 per param
+/// - Subtype match: +1 per param
+/// - Generic/Any param: +0 (matches but non-specific)
+/// - Exact multiplicity match: +4 per param
+/// - Compatible multiplicity: +specificity bonus (narrower = higher)
 ///
 /// If all candidates are eliminated by filtering, returns the original set
 /// (lets the ambiguity error surface with all candidates listed).
@@ -3809,8 +3795,8 @@ mod tests {
         model.chunks.push(ModelChunk::new(0));
 
         // Two `Foo` classes:
-        //  - one at root (M3 metaclass alias)
-        //  - one inside `pkg::sub` (the imported sibling)
+        // - one at root (M3 metaclass alias)
+        // - one inside `pkg::sub` (the imported sibling)
         let chunk_id = 1u16;
         let mut chunk = ModelChunk::new(chunk_id);
         let si = SourceInfo::new("t.pure", 1, 1, 1, 1);

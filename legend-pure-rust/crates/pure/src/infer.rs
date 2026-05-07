@@ -20,12 +20,12 @@
 //! # Design
 //!
 //! - **Inline types** — types are set directly on `ValueSpec::type_info`,
-//!   eliminating the need for a side map.
+//! eliminating the need for a side map.
 //! - **Bottom-up** — literals carry their own types, variables resolve from
-//!   scope, property access looks up the class, function calls use the
-//!   declared return type.
+//! scope, property access looks up the class, function calls use the
+//! declared return type.
 //! - **Scope chain** — `let` bindings and lambda parameters push entries
-//!   into a scope stack. Variable references resolve by walking up.
+//! into a scope stack. Variable references resolve by walking up.
 
 use smol_str::SmolStr;
 
@@ -155,16 +155,16 @@ impl InferCtx<'_> {
 /// expressions, mapping property bodies). The contract is:
 ///
 /// 1. `body` must already be lowered to [`ValueSpec`]s. Use the
-///    extension API in `crates/pure` (Pass 2b' lowering helpers,
-///    promoted as needed in future stages) to lower from AST.
+/// extension API in `crates/pure` (Pass 2b' lowering helpers,
+/// promoted as needed in future stages) to lower from AST.
 /// 2. `params` provides the variable bindings visible at the start of
-///    the body (e.g. the lambda's parameters). `Scope::from_params`
-///    builds the root scope.
+/// the body (e.g. the lambda's parameters). `Scope::from_params`
+/// builds the root scope.
 /// 3. The function mutates `body` in place — every successfully
-///    inferred expression has `type_info` populated. Read it with
-///    `body[i].type_info.as_ref()` after the call.
+/// inferred expression has `type_info` populated. Read it with
+/// `body[i].type_info.as_ref()` after the call.
 /// 4. Errors append to `errors` rather than aborting; partial
-///    inference results are still observable.
+/// inference results are still observable.
 pub fn infer_function_body(
     model: &PureModel,
     params: &[Parameter],
@@ -355,7 +355,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
         // **Automap rewrite (Java parity).** When the receiver
         // multiplicity is NOT strictly `[1..1]` — i.e., `[0..1]`,
         // `[*]`, `[1..*]`, or any non-unit `Range` — we rewrite in
-        // place to `map(receiver, λ{v_automap | property_call(v_automap, ...)})`.
+        // place to `map(receiver, λ{v_automap | property_call(v_automap,...)})`.
         // Mirrors `FunctionExpressionProcessor.reprocessPropertyForManySources`
         // which uses `isToOne(mult, true)` strict on the receiver.
         // The synthetic lambda parameter is named `v_automap` (same
@@ -740,33 +740,15 @@ fn infer_function_call(
         let type_expr = bindings.make_concrete_type(&f.return_type);
         let multiplicity = bindings.make_concrete_mult(&f.return_multiplicity);
 
-        // Default mode (Java parity): LENIENT. Java's "type
-        // parameter X was not resolved" error
-        // (`TypeInference.java:87-89`) is gated on
-        // `typeInferenceContext.getParent() == null` — it only fires
-        // at the outermost processing context. Every call inside a
-        // function body has a parent context, so the check stays
-        // silent there even when the substituted return retains a
-        // `Generic(T)`. The platform PCT corpus depends on this —
-        // `<Z|y>` parameters constantly thread through nested `eval`
-        // calls.
-        //
-        // **Strict mode** (Step 3f, gated by `crate::strict_mode`):
-        // walks the substituted return type/multiplicity for any
-        // surviving generic-variable name that isn't in the
-        // enclosing function's signature, and emits the Java-parity
-        // diagnostic. Strictly more diagnostics than Java emits at
-        // this site; intended for ports / migrations where loud
-        // signal beats silent type-system slips.
-        if crate::strict_mode::is_enabled() {
-            emit_unresolved_generic_diagnostics(
-                ctx,
-                function_name,
-                &type_expr,
-                &multiplicity,
-                arg_source_infos,
-            );
-        }
+        // Java parity (lenient): we don't fire
+        // `TypeInference.java:87-89`'s "type parameter X was not
+        // resolved" error here. Java gates that diagnostic on
+        // `typeInferenceContext.getParent() == null` — it fires
+        // only at the outermost processing context. Until our
+        // inference module tracks that nesting, replicate Java's
+        // silent behaviour at non-outermost calls (the platform PCT
+        // corpus depends on this — `<Z|y>` parameters constantly
+        // thread through nested `eval` calls).
 
         return Some(ResolvedType {
             type_expr,
@@ -840,30 +822,27 @@ fn process_let_function_call(
 /// check the dispatcher uses, but emit a diagnostic on failure rather
 /// than just filtering.
 ///
-/// By default checks against the raw declared `param.type_expr` —
-/// i.e. without substituting collected bindings into it. Generic
-/// params stay `Generic(T)` and `is_type_compatible` returns
-/// permissive on `Generic`. This is Java parity — Java itself
-/// silently widens (see BACKLOG entry "eval strict arg validation").
+/// Substitutes the param using *only* authoritative bindings
+/// (`ty_auth`). A `T` whose value was set by a structural
+/// `FunctionType` slot (Pure-invariant) survives as its concrete
+/// value; a `T` set only by a top-level Generic-typed arg (LUB-able
+/// under Java semantics) survives as `Generic("T")`, which
+/// `is_type_compatible`'s wildcard arm accepts. Result:
+/// - `eval(intFunc, 'wrong')` — T_auth=Integer (from arg 0's
+/// `Function<{T→V}>` slot); arg 1 (String) checked against
+/// Integer → catch.
+/// - `compare(1, 'a')` — T_auth empty; arg 1 ('a') checked
+/// against Generic("T") → wildcard pass.
+/// - `compare(1, 2.2)` — same; T_auth empty → wildcard pass.
+/// - `takesInt(2.2)` — no Generic; param is concrete Integer;
+/// `is_type_compatible(Float, Integer)` → false → catch.
 ///
-/// **Strict mode (Step 3g, opt-in via
-/// `crate::strict_mode::with_strict_mode(true, ...)` or the
-/// `LEGEND_PURE_STRICT_INFERENCE` env var)** substitutes the param's
-/// type using only *authoritative* bindings — the subset of T's bound
-/// from a structural `FunctionType` slot (Pure-invariant). A T whose
-/// value came only from a top-level Generic-typed arg (LUB-able under
-/// Java semantics) survives substitution as `Generic("T")`, which
-/// `is_type_compatible`'s wildcard arm accepts. This catches
-/// `eval(f:Function<{Integer→String}>[1], 'wrong')` (T_auth=Integer,
-/// catch) without false-positiving on
-/// `compare<T>(a:T,b:T)` mixed-arg calls (T_auth empty, wildcard
-/// pass — matching Java's LUB-to-common-supertype semantics for
-/// top-level Generic params). See
+/// This is a deliberate divergence over Java semantics: Java itself
+/// silently widens via `findBestCommonGenericType` covariant LUB,
+/// turning mismatched-type args into `Any`. We surface the catch
+/// surface listed above. See
 /// `inference::context::GenericBindings::ty_auth` for the source-side
-/// of the auth-vs-constraint distinction. This is a deliberate
-/// divergence-over-Java semantics; documented in
-/// `parity_semantics.md`.
-
+/// of the auth-vs-constraint distinction.
 #[allow(clippy::too_many_arguments)]
 fn validate_call_arguments(
     ctx: &mut InferCtx<'_>,
@@ -874,47 +853,17 @@ fn validate_call_arguments(
     arg_source_infos: &[legend_pure_parser_ast::SourceInfo],
     bindings: &crate::inference::GenericBindings,
 ) {
-    let strict = crate::strict_mode::is_enabled();
     for (param, (arg_ty, arg_idx)) in parameters.iter().zip(arg_types.iter().zip(0usize..)) {
         let Some(arg_ty) = arg_ty else { continue };
         let arg_eid = match &arg_ty.type_expr {
             TypeExpr::Named { element, .. } => Some(*element),
             _ => None,
         };
-        // Strict mode: substitute the param using *only* authoritative
-        // bindings (`ty_auth`). A `T` whose value was set by a
-        // structural `FunctionType` slot (Pure-invariant) survives as
-        // its concrete value; a `T` set only by a top-level Generic
-        // param contribution (LUB-able under Java semantics) survives
-        // as `Generic("T")`, which `is_type_compatible`'s wildcard
-        // arm accepts. Result:
-        //   - `eval(intFunc, 'wrong')` — T_auth=Integer (from arg 0's
-        //     `Function<{T→V}>` slot); arg 1 (String) checked against
-        //     Integer → catch.
-        //   - `compare(1, 'a')` — T_auth empty; arg 1 ('a') checked
-        //     against Generic("T") → wildcard pass.
-        //   - `compare(1, 2.2)` — same; T_auth empty → wildcard pass.
-        //   - `takesInt(2.2)` — no Generic; param is concrete Integer;
-        //     `is_type_compatible(Float, Integer)` → false → catch.
-        // This replaces the older excluding-self trick which
-        // false-positived on `compare(1,'a')`-style top-level Generic
-        // mixed-arg calls (Pure-language ack: top-level Generic params
-        // LUB to common supertype, no special numeric handling
-        // needed).
-        let param_te = if strict {
-            bindings.make_concrete_type_strict(&param.type_expr)
-        } else {
-            param.type_expr.clone()
-        };
-        let param_mult = if strict {
-            // Multiplicity bindings don't suffer the same LUB-widening
-            // issue (multiplicity LUB stays in the range lattice), so
-            // re-use the full bindings for the multiplicity side. The
-            // strict-mode arg-type check is the meaningful divergence.
-            bindings.make_concrete_mult(&param.multiplicity)
-        } else {
-            param.multiplicity.clone()
-        };
+        let param_te = bindings.make_concrete_type_strict(&param.type_expr);
+        // Multiplicity bindings don't suffer the same LUB-widening
+        // issue (multiplicity LUB stays in the range lattice), so
+        // re-use the full bindings for the multiplicity side.
+        let param_mult = bindings.make_concrete_mult(&param.multiplicity);
         // Suppress when an alternative overload at this package
         // would accept the actual arg type AND multiplicity —
         // the dispatcher had a real choice; second-guessing its
@@ -987,28 +936,28 @@ fn validate_call_arguments(
         // category mismatches the check fundamentally doesn't
         // handle:
         //
-        //   1. **Function references**: `myFn` as a value has
-        //      M3 metatype `ConcreteFunctionDefinition` /
-        //      `NativeFunctionDefinition`, both subtypes of the
-        //      `Function` metaclass. `is_subtype` walks Class
-        //      `super_types`, but the M3 metamodel hierarchy
-        //      isn't always loaded as Class supertypes, so a
-        //      function-arg vs `Function<{…}>` param falsely
-        //      fails. The proper fix is to teach `is_subtype`
-        //      about the metamodel hierarchy; until then the
-        //      structural `FunctionType` type-arg on the param
-        //      is enough to identify the callee shape.
+        // 1. **Function references**: `myFn` as a value has
+        // M3 metatype `ConcreteFunctionDefinition` /
+        // `NativeFunctionDefinition`, both subtypes of the
+        // `Function` metaclass. `is_subtype` walks Class
+        // `super_types`, but the M3 metamodel hierarchy
+        // isn't always loaded as Class supertypes, so a
+        // function-arg vs `Function<{…}>` param falsely
+        // fails. The proper fix is to teach `is_subtype`
+        // about the metamodel hierarchy; until then the
+        // structural `FunctionType` type-arg on the param
+        // is enough to identify the callee shape.
         //
-        //   2. **Structural `FunctionType` params**: the param's
-        //      type-expr is `TypeExpr::FunctionType { … }`
-        //      (lambda arrow type), not `Named { … }`. Nominal
-        //      element comparison is meaningless.
+        // 2. **Structural `FunctionType` params**: the param's
+        // type-expr is `TypeExpr::FunctionType { … }`
+        // (lambda arrow type), not `Named { … }`. Nominal
+        // element comparison is meaningless.
         //
-        //   3. **`Nil` arg**: the empty-collection literal `[]`
-        //      lowers to `Nil[0..0]`. `Nil` is the bottom of
-        //      Pure's subtyping lattice, compatible with every
-        //      type. The platform passes it freely into Function
-        //      and other typed params.
+        // 3. **`Nil` arg**: the empty-collection literal `[]`
+        // lowers to `Nil[0..0]`. `Nil` is the bottom of
+        // Pure's subtyping lattice, compatible with every
+        // type. The platform passes it freely into Function
+        // and other typed params.
         if let Some(eid) = arg_eid
             && matches!(ctx.model.try_get_element(eid), Some(Element::Function(_)))
         {
@@ -1062,63 +1011,6 @@ fn validate_call_arguments(
     }
 }
 
-/// Strict-mode-only Java-parity diagnostics (Step 3f). Walks the
-/// substituted return type/multiplicity for surviving generic /
-/// multiplicity variables that aren't transitive from the enclosing
-/// function's signature, and emits `UnresolvedTypeParameter` /
-/// `UnresolvedMultiplicityParameter` for each.
-///
-/// Default mode (Java parity) skips these checks: Java's site is
-/// `TypeInference.java:87-89, :102` and is gated on
-/// `getParent() == null`, so it only fires at the outermost
-/// processing context. We can't model that gate exactly without the
-/// full TypeInferenceContext stack (Step 3d-cont), so strict mode
-/// errs on the side of loudness — every call site reports unbound
-/// generics. Tests that pin pre-strict-mode lenient behaviour
-/// (`tic_unbound_t_at_nested_call_currently_silent` and friends)
-/// stay green because strict mode is opt-in.
-fn emit_unresolved_generic_diagnostics(
-    ctx: &mut InferCtx<'_>,
-    function_name: &SmolStr,
-    type_expr: &TypeExpr,
-    multiplicity: &Multiplicity,
-    arg_source_infos: &[legend_pure_parser_ast::SourceInfo],
-) {
-    let source_info = arg_source_infos
-        .first()
-        .cloned()
-        .unwrap_or_else(|| legend_pure_parser_ast::SourceInfo::new("<unknown>", 0, 0, 0, 0));
-    for name in crate::inference::context::unresolved_type_params(type_expr) {
-        if ctx.type_params_in_scope.contains(&name) {
-            continue;
-        }
-        ctx.errors.push(crate::error::CompilationError {
-            message: format!(
-                "The type parameter {name} was not resolved at call to '{function_name}'"
-            ),
-            source_info: source_info.clone(),
-            kind: crate::error::CompilationErrorKind::UnresolvedTypeParameter {
-                function: function_name.clone(),
-                parameter: name,
-            },
-        });
-    }
-    if let Some(name) = crate::inference::context::unresolved_mult_param(multiplicity)
-        && !ctx.mult_params_in_scope.contains(&name)
-    {
-        ctx.errors.push(crate::error::CompilationError {
-            message: format!(
-                "The multiplicity parameter {name} was not resolved at call to '{function_name}'"
-            ),
-            source_info,
-            kind: crate::error::CompilationErrorKind::UnresolvedMultiplicityParameter {
-                function: function_name.clone(),
-                parameter: name,
-            },
-        });
-    }
-}
-
 /// Infers return types for well-known built-in operators.
 fn infer_builtin_return_type(
     name: &str,
@@ -1144,7 +1036,6 @@ fn infer_builtin_return_type(
         // time — see `lower/copy_slice.rs`). The `set_and_return`
         // honour-pre-set rule routes that through inference without
         // needing a string-match arm here.
-
         _ => None,
     }
 }
@@ -1196,7 +1087,7 @@ struct QpCandidate {
 
 /// Inference helper for simple property access (`$x.name`). Shared by
 /// the legacy `ExprKind::PropertyAccess` arm and the new
-/// `ExprKind::PropertyCall(FunctionCallData { .. })` arm.
+/// `ExprKind::PropertyCall(FunctionCallData {.. })` arm.
 ///
 /// Infers a `PropertyCall` or `QualifiedPropertyCall` expression in
 /// place, performing the Java-parity automap rewrite when the receiver
@@ -1204,18 +1095,18 @@ struct QpCandidate {
 ///
 /// Steps:
 /// 1. Take ownership of the expression's `FunctionCallData` via
-///    `mem::replace` so we can mutate `expr.kind` later without
-///    borrow conflicts.
+/// `mem::replace` so we can mutate `expr.kind` later without
+/// borrow conflicts.
 /// 2. Infer all argument types bottom-up.
 /// 3. Resolve the property's return type via `infer_simple_property`
-///    or `infer_qualified_property` (handles `UnknownProperty` errors,
-///    QP arity + arg-type validation, etc.).
+/// or `infer_qualified_property` (handles `UnknownProperty` errors,
+/// QP arity + arg-type validation, etc.).
 /// 4. If the receiver multiplicity is non-strictly-toOne, rewrite
-///    `expr.kind` to a `map(receiver, λ{v_automap | property(v_automap, ...)})`
-///    call and return the rewritten map's resolved type.
+/// `expr.kind` to a `map(receiver, λ{v_automap | property(v_automap,...)})`
+/// call and return the rewritten map's resolved type.
 /// 5. Otherwise restore the original `PropertyCall` /
-///    `QualifiedPropertyCall` variant and return the property's type
-///    directly.
+/// `QualifiedPropertyCall` variant and return the property's type
+/// directly.
 fn infer_property_or_qp_call(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedType> {
     // Step 1: take the data out so we can later mutate `expr.kind`.
     let is_qualified = matches!(&*expr.kind, ExprKind::QualifiedPropertyCall(_));
@@ -1338,7 +1229,7 @@ fn multiply_multiplicities(a: &Multiplicity, b: &Multiplicity) -> Multiplicity {
     }
 }
 
-/// Builds the `map(receiver, λ{v_automap | property_call(v_automap, ...)})`
+/// Builds the `map(receiver, λ{v_automap | property_call(v_automap,...)})`
 /// expression that replaces a property/QP call on a non-toOne receiver.
 /// Mirrors Java's `FunctionExpressionProcessor.buildLambdaForMapWithProperty`.
 #[allow(clippy::needless_pass_by_value)] // SourceInfo is small but not Copy; consumed below
@@ -1476,7 +1367,7 @@ fn infer_simple_property(
 /// Inference helper for qualified property invocation
 /// (`$x.qp(arg1, arg2)`). Shared by the legacy
 /// `ExprKind::QualifiedPropertyAccess` arm and the new
-/// `ExprKind::QualifiedPropertyCall(FunctionCallData { .. })` arm.
+/// `ExprKind::QualifiedPropertyCall(FunctionCallData {.. })` arm.
 ///
 /// Performs the same overload-by-arity resolution and per-argument
 /// type/multiplicity validation as the legacy path.
@@ -1563,7 +1454,7 @@ fn infer_property_access(
     // chain doesn't fall off and downstream calls (`->toOne()` etc.)
     // can still bind T from the *property's* declared return type.
     // Without this, `$z.genericType.rawType->toOne()` left T
-    // unresolved at the strict-mode return-check
+    // unresolved at the return-check
     // (match.pure:185).
     let (receiver_id, receiver_type_args, receiver_mult_args) = match &target.type_expr {
         TypeExpr::Named {
@@ -1598,7 +1489,7 @@ fn infer_property_access(
         // generic calls can still bind T from the property's
         // declared return type. Return a synthetic
         // `FoundProperty(Any[*])` so the chain continues; the
-        // strict-mode check then fires on whatever the next call
+        // check then fires on whatever the next call
         // does with this Any.
         TypeExpr::Generic(_) => {
             return PropertyLookup::FoundProperty(ResolvedType {
@@ -1664,7 +1555,11 @@ fn infer_property_access(
         SmolStr::new("Enumeration"),
     ]);
     if Some(receiver_id) == enumeration_eid
-        && let [TypeExpr::Named { element: enum_eid, .. }] = receiver_type_args.as_slice()
+        && let [
+            TypeExpr::Named {
+                element: enum_eid, ..
+            },
+        ] = receiver_type_args.as_slice()
         && let Some(Element::Enumeration(enum_def)) = ctx.model.try_get_element(*enum_eid)
         && enum_def
             .values
@@ -1685,11 +1580,11 @@ fn infer_property_access(
     // Defer to runtime reflection ONLY when the receiver is a
     // parametric metatype carrier (Class<X>, Enumeration<X>,
     // Function<…>) or `Any`. For these:
-    //   - Class<Person>.allInstances, MyEnum.RED, lambda-param-infers-Any
-    //     all bring in members from the inner element X (or are simply
-    //     unknown), and the compile-time lookup can't resolve them
-    //     without a metatype-aware inner-element walk + improved
-    //     lambda-param inference.
+    // - Class<Person>.allInstances, MyEnum.RED, lambda-param-infers-Any
+    // all bring in members from the inner element X (or are simply
+    // unknown), and the compile-time lookup can't resolve them
+    // without a metatype-aware inner-element walk + improved
+    // lambda-param inference.
     //
     // For `Any` specifically, Java allows arbitrary property access
     // and yields `Any[*]` at runtime — used by reflective chains
@@ -1840,10 +1735,10 @@ fn lookup_member_in_class(
     }
 
     // 3. Association-injected properties. The derived index registers
-    //    each association property on its OWN target class; the property
-    //    visible from this class for navigation is the OTHER end (index
-    //    `1 - prop_idx_pointing_to_self`). Same convention as
-    //    `runtime/native/lang.rs:832`.
+    // each association property on its OWN target class; the property
+    // visible from this class for navigation is the OTHER end (index
+    // `1 - prop_idx_pointing_to_self`). Same convention as
+    // `runtime/native/lang.rs:832`.
     for (assoc_id, prop_idx_pointing_to_self) in model.association_properties(class_id) {
         if let Some(Element::Association(assoc)) = model.try_get_element(*assoc_id)
             && assoc.properties.len() == 2
@@ -2128,16 +2023,16 @@ fn has_compatible_sibling_overload(
 ///
 /// Same gating principles as the call-site arg-vs-param check:
 ///
-///   - Both sides must be **leaf primitives** (Integer / Float /
-///     Decimal / String / Boolean / three Date kinds). Generic and
-///     class returns involve subtyping nuances that this layer
-///     doesn't second-guess.
-///   - Multiplicity is checked only for **trustworthy expression
-///     shapes** (literals, `Variable`, `Collection` literal). Other
-///     shapes — chained `FunctionCall`s, `PropertyCall`s, lambdas —
-///     can have inferred multiplicity that's wrong upstream (e.g.
-///     `expr->toOne()` not narrowing `[*]` to `[1]`); reporting on
-///     those would emit noise on real platform code.
+/// - Both sides must be **leaf primitives** (Integer / Float /
+/// Decimal / String / Boolean / three Date kinds). Generic and
+/// class returns involve subtyping nuances that this layer
+/// doesn't second-guess.
+/// - Multiplicity is checked only for **trustworthy expression
+/// shapes** (literals, `Variable`, `Collection` literal). Other
+/// shapes — chained `FunctionCall`s, `PropertyCall`s, lambdas —
+/// can have inferred multiplicity that's wrong upstream (e.g.
+/// `expr->toOne()` not narrowing `[*]` to `[1]`); reporting on
+/// those would emit noise on real platform code.
 ///
 /// Errors get the function's source span, since "the body returns
 /// the wrong thing" is a property of the function as a whole and
@@ -2187,15 +2082,15 @@ pub fn check_body_return_signature(
     //
     // No longer needed:
     // - `Nil` is now a subtype of every type per
-    //   `resolve::is_subtype`'s explicit Nil-as-bottom rule. So
-    //   `is_type_compatible(Nil, X) = true` always — the check below
-    //   passes for free.
+    // `resolve::is_subtype`'s explicit Nil-as-bottom rule. So
+    // `is_type_compatible(Nil, X) = true` always — the check below
+    // passes for free.
     // - `Any`-typed bodies against more-specific declared returns are
-    //   real precision losses. Locked to zero on the embedded
-    //   platform by `inference_precision_sweep`'s
-    //   `PRECISION_CEILING = 0`. Letting this check fire turns any
-    //   future regression into a per-function diagnostic instead of a
-    //   silent miss.
+    // real precision losses. Locked to zero on the embedded
+    // platform by `inference_precision_sweep`'s
+    // `PRECISION_CEILING = 0`. Letting this check fire turns any
+    // future regression into a per-function diagnostic instead of a
+    // silent miss.
     if !crate::resolve::is_type_compatible(actual_eid, expected_type, model) {
         let actual = actual_eid
             .map(|e| model.element_name(e).to_string())
