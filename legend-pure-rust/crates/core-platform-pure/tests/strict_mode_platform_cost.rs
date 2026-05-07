@@ -156,6 +156,25 @@ fn strict_mode_platform_cost_report() {
                     }
                 }
 
+                println!("\n=== Sample from log.pure ===");
+                for e in &p.errors {
+                    if e.source_info.source.contains("/log.pure") {
+                        println!("  L{}: {}", e.source_info.start_line, e.message);
+                    }
+                }
+                println!("\n=== Sample from match.pure (full) ===");
+                for e in &p.errors {
+                    if e.source_info.source.contains("/match.pure") {
+                        println!("  L{}: {}", e.source_info.start_line, e.message);
+                    }
+                }
+                println!("\n=== Sample from cast.pure ===");
+                for e in &p.errors {
+                    if e.source_info.source.contains("/cast/cast.pure") {
+                        println!("  L{}: {}", e.source_info.start_line, e.message);
+                    }
+                }
+
                 // Sample one error per top file.
                 println!("\n=== Sample per file ===");
                 let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();

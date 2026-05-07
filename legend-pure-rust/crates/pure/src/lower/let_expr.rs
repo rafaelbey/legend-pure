@@ -226,6 +226,66 @@ fn infer_let_type(
             crate::bootstrap::metatype_of(ctx.model, ctx.model.get_element(*element))
                 .map(|eid| (named(eid), Multiplicity::PureOne))
         }
+        // Lambda: build `Named<LambdaFunction>{type_args=[FunctionType{...}]}`
+        // mirroring `build_packageable_element_ref`'s function-ref
+        // shape. The Named<LambdaFunction> wrapper is what makes
+        // `bind_type`'s subtype walk fire (LambdaFunction → Function),
+        // exposing the FunctionType slot to `eval<V|m>(func:Function<{->V[m]}>)`
+        // for V/m extraction.
+        //
+        // Without this, $z stayed type-less and `$z->eval(...)` saw a
+        // bare TypeExpr that bind_type's Named arm couldn't recurse
+        // into (the param is Named<Function>{[FunctionType]} but the
+        // arg was a bare FunctionType — different arms).
+        ExprKind::Lambda { parameters, body } => {
+            let ft_params: Vec<(crate::types::TypeExpr, crate::types::Multiplicity)> = parameters
+                .iter()
+                .map(|p| (p.type_expr.clone(), p.multiplicity.clone()))
+                .collect();
+            let (return_type, return_multiplicity) =
+                if let Some(last) = body.last() {
+                    let ret_te = crate::resolve::infer_typeexpr_from_valuespec(
+                        last,
+                        ctx.model,
+                        &ctx.variable_types,
+                    )
+                    .unwrap_or(crate::types::TypeExpr::Unresolved);
+                    let ret_mult = crate::resolve::infer_multiplicity_from_valuespec(
+                        last,
+                        ctx.model,
+                        &ctx.variable_types,
+                    )
+                    .unwrap_or(crate::types::Multiplicity::PureOne);
+                    (ret_te, ret_mult)
+                } else {
+                    (crate::types::TypeExpr::Unresolved, Multiplicity::PureOne)
+                };
+            let function_type = crate::types::TypeExpr::FunctionType {
+                parameters: ft_params,
+                return_type: Box::new(return_type),
+                return_multiplicity,
+            };
+            // Wrap in Named<LambdaFunction>{[FunctionType]} so subtype-walk
+            // to Function lifts the FunctionType slot out for binding.
+            let lambda_metaclass = ctx.model.resolve_by_path(&[
+                SmolStr::new("meta"),
+                SmolStr::new("pure"),
+                SmolStr::new("metamodel"),
+                SmolStr::new("function"),
+                SmolStr::new("LambdaFunction"),
+            ]);
+            let wrapped = if let Some(eid) = lambda_metaclass {
+                crate::types::TypeExpr::Named {
+                    element: eid,
+                    type_arguments: vec![function_type],
+                    multiplicity_arguments: Vec::new(),
+                    value_arguments: vec![],
+                }
+            } else {
+                function_type
+            };
+            Some((wrapped, Multiplicity::PureOne))
+        }
         _ => None,
     }
 }
