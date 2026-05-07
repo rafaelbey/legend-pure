@@ -26,17 +26,14 @@
 
 #![allow(clippy::needless_pass_by_value)]
 
-use legend_pure_dsl_tds::csv::TypedCell;
 use legend_pure_parser_pure::types::ValueSpec;
-use smol_str::SmolStr;
 
 use crate::error::PureException;
-use crate::heap::ObjectHandle;
 use crate::m3_paths;
 use crate::native::{EvalContextTrait, Evaluated, NativeFunction, expect_args};
 use crate::value::Value;
 
-use super::shared::{read_parsed_tds, unwrap_instance_value};
+use super::shared::{build_row_tuple, read_parsed_tds, unwrap_instance_value};
 
 /// Pure
 /// `filter<T>(rel:Relation<T>[1], f:Function<{T[1]→Boolean[1]}>[1])
@@ -105,50 +102,6 @@ impl NativeFunction for Filter {
 
     fn signature(&self) -> &'static str {
         "filter(Relation<T>[1], Function<{T[1]->Boolean[1]}>[1]):Relation<T>[1]"
-    }
-}
-
-/// Allocate a synthetic heap object representing one TDS row, with one
-/// slot per non-empty cell named after its column. Classifier is
-/// `meta::pure::metamodel::type::Any` — property access reads slots by
-/// name regardless of classifier, and `Any` avoids accidentally
-/// matching native-side classifier dispatch (e.g. `RelationType` /
-/// `TDS`) that other natives use to recognise their own argument
-/// shapes.
-#[allow(clippy::result_large_err)]
-fn build_row_tuple(
-    columns: &[legend_pure_dsl_tds::csv::ParsedColumn],
-    row: &[Option<TypedCell>],
-    ctx: &mut dyn EvalContextTrait,
-) -> Result<ObjectHandle, PureException> {
-    let handle = ctx.heap_mut().alloc_dynamic("meta::pure::metamodel::type::Any");
-    for (col, cell) in columns.iter().zip(row.iter()) {
-        let Some(cell) = cell else {
-            continue;
-        };
-        let value = typed_cell_to_value(cell);
-        ctx.heap_mut()
-            .mutate_add(&handle, col.name.as_str(), &[value])
-            .map_err(PureException::from)?;
-    }
-    Ok(handle)
-}
-
-/// Convert a [`TypedCell`] into a runtime [`Value`].
-///
-/// `Decimal`/`StrictDate`/`DateTime` map to `Value::String` for now;
-/// the runtime's typed-cell handling for those is its own follow-up,
-/// and the underlying storage in `TypedCell` is already a string.
-/// `String` likewise — the smolstr is widened to `String`.
-fn typed_cell_to_value(cell: &TypedCell) -> Value {
-    match cell {
-        TypedCell::Integer(i) => Value::Integer(*i),
-        TypedCell::Float(f) => Value::Float(*f),
-        TypedCell::Boolean(b) => Value::Boolean(*b),
-        TypedCell::String(s)
-        | TypedCell::Decimal(s)
-        | TypedCell::StrictDate(s)
-        | TypedCell::DateTime(s) => Value::String(SmolStr::new(s.as_str())),
     }
 }
 
