@@ -90,6 +90,13 @@ metamodel surface (`Class`, `GenericType`, `Function`, `Property`,
 helpers (`type()`, `genericType()`, `elementToPath()`,
 `pathToElement()`).
 
+**Generation is idempotent.** The CLI reads the existing file at each
+target path and only writes when the byte content differs, so reruns
+on an unchanged manifest leave file mtimes intact. That keeps Maven's
+incremental compiler and Develocity's remote caches warm — the
+exec-maven-plugin step still runs (cargo's incremental check is fast),
+but javac sees zero "modified" sources and skips recompile.
+
 To add more Pure surface to the bindings, append FQNs to the manifest
 and re-run `mvn compile`. To skip generation entirely (e.g. on a host
 without a Rust toolchain), pass `-Dlegend.skipBindings=true`.

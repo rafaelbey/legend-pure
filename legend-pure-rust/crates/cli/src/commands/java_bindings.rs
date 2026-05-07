@@ -232,7 +232,13 @@ pub fn run(args: JavaBindingsArgs) -> Result<(), CliError> {
     )
     .map_err(|e| CliError::Custom(e.to_string()))?;
 
+    // Idempotent writes: only touch a file when its content actually
+    // changes. Maven incremental builds and Develocity remote caches
+    // key on mtime, so unconditionally rewriting every file flushes
+    // those caches even when nothing the codegen produces is
+    // different.
     let mut written = 0usize;
+    let mut unchanged = 0usize;
     for file in &files {
         let dest = args.output.join(&file.relative_path);
         if let Some(parent) = dest.parent() {
@@ -241,17 +247,22 @@ pub fn run(args: JavaBindingsArgs) -> Result<(), CliError> {
                 source: e,
             })?;
         }
-        std::fs::write(&dest, &file.contents).map_err(|e| CliError::Io {
+        let did_write = write_if_changed(&dest, &file.contents).map_err(|e| CliError::Io {
             path: dest.clone(),
             source: e,
         })?;
-        written += 1;
+        if did_write {
+            written += 1;
+        } else {
+            unchanged += 1;
+        }
     }
 
     eprintln!(
-        "  {} wrote {} Java source file(s) under {}",
+        "  {} {} written, {} unchanged under {}",
         "✓".green(),
         written.to_string().bold(),
+        unchanged.to_string().dimmed(),
         args.output.display()
     );
     Ok(())
@@ -319,5 +330,72 @@ fn element_kind(e: &Element) -> &'static str {
         Element::Unit(_) => "Unit",
         Element::PackageableMultiplicity(_) => "Multiplicity",
         Element::Package(_) => "Package",
+    }
+}
+
+/// Write `contents` to `dest` only if `dest` doesn't already contain
+/// exactly that byte sequence. Returns `true` when a write happened,
+/// `false` when the existing file was byte-identical and was left
+/// untouched.
+///
+/// Read-then-compare is cheap relative to the cargo + codegen run that
+/// produced `contents`, and avoids the IO-error trap of
+/// "permission-denied to stat before write": we only suppress the
+/// write when we positively confirmed the existing bytes match.
+fn write_if_changed(dest: &std::path::Path, contents: &str) -> std::io::Result<bool> {
+    let existing = std::fs::read(dest).ok();
+    if existing.as_deref() == Some(contents.as_bytes()) {
+        return Ok(false);
+    }
+    std::fs::write(dest, contents)?;
+    Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_if_changed;
+
+    #[test]
+    fn write_if_changed_creates_missing_file() {
+        let tmp = tempdir();
+        let path = tmp.join("a.java");
+        let did = write_if_changed(&path, "alpha").expect("write");
+        assert!(did, "first write must report did_write=true");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "alpha");
+    }
+
+    #[test]
+    fn write_if_changed_skips_byte_identical() {
+        let tmp = tempdir();
+        let path = tmp.join("b.java");
+        std::fs::write(&path, "alpha").unwrap();
+        let mtime_before = std::fs::metadata(&path).unwrap().modified().unwrap();
+        // Sleep so a real write would tick the mtime.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let did = write_if_changed(&path, "alpha").expect("write");
+        assert!(!did, "byte-identical content must not rewrite");
+        let mtime_after = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(mtime_before, mtime_after, "mtime must be preserved");
+    }
+
+    #[test]
+    fn write_if_changed_overwrites_when_diff() {
+        let tmp = tempdir();
+        let path = tmp.join("c.java");
+        std::fs::write(&path, "alpha").unwrap();
+        let did = write_if_changed(&path, "beta").expect("write");
+        assert!(did);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "beta");
+    }
+
+    fn tempdir() -> std::path::PathBuf {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("legend-write-if-changed-{nanos}"));
+        std::fs::create_dir_all(&path).unwrap();
+        path
     }
 }
