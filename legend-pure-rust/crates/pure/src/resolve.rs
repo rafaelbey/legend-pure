@@ -2186,9 +2186,20 @@ pub(crate) fn infer_generic_bindings(
                 &param.type_expr,
                 &arg_ty,
                 &mut ctx.bindings.ty,
+                &mut ctx.bindings.ty_auth,
                 &mut ctx.bindings.mult,
                 model,
                 bind_mode,
+                // Top-level entry: not yet inside a FunctionType slot.
+                // The Generic("T") leaf-bind directly off `param.type_expr =
+                // Generic("T")` is a top-level constraint binding; it
+                // populates `ty` (Java parity LUB) but not `ty_auth`,
+                // letting `compare(1, 'a')` pass strict-mode without
+                // false-positive while `eval(intFunc, 'wrong')`'s
+                // arg 0 (Function<{T→V}> param) descends into the
+                // FunctionType and bumps `inside_structural=true`
+                // before reaching the inner T leaf.
+                false,
             );
         }
     }
@@ -2281,36 +2292,52 @@ pub(crate) fn bind_type(
     model: &crate::model::PureModel,
 ) {
     let mut mult_out: HashMap<SmolStr, crate::types::Multiplicity> = HashMap::new();
+    let mut ty_auth: HashMap<SmolStr, crate::types::TypeExpr> = HashMap::new();
     bind_type_with_mode(
         param_ty,
         arg_ty,
         out,
+        &mut ty_auth,
         &mut mult_out,
         model,
         crate::inference::context::RegisterMode::Constraint,
+        false,
     );
-    // Discard mult_out — callers using this thin entry don't ask for
-    // multiplicity bindings (they manage them separately at the outer
-    // parameter level). Internal call sites that need the inner
-    // FunctionType / Named multiplicity bindings call
-    // `bind_type_with_mode` directly with their own `mult_out`.
+    // Discard mult_out and ty_auth — callers using this thin entry
+    // don't ask for multiplicity bindings or auth tracking (they
+    // manage bindings separately at the outer parameter level).
+    // Internal call sites that need either call
+    // `bind_type_with_mode` directly with their own maps. Notably
+    // `inference::lambda::bind_from_lambda_body` uses this entry
+    // and stays Constraint mode + non-structural — opening it to
+    // structural-auth would touch the spike-graveyard area where
+    // earlier auth/constraint reframings regressed fold-style
+    // chains; tracked as a separate follow-up.
 }
 
 /// Mode-aware binding (Java's `register(...)` `merge` flag mapped onto
 /// our two-branch dispatch). See [`bind_type`] for semantic details.
 ///
-/// `out` accumulates type-variable bindings; `mult_out` accumulates
-/// multiplicity-variable bindings extracted from the structural recursion
-/// (`Named.multiplicity_arguments`, `FunctionType.parameters[i].mult`,
-/// `FunctionType.return_multiplicity`). The structural recursion is
-/// identical between modes; only the leaf-binding step differs.
+/// `out` accumulates the LUB-merged Java-parity bindings; `ty_auth`
+/// accumulates the subset bound from inside a structural `FunctionType`
+/// slot (invariant in Pure → authoritative for strict-mode arg-type
+/// checks). `mult_out` accumulates multiplicity-variable bindings
+/// extracted from the structural recursion (`Named.multiplicity_arguments`,
+/// `FunctionType.parameters[i].mult`, `FunctionType.return_multiplicity`).
+/// `inside_structural` flips to `true` the moment recursion descends
+/// into a `FunctionType`, and propagates through every nested
+/// recursion below that — including `Named.type_arguments` and
+/// `subtype_view` walks — so a `Function<{List<T>→V}>`-style nested
+/// structural binding still records `T` as authoritative.
 pub(crate) fn bind_type_with_mode(
     param_ty: &crate::types::TypeExpr,
     arg_ty: &crate::types::TypeExpr,
     out: &mut HashMap<SmolStr, crate::types::TypeExpr>,
+    ty_auth: &mut HashMap<SmolStr, crate::types::TypeExpr>,
     mult_out: &mut HashMap<SmolStr, crate::types::Multiplicity>,
     model: &crate::model::PureModel,
     mode: crate::inference::context::RegisterMode,
+    inside_structural: bool,
 ) {
     use crate::inference::context::RegisterMode;
     use crate::types::TypeExpr;
@@ -2342,6 +2369,25 @@ pub(crate) fn bind_type_with_mode(
                     }
                 },
             }
+            // Structural-slot bindings ALSO populate ty_auth so the
+            // strict-mode substitution can distinguish a T frozen by
+            // a `Function<{T→V}>` slot (catch `eval(intFunc,
+            // 'wrong')`) from a T LUBed across top-level Generic
+            // params (don't catch `compare(1, 'a')`). LUB across
+            // multiple auth contributions matches Java's
+            // `findBestCommonGenericType` and degrades cleanly when
+            // two `Function<{T→V}>` slots disagree.
+            if inside_structural {
+                match ty_auth.entry(name.clone()) {
+                    Entry::Vacant(e) => {
+                        e.insert(arg_ty.clone());
+                    }
+                    Entry::Occupied(mut e) => {
+                        let lub = type_lub(e.get(), arg_ty, model);
+                        *e.get_mut() = lub;
+                    }
+                }
+            }
         }
         TypeExpr::Named {
             element: p_eid,
@@ -2359,7 +2405,16 @@ pub(crate) fn bind_type_with_mode(
                 if p_eid == a_eid {
                     // Same element — pairwise bind type-args + mult-args.
                     for (p, a) in p_args.iter().zip(a_args.iter()) {
-                        bind_type_with_mode(p, a, out, mult_out, model, mode);
+                        bind_type_with_mode(
+                            p,
+                            a,
+                            out,
+                            ty_auth,
+                            mult_out,
+                            model,
+                            mode,
+                            inside_structural,
+                        );
                     }
                     for (p, a) in p_margs.iter().zip(a_margs.iter()) {
                         bind_mult_with_mode(p, a, mult_out, mode);
@@ -2374,7 +2429,16 @@ pub(crate) fn bind_type_with_mode(
                     // `Function<{T[n]->V[m]}>` against
                     // `Property<Nil,Any|*>` (Property extends Function).
                     if let Some(view) = subtype_view(*a_eid, a_args, a_margs, *p_eid, model) {
-                        bind_type_with_mode(param_ty, &view, out, mult_out, model, mode);
+                        bind_type_with_mode(
+                            param_ty,
+                            &view,
+                            out,
+                            ty_auth,
+                            mult_out,
+                            model,
+                            mode,
+                            inside_structural,
+                        );
                     }
                 }
                 // else: incompatible elements, nothing to bind.
@@ -2391,11 +2455,20 @@ pub(crate) fn bind_type_with_mode(
                 return_multiplicity: a_ret_mult,
             } = arg_ty
             {
+                // Entering a FunctionType marks every binding below
+                // (including nested Named.type_arguments) as
+                // structural. Once set, `inside_structural` stays
+                // `true` for the entire subtree — Pure's FunctionType
+                // signature is invariant in both inputs and outputs.
                 for ((p_ty, p_mult), (a_ty, a_mult)) in p_params.iter().zip(a_params.iter()) {
-                    bind_type_with_mode(p_ty, a_ty, out, mult_out, model, mode);
+                    bind_type_with_mode(
+                        p_ty, a_ty, out, ty_auth, mult_out, model, mode, true,
+                    );
                     bind_mult_with_mode(p_mult, a_mult, mult_out, mode);
                 }
-                bind_type_with_mode(p_ret, a_ret, out, mult_out, model, mode);
+                bind_type_with_mode(
+                    p_ret, a_ret, out, ty_auth, mult_out, model, mode, true,
+                );
                 bind_mult_with_mode(p_ret_mult, a_ret_mult, mult_out, mode);
             }
         }
