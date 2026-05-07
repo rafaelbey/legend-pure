@@ -37,19 +37,41 @@ fn debug_property_supertypes() {
     let element = model.get_element(prop_eid);
     println!("\n=== Property element ===");
     if let legend_pure_parser_pure::model::Element::Class(c) = element {
-        println!(
-            "type_parameters: {:?}",
-            c.type_parameters
-        );
-        println!(
-            "multiplicity_parameters: {:?}",
-            c.multiplicity_parameters
-        );
+        println!("type_parameters: {:?}", c.type_parameters);
+        println!("multiplicity_parameters: {:?}", c.multiplicity_parameters);
         println!("super_types: {} entries", c.super_types.len());
         for (i, st) in c.super_types.iter().enumerate() {
             println!("  [{i}] {st:?}");
         }
     } else {
         println!("Property is not a Class!");
+    }
+
+    // Walk Property's supertype chain.
+    println!("\n=== Walking up... ===");
+    let mut current = Some(prop_eid);
+    let mut depth = 0;
+    while let Some(eid) = current
+        && depth < 8
+    {
+        let node = model.get_node(eid);
+        let element = model.get_element(eid);
+        let supers = match element {
+            legend_pure_parser_pure::model::Element::Class(c) => &c.super_types[..],
+            _ => &[],
+        };
+        println!(
+            "  [d={depth}] {} → {} super(s)",
+            node.name,
+            supers.len()
+        );
+        for (i, st) in supers.iter().enumerate() {
+            println!("    [{i}] {st:?}");
+        }
+        current = supers.iter().find_map(|st| match st {
+            legend_pure_parser_pure::types::TypeExpr::Named { element, .. } => Some(*element),
+            _ => None,
+        });
+        depth += 1;
     }
 }
