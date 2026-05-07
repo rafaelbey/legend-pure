@@ -511,6 +511,7 @@ impl<'a> M3Parser<'a> {
         let mut properties = Vec::new();
         let mut super_types = Vec::new();
         let mut type_parameters: Vec<SmolStr> = Vec::new();
+        let mut multiplicity_parameters: Vec<SmolStr> = Vec::new();
 
         if !self.at(&Token::LBrace) {
             // No body — allocate empty class
@@ -570,6 +571,21 @@ impl<'a> M3Parser<'a> {
                             // Class.properties[typeParameters] : [...]
                             type_parameters = self.parse_type_parameters();
                         }
+                        "multiplicityParameters" => {
+                            // Class.properties[multiplicityParameters] :
+                            // ^InstanceValue{values: ['m'], …} — extract
+                            // the names from the values slot. Without
+                            // this, `Property<U,V|m>` lost its `m`
+                            // parameter and `subtype_view`'s mult
+                            // substitution couldn't fire on the
+                            // generalization, leaving downstream
+                            // `eval(Property<…>)` unable to bind the
+                            // FunctionType slot's `m` (1,628 cases on
+                            // platform pre-fix; this lifts the lid on
+                            // the residual ones).
+                            multiplicity_parameters =
+                                self.parse_multiplicity_parameters_instance_value();
+                        }
                         _ => {
                             // Skip the value
                             self.skip_value();
@@ -589,7 +605,7 @@ impl<'a> M3Parser<'a> {
             package_segments,
             Element::Class(Class {
                 type_parameters,
-                multiplicity_parameters: vec![],
+                multiplicity_parameters,
                 type_variable_parameters: vec![],
                 super_types,
                 properties,
@@ -599,6 +615,67 @@ impl<'a> M3Parser<'a> {
                 tagged_values: vec![],
             }),
         );
+    }
+
+    /// Parses the multiplicityParameters InstanceValue shape:
+    /// `^InstanceValue { values: ['m', 'n', …], multiplicity: …, genericType: … }`
+    /// and returns the parameter names.
+    ///
+    /// Tolerant of malformed input — returns whatever names were
+    /// successfully parsed.
+    fn parse_multiplicity_parameters_instance_value(&mut self) -> Vec<SmolStr> {
+        let mut names = Vec::new();
+        if !self.at(&Token::Caret) {
+            self.skip_value();
+            return names;
+        }
+        self.advance(); // ^
+        let _classifier = self.parse_classifier_path();
+
+        if !self.eat(&Token::LBrace) {
+            return names;
+        }
+        loop {
+            match self.peek() {
+                Token::RBrace | Token::Eof => break,
+                _ => {
+                    let path_tail = self.parse_property_path_tail();
+                    if !self.eat(&Token::Colon) {
+                        self.skip_to_comma_or_brace();
+                        continue;
+                    }
+                    if path_tail.as_str() == "values" {
+                        // values is `['m', 'n', …]`
+                        if self.eat(&Token::LBrack) {
+                            loop {
+                                match self.peek() {
+                                    Token::RBrack | Token::Eof => break,
+                                    Token::StringLit(s) => {
+                                        names.push(SmolStr::new(s.as_str()));
+                                        self.advance();
+                                    }
+                                    _ => {
+                                        self.advance();
+                                    }
+                                }
+                                self.eat(&Token::Comma);
+                            }
+                            self.eat(&Token::RBrack);
+                        } else if let Token::StringLit(s) = self.peek() {
+                            names.push(SmolStr::new(s.as_str()));
+                            self.advance();
+                        } else {
+                            self.skip_value();
+                        }
+                    } else {
+                        self.skip_value();
+                    }
+                }
+            }
+            self.eat(&Token::Comma);
+        }
+        self.eat(&Token::RBrace);
+        names
     }
 
     /// Parses a non-bootstrap `PrimitiveType` body from m3.pure.
