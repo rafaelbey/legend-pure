@@ -54,6 +54,13 @@ pub mod fqn;
 pub mod ids;
 pub mod infer;
 pub(crate) mod inference;
+/// Strict-mode toggle for inference (Step 3g). Re-exported here so
+/// integration tests and downstream tooling can opt into the
+/// deliberate-divergence-over-Java arg-type validation without
+/// reaching through `pub(crate) mod inference`.
+pub mod strict_mode {
+    pub use crate::inference::strict_mode::{is_enabled, with_strict_mode};
+}
 pub mod island_lower;
 pub mod locate;
 pub(crate) mod lower;

@@ -694,8 +694,11 @@ fn infer_function_call(
             function,
             function_name,
             &f.parameters,
+            arguments,
             arg_types,
             arg_source_infos,
+            &bindings,
+            &var_types,
         );
 
         // Reuse the up-front `bindings` to substitute the function's
@@ -797,28 +800,99 @@ fn process_let_function_call(
 /// check the dispatcher uses, but emit a diagnostic on failure rather
 /// than just filtering.
 ///
-/// Currently checks against the raw declared `param.type_expr` — i.e.
-/// without substituting collected bindings into it. Generic params
-/// stay `Generic(T)` and `is_type_compatible` returns permissive on
-/// `Generic`. Step 3g of the plan (strict-mode flag) flips the check
-/// to operate on the substituted form, which catches `eval(func, 'wrong')`
-/// style mismatches at the cost of diverging from Java parity (Java
-/// itself silently widens — see BACKLOG entry "eval strict arg
-/// validation").
+/// By default checks against the raw declared `param.type_expr` —
+/// i.e. without substituting collected bindings into it. Generic
+/// params stay `Generic(T)` and `is_type_compatible` returns
+/// permissive on `Generic`. This is Java parity — Java itself
+/// silently widens (see BACKLOG entry "eval strict arg validation").
+///
+/// **Strict mode (Step 3g, opt-in via
+/// `crate::strict_mode::with_strict_mode(true, ...)` or the
+/// `LEGEND_PURE_STRICT_INFERENCE` env var)** computes per-arg bindings
+/// that *exclude* the arg under check, then substitutes the param's
+/// type with those bindings before the compatibility check. This
+/// catches `eval(f:Function<{Integer→String}>[1], 'wrong')` style
+/// mismatches: T binds Integer authoritatively from arg 0's
+/// FunctionType slot; checking arg 1 (`'wrong'`) sees its param
+/// substituted to `Integer` (because arg 1 itself is excluded from
+/// the binding pass), and `is_type_compatible(String, Integer)`
+/// rejects. This is a deliberate divergence-over-Java semantics;
+/// documented in `parity_semantics.md`.
+fn strict_bindings_excluding_arg(
+    parameters: &[Parameter],
+    arguments: &[ValueSpec],
+    skip_idx: usize,
+    model: &PureModel,
+    var_types: &crate::resolve::VarTypes,
+) -> crate::inference::GenericBindings {
+    // Replace arguments[skip_idx] with an Unresolved-typed
+    // placeholder ValueSpec. `infer_typeexpr_from_valuespec` returns
+    // None for an unresolved Variable, which makes `bind_type`
+    // short-circuit (no contribution to bindings), giving the slot
+    // a clean no-op without restructuring `infer_generic_bindings`.
+    let mut modified = arguments.to_vec();
+    if skip_idx < modified.len() {
+        modified[skip_idx] = ValueSpec {
+            kind: Box::new(ExprKind::Variable {
+                name: SmolStr::new_static("__strict_excluded_arg"),
+            }),
+            source_info: legend_pure_parser_ast::SourceInfo::new("<strict-mode>", 0, 0, 0, 0),
+            type_info: Some(Box::new(ResolvedType {
+                type_expr: TypeExpr::Unresolved,
+                multiplicity: Multiplicity::PureOne,
+            })),
+        };
+    }
+    crate::resolve::infer_generic_bindings(parameters, &modified, model, var_types)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn validate_call_arguments(
     ctx: &mut InferCtx<'_>,
     function: Option<crate::ids::ElementId>,
     function_name: &SmolStr,
     parameters: &[Parameter],
+    arguments: &[ValueSpec],
     arg_types: &[Option<ResolvedType>],
     arg_source_infos: &[legend_pure_parser_ast::SourceInfo],
+    bindings: &crate::inference::GenericBindings,
+    var_types: &crate::resolve::VarTypes,
 ) {
+    let strict = crate::strict_mode::is_enabled();
     for (param, (arg_ty, arg_idx)) in parameters.iter().zip(arg_types.iter().zip(0usize..)) {
         let Some(arg_ty) = arg_ty else { continue };
         let arg_eid = match &arg_ty.type_expr {
             TypeExpr::Named { element, .. } => Some(*element),
             _ => None,
+        };
+        // Strict mode: compute bindings *excluding* the arg under
+        // check, so the LUB-merging in `bind_type` doesn't widen T
+        // back to Any and mask the mismatch. Replace `arguments[i]`
+        // with an Unresolved-typed placeholder so its position no
+        // longer contributes to T's binding — `bind_type` short-circuits
+        // on Unresolved (`resolve.rs:bind_type` early-return), giving
+        // the slot a no-op effect.
+        //
+        // Java analog: the two-branch dispatch in
+        // `FunctionExpressionProcessor:567-594` registers the
+        // converged args first (authoritative) and treats the
+        // failing arg as a constraint slot to check against the
+        // already-frozen authoritative bindings.
+        let param_te = if strict {
+            let excluded =
+                strict_bindings_excluding_arg(parameters, arguments, arg_idx, ctx.model, var_types);
+            excluded.make_concrete_type(&param.type_expr)
+        } else {
+            param.type_expr.clone()
+        };
+        let param_mult = if strict {
+            // Multiplicity bindings don't suffer the same LUB-widening
+            // issue (multiplicity LUB stays in the range lattice), so
+            // re-use the full bindings for the multiplicity side. The
+            // strict-mode arg-type check is the meaningful divergence.
+            bindings.make_concrete_mult(&param.multiplicity)
+        } else {
+            param.multiplicity.clone()
         };
         // Suppress when an alternative overload at this package
         // would accept the actual arg type AND multiplicity —
@@ -855,17 +929,14 @@ fn validate_call_arguments(
                 type_arguments: p_args,
                 ..
             },
-        ) = (&arg_ty.type_expr, &param.type_expr)
+        ) = (&arg_ty.type_expr, &param_te)
             && a_eid == p_eid
             && a_args.is_empty()
             && !p_args.is_empty()
         {
             continue;
         }
-        if !crate::resolve::is_multiplicity_compatible(
-            Some(&arg_ty.multiplicity),
-            &param.multiplicity,
-        ) {
+        if !crate::resolve::is_multiplicity_compatible(Some(&arg_ty.multiplicity), &param_mult) {
             let arg_si = arg_source_infos.get(arg_idx).cloned().unwrap_or_else(|| {
                 arg_source_infos.first().cloned().unwrap_or_else(|| {
                     legend_pure_parser_ast::SourceInfo::new("<unknown>", 0, 0, 0, 0)
@@ -876,7 +947,7 @@ fn validate_call_arguments(
                     "Argument {} of '{}': expected multiplicity {}, got {}",
                     arg_idx + 1,
                     function_name,
-                    render_multiplicity(&param.multiplicity),
+                    render_multiplicity(&param_mult),
                     render_multiplicity(&arg_ty.multiplicity),
                 ),
                 source_info: arg_si,
@@ -932,19 +1003,19 @@ fn validate_call_arguments(
         if matches!(arg_eid, Some(crate::ids::ElementId::Package(_))) {
             continue;
         }
-        if matches!(param.type_expr, TypeExpr::FunctionType { .. }) {
+        if matches!(param_te, TypeExpr::FunctionType { .. }) {
             continue;
         }
         if arg_eid == Some(bootstrap::NIL_ID) {
             continue;
         }
-        if !crate::resolve::is_type_compatible(arg_eid, &param.type_expr, ctx.model) {
+        if !crate::resolve::is_type_compatible(arg_eid, &param_te, ctx.model) {
             let arg_name = arg_eid
                 .map(|e| ctx.model.element_name(e).to_string())
                 .unwrap_or_else(|| "<unknown>".to_string());
-            let param_name = match &param.type_expr {
+            let param_name = match &param_te {
                 TypeExpr::Named { element, .. } => ctx.model.element_name(*element).to_string(),
-                _ => format!("{:?}", param.type_expr),
+                _ => format!("{:?}", param_te),
             };
             let arg_si = arg_source_infos.get(arg_idx).cloned().unwrap_or_else(|| {
                 arg_source_infos.first().cloned().unwrap_or_else(|| {

@@ -103,6 +103,53 @@ function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->
 }
 
 // ---------------------------------------------------------------------------
+// 3a. eval(...) wrong arg under strict mode — Step 3g divergence
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tic_eval_wrong_arg_strict_mode_errors() {
+    // **Deliberate divergence over Java semantics** (per
+    // `parity_semantics.md`): when strict-inference is enabled, the
+    // call-arg validator substitutes the param type with the call's
+    // bindings before the compatibility check. T binds Integer
+    // authoritatively from the FunctionType slot, so the constraint
+    // slot `param:T` becomes `param:Integer`, and 'not an int' (a
+    // String) is rejected.
+    //
+    // This test exercises the toggle through
+    // `legend_pure_parser_pure::strict_mode::with_strict_mode` —
+    // thread-local override that restores on closure exit even on
+    // panic, so other tests stay unaffected.
+    let source = r#"
+###Pure
+native function test::eval<T,V|m,n>(
+    func: meta::pure::metamodel::function::Function<{T[n]->V[m]}>[1],
+    param: T[n]
+): V[m];
+function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->String[1]}>[1]): String[1] {
+    $f->eval('not an int')
+}
+"#;
+    let result =
+        legend_pure_parser_pure::strict_mode::with_strict_mode(true, || compile_with_imports(&[source], &[]));
+    let partial = result.expect_err(
+        "Strict mode: T binds Integer authoritatively from FunctionType slot; \
+         the constraint slot `param:T` substituted to `param:Integer` should \
+         reject String.",
+    );
+    assert!(
+        !partial.errors.is_empty(),
+        "expected strict-mode arg-type mismatch error, got: {:?}",
+        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        partial.errors.iter().any(|e| e.message.contains("argument") || e.message.contains("Argument")),
+        "expected an argument-mismatch diagnostic, got: {:?}",
+        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 3. eval(...) wrong arg — current lenient state (pre Step 3g strict mode)
 // ---------------------------------------------------------------------------
 
