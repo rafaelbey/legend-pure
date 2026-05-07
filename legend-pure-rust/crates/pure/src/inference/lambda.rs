@@ -181,7 +181,7 @@ pub(crate) fn bind_from_lambda_body(
     let TypeExpr::FunctionType {
         parameters: ft_params,
         return_type,
-        ..
+        return_multiplicity: ft_return_mult,
     } = function_type
     else {
         return;
@@ -230,4 +230,40 @@ pub(crate) fn bind_from_lambda_body(
         value_arguments: vec![],
     };
     resolve::bind_type(return_type, &body_te, &mut bindings.ty, model);
+
+    // Strict-mode-only: bind the FunctionType's `return_multiplicity`
+    // from the lambda body's actual multiplicity. Default mode leaves
+    // `m` permissively unbound (Java parity — `if<T|m>(…, |body, …)`
+    // doesn't propagate the body's mult into `m` because Java's
+    // `bind_from_lambda_body` analog only binds the type slot).
+    //
+    // Why strict-only: the platform's QP-body returns include patterns
+    // like `func():Float[1] { if(true, |$this->map($valueFunc), |1.0) }`
+    // where the body's `map` call returns `Float[0..1]` (the
+    // narrower-overload). Binding `m:=ZeroOrOne` widens the if's
+    // return to `Float[0..1]`, which then mismatches the QP's
+    // declared `Float[1]` return type — a regression Java doesn't
+    // produce because Java keeps `m` unbound and the
+    // is_multiplicity_compatible check stays permissive on
+    // `Variable(_)`. Confirmed empirically: 1 platform-compile error
+    // when this bind fired in default mode.
+    //
+    // Strict mode users get the precise binding; they accept the
+    // tighter checks on QP bodies as part of the divergence.
+    if crate::strict_mode::is_enabled()
+        && let Multiplicity::Variable(name) = ft_return_mult
+        && let Some(body_mult) =
+            resolve::infer_multiplicity_from_valuespec(last_expr, model, &extended)
+    {
+        use std::collections::hash_map::Entry;
+        match bindings.mult.entry(name.clone()) {
+            Entry::Vacant(e) => {
+                e.insert(body_mult);
+            }
+            Entry::Occupied(mut e) => {
+                let lub = resolve::mult_lub(e.get(), &body_mult);
+                *e.get_mut() = lub;
+            }
+        }
+    }
 }
