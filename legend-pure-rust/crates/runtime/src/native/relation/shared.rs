@@ -33,6 +33,7 @@
 #![allow(clippy::needless_pass_by_value)]
 
 use legend_pure_dsl_tds::csv::{ParsedColumn, ParsedTDS, TypedCell};
+use smol_str::SmolStr;
 
 use crate::error::{PureException, PureRuntimeError};
 use crate::heap::ObjectHandle;
@@ -256,5 +257,61 @@ fn render_cell(cell: &Option<TypedCell>) -> String {
         }
         Some(TypedCell::StrictDate(s)) => s.to_string(),
         Some(TypedCell::DateTime(s)) => s.to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Row tuple binding (lambda-per-row natives: filter, extend, sort, …)
+// ---------------------------------------------------------------------------
+
+/// Allocate a synthetic heap object representing one TDS row, with one
+/// slot per non-empty cell named after its column. Classifier is
+/// `meta::pure::metamodel::type::Any` — property access reads slots by
+/// name regardless of classifier, and `Any` avoids accidentally
+/// matching native-side classifier dispatch (e.g. `RelationType` /
+/// `TDS`) that other natives use to recognise their own argument
+/// shapes.
+///
+/// Used by every lambda-per-row relation native (`filter` today;
+/// `extend`, `sort`, `groupBy` follow the same pattern). The lambda
+/// then invokes via `ctx.call_function(&lambda, &[Value::Object(handle)])`
+/// and reads the row's columns through standard `PropertyCall` slot
+/// lookup at runtime.
+#[allow(clippy::result_large_err)]
+pub(super) fn build_row_tuple(
+    columns: &[ParsedColumn],
+    row: &[Option<TypedCell>],
+    ctx: &mut dyn EvalContextTrait,
+) -> Result<ObjectHandle, PureException> {
+    let handle = ctx
+        .heap_mut()
+        .alloc_dynamic("meta::pure::metamodel::type::Any");
+    for (col, cell) in columns.iter().zip(row.iter()) {
+        let Some(cell) = cell else {
+            continue;
+        };
+        let value = typed_cell_to_value(cell);
+        ctx.heap_mut()
+            .mutate_add(&handle, col.name.as_str(), &[value])
+            .map_err(PureException::from)?;
+    }
+    Ok(handle)
+}
+
+/// Convert a [`TypedCell`] into a runtime [`Value`].
+///
+/// `Decimal`/`StrictDate`/`DateTime` map to `Value::String` for now;
+/// the runtime's typed-cell handling for those is its own follow-up,
+/// and the underlying storage in `TypedCell` is already a string.
+/// `String` likewise — the smolstr is widened.
+pub(super) fn typed_cell_to_value(cell: &TypedCell) -> Value {
+    match cell {
+        TypedCell::Integer(i) => Value::Integer(*i),
+        TypedCell::Float(f) => Value::Float(*f),
+        TypedCell::Boolean(b) => Value::Boolean(*b),
+        TypedCell::String(s)
+        | TypedCell::Decimal(s)
+        | TypedCell::StrictDate(s)
+        | TypedCell::DateTime(s) => Value::String(SmolStr::new(s.as_str())),
     }
 }
