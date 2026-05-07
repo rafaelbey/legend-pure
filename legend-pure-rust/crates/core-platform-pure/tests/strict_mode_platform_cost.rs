@@ -104,6 +104,45 @@ fn strict_mode_platform_cost_report() {
                         }
                     }
                 }
+                println!("\n=== Sample from rem.pure ===");
+                count = 0;
+                for e in &p.errors {
+                    if e.source_info.source.contains("/rem.pure") {
+                        println!("  L{}: {}", e.source_info.start_line, e.message);
+                        count += 1;
+                        if count >= 5 {
+                            break;
+                        }
+                    }
+                }
+                println!("\n=== Sample evaluateAndDeactivate calls ===");
+                count = 0;
+                for e in &p.errors {
+                    if e.message.contains("evaluateAndDeactivate") {
+                        println!(
+                            "  {}:{} → {}",
+                            e.source_info.source, e.source_info.start_line, e.message
+                        );
+                        count += 1;
+                        if count >= 5 {
+                            break;
+                        }
+                    }
+                }
+                println!("\n=== Sample 'at' calls ===");
+                count = 0;
+                for e in &p.errors {
+                    if e.message.contains("call to 'at'") {
+                        println!(
+                            "  {}:{} → {}",
+                            e.source_info.source, e.source_info.start_line, e.message
+                        );
+                        count += 1;
+                        if count >= 5 {
+                            break;
+                        }
+                    }
+                }
 
                 // Sample one error per top file.
                 println!("\n=== Sample per file ===");
