@@ -33,11 +33,23 @@ The lowering and inference layers now own their own files:
   Default stays Java-parity-lenient.
 
 Plan: `~/.claude/plans/do-we-have-enought-quiet-swing.md`. Steps 1
-through 4 plus 3a, 3b, 3c, 3e.1, 3e.2, 3f, 3g all complete. Step
-3d-cont (the full `TypeInferenceContext::register(merge: bool)`
-two-branch dispatch wiring) remains open; the min-viable strict mode
-in 3g works without it via the per-arg excluding-self trick, so
-3d-cont is no longer a blocker for any user-visible feature.
+through 5 plus 3a, 3b, 3c (carrier wiring), 3d (phase split + carrier
+through `infer_generic_bindings`), 3e.1, 3e.2, 3f, 3g all complete.
+The negative-test phase `crates/pure/tests/negative_tests.rs`
+explicitly pins what should-and-shouldn't compile across reference
+errors, structural model errors, lambda inference, and the
+strict-mode lenient/strict pin pairs.
+
+The remaining open item is the **authoritative-vs-constraint
+two-branch dispatch** (Java's
+`FunctionExpressionProcessor:567-594` `merge=false`/`merge=true`
+distinction). Currently every binding uses Constraint mode (the
+LUB-merging shape platform corpus depends on); the two prior spikes
+(`c17a06`, reverted `3f1a64`) tried changing this and regressed
+fold-style chains. The min-viable strict mode in 3g works without
+it via the per-arg excluding-self trick — so this isn't blocking any
+user-visible feature, and the safer path is to defer the structural
+change until a feature genuinely requires it.
 
 ---
 
