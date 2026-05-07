@@ -34,22 +34,26 @@ The lowering and inference layers now own their own files:
 
 Plan: `~/.claude/plans/do-we-have-enought-quiet-swing.md`. Steps 1
 through 5 plus 3a, 3b, 3c (carrier wiring), 3d (phase split + carrier
-through `infer_generic_bindings`), 3e.1, 3e.2, 3f, 3g all complete.
+through `infer_generic_bindings` plus the two-branch dispatch),
+3e.1, 3e.2, 3f (default + deep-walk strict), 3g all complete.
+
 The negative-test phase `crates/pure/tests/negative_tests.rs`
 explicitly pins what should-and-shouldn't compile across reference
 errors, structural model errors, lambda inference, and the
 strict-mode lenient/strict pin pairs.
 
-The remaining open item is the **authoritative-vs-constraint
-two-branch dispatch** (Java's
-`FunctionExpressionProcessor:567-594` `merge=false`/`merge=true`
-distinction). Currently every binding uses Constraint mode (the
-LUB-merging shape platform corpus depends on); the two prior spikes
-(`c17a06`, reverted `3f1a64`) tried changing this and regressed
-fold-style chains. The min-viable strict mode in 3g works without
-it via the per-arg excluding-self trick — so this isn't blocking any
-user-visible feature, and the safer path is to defer the structural
-change until a feature genuinely requires it.
+**Two-branch dispatch landed safely** (Phase B of the user's "beat
+Java by being more prescriptive" mandate): `infer_generic_bindings`
+now classifies args by pass-1 convergence and switches between
+`RegisterMode::Authoritative` (any arg unconverged →
+`potentiallyUpdate…`-style first-wins) and `RegisterMode::Constraint`
+(all converged → `update…`-style LUB-merge). `bind_type_with_mode`
+provides the leaf-level switch; the structural recursion is shared.
+Three new pins — `tic_two_branch_all_converge_lubs_to_any`,
+`tic_two_branch_lambda_unconverged_uses_authoritative`,
+`tic_two_branch_fold_accumulator_preserved_under_authoritative` —
+lock the dispatch behaviour. The fold-style chain that defeated both
+prior spikes (`c17a06`, reverted `3f1a64`) is now green.
 
 ---
 
