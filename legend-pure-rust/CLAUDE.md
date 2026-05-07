@@ -42,7 +42,8 @@ The `legend` CLI (`crates/cli`) is the primary developer tool: `legend parse`,
 | Parser | ✅ Complete | ~400+ | Full grammar coverage, 0 errors |
 | Compiler | ✅ Platform clean | ~50+ | 0 errors on 236 files / 1338 elements |
 | Runtime | 🚧 Active | ~160+ | ~50 native functions, PCT subset passing |
-| CLI | 🚧 Partial | ~20+ | 6/11 commands implemented |
+| CLI | 🚧 Partial | ~20+ | 7/11 commands implemented (`+java-bindings`) |
+| Java codegen | ✅ v1 | 11 | `legend java-bindings` + proxy runtime support |
 | **Total** | | **739** | |
 
 → See `BACKLOG.md` at workspace root for the unified backlog.

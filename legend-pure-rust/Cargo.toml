@@ -25,6 +25,7 @@ members = [
     "crates/pure",
     "crates/runtime",
     "crates/jni",
+    "crates/java-codegen",
     "crates/cli",
     "crates/core-platform-pure",
     "crates/snapshot-builder",

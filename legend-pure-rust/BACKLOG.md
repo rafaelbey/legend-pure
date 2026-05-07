@@ -172,7 +172,8 @@ checks; drop the flag for full statistical-strength baselines (~5min).
 ## CLI (`crates/cli`)
 
 ### Implemented ✅
-`parse`, `check`, `init`, `version`, `completions`, `emit`, `test`
+`parse`, `check`, `init`, `version`, `completions`, `emit`, `test`,
+`java-bindings`
 
 `legend test --pct` runs the platform PCT suite. By default it loads
 `crates/runtime/resources/pct_grammar_rust_native.json` and applies the
@@ -188,6 +189,35 @@ substitutes another manifest.
 | `plan` | P2 | Execution plan generation |
 | `package` | P2 | Compilation + artifact packaging |
 | `publish` | P3 | Package + registry upload |
+
+---
+
+## Java Bindings (`crates/java-codegen`)
+
+### Implemented ✅ (v1)
+`legend java-bindings` emits a single static-method facade plus one
+interface per reachable user `Class` (and enum per `Enumeration`). The
+hand-written runtime support lives in
+`legend-pure-runtime/legend-pure-runtime-rust-evaluator/src/main/java/
+org/finos/legend/pure/rust/proxy/` (`PureRegistered`,
+`PureProxyFactory`, `PureInvocationHandler`, `PureLambda` placeholder).
+
+Verification: 11 codegen unit + integration tests (`-p
+legend-pure-java-codegen`), including a `javac --release 11` round-trip
+on the generated set + the runtime support classes
+(`tests/javac_compiles.rs`).
+
+### Open Work (v2)
+
+| Item | Priority | Notes |
+|------|----------|-------|
+| Function-typed parameters (`map`, `filter`, `fold`, …) | P1 | v1 errors at codegen. v2 should add a `PureLambda` functional interface (placeholder file already exists) and a JNI callback path that lets a Pure-side `Function<{T[1]→V[1]}>` invoke a Java lambda. The cliff for usability — most platform collection operators take a callable. |
+| Generic type-arg propagation on user classes | P1 | `Person.friends: List<Person>` currently renders as `Object friends()` (the platform `List<T>` is filtered as a `meta::pure::*` class). v2 should let collection-shaped platform types (`List`, `Pair`, `Map`) project to typed Java collections by special-casing them or by walking their type-arguments. |
+| Streaming `[*]` returns | P3 | v1 materialises lists eagerly into `java.util.List`. v2 could expose `Iterable` lazily or a `Stream`. |
+| Round-trip JNI integration test | P2 | The plan called for a JUnit test that loads `libpure_rust_jni`, calls a generated wrapper, fetches a heap object, traverses via the Proxy, and asserts subtype-aware dispatch. Substituted in v1 by `tests/javac_compiles.rs` which proves the generated code is syntactically valid against `--release 11` together with the runtime support — but the live-evaluator round-trip remains to be wired (Maven module + cdylib loading). |
+| Relation-typed parameters/returns | P3 | Currently rejected at codegen. |
+| Mapping / Diagram / Path / TDS DSL elements | P3 | Out of scope for v1. |
+| Two-way binding (mutating Pure objects from Java) | P3 | Read-only in v1. |
 
 ---
 

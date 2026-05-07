@@ -1208,6 +1208,7 @@ dependencies = [
  "lcov",
  "legend-pure-core-platform",
  "legend-pure-dsl-graph",
+ "legend-pure-java-codegen",
  "legend-pure-lsp",
  "legend-pure-parser-ast",
  "legend-pure-parser-compose",
@@ -1355,6 +1356,19 @@ dependencies = [
  "serde",
  "serde_json",
  "smol_str",
+]
+
+[[package]]
+name = "legend-pure-java-codegen"
+version = "0.1.0"
+dependencies = [
+ "legend-pure-core-platform",
+ "legend-pure-parser-ast",
+ "legend-pure-parser-parser",
+ "legend-pure-parser-pure",
+ "smol_str",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
