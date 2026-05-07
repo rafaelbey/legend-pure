@@ -162,6 +162,10 @@ impl CompilerExtension for MappingExtension {
         for (_, reg) in registry.iter() {
             validate_mapping(&reg.def, &registry, ctx.model, ctx.auto_imports, ctx.errors);
         }
+        // Phase E1: every (source, target) FQN in every
+        // MappingInclude.store_substitutions must resolve to a known
+        // element on the model.
+        validate_substitution_endpoints(&registry, ctx.model, ctx.errors);
     }
 }
 
@@ -1682,4 +1686,55 @@ fn ptr_fqn(p: &PackageableElementPtr) -> SmolStr {
     } else {
         p.name.clone()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase E1 — substitution endpoint FQN resolution
+// ---------------------------------------------------------------------------
+
+/// Walk every `MappingInclude.store_substitutions` across all
+/// registered mappings; both endpoints (`source` / `target`) must
+/// resolve to a known element on the model. Misses emit
+/// `UnresolvedElement`.
+///
+/// Java parity: `StoreSubstitutionValidator.run` does this implicitly
+/// while collecting Store sets — we surface it as a structured
+/// diagnostic. The store-kind discriminator (does the FQN actually
+/// resolve to a Store-kind element?) is deferred until a Store
+/// stereotype / interface element lives on the platform bootstrap.
+fn validate_substitution_endpoints(
+    registry: &HashMap<SmolStr, RegisteredMapping>,
+    model: &PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    for (_mapping_fqn, reg) in registry.iter() {
+        for inc in &reg.def.includes {
+            for sub in &inc.store_substitutions {
+                check_substitution_endpoint(&sub.source, "source", sub, model, errors);
+                check_substitution_endpoint(&sub.target, "target", sub, model, errors);
+            }
+        }
+    }
+}
+
+fn check_substitution_endpoint(
+    ptr: &PackageableElementPtr,
+    role: &str,
+    sub: &crate::ast::StoreSubstitution,
+    model: &PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    let fqn = ptr_fqn(ptr);
+    let segments: Vec<SmolStr> = fqn.as_str().split("::").map(SmolStr::new).collect();
+    if segments.is_empty() || segments.iter().any(SmolStr::is_empty) {
+        return;
+    }
+    if model.resolve_by_path(&segments).is_some() {
+        return;
+    }
+    errors.push(CompilationError {
+        message: format!("Store substitution {role} '{fqn}' does not resolve to a known element"),
+        source_info: sub.source_info.clone(),
+        kind: CompilationErrorKind::UnresolvedElement { path: fqn },
+    });
 }
