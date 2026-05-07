@@ -554,6 +554,82 @@ function test::handler(b: test::Box<Integer>[1]): Integer[1] {
 }
 
 #[test]
+#[ignore = "Deep chain inference: $result.first.values->first() where $result \
+            comes from a let-bound fold(...)->cast(@Pair<List<X>,List<X>>) — \
+            the parametric let-type doesn't propagate through .first.values \
+            with full precision. Tracked under 'Generic unification (Z \
+            propagation)' P2 in BACKLOG. Targets \
+            PropertyMappingsImplementation:137 (4 platform errors)."]
+fn tic_pair_via_fold_then_chain() {
+    // Closer to PropertyMappingsImplementation:137 — the chain
+    // receiver comes from a let-bound `fold(...)->cast(@Pair<...>)`
+    // value. The cast's target type-arg becomes the fold's `V`
+    // binding, and the let-bound variable type should be
+    // Pair<List<X>,List<X>>. Then the chain
+    // .first.values->first() must resolve T=X. Synthetic ignored
+    // pending the "Generic unification" BACKLOG entry — a full
+    // multi-pass inference engine (Java's
+    // `TypeInferenceObserver`-driven approach) is the structural
+    // fix.
+    let source = r#"
+###Pure
+Class test::PM {}
+Class test::Pair<U, V> {
+    first: U[1];
+    second: V[1];
+}
+Class test::List<T> {
+    values: T[*];
+}
+native function test::myFold<T,V|m>(value: test::PM[*], func: meta::pure::metamodel::function::Function<{T[1],V[m]->V[m]}>[1], accumulator: V[m]): V[m];
+native function test::myFirst<T|m>(coll: T[m]): T[0..1];
+function test::caller(items: test::PM[*], seed: test::Pair<test::List<test::PM>, test::List<test::PM>>[1]): test::PM[0..1] {
+    let result = test::myFold($items, {pm, a | $a}, $seed);
+    $result.first.values->test::myFirst()
+}
+"#;
+    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[]).expect(
+            "fold(...)->cast(@Pair<List<X>>) result threads through \
+             let, then .first.values->first() binds T=X. Locks the \
+             PropertyMappingsImplementation:137 shape.",
+        );
+    });
+}
+
+#[test]
+fn tic_pair_first_values_first_chain() {
+    // Mirror of PropertyMappingsImplementation:137 platform pattern:
+    //   $p.first.values->first()
+    // where $p: Pair<List<PropertyMapping>, List<PropertyMapping>>.
+    // The chain: .first (on Pair<U,V>) returns U → substitute U=List<X>;
+    // .values (on List<X>) returns X[*]; ->first<T|m>(...) binds
+    // T=X. Strict mode currently emits "type parameter T was not
+    // resolved" — locks the case.
+    let source = r#"
+###Pure
+Class test::PropertyMapping {}
+Class test::Pair<U, V> {
+    first: U[1];
+    second: V[1];
+}
+Class test::List<T> {
+    values: T[*];
+}
+native function test::myFirst<T|m>(coll: T[m]): T[0..1];
+function test::caller(p: test::Pair<test::List<test::PropertyMapping>, test::List<test::PropertyMapping>>[1]): test::PropertyMapping[0..1] {
+    $p.first.values->test::myFirst()
+}
+"#;
+    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[]).expect(
+            "Pair<List<X>>.first.values->first() chain: each step must \
+             substitute parametric type-args; ->first() should bind T=X.",
+        );
+    });
+}
+
+#[test]
 fn tic_platform_canreactivate_lambda_evaluate_property_toOne_chain() {
     // Lock the canReactivateDynamically.pure:21 platform pattern at
     // the LOADED-PLATFORM level (rather than synthetic) since this
