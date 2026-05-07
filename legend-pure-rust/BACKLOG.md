@@ -209,10 +209,30 @@ unfolds into both participating classes). Explicit class seeds bypass
 the `meta::pure::*` platform-class filter; transitive walks from them
 still apply the filter.
 
+For Maven-style "bootstrap an evaluator" workflows there is also
+`--bindings-file <PATH>` — one FQN per line, kind auto-detected by the
+CLI from the model. The
+`legend-pure-runtime-rust-evaluator` Maven module wires this into its
+`generate-sources` phase via `exec-maven-plugin` + `build-helper-maven-plugin`,
+so `mvn compile` regenerates a curated M3 metamodel surface
+(`src/main/pure-bindings/m3-bindings.txt`, ~30 classes + a handful of
+metadata functions like `type()` / `genericType()` / `elementToPath()`)
+into `target/generated-sources/java-bindings/` and adds it to the
+compile path. Set `-Dlegend.skipBindings=true` to skip on a host
+without a Rust toolchain.
+
+Generic-typed property/QP returns on generated interfaces (e.g.
+`Enumeration<E>.values: E[*]`) render as `Object` / `Iterable<Object>`
+under a `GenericPolicy::AsObject` mode; static-facade function
+signatures still hard-fail on generics (`GenericPolicy::Reject`).
+
 Verification: 16 codegen unit + integration tests (`-p
 legend-pure-java-codegen`), including a `javac --release 11` round-trip
 on the generated set + the runtime support classes
-(`tests/javac_compiles.rs`).
+(`tests/javac_compiles.rs`). Live `mvn compile` of
+`legend-pure-runtime-rust-evaluator` regenerates 52 Java sources from
+the curated M3 manifest and compiles them clean alongside the 9
+hand-written runtime classes.
 
 ### Open Work (v2)
 

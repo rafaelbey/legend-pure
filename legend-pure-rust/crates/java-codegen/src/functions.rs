@@ -38,7 +38,7 @@ use crate::naming::{
     java_static_method_name, join_java_package, pure_fqn_segments, pure_package_segments_of,
     safe_java_identifier,
 };
-use crate::types::{JavaType, TypePosition, render_java_type};
+use crate::types::{GenericPolicy, JavaType, TypePosition, render_java_type};
 
 pub(crate) fn emit_functions_class(
     model: &PureModel,
@@ -113,6 +113,7 @@ fn emit_one_method(
             resolved.fqn.as_str(),
             TypePosition::Parameter(param.name.as_str()),
             opts,
+            GenericPolicy::Reject,
         )?;
         java_params.push((safe_java_identifier(param.name.as_str()), ty));
     }
@@ -123,6 +124,7 @@ fn emit_one_method(
         resolved.fqn.as_str(),
         TypePosition::Return,
         opts,
+        GenericPolicy::Reject,
     )?;
 
     out.push_str("\n    public static ");

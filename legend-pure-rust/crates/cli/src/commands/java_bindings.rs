@@ -26,6 +26,13 @@
 //! `evaluate(...)` returning generic values, or for an association whose
 //! endpoint classes wouldn't otherwise be pulled in.
 //!
+//! For Maven-style "bootstrap an evaluator from a manifest" workflows,
+//! `--bindings-file <PATH>` accepts a single file containing one FQN per
+//! line; the CLI resolves each entry against the model and dispatches
+//! it to the right slot (function / class / association) based on its
+//! actual element kind. Blank lines and `#`-prefixed comments are
+//! ignored.
+//!
 //! # Usage
 //!
 //! ```bash
@@ -35,6 +42,12 @@
 //!     --functions meta::pure::functions::math::plus_Integer_MANY__Integer_1_ \
 //!     --classes user_test::Person \
 //!     --associations user_test::PersonAddress
+//!
+//! # Or, bootstrap from a curated list:
+//! legend java-bindings \
+//!     --output target/generated-sources/java-bindings \
+//!     --java-package org.finos.legend.pure.rust.generated \
+//!     --bindings-file src/main/pure-bindings/m3-bindings.txt
 //! ```
 
 use std::path::PathBuf;
@@ -44,6 +57,7 @@ use smol_str::SmolStr;
 
 use legend_pure_core_platform::repo::{self, Repo};
 use legend_pure_java_codegen::{FqnInput, Options, generate};
+use legend_pure_parser_pure::model::{Element, PureModel};
 
 use crate::diagnostics::CliError;
 
@@ -81,6 +95,14 @@ pub struct JavaBindingsArgs {
     #[arg(long = "associations", value_name = "FQN", action = clap::ArgAction::Append)]
     pub associations: Vec<String>,
 
+    /// Single file listing FQNs of Pure elements to bind, one per line.
+    /// The CLI resolves each entry and dispatches it by element kind
+    /// (Function / Class / Association). Blank lines and `#`-prefixed
+    /// comments are ignored. Suitable for Maven-style bootstrap
+    /// manifests that mix functions, classes, and associations.
+    #[arg(long, value_name = "FILE")]
+    pub bindings_file: Option<PathBuf>,
+
     /// Simple class name for the generated static-functions facade.
     /// Defaults to `PureFunctions`.
     #[arg(long, value_name = "NAME")]
@@ -117,23 +139,45 @@ pub fn run(args: JavaBindingsArgs) -> Result<(), CliError> {
         }
     }
 
-    let extra_classes: Vec<FqnInput> = args
+    let mut extra_classes: Vec<FqnInput> = args
         .classes
         .iter()
         .map(|s| FqnInput::new(s.trim()))
         .filter(|f| !f.raw.is_empty())
         .collect();
-    let extra_associations: Vec<FqnInput> = args
+    let mut extra_associations: Vec<FqnInput> = args
         .associations
         .iter()
         .map(|s| FqnInput::new(s.trim()))
         .filter(|f| !f.raw.is_empty())
         .collect();
 
-    if requested.is_empty() && extra_classes.is_empty() && extra_associations.is_empty() {
+    // Read the kind-agnostic bindings file (one FQN per line) into a
+    // raw vector; we'll dispatch each entry by element kind once the
+    // model is loaded.
+    let bindings_lines = if let Some(file) = args.bindings_file.as_deref() {
+        let content = std::fs::read_to_string(file).map_err(|e| CliError::Io {
+            path: file.to_path_buf(),
+            source: e,
+        })?;
+        content
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
+    if requested.is_empty()
+        && extra_classes.is_empty()
+        && extra_associations.is_empty()
+        && bindings_lines.is_empty()
+    {
         return Err(CliError::Custom(
-            "nothing to generate — pass --functions, --functions-file, --classes, or \
-             --associations"
+            "nothing to generate — pass --functions, --functions-file, --classes, \
+             --associations, or --bindings-file"
                 .to_owned(),
         ));
     }
@@ -155,6 +199,24 @@ pub fn run(args: JavaBindingsArgs) -> Result<(), CliError> {
             partial.model
         }
     };
+
+    // Dispatch every entry from the bindings file by its element kind.
+    if !bindings_lines.is_empty() {
+        let (fns_added, classes_added, assocs_added) = dispatch_bindings_by_kind(
+            &model,
+            &bindings_lines,
+            &mut requested,
+            &mut extra_classes,
+            &mut extra_associations,
+        )?;
+        eprintln!(
+            "  {} bindings file: {} function(s), {} class(es), {} association(s)",
+            "•".dimmed(),
+            fns_added,
+            classes_added,
+            assocs_added,
+        );
+    }
 
     let mut opts = Options::new(&args.java_package);
     if let Some(name) = args.functions_class {
@@ -193,4 +255,69 @@ pub fn run(args: JavaBindingsArgs) -> Result<(), CliError> {
         args.output.display()
     );
     Ok(())
+}
+
+/// Resolve each entry in a `--bindings-file` and append it to the right
+/// slot based on the element kind found in the model.
+///
+/// Returns `(functions_added, classes_added, associations_added)` for
+/// the per-kind summary.
+fn dispatch_bindings_by_kind(
+    model: &PureModel,
+    lines: &[String],
+    fns_out: &mut Vec<FqnInput>,
+    classes_out: &mut Vec<FqnInput>,
+    associations_out: &mut Vec<FqnInput>,
+) -> Result<(usize, usize, usize), CliError> {
+    let mut fns_count = 0usize;
+    let mut classes_count = 0usize;
+    let mut assocs_count = 0usize;
+
+    for raw in lines {
+        let id = match model.resolve_fqn_str(raw) {
+            Some(id) => id,
+            None => {
+                return Err(CliError::Custom(format!(
+                    "bindings-file entry `{raw}` could not be resolved in the model"
+                )));
+            }
+        };
+        match model.get_element(id) {
+            Element::Function(_) => {
+                fns_out.push(FqnInput::new(raw));
+                fns_count += 1;
+            }
+            Element::Class(_) => {
+                classes_out.push(FqnInput::new(raw));
+                classes_count += 1;
+            }
+            Element::Association(_) => {
+                associations_out.push(FqnInput::new(raw));
+                assocs_count += 1;
+            }
+            other => {
+                return Err(CliError::Custom(format!(
+                    "bindings-file entry `{raw}` resolved to an unsupported element kind ({}) \
+                     — only Function, Class, and Association are supported",
+                    element_kind(other)
+                )));
+            }
+        }
+    }
+    Ok((fns_count, classes_count, assocs_count))
+}
+
+fn element_kind(e: &Element) -> &'static str {
+    match e {
+        Element::Class(_) => "Class",
+        Element::Enumeration(_) => "Enumeration",
+        Element::Function(_) => "Function",
+        Element::Profile(_) => "Profile",
+        Element::Association(_) => "Association",
+        Element::Measure(_) => "Measure",
+        Element::PrimitiveType(_) => "PrimitiveType",
+        Element::Unit(_) => "Unit",
+        Element::PackageableMultiplicity(_) => "Multiplicity",
+        Element::Package(_) => "Package",
+    }
 }

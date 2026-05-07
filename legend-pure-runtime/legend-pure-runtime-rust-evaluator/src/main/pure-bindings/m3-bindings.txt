@@ -1,0 +1,75 @@
+# Copyright 2026 Goldman Sachs
+#
+# Manifest of Pure elements to materialise as Java bindings via
+# `legend java-bindings --bindings-file`. Each non-blank, non-comment
+# line is a Pure FQN. The CLI resolves it to an element in the platform
+# model and dispatches it by kind:
+#
+#   Function     → static-method wrapper on the generated facade class
+#   Class        → Java interface (with property closure walked)
+#   Association  → both endpoint classes seeded; injected properties
+#                  surface on each side's interface
+#
+# Used by the `exec-maven-plugin` configuration in this module's
+# pom.xml during the `generate-sources` phase. Edit and rebuild to
+# extend the bound surface; do not check in the generated Java itself
+# (it lives under `target/generated-sources/`).
+
+###############################################################################
+# M3 metamodel classes — the core "what is a class?" / "what is a property?"
+# graph that downstream tooling traverses reflectively.
+###############################################################################
+meta::pure::metamodel::type::Any
+meta::pure::metamodel::type::Type
+meta::pure::metamodel::type::Class
+meta::pure::metamodel::type::Nil
+meta::pure::metamodel::type::PrimitiveType
+meta::pure::metamodel::type::Enumeration
+
+# Generic types
+meta::pure::metamodel::type::generics::GenericType
+meta::pure::metamodel::type::generics::TypeParameter
+
+# Functions / properties
+meta::pure::metamodel::function::Function
+meta::pure::metamodel::function::FunctionDefinition
+meta::pure::metamodel::function::ConcreteFunctionDefinition
+meta::pure::metamodel::function::LambdaFunction
+meta::pure::metamodel::function::property::Property
+meta::pure::metamodel::function::property::QualifiedProperty
+
+# Relationships
+meta::pure::metamodel::relationship::Association
+meta::pure::metamodel::relationship::Generalization
+
+# Multiplicity
+meta::pure::metamodel::multiplicity::Multiplicity
+
+# Annotations / extension
+meta::pure::metamodel::extension::Profile
+meta::pure::metamodel::extension::Stereotype
+meta::pure::metamodel::extension::Tag
+meta::pure::metamodel::extension::TaggedValue
+meta::pure::metamodel::extension::AnnotatedElement
+meta::pure::metamodel::extension::Annotation
+meta::pure::metamodel::extension::ElementWithTaggedValues
+meta::pure::metamodel::extension::ElementWithStereotypes
+
+# Packageable structure
+meta::pure::metamodel::PackageableElement
+meta::pure::metamodel::ModelElement
+meta::pure::metamodel::Referenceable
+meta::pure::metamodel::ReferenceUsage
+
+###############################################################################
+# Useful metadata functions — reflection over the metamodel from user code.
+# These take `Any` and return one of the M3 classes above.
+###############################################################################
+# `$x->type()` returns the runtime classifier as a Type.
+meta::pure::functions::meta::type_Any_MANY__Type_1_
+
+# `$x->genericType()` returns the parameterised type (carrying type args).
+meta::pure::functions::meta::genericType_Any_MANY__GenericType_1_
+
+# `$x->elementToPath()` returns the FQN string of a PackageableElement.
+meta::pure::functions::meta::elementToPath_PackageableElement_1__String_1_
