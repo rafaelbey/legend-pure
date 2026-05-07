@@ -66,14 +66,17 @@ catching dispatch ambiguities that Java would silently widen.
   (`getParent() == null`); we report at every call site. This is
   intentional — porters benefit from loud signal over Java's silent
   drift.
-- **Per-arg excluding-self is approximate.** It mirrors Java's
-  authoritative-vs-constraint two-branch dispatch
-  (`FunctionExpressionProcessor:567-594`) without porting the full
-  `TypeInferenceContext::register(merge: bool)` algorithm. Step
-  3d-cont in the plan would land that — currently deferred because the
-  excluding-self trick works for every test we've identified, and the
-  prior two spikes attempting the full port both regressed
-  fold-style chains.
+- **Per-arg excluding-self complements the two-branch dispatch.**
+  The full Java two-branch dispatch
+  (`FunctionExpressionProcessor:567-594` `merge=false`/`merge=true`)
+  is now wired in `infer_generic_bindings` via
+  `bind_type_with_mode` (see `crates/pure/src/resolve.rs`).
+  Strict mode's per-arg excluding-self trick layers an
+  additional check on top — it's what catches
+  `eval(f, 'wrong')`-style mismatches where Java's `merge=true`
+  LUBs to Any silently. Without strict mode, the two-branch
+  dispatch alone gets fold-style chains right but doesn't reject
+  the eval case (that's the deliberate Java parity).
 - **Multiplicity bindings re-use the full bindings**, not the
   excluding-self set. Multiplicity LUB stays in the range lattice and
   doesn't suffer the same widening pathology as type LUB; the
