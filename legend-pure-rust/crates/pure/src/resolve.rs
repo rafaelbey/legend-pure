@@ -2371,7 +2371,7 @@ fn subtype_view(
         };
         let substituted_args: Vec<TypeExpr> = st_args
             .iter()
-            .map(|t| substitute_type(t, &ty_subst))
+            .map(|t| substitute_type_with_mults(t, &ty_subst, &mult_subst))
             .collect();
         let substituted_margs: Vec<Multiplicity> = st_margs
             .iter()
@@ -2493,6 +2493,23 @@ pub(crate) fn substitute_type(
     ty: &crate::types::TypeExpr,
     bindings: &HashMap<SmolStr, crate::types::TypeExpr>,
 ) -> crate::types::TypeExpr {
+    let empty_mult = HashMap::new();
+    substitute_type_with_mults(ty, bindings, &empty_mult)
+}
+
+/// Substitutes type AND multiplicity variables. Necessary when the
+/// type contains structural elements (`FunctionType`,
+/// `Named.multiplicity_arguments`) that bind multiplicity variables —
+/// substituting only types leaves `Function<{T[n]→V[m]}>` with `n`
+/// and `m` as `Variable(_)` even when the call site bound them.
+///
+/// `substitute_type` is the thin wrapper that passes an empty
+/// multiplicity-bindings map for callers that only care about types.
+pub(crate) fn substitute_type_with_mults(
+    ty: &crate::types::TypeExpr,
+    bindings: &HashMap<SmolStr, crate::types::TypeExpr>,
+    mult_bindings: &HashMap<SmolStr, crate::types::Multiplicity>,
+) -> crate::types::TypeExpr {
     use crate::types::TypeExpr;
     match ty {
         TypeExpr::Generic(name) => bindings.get(name).cloned().unwrap_or_else(|| ty.clone()),
@@ -2505,9 +2522,12 @@ pub(crate) fn substitute_type(
             element: *element,
             type_arguments: type_arguments
                 .iter()
-                .map(|t| substitute_type(t, bindings))
+                .map(|t| substitute_type_with_mults(t, bindings, mult_bindings))
                 .collect(),
-            multiplicity_arguments: multiplicity_arguments.clone(),
+            multiplicity_arguments: multiplicity_arguments
+                .iter()
+                .map(|m| substitute_mult(m, mult_bindings))
+                .collect(),
             value_arguments: value_arguments.clone(),
         },
         TypeExpr::FunctionType {
@@ -2517,14 +2537,23 @@ pub(crate) fn substitute_type(
         } => TypeExpr::FunctionType {
             parameters: parameters
                 .iter()
-                .map(|(t, m)| (substitute_type(t, bindings), m.clone()))
+                .map(|(t, m)| {
+                    (
+                        substitute_type_with_mults(t, bindings, mult_bindings),
+                        substitute_mult(m, mult_bindings),
+                    )
+                })
                 .collect(),
-            return_type: Box::new(substitute_type(return_type, bindings)),
-            return_multiplicity: return_multiplicity.clone(),
+            return_type: Box::new(substitute_type_with_mults(
+                return_type,
+                bindings,
+                mult_bindings,
+            )),
+            return_multiplicity: substitute_mult(return_multiplicity, mult_bindings),
         },
         TypeExpr::AlgebraUnion(a, b) => TypeExpr::AlgebraUnion(
-            Box::new(substitute_type(a, bindings)),
-            Box::new(substitute_type(b, bindings)),
+            Box::new(substitute_type_with_mults(a, bindings, mult_bindings)),
+            Box::new(substitute_type_with_mults(b, bindings, mult_bindings)),
         ),
         // Recurse into structural relation columns: each column's
         // `type_expr` may reference an outer-scope generic
@@ -2538,8 +2567,12 @@ pub(crate) fn substitute_type(
             cols.iter()
                 .map(|c| crate::types::RelationColumnTypeExpr {
                     name: c.name.clone(),
-                    type_expr: substitute_type(&c.type_expr, bindings),
-                    multiplicity: c.multiplicity.clone(),
+                    type_expr: substitute_type_with_mults(
+                        &c.type_expr,
+                        bindings,
+                        mult_bindings,
+                    ),
+                    multiplicity: substitute_mult(&c.multiplicity, mult_bindings),
                 })
                 .collect(),
         ),
