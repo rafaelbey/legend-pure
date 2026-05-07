@@ -2671,6 +2671,25 @@ pub(crate) fn type_lub(
     if a == b {
         return a.clone();
     }
+    // `Generic(name)` represents an unbound placeholder — at a LUB
+    // call site this means "no concrete contribution from this side."
+    // Treat Generic as the identity element so a function-ref's
+    // lifted FunctionType (which carries the callee's generic
+    // parameters as `Generic("T")` placeholders, e.g.
+    // `reverse_T_m__->eval([1,2,3])` lifts to
+    // `FunctionType{Generic("T")[m]→Generic("T")[m]}`) doesn't
+    // widen the caller's binding to Any when it later LUBs with the
+    // concrete contribution from a sibling arg (`[1,2,3]` →
+    // Integer). Without this, eval's T LUB(Generic("T"), Integer)
+    // = Any, leaving V/m unresolved at the strict-mode return-check.
+    //
+    // Java analog: `findBestCommonGenericType` — Java's LUB also
+    // skips the parameter-name placeholder side when one side is a
+    // bound concrete type. Same effect via a simpler rule here.
+    match (a, b) {
+        (TypeExpr::Generic(_), other) | (other, TypeExpr::Generic(_)) => return other.clone(),
+        _ => {}
+    }
     match (a, b) {
         (TypeExpr::Named { element: ea, .. }, TypeExpr::Named { element: eb, .. }) => {
             TypeExpr::Named {
@@ -2790,7 +2809,44 @@ pub(crate) fn substitute_type_with_mults(
 ) -> crate::types::TypeExpr {
     use crate::types::TypeExpr;
     match ty {
-        TypeExpr::Generic(name) => bindings.get(name).cloned().unwrap_or_else(|| ty.clone()),
+        // Follow alias chains: a function-ref's lifted FunctionType
+        // carries the callee's generic parameters (e.g.
+        // `reverse_T_m__T_m_` lifts to `FunctionType{T[m]→T[m]}`),
+        // and binding eval against this records eval's V → Generic("T")
+        // (the callee's name) as a placeholder *alias*. When eval's
+        // own T then binds concretely (from a sibling arg like
+        // `[1,2,3]`), we want V to resolve through the alias chain to
+        // the same concrete type. Without this, `eval(reverseRef,
+        // [1,2,3])` left V as `Generic("T")` even though T was bound
+        // to Integer, and strict-mode emitted "type parameter V was
+        // not resolved at call to 'eval'".
+        //
+        // Walk Generic→Generic aliases only (never structural — that
+        // would risk unbounded recursion through `Box<Generic("T")>`
+        // shapes). Once we land on a non-Generic binding, return it
+        // *as-is* without recursive substitution: substitution into
+        // its inner type-args was already done at insert time.
+        // Cycle guard: if a chain loops (T → T or T → V → T), break
+        // and return the last-seen Generic — degrades to current
+        // behaviour rather than infinite recurse.
+        TypeExpr::Generic(name) => {
+            let mut current_name = name.clone();
+            let mut seen = std::collections::HashSet::new();
+            loop {
+                if !seen.insert(current_name.clone()) {
+                    return TypeExpr::Generic(current_name);
+                }
+                match bindings.get(&current_name) {
+                    Some(TypeExpr::Generic(next_name)) if next_name != &current_name => {
+                        current_name = next_name.clone();
+                    }
+                    Some(non_generic) => {
+                        return non_generic.clone();
+                    }
+                    None => return TypeExpr::Generic(current_name),
+                }
+            }
+        }
         TypeExpr::Named {
             element,
             type_arguments,
