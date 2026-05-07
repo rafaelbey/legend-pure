@@ -60,9 +60,11 @@ fn class_closure_emits_person_and_address_interfaces() {
         person_src.contains("package com.example.gen.user_test;"),
         "Person package wrong: {person_src}"
     );
+    // Every generated interface ultimately extends the hand-written
+    // `org.finos.legend.pure.rust.proxy.Any`.
     assert!(
-        person_src.contains("public interface Person extends "),
-        "Person should be an interface with extends clause: {person_src}"
+        person_src.contains("public interface Person extends org.finos.legend.pure.rust.proxy.Any"),
+        "Person must extend the hand-written Any: {person_src}"
     );
     // [1] stays abstract; [0..1] / [*] get default empty bodies so
     // user impls don't need to override every property.
@@ -90,8 +92,9 @@ fn class_closure_emits_person_and_address_interfaces() {
 
     let address_src = &address.contents;
     assert!(
-        address_src.contains("public interface Address extends "),
-        "Address must be an interface: {address_src}"
+        address_src
+            .contains("public interface Address extends org.finos.legend.pure.rust.proxy.Any"),
+        "Address must extend the hand-written Any: {address_src}"
     );
     assert!(
         address_src.contains("String street();"),

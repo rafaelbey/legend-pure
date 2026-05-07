@@ -16,7 +16,8 @@ Java methods and interfaces.
 | Generated interfaces            | `<root>.<pure-package>.<ClassName>`             | One Java interface per reachable user `Class` (and `Enumeration`). Properties become methods — `[1]` abstract, `[0..1]` defaults to `Optional.empty()`, `[*]` defaults to `Collections.emptyList()`. Interfaces extend their Pure supertypes' generated interfaces, register their classifier on first init, and inherit two sentinel accessors (`$instancePointer()`, `$evaluator()`) from `PureRegistered`. |
 | `PureProxyFactory`              | `org.finos.legend.pure.rust.proxy`              | `wrap`/`unwrap` between native handles and proxies, plus `create(userImpl, iface, eval)` to materialise a hand-written `implements` of a generated interface as a real heap object. |
 | `PureInvocationHandler`         | `org.finos.legend.pure.rust.proxy`              | `InvocationHandler` backing every proxy. Routes property reads through `PureRustInstance.getProperty(...)` and re-wraps results using the declared `Method.getGenericReturnType()` so element types of `Iterable<X>` survive erasure. |
-| `PureRegistered`                | `org.finos.legend.pure.rust.proxy`              | Marker supertype every generated interface extends. |
+| `Any`                           | `org.finos.legend.pure.rust.proxy`              | Universal supertype every generated interface extends (transitively). Mirrors Pure's `meta::pure::metamodel::type::Any`. Adds `$rustInstance()` for falling back to dynamic dispatch via `PureRustInstance.getProperty(...)`. Used as the proxy fallback when the runtime classifier isn't registered to a more-specific generated interface — so `wrap(...)` always returns a typed proxy, never a bare `PureRustInstance`. |
+| `PureRegistered`                | `org.finos.legend.pure.rust.proxy`              | Marker supertype of `Any`; declares the `$instancePointer()` / `$evaluator()` sentinels every proxy answers. |
 | `PureLambda` (placeholder)      | `org.finos.legend.pure.rust.proxy`              | Anchors v2 function-typed-parameter support. |
 
 ## Quickstart
@@ -35,6 +36,13 @@ Long sum = PureFunctions.meta_pure_functions_math_plus_Integer_MANY__Integer_1_(
 Person bob = eval.evaluate("user_test::makePerson_String_1__Person_1_", "Bob");
 String first = bob.firstName();
 for (Address a : bob.addresses()) { System.out.println(a.street()); }
+
+// 2b. If the runtime classifier isn't registered for a specific
+//     interface (or you only have an Object reference), you still get a
+//     typed Any proxy — drop down to dynamic dispatch via $rustInstance().
+Any opaque = eval.evaluate("some::function::returning::Any_Any_1_", x);
+String classifier = opaque.$rustInstance().getClassifier();
+Object firstName = opaque.$rustInstance().getProperty("firstName");
 
 // 3. Build a fresh heap object from a hand-written implementation of a
 //    generated interface. Only override the fields you care about — the

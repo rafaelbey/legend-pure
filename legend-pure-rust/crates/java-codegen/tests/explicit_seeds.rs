@@ -48,8 +48,8 @@ fn extra_class_seed_emits_interface_with_no_function_request() {
         .expect("Standalone.java emitted");
     let src = &standalone.contents;
     assert!(
-        src.contains("public interface Standalone extends "),
-        "Standalone is an interface: {src}"
+        src.contains("public interface Standalone extends org.finos.legend.pure.rust.proxy.Any"),
+        "Standalone must extend the hand-written Any: {src}"
     );
     assert!(src.contains("String label();"), "label() missing: {src}");
     assert!(

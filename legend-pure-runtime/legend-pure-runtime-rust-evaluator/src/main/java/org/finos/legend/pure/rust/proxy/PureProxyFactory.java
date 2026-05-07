@@ -55,6 +55,14 @@ public final class PureProxyFactory
     private static final Map<String, Class<?>> CLASSIFIER_REGISTRY = new ConcurrentHashMap<>();
     private static final Map<Class<?>, String> INTERFACE_TO_CLASSIFIER = new ConcurrentHashMap<>();
 
+    static
+    {
+        // The universal supertype is always available; the codegen
+        // substitutes references to `meta::pure::metamodel::type::Any`
+        // with this hand-written interface and never emits Any.java.
+        register("meta::pure::metamodel::type::Any", Any.class);
+    }
+
     private PureProxyFactory() {}
 
     /**
@@ -359,17 +367,14 @@ public final class PureProxyFactory
         }
 
         // PureRustInstance: pick the interface to proxy as.
+        // pickInterface always returns at least Any.class, so every
+        // heap object hands back a typed proxy that the caller can
+        // instanceof-narrow or drop down on via $rustInstance().
         if (raw instanceof PureRustInstance)
         {
             PureRustInstance instance = (PureRustInstance) raw;
             Class<?> declaredIface = asInterfaceClass(declaredType);
             Class<?> targetIface = pickInterface(instance, declaredIface);
-            if (targetIface == null)
-            {
-                // No generated interface — return the raw instance so
-                // callers retain the JNI handle.
-                return (T) instance;
-            }
             return (T) Proxy.newProxyInstance(
                     targetIface.getClassLoader(),
                     new Class<?>[] {targetIface},
@@ -419,9 +424,19 @@ public final class PureProxyFactory
     }
 
     /**
-     * Return the most-specific generated interface registered for the
-     * runtime classifier of {@code instance}, falling back to the
-     * declared interface when the classifier is unregistered.
+     * Pick the interface to proxy a {@link PureRustInstance} as, in
+     * decreasing specificity:
+     * <ol>
+     *   <li>The most-specific generated interface registered for the
+     *       runtime classifier of {@code instance}, when that interface
+     *       is assignable to {@code declaredIface}.</li>
+     *   <li>The declared interface itself, when it's a generated
+     *       (i.e. {@link PureRegistered}-extending) interface.</li>
+     *   <li>{@link Any} — the universal fallback. Every Pure heap
+     *       object is at least an Any, so callers always get a typed
+     *       proxy with a {@link Any#$rustInstance()} drop-down to
+     *       dynamic dispatch.</li>
+     * </ol>
      */
     private static Class<?> pickInterface(PureRustInstance instance, Class<?> declaredIface)
     {
@@ -447,7 +462,7 @@ public final class PureProxyFactory
         {
             return declaredIface;
         }
-        return null;
+        return Any.class;
     }
 
     private static Class<?> asInterfaceClass(Type t)
