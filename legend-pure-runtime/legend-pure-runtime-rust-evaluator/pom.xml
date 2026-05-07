@@ -31,6 +31,7 @@
         <maven.compiler.release>11</maven.compiler.release>
         <maven.compiler.source>11</maven.compiler.source>
         <maven.compiler.target>11</maven.compiler.target>
+        <legend.skipBindings>false</legend.skipBindings>
     </properties>
 
     <dependencies>
@@ -55,4 +56,71 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+                Generate Java bindings for the M3 metamodel from a curated
+                manifest before compile. The manifest mixes function /
+                class / association FQNs; the CLI auto-dispatches by kind.
+                Set -Dlegend.skipBindings=true to skip (e.g. on a host
+                without a Rust toolchain).
+            -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <id>generate-java-bindings</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${legend.skipBindings}</skip>
+                            <executable>cargo</executable>
+                            <workingDirectory>${project.basedir}/../../legend-pure-rust</workingDirectory>
+                            <arguments>
+                                <argument>run</argument>
+                                <argument>--quiet</argument>
+                                <argument>-p</argument>
+                                <argument>legend-cli</argument>
+                                <argument>--</argument>
+                                <argument>java-bindings</argument>
+                                <argument>--output</argument>
+                                <argument>${project.build.directory}/generated-sources/java-bindings</argument>
+                                <argument>--java-package</argument>
+                                <argument>org.finos.legend.pure.rust.generated</argument>
+                                <argument>--bindings-file</argument>
+                                <argument>${project.basedir}/src/main/pure-bindings/m3-bindings.txt</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Register the generated dir as a compile source root. -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <id>add-generated-source</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>add-source</goal>
+                        </goals>
+                        <configuration>
+                            <sources>
+                                <source>${project.build.directory}/generated-sources/java-bindings</source>
+                            </sources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
 </project>

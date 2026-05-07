@@ -37,7 +37,7 @@ use crate::naming::{
     join_java_package, pure_fqn_segments, pure_fqn_string, pure_package_segments_of,
     safe_java_identifier,
 };
-use crate::types::{TypePosition, render_java_type};
+use crate::types::{GenericPolicy, TypePosition, render_java_type};
 
 pub(crate) fn emit_class_interface(
     model: &PureModel,
@@ -99,6 +99,7 @@ pub(crate) fn emit_class_interface(
             &pure_fqn,
             TypePosition::Return,
             opts,
+            GenericPolicy::AsObject,
         )?;
         body.push_str(&format!(
             "    {} {}();\n",
@@ -116,6 +117,7 @@ pub(crate) fn emit_class_interface(
             &pure_fqn,
             TypePosition::Return,
             opts,
+            GenericPolicy::AsObject,
         )?;
         body.push_str(&format!("    {} ", return_ty.source));
         body.push_str(&safe_java_identifier(qp.name.as_str()));
@@ -131,6 +133,7 @@ pub(crate) fn emit_class_interface(
                 &pure_fqn,
                 TypePosition::Parameter(param.name.as_str()),
                 opts,
+                GenericPolicy::AsObject,
             )?;
             body.push_str(&format!(
                 "{} {}",
@@ -158,6 +161,7 @@ pub(crate) fn emit_class_interface(
                 &pure_fqn,
                 TypePosition::Return,
                 opts,
+                GenericPolicy::AsObject,
             )?;
             body.push_str(&format!(
                 "    {} {}();\n",

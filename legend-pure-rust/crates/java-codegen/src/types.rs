@@ -52,6 +52,24 @@ pub(crate) struct JavaType {
     pub(crate) carries_user_type: bool,
 }
 
+/// How to handle a `TypeExpr::Generic` (a type-variable reference).
+///
+/// Static-facade function signatures hard-fail when a generic type
+/// shows up — there's no way to wrap a function whose signature can't
+/// be made concrete in Java. Class properties / qualified properties
+/// on generated interfaces are rendered with a relaxed mode that maps
+/// generics to `Object`, which is lossy but keeps codegen running for
+/// generic classes (`Enumeration<E>.values: E[*]` →
+/// `Iterable<Object> values()`). Future v2 generic-arg propagation
+/// will replace this with parameterised interfaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GenericPolicy {
+    /// Reject generic types with `CodegenError::GenericTyped`.
+    Reject,
+    /// Render generic types as `Object`.
+    AsObject,
+}
+
 /// Render the Java type for a Pure (TypeExpr, Multiplicity) pair.
 ///
 /// `function_fqn` is included only so error variants can attribute the
@@ -63,8 +81,16 @@ pub(crate) fn render_java_type(
     function_fqn: &str,
     position: TypePosition<'_>,
     opts: &Options,
+    generic_policy: GenericPolicy,
 ) -> Result<JavaType, CodegenError> {
-    let inner = render_inner_type(model, type_expr, function_fqn, position, opts)?;
+    let inner = render_inner_type(
+        model,
+        type_expr,
+        function_fqn,
+        position,
+        opts,
+        generic_policy,
+    )?;
     Ok(wrap_multiplicity(inner, mult))
 }
 
@@ -104,6 +130,7 @@ fn render_inner_type(
     function_fqn: &str,
     position: TypePosition<'_>,
     opts: &Options,
+    generic_policy: GenericPolicy,
 ) -> Result<JavaType, CodegenError> {
     // Reject any nested function-type (e.g. `Function<{T[1]->V[1]}>`) before
     // we even try to render the outer Named ref.
@@ -118,20 +145,32 @@ fn render_inner_type(
             fqn: function_fqn.to_owned(),
             position: position.describe(),
         }),
-        TypeExpr::Generic(name) => Err(CodegenError::GenericTyped {
-            fqn: function_fqn.to_owned(),
-            position: position.describe(),
-            ty: name.to_string(),
-        }),
+        TypeExpr::Generic(name) => match generic_policy {
+            GenericPolicy::Reject => Err(CodegenError::GenericTyped {
+                fqn: function_fqn.to_owned(),
+                position: position.describe(),
+                ty: name.to_string(),
+            }),
+            GenericPolicy::AsObject => Ok(JavaType {
+                source: "Object".to_owned(),
+                carries_user_type: false,
+            }),
+        },
         TypeExpr::AlgebraUnion(_, _) => Err(CodegenError::RelationTyped {
             fqn: function_fqn.to_owned(),
             position: position.describe(),
         }),
-        TypeExpr::Unresolved => Err(CodegenError::GenericTyped {
-            fqn: function_fqn.to_owned(),
-            position: position.describe(),
-            ty: "<unresolved>".to_owned(),
-        }),
+        TypeExpr::Unresolved => match generic_policy {
+            GenericPolicy::Reject => Err(CodegenError::GenericTyped {
+                fqn: function_fqn.to_owned(),
+                position: position.describe(),
+                ty: "<unresolved>".to_owned(),
+            }),
+            GenericPolicy::AsObject => Ok(JavaType {
+                source: "Object".to_owned(),
+                carries_user_type: false,
+            }),
+        },
     }
 }
 
