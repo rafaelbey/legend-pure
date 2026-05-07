@@ -24,29 +24,29 @@
 //! struct with explicit phases:
 //!
 //! 1. **Phase 0 — `process_let_function_call`**. Side-effect form;
-//! binds variable into scope, returns `Nil[0]`.
+//!    binds variable into scope, returns `Nil[0]`.
 //! 2. **Phase 1 — `first_pass_inference`**. Walk each arg bottom-up,
-//! flagging args that didn't converge. Java analog:
-//! `FunctionExpressionProcessor.firstPassTypeInference` (`:796-821`).
+//!    flagging args that didn't converge. Java analog:
+//!    `FunctionExpressionProcessor.firstPassTypeInference` (`:796-821`).
 //! 3. **Phase 1.5 — `branch_select`**. If any arg failed to converge
-//! in Phase 1 → `RegisterMode::Authoritative` over the succeeded
-//! args (Java's `potentiallyUpdate…`). Otherwise →
-//! `RegisterMode::Constraint` over all args (Java's `update…`).
+//!    in Phase 1 → `RegisterMode::Authoritative` over the succeeded
+//!    args (Java's `potentiallyUpdate…`). Otherwise →
+//!    `RegisterMode::Constraint` over all args (Java's `update…`).
 //! 4. **Phase 2 — `register_*`**. Bind type/multiplicity vars into
-//! [`super::context::TypeInferenceContext`] using the chosen mode.
+//!    [`super::context::TypeInferenceContext`] using the chosen mode.
 //! 5. **Phase 3 — `process_lambdas`**. The lambda body second-pass —
-//! extends `var_types` with substituted lambda params, infers each
-//! body's last expression, binds the FunctionType's return-var.
-//! Java analog: `FunctionExpressionProcessor:618-679`. Currently in
-//! `crate::resolve::infer_generic_bindings`'s second-pass loop;
-//! moves into [`super::lambda::LambdaParamFiller`] in Step 3e.
+//!    extends `var_types` with substituted lambda params, infers each
+//!    body's last expression, binds the FunctionType's return-var.
+//!    Java analog: `FunctionExpressionProcessor:618-679`. Currently in
+//!    `crate::resolve::infer_generic_bindings`'s second-pass loop;
+//!    moves into [`super::lambda::LambdaParamFiller`] in Step 3e.
 //! 6. **Phase 4 — `validate_call_arguments`**. Per-arg type +
-//! multiplicity check using `make_concrete(param)`. Currently in
-//! `crate::infer::validate_call_arguments`; routed through here in
-//! Step 3g (when arg validation flips on).
+//!    multiplicity check using `make_concrete(param)`. Currently in
+//!    `crate::infer::validate_call_arguments`; routed through here in
+//!    Step 3g (when arg validation flips on).
 //! 7. **Phase 5 — `finalize`**. Substitute the function's declared
-//! return signature with the bindings; emit any
-//! `UnresolvedTypeParameter` /
-//! `UnresolvedMultiplicityParameter` diagnostics under.
+//!    return signature with the bindings; emit any
+//!    `UnresolvedTypeParameter` /
+//!    `UnresolvedMultiplicityParameter` diagnostics under.
 //!
 //! Plan: `~/.claude/plans/do-we-have-enought-quiet-swing.md`.

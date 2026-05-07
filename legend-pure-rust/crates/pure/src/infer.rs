@@ -20,12 +20,12 @@
 //! # Design
 //!
 //! - **Inline types** — types are set directly on `ValueSpec::type_info`,
-//! eliminating the need for a side map.
+//!   eliminating the need for a side map.
 //! - **Bottom-up** — literals carry their own types, variables resolve from
-//! scope, property access looks up the class, function calls use the
-//! declared return type.
+//!   scope, property access looks up the class, function calls use the
+//!   declared return type.
 //! - **Scope chain** — `let` bindings and lambda parameters push entries
-//! into a scope stack. Variable references resolve by walking up.
+//!   into a scope stack. Variable references resolve by walking up.
 
 use smol_str::SmolStr;
 
@@ -155,16 +155,16 @@ impl InferCtx<'_> {
 /// expressions, mapping property bodies). The contract is:
 ///
 /// 1. `body` must already be lowered to [`ValueSpec`]s. Use the
-/// extension API in `crates/pure` (Pass 2b' lowering helpers,
-/// promoted as needed in future stages) to lower from AST.
+///    extension API in `crates/pure` (Pass 2b' lowering helpers,
+///    promoted as needed in future stages) to lower from AST.
 /// 2. `params` provides the variable bindings visible at the start of
-/// the body (e.g. the lambda's parameters). `Scope::from_params`
-/// builds the root scope.
+///    the body (e.g. the lambda's parameters). `Scope::from_params`
+///    builds the root scope.
 /// 3. The function mutates `body` in place — every successfully
-/// inferred expression has `type_info` populated. Read it with
-/// `body[i].type_info.as_ref()` after the call.
+///    inferred expression has `type_info` populated. Read it with
+///    `body[i].type_info.as_ref()` after the call.
 /// 4. Errors append to `errors` rather than aborting; partial
-/// inference results are still observable.
+///    inference results are still observable.
 pub fn infer_function_body(
     model: &PureModel,
     params: &[Parameter],
@@ -829,13 +829,13 @@ fn process_let_function_call(
 /// under Java semantics) survives as `Generic("T")`, which
 /// `is_type_compatible`'s wildcard arm accepts. Result:
 /// - `eval(intFunc, 'wrong')` — T_auth=Integer (from arg 0's
-/// `Function<{T→V}>` slot); arg 1 (String) checked against
-/// Integer → catch.
+///   `Function<{T→V}>` slot); arg 1 (String) checked against
+///   Integer → catch.
 /// - `compare(1, 'a')` — T_auth empty; arg 1 ('a') checked
-/// against Generic("T") → wildcard pass.
+///   against Generic("T") → wildcard pass.
 /// - `compare(1, 2.2)` — same; T_auth empty → wildcard pass.
 /// - `takesInt(2.2)` — no Generic; param is concrete Integer;
-/// `is_type_compatible(Float, Integer)` → false → catch.
+///   `is_type_compatible(Float, Integer)` → false → catch.
 ///
 /// This is a deliberate divergence over Java semantics: Java itself
 /// silently widens via `findBestCommonGenericType` covariant LUB,
@@ -1095,18 +1095,18 @@ struct QpCandidate {
 ///
 /// Steps:
 /// 1. Take ownership of the expression's `FunctionCallData` via
-/// `mem::replace` so we can mutate `expr.kind` later without
-/// borrow conflicts.
+///    `mem::replace` so we can mutate `expr.kind` later without
+///    borrow conflicts.
 /// 2. Infer all argument types bottom-up.
 /// 3. Resolve the property's return type via `infer_simple_property`
-/// or `infer_qualified_property` (handles `UnknownProperty` errors,
-/// QP arity + arg-type validation, etc.).
+///    or `infer_qualified_property` (handles `UnknownProperty` errors,
+///    QP arity + arg-type validation, etc.).
 /// 4. If the receiver multiplicity is non-strictly-toOne, rewrite
-/// `expr.kind` to a `map(receiver, λ{v_automap | property(v_automap,...)})`
-/// call and return the rewritten map's resolved type.
+///    `expr.kind` to a `map(receiver, λ{v_automap | property(v_automap,...)})`
+///    call and return the rewritten map's resolved type.
 /// 5. Otherwise restore the original `PropertyCall` /
-/// `QualifiedPropertyCall` variant and return the property's type
-/// directly.
+///    `QualifiedPropertyCall` variant and return the property's type
+///    directly.
 fn infer_property_or_qp_call(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedType> {
     // Step 1: take the data out so we can later mutate `expr.kind`.
     let is_qualified = matches!(&*expr.kind, ExprKind::QualifiedPropertyCall(_));
@@ -2024,15 +2024,15 @@ fn has_compatible_sibling_overload(
 /// Same gating principles as the call-site arg-vs-param check:
 ///
 /// - Both sides must be **leaf primitives** (Integer / Float /
-/// Decimal / String / Boolean / three Date kinds). Generic and
-/// class returns involve subtyping nuances that this layer
-/// doesn't second-guess.
+///   Decimal / String / Boolean / three Date kinds). Generic and
+///   class returns involve subtyping nuances that this layer
+///   doesn't second-guess.
 /// - Multiplicity is checked only for **trustworthy expression
-/// shapes** (literals, `Variable`, `Collection` literal). Other
-/// shapes — chained `FunctionCall`s, `PropertyCall`s, lambdas —
-/// can have inferred multiplicity that's wrong upstream (e.g.
-/// `expr->toOne()` not narrowing `[*]` to `[1]`); reporting on
-/// those would emit noise on real platform code.
+///   shapes** (literals, `Variable`, `Collection` literal). Other
+///   shapes — chained `FunctionCall`s, `PropertyCall`s, lambdas —
+///   can have inferred multiplicity that's wrong upstream (e.g.
+///   `expr->toOne()` not narrowing `[*]` to `[1]`); reporting on
+///   those would emit noise on real platform code.
 ///
 /// Errors get the function's source span, since "the body returns
 /// the wrong thing" is a property of the function as a whole and
