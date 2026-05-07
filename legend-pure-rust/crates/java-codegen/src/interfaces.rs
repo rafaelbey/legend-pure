@@ -141,15 +141,20 @@ pub(crate) fn emit_class_interface(
         body.push_str(");\n");
     }
 
-    // Association-injected properties.
-    for (assoc_id, prop_idx) in model.association_properties(class_id) {
+    // Association-injected properties. The model's
+    // `association_properties` index registers each property on its OWN
+    // declared target class; the property that's *navigable* from this
+    // class is the OTHER end (`1 - prop_idx_pointing_to_self`). Mirrors
+    // `crates/pure/src/infer.rs:1755`.
+    for (assoc_id, prop_idx_pointing_to_self) in model.association_properties(class_id) {
         if let Element::Association(assoc) = model.get_element(*assoc_id)
-            && let Some(prop) = assoc.properties.get(*prop_idx)
+            && assoc.properties.len() == 2
+            && let Some(injected) = assoc.properties.get(1 - *prop_idx_pointing_to_self)
         {
             let return_ty = render_java_type(
                 model,
-                &prop.type_expr,
-                &prop.multiplicity,
+                &injected.type_expr,
+                &injected.multiplicity,
                 &pure_fqn,
                 TypePosition::Return,
                 opts,
@@ -157,7 +162,7 @@ pub(crate) fn emit_class_interface(
             body.push_str(&format!(
                 "    {} {}();\n",
                 return_ty.source,
-                safe_java_identifier(prop.name.as_str())
+                safe_java_identifier(injected.name.as_str())
             ));
         }
     }
