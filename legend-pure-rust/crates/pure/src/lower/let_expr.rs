@@ -98,46 +98,34 @@ fn infer_let_type(
         ExprKind::BooleanLiteral(_) => Some((named(bootstrap::BOOLEAN_ID), Multiplicity::PureOne)),
         ExprKind::FunctionCall(FunctionCallData {
             function,
-            function_name,
             arguments,
-        }) => {
-            // `copy` returns the source's type. Lowered via
-            // `lower_copy` as `FunctionCall { function: None,
-            // function_name: "copy", arguments: [source, key1,
-            // val1, augmented1, …] }` — the dispatcher doesn't
-            // bind `copy` to an Element, so `function.and_then`
-            // fails. Special-case here so
-            // `let p2 = ^$person(field=val)` registers p2's type
-            // as Person (matching $person). Without this,
-            // `$p2.field->toOne()` strict-checks fail because
-            // p2 has no type info downstream.
-            if function_name.as_str() == "copy"
-                && let Some(source) = arguments.first()
-                && let Some((te, mult)) = infer_let_type(source, ctx)
-            {
-                return Some((te, mult));
+            ..
+        }) => function.and_then(|fid| {
+            if let crate::model::Element::Function(f) = ctx.model.get_element(fid) {
+                // Bind generic type/multiplicity variables from the call
+                // arguments, then substitute into the declared return type
+                // and multiplicity. This turns `cast<T|m>(x, @Class<Any>)`
+                // from `(T, m)` into `(Class<Any>, [1])`.
+                //
+                // Note on `copy`: `^$x(field=val)` lowers to
+                // `FunctionCall { function: None, function_name: "copy" }`.
+                // Its type comes from `lower_copy`'s pre-set `type_info`
+                // (read via the early-return at the top of
+                // `infer_let_type`), not through this arm.
+                let bindings = crate::resolve::infer_generic_bindings(
+                    &f.parameters,
+                    arguments,
+                    ctx.model,
+                    &ctx.variable_types,
+                );
+                Some((
+                    crate::resolve::substitute_type(&f.return_type, &bindings.ty),
+                    crate::resolve::substitute_mult(&f.return_multiplicity, &bindings.mult),
+                ))
+            } else {
+                None
             }
-            function.and_then(|fid| {
-                if let crate::model::Element::Function(f) = ctx.model.get_element(fid) {
-                    // Bind generic type/multiplicity variables from the call
-                    // arguments, then substitute into the declared return type
-                    // and multiplicity. This turns `cast<T|m>(x, @Class<Any>)`
-                    // from `(T, m)` into `(Class<Any>, [1])`.
-                    let bindings = crate::resolve::infer_generic_bindings(
-                        &f.parameters,
-                        arguments,
-                        ctx.model,
-                        &ctx.variable_types,
-                    );
-                    Some((
-                        crate::resolve::substitute_type(&f.return_type, &bindings.ty),
-                        crate::resolve::substitute_mult(&f.return_multiplicity, &bindings.mult),
-                    ))
-                } else {
-                    None
-                }
-            })
-        }
+        }),
         ExprKind::PropertyCall(data) | ExprKind::QualifiedPropertyCall(data) => {
             // Resolve the property's declared type + multiplicity and
             // combine with the receiver's multiplicity (`obj[m1].prop[m2]`
