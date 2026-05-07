@@ -244,6 +244,42 @@ function test::pctRunner<Z|y>(
 }
 
 // ---------------------------------------------------------------------------
+// 6a. Unbound T at nested call site — strict-mode divergence (Step 3f)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tic_unbound_t_at_nested_call_strict_mode_errors() {
+    // Strict mode flips the lenient default below: every call site
+    // reports surviving `Generic(name)` that isn't in the enclosing
+    // function's signature. Strictly more diagnostics than Java
+    // emits (Java is gated on outermost context only); we err on the
+    // side of loudness because that's what porters/migrations need.
+    let source = r#"
+###Pure
+native function test::stub<T>(): T[1];
+function test::caller(): Any[1] {
+    test::stub()
+}
+"#;
+    let result = legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[])
+    });
+    let partial = result.expect_err(
+        "Strict mode: unresolved T at the call to `stub` must surface \
+         UnresolvedTypeParameter.",
+    );
+    assert!(
+        partial.errors.iter().any(|e| matches!(
+            &e.kind,
+            legend_pure_parser_pure::error::CompilationErrorKind::UnresolvedTypeParameter { parameter, .. }
+                if parameter.as_str() == "T"
+        )),
+        "expected UnresolvedTypeParameter {{ parameter: \"T\", .. }}; got: {:?}",
+        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 6. Unbound T at nested call site — current lenient state (Java parity)
 // ---------------------------------------------------------------------------
 
@@ -278,6 +314,37 @@ function test::caller(): Any[1] {
     // strict-mode flag, the count below catches it without needing
     // the test to flip.
     drop(model); // suppress unused-binding lint
+}
+
+// ---------------------------------------------------------------------------
+// 7a. Unbound multiplicity m — strict-mode divergence (Step 3f)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tic_unbound_multiplicity_at_nested_call_strict_mode_errors() {
+    let source = r#"
+###Pure
+native function test::stubM<T|m>(t: T[1]): T[m];
+function test::caller(): Integer[1] {
+    test::stubM(1)
+}
+"#;
+    let result = legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[])
+    });
+    let partial = result.expect_err(
+        "Strict mode: unresolved m at the call to `stubM` must surface \
+         UnresolvedMultiplicityParameter.",
+    );
+    assert!(
+        partial.errors.iter().any(|e| matches!(
+            &e.kind,
+            legend_pure_parser_pure::error::CompilationErrorKind::UnresolvedMultiplicityParameter { parameter, .. }
+                if parameter.as_str() == "m"
+        )),
+        "expected UnresolvedMultiplicityParameter {{ parameter: \"m\", .. }}; got: {:?}",
+        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
 }
 
 // ---------------------------------------------------------------------------

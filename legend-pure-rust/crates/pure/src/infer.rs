@@ -711,22 +711,33 @@ fn infer_function_call(
         let type_expr = bindings.make_concrete_type(&f.return_type);
         let multiplicity = bindings.make_concrete_mult(&f.return_multiplicity);
 
-        // **Java parity intentionally LENIENT here.** Java's
-        // "type parameter X was not resolved" error
+        // Default mode (Java parity): LENIENT. Java's "type
+        // parameter X was not resolved" error
         // (`TypeInference.java:87-89`) is gated on
         // `typeInferenceContext.getParent() == null` — it only fires
         // at the outermost processing context. Every call inside a
         // function body has a parent context, so the check stays
         // silent there even when the substituted return retains a
-        // `Generic(T)`. Locks current behaviour with the platform
-        // PCT corpus, which constantly threads `<Z|y>` parameters
-        // through nested `eval` calls.
+        // `Generic(T)`. The platform PCT corpus depends on this —
+        // `<Z|y>` parameters constantly thread through nested `eval`
+        // calls.
         //
-        // A *strict-mode* divergence (covered by tests
-        // `tic_unbound_top_level_t_errors`,
-        // `tic_unbound_multiplicity_errors`,
-        // `tic_eval_wrong_arg_strict_errors`) is a separate item;
-        // see plan Step 3g + the `inference::` module's open work.
+        // **Strict mode** (Step 3f, gated by `crate::strict_mode`):
+        // walks the substituted return type/multiplicity for any
+        // surviving generic-variable name that isn't in the
+        // enclosing function's signature, and emits the Java-parity
+        // diagnostic. Strictly more diagnostics than Java emits at
+        // this site; intended for ports / migrations where loud
+        // signal beats silent type-system slips.
+        if crate::strict_mode::is_enabled() {
+            emit_unresolved_generic_diagnostics(
+                ctx,
+                function_name,
+                &type_expr,
+                &multiplicity,
+                arg_source_infos,
+            );
+        }
 
         return Some(ResolvedType {
             type_expr,
@@ -1038,6 +1049,63 @@ fn validate_call_arguments(
                 },
             });
         }
+    }
+}
+
+/// Strict-mode-only Java-parity diagnostics (Step 3f). Walks the
+/// substituted return type/multiplicity for surviving generic /
+/// multiplicity variables that aren't transitive from the enclosing
+/// function's signature, and emits `UnresolvedTypeParameter` /
+/// `UnresolvedMultiplicityParameter` for each.
+///
+/// Default mode (Java parity) skips these checks: Java's site is
+/// `TypeInference.java:87-89, :102` and is gated on
+/// `getParent() == null`, so it only fires at the outermost
+/// processing context. We can't model that gate exactly without the
+/// full TypeInferenceContext stack (Step 3d-cont), so strict mode
+/// errs on the side of loudness — every call site reports unbound
+/// generics. Tests that pin pre-strict-mode lenient behaviour
+/// (`tic_unbound_t_at_nested_call_currently_silent` and friends)
+/// stay green because strict mode is opt-in.
+fn emit_unresolved_generic_diagnostics(
+    ctx: &mut InferCtx<'_>,
+    function_name: &SmolStr,
+    type_expr: &TypeExpr,
+    multiplicity: &Multiplicity,
+    arg_source_infos: &[legend_pure_parser_ast::SourceInfo],
+) {
+    let source_info = arg_source_infos
+        .first()
+        .cloned()
+        .unwrap_or_else(|| legend_pure_parser_ast::SourceInfo::new("<unknown>", 0, 0, 0, 0));
+    for name in crate::inference::context::unresolved_type_params(type_expr) {
+        if ctx.type_params_in_scope.contains(&name) {
+            continue;
+        }
+        ctx.errors.push(crate::error::CompilationError {
+            message: format!(
+                "The type parameter {name} was not resolved at call to '{function_name}'"
+            ),
+            source_info: source_info.clone(),
+            kind: crate::error::CompilationErrorKind::UnresolvedTypeParameter {
+                function: function_name.clone(),
+                parameter: name,
+            },
+        });
+    }
+    if let Some(name) = crate::inference::context::unresolved_mult_param(multiplicity)
+        && !ctx.mult_params_in_scope.contains(&name)
+    {
+        ctx.errors.push(crate::error::CompilationError {
+            message: format!(
+                "The multiplicity parameter {name} was not resolved at call to '{function_name}'"
+            ),
+            source_info,
+            kind: crate::error::CompilationErrorKind::UnresolvedMultiplicityParameter {
+                function: function_name.clone(),
+                parameter: name,
+            },
+        });
     }
 }
 

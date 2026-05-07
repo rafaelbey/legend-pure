@@ -91,7 +91,6 @@ impl GenericBindings {
 /// `AlgebraUnion`, and `Relation` columns so a parametric position
 /// (`Class<T>`, `Function<{T->X}>`) doesn't hide an unresolved
 /// generic.
-#[allow(dead_code)] // wired in Step 3g (strict-mode flag)
 #[must_use]
 pub fn unresolved_type_params(ty: &TypeExpr) -> Vec<SmolStr> {
     let mut out = Vec::new();
@@ -99,7 +98,6 @@ pub fn unresolved_type_params(ty: &TypeExpr) -> Vec<SmolStr> {
     out
 }
 
-#[allow(dead_code)] // wired in Step 3g (strict-mode flag)
 fn walk_type_for_unresolved(ty: &TypeExpr, out: &mut Vec<SmolStr>) {
     match ty {
         TypeExpr::Generic(name) => {
@@ -140,7 +138,6 @@ fn walk_type_for_unresolved(ty: &TypeExpr, out: &mut Vec<SmolStr>) {
 /// [`unresolved_type_params`] to detect unresolved multiplicity
 /// generics — Java parity for `TypeInference.java:102` ("The
 /// multiplicity parameter X was not resolved").
-#[allow(dead_code)] // wired in Step 3g (strict-mode flag)
 #[must_use]
 pub fn unresolved_mult_param(m: &Multiplicity) -> Option<SmolStr> {
     match m {
