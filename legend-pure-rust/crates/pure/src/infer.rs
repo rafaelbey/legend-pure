@@ -725,11 +725,9 @@ fn infer_function_call(
             function,
             function_name,
             &f.parameters,
-            arguments,
             arg_types,
             arg_source_infos,
             &bindings,
-            &var_types,
         );
 
         // Reuse the up-front `bindings` to substitute the function's
@@ -850,43 +848,21 @@ fn process_let_function_call(
 ///
 /// **Strict mode (Step 3g, opt-in via
 /// `crate::strict_mode::with_strict_mode(true, ...)` or the
-/// `LEGEND_PURE_STRICT_INFERENCE` env var)** computes per-arg bindings
-/// that *exclude* the arg under check, then substitutes the param's
-/// type with those bindings before the compatibility check. This
-/// catches `eval(f:Function<{Integer→String}>[1], 'wrong')` style
-/// mismatches: T binds Integer authoritatively from arg 0's
-/// FunctionType slot; checking arg 1 (`'wrong'`) sees its param
-/// substituted to `Integer` (because arg 1 itself is excluded from
-/// the binding pass), and `is_type_compatible(String, Integer)`
-/// rejects. This is a deliberate divergence-over-Java semantics;
-/// documented in `parity_semantics.md`.
-fn strict_bindings_excluding_arg(
-    parameters: &[Parameter],
-    arguments: &[ValueSpec],
-    skip_idx: usize,
-    model: &PureModel,
-    var_types: &crate::resolve::VarTypes,
-) -> crate::inference::GenericBindings {
-    // Replace arguments[skip_idx] with an Unresolved-typed
-    // placeholder ValueSpec. `infer_typeexpr_from_valuespec` returns
-    // None for an unresolved Variable, which makes `bind_type`
-    // short-circuit (no contribution to bindings), giving the slot
-    // a clean no-op without restructuring `infer_generic_bindings`.
-    let mut modified = arguments.to_vec();
-    if skip_idx < modified.len() {
-        modified[skip_idx] = ValueSpec {
-            kind: Box::new(ExprKind::Variable {
-                name: SmolStr::new_static("__strict_excluded_arg"),
-            }),
-            source_info: legend_pure_parser_ast::SourceInfo::new("<strict-mode>", 0, 0, 0, 0),
-            type_info: Some(Box::new(ResolvedType {
-                type_expr: TypeExpr::Unresolved,
-                multiplicity: Multiplicity::PureOne,
-            })),
-        };
-    }
-    crate::resolve::infer_generic_bindings(parameters, &modified, model, var_types)
-}
+/// `LEGEND_PURE_STRICT_INFERENCE` env var)** substitutes the param's
+/// type using only *authoritative* bindings — the subset of T's bound
+/// from a structural `FunctionType` slot (Pure-invariant). A T whose
+/// value came only from a top-level Generic-typed arg (LUB-able under
+/// Java semantics) survives substitution as `Generic("T")`, which
+/// `is_type_compatible`'s wildcard arm accepts. This catches
+/// `eval(f:Function<{Integer→String}>[1], 'wrong')` (T_auth=Integer,
+/// catch) without false-positiving on
+/// `compare<T>(a:T,b:T)` mixed-arg calls (T_auth empty, wildcard
+/// pass — matching Java's LUB-to-common-supertype semantics for
+/// top-level Generic params). See
+/// `inference::context::GenericBindings::ty_auth` for the source-side
+/// of the auth-vs-constraint distinction. This is a deliberate
+/// divergence-over-Java semantics; documented in
+/// `parity_semantics.md`.
 
 #[allow(clippy::too_many_arguments)]
 fn validate_call_arguments(
@@ -894,11 +870,9 @@ fn validate_call_arguments(
     function: Option<crate::ids::ElementId>,
     function_name: &SmolStr,
     parameters: &[Parameter],
-    arguments: &[ValueSpec],
     arg_types: &[Option<ResolvedType>],
     arg_source_infos: &[legend_pure_parser_ast::SourceInfo],
     bindings: &crate::inference::GenericBindings,
-    var_types: &crate::resolve::VarTypes,
 ) {
     let strict = crate::strict_mode::is_enabled();
     for (param, (arg_ty, arg_idx)) in parameters.iter().zip(arg_types.iter().zip(0usize..)) {
@@ -907,23 +881,28 @@ fn validate_call_arguments(
             TypeExpr::Named { element, .. } => Some(*element),
             _ => None,
         };
-        // Strict mode: compute bindings *excluding* the arg under
-        // check, so the LUB-merging in `bind_type` doesn't widen T
-        // back to Any and mask the mismatch. Replace `arguments[i]`
-        // with an Unresolved-typed placeholder so its position no
-        // longer contributes to T's binding — `bind_type` short-circuits
-        // on Unresolved (`resolve.rs:bind_type` early-return), giving
-        // the slot a no-op effect.
-        //
-        // Java analog: the two-branch dispatch in
-        // `FunctionExpressionProcessor:567-594` registers the
-        // converged args first (authoritative) and treats the
-        // failing arg as a constraint slot to check against the
-        // already-frozen authoritative bindings.
+        // Strict mode: substitute the param using *only* authoritative
+        // bindings (`ty_auth`). A `T` whose value was set by a
+        // structural `FunctionType` slot (Pure-invariant) survives as
+        // its concrete value; a `T` set only by a top-level Generic
+        // param contribution (LUB-able under Java semantics) survives
+        // as `Generic("T")`, which `is_type_compatible`'s wildcard
+        // arm accepts. Result:
+        //   - `eval(intFunc, 'wrong')` — T_auth=Integer (from arg 0's
+        //     `Function<{T→V}>` slot); arg 1 (String) checked against
+        //     Integer → catch.
+        //   - `compare(1, 'a')` — T_auth empty; arg 1 ('a') checked
+        //     against Generic("T") → wildcard pass.
+        //   - `compare(1, 2.2)` — same; T_auth empty → wildcard pass.
+        //   - `takesInt(2.2)` — no Generic; param is concrete Integer;
+        //     `is_type_compatible(Float, Integer)` → false → catch.
+        // This replaces the older excluding-self trick which
+        // false-positived on `compare(1,'a')`-style top-level Generic
+        // mixed-arg calls (Pure-language ack: top-level Generic params
+        // LUB to common supertype, no special numeric handling
+        // needed).
         let param_te = if strict {
-            let excluded =
-                strict_bindings_excluding_arg(parameters, arguments, arg_idx, ctx.model, var_types);
-            excluded.make_concrete_type(&param.type_expr)
+            bindings.make_concrete_type_strict(&param.type_expr)
         } else {
             param.type_expr.clone()
         };

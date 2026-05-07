@@ -33,18 +33,36 @@ use crate::types::{Multiplicity, TypeExpr};
 /// Bindings from generic parameter names (`T`, `m`, …) to the concrete
 /// types/multiplicities inferred at a specific call site.
 ///
-/// **Currently** a flat pair of maps; relocated here from
-/// `crate::resolve::GenericBindings` so the binding/substitution seam
-/// has a stable home. The Java analog is `GenericTypeWithXArguments`
-/// (which additionally carries the parametric type the arguments
-/// belong to). Future work threads a `TypeInferenceContext` stack
-/// around this so authoritative-vs-constraint bindings are
-/// distinguishable; at that point this struct may grow a `parent` link
-/// or be replaced wholesale by a richer state record.
+/// `ty` carries the LUB-merged Java-parity view (matches Java's
+/// `findBestCommonGenericType` covariant LUB). `ty_auth` carries the
+/// subset bound from *structural* `FunctionType` slots — those
+/// bindings are invariant in Pure (a function declared
+/// `Function<{Integer→X}>` cannot be upcast to
+/// `Function<{Number→X}>`), so they're treated as authoritative for
+/// the strict-mode wrong-arg check that matches an arg's type
+/// against a frozen-by-FunctionType T.
+///
+/// Strict-mode catches `eval(intFunc, 'wrong')` because arg 0's
+/// `Function<{T→V}>` slot binds T=Integer authoritatively, while
+/// arg 1's top-level `T` binds T=String as a constraint. The
+/// LUB-merged view widens to Any (Java parity, default mode passes);
+/// the auth-only view keeps T=Integer (strict mode rejects). For
+/// `compare<T>(a:T, b:T)`-style calls, both bindings are top-level
+/// constraint, `ty_auth` is empty, the auth-only view leaves T as
+/// `Generic("T")` which `is_type_compatible`'s wildcard arm accepts
+/// — so strict mode doesn't false-positive on `compare(1, 'a')`.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct GenericBindings {
-    /// Type-variable bindings: `T` → `TypeExpr::Named { Class, … }`.
+    /// Type-variable bindings, LUB-merged across all sources
+    /// (Java-parity merged view).
     pub ty: HashMap<SmolStr, TypeExpr>,
+    /// Subset of `ty` bound from a structural `FunctionType` slot
+    /// (invariant, treated as authoritative). When both auth and
+    /// constraint contribute to the same `T`, auth wins absolutely
+    /// — `ty_auth[T]` is the auth value, `ty[T]` is the LUB-merged
+    /// (Java parity) value. Used by [`make_concrete_type_strict`] to
+    /// produce the strict-mode substituted view.
+    pub ty_auth: HashMap<SmolStr, TypeExpr>,
     /// Multiplicity-variable bindings: `m` → `Multiplicity::PureOne`.
     pub mult: HashMap<SmolStr, Multiplicity>,
 }
@@ -78,6 +96,26 @@ impl GenericBindings {
     #[must_use]
     pub fn make_concrete_mult(&self, m: &Multiplicity) -> Multiplicity {
         crate::resolve::substitute_mult(m, &self.mult)
+    }
+
+    /// Substitute using *only* authoritative bindings (those bound from
+    /// a structural `FunctionType` slot). Constraint-only `Generic(T)`
+    /// references survive as `Generic("T")` in the result —
+    /// `is_type_compatible`'s `_ => return true` arm then accepts any
+    /// arg type against them, matching Java's LUB-to-supertype semantics
+    /// for top-level Generic params without LUB-widening auth slots.
+    ///
+    /// Used by the strict-mode arg-type check in
+    /// `validate_call_arguments`. The catch surface: any `T` whose value
+    /// was set authoritatively by another arg's structural FunctionType
+    /// slot (most prominently `eval`'s `func:Function<{T[n]→V[m]}>`
+    /// signature). The non-catch surface: `compare<T>(a:T,b:T)`-style
+    /// calls where both args are top-level Generic-typed; `ty_auth` is
+    /// empty for those, the substituted param remains `Generic("T")`,
+    /// strict-mode silently accepts.
+    #[must_use]
+    pub fn make_concrete_type_strict(&self, ty: &TypeExpr) -> TypeExpr {
+        crate::resolve::substitute_type(ty, &self.ty_auth)
     }
 }
 
