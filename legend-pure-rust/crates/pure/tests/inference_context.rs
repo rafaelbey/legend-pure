@@ -553,6 +553,42 @@ function test::handler(b: test::Box<Integer>[1]): Integer[1] {
     );
 }
 
+#[test]
+fn tic_let_bound_collection_of_lambdas_match() {
+    // Mirror of `match.pure:80-83` platform pattern:
+    //   let lambdas = [λ1, λ2, ...];
+    //   var->match($lambdas)
+    // A let-bound collection of lambdas with mixed param types. The
+    // FunctionType slot must survive Collection LUB so downstream
+    // `match($lambdas)` can bind T/V from the FunctionType return
+    // slot. Without preserving type_arguments through the LUB step,
+    // $lambdas's variable_type collapses to bare
+    // `Named<LambdaFunction>{[]}` and the strict-mode return-check
+    // emits "type parameter T was not resolved at call to 'match'"
+    // (28 platform errors at match.pure trace to this case).
+    let source = r#"
+###Pure
+native function test::match<T,V|m,n>(
+    var: T[1],
+    fns: meta::pure::metamodel::function::Function<{T[1]->V[m]}>[1..*]
+): V[m];
+function test::caller(s: String[1]): Integer[1] {
+    let lambdas = [
+        x: Integer[1] | 1,
+        x: Integer[1] | 2,
+        x: Integer[1] | 3
+    ];
+    1->test::match($lambdas)
+}
+"#;
+    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[]).expect(
+            "let-bound [λ1, λ2, ...] preserves FunctionType slot through \
+             Collection LUB; match($lambdas) binds T/V from it under strict.",
+        );
+    });
+}
+
 // ---------------------------------------------------------------------------
 // 15. function-ref-to-eval binds T/V/m through lifted FunctionType
 // ---------------------------------------------------------------------------

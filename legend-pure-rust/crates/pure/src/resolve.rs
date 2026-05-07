@@ -2442,6 +2442,43 @@ pub(crate) fn bind_type_with_mode(
                     }
                 }
                 // else: incompatible elements, nothing to bind.
+            } else if matches!(arg_ty, TypeExpr::FunctionType { .. })
+                && crate::strict_mode::is_enabled()
+            {
+                // Strict-mode-only bridge: bare-`FunctionType` arg
+                // against `Named<Function-shaped>{[FT_param]}` param.
+                // The infer-time `infer_expr` Lambda branch returns
+                // its inferred type as bare `FunctionType`, while
+                // lower-time `infer_let_type` wraps lambdas in
+                // `Named<LambdaFunction>{[FT]}`. The two forms cohabit:
+                // a let-bound lambda's `var_types[name]` ends up as
+                // bare FT (set by `process_let_function_call` from
+                // `arg_types[1]`), and downstream `match($lambdas)` /
+                // `eval($f)` / `if(c, $f1, $f2)` need the shape-bridge
+                // here so Pass-1 binding can walk into the inner FT
+                // slot.
+                //
+                // Why strict-only: the FunctionType branch's
+                // `return_multiplicity` bind (`bind_mult_with_mode`)
+                // would widen the platform-pervasive
+                // `if(true, |$this->map($valueFunc), |1.0)` shape
+                // (Float[0..1] LUBs Float[1] → 0..1, breaking the
+                // surrounding QP's `Float[1]` declared return). Same
+                // Java-parity carve-out as
+                // `inference::lambda::bind_from_lambda_body` makes for
+                // its own multiplicity bind. Default mode is already
+                // 0 errors; strict mode is what's chasing the
+                // residual `match.pure` / `eval.pure` / `if.pure`
+                // unresolved-T cluster — a binding gap, not a
+                // multiplicity-widening hazard.
+                if let Some(p_ft) = p_args
+                    .iter()
+                    .find(|ta| matches!(ta, TypeExpr::FunctionType { .. }))
+                {
+                    bind_type_with_mode(
+                        p_ft, arg_ty, out, ty_auth, mult_out, model, mode, inside_structural,
+                    );
+                }
             }
         }
         TypeExpr::FunctionType {
@@ -2624,7 +2661,7 @@ fn bind_mult_with_mode(
 /// Computes the least upper bound of two `TypeExpr`s.
 /// For `Named` types, walks the type hierarchy via `least_upper_bound`.
 /// For anything else (or mixed), falls back to `Any`.
-fn type_lub(
+pub(crate) fn type_lub(
     a: &crate::types::TypeExpr,
     b: &crate::types::TypeExpr,
     model: &crate::model::PureModel,
@@ -2641,6 +2678,57 @@ fn type_lub(
                 type_arguments: vec![],
                 multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
+            }
+        }
+        // FunctionType LUB preserves the structural shape so downstream
+        // bind_type_with_mode can still walk the slots:
+        //   - Param types are contravariant in Pure's function type;
+        //     fall back to `Nil` (the bottom) for unmatched param
+        //     positions. This is what `match`'s declared
+        //     `Function<{Nil[n]→T[m]}>[1..*]` expects anyway, and
+        //     keeps the FunctionType usable as a binding target.
+        //   - Return type is covariant; LUB recursively.
+        //   - Multiplicities use the standard `mult_lub` (param) and
+        //     return-slot LUB.
+        // Without this, two lambdas in a let-bound `[λ1, λ2]`
+        // collapsed their FunctionTypes to `Any`, leaving downstream
+        // `match($lambdas)` no slot to bind T from.
+        (
+            TypeExpr::FunctionType {
+                parameters: a_params,
+                return_type: a_ret,
+                return_multiplicity: a_ret_mult,
+            },
+            TypeExpr::FunctionType {
+                parameters: b_params,
+                return_type: b_ret,
+                return_multiplicity: b_ret_mult,
+            },
+        ) => {
+            let nil = TypeExpr::Named {
+                element: bootstrap::NIL_ID,
+                type_arguments: vec![],
+                multiplicity_arguments: Vec::new(),
+                value_arguments: vec![],
+            };
+            let len = a_params.len().max(b_params.len());
+            let mut params = Vec::with_capacity(len);
+            for i in 0..len {
+                let p_ty = match (a_params.get(i), b_params.get(i)) {
+                    (Some((ta, _)), Some((tb, _))) => type_lub(ta, tb, model),
+                    _ => nil.clone(),
+                };
+                let p_mult = match (a_params.get(i), b_params.get(i)) {
+                    (Some((_, ma)), Some((_, mb))) => mult_lub(ma, mb),
+                    (Some((_, m)), None) | (None, Some((_, m))) => m.clone(),
+                    (None, None) => crate::types::Multiplicity::PureOne,
+                };
+                params.push((p_ty, p_mult));
+            }
+            TypeExpr::FunctionType {
+                parameters: params,
+                return_type: Box::new(type_lub(a_ret, b_ret, model)),
+                return_multiplicity: mult_lub(a_ret_mult, b_ret_mult),
             }
         }
         // Can't compute structural LUB → Any
