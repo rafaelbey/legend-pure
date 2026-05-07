@@ -22,7 +22,7 @@ use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
 use legend_pure_parser_pure::types::TypeExpr;
 
-use crate::model::ResolvedFn;
+use crate::model::{Bootstrap, ResolvedFn};
 use crate::naming::pure_fqn_segments;
 use crate::types::is_platform_class;
 
@@ -58,6 +58,7 @@ pub(crate) fn reachable_types(
     model: &PureModel,
     fns: &[ResolvedFn],
     extra_class_seeds: &[ElementId],
+    bootstrap: Bootstrap,
 ) -> ReachableSet {
     let mut visited: HashSet<ElementId> = HashSet::new();
     let mut queue: Vec<ElementId> = Vec::new();
@@ -126,14 +127,15 @@ pub(crate) fn reachable_types(
         }
     }
 
-    // Drop `meta::pure::metamodel::type::Any` from the reachable set
-    // — the hand-written `org.finos.legend.pure.rust.proxy.Any`
-    // interface stands in for it, and the codegen substitutes
-    // supertype references at emission time.
-    classes.retain(|id| {
-        let segs = pure_fqn_segments(model, *id);
-        !is_any_fqn(&segs)
-    });
+    // Drop the universal-supertype `Any` and the bottom type `Nil`
+    // from the reachable set — the hand-written
+    // `org.finos.legend.pure.rust.proxy.Any` interface stands in for
+    // Any, and Nil is rendered as Java `Void` directly. Identity
+    // comparison via the canonical bootstrap IDs (FQN-string match
+    // would miss because M3 bootstrap classes carry
+    // `parent_package = root` and so `pure_fqn_segments` returns just
+    // the leaf name).
+    classes.retain(|id| !bootstrap.is_any(*id) && !bootstrap.is_nil(*id));
 
     let class_set: HashSet<ElementId> = classes.iter().copied().collect();
     ReachableSet {
@@ -141,19 +143,6 @@ pub(crate) fn reachable_types(
         enums,
         class_set,
     }
-}
-
-/// True when the FQN segments are exactly
-/// `meta::pure::metamodel::type::Any`. The hand-written
-/// `org.finos.legend.pure.rust.proxy.Any` interface stands in for this
-/// element; the codegen never emits an interface for it.
-pub(crate) fn is_any_fqn(segments: &[smol_str::SmolStr]) -> bool {
-    segments.len() == 5
-        && segments[0].as_str() == "meta"
-        && segments[1].as_str() == "pure"
-        && segments[2].as_str() == "metamodel"
-        && segments[3].as_str() == "type"
-        && segments[4].as_str() == "Any"
 }
 
 fn seed_from_type_expr(ty: &TypeExpr, queue: &mut Vec<ElementId>) {

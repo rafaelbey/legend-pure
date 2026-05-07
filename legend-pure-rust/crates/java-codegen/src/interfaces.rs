@@ -31,8 +31,8 @@ use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
 use legend_pure_parser_pure::types::{Multiplicity, TypeExpr};
 
-use crate::closure::{ReachableSet, is_any_fqn};
-use crate::model::{CodegenError, JavaFile, Options};
+use crate::closure::ReachableSet;
+use crate::model::{Bootstrap, CodegenError, JavaFile, Options};
 use crate::naming::{
     join_java_package, pure_fqn_segments, pure_fqn_string, pure_package_segments_of,
     safe_java_identifier,
@@ -50,6 +50,7 @@ pub(crate) fn emit_class_interface(
     class_id: ElementId,
     reachable: &ReachableSet,
     opts: &Options,
+    bootstrap: Bootstrap,
 ) -> Result<JavaFile, CodegenError> {
     let segments = pure_fqn_segments(model, class_id);
     let leaf = segments
@@ -82,10 +83,10 @@ pub(crate) fn emit_class_interface(
     let mut extends_list: Vec<String> = Vec::new();
     for super_ty in &class.super_types {
         if let TypeExpr::Named { element, .. } = super_ty {
-            let segs = pure_fqn_segments(model, *element);
-            if is_any_fqn(&segs) {
+            if bootstrap.is_any(*element) {
                 extends_list.push(HAND_WRITTEN_ANY_FQN.to_owned());
             } else if reachable.contains_class(*element) {
+                let segs = pure_fqn_segments(model, *element);
                 let leaf2 = segs.last().map(smol_str::SmolStr::as_str).unwrap_or("");
                 let p = pure_package_segments_of(model, *element);
                 let pkg = join_java_package(&opts.java_root_package, &p);
@@ -112,6 +113,7 @@ pub(crate) fn emit_class_interface(
             TypePosition::Return,
             opts,
             GenericPolicy::AsObject,
+            bootstrap,
         )?;
         let java_name = safe_java_identifier(prop.name.as_str());
         emit_property_decl(&return_ty.source, &java_name, &prop.multiplicity, &mut body);
@@ -130,6 +132,7 @@ pub(crate) fn emit_class_interface(
             TypePosition::Return,
             opts,
             GenericPolicy::AsObject,
+            bootstrap,
         )?;
         body.push_str(&format!("    {} ", return_ty.source));
         body.push_str(&safe_java_identifier(qp.name.as_str()));
@@ -146,6 +149,7 @@ pub(crate) fn emit_class_interface(
                 TypePosition::Parameter(param.name.as_str()),
                 opts,
                 GenericPolicy::AsObject,
+                bootstrap,
             )?;
             body.push_str(&format!(
                 "{} {}",
@@ -174,6 +178,7 @@ pub(crate) fn emit_class_interface(
                 TypePosition::Return,
                 opts,
                 GenericPolicy::AsObject,
+                bootstrap,
             )?;
             let java_name = safe_java_identifier(injected.name.as_str());
             emit_property_decl(
