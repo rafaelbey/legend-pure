@@ -41,8 +41,8 @@ use crate::model::PureModel;
 /// Stored on [`PureModel::repo_visibility`]. Empty by default — a model
 /// constructed without going through [`crate::pipeline::init_bootstrap_model`]
 /// + a real loader sees no rules, so no checks run. This preserves every
-/// existing test that builds a model from raw source files without a
-/// surrounding repo.
+///   existing test that builds a model from raw source files without a
+///   surrounding repo.
 pub type RepoVisibilityMap = HashMap<SmolStr, BTreeSet<SmolStr>>;
 
 /// Extract the repo name from a canonical source URL.

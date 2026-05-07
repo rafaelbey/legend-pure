@@ -139,7 +139,7 @@ pub(crate) struct ResolutionContext<'a> {
 /// Resolution order (matches Java `ImportStub.resolvePackageableElement`):
 /// 1. If qualified (has package): resolve via the AST Package tree directly
 /// 2. If unqualified: check memo cache, then bootstrap, then import packages,
-/// then root package fallback
+///    then root package fallback
 ///
 /// Returns `None` and pushes a `CompilationError` if the type cannot be resolved.
 pub(crate) fn resolve_type_ref(
@@ -272,7 +272,7 @@ pub(crate) fn resolve_type_ref(
 /// The parser encodes function types `{ParamType[m],... -> RetType[m]}` as a
 /// `TypeReference` with name `{FunctionType}`:
 /// - `type_arguments[0..n-1]` — parameter types, each with its multiplicity in
-/// `multiplicity_arguments[0]`
+///   `multiplicity_arguments[0]`
 /// - `type_arguments[n-1]` — the return type
 /// - top-level `multiplicity_arguments[0]` — the return multiplicity
 #[allow(clippy::unnecessary_wraps)]
@@ -1706,8 +1706,8 @@ pub(crate) fn find_property_multiplicity(
 /// - Either side has lower bound 0 → result lower bound 0.
 /// - Bounded × Bounded → product of bounds.
 /// - Variable / Generic on either side → fall back to the *receiver*
-/// multiplicity (best partial answer; better than `None` which
-/// dispatch treats as permissively compatible with everything).
+///   multiplicity (best partial answer; better than `None` which
+///   dispatch treats as permissively compatible with everything).
 pub(crate) fn multiplicity_product(
     receiver_mult: &crate::types::Multiplicity,
     property_mult: &crate::types::Multiplicity,
@@ -1814,9 +1814,9 @@ pub(crate) fn is_type_compatible(
 /// Recognises both shapes the resolver produces:
 /// - `Relation(cols)` directly.
 /// - `Named { RelationType_id, type_arguments: [Relation(cols)], … }`
-/// (the canonical wrapper form `RelationType<Relation(cols)>`).
+///   (the canonical wrapper form `RelationType<Relation(cols)>`).
 /// - `Named { _, type_arguments: [Named { RelationType_id, …, [Relation(cols)] }], … }`
-/// (e.g. `TDS<RelationType<Relation(cols)>>`).
+///   (e.g. `TDS<RelationType<Relation(cols)>>`).
 ///
 /// Returns `None` when no relation columns are reachable in this
 /// type's outer-or-first-type-argument layers.
@@ -1843,11 +1843,11 @@ fn extract_relation_columns(
 ///
 /// Compatible means:
 /// - Param has no specific columns (empty Relation list, or no Relation
-/// layer at all) — accept anything.
+///   layer at all) — accept anything.
 /// - Arg has no extractable columns — accept (can't eliminate).
 /// - Both have columns — every param column must appear in arg with a
-/// compatible type and a satisfiable multiplicity. Extra arg columns
-/// are allowed (subset semantics — `Relation<X⊆T>`).
+///   compatible type and a satisfiable multiplicity. Extra arg columns
+///   are allowed (subset semantics — `Relation<X⊆T>`).
 fn is_relation_columns_compatible(
     arg_te: &crate::types::TypeExpr,
     param: &crate::types::TypeExpr,
@@ -2310,16 +2310,16 @@ pub(crate) fn infer_generic_bindings(
 /// AND multiplicity-variable bindings. Handles:
 /// - `Generic(T)` vs anything → bind `T := arg_ty`.
 /// - `Named { type_arguments, multiplicity_arguments }` vs same → recurse
-/// pairwise so `List<T>` against `List<String>` binds `T := String`,
-/// and `Map<K|m>` against `Map<String|1>` binds `K := String`, `m := 1`.
+///   pairwise so `List<T>` against `List<String>` binds `T := String`,
+///   and `Map<K|m>` against `Map<String|1>` binds `K := String`, `m := 1`.
 /// - `FunctionType { parameters: [(ty, mult), …], return_type, return_multiplicity }`
-/// vs same → recurse pairwise on parameter types AND multiplicities,
-/// plus return-type and return-multiplicity. This is the load-bearing
-/// case for `eval<T,V|m,n>(func:Function<{T[n]->V[m]}>, param:T[n]):V[m]`
-/// — without inner-multiplicity binding, `m` and `n` are left
-/// `Variable(_)` and the unresolved-multiplicity check
-/// fires falsely (1,628 times across the platform — confirmed
-/// regression).
+///   vs same → recurse pairwise on parameter types AND multiplicities,
+///   plus return-type and return-multiplicity. This is the load-bearing
+///   case for `eval<T,V|m,n>(func:Function<{T[n]->V[m]}>, param:T[n]):V[m]`
+///   — without inner-multiplicity binding, `m` and `n` are left
+///   `Variable(_)` and the unresolved-multiplicity check
+///   fires falsely (1,628 times across the platform — confirmed
+///   regression).
 ///
 /// **Constraint mode** (Java `merge=true`): existing-concrete +
 /// incoming-concrete → LUB. Used when every arg converged.
@@ -2746,9 +2746,9 @@ fn subtype_view(
 ///
 /// - Vacant entry → insert.
 /// - Occupied + Constraint → `mult_lub` (existing behaviour for the
-/// outer-level parameter-multiplicity bind in `infer_generic_bindings`).
+///   outer-level parameter-multiplicity bind in `infer_generic_bindings`).
 /// - Occupied + Authoritative → existing-Variable + incoming-concrete
-/// replaces; both-concrete keeps existing.
+///   replaces; both-concrete keeps existing.
 fn bind_mult_with_mode(
     p: &crate::types::Multiplicity,
     a: &crate::types::Multiplicity,

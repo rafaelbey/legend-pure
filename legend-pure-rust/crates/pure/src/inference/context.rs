@@ -159,18 +159,18 @@ impl GenericBindings {
 /// argument:
 ///
 /// - [`RegisterMode::Authoritative`] — `merge=false`. Used by
-/// `potentiallyUpdateTypeInferenceContextUsingFunctionSignature`
-/// (`:567-584`) when at least one argument failed to converge in
-/// the first pass. Only the *succeeded* arg pairs are walked, and
-/// each binding is treated as the canonical value for the type
-/// parameter — an existing non-concrete entry can be replaced
-/// outright by a concrete incoming value.
+///   `potentiallyUpdateTypeInferenceContextUsingFunctionSignature`
+///   (`:567-584`) when at least one argument failed to converge in
+///   the first pass. Only the *succeeded* arg pairs are walked, and
+///   each binding is treated as the canonical value for the type
+///   parameter — an existing non-concrete entry can be replaced
+///   outright by a concrete incoming value.
 /// - [`RegisterMode::Constraint`] — `merge=true`. Used by
-/// `updateTypeInferenceContextUsingFunctionSignature` (`:586-594`)
-/// when every argument converged. All pairs are walked
-/// left-to-right and each registration LUB-merges with the
-/// existing binding (Java acknowledges a known-broken
-/// widen-to-Any-then-drop case at `register():474-478`).
+///   `updateTypeInferenceContextUsingFunctionSignature` (`:586-594`)
+///   when every argument converged. All pairs are walked
+///   left-to-right and each registration LUB-merges with the
+///   existing binding (Java acknowledges a known-broken
+///   widen-to-Any-then-drop case at `register():474-478`).
 ///
 /// Today `bind_type` always behaves like `Constraint` (LUB-merge
 /// unconditionally). Step 3d of the plan will route the two-branch
@@ -199,24 +199,24 @@ pub enum RegisterMode {
 ///
 /// Java fields mirrored:
 /// - `id` — sequential identifier; useful for the
-/// `TypeInferenceObserver` trace.
+///   `TypeInferenceObserver` trace.
 /// - `parent` — pointer to the enclosing context. Recursive generic
-/// functions like `getAllTypeGeneralisations` rely on the parent
-/// chain to resolve a type parameter that's bound in an outer
-/// call.
+///   functions like `getAllTypeGeneralisations` rely on the parent
+///   chain to resolve a type parameter that's bound in an outer
+///   call.
 /// - `scope` — the M3 element being processed (function, class).
-/// Surfaces in error messages.
+///   Surfaces in error messages.
 /// - `bindings` — the current frame's `(types, mults)` map pair. Two
-/// per-state Java fields (`ahead`, `ahead_consumed`) are *not*
-/// ported yet — they cover the deferred-lambda-body case and land
-/// together with [`crate::inference::lambda::LambdaParamFiller`]
-/// (Step 3e).
+///   per-state Java fields (`ahead`, `ahead_consumed`) are *not*
+///   ported yet — they cover the deferred-lambda-body case and land
+///   together with [`crate::inference::lambda::LambdaParamFiller`]
+///   (Step 3e).
 /// - `tops` — set of type-parameter names that are *top-level* in
-/// this context (declared on the M3 element being processed). A
-/// `Generic(name)` whose name is in `tops` MUST stay generic
-/// through `make_concrete` — substituting it would conflate
-/// distinct outer-scope parameters with bindings collected at this
-/// call site.
+///   this context (declared on the M3 element being processed). A
+///   `Generic(name)` whose name is in `tops` MUST stay generic
+///   through `make_concrete` — substituting it would conflate
+///   distinct outer-scope parameters with bindings collected at this
+///   call site.
 ///
 /// The struct deliberately uses owned values (no `Rc`/`Weak`) until
 /// Step 3d shows whether shared ownership is required. Most call
