@@ -143,17 +143,24 @@ fn lower_lambda_parameters(
             // `Generic(T)` expectations stay silent because they may
             // bind at the call site if the enclosing fn is parametric.
             //
-            // Strict mode adds: an expectation that's a `Generic(name)`
-            // whose `name` isn't a transitive parameter of the
-            // enclosing element (`ctx.type_parameters`) is also a
-            // failure. Catches `needsPred(x | …)` where T isn't in
-            // scope and no sibling arg can bind it.
+            // Strict mode adds: an expectation containing ANY
+            // `Generic(name)` whose `name` isn't a transitive parameter
+            // of the enclosing element (`ctx.type_parameters`) — at any
+            // depth — is also a failure. Walks the full type via
+            // `unresolved_type_params` so `List<T>`, `Function<{T->X}>`,
+            // and arbitrarily nested cases all fail when T (or X) isn't
+            // in the enclosing fn's scope. Catches `needsPred(x | …)`,
+            // `mapToList(x | …)`, and `compose(f, g)`-style chains where
+            // the propagating Generic can't bind from any sibling arg.
             let expected_unbindable_in_strict = strict
                 && match expected {
-                    Some((crate::types::TypeExpr::Generic(name), _)) => {
-                        !ctx.type_parameters.iter().any(|t| t == name)
+                    Some((te, _)) => {
+                        let unresolved = crate::inference::context::unresolved_type_params(te);
+                        unresolved
+                            .iter()
+                            .any(|name| !ctx.type_parameters.iter().any(|t| t == name))
                     }
-                    _ => false,
+                    None => false,
                 };
             let is_uninferred = (declared_type.is_none() && expected.is_none())
                 || (declared_type.is_none() && expected_unbindable_in_strict);
