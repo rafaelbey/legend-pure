@@ -60,7 +60,10 @@ fn categorize_platform_errors_detailed() {
                         *unsupported.entry(kind.to_string()).or_default() += 1;
                     }
                     legend_pure_parser_pure::error::CompilationErrorKind::ParseFailure { source } => {
-                        println!("  PARSE FAILURE: {} @ {:?}", source, e.source_info);
+                        println!(
+                            "  PARSE FAILURE: {} @ {:?}\n    msg: {}",
+                            source, e.source_info, e.message
+                        );
                     }
                     _ => {}
                 }
