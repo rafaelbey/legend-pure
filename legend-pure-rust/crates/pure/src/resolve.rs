@@ -2821,12 +2821,76 @@ pub(crate) fn type_lub(
         _ => {}
     }
     match (a, b) {
-        (TypeExpr::Named { element: ea, .. }, TypeExpr::Named { element: eb, .. }) => {
+        (
             TypeExpr::Named {
-                element: least_upper_bound(*ea, *eb, model),
-                type_arguments: vec![],
-                multiplicity_arguments: Vec::new(),
-                value_arguments: vec![],
+                element: ea,
+                type_arguments: a_args,
+                multiplicity_arguments: a_margs,
+                ..
+            },
+            TypeExpr::Named {
+                element: eb,
+                type_arguments: b_args,
+                multiplicity_arguments: b_margs,
+                ..
+            },
+        ) => {
+            // Same element + parametric: preserve / LUB type-args
+            // and mult-args pairwise. Without this, LUBing
+            // `Pair<List<PM>, List<PM>>` with a bare-Named `Pair<>`
+            // dropped the type-args, leaving the let-bound chain
+            // receiver as `Pair<>` and downstream `.first.values`
+            // unable to substitute. When one side has no type-args
+            // (the bare form, common at second-pass bindings where
+            // a value arg's parametric shape was lost during
+            // intermediate substitution), prefer the side that
+            // carries info.
+            if ea == eb {
+                let lub_args: Vec<TypeExpr> = if a_args.is_empty() {
+                    b_args.clone()
+                } else if b_args.is_empty() {
+                    a_args.clone()
+                } else if a_args.len() == b_args.len() {
+                    a_args
+                        .iter()
+                        .zip(b_args.iter())
+                        .map(|(x, y)| type_lub(x, y, model))
+                        .collect()
+                } else {
+                    vec![]
+                };
+                let lub_margs: Vec<crate::types::Multiplicity> = if a_margs.is_empty() {
+                    b_margs.clone()
+                } else if b_margs.is_empty() {
+                    a_margs.clone()
+                } else if a_margs.len() == b_margs.len() {
+                    a_margs
+                        .iter()
+                        .zip(b_margs.iter())
+                        .map(|(x, y)| mult_lub(x, y))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                TypeExpr::Named {
+                    element: *ea,
+                    type_arguments: lub_args,
+                    multiplicity_arguments: lub_margs,
+                    value_arguments: vec![],
+                }
+            } else {
+                // Different elements — fall back to hierarchy LUB,
+                // dropping type-args (the cross-class case). Java
+                // does the same: `findBestCommonGenericType` walks
+                // up the class hierarchy to a common ancestor
+                // whose type-parameters may not align between the
+                // two sides.
+                TypeExpr::Named {
+                    element: least_upper_bound(*ea, *eb, model),
+                    type_arguments: vec![],
+                    multiplicity_arguments: Vec::new(),
+                    value_arguments: vec![],
+                }
             }
         }
         // FunctionType LUB preserves the structural shape so downstream
