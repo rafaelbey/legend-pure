@@ -554,6 +554,64 @@ function test::handler(b: test::Box<Integer>[1]): Integer[1] {
 }
 
 #[test]
+fn tic_match_z_genericType_rawType_toOne() {
+    // Mirror of match.pure:185:
+    //   `let z = $f->eval(|...->deactivate());`
+    //   `assertIs(Any, $z.genericType.rawType->toOne());`
+    // The chain: $z's type comes from eval (V[m]); .genericType
+    // is a property on Any/ValueSpec; .rawType returns Type[0..1];
+    // ->toOne() should bind T=Type. Strict mode emits "T not
+    // resolved at toOne".
+    let source = r#"
+###Pure
+Class test::T {}
+Class test::GT { rawType: test::T[0..1]; }
+Class test::AnyVal { genericType: test::GT[0..1]; }
+native function test::myEval<TT,VV|mm,nn>(
+    func: meta::pure::metamodel::function::Function<{TT[nn]->VV[mm]}>[1],
+    p: TT[nn]
+): VV[mm];
+native function test::myToOne<T|m>(coll: T[m]): T[1];
+native function test::myDeact(var: meta::pure::metamodel::type::Any[*]): test::AnyVal[1];
+function test::caller<Z|y>(f: meta::pure::metamodel::function::Function<{meta::pure::metamodel::function::Function<{->Z[y]}>[1]->Z[y]}>[1]): meta::pure::metamodel::type::Any[1] {
+    let z = test::myEval($f, | test::myDeact(1));
+    $z.genericType.rawType->test::myToOne()
+}
+"#;
+    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[]).expect(
+            "let-bound result of eval, chained through .genericType.rawType->toOne(): \
+             the property chain must propagate the let-bound type so toOne binds T.",
+        );
+    });
+}
+
+#[test]
+fn tic_enum_value_class_chain() {
+    // Mirror of class.pure:49 platform pattern:
+    //   CC_GeographicEntityType.CITY->class()
+    // An enum value is accessed via `.CITY` on the enum
+    // declaration, then passed to the `class<T>(any:T[*]):Class<T>[1]`
+    // metamodel function. T should bind to the enum type. Strict
+    // mode currently emits "type parameter T was not resolved at
+    // call to 'class'".
+    let source = r#"
+###Pure
+Enum test::EntityKind { CITY, COUNTRY }
+native function test::myClass<T>(any: T[*]): meta::pure::metamodel::type::Class<T>[1];
+function test::caller(): meta::pure::metamodel::type::Class<test::EntityKind>[1] {
+    test::EntityKind.CITY->test::myClass()
+}
+"#;
+    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[]).expect(
+            "Enum value access (EntityKind.CITY) should be typed as EntityKind[1]; \
+             ->class() should bind T=EntityKind.",
+        );
+    });
+}
+
+#[test]
 fn tic_pair_via_fold_then_chain() {
     // Closer to PropertyMappingsImplementation:137 — the chain
     // receiver comes from a let-bound `fold(...)->cast(@Pair<...>)`
