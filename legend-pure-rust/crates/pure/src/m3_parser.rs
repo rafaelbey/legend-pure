@@ -784,12 +784,12 @@ impl<'a> M3Parser<'a> {
                 match self.peek() {
                     Token::RBrack | Token::Eof => break,
                     Token::Caret => {
-                        // ^Generalization { general: ^GenericType { rawType: SuperClass }, specific: SubClass }
-                        if let Some((general, specific)) = self.parse_generalization_instance() {
+                        // ^Generalization { general: ^GenericType { rawType: SuperClass, typeArguments: …, multiplicityArguments: … }, specific: SubClass }
+                        if let Some((te, specific)) = self.parse_generalization_instance() {
                             // Only keep this generalization if `specific` matches
                             // the class we are currently parsing.
                             if specific.as_deref() == Some(class_name) || specific.is_none() {
-                                supers.push(crate::types::TypeExpr::Generic(general));
+                                supers.push(te);
                             }
                         }
                     }
@@ -802,10 +802,10 @@ impl<'a> M3Parser<'a> {
             self.eat(&Token::RBrack);
         } else if self.at(&Token::Caret) {
             // Single generalization (not in array)
-            if let Some((general, specific)) = self.parse_generalization_instance()
+            if let Some((te, specific)) = self.parse_generalization_instance()
                 && (specific.as_deref() == Some(class_name) || specific.is_none())
             {
-                supers.push(crate::types::TypeExpr::Generic(general));
+                supers.push(te);
             }
         } else {
             self.skip_value();
@@ -814,12 +814,26 @@ impl<'a> M3Parser<'a> {
         supers
     }
 
-    /// Parses a `^Generalization { general: ^GenericType{rawType: X}, specific: Y }`
-    /// and returns `(general_raw_type, specific_name)`.
+    /// Parses a `^Generalization { general: ^GenericType{rawType: X, typeArguments: …, multiplicityArguments: …}, specific: Y }`
+    /// and returns `(general_typeexpr, specific_name)`.
+    ///
+    /// The `general_typeexpr` is the *full* parametric form of the
+    /// supertype — `Generic(name)` for plain references, or the
+    /// sentinel `Named { ANY_ID, type_arguments, multiplicity_arguments,
+    /// value_arguments: [String(rawType)] }` form when typeArguments /
+    /// multiplicityArguments are present (`resolve_m3_supertypes`
+    /// rewrites the element id during bootstrap finalisation —
+    /// preserving the args). Without this, `Property` lost its
+    /// `Function<{U[1]->V[m]}>` generalization shape and
+    /// `bind_type`'s subtype-walk had no FunctionType slot to extract
+    /// T/V/m/n from when an `eval` overload bound against a
+    /// `Property<...>` arg.
     ///
     /// The `specific` is the simple name of the subclass extracted from the
     /// path reference (e.g., `Root.children[...].children[Class]` → `"Class"`).
-    fn parse_generalization_instance(&mut self) -> Option<(SmolStr, Option<SmolStr>)> {
+    fn parse_generalization_instance(
+        &mut self,
+    ) -> Option<(crate::types::TypeExpr, Option<SmolStr>)> {
         self.expect(&Token::Caret);
         let _classifier = self.parse_classifier_path();
 
@@ -833,7 +847,7 @@ impl<'a> M3Parser<'a> {
             // Otherwise it might be something else
         }
 
-        let mut general_type = None;
+        let mut general_type: Option<crate::types::TypeExpr> = None;
         let mut specific_type = None;
 
         if self.eat(&Token::LBrace) {
@@ -852,9 +866,16 @@ impl<'a> M3Parser<'a> {
 
                         match path_tail.as_str() {
                             "general" => {
-                                // The value is a ^GenericType{rawType: XXXX}
-                                // We need to extract XXXX
-                                general_type = Some(self.parse_generic_type_raw_type());
+                                // Use the parametric-aware parser so
+                                // `^GenericType{rawType: X, typeArguments: […], multiplicityArguments: […]}`
+                                // survives intact.
+                                let (raw, ta, ma) = self.parse_generic_type_full();
+                                let te = if !ta.is_empty() || !ma.is_empty() {
+                                    self.build_pack_typeexpr(raw, ta, ma)
+                                } else {
+                                    crate::types::TypeExpr::Generic(raw)
+                                };
+                                general_type = Some(te);
                             }
                             "specific" => {
                                 // The value is a path reference like:
@@ -944,11 +965,6 @@ impl<'a> M3Parser<'a> {
 
     /// Extracts the raw type name from a `^GenericType{rawType: X}` or
     /// a simple element reference `Root.children[...].children[X]`.
-    fn parse_generic_type_raw_type(&mut self) -> SmolStr {
-        let (raw, _, _) = self.parse_generic_type_full();
-        raw
-    }
-
     /// Parses an `^GenericType { rawType: …, typeArguments: […], multiplicityArguments: … }`
     /// inline instance and returns the raw type name plus a recursive
     /// `TypeExpr` for each type argument and a `Multiplicity` for each
