@@ -374,6 +374,44 @@ function test::caller(): Integer[1] {
 }
 
 // ---------------------------------------------------------------------------
+// 8a. Lambda param can't be anchored — strict-mode divergence (Step 3f)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tic_lambda_param_with_unbound_t_strict_mode_errors() {
+    // Strict mode treats `Generic(T)`-expected-but-not-in-scope as
+    // a lambda-inference failure. `needsPred<T>(...)` is non-parametric
+    // outside, T can't bind from any sibling arg, so the lambda
+    // param `x`'s expected type stays `Generic(T)` with T not in
+    // `ctx.type_parameters`.
+    let source = r#"
+###Pure
+native function test::needsPred<T>(
+    pred: meta::pure::metamodel::function::Function<{T[1]->Boolean[1]}>[1]
+): Boolean[1];
+native function test::isPositive(x: Integer[1]): Boolean[1];
+function test::caller(): Boolean[1] { test::needsPred(x | $x->test::isPositive()) }
+"#;
+    let result = legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[])
+    });
+    let partial = result.expect_err(
+        "Strict mode: lambda param `x` whose expected type is Generic(T) \
+         with T not in the enclosing fn's type-params must surface \
+         CannotInferLambdaParameterTypes.",
+    );
+    assert!(
+        partial.errors.iter().any(|e| matches!(
+            &e.kind,
+            legend_pure_parser_pure::error::CompilationErrorKind::CannotInferLambdaParameterTypes { names }
+                if names.iter().any(|n| n.as_str() == "x")
+        )),
+        "expected CannotInferLambdaParameterTypes containing 'x'; got: {:?}",
+        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 8. Lambda param can't be anchored — current lenient state
 // ---------------------------------------------------------------------------
 
