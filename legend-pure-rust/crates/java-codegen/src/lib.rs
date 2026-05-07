@@ -72,19 +72,20 @@ pub fn generate(
     extra_associations: &[FqnInput],
     opts: &Options,
 ) -> Result<Vec<JavaFile>, CodegenError> {
+    let bootstrap = model::Bootstrap::resolve(model);
     let resolved = model::resolve_requested(model, fns)?;
     let extra_seeds = model::resolve_extra_seeds(model, extra_classes, extra_associations)?;
-    let closure = closure::reachable_types(model, &resolved, &extra_seeds);
+    let closure = closure::reachable_types(model, &resolved, &extra_seeds, bootstrap);
 
     let mut files: Vec<JavaFile> =
         Vec::with_capacity(2 + closure.classes.len() + closure.enums.len());
 
     files.push(functions::emit_functions_class(
-        model, &resolved, &closure, opts,
+        model, &resolved, &closure, opts, bootstrap,
     )?);
     for cls_id in &closure.classes {
         files.push(interfaces::emit_class_interface(
-            model, *cls_id, &closure, opts,
+            model, *cls_id, &closure, opts, bootstrap,
         )?);
     }
     for enum_id in &closure.enums {

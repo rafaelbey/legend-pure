@@ -159,6 +159,36 @@ pub enum CodegenError {
     },
 }
 
+/// Canonical bootstrap-element IDs the codegen needs to recognise by
+/// identity. The M3 bootstrap classes carry `parent_package = root` in
+/// the model, so `pure_fqn_segments` returns just the leaf name for
+/// them (`["Any"]`, `["Nil"]`) instead of the full
+/// `meta::pure::metamodel::type::*` path; an FQN-based string match
+/// would always miss. Resolving via `resolve_fqn_str` walks the package
+/// tree top-down and finds the canonical element regardless.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Bootstrap {
+    pub(crate) any_id: Option<ElementId>,
+    pub(crate) nil_id: Option<ElementId>,
+}
+
+impl Bootstrap {
+    pub(crate) fn resolve(model: &PureModel) -> Self {
+        Self {
+            any_id: model.resolve_fqn_str("meta::pure::metamodel::type::Any"),
+            nil_id: model.resolve_fqn_str("meta::pure::metamodel::type::Nil"),
+        }
+    }
+
+    pub(crate) fn is_any(self, id: ElementId) -> bool {
+        self.any_id == Some(id)
+    }
+
+    pub(crate) fn is_nil(self, id: ElementId) -> bool {
+        self.nil_id == Some(id)
+    }
+}
+
 /// One resolved requested function — carries the looked-up `ElementId`
 /// and the mangled FQN we'll pass to `PureRustEvaluator.evaluate`.
 #[derive(Debug, Clone)]

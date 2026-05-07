@@ -19,16 +19,17 @@
 # M3 metamodel classes — the core "what is a class?" / "what is a property?"
 # graph that downstream tooling traverses reflectively.
 #
-# Note: `meta::pure::metamodel::type::Any` is the universal supertype.
-# The codegen substitutes any reference to it with the hand-written
-# `org.finos.legend.pure.rust.proxy.Any` interface and never emits a
-# generated `Any.java`. Listing it here is harmless (the entry is
-# filtered out at emit time) but unnecessary.
+# Two M3 types are *not* listed here because the codegen handles them
+# specially:
+#   * `meta::pure::metamodel::type::Any` — the universal supertype.
+#     Substituted with the hand-written `org.finos.legend.pure.rust.proxy.Any`
+#     interface; every generated interface extends it transitively.
+#   * `meta::pure::metamodel::type::Nil` — the bottom type. Rendered
+#     as Java `Void` (always `null`), since a `Nil`-typed return can
+#     never carry a real value.
 ###############################################################################
-meta::pure::metamodel::type::Any
 meta::pure::metamodel::type::Type
 meta::pure::metamodel::type::Class
-meta::pure::metamodel::type::Nil
 meta::pure::metamodel::type::PrimitiveType
 meta::pure::metamodel::type::Enumeration
 
