@@ -2014,6 +2014,19 @@ pub(crate) fn infer_multiplicity_from_valuespec(
 ) -> Option<crate::types::Multiplicity> {
     use crate::types::{ExprKind, Multiplicity};
 
+    // Honour pre-set `type_info` first — same canonical
+    // "lowering captures parametric type info; consumers read from
+    // type_info" pattern as `infer_typeexpr_from_valuespec`. Without
+    // this, `^Class<T>(...)` new instances (lowered to
+    // `FunctionCall { function: None, function_name: "new", ... }`
+    // with type_info carrying multiplicity = PureOne) returned `None`
+    // here — leaving downstream `evaluateAndDeactivate(^Class<...>())`
+    // unable to bind eval's `m` and emitting "multiplicity parameter
+    // m was not resolved" under strict mode (addColumns.pure:41).
+    if let Some(rt) = vs.type_info.as_deref() {
+        return Some(rt.multiplicity.clone());
+    }
+
     match vs.kind.as_ref() {
         // All literals produce exactly one value; enum values are [1]; lambda is [1];
         // bare element refs and type references are single values
@@ -2447,37 +2460,74 @@ pub(crate) fn bind_type_with_mode(
             {
                 // Strict-mode-only bridge: bare-`FunctionType` arg
                 // against `Named<Function-shaped>{[FT_param]}` param.
-                // The infer-time `infer_expr` Lambda branch returns
-                // its inferred type as bare `FunctionType`, while
-                // lower-time `infer_let_type` wraps lambdas in
-                // `Named<LambdaFunction>{[FT]}`. The two forms cohabit:
-                // a let-bound lambda's `var_types[name]` ends up as
-                // bare FT (set by `process_let_function_call` from
-                // `arg_types[1]`), and downstream `match($lambdas)` /
-                // `eval($f)` / `if(c, $f1, $f2)` need the shape-bridge
-                // here so Pass-1 binding can walk into the inner FT
-                // slot.
+                // Bare-FT arg is produced ONLY by the infer-time
+                // `infer_expr` Lambda branch — function-refs go
+                // through `build_packageable_element_ref` which
+                // wraps in `Named<NativeFunction>{[FT]}`. So a bare
+                // FT here unambiguously means the arg is a lambda
+                // literal.
                 //
-                // Why strict-only: the FunctionType branch's
-                // `return_multiplicity` bind (`bind_mult_with_mode`)
-                // would widen the platform-pervasive
-                // `if(true, |$this->map($valueFunc), |1.0)` shape
-                // (Float[0..1] LUBs Float[1] → 0..1, breaking the
-                // surrounding QP's `Float[1]` declared return). Same
-                // Java-parity carve-out as
-                // `inference::lambda::bind_from_lambda_body` makes for
-                // its own multiplicity bind. Default mode is already
-                // 0 errors; strict mode is what's chasing the
-                // residual `match.pure` / `eval.pure` / `if.pure`
-                // unresolved-T cluster — a binding gap, not a
-                // multiplicity-widening hazard.
-                if let Some(p_ft) = p_args
+                // The lambda's already-inferred body return type
+                // appears as the FT's `return_type`. We bind eval's
+                // V from this — but ONLY into the LUB-merged `out`
+                // (Constraint mode), NOT into `ty_auth`. The lambda
+                // body's type is *itself* shaped by the binding
+                // context (V's expected type filters lambda param
+                // expectations), so it's not authoritatively
+                // "frozen": fold's `(coll, {x,y|...}, init)` shape
+                // depends on the lambda body's V-contribution being
+                // LUB-able with `init`'s type, not auth-frozen by
+                // the body alone. Same Java-parity carve-out as
+                // `inference::lambda::bind_from_lambda_body` (which
+                // uses the public `bind_type` Constraint mode).
+                //
+                // Concretely: walk the FT pair manually rather than
+                // recursing into `bind_type_with_mode`'s FunctionType
+                // branch, because that branch unconditionally bumps
+                // `inside_structural=true` (correct for function-ref
+                // structural slots, wrong for lambda-arg slots).
+                // Mults still bind through `bind_mult_with_mode`.
+                if let Some(TypeExpr::FunctionType {
+                    parameters: p_params,
+                    return_type: p_ret,
+                    return_multiplicity: p_ret_mult,
+                }) = p_args
                     .iter()
                     .find(|ta| matches!(ta, TypeExpr::FunctionType { .. }))
                 {
-                    bind_type_with_mode(
-                        p_ft, arg_ty, out, ty_auth, mult_out, model, mode, inside_structural,
-                    );
+                    if let TypeExpr::FunctionType {
+                        parameters: a_params,
+                        return_type: a_ret,
+                        return_multiplicity: a_ret_mult,
+                    } = arg_ty
+                    {
+                        for ((p_ty, p_mult), (a_ty, a_mult)) in
+                            p_params.iter().zip(a_params.iter())
+                        {
+                            bind_type_with_mode(
+                                p_ty,
+                                a_ty,
+                                out,
+                                ty_auth,
+                                mult_out,
+                                model,
+                                mode,
+                                /* inside_structural */ false,
+                            );
+                            bind_mult_with_mode(p_mult, a_mult, mult_out, mode);
+                        }
+                        bind_type_with_mode(
+                            p_ret,
+                            a_ret,
+                            out,
+                            ty_auth,
+                            mult_out,
+                            model,
+                            mode,
+                            /* inside_structural */ false,
+                        );
+                        bind_mult_with_mode(p_ret_mult, a_ret_mult, mult_out, mode);
+                    }
                 }
             }
         }
