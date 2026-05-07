@@ -554,6 +554,63 @@ function test::handler(b: test::Box<Integer>[1]): Integer[1] {
 }
 
 // ---------------------------------------------------------------------------
+// 11b. Subtype-view-walking through TWO levels (Property → AbstractProperty → Function)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tic_subtype_view_walks_two_levels() {
+    // Mirror the platform's Property → AbstractProperty → Function
+    // chain. `MyProp<L> extends MyAbs<L>` and `MyAbs<F> extends MyFunc<F>`.
+    // myEval<T>(p:MyFunc<T>):T against `MyProp<Integer>` must walk two
+    // hops to extract T:=Integer.
+    let source = r#"
+###Pure
+Class test::MyFunc<F> {}
+Class test::MyAbs<F> extends test::MyFunc<F> {}
+Class test::MyProp<L> extends test::MyAbs<L> {}
+native function test::myEval<T>(p: test::MyFunc<T>[1]): T[1];
+function test::caller(p: test::MyProp<Integer>[1]): Integer[1] {
+    test::myEval($p)
+}
+"#;
+    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[]).expect(
+            "Two-level subtype walk: MyProp → MyAbs → MyFunc, T binds \
+             through both hops.",
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// 11c. Subtype-view with FunctionType inside (Property-shaped)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tic_subtype_view_with_function_type_arg() {
+    // Closer to the real Property pattern: outer container has a
+    // FunctionType inside its supertype's type-arguments.
+    // `MyProp<L>` extends `MyFunc<{L[1]->L[1]}>` (FunctionType inside).
+    // `eval<T>(f:MyFunc<{T[1]->T[1]}>):T` against `MyProp<Integer>`
+    // must extract T:=Integer through the FunctionType slot.
+    let source = r#"
+###Pure
+Class test::MyFunc<F> {}
+Class test::MyProp<L> extends test::MyFunc<test::Box<L>> {}
+Class test::Box<X> {}
+native function test::myEval<T>(p: test::MyFunc<test::Box<T>>[1]): T[1];
+function test::caller(p: test::MyProp<Integer>[1]): Integer[1] {
+    test::myEval($p)
+}
+"#;
+    legend_pure_parser_pure::strict_mode::with_strict_mode(true, || {
+        compile_with_imports(&[source], &[]).expect(
+            "Subtype walk with nested generic class: T must bind \
+             Integer through Box<L>.",
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
 // 11. Subtype-view binding — Function param binds against Property arg
 // ---------------------------------------------------------------------------
 
