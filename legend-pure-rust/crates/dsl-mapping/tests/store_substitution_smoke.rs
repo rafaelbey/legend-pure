@@ -159,6 +159,120 @@ fn substitution_with_known_endpoints_passes() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// E2: Substitution-chain cycle detection
+// ---------------------------------------------------------------------------
+
+#[test]
+fn substitution_chain_acyclic_passes() {
+    // A→C and B→C are independent edges; no cycle.
+    let errors = compile_errors(indoc! {r"
+        ###Pure
+        Class my::test::A { x : String[1]; }
+        Class my::test::B { y : String[1]; }
+        Class my::test::DbA {}
+        Class my::test::DbB {}
+        Class my::test::DbC {}
+
+        ###Mapping
+        Mapping my::test::Inner
+        (
+          my::test::A : Pure { x : 'a' }
+        )
+
+        Mapping my::test::Middle
+        (
+          include my::test::Inner [my::test::DbA -> my::test::DbC]
+        )
+
+        Mapping my::test::Outer
+        (
+          include my::test::Middle [my::test::DbB -> my::test::DbC]
+
+          my::test::B : Pure { y : 'b' }
+        )
+    "});
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("Cyclic Store Substitution")),
+        "expected acyclic graph; got: {:#?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn substitution_chain_with_a_to_b_to_a_errors() {
+    // BMapping has A→C; OuterMapping has C→A through include of
+    // BMapping. Combined edges: {A→C, C→A} — cycle.
+    // (Mirror of Java's `TestCyclicStoreSubstitutionInMappingHierarchy`
+    // direct case.)
+    let errors = compile_errors(indoc! {r"
+        ###Pure
+        Class my::test::A { x : String[1]; }
+        Class my::test::B { y : String[1]; }
+        Class my::test::DbA {}
+        Class my::test::DbC {}
+
+        ###Mapping
+        Mapping my::test::Inner
+        (
+          my::test::A : Pure { x : 'a' }
+        )
+
+        Mapping my::test::Middle
+        (
+          include my::test::Inner [my::test::DbA -> my::test::DbC]
+        )
+
+        Mapping my::test::Outer
+        (
+          include my::test::Middle [my::test::DbC -> my::test::DbA]
+
+          my::test::B : Pure { y : 'b' }
+        )
+    "});
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Cyclic Store Substitution")
+                && e.message.contains("my::test::Db")),
+        "expected substitution-cycle error; got: {:#?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn substitution_self_loop_errors() {
+    // A→A — self-loop.
+    let errors = compile_errors(indoc! {r"
+        ###Pure
+        Class my::test::A { x : String[1]; }
+        Class my::test::B { y : String[1]; }
+        Class my::test::DbA {}
+
+        ###Mapping
+        Mapping my::test::Inner
+        (
+          my::test::A : Pure { x : 'a' }
+        )
+
+        Mapping my::test::Outer
+        (
+          include my::test::Inner [my::test::DbA -> my::test::DbA]
+
+          my::test::B : Pure { y : 'b' }
+        )
+    "});
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Cyclic Store Substitution")),
+        "expected self-loop cycle error; got: {:#?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn substitution_without_brackets_passes() {
     // No store substitutions on the include — validator should be
