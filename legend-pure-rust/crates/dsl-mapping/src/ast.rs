@@ -271,6 +271,20 @@ pub trait ForeignClassMappingBody: std::fmt::Debug + Send + Sync {
     /// round-trip path. The composer prints `: <kind> ` immediately
     /// before this call, so the body itself owns only the body block.
     fn compose(&self, out: &mut String);
+
+    /// Stores referenced by this body's grammar. Default returns
+    /// empty. Implementations override when their grammar references
+    /// stores — relational class-mapping bodies reference Databases
+    /// via `~mainTable [db]`, scope's `[db]`, per-line `[db]`
+    /// qualifiers, and join-sequence `[db]` qualifiers.
+    ///
+    /// Used by Phase E3's `validate_store_substitution_existence` to
+    /// answer "what stores does mapping IM accept?". Java parity:
+    /// `InstanceSetImplementation._stores()` on the relational
+    /// metamodel.
+    fn referenced_stores(&self) -> Vec<PackageableElementPtr> {
+        Vec::new()
+    }
 }
 
 impl Clone for Box<dyn ForeignClassMappingBody> {
