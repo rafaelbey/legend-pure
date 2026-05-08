@@ -99,6 +99,12 @@ pub struct RelationalExtension {
     /// [`crate::processor::ResolvedClassMapping`] and
     /// [`Self::resolved_class_mappings`].
     resolved_class_mappings: RefCell<Vec<crate::processor::ResolvedClassMapping>>,
+    /// Per-mapping include FQNs captured during `declare()`. Keyed
+    /// by mapping FQN, value is the list of FQNs in that mapping's
+    /// `includes`. Used by Phase E4 (cross-mapping inline + extends
+    /// id resolution) to walk the include closure when looking up
+    /// class-mapping ids.
+    mapping_includes: RefCell<HashMap<SmolStr, Vec<SmolStr>>>,
 }
 
 /// One registered database, plus the source file it came from
@@ -181,6 +187,8 @@ impl CompilerExtension for RelationalExtension {
         by_fqn.clear();
         let mut relational_class_mappings = self.relational_class_mappings.borrow_mut();
         relational_class_mappings.clear();
+        let mut mapping_includes = self.mapping_includes.borrow_mut();
+        mapping_includes.clear();
         for source in ctx.source_files {
             for section in &source.sections {
                 match section.kind.as_str() {
@@ -213,6 +221,21 @@ impl CompilerExtension for RelationalExtension {
                                 continue;
                             };
                             let mapping_fqn = mapping_fqn(mapping);
+                            // Capture this mapping's include FQNs so the
+                            // E4 cross-mapping resolver can walk the
+                            // include closure when looking up class-
+                            // mapping ids. Done once per Mapping section
+                            // entry; later entries for the same FQN
+                            // overwrite (the dsl-mapping side surfaces
+                            // duplicate-Mapping diagnostics already).
+                            mapping_includes.insert(
+                                mapping_fqn.clone(),
+                                mapping
+                                    .includes
+                                    .iter()
+                                    .map(|inc| packageable_fqn(&inc.included))
+                                    .collect(),
+                            );
                             for cm in &mapping.class_mappings {
                                 let ClassMappingBody::Foreign(boxed) = &cm.body else {
                                     continue;
@@ -296,7 +319,8 @@ impl CompilerExtension for RelationalExtension {
         }
         // Stage 8 + 9: per-class-mapping validation.
         let class_mappings = self.relational_class_mappings.borrow();
-        validate_relational_class_mappings(&class_mappings, &dbs, ctx.errors);
+        let mapping_includes = self.mapping_includes.borrow();
+        validate_relational_class_mappings(&class_mappings, &dbs, &mapping_includes, ctx.errors);
         // Phase D: repo-boundary visibility for `include` and `[db]`
         // qualifiers. No-op when `model.repo_visibility` is empty (so
         // existing tests that build a model without descriptors stay
@@ -328,7 +352,7 @@ impl CompilerExtension for RelationalExtension {
         // declared target class. Java parity:
         // "The inlineSetImplementationId '...' is implementing the
         // class 'X' which is not a subType of 'Y'".
-        validate_inline_target_subtypes(&class_mappings, ctx.model, ctx.errors);
+        validate_inline_target_subtypes(&class_mappings, &mapping_includes, ctx.model, ctx.errors);
         // Phase A7: AssociationMapping target identity. An
         // AssociationMapping body's class FQN must resolve to an
         // `Association` element on the model (not a Class), and
@@ -1038,14 +1062,16 @@ fn mapping_fqn(m: &MappingDef) -> SmolStr {
 /// E2. AssociationMapping arity — Java requires exactly two
 ///     property-mapping lines (one per association end). Empty or
 ///     single-line bodies are flagged.
-/// E3. Inline trailer must reference a class-mapping id within the
-///     same enclosing `Mapping`. Cross-mapping inline references
-///     would require the mapping graph and aren't supported in
-///     Stage 8 (Java's processor walks the include graph to resolve
-///     them — out of scope here).
+/// E3. Inline trailer must reference a class-mapping id reachable
+///     from the enclosing `Mapping` — same Mapping or any
+///     transitively-included one. Java's processor walks the
+///     include graph via `getClassMappingsByIdIncludeEmbedded`; we
+///     mirror with `mapping_includes` (captured at declare time)
+///     plus the same-Mapping `ids_by_mapping` index.
 fn validate_relational_class_mappings(
     class_mappings: &[RegisteredRelationalClassMapping],
     dbs: &HashMap<SmolStr, RegisteredDatabase>,
+    mapping_includes: &HashMap<SmolStr, Vec<SmolStr>>,
     errors: &mut Vec<CompilationError>,
 ) {
     use std::collections::HashSet;
@@ -1096,11 +1122,12 @@ fn validate_relational_class_mappings(
                     },
                 });
             } else {
-                // A8b: extends id must resolve to a class mapping in
-                // the same `Mapping`.
-                let known = ids_by_mapping
-                    .get(&reg.mapping_fqn)
-                    .is_some_and(|set| set.contains(parent_id));
+                // A8b: extends id must resolve to a class mapping
+                // visible from this Mapping — itself or any
+                // transitively-included Mapping.
+                let visible =
+                    visible_class_mapping_ids(&reg.mapping_fqn, &ids_by_mapping, mapping_includes);
+                let known = visible.contains(parent_id);
                 if !known {
                     errors.push(CompilationError {
                         message: format!(
@@ -1212,12 +1239,15 @@ fn validate_relational_class_mappings(
                         },
                     });
                 }
-                // E3: Inline trailer must reference a mapping id.
+                // E3: Inline trailer must reference a mapping id
+                // visible from the enclosing Mapping — itself or any
+                // transitively-included Mapping.
                 if let Some(EmbeddedMappingTrailer::Inline(inline)) = &em.trailer {
-                    let known_ids = ids_by_mapping
-                        .get(&reg.mapping_fqn)
-                        .cloned()
-                        .unwrap_or_default();
+                    let known_ids = visible_class_mapping_ids(
+                        &reg.mapping_fqn,
+                        &ids_by_mapping,
+                        mapping_includes,
+                    );
                     if !known_ids.contains(&inline.id.value) {
                         errors.push(CompilationError {
                             message: format!(
@@ -2682,6 +2712,7 @@ fn find_property_type(
 /// check on top.
 fn validate_inline_target_subtypes(
     class_mappings: &[RegisteredRelationalClassMapping],
+    mapping_includes: &HashMap<SmolStr, Vec<SmolStr>>,
     model: &legend_pure_parser_pure::model::PureModel,
     errors: &mut Vec<CompilationError>,
 ) {
@@ -2712,6 +2743,7 @@ fn validate_inline_target_subtypes(
                 class_id,
                 &reg.mapping_fqn,
                 &by_id,
+                mapping_includes,
                 model,
                 &owner,
                 errors,
@@ -2725,6 +2757,7 @@ fn walk_for_inline_subtypes(
     enclosing_class_id: legend_pure_parser_pure::ids::ElementId,
     mapping_fqn: &SmolStr,
     by_id: &HashMap<(SmolStr, SmolStr), SmolStr>,
+    mapping_includes: &HashMap<SmolStr, Vec<SmolStr>>,
     model: &legend_pure_parser_pure::model::PureModel,
     owner: &SmolStr,
     errors: &mut Vec<CompilationError>,
@@ -2736,6 +2769,7 @@ fn walk_for_inline_subtypes(
                 enclosing_class_id,
                 mapping_fqn,
                 by_id,
+                mapping_includes,
                 model,
                 owner,
                 errors,
@@ -2748,6 +2782,7 @@ fn walk_for_inline_subtypes(
                     enclosing_class_id,
                     mapping_fqn,
                     by_id,
+                    mapping_includes,
                     model,
                     owner,
                     errors,
@@ -2762,6 +2797,7 @@ fn walk_line_for_inline_subtypes(
     enclosing_class_id: legend_pure_parser_pure::ids::ElementId,
     mapping_fqn: &SmolStr,
     by_id: &HashMap<(SmolStr, SmolStr), SmolStr>,
+    mapping_includes: &HashMap<SmolStr, Vec<SmolStr>>,
     model: &legend_pure_parser_pure::model::PureModel,
     owner: &SmolStr,
     errors: &mut Vec<CompilationError>,
@@ -2798,6 +2834,7 @@ fn walk_line_for_inline_subtypes(
                 nested_id,
                 mapping_fqn,
                 by_id,
+                mapping_includes,
                 model,
                 owner,
                 errors,
@@ -2816,8 +2853,9 @@ fn walk_line_for_inline_subtypes(
         // checks are A5's job).
         return;
     };
-    let inline_target_key = (mapping_fqn.clone(), inline.id.value.clone());
-    let Some(inline_class_fqn) = by_id.get(&inline_target_key) else {
+    let Some(inline_class_fqn) =
+        find_class_mapping_via_includes(mapping_fqn, &inline.id.value, by_id, mapping_includes)
+    else {
         // E3 emits the unresolved diagnostic.
         return;
     };
@@ -2975,4 +3013,93 @@ fn validate_association_mapping_targets(
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase E4 — cross-mapping include resolution helpers
+// ---------------------------------------------------------------------------
+
+/// Set of class-mapping ids visible from `mapping_fqn` — its own ids
+/// unioned with every transitively-included mapping's ids. Mirrors
+/// Java's
+/// `org.finos.legend.pure.m2.dsl.mapping.Mapping.getClassMappingsByIdIncludeEmbedded`.
+fn visible_class_mapping_ids(
+    mapping_fqn: &SmolStr,
+    ids_by_mapping: &HashMap<SmolStr, HashSet<SmolStr>>,
+    mapping_includes: &HashMap<SmolStr, Vec<SmolStr>>,
+) -> HashSet<SmolStr> {
+    let mut out: HashSet<SmolStr> = HashSet::new();
+    let mut visited: HashSet<SmolStr> = HashSet::new();
+    walk_visible_ids(
+        mapping_fqn,
+        ids_by_mapping,
+        mapping_includes,
+        &mut out,
+        &mut visited,
+    );
+    out
+}
+
+fn walk_visible_ids(
+    mapping_fqn: &SmolStr,
+    ids_by_mapping: &HashMap<SmolStr, HashSet<SmolStr>>,
+    mapping_includes: &HashMap<SmolStr, Vec<SmolStr>>,
+    out: &mut HashSet<SmolStr>,
+    visited: &mut HashSet<SmolStr>,
+) {
+    if !visited.insert(mapping_fqn.clone()) {
+        return;
+    }
+    if let Some(ids) = ids_by_mapping.get(mapping_fqn) {
+        out.extend(ids.iter().cloned());
+    }
+    if let Some(includes) = mapping_includes.get(mapping_fqn) {
+        for inc_fqn in includes {
+            walk_visible_ids(inc_fqn, ids_by_mapping, mapping_includes, out, visited);
+        }
+    }
+}
+
+/// Find the class FQN that an inline target id resolves to, walking
+/// the include closure. Returns `None` when the id isn't visible
+/// from `mapping_fqn` or any of its transitively-included mappings.
+fn find_class_mapping_via_includes<'a>(
+    mapping_fqn: &SmolStr,
+    target_id: &SmolStr,
+    by_id: &'a HashMap<(SmolStr, SmolStr), SmolStr>,
+    mapping_includes: &HashMap<SmolStr, Vec<SmolStr>>,
+) -> Option<&'a SmolStr> {
+    let mut visited: HashSet<SmolStr> = HashSet::new();
+    walk_find_class_mapping(
+        mapping_fqn,
+        target_id,
+        by_id,
+        mapping_includes,
+        &mut visited,
+    )
+}
+
+fn walk_find_class_mapping<'a>(
+    mapping_fqn: &SmolStr,
+    target_id: &SmolStr,
+    by_id: &'a HashMap<(SmolStr, SmolStr), SmolStr>,
+    mapping_includes: &HashMap<SmolStr, Vec<SmolStr>>,
+    visited: &mut HashSet<SmolStr>,
+) -> Option<&'a SmolStr> {
+    if !visited.insert(mapping_fqn.clone()) {
+        return None;
+    }
+    if let Some(class_fqn) = by_id.get(&(mapping_fqn.clone(), target_id.clone())) {
+        return Some(class_fqn);
+    }
+    if let Some(includes) = mapping_includes.get(mapping_fqn) {
+        for inc_fqn in includes {
+            if let Some(found) =
+                walk_find_class_mapping(inc_fqn, target_id, by_id, mapping_includes, visited)
+            {
+                return Some(found);
+            }
+        }
+    }
+    None
 }

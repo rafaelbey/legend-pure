@@ -906,6 +906,108 @@ mod stage9 {
             "expected clean extends; got {errors:#?}"
         );
     }
+
+    // ---------------------------------------------------------------
+    // E4: extends id resolves through include closure
+    // (Java parity: TestExtendGrammar.testExtendWithInclude)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn class_mapping_extending_id_in_included_mapping_passes() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (id INT PRIMARY KEY)
+            )
+
+            ###Pure
+            Class pkg::Parent { id : Integer[1]; }
+            Class pkg::Child extends pkg::Parent {}
+
+            ###Mapping
+            Mapping pkg::BaseMap
+            (
+              *pkg::Parent[parentMap] : Relational
+              {
+                ~mainTable [pkg::db]t
+                (id : t.id)
+              }
+            )
+
+            Mapping pkg::DerivedMap
+            (
+              include pkg::BaseMap
+
+              pkg::Child[childMap] extends [parentMap] : Relational
+              {
+                (id : t.id)
+              }
+            )
+        "});
+        assert!(
+            errors.iter().all(|e| !matches!(
+                &e.kind,
+                CompilationErrorKind::UnresolvedElement { path }
+                    if path.as_str() == "parentMap"
+            )),
+            "expected extends id to resolve via include; got {errors:#?}"
+        );
+    }
+
+    #[test]
+    fn class_mapping_extending_id_not_in_includes_errors() {
+        let errors = run_validator_with_mapping(indoc! {r"
+            ###Relational
+            Database pkg::db
+            (
+              Table t (id INT PRIMARY KEY)
+            )
+
+            ###Pure
+            Class pkg::Parent { id : Integer[1]; }
+            Class pkg::Child extends pkg::Parent {}
+
+            ###Mapping
+            Mapping pkg::BaseMap
+            (
+              *pkg::Parent[parentMap] : Relational
+              {
+                ~mainTable [pkg::db]t
+                (id : t.id)
+              }
+            )
+
+            Mapping pkg::OtherMap
+            (
+              pkg::Parent[otherParent] : Relational
+              {
+                ~mainTable [pkg::db]t
+                (id : t.id)
+              }
+            )
+
+            Mapping pkg::DerivedMap
+            (
+              // No include of pkg::BaseMap — `parentMap` shouldn't
+              // resolve from this mapping.
+              include pkg::OtherMap
+
+              pkg::Child[childMap] extends [parentMap] : Relational
+              {
+                (id : t.id)
+              }
+            )
+        "});
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                CompilationErrorKind::UnresolvedElement { path }
+                    if path.as_str() == "parentMap"
+            )),
+            "expected extends-id-unresolved error; got {errors:#?}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
