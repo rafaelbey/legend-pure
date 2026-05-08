@@ -23,25 +23,29 @@ import java.lang.annotation.Target;
  * Marks a Java class as the trigger for typed Pure-bindings generation.
  *
  * <p>The {@link PureBindingsProcessor} annotation processor reads the
- * referenced manifest, dispatches each FQN through the Rust codegen
- * crate via the {@code libpure_rust_jni} cdylib, and emits one
- * {@code .java} file per resulting Java source under
- * {@link #javaPackage()}.
+ * referenced manifest from the <b>compile classpath</b>, dispatches
+ * each FQN through the Rust codegen crate via the
+ * {@code libpure_rust_jni} cdylib, and emits one {@code .java} file
+ * per resulting Java source under the package declared by the
+ * manifest's {@code @pkg:} directive (or the {@link #javaPackage()}
+ * fallback).
  *
  * <p>Typical usage:
  * <pre>{@code
- * @PureBindings(
- *     bindingsFile = "src/main/pure-bindings/m3-bindings.txt",
- *     javaPackage  = "org.finos.legend.pure.rust.generated"
- * )
+ * @PureBindings(bindingsFile = "pure-bindings/m3-bindings.jpure")
  * public final class M3Bootstrap {}
  * }</pre>
  *
- * <p>Two compiler-level options drive the path resolution:
+ * <p>The manifest format supports directives:
+ * <pre>{@code
+ * @pkg: org.finos.legend.pure.rust.generated
+ * @import: pure-bindings/m3-bindings.jpure
+ *
+ * meta::pure::metamodel::type::Class
+ * }</pre>
+ *
+ * <p>One compiler-level option drives native loading:
  * <ul>
- *   <li>{@code -Apure.bindings.basedir=…} — directory the
- *       {@link #bindingsFile()} path resolves against (defaults to the
- *       JVM's working directory, which is the Maven {@code basedir}).</li>
  *   <li>{@code -Apure.cdylib.path=…} — absolute path to the
  *       {@code libpure_rust_jni.{dylib,so,dll}} that the processor
  *       loads at compile time.</li>
@@ -56,26 +60,31 @@ import java.lang.annotation.Target;
 public @interface PureBindings
 {
     /**
-     * Path to the bindings manifest, one Pure FQN per line. Resolved
-     * relative to {@code -Apure.bindings.basedir} (which the Maven
-     * compiler plugin sets to {@code ${project.basedir}}). Blank lines
-     * and {@code #}-prefixed comments are ignored.
+     * Classpath path to the bindings manifest (typically a {@code .jpure}
+     * resource under {@code src/main/resources/}). Resolved via
+     * {@link javax.annotation.processing.Filer#getResource(JavaFileManager.Location, CharSequence, CharSequence)
+     * Filer.getResource} against {@code StandardLocation.CLASS_OUTPUT}.
+     * Blank lines and {@code #}-prefixed comments are ignored.
      *
-     * @return the manifest path
+     * @return the classpath-relative manifest path
      */
     String bindingsFile();
 
     /**
-     * Java package every emitted source class lives under.
+     * Optional fallback Java package for emitted classes. Used only
+     * when the manifest does not declare a {@code @pkg:} directive of
+     * its own. Empty default — the manifest is the preferred home for
+     * this value because it then travels with the bindings JAR.
      *
-     * @return the root Java package
+     * @return the root Java package, or empty to defer to the manifest
      */
-    String javaPackage();
+    String javaPackage() default "";
 
     /**
-     * Optional override for the simple class name of the generated
-     * static-functions facade. Defaults to {@code PureFunctions} when
-     * empty.
+     * Optional fallback for the simple class name of the generated
+     * static-functions facade. Used only when the manifest does not
+     * declare a {@code @functions-class:} directive. Defaults to
+     * {@code PureFunctions}.
      *
      * @return the facade class name (or empty for the default)
      */

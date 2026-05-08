@@ -56,7 +56,9 @@ use owo_colors::OwoColorize;
 use smol_str::SmolStr;
 
 use legend_pure_core_platform::repo::{self, Repo};
-use legend_pure_java_codegen::{FqnInput, Options, dispatch_bindings_by_kind, generate};
+use legend_pure_java_codegen::{
+    FqnInput, Options, dispatch_bindings_by_kind, generate, parse_manifest,
+};
 
 use crate::diagnostics::CliError;
 
@@ -151,20 +153,32 @@ pub fn run(args: JavaBindingsArgs) -> Result<(), CliError> {
         .filter(|f| !f.raw.is_empty())
         .collect();
 
-    // Read the kind-agnostic bindings file (one FQN per line) into a
-    // raw vector; we'll dispatch each entry by element kind once the
-    // model is loaded.
+    // Read the bindings manifest, parsing `@pkg` / `@functions-class`
+    // / `@import` directives out of the body. The CLI is the
+    // standalone codegen path; `@import` requires classpath
+    // resolution which only the annotation processor can do, so we
+    // surface a clear error if a CLI-supplied manifest tries to use
+    // them.
+    let mut manifest_pkg: Option<String> = None;
+    let mut manifest_functions_class: Option<String> = None;
     let bindings_lines = if let Some(file) = args.bindings_file.as_deref() {
         let content = std::fs::read_to_string(file).map_err(|e| CliError::Io {
             path: file.to_path_buf(),
             source: e,
         })?;
-        content
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
+        let raw_lines: Vec<String> = content.lines().map(str::to_owned).collect();
+        let parsed = parse_manifest(&raw_lines).map_err(|e| CliError::Custom(e.to_string()))?;
+        if !parsed.imports.is_empty() {
+            return Err(CliError::Custom(format!(
+                "manifest `{}` uses `@import:` which only the annotation processor can resolve. \
+                 The CLI is for standalone codegen — emit each manifest separately or invoke \
+                 the AP via `mvn compile`.",
+                file.display()
+            )));
+        }
+        manifest_pkg = parsed.pkg;
+        manifest_functions_class = parsed.functions_class;
+        parsed.fqns
     } else {
         Vec::new()
     };
@@ -218,8 +232,11 @@ pub fn run(args: JavaBindingsArgs) -> Result<(), CliError> {
         );
     }
 
-    let mut opts = Options::new(&args.java_package);
-    if let Some(name) = args.functions_class {
+    // Manifest's `@pkg:` directive overrides the `--java-package`
+    // command-line default; same for `--functions-class`.
+    let java_package = manifest_pkg.unwrap_or(args.java_package);
+    let mut opts = Options::new(&java_package);
+    if let Some(name) = args.functions_class.or(manifest_functions_class) {
         opts.functions_class_name = Some(name);
     }
 

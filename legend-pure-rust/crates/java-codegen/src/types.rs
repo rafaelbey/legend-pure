@@ -20,7 +20,8 @@ use legend_pure_parser_pure::types::{Multiplicity, TypeExpr};
 
 use crate::model::{Bootstrap, CodegenError, Options};
 use crate::naming::{
-    join_java_package, pure_fqn_segments, pure_package_segments_of, safe_java_identifier,
+    join_java_package, pure_fqn_segments, pure_fqn_string, pure_package_segments_of,
+    safe_java_identifier,
 };
 
 /// Where in a function signature a type appears — for diagnostics.
@@ -202,6 +203,21 @@ fn render_named(
             source: "Void".to_owned(),
             carries_user_type: false,
         });
+    }
+
+    // External bindings — emitted by another module — win over every
+    // fallback below. Resolves a Pure FQN like
+    // `meta::pure::metamodel::type::Class` to its imported Java FQN
+    // `org.finos.legend.pure.rust.generated.Class` instead of
+    // collapsing to `Object` via the platform-class filter.
+    if !opts.external_bindings.is_empty() {
+        let pure_fqn = pure_fqn_string(model, id);
+        if let Some(java_fqn) = opts.external_bindings.get(&pure_fqn) {
+            return Ok(JavaType {
+                source: java_fqn.clone(),
+                carries_user_type: true,
+            });
+        }
     }
 
     if let Some(java) = primitive_java_type(element, leaf_name, &segments) {

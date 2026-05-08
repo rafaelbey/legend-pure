@@ -74,7 +74,6 @@ the standard `<annotationProcessorPaths>` mechanism:
       </path>
     </annotationProcessorPaths>
     <compilerArgs>
-      <arg>-Apure.bindings.basedir=${project.basedir}</arg>
       <arg>-Apure.cdylib.path=${legend.cdylib.path}</arg>
     </compilerArgs>
   </configuration>
@@ -86,29 +85,69 @@ The marker class
 carries the `@PureBindings` annotation that points at the manifest:
 
 ```java
-@PureBindings(
-    bindingsFile = "src/main/pure-bindings/m3-bindings.txt",
-    javaPackage  = "org.finos.legend.pure.rust.generated"
-)
+@PureBindings(bindingsFile = "pure-bindings/m3-bindings.jpure")
 public final class M3Bootstrap {}
 ```
 
-At compile time the AP loads `libpure_rust_jni.{dylib,so,dll}` (path
-resolved from `-Apure.cdylib.path`), calls into the Rust
-`legend-pure-java-codegen` crate to walk the model and produce Java
-sources, and emits each one through `Filer` (which puts them under
-`target/generated-sources/annotations/` and feeds them into the same
-javac round). No `cargo` subprocess fork, no extra `<build-helper>`
-plugin to wire the generated source root.
+The manifest path is a **classpath resource**, resolved from
+`target/classes/` after Maven copies the file out of
+`src/main/resources/`. At compile time the AP loads
+`libpure_rust_jni.{dylib,so,dll}` (path resolved from
+`-Apure.cdylib.path`), reads the manifest via
+`Filer.getResource(StandardLocation.CLASS_OUTPUT, …)`, parses its
+header directives, calls into the Rust `legend-pure-java-codegen`
+crate to walk the model, and emits each produced source through
+`Filer` (which puts it under `target/generated-sources/annotations/`
+and feeds it into the same javac round). No `cargo` subprocess fork,
+no extra `<build-helper>` plugin to wire the generated source root.
 
-The manifest at `src/main/pure-bindings/m3-bindings.txt` is one Pure
-FQN per line; the AP auto-detects each entry's element kind (Function /
-Class / Association) and dispatches accordingly. Blank lines and
-`#`-prefixed comments are ignored. The default manifest covers the M3
-metamodel surface (`Class`, `GenericType`, `Function`, `Property`,
-`Multiplicity`, `Profile`, `Stereotype`, …) plus a few reflection
-helpers (`type()`, `genericType()`, `elementToPath()`,
+### Manifest format (`.jpure`)
+
+Each manifest is a UTF-8 text file with directive lines + an FQN
+body:
+
+```
+# Comments and blank lines ignored.
+@pkg: org.finos.legend.pure.rust.generated
+@functions-class: PureFunctions          # optional override
+
+# Pure FQNs — one per line. Auto-dispatched by element kind:
+#   Function     → static method on the facade class
+#   Class        → Java interface (with property closure walked)
+#   Association  → both endpoint classes seeded
+meta::pure::metamodel::type::Class
+meta::pure::functions::math::plus_Integer_MANY__Integer_1_
+```
+
+The `.jpure` extension marks the file as a Pure-bindings manifest
+(distinct from a generic text file). The default M3 manifest covers
+the metamodel surface (`Class`, `GenericType`, `Function`,
+`Property`, `Multiplicity`, `Profile`, `Stereotype`, …) plus a few
+reflection helpers (`type()`, `genericType()`, `elementToPath()`,
 `pathToElement()`).
+
+### Cross-module composition (`@import:`)
+
+Downstream modules build on the M3 bindings without re-emitting
+them. Add `@import:` to your manifest pointing at another module's
+`.jpure` resource (which must be on your compile classpath via a
+`provided`-scope dependency):
+
+```
+# my-dsl.jpure — bindings for an example DSL on top of M3.
+@pkg: org.example.dsl.generated
+@import: pure-bindings/m3-bindings.jpure
+
+org::example::dsl::Mapping
+org::example::dsl::PropertyMapping
+```
+
+The processor recursively reads each imported manifest, builds a
+Pure-FQN → Java-FQN map, and the codegen routes references to those
+types at the imported Java FQN (e.g. references to
+`meta::pure::metamodel::PackageableElement` resolve to
+`org.finos.legend.pure.rust.generated.PackageableElement`) instead
+of re-emitting them locally.
 
 To add more Pure surface to the bindings, append FQNs to the manifest
 and re-run `mvn compile`. To skip generation entirely (e.g. on a host

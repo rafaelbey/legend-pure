@@ -138,7 +138,6 @@
                         </path>
                     </annotationProcessorPaths>
                     <compilerArgs>
-                        <arg>-Apure.bindings.basedir=${project.basedir}</arg>
                         <arg>-Apure.cdylib.path=${legend.cdylib.path}</arg>
                     </compilerArgs>
                 </configuration>

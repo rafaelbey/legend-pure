@@ -86,7 +86,20 @@ pub(crate) fn emit_class_interface(
         if let TypeExpr::Named { element, .. } = super_ty {
             if bootstrap.is_any(*element) {
                 extends_list.push(HAND_WRITTEN_ANY_FQN.to_owned());
-            } else if reachable.contains_class(*element) {
+                continue;
+            }
+            // External-binding supertype: another module already
+            // emitted the parent interface. Reference its imported
+            // Java FQN so this child compiles as a real subtype.
+            if !opts.external_bindings.is_empty()
+                && let Some(java_fqn) = opts
+                    .external_bindings
+                    .get(&pure_fqn_string(model, *element))
+            {
+                extends_list.push(java_fqn.clone());
+                continue;
+            }
+            if reachable.contains_class(*element) {
                 let segs = pure_fqn_segments(model, *element);
                 let leaf2 = segs.last().map(smol_str::SmolStr::as_str).unwrap_or("");
                 let p = pure_package_segments_of(model, *element);

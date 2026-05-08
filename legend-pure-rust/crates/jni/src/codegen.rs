@@ -40,7 +40,10 @@ use smol_str::SmolStr;
 /// Parameters mirror the CLI shape: explicit `--functions` /
 /// `--classes` / `--associations` seeds plus a kind-agnostic bindings
 /// list. `functions_class_name` is the empty string when the caller
-/// wants the default (`PureFunctions`).
+/// wants the default (`PureFunctions`). `external_bindings_flat` is a
+/// `String[]` of alternating `(pure_fqn, java_fqn)` pairs declaring
+/// types already emitted by another module — codegen references those
+/// Java FQNs instead of re-emitting interfaces locally.
 ///
 /// Returns a `String[]` of even length, alternating `(relativePath,
 /// contents)`. On error throws `org/finos/legend/pure/rust/PureRustException`
@@ -62,6 +65,7 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_bindings_PureBindingsGene
     associations: JObjectArray<'local>,
     bindings_lines: JObjectArray<'local>,
     functions_class_name: JString<'local>,
+    external_bindings_flat: JObjectArray<'local>,
 ) -> JObjectArray<'local> {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let java_package_str: String = env.get_string(&java_package).unwrap().into();
@@ -75,6 +79,9 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_bindings_PureBindingsGene
             .map_err(|e| format!("converting --associations array: {e:?}"))?;
         let bindings_lines_vec = read_string_array(&mut env, &bindings_lines)
             .map_err(|e| format!("converting bindings-lines array: {e:?}"))?;
+        let external_flat = read_string_array(&mut env, &external_bindings_flat)
+            .map_err(|e| format!("converting external-bindings array: {e:?}"))?;
+        let external_pairs = pair_external_bindings(&external_flat)?;
 
         run_codegen(
             &java_package_str,
@@ -83,6 +90,7 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_bindings_PureBindingsGene
             &associations_vec,
             &bindings_lines_vec,
             functions_class_name_str.as_str(),
+            &external_pairs,
         )
     }));
 
@@ -129,6 +137,7 @@ pub(crate) fn run_codegen(
     associations: &[String],
     bindings_lines: &[String],
     functions_class_name: &str,
+    external_bindings: &[(String, String)],
 ) -> Result<Vec<JavaFile>, String> {
     let repos = Repo::default_with_build_snapshots();
     let auto_imports: Vec<SmolStr> = legend_pure_core_platform::platform::PLATFORM_AUTO_IMPORTS
@@ -161,7 +170,7 @@ pub(crate) fn run_codegen(
     let cleaned_lines: Vec<String> = bindings_lines
         .iter()
         .map(|s| s.trim().to_owned())
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('@'))
         .collect();
 
     if !cleaned_lines.is_empty() {
@@ -183,9 +192,30 @@ pub(crate) fn run_codegen(
     if !functions_class_name.is_empty() {
         opts.functions_class_name = Some(functions_class_name.to_owned());
     }
+    for (pure_fqn, java_fqn) in external_bindings {
+        opts.external_bindings
+            .insert(pure_fqn.clone(), java_fqn.clone());
+    }
 
     generate(&model, &requested, &extra_classes, &extra_associations, &opts)
         .map_err(|e| e.to_string())
+}
+
+/// Pair the alternating `(pure_fqn, java_fqn)` flat array into a list
+/// of tuples. Returns an error on odd length so the caller can throw a
+/// clear `PureRustException` instead of silently dropping an entry.
+fn pair_external_bindings(flat: &[String]) -> Result<Vec<(String, String)>, String> {
+    if !flat.len().is_multiple_of(2) {
+        return Err(format!(
+            "external-bindings array must be even-length (alternating \
+             pure_fqn / java_fqn pairs), got {} entries",
+            flat.len()
+        ));
+    }
+    Ok(flat
+        .chunks_exact(2)
+        .map(|c| (c[0].clone(), c[1].clone()))
+        .collect())
 }
 
 /// Read a `String[]` argument into a `Vec<String>`. A null array is
@@ -256,7 +286,7 @@ mod tests {
 
     #[test]
     fn run_codegen_with_empty_inputs_errors_cleanly() {
-        let err = run_codegen("com.example.gen", &[], &[], &[], &[], "")
+        let err = run_codegen("com.example.gen", &[], &[], &[], &[], "", &[])
             .expect_err("empty seeds must error");
         assert!(
             err.contains("nothing to generate"),
@@ -276,6 +306,7 @@ mod tests {
             &[],
             &lines,
             "",
+            &[],
         )
         .expect("plus dispatches and codegen succeeds");
         assert!(
@@ -291,11 +322,12 @@ mod tests {
     }
 
     #[test]
-    fn run_codegen_strips_comments_and_blank_lines() {
+    fn run_codegen_strips_comments_blank_and_directive_lines() {
         let lines = vec![
             "# this is a comment".to_owned(),
             "".to_owned(),
             "   ".to_owned(),
+            "@pkg: ignored.here".to_owned(),
             "meta::pure::functions::math::plus_Integer_MANY__Integer_1_".to_owned(),
         ];
         let files = run_codegen(
@@ -305,15 +337,16 @@ mod tests {
             &[],
             &lines,
             "",
+            &[],
         )
-        .expect("comment + whitespace lines stripped");
+        .expect("comment + whitespace + directive lines stripped");
         assert!(!files.is_empty());
     }
 
     #[test]
     fn run_codegen_unresolved_bindings_entry_errors() {
         let lines = vec!["totally::made::up".to_owned()];
-        let err = run_codegen("com.example.gen", &[], &[], &[], &lines, "")
+        let err = run_codegen("com.example.gen", &[], &[], &[], &lines, "", &[])
             .expect_err("unresolved entry must error");
         assert!(
             err.contains("totally::made::up"),
@@ -325,5 +358,26 @@ mod tests {
     fn relative_path_uses_forward_slashes() {
         let p = std::path::PathBuf::from("a").join("b").join("C.java");
         assert_eq!(relative_path_with_forward_slashes(&p), "a/b/C.java");
+    }
+
+    #[test]
+    fn pair_external_bindings_errors_on_odd_length() {
+        let err = pair_external_bindings(&["only-one".to_owned()])
+            .expect_err("odd length must error");
+        assert!(err.contains("even-length"), "wrong error: {err}");
+    }
+
+    #[test]
+    fn pair_external_bindings_collects_pairs() {
+        let pairs = pair_external_bindings(&[
+            "user_test::Account".to_owned(),
+            "org.upstream.gen.Account".to_owned(),
+            "user_test::Trader".to_owned(),
+            "org.upstream.gen.Trader".to_owned(),
+        ])
+        .expect("even-length pairs OK");
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].0, "user_test::Account");
+        assert_eq!(pairs[0].1, "org.upstream.gen.Account");
     }
 }

@@ -38,7 +38,9 @@ mod model;
 mod naming;
 mod types;
 
-pub use crate::dispatch::{DispatchedBindings, dispatch_bindings_by_kind};
+pub use crate::dispatch::{
+    DispatchedBindings, ManifestImport, ParsedManifest, dispatch_bindings_by_kind, parse_manifest,
+};
 pub use crate::model::{CodegenError, FqnInput, JavaFile, Options};
 
 use legend_pure_parser_pure::model::PureModel;
@@ -77,7 +79,7 @@ pub fn generate(
     let bootstrap = model::Bootstrap::resolve(model);
     let resolved = model::resolve_requested(model, fns)?;
     let extra_seeds = model::resolve_extra_seeds(model, extra_classes, extra_associations)?;
-    let closure = closure::reachable_types(model, &resolved, &extra_seeds, bootstrap);
+    let closure = closure::reachable_types(model, &resolved, &extra_seeds, bootstrap, opts);
 
     let mut files: Vec<JavaFile> =
         Vec::with_capacity(2 + closure.classes.len() + closure.enums.len());

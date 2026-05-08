@@ -1,19 +1,34 @@
 # Copyright 2026 Goldman Sachs
 #
-# Manifest of Pure elements to materialise as Java bindings via
-# `legend java-bindings --bindings-file`. Each non-blank, non-comment
-# line is a Pure FQN. The CLI resolves it to an element in the platform
-# model and dispatches it by kind:
+# Manifest of Pure elements to materialise as Java bindings via the
+# `legend-pure-runtime-rust-evaluator-bindings-ap` annotation processor
+# (or, equivalently, the `legend java-bindings --bindings-file` CLI).
 #
-#   Function     → static-method wrapper on the generated facade class
-#   Class        → Java interface (with property closure walked)
-#   Association  → both endpoint classes seeded; injected properties
-#                  surface on each side's interface
-#
-# Used by the `exec-maven-plugin` configuration in this module's
-# pom.xml during the `generate-sources` phase. Edit and rebuild to
-# extend the bound surface; do not check in the generated Java itself
-# (it lives under `target/generated-sources/`).
+# Format:
+#   @<directive>: <value>     - directive lines, parsed before FQN body.
+#                               Supported keys:
+#                                 @pkg              - Java root package
+#                                 @functions-class  - facade simple name
+#                                 @import           - classpath path to
+#                                                     another `.jpure`
+#                                                     manifest whose FQNs
+#                                                     are referenced (not
+#                                                     re-emitted here)
+#   <pure-fqn>                - one Pure fully-qualified name per line.
+#                               Resolved against the platform model and
+#                               dispatched by element kind:
+#                                 Function     → static-method wrapper
+#                                                on the facade class
+#                                 Class        → Java interface
+#                                                (property closure walked)
+#                                 Association  → both endpoint classes
+#                                                seeded; injected
+#                                                properties surface on
+#                                                each side's interface
+#   # ...                     - comment line (ignored)
+#   <blank>                   - ignored
+
+@pkg: org.finos.legend.pure.rust.generated
 
 ###############################################################################
 # M3 metamodel classes — the core "what is a class?" / "what is a property?"

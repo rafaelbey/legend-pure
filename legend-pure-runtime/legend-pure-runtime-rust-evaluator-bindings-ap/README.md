@@ -28,11 +28,20 @@ Add `<annotationProcessorPaths>` to your consuming module's
       </path>
     </annotationProcessorPaths>
     <compilerArgs>
-      <arg>-Apure.bindings.basedir=${project.basedir}</arg>
       <arg>-Apure.cdylib.path=/abs/path/to/libpure_rust_jni.dylib</arg>
     </compilerArgs>
   </configuration>
 </plugin>
+```
+
+Place a `.jpure` manifest under `src/main/resources/`:
+
+```
+# src/main/resources/pure-bindings/my-bindings.jpure
+@pkg: com.example.generated
+
+user_test::Account
+user_test::Trader
 ```
 
 Then place a marker class anywhere in the consumer's `src/main/java`
@@ -43,24 +52,39 @@ package com.example.bindings;
 
 import org.finos.legend.pure.rust.bindings.PureBindings;
 
-@PureBindings(
-    bindingsFile = "src/main/pure-bindings/my-manifest.txt",
-    javaPackage  = "com.example.generated"
-)
+@PureBindings(bindingsFile = "pure-bindings/my-bindings.jpure")
 public final class Bootstrap {}
 ```
 
-The processor reads the manifest at the supplied path (resolved
-against `-Apure.bindings.basedir`), routes each FQN to
-`legend_pure_java_codegen::generate` via the cdylib JNI bridge, and
-emits one Java source per produced file using
-`Filer.createSourceFile`.
+The processor reads the manifest as a classpath resource via
+`Filer.getResource(StandardLocation.CLASS_OUTPUT, "", path)`, parses
+header directives (`@pkg`, `@functions-class`, `@import`),
+recursively resolves any imports, builds a Pure-FQN → Java-FQN
+external-bindings map, then routes everything to
+`legend_pure_java_codegen::generate` via the cdylib JNI bridge and
+emits one Java source per produced file using `Filer.createSourceFile`.
+
+## Manifest format (`.jpure`)
+
+```
+# Header directives precede the FQN body.
+@pkg: <java.root.package>           # required (or via @PureBindings.javaPackage())
+@functions-class: <SimpleName>      # optional, default: PureFunctions
+@import: <classpath-path>           # zero or more
+
+# Pure FQNs (one per line, blank/comment lines ignored).
+<package>::<element>                # Function / Class / Association
+```
+
+Imported manifests must each declare their own `@pkg:` directive so
+the importer knows where the bindings live. Imports are loaded from
+the same compile classpath the AP itself runs on — typically a
+`provided`-scope Maven dependency on the upstream module.
 
 ## Compiler options
 
 | Option                         | Purpose                                                                  |
 | ------------------------------ | ------------------------------------------------------------------------ |
-| `-Apure.bindings.basedir=…`    | Directory the `bindingsFile` path resolves against. Defaults to `user.dir`. |
 | `-Apure.cdylib.path=…`         | Absolute path to `libpure_rust_jni.{dylib,so,dll}`. Required.           |
 
 ## Architecture
