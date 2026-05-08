@@ -49,15 +49,25 @@ pub struct Options {
     /// Simple class name for the static-functions facade. Defaults to
     /// `"PureFunctions"` when `None`.
     pub functions_class_name: Option<String>,
+    /// Pure-FQN → Java-FQN map of bindings already emitted by another
+    /// module (typically resolved by the annotation processor by
+    /// reading `@import:` manifest references off the compile
+    /// classpath). Codegen treats every entry as **external**:
+    /// references resolve to the supplied Java FQN, and the type is
+    /// excluded from the reachable set so no Java source is emitted
+    /// for it locally. Empty map = standalone codegen with no imports.
+    pub external_bindings: std::collections::HashMap<String, String>,
 }
 
 impl Options {
-    /// Constructs options with the default facade class name (`PureFunctions`).
+    /// Constructs options with the default facade class name (`PureFunctions`)
+    /// and no external bindings.
     #[must_use]
     pub fn new(java_root_package: impl Into<String>) -> Self {
         Self {
             java_root_package: java_root_package.into(),
             functions_class_name: None,
+            external_bindings: std::collections::HashMap::new(),
         }
     }
 
@@ -176,6 +186,15 @@ pub enum CodegenError {
         fqn: String,
         /// The element kind that was found.
         kind: &'static str,
+    },
+    /// A manifest line was malformed — typically an `@<key>` directive
+    /// that's missing its colon, or an unrecognised key.
+    #[error("manifest syntax error on `{line}`: {reason}")]
+    ManifestSyntax {
+        /// The offending line as it appeared in the manifest (trimmed).
+        line: String,
+        /// Human-readable explanation of why the line was rejected.
+        reason: String,
     },
 }
 

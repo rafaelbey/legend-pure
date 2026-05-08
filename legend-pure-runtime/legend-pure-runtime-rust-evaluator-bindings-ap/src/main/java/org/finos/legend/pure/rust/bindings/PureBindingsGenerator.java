@@ -77,6 +77,12 @@ public final class PureBindingsGenerator
      *                             comment lines tolerated and stripped on the Rust side)
      * @param functionsClassName   simple name override for the facade class;
      *                             empty string requests the default ({@code PureFunctions})
+     * @param externalBindings     flat array of alternating
+     *                             (Pure FQN, Java FQN) pairs declaring
+     *                             types already emitted by another module —
+     *                             codegen references those Java FQNs instead
+     *                             of re-emitting interfaces. Empty array =
+     *                             standalone codegen with no imports.
      * @return alternating (path, contents) entries; never null on success
      * @throws RuntimeException carrying the underlying Rust error message
      *                          if codegen fails (translated from the
@@ -88,5 +94,6 @@ public final class PureBindingsGenerator
             String[] classes,
             String[] associations,
             String[] bindingsLines,
-            String functionsClassName);
+            String functionsClassName,
+            String[] externalBindings);
 }

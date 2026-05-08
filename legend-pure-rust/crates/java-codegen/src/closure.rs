@@ -22,8 +22,8 @@ use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
 use legend_pure_parser_pure::types::TypeExpr;
 
-use crate::model::{Bootstrap, ResolvedFn};
-use crate::naming::pure_fqn_segments;
+use crate::model::{Bootstrap, Options, ResolvedFn};
+use crate::naming::{pure_fqn_segments, pure_fqn_string};
 use crate::types::is_platform_class;
 
 /// User types reachable from the seed set, deduplicated and ordered.
@@ -59,6 +59,7 @@ pub(crate) fn reachable_types(
     fns: &[ResolvedFn],
     extra_class_seeds: &[ElementId],
     bootstrap: Bootstrap,
+    opts: &Options,
 ) -> ReachableSet {
     let mut visited: HashSet<ElementId> = HashSet::new();
     let mut queue: Vec<ElementId> = Vec::new();
@@ -82,6 +83,16 @@ pub(crate) fn reachable_types(
 
     while let Some(id) = queue.pop() {
         if !visited.insert(id) {
+            continue;
+        }
+        // Externally-bound types are emitted by another module — skip
+        // walking + emission entirely. The reference site renders to
+        // the imported Java FQN via `Options::external_bindings` in
+        // `types.rs::render_named`, so we don't need to chase
+        // transitive types reached *through* an external class either:
+        // that closure already lives in the importing JAR.
+        let pure_fqn = pure_fqn_string(model, id);
+        if opts.external_bindings.contains_key(&pure_fqn) {
             continue;
         }
         // Skip the M3 metamodel — we render those as opaque `Object` and

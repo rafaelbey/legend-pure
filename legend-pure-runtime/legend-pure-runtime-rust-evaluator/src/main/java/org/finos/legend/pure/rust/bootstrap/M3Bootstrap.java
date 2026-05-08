@@ -19,7 +19,12 @@ import org.finos.legend.pure.rust.bindings.PureBindings;
 /**
  * Marker class that triggers Pure-bindings codegen for the M3
  * metamodel manifest at
- * {@code src/main/pure-bindings/m3-bindings.txt}.
+ * {@code src/main/resources/pure-bindings/m3-bindings.jpure}.
+ *
+ * <p>The manifest path is a classpath-relative resource. Its
+ * {@code @pkg:} directive declares the Java root package
+ * ({@code org.finos.legend.pure.rust.generated}); no annotation
+ * fallback is needed.
  *
  * <p>Generated sources land in
  * {@code target/generated-sources/annotations/org/finos/legend/pure/rust/generated/}
@@ -27,10 +32,7 @@ import org.finos.legend.pure.rust.bindings.PureBindings;
  * automatically by javac in the same compile that runs the AP — no
  * extra source-root registration needed.
  */
-@PureBindings(
-        bindingsFile = "src/main/pure-bindings/m3-bindings.txt",
-        javaPackage = "org.finos.legend.pure.rust.generated"
-)
+@PureBindings(bindingsFile = "pure-bindings/m3-bindings.jpure")
 public final class M3Bootstrap
 {
     private M3Bootstrap()
