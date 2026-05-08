@@ -1,9 +1,9 @@
 # Pure-Rust port: parity semantics
 
 This document records *deliberate divergences* between the Rust port's
-behaviour and the upstream Java Pure implementation. By default the
-Rust compiler holds Java parity; deviations are gated behind opt-in
-flags so the platform PCT corpus stays green.
+behaviour and the upstream Java Pure implementation. The Rust compiler
+targets exact Java semantics by default; the items below are the
+exceptions.
 
 If a behaviour isn't listed here, the Rust port targets exact Java
 semantics. Discrepancies you find should be filed as parity bugs
@@ -11,104 +11,80 @@ unless the cause is documented in this file.
 
 ## Table of contents
 
-- [Strict-mode inference](#strict-mode-inference)
+- [Inference: prescriptive divergences](#inference-prescriptive-divergences)
 
-## Strict-mode inference
+## Inference: prescriptive divergences
 
-**Toggle:** `LEGEND_PURE_STRICT_INFERENCE=1` env var, or
-`legend_pure_parser_pure::strict_mode::with_strict_mode(true, || …)`
-for tests / programmatic opt-in. Default OFF — the platform compile
-runs in lenient (Java parity) mode.
+These behaviours are **always on**. There is no toggle — they ship as the
+default Rust-port semantics. The history: an earlier `with_strict_mode`
+toggle (and `LEGEND_PURE_STRICT_INFERENCE` env var) gated them off by
+default, but once the platform reached zero errors under strict, the
+toggle was removed and strict became default.
 
-**Plan reference:** Steps 3f / 3g in
-`~/.claude/plans/do-we-have-enought-quiet-swing.md`.
-
-### Why we diverge here
+### Why we diverge
 
 Java's `FunctionExpressionProcessor` silently widens mismatched-arg
 types via `findBestCommonGenericType`'s covariant LUB at
 `register():467-480`. Java itself flags this as a known weakness
 (comment at `register():474-478`: "should LUB to Any but currently
-doesn't"). Practical consequences:
+doesn't"). Practical consequences in Java:
 
 - `eval(f:Function<{Integer→String}>[1], 'wrong')` — T binds Integer
   authoritatively from the FunctionType slot; the constraint slot
   `param:T` LUBs Integer + String → Any, then `param:Any` accepts the
   String silently.
-- `pick<T>(1, 'x')` — both T-binding slots LUB to Any. No error fires.
 - `someFn<T>(): T[1]` called from a non-parametric function body —
-  T can't bind from any sibling arg; Java would emit "type parameter
-  T was not resolved" at the *outermost* context only
+  T can't bind from any sibling arg; Java emits "type parameter T was
+  not resolved" only at the *outermost* context
   (`TypeInference.java:87-89`, gated on `getParent() == null`); inside
   a function body the check stays silent.
 - Lambda params with `Generic(T)` expected type and T not in scope —
   Java emits "cannot infer lambda parameter type"
-  (`TypeInference.java:116, :127`); we currently fall through to
-  `Unresolved` placeholder and dispatch carries on.
+  (`TypeInference.java:116, :127`) only at outermost.
 
-Strict mode trades the lenient permissiveness for loud diagnostics.
-Use cases: porting / migrating existing Pure source, CI quality gates,
-catching dispatch ambiguities that Java would silently widen.
+The Rust port instead surfaces these consistently. Use cases: porting
+existing Pure source, CI quality gates, catching dispatch ambiguities
+that Java would silently widen.
 
-### What strict mode does
+### What the Rust port does (always)
 
-| Site | Default (Java parity) | Strict mode |
+| Site | Java | Rust port |
 |---|---|---|
-| Per-arg type compatibility check (`infer.rs::validate_call_arguments`) | Checks against the raw declared `param.type_expr` — `Generic(T)` permissive. | Computes per-arg bindings *excluding* the arg under check (replaces it with an `Unresolved`-typed placeholder so `bind_type`'s LUB-merge doesn't widen back to Any), substitutes the param type with those bindings, and rejects incompatible args. Catches the `eval(f, 'wrong')` case. |
-| Unresolved generics in the substituted return type (`infer.rs::infer_function_call`) | Silent. Java is gated on `getParent() == null`; we don't model that gate exactly. | Walks the substituted return for surviving `Generic(name)` whose `name` isn't in the enclosing fn's `type_params_in_scope`. Emits `UnresolvedTypeParameter`. |
-| Unresolved multiplicity in the substituted return | Silent. | Same idea as above for `Variable(name)` not in `mult_params_in_scope`. Emits `UnresolvedMultiplicityParameter`. |
-| Lambda param expected as `Generic(T)`-not-in-scope (`lower/lambda.rs::lower_lambda_parameters`) | Falls through to `Unresolved` placeholder. The eager `CannotInferLambdaParameterTypes` only fires when both declaration AND expectation are missing. | Treats `Generic(name)` where `name` ∉ `ctx.type_parameters` as a lambda inference failure. Emits `CannotInferLambdaParameterTypes` for the affected param. |
+| Per-arg type compatibility check (`infer.rs::validate_call_arguments`) | Checks against the raw declared `param.type_expr` — `Generic(T)` permissive. | Substitutes `param.type_expr` through the call's `ty_auth` bindings (only T's sourced from a structural FunctionType slot, not from a top-level Generic-typed arg), then checks compatibility. Catches the `eval(f, 'wrong')` case while letting `compare(1, 'a')`/`compare(1, 2.2)` keep their Java-style covariant-LUB-to-common-supertype behaviour. |
+| Unresolved generics in the substituted return type (`infer.rs::infer_function_call`) | Silent (gated on `getParent() == null`). | Walks the substituted return for surviving `Generic(name)` whose `name` isn't in the enclosing fn's `type_params_in_scope`. Emits `UnresolvedTypeParameter`. |
+| Unresolved multiplicity in the substituted return | Silent. | Same idea for `Variable(name)` not in `mult_params_in_scope`. Emits `UnresolvedMultiplicityParameter`. |
+| Lambda param expected as `Generic(T)`-not-in-scope (`lower/lambda.rs::lower_lambda_parameters`) | Falls through to `Unresolved` placeholder; eager check only when both declaration AND expectation are missing. | Treats `Generic(name)` where `name` ∉ `ctx.type_parameters` as a lambda inference failure. Emits `CannotInferLambdaParameterTypes`. |
 
-### Caveats
+### Auth/Constraint binding distinction
 
-- **Strict mode is strictly more diagnostics than Java emits.** Java's
-  unresolved-param error is gated on outermost context
-  (`getParent() == null`); we report at every call site. This is
-  intentional — porters benefit from loud signal over Java's silent
-  drift.
-- **Per-arg excluding-self complements the two-branch dispatch.**
-  The full Java two-branch dispatch
-  (`FunctionExpressionProcessor:567-594` `merge=false`/`merge=true`)
-  is now wired in `infer_generic_bindings` via
-  `bind_type_with_mode` (see `crates/pure/src/resolve.rs`).
-  Strict mode's per-arg excluding-self trick layers an
-  additional check on top — it's what catches
-  `eval(f, 'wrong')`-style mismatches where Java's `merge=true`
-  LUBs to Any silently. Without strict mode, the two-branch
-  dispatch alone gets fold-style chains right but doesn't reject
-  the eval case (that's the deliberate Java parity).
-- **Multiplicity bindings re-use the full bindings**, not the
-  excluding-self set. Multiplicity LUB stays in the range lattice and
-  doesn't suffer the same widening pathology as type LUB; the
-  strict-mode arg-type check is the load-bearing divergence.
+The load-bearing mechanism is the auth-vs-constraint split (Step "auth"
+in the inference rebuild). `GenericBindings` carries two binding maps:
+
+- `ty_auth` — Generic(T) bindings sourced from a *structural FunctionType
+  slot* (Pure-invariant).
+- `ty` — same, plus bindings from top-level Generic-typed args
+  (Java-style covariant LUB).
+
+The per-arg type-compatibility check substitutes via `ty_auth` only;
+constraint-only T's stay `Generic("T")` and `is_type_compatible`'s
+wildcard arm accepts. That's how `eval(intFunc, 'wrong')` catches
+without false-positives on `compare(1, 'a')`.
+
+`bind_type_with_mode` provides the leaf-level switch. The two-branch
+dispatch in `infer_generic_bindings` classifies args by pass-1
+convergence and switches between `RegisterMode::Authoritative`
+(any arg unconverged → `potentiallyUpdate…`-style first-wins) and
+`RegisterMode::Constraint` (all converged → `update…`-style LUB-merge).
 
 ### Test pinning
 
-Each strict divergence is locked in pairs of tests in
-`crates/pure/tests/inference_context.rs`:
+Each divergence is locked in `crates/pure/tests/inference_context.rs`
+by tests with the `tic_*_strict_mode_*` prefix (the name preserves the
+historical "strict" framing — the tests now run under default
+semantics). Companion lenient pins document Java parity behaviours
+that the Rust port intentionally keeps (e.g.
+`tic_pick_t_t_with_unrelated_args_lubs_silently` — `pick<T>(1, 'x')`
+LUBs to Any silently, matching Java).
 
-| Lenient pin (default) | Strict pin (opt-in) |
-|---|---|
-| `tic_eval_wrong_arg_currently_lenient_pre_strict_mode` | `tic_eval_wrong_arg_strict_mode_errors` |
-| `tic_unbound_t_at_nested_call_currently_silent` | `tic_unbound_t_at_nested_call_strict_mode_errors` |
-| `tic_unbound_multiplicity_at_nested_call_currently_silent` | `tic_unbound_multiplicity_at_nested_call_strict_mode_errors` |
-| `tic_lambda_param_with_unbound_t_currently_silent` | `tic_lambda_param_with_unbound_t_strict_mode_errors` |
-
-If Java semantics ever change such that the lenient pins should flip,
-the test failure is the alarm: read its doc-comment for the migration
-recipe (typically: rewrite `expect("compiles silently")` →
-`expect_err(...)` plus the relevant diagnostic kind, or move the test
-under a `with_strict_mode(true, || ...)` wrapper).
-
-If strict mode itself grows new behaviour (e.g. Step 3d-cont lands the
-full TypeInferenceContext), update the strict pins to assert the
-sharper diagnostic shape and add new tests pinning the unaffected
-fold-style / recursive-generic / collection-of-lambdas patterns.
-
-### Shipping the toggle
-
-The thread-local `with_strict_mode` is the test/library entry. For
-process-wide opt-in (CI runs, dedicated migration jobs), set
-`LEGEND_PURE_STRICT_INFERENCE=1`. The toggle is read at the call-site
-hot path, so flipping the env var mid-process has no effect — set it
-before invoking the binary.
+If a divergence is rolled back in the future, the failing strict pin is
+the alarm: read its doc-comment for the migration recipe.

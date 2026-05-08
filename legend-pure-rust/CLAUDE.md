@@ -35,16 +35,16 @@ lives only in the `protocol` crate.
 The `legend` CLI (`crates/cli`) is the primary developer tool: `legend parse`,
 `legend check`, `legend init`. Install with `cargo install --path crates/cli`.
 
-## Current State (April 2026)
+## Current State (May 2026)
 
 | Component | Status | Tests | Key Milestone |
 |-----------|--------|-------|---------------|
 | Parser | ✅ Complete | ~400+ | Full grammar coverage, 0 errors |
-| Compiler | ✅ Platform clean | ~50+ | 0 errors on 236 files / 1338 elements |
-| Runtime | 🚧 Active | ~160+ | ~50 native functions, PCT subset passing |
-| CLI | 🚧 Partial | ~20+ | 7/11 commands implemented (`+java-bindings`) |
-| Java codegen | ✅ v1 | 16 | `legend java-bindings` + proxy runtime support; explicit `--classes` / `--associations` seeds |
-| **Total** | | **739** | |
+| Compiler | ✅ Platform clean | 117 lib + ~180 integration | 0 errors on 244 files / ~1660 elements (M3 + Store + Mapping + Diagram + Graph + TDS + Relational DSL metamodels) |
+| Runtime | ✅ Surveyor 246/0/0; PCT 465/465 | 357 lib + 71 eval + 246 surveyor | ~50 native functions, PCT broad-canary 100% (9 manifest exclusions) |
+| CLI | 🚧 Partial | ~20+ | 8/11 commands implemented (`+java-bindings`) |
+| Java codegen | ✅ v1 | 16 | `legend java-bindings` + proxy runtime support; explicit `--classes` / `--associations` seeds; hand-written `Any` as universal proxy supertype |
+| **Total** | | **~1500+** | |
 
 → See `BACKLOG.md` at workspace root for the unified backlog.
 

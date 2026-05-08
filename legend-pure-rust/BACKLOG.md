@@ -12,10 +12,11 @@ in its crate directory; this file provides the high-level view.
 | Component | Status | Platform Errors | Test Count | Key Milestone |
 |-----------|--------|----------------|------------|---------------|
 | Parser | ✅ Complete | 0 | ~400+ | Full grammar coverage |
-| Compiler | ✅ Platform clean | **0** | ~50+ | 244 files / ~1660 elements (M3 + Store + Mapping + Diagram + Graph + TDS + **Relational** DSL metamodels). |
-| Runtime | ✅ Surveyor 246/0/0; PCT 465/465 | N/A | 357+ lib + 71 eval + 246 surveyor | PCT broad-canary at 100% with 9 manifest exclusions |
+| Compiler | ✅ Platform clean | **0** | 117 lib + ~180 integration | 244 files / ~1660 elements (M3 + Store + Mapping + Diagram + Graph + TDS + **Relational** DSL metamodels) |
+| Runtime | ✅ Surveyor 246/0/0; PCT 465/465 | N/A | 357 lib + 71 eval + 246 surveyor | PCT broad-canary at 100% with 9 manifest exclusions |
 | CLI | 🚧 Partial | N/A | ~20+ | 8/11 commands; `legend test --pct` defaults to bundled `pct_grammar_rust_native.json` exclusions |
-| **Total** | | **0** | **739+** | |
+| Java codegen | ✅ v1 | N/A | 16 | `legend java-bindings` + proxy runtime; hand-written `Any` as universal proxy supertype |
+| **Total** | | **0** | **~1500+** | |
 
 ---
 
