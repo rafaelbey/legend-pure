@@ -1055,4 +1055,156 @@ impl ForeignClassMappingBody for RelationalClassMappingBody {
     fn compose(&self, out: &mut String) {
         crate::compose::write_relational_class_mapping_body(out, self);
     }
+    fn referenced_stores(&self) -> Vec<PackageableElementPtr> {
+        let mut out: Vec<PackageableElementPtr> = Vec::new();
+        let mut seen: std::collections::HashSet<smol_str::SmolStr> =
+            std::collections::HashSet::new();
+        let record =
+            |db: &PackageableElementPtr,
+             out: &mut Vec<PackageableElementPtr>,
+             seen: &mut std::collections::HashSet<smol_str::SmolStr>| {
+                let key = ptr_fqn_key(db);
+                if seen.insert(key) {
+                    out.push(db.clone());
+                }
+            };
+        // ~mainTable [db]
+        if let Some(mt) = &self.main_table {
+            record(&mt.db, &mut out, &mut seen);
+        }
+        // ~filter [db] / its `| [db]` chain
+        if let Some(filter) = &self.filter {
+            record(&filter.db, &mut out, &mut seen);
+            if let Some(seq) = &filter.join_sequence {
+                record(&seq.second_db, &mut out, &mut seen);
+            }
+        }
+        // mappingElements: walk JoinColWithDbOrConstant.db + Otherwise db
+        for elem in &self.mapping_elements {
+            collect_db_refs_in_mapping_element(elem, &mut out, &mut seen);
+        }
+        // AssociationMapping body lines
+        if let Some(lines) = &self.association_mapping {
+            for line in lines {
+                collect_db_refs_in_single_mapping_line(line, &mut out, &mut seen);
+            }
+        }
+        // ~groupBy / ~primaryKey
+        if let Some(jcs) = &self.group_by {
+            for jc in jcs {
+                if let Some(db) = &jc.db {
+                    record(db, &mut out, &mut seen);
+                }
+            }
+        }
+        if let Some(jcs) = &self.primary_key {
+            for jc in jcs {
+                if let Some(db) = &jc.db {
+                    record(db, &mut out, &mut seen);
+                }
+            }
+        }
+        out
+    }
+}
+
+/// FQN key for the dedupe set inside `referenced_stores`.
+fn ptr_fqn_key(p: &PackageableElementPtr) -> smol_str::SmolStr {
+    let mut s = String::new();
+    if let Some(pkg) = p.package.as_ref() {
+        for seg in pkg.segments() {
+            s.push_str(seg.as_str());
+            s.push_str("::");
+        }
+    }
+    s.push_str(p.name.as_str());
+    smol_str::SmolStr::new(&s)
+}
+
+fn collect_db_refs_in_mapping_element(
+    e: &MappingElement,
+    out: &mut Vec<PackageableElementPtr>,
+    seen: &mut std::collections::HashSet<smol_str::SmolStr>,
+) {
+    match e {
+        MappingElement::Single(line) => {
+            collect_db_refs_in_single_mapping_line(line, out, seen);
+        }
+        MappingElement::Scope(scope) => {
+            // Scope's `[db]` is the contextual store for inner lines.
+            let key = ptr_fqn_key(&scope.db);
+            if seen.insert(key) {
+                out.push(scope.db.clone());
+            }
+            for line in &scope.mapping_lines {
+                collect_db_refs_in_single_mapping_line(line, out, seen);
+            }
+        }
+    }
+}
+
+fn collect_db_refs_in_single_mapping_line(
+    line: &SingleMappingLine,
+    out: &mut Vec<PackageableElementPtr>,
+    seen: &mut std::collections::HashSet<smol_str::SmolStr>,
+) {
+    match line {
+        SingleMappingLine::Plus(p) => {
+            collect_db_refs_in_join_col(&p.mapping.value, out, seen);
+        }
+        SingleMappingLine::NonePlus(np) => match &np.value {
+            NonePlusMappingValue::Relational(rm) => {
+                collect_db_refs_in_join_col(&rm.value, out, seen);
+            }
+            NonePlusMappingValue::Embedded(em) => {
+                if let Some(jcs) = &em.primary_key {
+                    for jc in jcs {
+                        collect_db_refs_in_join_col(jc, out, seen);
+                    }
+                }
+                for inner in &em.mapping_lines {
+                    collect_db_refs_in_single_mapping_line(inner, out, seen);
+                }
+                if let Some(EmbeddedMappingTrailer::Otherwise(maps)) = &em.trailer {
+                    for m in maps {
+                        if let Some(db) = &m.otherwise_join.db {
+                            let key = ptr_fqn_key(db);
+                            if seen.insert(key) {
+                                out.push(db.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    }
+}
+
+fn collect_db_refs_in_join_col(
+    jc: &JoinColWithDbOrConstant,
+    out: &mut Vec<PackageableElementPtr>,
+    seen: &mut std::collections::HashSet<smol_str::SmolStr>,
+) {
+    if let Some(db) = &jc.db {
+        let key = ptr_fqn_key(db);
+        if seen.insert(key) {
+            out.push(db.clone());
+        }
+    }
+    if let Some(seq) = &jc.join {
+        for r in &seq.right {
+            if let Some(db) = &r.db {
+                let key = ptr_fqn_key(db);
+                if seen.insert(key) {
+                    out.push(db.clone());
+                }
+            }
+        }
+    }
+    if let Some(OpColumn::Aliased { db: Some(db), .. }) = &jc.column {
+        let key = ptr_fqn_key(db);
+        if seen.insert(key) {
+            out.push(db.clone());
+        }
+    }
 }

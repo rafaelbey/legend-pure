@@ -172,6 +172,13 @@ impl CompilerExtension for MappingExtension {
         // collectStoreSubstitutionsAlongPath — emits "Cyclic Store
         // Substitution for store [X] in mapping hierarchy".
         validate_substitution_cycles(&registry, ctx.errors);
+        // Phase E3: each substitution's `source` store must actually
+        // be referenced by the included mapping (or by its own
+        // includes' substitution targets). Java parity:
+        // `StoreSubstitutionValidator.run` — emits "Store
+        // Substitution Error in mapping [X] as [Y] does not exist
+        // in included mapping [Z]".
+        validate_store_substitution_existence(&registry, ctx.errors);
     }
 }
 
@@ -1869,4 +1876,108 @@ fn collect_substitution_edges(
         let included_fqn = ptr_fqn(&inc.included);
         collect_substitution_edges(&included_fqn, registry, visited, edges);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase E3 — substitution source must be a store used by the included mapping
+// ---------------------------------------------------------------------------
+
+/// For each `MappingInclude` in every mapping, every substitution
+/// `(source → target)` must satisfy: the `source` store is actually
+/// referenced by the included mapping or by its transitive
+/// includes' substitution targets. Java parity:
+/// `StoreSubstitutionValidator.run` — emits "Store Substitution
+/// Error in mapping [X] as [Y] does not exist in included mapping
+/// [Z]".
+///
+/// "Stores referenced by mapping IM" comes from the
+/// [`crate::ast::ForeignClassMappingBody::referenced_stores`] trait
+/// method (relational class-mapping bodies override it; other DSLs
+/// use the empty default), unioned with each include's substitution
+/// targets walked recursively.
+fn validate_store_substitution_existence(
+    registry: &HashMap<SmolStr, RegisteredMapping>,
+    errors: &mut Vec<CompilationError>,
+) {
+    for (mapping_fqn, reg) in registry.iter() {
+        for inc in &reg.def.includes {
+            let included_fqn = ptr_fqn(&inc.included);
+            if !registry.contains_key(&included_fqn) {
+                // Existing include-FQN-resolves validator already
+                // surfaced this; skip to avoid double reports.
+                continue;
+            }
+            // Stores accessible through the included mapping.
+            let mut visited: HashSet<SmolStr> = HashSet::new();
+            let included_stores = collect_mapping_stores(&included_fqn, registry, &mut visited);
+            for sub in &inc.store_substitutions {
+                let source_fqn = ptr_fqn(&sub.source);
+                if !included_stores.contains(&source_fqn) {
+                    errors.push(CompilationError {
+                        message: format!(
+                            "Store Substitution Error in mapping [{mapping_fqn}] as \
+                             [{source_fqn}] does not exist in included mapping \
+                             [{included_fqn}]"
+                        ),
+                        source_info: sub.source_info.clone(),
+                        kind: CompilationErrorKind::UnresolvedElement { path: source_fqn },
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Recursively gather the FQN set of stores a mapping references.
+///
+/// Sources:
+/// - Each class mapping body's `ForeignClassMappingBody::referenced_stores()`.
+///   For Pure-DSL bodies this is empty; for relational bodies this is the
+///   union of all `[db]` qualifiers reachable through the body.
+/// - Each include's substitution `target` FQNs (after substitution,
+///   the included mapping's stores get rewritten to their targets in
+///   the outer mapping's perspective).
+/// - Recursion into the included mapping's own stores (after
+///   applying substitution rewrites — Java's algorithm; here we
+///   approximate by union, which is a strict superset).
+fn collect_mapping_stores(
+    mapping_fqn: &SmolStr,
+    registry: &HashMap<SmolStr, RegisteredMapping>,
+    visited: &mut HashSet<SmolStr>,
+) -> HashSet<SmolStr> {
+    let mut out: HashSet<SmolStr> = HashSet::new();
+    if !visited.insert(mapping_fqn.clone()) {
+        return out;
+    }
+    let Some(reg) = registry.get(mapping_fqn) else {
+        return out;
+    };
+    // Class-mapping body refs.
+    for cm in &reg.def.class_mappings {
+        if let crate::ast::ClassMappingBody::Foreign(foreign) = &cm.body {
+            for ptr in foreign.referenced_stores() {
+                let mut s = String::new();
+                if let Some(pkg) = ptr.package.as_ref() {
+                    for seg in pkg.segments() {
+                        s.push_str(seg.as_str());
+                        s.push_str("::");
+                    }
+                }
+                s.push_str(ptr.name.as_str());
+                out.insert(SmolStr::new(&s));
+            }
+        }
+    }
+    // Includes: each substitution's target is a "store accessible
+    // through this mapping" (the substitution rewrites it from the
+    // included mapping's source → this mapping's target). Then
+    // recurse to gather any deeper stores.
+    for inc in &reg.def.includes {
+        for sub in &inc.store_substitutions {
+            out.insert(ptr_fqn(&sub.target));
+        }
+        let included_fqn = ptr_fqn(&inc.included);
+        out.extend(collect_mapping_stores(&included_fqn, registry, visited));
+    }
+    out
 }

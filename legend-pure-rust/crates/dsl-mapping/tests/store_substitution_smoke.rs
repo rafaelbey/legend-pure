@@ -273,6 +273,98 @@ fn substitution_self_loop_errors() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// E3: Substitution source must be a store used by the included mapping
+// ---------------------------------------------------------------------------
+
+// E3 fixtures use Pure-DSL bodies whose `referenced_stores()` is the
+// empty default. Java parity: a Pure-DSL mapping carries no store, so
+// any substitution against it has no valid source store and the
+// validator fires. Relational-body fixtures live in the
+// dsl-relational test crate (where `RelationalClassMappingBody`'s
+// override of `referenced_stores()` lives).
+
+#[test]
+fn pure_dsl_included_mapping_has_no_stores_so_substitution_source_errors() {
+    let errors = compile_errors(indoc! {r"
+        ###Pure
+        Class my::test::A { x : String[1]; }
+        Class my::test::B { y : String[1]; }
+        Class my::test::DbA {}
+        Class my::test::DbB {}
+
+        ###Mapping
+        Mapping my::test::Inner
+        (
+          my::test::A : Pure { x : 'a' }
+        )
+
+        Mapping my::test::Outer
+        (
+          include my::test::Inner [my::test::DbA -> my::test::DbB]
+
+          my::test::B : Pure { y : 'b' }
+        )
+    "});
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Store Substitution Error")
+                && e.message.contains("my::test::DbA")
+                && e.message.contains("my::test::Inner")),
+        "expected source-not-in-included-stores error; got: {:#?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn substitution_source_via_inner_substitution_target_passes() {
+    // Inner-mapping substitution `DbA -> DbX` makes `DbX` an
+    // accessible store through `Inner` from Middle's perspective.
+    // Outer's substitution `DbX -> DbY` on Middle should be valid
+    // (its source DbX is reachable via Inner's substitution target).
+    let errors = compile_errors(indoc! {r"
+        ###Pure
+        Class my::test::A { x : String[1]; }
+        Class my::test::B { y : String[1]; }
+        Class my::test::DbA {}
+        Class my::test::DbX {}
+        Class my::test::DbY {}
+
+        ###Mapping
+        Mapping my::test::Inner
+        (
+          my::test::A : Pure { x : 'a' }
+        )
+
+        Mapping my::test::Middle
+        (
+          include my::test::Inner [my::test::DbA -> my::test::DbX]
+        )
+
+        Mapping my::test::Outer
+        (
+          include my::test::Middle [my::test::DbX -> my::test::DbY]
+
+          my::test::B : Pure { y : 'b' }
+        )
+    "});
+    let dbx_errors: Vec<&String> = errors
+        .iter()
+        .filter_map(|e| {
+            if e.message.contains("Store Substitution Error") && e.message.contains("DbX") {
+                Some(&e.message)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert!(
+        dbx_errors.is_empty(),
+        "expected DbX accessible via inner substitution; got: {dbx_errors:#?}"
+    );
+}
+
 #[test]
 fn substitution_without_brackets_passes() {
     // No store substitutions on the include — validator should be
