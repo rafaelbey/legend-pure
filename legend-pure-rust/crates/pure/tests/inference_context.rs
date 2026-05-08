@@ -23,19 +23,18 @@
 //!
 //! Every test is GREEN. Each one pins one of two semantics:
 //!
-//! 1. **Java parity (always-on):** the call must compile / produce the
-//!    expected dispatch shape. These are non-negotiable contracts.
+//! 1. **Java parity:** the call must compile / produce the expected
+//!    dispatch shape. These are non-negotiable contracts.
 //!
-//! 2. **Pre-strict-mode lenient state:** Java itself silently widens
-//!    in these cases (see plan: "Java's `findBestCommonGenericType`
-//!    LUBs to Any" / "TypeInference.java:87-89 is gated on
-//!    `getParent() == null`"). We currently match Java. When Step 3g
-//!    lands a strict-mode flag, the *strict* path will reject these,
-//!    and the assertion in each lenient test will need to flip from
-//!    `expect("compiles silently — Java parity")` to a strict-mode
-//!    `expect_err(...)`. **Renaming + asserting current behaviour is
-//!    deliberate: the failing assertion when strict mode lands is the
-//!    alarm that says "remember to flip this test."**
+//! 2. **Always-on divergences over Java:** Java itself silently widens
+//!    in these cases (see `parity_semantics.md`). The Rust port
+//!    instead surfaces them — auth/constraint binding split,
+//!    unresolved-generic diagnostics at every call site, etc. The
+//!    `tic_*_strict_mode_*` test names preserve the historical
+//!    framing from when these were opt-in; they now run under default
+//!    semantics. Companion `_currently_silent` lenient pins document
+//!    Java parities the Rust port intentionally keeps (e.g. silent
+//!    LUB-to-Any for `pick<T>(1, 'x')`).
 //!
 //! No test is `#[ignore]`'d — silent skips would mask any drift.
 
@@ -80,23 +79,19 @@ function test::caller(): Any[1] { pick(1, 'x') }
 }
 
 // ---------------------------------------------------------------------------
-// 3a. eval(...) wrong arg under strict mode — Step 3g divergence
+// 3a. eval(...) wrong arg — always-on divergence over Java
 // ---------------------------------------------------------------------------
 
 #[test]
 fn tic_eval_wrong_arg_strict_mode_errors() {
     // **Deliberate divergence over Java semantics** (per
-    // `parity_semantics.md`): when strict-inference is enabled, the
-    // call-arg validator substitutes the param type with the call's
-    // bindings before the compatibility check. T binds Integer
-    // authoritatively from the FunctionType slot, so the constraint
-    // slot `param:T` becomes `param:Integer`, and 'not an int' (a
-    // String) is rejected.
-    //
-    // This test exercises the toggle through
-    // `legend_pure_parser_pure::strict_mode::with_strict_mode` —
-    // thread-local override that restores on closure exit even on
-    // panic, so other tests stay unaffected.
+    // `parity_semantics.md`): the call-arg validator substitutes the
+    // param type with the call's `ty_auth` bindings before the
+    // compatibility check. T binds Integer authoritatively from the
+    // FunctionType slot, so the constraint slot `param:T` becomes
+    // `param:Integer`, and 'not an int' (a String) is rejected. Always
+    // on — the historical `with_strict_mode` toggle was removed once
+    // the platform reached zero errors under strict.
     let source = r#"
 ###Pure
 native function test::eval<T,V|m,n>(
@@ -115,7 +110,7 @@ function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->
     );
     assert!(
         !partial.errors.is_empty(),
-        "expected strict-mode arg-type mismatch error, got: {:?}",
+        "expected arg-type mismatch error, got: {:?}",
         partial
             .errors
             .iter()
@@ -200,12 +195,12 @@ function test::pctRunner<Z|y>(
 
 #[test]
 fn tic_unbound_multiplicity_at_nested_call_currently_silent() {
-    // Symmetric to `tic_unbound_t_at_nested_call_currently_silent`:
     // `test::stubM<T|m>(t:T[1]):T[m]` — m can't bind from any arg.
-    // Java is silent at nested call sites; we match.
-    //
-    // **When Step 3g lands**, strict mode flips this to surface
-    // `UnresolvedMultiplicityParameter`. Flip the assertion then.
+    // Java is silent at nested call sites. The Rust port surfaces
+    // `UnresolvedMultiplicityParameter` only when m is unresolved at
+    // outermost (caller's enclosing fn isn't parametric in m); inside
+    // a parametric body it stays silent — this test pins that lenient
+    // case to match Java.
     let source = r#"
 ###Pure
 native function test::stubM<T|m>(t: T[1]): T[m];
@@ -215,8 +210,7 @@ function test::caller(): Integer[1] {
 "#;
     compile_with_imports(&[source], &[]).expect(
         "Default mode: unbound m at nested call site compiles silently \
-         (Java parity). When Step 3g lands and this fails, flip to \
-         expect_err with UnresolvedMultiplicityParameter check.",
+         (Java parity).",
     );
 }
 
@@ -236,10 +230,12 @@ fn tic_lambda_param_with_unbound_t_currently_silent() {
     // outer context where the type variable is in scope and may bind
     // at the call site.").
     //
-    // **Step 3f / 3g**: Java emits "Cannot infer lambda parameter
-    // type" at this site (`TypeInference.java:116, :127`). When we
-    // turn that on, this test must fail loudly — flip the assertion
-    // to expect_err and check for `CannotInferLambdaParameterTypes`.
+    // Java emits "Cannot infer lambda parameter type" only at
+    // outermost (`TypeInference.java:116, :127`). The Rust port
+    // currently keeps Java parity here for the `Generic(T)`
+    // expected-type path; the eager
+    // `CannotInferLambdaParameterTypes` diagnostic only fires when
+    // the expected type lands on `Unresolved` (a different site).
     let source = r#"
 ###Pure
 native function test::needsPred<T>(
@@ -249,10 +245,8 @@ native function test::isPositive(x: Integer[1]): Boolean[1];
 function test::caller(): Boolean[1] { test::needsPred(x | $x->test::isPositive()) }
 "#;
     compile_with_imports(&[source], &[]).expect(
-        "Default mode: lambda param expected as Generic(T) doesn't \
-         trigger the eager CannotInferLambdaParameterTypes \
-         diagnostic. When Step 3f/3g lands and this fails, flip to \
-         expect_err with the CannotInferLambdaParameterTypes check.",
+        "Lambda param expected as Generic(T) doesn't trigger \
+         CannotInferLambdaParameterTypes — matches Java parity.",
     );
 }
 
@@ -280,7 +274,7 @@ function test::handler(b: test::Box<Integer>[1]): Integer[1] {
 "#;
     compile_with_imports(&[source], &[]).expect(
         "match([λ]) — Collection-of-lambdas must drive V binding from each \
-         lambda's body (covered by Step 3e: LambdaParamFiller).",
+         lambda's body.",
     );
 }
 
@@ -291,8 +285,8 @@ fn tic_match_z_genericType_rawType_toOne() {
     //   `assertIs(Any, $z.genericType.rawType->toOne());`
     // The chain: $z's type comes from eval (V[m]); .genericType
     // is a property on Any/ValueSpec; .rawType returns Type[0..1];
-    // ->toOne() should bind T=Type. Strict mode emits "T not
-    // resolved at toOne".
+    // ->toOne() should bind T=Type. The unresolved-T check fires if
+    // it doesn't.
     let source = r#"
 ###Pure
 Class test::T {}
@@ -421,9 +415,8 @@ fn tic_platform_canreactivate_lambda_evaluate_property_toOne_chain() {
     let model = legend_pure_core_platform::platform::load_platform();
     assert!(
         model.is_ok(),
-        "Default-mode platform compile must stay clean — variance + \
-     lambda bridge fixes already removed all strict-mode-only \
-     errors; if THIS assertion breaks, a clean-mode regression \
+        "Platform compile must stay clean — variance + lambda bridge \
+     fixes cleared all errors; if THIS assertion breaks, a regression \
      landed."
     );
 }
@@ -438,7 +431,7 @@ fn tic_let_bound_collection_of_lambdas_match() {
     // `match($lambdas)` can bind T/V from the FunctionType return
     // slot. Without preserving type_arguments through the LUB step,
     // $lambdas's variable_type collapses to bare
-    // `Named<LambdaFunction>{[]}` and the strict-mode return-check
+    // `Named<LambdaFunction>{[]}` and the always-on return-check
     // emits "type parameter T was not resolved at call to 'match'"
     // (28 platform errors at match.pure trace to this case).
     let source = r#"
@@ -459,7 +452,7 @@ let lambdas = [
     {
         compile_with_imports(&[source], &[]).expect(
             "let-bound [λ1, λ2, ...] preserves FunctionType slot through \
-         Collection LUB; match($lambdas) binds T/V from it under strict.",
+         Collection LUB; match($lambdas) binds T/V from it.",
         );
     }
 }
@@ -559,8 +552,7 @@ fn tic_let_copy_carries_type_for_method_chain() {
     // be Person (same as $p), so .address resolves and toOne's T
     // binds Address. Without this, var_types[p2] stays empty,
     // .address fails type-resolution, and downstream toOne reports
-    // "T was not resolved" under strict mode (~22 platform errors
-    // in copy.pure pre-fix).
+    // "T was not resolved" (~22 platform errors in copy.pure pre-fix).
     let source = r#"
 ###Pure
 Class test::Address { name: String[1]; }
@@ -704,7 +696,7 @@ fn tic_subtype_view_binds_function_against_property_subtype() {
     // `myEval(p:MyFunc<{T[n]->V[k]}>):V[k]` against a `MyProp<Int,Str|*>`
     // should bind T:=Int, V:=Str, k:=*, and the return type becomes
     // Str[*]. Without the supertype-view, T/V/k stay Variable/Generic
-    // and strict mode reports unresolved generics.
+    // and the unresolved-generic check fires.
     let source = r#"
 ###Pure
 Class test::MyFunc<F> {}
@@ -717,8 +709,7 @@ function test::caller(p: test::MyProp<Integer>[1]): Integer[1] {
     compile_with_imports(&[source], &[]).expect(
         "Subtype-view binding: MyFunc<T> param against MyProp<L> \
          arg must walk MyProp's supertype chain to extract \
-         T:=Integer. Without subtype_view, T stays Generic and \
-         strict mode reports unresolved.",
+         T:=Integer.",
     );
 }
 
