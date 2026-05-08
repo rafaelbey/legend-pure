@@ -1942,12 +1942,16 @@ fn validate_store_substitution_existence(
 /// - Each class mapping body's `ForeignClassMappingBody::referenced_stores()`.
 ///   For Pure-DSL bodies this is empty; for relational bodies this is the
 ///   union of all `[db]` qualifiers reachable through the body.
-/// - Each include's substitution `target` FQNs (after substitution,
-///   the included mapping's stores get rewritten to their targets in
-///   the outer mapping's perspective).
-/// - Recursion into the included mapping's own stores (after
-///   applying substitution rewrites — Java's algorithm; here we
-///   approximate by union, which is a strict superset).
+/// - Each include's inner mapping is recursed into, then each
+///   inner store is rewritten through the include's substitution
+///   rules (Java parity: a store substituted away by this include
+///   is no longer accessible from the outer mapping's perspective —
+///   the substitution target replaces the source).
+///
+/// The Java algorithm in `StoreSubstitutionValidator.run` walks each
+/// `MappingInclude` collecting the inner mapping's stores and then
+/// applying that include's substitution map; only then are the
+/// rewritten stores added to the outer accessible set.
 fn collect_mapping_stores(
     mapping_fqn: &SmolStr,
     registry: &HashMap<SmolStr, RegisteredMapping>,
@@ -1964,28 +1968,29 @@ fn collect_mapping_stores(
     for cm in &reg.def.class_mappings {
         if let crate::ast::ClassMappingBody::Foreign(foreign) = &cm.body {
             for ptr in foreign.referenced_stores() {
-                let mut s = String::new();
-                if let Some(pkg) = ptr.package.as_ref() {
-                    for seg in pkg.segments() {
-                        s.push_str(seg.as_str());
-                        s.push_str("::");
-                    }
-                }
-                s.push_str(ptr.name.as_str());
-                out.insert(SmolStr::new(&s));
+                out.insert(ptr_fqn(&ptr));
             }
         }
     }
-    // Includes: each substitution's target is a "store accessible
-    // through this mapping" (the substitution rewrites it from the
-    // included mapping's source → this mapping's target). Then
-    // recurse to gather any deeper stores.
+    // Includes: recurse to gather the inner mapping's accessible
+    // stores, then apply this include's substitution rewrites —
+    // sources matched in the rewrite map get replaced by targets;
+    // other stores pass through unchanged. The substitution itself
+    // is not separately added (that would over-approximate; the
+    // target only becomes accessible if it's a rewrite of an inner
+    // accessible store, which the rewrite step already covers).
     for inc in &reg.def.includes {
-        for sub in &inc.store_substitutions {
-            out.insert(ptr_fqn(&sub.target));
-        }
         let included_fqn = ptr_fqn(&inc.included);
-        out.extend(collect_mapping_stores(&included_fqn, registry, visited));
+        let inner = collect_mapping_stores(&included_fqn, registry, visited);
+        let sub_map: HashMap<SmolStr, SmolStr> = inc
+            .store_substitutions
+            .iter()
+            .map(|sub| (ptr_fqn(&sub.source), ptr_fqn(&sub.target)))
+            .collect();
+        for store in inner {
+            let rewritten = sub_map.get(&store).cloned().unwrap_or(store);
+            out.insert(rewritten);
+        }
     }
     out
 }
