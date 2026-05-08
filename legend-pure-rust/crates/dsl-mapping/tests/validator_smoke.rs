@@ -285,6 +285,49 @@ fn cyclic_mapping_include_errors() {
     );
 }
 
+// Java parity:
+// `TestCyclicMappingIncludeInMappingHierarchy.testAcyclicMappingIncludeAllowedInMappingHierarchy`.
+// A 3-level acyclic chain (AMapping → BMapping → CMapping) should
+// compile cleanly — no cycle, no mistaken cycle-detection trigger.
+#[test]
+fn acyclic_3_level_mapping_include_passes() {
+    let source = indoc! {r"
+        ###Pure
+        Class test::A { x : String[1]; }
+        Class test::B { y : String[1]; }
+        Class test::C { z : String[1]; }
+
+        ###Mapping
+        Mapping test::CMapping
+        (
+          test::C : Pure { z : 'c' }
+        )
+
+        Mapping test::BMapping
+        (
+          include test::CMapping
+
+          test::B : Pure { y : 'b' }
+        )
+
+        Mapping test::AMapping
+        (
+          include test::BMapping
+
+          test::A : Pure { x : 'a' }
+        )
+    "};
+    let file = parse("acyclic.pure", source);
+    let (errors, _ext) = compile_with_mapping(vec![file]);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("Cyclic mapping include")),
+        "expected acyclic 3-level chain to compile cleanly; got: {:#?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn unresolved_mapping_include_errors() {
     let source = indoc! {r"

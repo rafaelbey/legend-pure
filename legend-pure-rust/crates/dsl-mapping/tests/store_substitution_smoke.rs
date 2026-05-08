@@ -318,11 +318,14 @@ fn pure_dsl_included_mapping_has_no_stores_so_substitution_source_errors() {
 }
 
 #[test]
-fn substitution_source_via_inner_substitution_target_passes() {
-    // Inner-mapping substitution `DbA -> DbX` makes `DbX` an
-    // accessible store through `Inner` from Middle's perspective.
-    // Outer's substitution `DbX -> DbY` on Middle should be valid
-    // (its source DbX is reachable via Inner's substitution target).
+fn substitution_chain_through_pure_dsl_inner_errors() {
+    // Java parity: a Pure-DSL inner mapping has no
+    // `referenced_stores()`, so the substitution rewrite map can
+    // never produce an accessible store at any level. Two-level
+    // substitution chain through Pure-DSL bodies should error at
+    // both levels — the `[DbA -> DbX]` first because Inner doesn't
+    // use DbA, and `[DbX -> DbY]` second because Middle doesn't
+    // expose DbX (Inner had nothing to rewrite).
     let errors = compile_errors(indoc! {r"
         ###Pure
         Class my::test::A { x : String[1]; }
@@ -349,19 +352,24 @@ fn substitution_source_via_inner_substitution_target_passes() {
           my::test::B : Pure { y : 'b' }
         )
     "});
+    // Both Middle's [DbA -> DbX] and Outer's [DbX -> DbY] should fail
+    // because the Pure-DSL inner exposes no stores.
     let dbx_errors: Vec<&String> = errors
         .iter()
         .filter_map(|e| {
-            if e.message.contains("Store Substitution Error") && e.message.contains("DbX") {
+            if e.message.contains("Store Substitution Error")
+                && (e.message.contains("DbA") || e.message.contains("DbX"))
+            {
                 Some(&e.message)
             } else {
                 None
             }
         })
         .collect();
-    assert!(
-        dbx_errors.is_empty(),
-        "expected DbX accessible via inner substitution; got: {dbx_errors:#?}"
+    assert_eq!(
+        dbx_errors.len(),
+        2,
+        "expected two errors (Middle's [DbA->DbX] + Outer's [DbX->DbY]); got: {dbx_errors:#?}"
     );
 }
 

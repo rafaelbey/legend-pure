@@ -245,3 +245,372 @@ fn relational_substitution_via_inner_substitution_target_passes() {
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Java parity — `TestStoreSubstitutionValidator.testValidDoubleStoreSubstitution`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn relational_double_substitution_chained_passes() {
+    // Inner uses Db3 (~mainTable). Middle includes Inner with [Db3 -> Db2].
+    // Outer includes Middle with [Db2 -> Db1]. Both substitutions are valid:
+    // - Middle's [Db3 -> Db2]: Db3 is in Inner.referenced_stores ✓
+    // - Outer's [Db2 -> Db1]: Db2 is Middle's accessible-store via the inner
+    //   substitution's target. ✓
+    let errors = compile_errors(indoc! {r"
+        ###Relational
+        Database a::Db1
+        (
+          Table T1 (id INT PRIMARY KEY)
+        )
+
+        ###Relational
+        Database a::Db2
+        (
+          Table T2 (id INT PRIMARY KEY)
+        )
+
+        ###Relational
+        Database a::Db3
+        (
+          Table T3 (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class a::Person { id : Integer[1]; }
+
+        ###Mapping
+        Mapping a::InnerMap
+        (
+          a::Person : Relational
+          {
+            ~mainTable [a::Db3]T3
+            (id : T3.id)
+          }
+        )
+
+        Mapping a::MiddleMap
+        (
+          include a::InnerMap [a::Db3 -> a::Db2]
+        )
+
+        Mapping a::OuterMap
+        (
+          include a::MiddleMap [a::Db2 -> a::Db1]
+        )
+    "});
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("Store Substitution Error")),
+        "expected double substitution to pass; got: {:#?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Java parity — `TestStoreSubstitutionValidator.testValidNestedStoreSubstitution`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn relational_nested_substitution_three_level_passes() {
+    // Inner uses Db4 + Db5 (two class mappings on different DBs).
+    // Middle includes Inner with [Db5 -> Db3]. Middle.referenced_stores
+    // (via class mappings) is {} (Middle has no own class mappings)
+    // BUT Middle's accessible stores include Db4 (from Inner) and Db3
+    // (substitution target). Outer's [Db4 -> Db1] and [Db3 -> Db1] are
+    // both valid.
+    let errors = compile_errors(indoc! {r"
+        ###Relational
+        Database a::Db1
+        (
+          Table T1 (id INT PRIMARY KEY)
+        )
+
+        ###Relational
+        Database a::Db3
+        (
+          Table T3 (id INT PRIMARY KEY)
+        )
+
+        ###Relational
+        Database a::Db4
+        (
+          Table T4 (id INT PRIMARY KEY)
+        )
+
+        ###Relational
+        Database a::Db5
+        (
+          Table T5 (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class a::PersonA { id : Integer[1]; }
+        Class a::PersonB { id : Integer[1]; }
+
+        ###Mapping
+        Mapping a::InnerMap
+        (
+          a::PersonA : Relational
+          {
+            ~mainTable [a::Db4]T4
+            (id : T4.id)
+          }
+
+          a::PersonB : Relational
+          {
+            ~mainTable [a::Db5]T5
+            (id : T5.id)
+          }
+        )
+
+        Mapping a::MiddleMap
+        (
+          include a::InnerMap [a::Db5 -> a::Db3]
+        )
+
+        Mapping a::OuterMap
+        (
+          include a::MiddleMap [a::Db4 -> a::Db1, a::Db3 -> a::Db1]
+        )
+    "});
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("Store Substitution Error")),
+        "expected nested substitution to pass; got: {:#?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Java parity — `TestStoreSubstitutionValidator.testValidHybridStoreSubstitution`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn relational_hybrid_substitution_passes() {
+    // Outer applies multiple substitutions in one include block —
+    // direct (Db2 -> Db1, Db4 -> Db1) plus an inner-substitution-
+    // mediated edge (Db3 -> Db1, where Middle had [Db5 -> Db3]).
+    let errors = compile_errors(indoc! {r"
+        ###Relational
+        Database a::Db1
+        (
+          Table T1 (id INT PRIMARY KEY)
+        )
+
+        ###Relational
+        Database a::Db2
+        (
+          Table T2 (id INT PRIMARY KEY)
+        )
+
+        ###Relational
+        Database a::Db3
+        (
+          Table T3 (id INT PRIMARY KEY)
+        )
+
+        ###Relational
+        Database a::Db4
+        (
+          Table T4 (id INT PRIMARY KEY)
+        )
+
+        ###Relational
+        Database a::Db5
+        (
+          Table T5 (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class a::PA { id : Integer[1]; }
+        Class a::PB { id : Integer[1]; }
+        Class a::PC { id : Integer[1]; }
+
+        ###Mapping
+        Mapping a::InnerMap
+        (
+          a::PA : Relational
+          {
+            ~mainTable [a::Db2]T2
+            (id : T2.id)
+          }
+          a::PB : Relational
+          {
+            ~mainTable [a::Db4]T4
+            (id : T4.id)
+          }
+          a::PC : Relational
+          {
+            ~mainTable [a::Db5]T5
+            (id : T5.id)
+          }
+        )
+
+        Mapping a::MiddleMap
+        (
+          include a::InnerMap [a::Db5 -> a::Db3]
+        )
+
+        Mapping a::OuterMap
+        (
+          include a::MiddleMap [a::Db2 -> a::Db1, a::Db4 -> a::Db1, a::Db3 -> a::Db1]
+        )
+    "});
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("Store Substitution Error")),
+        "expected hybrid substitution to pass; got: {:#?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Java parity — `TestStoreSubstitutionValidator.testInValidDoubleStoreSubstitution`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn relational_invalid_double_substitution_errors() {
+    // Inner uses Db2. Middle's substitution claims Db5 → Db3 — but Db5
+    // is not in Inner's referenced_stores (Inner only uses Db2).
+    let errors = compile_errors(indoc! {r"
+        ###Relational
+        Database a::Db1
+        (
+          Table T1 (id INT PRIMARY KEY)
+        )
+
+        ###Relational
+        Database a::Db2
+        (
+          Table T2 (id INT PRIMARY KEY)
+        )
+
+        ###Relational
+        Database a::Db3
+        (
+          Table T3 (id INT PRIMARY KEY)
+        )
+
+        ###Relational
+        Database a::Db5
+        (
+          Table T5 (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class a::Person { id : Integer[1]; }
+
+        ###Mapping
+        Mapping a::InnerMap
+        (
+          a::Person : Relational
+          {
+            ~mainTable [a::Db2]T2
+            (id : T2.id)
+          }
+        )
+
+        Mapping a::MiddleMap
+        (
+          include a::InnerMap [a::Db5 -> a::Db3]
+        )
+
+        Mapping a::OuterMap
+        (
+          include a::MiddleMap [a::Db3 -> a::Db1]
+        )
+    "});
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("Store Substitution Error in mapping [a::MiddleMap]")
+            && e.message.contains("a::Db5")
+            && e.message.contains("a::InnerMap")),
+        "expected invalid-double error pinning Db5/InnerMap; got: {:#?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Java parity — `TestStoreSubstitutionValidator.testInValidNestedStoreSubstitution`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn relational_invalid_nested_substitution_errors() {
+    // Outer claims Db5 → Db1 against Middle, but Middle's accessible
+    // stores are {Db4 (from Inner), Db3 (substitution target inside)}.
+    // Db5 was already substituted away by Middle's [Db5 -> Db3]; from
+    // Outer's perspective Db5 isn't accessible through Middle.
+    // (Mirror of Java's `testInValidNestedStoreSubstitution`.)
+    let errors = compile_errors(indoc! {r"
+        ###Relational
+        Database a::Db1
+        (
+          Table T1 (id INT PRIMARY KEY)
+        )
+
+        ###Relational
+        Database a::Db3
+        (
+          Table T3 (id INT PRIMARY KEY)
+        )
+
+        ###Relational
+        Database a::Db4
+        (
+          Table T4 (id INT PRIMARY KEY)
+        )
+
+        ###Relational
+        Database a::Db5
+        (
+          Table T5 (id INT PRIMARY KEY)
+        )
+
+        ###Pure
+        Class a::PA { id : Integer[1]; }
+        Class a::PB { id : Integer[1]; }
+
+        ###Mapping
+        Mapping a::InnerMap
+        (
+          a::PA : Relational
+          {
+            ~mainTable [a::Db4]T4
+            (id : T4.id)
+          }
+
+          a::PB : Relational
+          {
+            ~mainTable [a::Db5]T5
+            (id : T5.id)
+          }
+        )
+
+        Mapping a::MiddleMap
+        (
+          // Substitutes Db5 → Db3, so Middle's accessible stores are
+          // {Db4, Db3} (Db5 has been swapped away).
+          include a::InnerMap [a::Db5 -> a::Db3]
+        )
+
+        Mapping a::OuterMap
+        (
+          // Db5 -> Db1 is invalid: Db5 isn't a store Middle exposes.
+          include a::MiddleMap [a::Db5 -> a::Db1]
+        )
+    "});
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("Store Substitution Error in mapping [a::OuterMap]")
+            && e.message.contains("a::Db5")
+            && e.message.contains("a::MiddleMap")),
+        "expected invalid-nested error pinning Db5/MiddleMap; got: {:#?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
