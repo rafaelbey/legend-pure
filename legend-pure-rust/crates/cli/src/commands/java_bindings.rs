@@ -56,8 +56,9 @@ use owo_colors::OwoColorize;
 use smol_str::SmolStr;
 
 use legend_pure_core_platform::repo::{self, Repo};
-use legend_pure_java_codegen::{FqnInput, Options, generate};
-use legend_pure_parser_pure::model::{Element, PureModel};
+use legend_pure_java_codegen::{
+    FqnInput, Options, dispatch_bindings_by_kind, generate, parse_manifest,
+};
 
 use crate::diagnostics::CliError;
 
@@ -152,20 +153,32 @@ pub fn run(args: JavaBindingsArgs) -> Result<(), CliError> {
         .filter(|f| !f.raw.is_empty())
         .collect();
 
-    // Read the kind-agnostic bindings file (one FQN per line) into a
-    // raw vector; we'll dispatch each entry by element kind once the
-    // model is loaded.
+    // Read the bindings manifest, parsing `@pkg` / `@functions-class`
+    // / `@import` directives out of the body. The CLI is the
+    // standalone codegen path; `@import` requires classpath
+    // resolution which only the annotation processor can do, so we
+    // surface a clear error if a CLI-supplied manifest tries to use
+    // them.
+    let mut manifest_pkg: Option<String> = None;
+    let mut manifest_functions_class: Option<String> = None;
     let bindings_lines = if let Some(file) = args.bindings_file.as_deref() {
         let content = std::fs::read_to_string(file).map_err(|e| CliError::Io {
             path: file.to_path_buf(),
             source: e,
         })?;
-        content
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
+        let raw_lines: Vec<String> = content.lines().map(str::to_owned).collect();
+        let parsed = parse_manifest(&raw_lines).map_err(|e| CliError::Custom(e.to_string()))?;
+        if !parsed.imports.is_empty() {
+            return Err(CliError::Custom(format!(
+                "manifest `{}` uses `@import:` which only the annotation processor can resolve. \
+                 The CLI is for standalone codegen — emit each manifest separately or invoke \
+                 the AP via `mvn compile`.",
+                file.display()
+            )));
+        }
+        manifest_pkg = parsed.pkg;
+        manifest_functions_class = parsed.functions_class;
+        parsed.fqns
     } else {
         Vec::new()
     };
@@ -202,13 +215,14 @@ pub fn run(args: JavaBindingsArgs) -> Result<(), CliError> {
 
     // Dispatch every entry from the bindings file by its element kind.
     if !bindings_lines.is_empty() {
-        let (fns_added, classes_added, assocs_added) = dispatch_bindings_by_kind(
-            &model,
-            &bindings_lines,
-            &mut requested,
-            &mut extra_classes,
-            &mut extra_associations,
-        )?;
+        let dispatched = dispatch_bindings_by_kind(&model, &bindings_lines)
+            .map_err(|e| CliError::Custom(e.to_string()))?;
+        let fns_added = dispatched.functions.len();
+        let classes_added = dispatched.classes.len();
+        let assocs_added = dispatched.associations.len();
+        requested.extend(dispatched.functions);
+        extra_classes.extend(dispatched.classes);
+        extra_associations.extend(dispatched.associations);
         eprintln!(
             "  {} bindings file: {} function(s), {} class(es), {} association(s)",
             "•".dimmed(),
@@ -218,8 +232,11 @@ pub fn run(args: JavaBindingsArgs) -> Result<(), CliError> {
         );
     }
 
-    let mut opts = Options::new(&args.java_package);
-    if let Some(name) = args.functions_class {
+    // Manifest's `@pkg:` directive overrides the `--java-package`
+    // command-line default; same for `--functions-class`.
+    let java_package = manifest_pkg.unwrap_or(args.java_package);
+    let mut opts = Options::new(&java_package);
+    if let Some(name) = args.functions_class.or(manifest_functions_class) {
         opts.functions_class_name = Some(name);
     }
 
@@ -266,71 +283,6 @@ pub fn run(args: JavaBindingsArgs) -> Result<(), CliError> {
         args.output.display()
     );
     Ok(())
-}
-
-/// Resolve each entry in a `--bindings-file` and append it to the right
-/// slot based on the element kind found in the model.
-///
-/// Returns `(functions_added, classes_added, associations_added)` for
-/// the per-kind summary.
-fn dispatch_bindings_by_kind(
-    model: &PureModel,
-    lines: &[String],
-    fns_out: &mut Vec<FqnInput>,
-    classes_out: &mut Vec<FqnInput>,
-    associations_out: &mut Vec<FqnInput>,
-) -> Result<(usize, usize, usize), CliError> {
-    let mut fns_count = 0usize;
-    let mut classes_count = 0usize;
-    let mut assocs_count = 0usize;
-
-    for raw in lines {
-        let id = match model.resolve_fqn_str(raw) {
-            Some(id) => id,
-            None => {
-                return Err(CliError::Custom(format!(
-                    "bindings-file entry `{raw}` could not be resolved in the model"
-                )));
-            }
-        };
-        match model.get_element(id) {
-            Element::Function(_) => {
-                fns_out.push(FqnInput::new(raw));
-                fns_count += 1;
-            }
-            Element::Class(_) => {
-                classes_out.push(FqnInput::new(raw));
-                classes_count += 1;
-            }
-            Element::Association(_) => {
-                associations_out.push(FqnInput::new(raw));
-                assocs_count += 1;
-            }
-            other => {
-                return Err(CliError::Custom(format!(
-                    "bindings-file entry `{raw}` resolved to an unsupported element kind ({}) \
-                     — only Function, Class, and Association are supported",
-                    element_kind(other)
-                )));
-            }
-        }
-    }
-    Ok((fns_count, classes_count, assocs_count))
-}
-
-fn element_kind(e: &Element) -> &'static str {
-    match e {
-        Element::Class(_) => "Class",
-        Element::Enumeration(_) => "Enumeration",
-        Element::Function(_) => "Function",
-        Element::Profile(_) => "Profile",
-        Element::Association(_) => "Association",
-        Element::Measure(_) => "Measure",
-        Element::PrimitiveType(_) => "PrimitiveType",
-        Element::Unit(_) => "Unit",
-        Element::PackageableMultiplicity(_) => "Multiplicity",
-        Element::Package(_) => "Package",
-    }
 }
 
 /// Write `contents` to `dest` only if `dest` doesn't already contain

@@ -25,6 +25,7 @@
 //! - registers itself with `PureProxyFactory` via a static initializer
 //!   block so subtype-aware proxying works at runtime.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use legend_pure_parser_pure::ids::ElementId;
@@ -85,7 +86,20 @@ pub(crate) fn emit_class_interface(
         if let TypeExpr::Named { element, .. } = super_ty {
             if bootstrap.is_any(*element) {
                 extends_list.push(HAND_WRITTEN_ANY_FQN.to_owned());
-            } else if reachable.contains_class(*element) {
+                continue;
+            }
+            // External-binding supertype: another module already
+            // emitted the parent interface. Reference its imported
+            // Java FQN so this child compiles as a real subtype.
+            if !opts.external_bindings.is_empty()
+                && let Some(java_fqn) = opts
+                    .external_bindings
+                    .get(&pure_fqn_string(model, *element))
+            {
+                extends_list.push(java_fqn.clone());
+                continue;
+            }
+            if reachable.contains_class(*element) {
                 let segs = pure_fqn_segments(model, *element);
                 let leaf2 = segs.last().map(smol_str::SmolStr::as_str).unwrap_or("");
                 let p = pure_package_segments_of(model, *element);
@@ -103,8 +117,23 @@ pub(crate) fn emit_class_interface(
         extends_list.join(", ")
     ));
 
+    // Property names declared on any in-closure supertype. Pure allows
+    // a subclass to *redeclare* a property already defined on a
+    // supertype (often as a no-op shadowing for documentation), but
+    // emitting the redeclaration as a default method on the child
+    // creates a Java diamond-inheritance conflict whenever the child
+    // also extends a sibling interface that provides its own default
+    // for the same name. Suppress the redeclaration on the child side
+    // and inherit the supertype's default. Multiplicity narrowing /
+    // type narrowing across supertypes is rare in M3 and not worth
+    // a richer override-emission policy in v1.
+    let supertype_property_names = collect_supertype_property_names(model, class_id, reachable);
+
     // Direct properties.
     for prop in &class.properties {
+        if supertype_property_names.contains(prop.name.as_str()) {
+            continue;
+        }
         let return_ty = render_java_type(
             model,
             &prop.type_expr,
@@ -170,6 +199,9 @@ pub(crate) fn emit_class_interface(
             && assoc.properties.len() == 2
             && let Some(injected) = assoc.properties.get(1 - *prop_idx_pointing_to_self)
         {
+            if supertype_property_names.contains(injected.name.as_str()) {
+                continue;
+            }
             let return_ty = render_java_type(
                 model,
                 &injected.type_expr,
@@ -188,6 +220,28 @@ pub(crate) fn emit_class_interface(
                 &mut body,
             );
         }
+    }
+
+    // Diamond resolution. When the supertype graph above this class
+    // contains two ancestors-in-closure that each declare a property
+    // with the same name, Java rejects the resulting interface because
+    // it "inherits unrelated defaults" from both branches. Emit an
+    // explicit `default` override here for every such property so the
+    // joining interface picks one body deterministically and the
+    // diamond is broken. The override re-uses the first declaration
+    // we encounter; the runtime always routes through the proxy
+    // factory so the body is only material to hand-written impls of
+    // the interface.
+    let direct_property_names = direct_property_name_set(model, class_id);
+    for diamond in diamond_overrides(model, class_id, reachable, opts, bootstrap)? {
+        if direct_property_names.contains(&diamond.name) {
+            // Already emitted above; the supertype-name skip handled it.
+            continue;
+        }
+        body.push_str(&format!(
+            "    @Override default {} {}() {{ return {}; }}\n",
+            diamond.java_type, diamond.java_name, diamond.default_body,
+        ));
     }
 
     // Subtype-aware proxy registration. Initialising `$REGISTERED` runs
@@ -217,6 +271,230 @@ pub(crate) fn emit_class_interface(
         relative_path: path,
         contents: body,
     })
+}
+
+/// One diamond-override emission unit, computed from the transitive
+/// ancestor declarations of the class being emitted.
+#[derive(Debug)]
+struct DiamondOverride {
+    name: String,
+    java_name: String,
+    java_type: String,
+    default_body: String,
+}
+
+/// Property names declared **directly** by a class (own properties,
+/// qualified properties, and association-injected properties) — used
+/// to dedupe diamond emissions against the direct-property emission
+/// loop above.
+fn direct_property_name_set(model: &PureModel, class_id: ElementId) -> HashSet<String> {
+    let mut names = HashSet::<String>::new();
+    if let Element::Class(class) = model.get_element(class_id) {
+        for prop in &class.properties {
+            names.insert(prop.name.as_str().to_owned());
+        }
+        for qp in &class.qualified_properties {
+            names.insert(qp.name.as_str().to_owned());
+        }
+        for (assoc_id, prop_idx_pointing_to_self) in model.association_properties(class_id) {
+            if let Element::Association(assoc) = model.get_element(*assoc_id)
+                && assoc.properties.len() == 2
+                && let Some(injected) = assoc.properties.get(1 - *prop_idx_pointing_to_self)
+            {
+                names.insert(injected.name.as_str().to_owned());
+            }
+        }
+    }
+    names
+}
+
+/// For each simple property name declared by **two or more distinct**
+/// ancestors-in-closure of `class_id`, return one [`DiamondOverride`]
+/// describing the override emission this class needs. The returned
+/// `java_type` and `default_body` come from one of the colliding
+/// declarations (deterministic but order-dependent on the supertype
+/// walk); when those declarations agree on multiplicity (the typical
+/// M3 case where two ancestors carry shadowed copies of `name:
+/// String[0..1]`) the override is exactly correct. Disagreements are
+/// rare in the M3 metamodel and not worth a richer policy in v1.
+///
+/// Qualified properties and association-injected properties are
+/// included in the conflict set, but only simple-property collisions
+/// produce overrides — qualified properties are abstract on every
+/// emitted interface so the diamond never forms for them.
+fn diamond_overrides(
+    model: &PureModel,
+    class_id: ElementId,
+    reachable: &ReachableSet,
+    opts: &Options,
+    bootstrap: Bootstrap,
+) -> Result<Vec<DiamondOverride>, CodegenError> {
+    // Walk every ancestor-in-closure once. For each simple property
+    // declaration, record (declaring-ancestor-id, prop-clone) so we
+    // can later detect "same name, two distinct ancestors".
+    let mut by_name: HashMap<String, Vec<(ElementId, TypeExpr, Multiplicity)>> = HashMap::new();
+    let mut visited = HashSet::<ElementId>::new();
+    walk_ancestors_collecting(model, class_id, reachable, &mut visited, &mut by_name);
+
+    // Stable iteration order — sort property names alphabetically so
+    // codegen output is deterministic.
+    let mut sorted_names: Vec<&String> = by_name.keys().collect();
+    sorted_names.sort();
+
+    let pure_fqn = pure_fqn_string(model, class_id);
+    let mut out = Vec::new();
+    for name in sorted_names {
+        let decls = match by_name.get(name) {
+            Some(d) => d,
+            None => continue,
+        };
+        // Diamond is signalled by two or more distinct declaring ancestors.
+        let distinct: HashSet<ElementId> = decls.iter().map(|(id, _, _)| *id).collect();
+        if distinct.len() < 2 {
+            continue;
+        }
+        let (_, ty_expr, mult) = decls.first().unwrap();
+        let return_ty = render_java_type(
+            model,
+            ty_expr,
+            mult,
+            &pure_fqn,
+            TypePosition::Return,
+            opts,
+            GenericPolicy::AsObject,
+            bootstrap,
+        )?;
+        let java_name = safe_java_identifier(name);
+        let default_body = match default_body_for(mult) {
+            Some(body) => body.to_owned(),
+            // [1] mults can't easily resolve a diamond from the joining
+            // class — fall back to throwing at runtime so the generated
+            // code still compiles. The proxy invocation handler routes
+            // around this body in practice.
+            None => "java.util.Objects.requireNonNull(null, \"abstract diamond property\")".to_owned(),
+        };
+        out.push(DiamondOverride {
+            name: name.clone(),
+            java_name,
+            java_type: return_ty.source,
+            default_body,
+        });
+    }
+    Ok(out)
+}
+
+fn walk_ancestors_collecting(
+    model: &PureModel,
+    from_class: ElementId,
+    reachable: &ReachableSet,
+    visited: &mut HashSet<ElementId>,
+    by_name: &mut HashMap<String, Vec<(ElementId, TypeExpr, Multiplicity)>>,
+) {
+    let class = match model.get_element(from_class) {
+        Element::Class(c) => c,
+        _ => return,
+    };
+    for super_ty in &class.super_types {
+        if let TypeExpr::Named { element, .. } = super_ty
+            && reachable.contains_class(*element)
+            && visited.insert(*element)
+        {
+            if let Element::Class(ancestor) = model.get_element(*element) {
+                for prop in &ancestor.properties {
+                    by_name.entry(prop.name.as_str().to_owned()).or_default().push((
+                        *element,
+                        prop.type_expr.clone(),
+                        prop.multiplicity.clone(),
+                    ));
+                }
+                // Association-injected props on the ancestor end up
+                // navigable from any subtype, same diamond risk.
+                for (assoc_id, prop_idx_pointing_to_self) in model.association_properties(*element)
+                {
+                    if let Element::Association(assoc) = model.get_element(*assoc_id)
+                        && assoc.properties.len() == 2
+                        && let Some(injected) =
+                            assoc.properties.get(1 - *prop_idx_pointing_to_self)
+                    {
+                        by_name
+                            .entry(injected.name.as_str().to_owned())
+                            .or_default()
+                            .push((
+                                *element,
+                                injected.type_expr.clone(),
+                                injected.multiplicity.clone(),
+                            ));
+                    }
+                }
+            }
+            walk_ancestors_collecting(model, *element, reachable, visited, by_name);
+        }
+    }
+}
+
+/// Walk the transitive supertype chain of `class_id` (restricted to
+/// classes also in `reachable`) and collect the set of property names
+/// — direct, qualified, and association-injected — that any such
+/// supertype declares. Used to suppress redeclarations on the child
+/// side that would otherwise cause Java diamond-inheritance conflicts
+/// against a sibling parent's default body.
+fn collect_supertype_property_names(
+    model: &PureModel,
+    class_id: ElementId,
+    reachable: &ReachableSet,
+) -> HashSet<String> {
+    let mut names = HashSet::<String>::new();
+    let mut visited = HashSet::<ElementId>::new();
+    let class = match model.get_element(class_id) {
+        Element::Class(c) => c,
+        _ => return names,
+    };
+    for super_ty in &class.super_types {
+        if let TypeExpr::Named { element, .. } = super_ty
+            && reachable.contains_class(*element)
+        {
+            collect_property_names_recursive(model, *element, reachable, &mut names, &mut visited);
+        }
+    }
+    names
+}
+
+fn collect_property_names_recursive(
+    model: &PureModel,
+    class_id: ElementId,
+    reachable: &ReachableSet,
+    names: &mut HashSet<String>,
+    visited: &mut HashSet<ElementId>,
+) {
+    if !visited.insert(class_id) {
+        return;
+    }
+    let class = match model.get_element(class_id) {
+        Element::Class(c) => c,
+        _ => return,
+    };
+    for prop in &class.properties {
+        names.insert(prop.name.as_str().to_owned());
+    }
+    for qp in &class.qualified_properties {
+        names.insert(qp.name.as_str().to_owned());
+    }
+    for (assoc_id, prop_idx_pointing_to_self) in model.association_properties(class_id) {
+        if let Element::Association(assoc) = model.get_element(*assoc_id)
+            && assoc.properties.len() == 2
+            && let Some(injected) = assoc.properties.get(1 - *prop_idx_pointing_to_self)
+        {
+            names.insert(injected.name.as_str().to_owned());
+        }
+    }
+    // Recurse into further supertypes.
+    for super_ty in &class.super_types {
+        if let TypeExpr::Named { element, .. } = super_ty
+            && reachable.contains_class(*element)
+        {
+            collect_property_names_recursive(model, *element, reachable, names, visited);
+        }
+    }
 }
 
 /// Emit one property declaration (simple property or

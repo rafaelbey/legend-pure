@@ -56,50 +56,132 @@ eval.close();
 
 ## Generated bindings — what gets emitted
 
-Bindings are produced by the `legend java-bindings` CLI from the Rust
-workspace. The Maven module wires it into `generate-sources`:
+Bindings are produced by the `PureBindingsProcessor` annotation
+processor in the sibling
+[`legend-pure-runtime-rust-evaluator-bindings-ap`](../legend-pure-runtime-rust-evaluator-bindings-ap/)
+module. The processor is wired into this module's `mvn compile` via
+the standard `<annotationProcessorPaths>` mechanism:
 
 ```xml
 <plugin>
-  <groupId>org.codehaus.mojo</groupId>
-  <artifactId>exec-maven-plugin</artifactId>
-  …
-  <arguments>
-    <argument>run</argument>
-    <argument>--quiet</argument>
-    <argument>-p</argument>
-    <argument>legend-cli</argument>
-    <argument>--</argument>
-    <argument>java-bindings</argument>
-    <argument>--output</argument>
-    <argument>${project.build.directory}/generated-sources/java-bindings</argument>
-    <argument>--java-package</argument>
-    <argument>org.finos.legend.pure.rust.generated</argument>
-    <argument>--bindings-file</argument>
-    <argument>${project.basedir}/src/main/pure-bindings/m3-bindings.txt</argument>
-  </arguments>
+  <artifactId>maven-compiler-plugin</artifactId>
+  <configuration>
+    <annotationProcessorPaths>
+      <path>
+        <groupId>${project.groupId}</groupId>
+        <artifactId>legend-pure-runtime-rust-evaluator-bindings-ap</artifactId>
+        <version>${project.version}</version>
+      </path>
+    </annotationProcessorPaths>
+    <compilerArgs>
+      <arg>-Apure.cdylib.path=${legend.cdylib.path}</arg>
+    </compilerArgs>
+  </configuration>
 </plugin>
 ```
 
-The manifest at `src/main/pure-bindings/m3-bindings.txt` is one Pure FQN
-per line; the CLI auto-detects each entry's element kind (Function /
-Class / Association) and dispatches accordingly. Blank lines and
-`#`-prefixed comments are ignored. The default manifest covers the M3
-metamodel surface (`Class`, `GenericType`, `Function`, `Property`,
-`Multiplicity`, `Profile`, `Stereotype`, …) plus a few reflection
-helpers (`type()`, `genericType()`, `elementToPath()`,
+The marker class
+[`org.finos.legend.pure.rust.bootstrap.M3Bootstrap`](src/main/java/org/finos/legend/pure/rust/bootstrap/M3Bootstrap.java)
+carries the `@PureBindings` annotation that points at the manifest:
+
+```java
+@PureBindings(bindingsFile = "pure-bindings/m3-bindings.jpure")
+public final class M3Bootstrap {}
+```
+
+The manifest path is a **classpath resource**, resolved from
+`target/classes/` after Maven copies the file out of
+`src/main/resources/`. At compile time the AP loads
+`libpure_rust_jni.{dylib,so,dll}` (path resolved from
+`-Apure.cdylib.path`), reads the manifest via
+`Filer.getResource(StandardLocation.CLASS_OUTPUT, …)`, parses its
+header directives, calls into the Rust `legend-pure-java-codegen`
+crate to walk the model, and emits each produced source through
+`Filer` (which puts it under `target/generated-sources/annotations/`
+and feeds it into the same javac round). No `cargo` subprocess fork,
+no extra `<build-helper>` plugin to wire the generated source root.
+
+### Manifest format (`.jpure`)
+
+Each manifest is a UTF-8 text file with directive lines + an FQN
+body:
+
+```
+# Comments and blank lines ignored.
+@pkg: org.finos.legend.pure.rust.generated
+@functions-class: PureFunctions          # optional override
+
+# Pure FQNs — one per line. Auto-dispatched by element kind:
+#   Function     → static method on the facade class
+#   Class        → Java interface (with property closure walked)
+#   Association  → both endpoint classes seeded
+meta::pure::metamodel::type::Class
+meta::pure::functions::math::plus_Integer_MANY__Integer_1_
+```
+
+The `.jpure` extension marks the file as a Pure-bindings manifest
+(distinct from a generic text file). The default M3 manifest covers
+the metamodel surface (`Class`, `GenericType`, `Function`,
+`Property`, `Multiplicity`, `Profile`, `Stereotype`, …) plus a few
+reflection helpers (`type()`, `genericType()`, `elementToPath()`,
 `pathToElement()`).
 
-**Generation is idempotent.** The CLI reads the existing file at each
-target path and only writes when the byte content differs, so reruns
-on an unchanged manifest leave file mtimes intact. That keeps Maven's
-incremental compiler and Develocity's remote caches warm — the
-exec-maven-plugin step still runs (cargo's incremental check is fast),
-but javac sees zero "modified" sources and skips recompile.
+### Cross-module composition (`@import:`)
+
+Downstream modules build on the M3 bindings without re-emitting
+them. Add `@import:` to your manifest pointing at another module's
+`.jpure` resource (which must be on your compile classpath via a
+`provided`-scope dependency):
+
+```
+# my-dsl.jpure — bindings for an example DSL on top of M3.
+@pkg: org.example.dsl.generated
+@import: pure-bindings/m3-bindings.jpure
+
+org::example::dsl::Mapping
+org::example::dsl::PropertyMapping
+```
+
+The processor recursively reads each imported manifest, builds a
+Pure-FQN → Java-FQN map, and the codegen routes references to those
+types at the imported Java FQN (e.g. references to
+`meta::pure::metamodel::PackageableElement` resolve to
+`org.finos.legend.pure.rust.generated.PackageableElement`) instead
+of re-emitting them locally.
 
 To add more Pure surface to the bindings, append FQNs to the manifest
 and re-run `mvn compile`. To skip generation entirely (e.g. on a host
-without a Rust toolchain), pass `-Dlegend.skipBindings=true`.
+without a built cdylib), pass `-Dmaven.compiler.proc=none`.
+
+### Why the cdylib at compile time?
+
+The annotation processor reuses the **same Rust codegen library** the
+`legend java-bindings` CLI calls into, by loading
+`libpure_rust_jni.{dylib,so,dll}` and invoking a JNI shim. That keeps
+the codegen logic single-sourced in the Rust crate (where its 16-test
+suite covers the emission rules) instead of forcing a parallel Java
+port.
+
+For local development that means the cdylib must already be built
+*before* `mvn compile`:
+
+```bash
+cargo build -p legend-pure-parser-jni
+```
+
+The pom defaults `legend.cdylib.path` to
+`${project.basedir}/../../legend-pure-rust/target/debug/libpure_rust_jni<EXT>`
+where `<EXT>` is filled in by an OS-detection profile (`.dylib` on
+macOS, `.so` on Linux, `.dll` on Windows). Override with
+`-Dlegend.cdylib.path=…` if you've built the cdylib elsewhere or
+cross-compiled it for a different target arch.
+
+> **Note.** The current build expects the developer host to ship its
+> own cdylib. A future phase will bundle pre-built `.dylib` / `.so` /
+> `.dll` for the common arch matrix into the AP JAR (under
+> `META-INF/native/<os>-<arch>/`) and extract them automatically via a
+> `NativeLibraryLoader` so downstream Java consumers no longer need a
+> Rust toolchain.
 
 ### Type mapping summary
 
@@ -162,18 +244,24 @@ interface that doesn't declare them.
 
 `mvn compile` from this module:
 
-1. Invokes `cargo run -p legend-cli -- java-bindings …` to regenerate
-   Java sources from the manifest.
-2. Adds `target/generated-sources/java-bindings` to the compile path.
-3. Runs `javac --release 11` over the hand-written runtime classes plus
-   the generated set.
+1. Triggers `PureBindingsProcessor` (annotation-processor-paths)
+   inside javac. The processor `System.load`s the cdylib via
+   `-Apure.cdylib.path`, calls into the Rust codegen, and emits each
+   produced source through `Filer.createSourceFile`.
+2. javac picks up the Filer-emitted sources from
+   `target/generated-sources/annotations/` (auto-registered) and
+   compiles them in the same round as the hand-written runtime
+   classes under `--release 11`.
 
 The shared library that `PureRustEvaluator` loads via
 `System.loadLibrary("pure_rust_jni")` must be on `java.library.path`
-when you actually *call* the evaluator at runtime — it's not needed at
-compile time. Build it with `cargo build -p legend-pure-parser-jni` and
-either install onto `~/Library/Java/Extensions/` (macOS) or pass
-`-Djava.library.path=…/legend-pure-rust/target/debug/`.
+when you actually *call* the evaluator at runtime. The AP also needs
+the cdylib at *compile* time (see above). The same artifact services
+both: build it once with `cargo build -p legend-pure-parser-jni` then
+either install onto `~/Library/Java/Extensions/` (macOS) and let
+`-Apure.cdylib.path` resolve to the workspace's `target/debug/`
+default, or pass `-Djava.library.path=…/legend-pure-rust/target/debug/`
+explicitly when you run the evaluator at runtime.
 
 ## Tests
 
@@ -192,9 +280,14 @@ together with the runtime support classes; that test runs as part of
 
 ## See also
 
-- `legend-pure-rust/crates/java-codegen/` — the codegen library and
-  CLI implementation.
-- `legend-pure-rust/crates/jni/` — the Rust side of this bridge.
+- [`legend-pure-runtime-rust-evaluator-bindings-ap/`](../legend-pure-runtime-rust-evaluator-bindings-ap/)
+  — the annotation processor that drives codegen.
+- `legend-pure-rust/crates/java-codegen/` — the codegen library
+  (single source of truth, called by both the AP and the
+  `legend java-bindings` developer CLI).
+- `legend-pure-rust/crates/jni/` — the Rust side of this bridge,
+  including the `nativeGenerateBindings` JNI export.
 - `legend-pure-rust/BACKLOG.md` — open follow-ups (function-typed
   parameters, generic type-arg propagation, streaming `[*]` returns,
-  full live-evaluator JUnit round-trip).
+  full live-evaluator JUnit round-trip, multi-platform cdylib
+  bundling).
