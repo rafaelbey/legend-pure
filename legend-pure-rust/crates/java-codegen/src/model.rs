@@ -157,6 +157,26 @@ pub enum CodegenError {
         /// The element kind that was found.
         kind: &'static str,
     },
+    /// An entry in a kind-agnostic bindings file did not resolve to any
+    /// element in the model.
+    #[error("bindings-file entry `{fqn}` could not be resolved in the model")]
+    BindingsFileEntryUnresolved {
+        /// The offending FQN.
+        fqn: String,
+    },
+    /// An entry in a kind-agnostic bindings file resolved to an element
+    /// kind we cannot dispatch (only `Function`, `Class`, and
+    /// `Association` are supported).
+    #[error(
+        "bindings-file entry `{fqn}` resolved to an unsupported element kind ({kind}) — \
+         only Function, Class, and Association are supported"
+    )]
+    BindingsFileEntryWrongKind {
+        /// The offending FQN.
+        fqn: String,
+        /// The element kind that was found.
+        kind: &'static str,
+    },
 }
 
 /// Canonical bootstrap-element IDs the codegen needs to recognise by
@@ -290,7 +310,7 @@ pub(crate) fn resolve_extra_seeds(
     Ok(out)
 }
 
-fn element_kind(e: &Element) -> &'static str {
+pub(crate) fn element_kind(e: &Element) -> &'static str {
     match e {
         Element::Class(_) => "Class",
         Element::Enumeration(_) => "Enumeration",

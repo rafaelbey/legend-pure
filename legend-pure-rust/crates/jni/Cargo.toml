@@ -32,6 +32,7 @@ legend-pure-parser-protocol = { path = "../protocol" }
 legend-pure-parser-pure = { path = "../pure" }
 legend-pure-runtime = { path = "../runtime" }
 legend-pure-core-platform = { path = "../core-platform-pure" }
+legend-pure-java-codegen = { path = "../java-codegen" }
 slotmap = { workspace = true }
 smol_str = { workspace = true }
 im-rc = { workspace = true }

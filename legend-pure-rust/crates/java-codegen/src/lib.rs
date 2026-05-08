@@ -30,6 +30,7 @@
 #![deny(missing_docs)]
 
 mod closure;
+mod dispatch;
 mod enums;
 mod functions;
 mod interfaces;
@@ -37,6 +38,7 @@ mod model;
 mod naming;
 mod types;
 
+pub use crate::dispatch::{DispatchedBindings, dispatch_bindings_by_kind};
 pub use crate::model::{CodegenError, FqnInput, JavaFile, Options};
 
 use legend_pure_parser_pure::model::PureModel;

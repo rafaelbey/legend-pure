@@ -1427,6 +1427,7 @@ dependencies = [
  "im-rc",
  "jni",
  "legend-pure-core-platform",
+ "legend-pure-java-codegen",
  "legend-pure-parser-ast",
  "legend-pure-parser-lexer",
  "legend-pure-parser-parser",
