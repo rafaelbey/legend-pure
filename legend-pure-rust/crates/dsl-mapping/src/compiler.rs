@@ -179,6 +179,14 @@ impl CompilerExtension for MappingExtension {
         // Substitution Error in mapping [X] as [Y] does not exist
         // in included mapping [Z]".
         validate_store_substitution_existence(&registry, ctx.errors);
+        // Phase 2 visibility: walk every cross-element reference
+        // (mapping includes, class-mapping target classes, Pure
+        // body `~src` clauses, operation function refs, enum-ref
+        // source values, store-substitution endpoints) and emit
+        // `NotVisible` for refs whose target home repo is not in
+        // the use-site repo's declared dependencies. No-op when
+        // `model.repo_visibility` is empty.
+        validate_repo_visibility(&registry, ctx.model, ctx.errors);
     }
 }
 
@@ -1980,4 +1988,169 @@ fn collect_mapping_stores(
         out.extend(collect_mapping_stores(&included_fqn, registry, visited));
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: repo-boundary visibility for dsl-mapping
+// ---------------------------------------------------------------------------
+
+/// Walks every cross-element reference inside every registered
+/// mapping and emits `NotVisible` for refs whose target home repo
+/// isn't in the use-site repo's declared dependencies. Mirrors
+/// `crates/dsl-relational/src/compiler.rs::validate_repo_visibility`
+/// (Phase D), adapted for dsl-mapping cross-refs:
+///
+/// - `MappingInclude.included` — resolved through the mapping
+///   registry (Mappings aren't M3 elements on `PureModel`).
+/// - `MappingInclude.store_substitutions[].source/target` — resolved
+///   on the model.
+/// - `ClassMapping.class` — Class / Enumeration / Association on
+///   the model (depending on body kind).
+/// - `PureClassMappingBody.src_class` — Class on the model.
+/// - `OperationClassMappingBody.operation` — Function on the model.
+/// - `EnumValueMapping.source_values[]` `EnumRef.enumeration` —
+///   Enumeration on the model.
+///
+/// No-op when `model.repo_visibility` is empty (existing tests that
+/// build models without descriptors stay green).
+fn validate_repo_visibility(
+    registry: &HashMap<SmolStr, RegisteredMapping>,
+    model: &PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    use legend_pure_parser_pure::visibility::source_repo_name;
+
+    if model.repo_visibility.is_empty() {
+        return;
+    }
+
+    for reg in registry.values() {
+        let use_site = &reg.def.source_info.source;
+        let Some(use_repo) = source_repo_name(use_site) else {
+            continue;
+        };
+        let Some(visible) = model.repo_visibility.get(&use_repo) else {
+            continue;
+        };
+
+        // 1. Mapping includes — resolved via the registry, not the
+        //    model. Mirrors dsl-relational's Phase D `[db]` ref check.
+        for inc in &reg.def.includes {
+            check_mapping_visibility(&inc.included, use_site, visible, registry, errors);
+            // 2. Store substitutions — endpoints live on the model.
+            for sub in &inc.store_substitutions {
+                check_element_ref_visibility(&sub.source, use_site, visible, model, errors);
+                check_element_ref_visibility(&sub.target, use_site, visible, model, errors);
+            }
+        }
+
+        // 3. Per-class-mapping refs.
+        for cm in &reg.def.class_mappings {
+            check_element_ref_visibility(&cm.class, use_site, visible, model, errors);
+            check_body_refs_visibility(&cm.body, use_site, visible, model, errors);
+        }
+    }
+}
+
+fn check_mapping_visibility(
+    target: &PackageableElementPtr,
+    use_site: &SmolStr,
+    visible: &std::collections::BTreeSet<SmolStr>,
+    registry: &HashMap<SmolStr, RegisteredMapping>,
+    errors: &mut Vec<CompilationError>,
+) {
+    use legend_pure_parser_pure::visibility::source_repo_name;
+    let target_fqn = ptr_fqn(target);
+    let Some(target_reg) = registry.get(&target_fqn) else {
+        // Existing include-FQN-resolves validator handles missing.
+        return;
+    };
+    let target_source = &target_reg.def.source_info.source;
+    let Some(target_repo) = source_repo_name(target_source) else {
+        return;
+    };
+    if visible.contains(&target_repo) {
+        return;
+    }
+    errors.push(CompilationError {
+        message: format!("{target_fqn} is not visible in the file {use_site}"),
+        source_info: target.source_info.clone(),
+        kind: CompilationErrorKind::NotVisible {
+            target_fqn,
+            source_id: use_site.clone(),
+        },
+    });
+}
+
+fn check_element_ref_visibility(
+    target: &PackageableElementPtr,
+    use_site: &SmolStr,
+    _visible: &std::collections::BTreeSet<SmolStr>,
+    model: &PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    let fqn = ptr_fqn(target);
+    let segments: Vec<SmolStr> = fqn.as_str().split("::").map(SmolStr::new).collect();
+    if segments.is_empty() || segments.iter().any(SmolStr::is_empty) {
+        return;
+    }
+    let Some(target_id) = model.resolve_by_path(&segments) else {
+        // Other validators surface unresolved-element diagnostics.
+        return;
+    };
+    if let Some(violation) =
+        legend_pure_parser_pure::visibility::check_element_visible(model, use_site, target_id)
+    {
+        errors.push(CompilationError {
+            message: violation.message(),
+            source_info: target.source_info.clone(),
+            kind: CompilationErrorKind::NotVisible {
+                target_fqn: violation.target_fqn,
+                source_id: violation.use_site_source,
+            },
+        });
+    }
+}
+
+fn check_body_refs_visibility(
+    body: &crate::ast::ClassMappingBody,
+    use_site: &SmolStr,
+    visible: &std::collections::BTreeSet<SmolStr>,
+    model: &PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    use crate::ast::ClassMappingBody;
+    match body {
+        ClassMappingBody::Pure(b) => {
+            if let Some(src) = &b.src_class {
+                check_element_ref_visibility(src, use_site, visible, model, errors);
+            }
+        }
+        ClassMappingBody::Operation(b) => {
+            check_element_ref_visibility(&b.operation, use_site, visible, model, errors);
+        }
+        ClassMappingBody::Enumeration(b) => {
+            for v in &b.value_mappings {
+                for sv in &v.source_values {
+                    if let crate::ast::EnumSourceValue::EnumRef { enumeration, .. } = sv {
+                        check_element_ref_visibility(enumeration, use_site, visible, model, errors);
+                    }
+                }
+            }
+        }
+        ClassMappingBody::AggregationAware(_) | ClassMappingBody::XStore(_) => {
+            // Nested mapping bodies + xstore — reach into them for
+            // cross-refs in a follow-up. Today's coverage already
+            // catches the headline cases; the agg/xstore shapes
+            // route through the same `class` field already
+            // checked above.
+        }
+        ClassMappingBody::Foreign(_) => {
+            // Foreign DSLs (relational, etc.) own their own
+            // visibility validators (relational's Phase D walks
+            // `[db]` qualifiers in op-bodies + class-mapping
+            // bodies). dsl-mapping deliberately doesn't reach
+            // into the foreign body here.
+        }
+    }
 }
