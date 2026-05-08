@@ -166,6 +166,12 @@ impl CompilerExtension for MappingExtension {
         // MappingInclude.store_substitutions must resolve to a known
         // element on the model.
         validate_substitution_endpoints(&registry, ctx.model, ctx.errors);
+        // Phase E2: detect cycles in the substitution graph
+        // accumulated through each mapping's include closure. Java
+        // parity: DatabaseSubstitutionHandler's
+        // collectStoreSubstitutionsAlongPath — emits "Cyclic Store
+        // Substitution for store [X] in mapping hierarchy".
+        validate_substitution_cycles(&registry, ctx.errors);
     }
 }
 
@@ -1737,4 +1743,130 @@ fn check_substitution_endpoint(
         source_info: sub.source_info.clone(),
         kind: CompilationErrorKind::UnresolvedElement { path: fqn },
     });
+}
+
+// ---------------------------------------------------------------------------
+// Phase E2 — substitution-chain cycle detector
+// ---------------------------------------------------------------------------
+
+/// For each registered mapping, walk its include closure to gather
+/// the union of all `(source → target)` substitution edges visible
+/// from that mapping. Detect cycles in the resulting directed graph
+/// using DFS with three-color marking. The first cycle found per
+/// mapping emits a `CyclicInheritance` error citing one of the
+/// stores on the cycle.
+///
+/// Java parity:
+/// `DatabaseSubstitutionHandler.collectStoreSubstitutionsAlongPath`
+/// (lines 73-92) accumulates substitution rules along the include
+/// path and `getDatabaseAfterStoreSubstitution` (lines 53-66)
+/// detects cycles in the substitution chain itself.
+fn validate_substitution_cycles(
+    registry: &HashMap<SmolStr, RegisteredMapping>,
+    errors: &mut Vec<CompilationError>,
+) {
+    for (mapping_fqn, reg) in registry.iter() {
+        // Edges (source_fqn → target_fqn) in the substitution graph
+        // visible from this mapping. Tracking source spans on the
+        // first occurrence so the diagnostic points back at the
+        // declaration site.
+        let mut edges: HashMap<SmolStr, Vec<(SmolStr, SourceInfo)>> = HashMap::new();
+        let mut visited_mappings: HashSet<SmolStr> = HashSet::new();
+        collect_substitution_edges(mapping_fqn, registry, &mut visited_mappings, &mut edges);
+
+        // DFS with three-colour marking: White (unvisited) / Gray
+        // (on the current path) / Black (finished). A back-edge to
+        // a Gray node is a cycle.
+        let mut color: HashMap<SmolStr, NodeColor> = HashMap::new();
+        let mut reported = false;
+        for source in edges.keys() {
+            if reported {
+                break;
+            }
+            if !color.contains_key(source) {
+                if let Some(cycle_node) =
+                    detect_cycle_dfs(source, &edges, &mut color, &mut Vec::new())
+                {
+                    let span = edges
+                        .get(&cycle_node)
+                        .and_then(|targets| targets.first())
+                        .map(|(_, s)| s.clone())
+                        .unwrap_or_else(|| reg.def.source_info.clone());
+                    errors.push(CompilationError {
+                        message: format!(
+                            "Cyclic Store Substitution for store '{cycle_node}' in mapping \
+                             hierarchy of '{mapping_fqn}'"
+                        ),
+                        source_info: span,
+                        kind: CompilationErrorKind::CyclicInheritance {
+                            element_name: cycle_node,
+                        },
+                    });
+                    reported = true;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NodeColor {
+    Gray,
+    Black,
+}
+
+fn detect_cycle_dfs(
+    node: &SmolStr,
+    edges: &HashMap<SmolStr, Vec<(SmolStr, SourceInfo)>>,
+    color: &mut HashMap<SmolStr, NodeColor>,
+    path: &mut Vec<SmolStr>,
+) -> Option<SmolStr> {
+    color.insert(node.clone(), NodeColor::Gray);
+    path.push(node.clone());
+
+    if let Some(targets) = edges.get(node) {
+        for (target, _) in targets {
+            match color.get(target) {
+                Some(NodeColor::Gray) => {
+                    return Some(target.clone());
+                }
+                Some(NodeColor::Black) => {}
+                None => {
+                    if let Some(found) = detect_cycle_dfs(target, edges, color, path) {
+                        return Some(found);
+                    }
+                }
+            }
+        }
+    }
+
+    color.insert(node.clone(), NodeColor::Black);
+    path.pop();
+    None
+}
+
+fn collect_substitution_edges(
+    mapping_fqn: &SmolStr,
+    registry: &HashMap<SmolStr, RegisteredMapping>,
+    visited: &mut HashSet<SmolStr>,
+    edges: &mut HashMap<SmolStr, Vec<(SmolStr, SourceInfo)>>,
+) {
+    if !visited.insert(mapping_fqn.clone()) {
+        return;
+    }
+    let Some(reg) = registry.get(mapping_fqn) else {
+        return;
+    };
+    for inc in &reg.def.includes {
+        for sub in &inc.store_substitutions {
+            let src = ptr_fqn(&sub.source);
+            let tgt = ptr_fqn(&sub.target);
+            edges
+                .entry(src)
+                .or_default()
+                .push((tgt, sub.source_info.clone()));
+        }
+        let included_fqn = ptr_fqn(&inc.included);
+        collect_substitution_edges(&included_fqn, registry, visited, edges);
+    }
 }
