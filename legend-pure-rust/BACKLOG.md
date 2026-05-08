@@ -212,15 +212,22 @@ still apply the filter.
 
 For Maven-style "bootstrap an evaluator" workflows there is also
 `--bindings-file <PATH>` — one FQN per line, kind auto-detected by the
-CLI from the model. The
-`legend-pure-runtime-rust-evaluator` Maven module wires this into its
-`generate-sources` phase via `exec-maven-plugin` + `build-helper-maven-plugin`,
-so `mvn compile` regenerates a curated M3 metamodel surface
-(`src/main/pure-bindings/m3-bindings.txt`, ~30 classes + a handful of
-metadata functions like `type()` / `genericType()` / `elementToPath()`)
-into `target/generated-sources/java-bindings/` and adds it to the
-compile path. Set `-Dlegend.skipBindings=true` to skip on a host
-without a Rust toolchain.
+helper `legend_pure_java_codegen::dispatch_bindings_by_kind` (shared
+between the CLI and the annotation processor described below).
+
+The `legend-pure-runtime-rust-evaluator` Maven module drives this
+codegen at compile time through a sibling
+`legend-pure-runtime-rust-evaluator-bindings-ap` annotation-processor
+module: a `@PureBindings` marker on
+`org.finos.legend.pure.rust.bootstrap.M3Bootstrap` triggers
+`PureBindingsProcessor` to load `libpure_rust_jni.{dylib,so,dll}`,
+call `nativeGenerateBindings` (`crates/jni/src/codegen.rs`), and emit
+the produced Java sources via `Filer` into
+`target/generated-sources/annotations/`. Same Rust codegen library,
+no `cargo` subprocess fork, no `<build-helper-maven-plugin>` source
+root wiring — javac picks up the AP-emitted sources automatically.
+Pass `-Dmaven.compiler.proc=none` to skip generation on a host
+without a built cdylib.
 
 Generic-typed property/QP returns on generated interfaces (e.g.
 `Enumeration<E>.values: E[*]`) render as `Object` / `Iterable<Object>`
@@ -257,13 +264,30 @@ chain), so a user class whose *parent* implements the generated
 interface won't resolve. Adequate for the `class MyPerson implements
 Person` case, needs a fix for deeper hierarchies.
 
+**Diamond-inheritance break (2026-05-07).** Pure's M3 lets a subclass
+*redeclare* an inherited property as a no-op shadow (`Type.name`
+shadows `ModelElement.name`, etc.). When two such ancestors-in-closure
+each emit a `default` method for the same property name, Java
+rejects the joining interface ("inherits unrelated defaults"). The
+codegen now (a) suppresses redeclarations on the child whose direct
+supertype-in-closure already declares the same property name, and
+(b) emits an explicit `@Override default` on any joining class whose
+supertype graph carries two distinct declarations of the same simple
+property. Multiplicity narrowing across distinct ancestors is rare
+in M3 and not handled in v1 — would need a richer override-emission
+policy. See `crates/java-codegen/src/interfaces.rs::diamond_overrides`.
+
 Verification: 16 codegen unit + integration tests (`-p
-legend-pure-java-codegen`), including a `javac --release 11` round-trip
-on the generated set + the runtime support classes
-(`tests/javac_compiles.rs`). Live `mvn compile` of
-`legend-pure-runtime-rust-evaluator` regenerates 52 Java sources from
-the curated M3 manifest and compiles them clean alongside the 9
-hand-written runtime classes.
+legend-pure-java-codegen`) + 4 new `dispatch_smoke` tests for the
+relocated `dispatch_bindings_by_kind` helper, including a `javac
+--release 11` round-trip on the generated set + the runtime support
+classes (`tests/javac_compiles.rs`). 5 JNI unit tests (`-p
+legend-pure-parser-jni`) exercise the FFI-free inner of
+`nativeGenerateBindings`. Live `mvn compile` of
+`legend-pure-runtime-rust-evaluator` regenerates 50 Java sources from
+the curated M3 manifest via the annotation processor and compiles
+them clean alongside the hand-written runtime classes; the byte-set
+is identical to what the CLI emits.
 
 ### Open Work (v2)
 
@@ -273,6 +297,9 @@ hand-written runtime classes.
 | Generic type-arg propagation on user classes | P1 | `Person.friends: List<Person>` currently renders as `Object friends()` (the platform `List<T>` is filtered as a `meta::pure::*` class). v2 should let collection-shaped platform types (`List`, `Pair`, `Map`) project to typed Java collections by special-casing them or by walking their type-arguments. |
 | Streaming `[*]` returns | P3 | v1 materialises lists eagerly into `java.util.List`. v2 could expose `Iterable` lazily or a `Stream`. |
 | Round-trip JNI integration test | P2 | The plan called for a JUnit test that loads `libpure_rust_jni`, calls a generated wrapper, fetches a heap object, traverses via the Proxy, and asserts subtype-aware dispatch. Substituted in v1 by `tests/javac_compiles.rs` which proves the generated code is syntactically valid against `--release 11` together with the runtime support — but the live-evaluator round-trip remains to be wired (Maven module + cdylib loading). |
+| AP processor unit test (Java side) | P2 | The Rust-side codegen, the JNI shim, and the byte-parity diff between CLI and AP outputs are covered. A dedicated Java-side AP test (e.g. via `com.google.testing.compile` or `javax.tools.ToolProvider.getSystemJavaCompiler`) that exercises `PureBindingsProcessor` end-to-end against a fixture annotated with `@PureBindings` is the missing piece — would have caught the cdylib-arch and `<provided>` dep wiring issues earlier. |
+| Multi-platform cdylib bundling | P2 | Today `PureBindingsProcessor` requires the developer to build a host-arch cdylib at `-Apure.cdylib.path`. Next phase: GitHub Actions matrix builds `libpure_rust_jni.{dylib,so,dll}` for `{macOS-arm64, macOS-x64, Linux-x64, Linux-arm64, Windows-x64}`, the `legend-pure-runtime-rust-evaluator-bindings-ap` JAR ships them under `META-INF/native/<os>-<arch>/`, and a `NativeLibraryLoader` extracts the right binary on the fly. Removes the Rust-toolchain prereq for downstream Java consumers. |
+| Multiplicity narrowing across diamond declarations | P3 | The current `diamond_overrides` policy picks the first ancestor's declaration. If two ancestors disagree on multiplicity (e.g. `[0..1]` vs `[1]`), the override picks one and the other branch's signature is not honoured. Rare in M3; revisit if a real case shows up. |
 | Relation-typed parameters/returns | P3 | Currently rejected at codegen. |
 | Mapping / Diagram / Path / TDS DSL elements | P3 | Out of scope for v1. |
 | Two-way binding (mutating Pure objects from Java) | P3 | Read-only in v1. |

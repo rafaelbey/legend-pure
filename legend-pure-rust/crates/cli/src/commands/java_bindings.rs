@@ -56,8 +56,7 @@ use owo_colors::OwoColorize;
 use smol_str::SmolStr;
 
 use legend_pure_core_platform::repo::{self, Repo};
-use legend_pure_java_codegen::{FqnInput, Options, generate};
-use legend_pure_parser_pure::model::{Element, PureModel};
+use legend_pure_java_codegen::{FqnInput, Options, dispatch_bindings_by_kind, generate};
 
 use crate::diagnostics::CliError;
 
@@ -202,13 +201,14 @@ pub fn run(args: JavaBindingsArgs) -> Result<(), CliError> {
 
     // Dispatch every entry from the bindings file by its element kind.
     if !bindings_lines.is_empty() {
-        let (fns_added, classes_added, assocs_added) = dispatch_bindings_by_kind(
-            &model,
-            &bindings_lines,
-            &mut requested,
-            &mut extra_classes,
-            &mut extra_associations,
-        )?;
+        let dispatched = dispatch_bindings_by_kind(&model, &bindings_lines)
+            .map_err(|e| CliError::Custom(e.to_string()))?;
+        let fns_added = dispatched.functions.len();
+        let classes_added = dispatched.classes.len();
+        let assocs_added = dispatched.associations.len();
+        requested.extend(dispatched.functions);
+        extra_classes.extend(dispatched.classes);
+        extra_associations.extend(dispatched.associations);
         eprintln!(
             "  {} bindings file: {} function(s), {} class(es), {} association(s)",
             "•".dimmed(),
@@ -266,71 +266,6 @@ pub fn run(args: JavaBindingsArgs) -> Result<(), CliError> {
         args.output.display()
     );
     Ok(())
-}
-
-/// Resolve each entry in a `--bindings-file` and append it to the right
-/// slot based on the element kind found in the model.
-///
-/// Returns `(functions_added, classes_added, associations_added)` for
-/// the per-kind summary.
-fn dispatch_bindings_by_kind(
-    model: &PureModel,
-    lines: &[String],
-    fns_out: &mut Vec<FqnInput>,
-    classes_out: &mut Vec<FqnInput>,
-    associations_out: &mut Vec<FqnInput>,
-) -> Result<(usize, usize, usize), CliError> {
-    let mut fns_count = 0usize;
-    let mut classes_count = 0usize;
-    let mut assocs_count = 0usize;
-
-    for raw in lines {
-        let id = match model.resolve_fqn_str(raw) {
-            Some(id) => id,
-            None => {
-                return Err(CliError::Custom(format!(
-                    "bindings-file entry `{raw}` could not be resolved in the model"
-                )));
-            }
-        };
-        match model.get_element(id) {
-            Element::Function(_) => {
-                fns_out.push(FqnInput::new(raw));
-                fns_count += 1;
-            }
-            Element::Class(_) => {
-                classes_out.push(FqnInput::new(raw));
-                classes_count += 1;
-            }
-            Element::Association(_) => {
-                associations_out.push(FqnInput::new(raw));
-                assocs_count += 1;
-            }
-            other => {
-                return Err(CliError::Custom(format!(
-                    "bindings-file entry `{raw}` resolved to an unsupported element kind ({}) \
-                     — only Function, Class, and Association are supported",
-                    element_kind(other)
-                )));
-            }
-        }
-    }
-    Ok((fns_count, classes_count, assocs_count))
-}
-
-fn element_kind(e: &Element) -> &'static str {
-    match e {
-        Element::Class(_) => "Class",
-        Element::Enumeration(_) => "Enumeration",
-        Element::Function(_) => "Function",
-        Element::Profile(_) => "Profile",
-        Element::Association(_) => "Association",
-        Element::Measure(_) => "Measure",
-        Element::PrimitiveType(_) => "PrimitiveType",
-        Element::Unit(_) => "Unit",
-        Element::PackageableMultiplicity(_) => "Multiplicity",
-        Element::Package(_) => "Package",
-    }
 }
 
 /// Write `contents` to `dest` only if `dest` doesn't already contain

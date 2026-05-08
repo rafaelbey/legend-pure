@@ -18,6 +18,7 @@
 
 #![deny(missing_docs)]
 
+mod codegen;
 mod context;
 mod conversion;
 
