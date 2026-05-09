@@ -18,10 +18,38 @@
 //! `org.finos.legend.pure.m3.navigation.generictype.GenericTypeWithXArguments`,
 //! which pairs a parametric type with the values bound for its parameters.
 //! Java additionally maintains a stack of these via `TypeInferenceContext`
-//! (with `parent`, `tops`, `scope`, per-state `ahead` flags). We're
-//! porting incrementally — the stack lands in a follow-up step
-//! (3c of the plan) once the surrounding code routes binding /
-//! substitution through this seam.
+//! (with `parent`, `tops`, `scope`, per-state `ahead` flags). We've
+//! ported the [`TypeInferenceContext`] skeleton itself but **not** wired
+//! it as the inner carrier of [`crate::resolve::infer_generic_bindings`]'s
+//! call site.
+//!
+//! # Z-propagation audit (Item 3, May 2026) — dormant on purpose
+//!
+//! The auth/constraint binding split + two-branch dispatch
+//! (`RegisterMode::Authoritative` / `Constraint`) plus the lambda-body
+//! second-pass already drive
+//! [`inference_precision_sweep`](../../core-platform-pure/tests/inference_precision_sweep.rs)
+//! to **0** body-Any cases. The per-expression
+//! [`inference_drift_histogram`](../../core-platform-pure/tests/inference_drift_histogram.rs)
+//! reports total surviving Generic / Variable markers under a hard
+//! ceiling — currently 5931 baseline / 6500 ceiling.
+//!
+//! Wiring the stack-context through `infer_generic_bindings` would be
+//! required only for:
+//!
+//! - Java's `pushTypeInferenceContextAhead` deferred-lambda-body case
+//!   (`FunctionExpressionProcessor.java:605-615`).
+//! - Java's overload-elimination retry loop (`:226`).
+//! - Per-expression chain-inference cases like the higher-order
+//!   `Function<{Function<{...}>->...}>` arg-type-mismatch check pinned
+//!   under `#[ignore]` in
+//!   [`crates/pure/tests/integration_tests.rs::function_type_higher_order_wrong_inner_type_errors`](../../tests/integration_tests.rs).
+//!
+//! None of these are concrete platform regressions today, so the
+//! skeleton stays dormant. **Do not enable it without a concrete
+//! failing test driving the change** — both prior structural spikes
+//! (commits `c17a06`, reverted `3f1a64`) regressed platform fold-style
+//! chains.
 
 use std::collections::{HashMap, HashSet};
 
