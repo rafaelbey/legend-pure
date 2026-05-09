@@ -2458,18 +2458,19 @@ function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->
 }
 
 #[test]
-#[ignore = "Tried twice (commits c17a06 and the bind_type-auth-tracking \
-            spike): bind_type unconditional LUB-merge widens T to Any \
-            when sibling slots disagree, masking eval's wrong-arg-type. \
-            Both attempts at distinguishing 'authoritative' (FunctionType \
-            slot) from 'constraint' (param:T) bindings produced platform \
-            regressions in fold-style chains where the lambda body's \
-            inferred return type is the source of V. Real fix needs \
-            Java-style TypeInferenceContext ordering with proper \
-            'supplies T' vs 'consumes T' tracking that handles the \
-            lambda-body-as-V-source case correctly. Tracked in BACKLOG \
-            'Authoritative vs constraint bindings (eval arg validation)'."]
 fn function_type_one_arg_wrong_type_errors() {
+    // The auth/constraint binding split (commit `eaf4ee4cd44`) and
+    // surrounding chain-inference work made this test green under
+    // default semantics. Two prior spikes (`c17a06`, reverted
+    // `3f1a64`) tried inverting Java's order and regressed
+    // fold-style chains; the eventual fix tracks
+    // `Generic(T)` bindings sourced from a structural FunctionType
+    // slot separately (`ty_auth`) from those sourced from a top-
+    // level Generic-typed arg, and substitutes via `ty_auth` only
+    // for the per-arg type-compat check. See
+    // `parity_semantics.md` for the full ledger; `inference_context::
+    // tic_eval_wrong_arg_strict_mode_errors` is the canonical pin
+    // for this shape and stays the source of truth.
     // Same shape, but the arg type is wrong: pass String to a
     // Function<{Integer[1]->...}>. This MUST error — eval's T binds
     // to Integer from the FunctionType slot, then `param: T[n]` =
@@ -2521,8 +2522,17 @@ function test::pctRunner<Z|y>(
 }
 
 #[test]
-#[ignore = "Same root cause + same failed attempts as \
-            `function_type_one_arg_wrong_type_errors`."]
+#[ignore = "Z-prop audit (Item 3) finding: simple eval(f, 'wrong') is \
+            now caught by the ty_auth-driven auth/constraint split \
+            (function_type_one_arg_wrong_type_errors un-ignored), but \
+            the higher-order shape — where the type mismatch lives \
+            INSIDE a nested Function<{Function<{->String[1]}>[1]->\
+            Integer[1]}> slot — still doesn't error. The auth/constraint \
+            tracking propagates one level of FunctionType, not two. \
+            P1 follow-up: extend bind_type_with_mode to track the \
+            inside_structural depth so nested-FunctionType arg-type \
+            mismatches surface. Tracked under 'Authoritative vs \
+            constraint bindings — higher-order propagation' in BACKLOG."]
 fn function_type_higher_order_wrong_inner_type_errors() {
     // Same PCT shape, but the inner Function shape doesn't match the
     // PCT's expectation. `pct: Function<{Function<{->Integer[1]}>[1]->Integer[1]}>`
