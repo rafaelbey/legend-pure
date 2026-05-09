@@ -1809,6 +1809,109 @@ pub(crate) fn is_type_compatible(
     is_subtype(arg_eid, param_eid, model)
 }
 
+/// Type-arguments-aware structural compatibility check.
+///
+/// Like [`is_type_compatible`], but compares the **full** `TypeExpr` on
+/// both sides — including nested `type_arguments` and inner
+/// `FunctionType` shapes. Required for catching arg-type mismatches
+/// that live inside parametric wrappers (e.g.
+/// `Function<{Function<{->String}>->...}>` vs
+/// `Function<{Function<{->Integer}>->...}>`).
+///
+/// Decision tree:
+///
+/// 1. Outer-element check via [`is_type_compatible`]. If incompatible
+///    at the nominal level, return false (current behaviour).
+/// 2. Both sides `Named` with **same element** AND non-empty
+///    `type_arguments` on the param: recurse pairwise into
+///    `type_arguments`. A length mismatch is permissive (Pure allows
+///    unparametrised supertype refs to flow into parametrised
+///    contexts).
+/// 3. Both sides `FunctionType`: compare parameter count then recurse
+///    into each parameter pair plus the return type.
+/// 4. Otherwise fall back to the result of step 1 (compatible).
+///
+/// **Generic / FunctionType special cases stay permissive** — they're
+/// type holes that the caller's surrounding context fills in. Only
+/// concrete type-vs-type mismatches at the same structural position
+/// trigger a rejection.
+///
+/// **Why this isn't simply folded into `is_type_compatible`:** the
+/// existing function takes `Option<ElementId>` for the arg side, used
+/// by call sites that don't have a full `TypeExpr` (overload narrowing
+/// from element classifiers). Adding a structural variant keeps both
+/// surfaces honest.
+pub(crate) fn is_type_compatible_structural(
+    arg: &crate::types::TypeExpr,
+    param: &crate::types::TypeExpr,
+    model: &crate::model::PureModel,
+) -> bool {
+    use crate::types::TypeExpr;
+
+    let arg_eid = match arg {
+        TypeExpr::Named { element, .. } => Some(*element),
+        _ => None,
+    };
+    if !is_type_compatible(arg_eid, param, model) {
+        return false;
+    }
+
+    match (arg, param) {
+        (
+            TypeExpr::Named {
+                element: a_e,
+                type_arguments: a_args,
+                ..
+            },
+            TypeExpr::Named {
+                element: p_e,
+                type_arguments: p_args,
+                ..
+            },
+        ) if a_e == p_e && !p_args.is_empty() && !a_args.is_empty() => {
+            // Same outer element + both parametrised: recurse pairwise.
+            // Length mismatch stays permissive: a parametrised receiver
+            // arriving without explicit type-args (e.g. raw `List` flowing
+            // into `List<T>` slot) is the supertype-erasure case — the
+            // imprecise-inference detector at the call site already
+            // suppresses the error there.
+            if a_args.len() == p_args.len() {
+                for (a, p) in a_args.iter().zip(p_args.iter()) {
+                    if !is_type_compatible_structural(a, p, model) {
+                        return false;
+                    }
+                }
+            }
+            true
+        }
+        (
+            TypeExpr::FunctionType {
+                parameters: a_params,
+                return_type: a_ret,
+                ..
+            },
+            TypeExpr::FunctionType {
+                parameters: p_params,
+                return_type: p_ret,
+                ..
+            },
+        ) => {
+            // Structural FunctionType comparison. Different parameter
+            // counts are an outright mismatch.
+            if a_params.len() != p_params.len() {
+                return false;
+            }
+            for ((a_te, _), (p_te, _)) in a_params.iter().zip(p_params.iter()) {
+                if !is_type_compatible_structural(a_te, p_te, model) {
+                    return false;
+                }
+            }
+            is_type_compatible_structural(a_ret, p_ret, model)
+        }
+        _ => true,
+    }
+}
+
 /// Extract the structural relation columns from a `TypeExpr`, if any.
 ///
 /// Recognises both shapes the resolver produces:
