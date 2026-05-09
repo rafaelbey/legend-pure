@@ -306,6 +306,13 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
 /// the lookup is a `resolve_by_path` call rather than a compile-time constant.
 #[must_use]
 pub fn metatype_of(model: &crate::model::PureModel, element: &Element) -> Option<ElementId> {
+    // DSL instances carry their classifier FQN explicitly in the
+    // payload — resolve it directly rather than dispatching through the
+    // static metatype table.
+    if let Element::DSLInstance(d) = element {
+        let segments: Vec<SmolStr> = d.classifier_fqn.split("::").map(SmolStr::new).collect();
+        return model.resolve_by_path(&segments);
+    }
     let path: &[&str] = match element {
         Element::Class(_) => &["meta", "pure", "metamodel", "type", "Class"],
         Element::Enumeration(_) => &["meta", "pure", "metamodel", "type", "Enumeration"],
@@ -336,6 +343,8 @@ pub fn metatype_of(model: &crate::model::PureModel, element: &Element) -> Option
             "PackageableMultiplicity",
         ],
         Element::Package(_) => &["meta", "pure", "metamodel", "type", "Package"],
+        // Handled via early return above.
+        Element::DSLInstance(_) => unreachable!(),
     };
     let segments: Vec<SmolStr> = path.iter().map(|&s| SmolStr::new(s)).collect();
     model.resolve_by_path(&segments)

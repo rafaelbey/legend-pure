@@ -16,17 +16,25 @@
 //!
 //! The extension walks each parsed source file's `###Diagram`
 //! sections, downcasts every `Element::DSLElement` to `DiagramDef`,
-//! and registers it in extension-owned state keyed by FQN. Type
-//! references inside views (`TypeView.type_ref`,
-//! `AssociationView.association`, `PropertyView.property.class`)
-//! are validated against the [`PureModel`] in the `validate` pass.
+//! and registers each diagram in two parallel places:
 //!
-//! The extension stores its own diagram registry rather than
-//! contributing a `Box<dyn ModelDSLElement>` to `PureModel::Element`
-//! — that route requires adding a new variant to the compiled
-//! model enum and is deferred until cross-DSL references make it
-//! load-bearing. For Diagram alone, "extension-owned per-FQN
-//! storage" is sufficient and keeps the contract narrower.
+//! 1. **The model graph** as `Element::DSLInstance` — this carries the
+//!    diagram through `.purem` slice/merge automatically (the chunk
+//!    machinery handles it just like any `Class` or `Function`). The
+//!    payload is a Postcard-encoded [`DiagramSnapshot`] keyed by the
+//!    `"Diagram"` DSL name.
+//! 2. **Extension-owned state** (the legacy [`Self::diagrams`]
+//!    `RefCell<HashMap>`) — kept for now so existing in-process
+//!    consumers (tests, codegen, validate pass) keep working without
+//!    a forced migration. Reads via [`Self::diagrams`] return whatever
+//!    the in-process compile registered; reads via
+//!    [`Self::diagrams_from_model`] decode from the graph and survive
+//!    `.purem` round-trips.
+//!
+//! The dual-write keeps validate-pass logic intact (it still walks
+//! the rich AST for source-info-bearing diagnostics) while making
+//! `.purem` round-trips first-class. Migrating consumers to the
+//! graph-walk side and deleting the `RefCell` is follow-up work.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -36,11 +44,19 @@ use legend_pure_parser_ast::element::PackageableElement;
 use legend_pure_parser_pure::error::{CompilationError, CompilationErrorKind};
 use legend_pure_parser_pure::extension::{CompilerExtension, DeclareCtx, DefineCtx, ValidateCtx};
 use legend_pure_parser_pure::ids::ElementId;
-use legend_pure_parser_pure::model::Element as ModelElement;
-use legend_pure_parser_pure::model::PureModel;
+use legend_pure_parser_pure::model::{
+    DSLInstance, Element as ModelElement, ElementNode, PureModel,
+};
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 use crate::ast::{DiagramDef, DiagramView};
+
+/// Stable name used to key Diagram payloads in `Element::DSLInstance`.
+pub const DIAGRAM_DSL_NAME: &str = "Diagram";
+
+/// FQN of the M3 metaclass `Diagram` instances are typed against.
+pub const DIAGRAM_CLASSIFIER_FQN: &str = "meta::pure::diagram::Diagram";
 
 /// Compiler extension for the Diagram DSL.
 ///
@@ -64,6 +80,103 @@ pub struct RegisteredDiagram {
     pub fqn: SmolStr,
 }
 
+/// Compiled, serializable form of a Diagram — what survives a `.purem`
+/// round-trip.
+///
+/// The pilot intentionally captures only the **identifying** data
+/// (FQN + classifier + per-view summary). Lossless `DiagramDef`
+/// preservation through `.purem` is follow-up work and would need a
+/// matching set of serializable view-summary types; it is not
+/// load-bearing for the current pilot, whose job is to demonstrate the
+/// `Element::DSLInstance` round-trip end-to-end.
+///
+/// The view summaries are deliberately string-based (`view_kind` is
+/// the textual tag, `target_fqn` the FQN of the referenced element).
+/// This keeps the snapshot decoupled from `legend-pure-parser-ast`'s
+/// non-serde types (`Identifier`, `TypeReference`, `SourceInfo`,
+/// `SpannedString`) so the architectural rule "ast crate has no serde"
+/// stays intact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiagramSnapshot {
+    /// FQN this snapshot's diagram lives at, e.g.
+    /// `"model::test::TinyDiagram"`.
+    pub fqn: SmolStr,
+    /// Per-view summary — kind tag + optional referenced FQN. The
+    /// referenced FQN is `None` for `GeneralizationView` (which only
+    /// references local TypeView ids, not model elements).
+    pub views: Vec<DiagramViewSnapshot>,
+}
+
+/// One view's compiled-form summary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiagramViewSnapshot {
+    /// Discriminator: `"TypeView"`, `"AssociationView"`, `"PropertyView"`,
+    /// `"GeneralizationView"`.
+    pub view_kind: SmolStr,
+    /// Local id of the view inside its diagram (referenced by `source=`
+    /// / `target=` in edges).
+    pub local_id: SmolStr,
+    /// FQN of the referenced model element. `None` for views whose
+    /// reference is non-element (e.g. `GeneralizationView`'s
+    /// source/target are local TypeView ids, not model elements).
+    pub target_fqn: Option<SmolStr>,
+}
+
+impl DiagramSnapshot {
+    /// Build a snapshot from an in-memory `DiagramDef` AST.
+    #[must_use]
+    pub fn from_def(def: &DiagramDef, fqn: SmolStr) -> Self {
+        let views = def
+            .views
+            .iter()
+            .map(|v| match v {
+                DiagramView::Type(t) => DiagramViewSnapshot {
+                    view_kind: SmolStr::new("TypeView"),
+                    local_id: t.id.clone(),
+                    target_fqn: Some(SmolStr::new(t.type_ref.full_path())),
+                },
+                DiagramView::Association(a) => DiagramViewSnapshot {
+                    view_kind: SmolStr::new("AssociationView"),
+                    local_id: a.id.clone(),
+                    target_fqn: Some(SmolStr::new(a.association.full_path())),
+                },
+                DiagramView::Property(p) => DiagramViewSnapshot {
+                    view_kind: SmolStr::new("PropertyView"),
+                    local_id: p.id.clone(),
+                    target_fqn: Some(SmolStr::new(format!(
+                        "{}.{}",
+                        p.property.class.full_path(),
+                        p.property.property
+                    ))),
+                },
+                DiagramView::Generalization(g) => DiagramViewSnapshot {
+                    view_kind: SmolStr::new("GeneralizationView"),
+                    local_id: g.id.clone(),
+                    target_fqn: None,
+                },
+            })
+            .collect();
+        Self { fqn, views }
+    }
+
+    /// Encode for storage in `Element::DSLInstance.data`.
+    ///
+    /// # Errors
+    /// Postcard never fails on well-typed inputs in practice, but the
+    /// error is propagated rather than panicking.
+    pub fn encode(&self) -> Result<Vec<u8>, postcard::Error> {
+        postcard::to_allocvec(self)
+    }
+
+    /// Decode a payload produced by [`Self::encode`].
+    ///
+    /// # Errors
+    /// Returns the underlying Postcard error on corrupt or truncated input.
+    pub fn decode(bytes: &[u8]) -> Result<Self, postcard::Error> {
+        postcard::from_bytes(bytes)
+    }
+}
+
 impl DiagramExtension {
     /// Construct an empty extension.
     #[must_use]
@@ -71,11 +184,45 @@ impl DiagramExtension {
         Self::default()
     }
 
-    /// Snapshot of all registered diagrams keyed by FQN. Useful for
-    /// tests, codegen, and CLI inspection after compile completes.
+    /// Snapshot of all registered diagrams keyed by FQN. Returns the
+    /// extension's in-process state — use this immediately after a
+    /// fresh compile to see the rich AST. After a `.purem` round-trip
+    /// this map is empty; use [`Self::diagrams_from_model`] instead.
     #[must_use]
     pub fn diagrams(&self) -> HashMap<SmolStr, RegisteredDiagram> {
         self.diagrams.borrow().clone()
+    }
+
+    /// Snapshot of all registered diagrams **as graph elements** —
+    /// walks `model.elements()` for `Element::DSLInstance` entries
+    /// keyed `"Diagram"` and decodes each payload.
+    ///
+    /// Survives `.purem` slice/merge: every diagram registered during
+    /// the original compile reappears here after a fresh model is
+    /// built from a serialised slice.
+    ///
+    /// Returns `(fqn, snapshot)` pairs in iteration order over the
+    /// model's chunks. Decoding errors are dropped silently — a
+    /// well-formed `.purem` will never produce them, and a corrupt
+    /// payload should already have been caught by the writer's schema
+    /// hash on read.
+    #[must_use]
+    pub fn diagrams_from_model(model: &PureModel) -> Vec<(SmolStr, DiagramSnapshot)> {
+        let mut out = Vec::new();
+        for chunk in &model.chunks {
+            for (_, element) in chunk.elements.iter() {
+                let ModelElement::DSLInstance(d) = element else {
+                    continue;
+                };
+                if d.dsl_name.as_str() != DIAGRAM_DSL_NAME {
+                    continue;
+                }
+                if let Ok(snapshot) = DiagramSnapshot::decode(&d.data) {
+                    out.push((snapshot.fqn.clone(), snapshot));
+                }
+            }
+        }
+        out
     }
 }
 
@@ -86,6 +233,12 @@ impl CompilerExtension for DiagramExtension {
 
     fn declare(&self, ctx: &mut DeclareCtx<'_>) {
         let mut registry = self.diagrams.borrow_mut();
+        // Pass 1 has already created (or reused) the slice's chunk
+        // and pushed it onto `model.chunks`. The just-created chunk
+        // is the last one — we allocate `Element::DSLInstance` rows
+        // there alongside the M3 elements from the same source file.
+        let chunk_id = (ctx.model.chunks.len().saturating_sub(1)) as u16;
+
         for source_file in ctx.source_files {
             for section in &source_file.sections {
                 if section.kind.as_str() != crate::ast::SECTION_KIND {
@@ -100,22 +253,76 @@ impl CompilerExtension for DiagramExtension {
                     };
 
                     let fqn = build_fqn(d);
-                    if let Some(prev) = registry.insert(
+                    if registry.contains_key(&fqn) {
+                        ctx.errors.push(CompilationError {
+                            message: format!("Duplicate diagram '{fqn}'"),
+                            source_info: d.source_info.clone(),
+                            kind: CompilationErrorKind::DuplicateElement { name: fqn.clone() },
+                        });
+                        // First registration wins; skip the second so we
+                        // don't double-register the graph element either.
+                        continue;
+                    }
+
+                    // Dual-write 1/2 — extension RefCell (existing API).
+                    registry.insert(
                         fqn.clone(),
                         RegisteredDiagram {
                             def: d.clone(),
                             fqn: fqn.clone(),
                         },
-                    ) {
-                        ctx.errors.push(CompilationError {
-                            message: format!("Duplicate diagram '{fqn}'"),
+                    );
+
+                    // Dual-write 2/2 — model graph as `Element::DSLInstance`.
+                    // Encodes a `DiagramSnapshot` so the diagram round-
+                    // trips through `.purem` slice/merge alongside every
+                    // M3 element without any new serialisation surface.
+                    let snapshot = DiagramSnapshot::from_def(d, fqn.clone());
+                    let data = match snapshot.encode() {
+                        Ok(bytes) => bytes,
+                        Err(e) => {
+                            ctx.errors.push(CompilationError {
+                                message: format!(
+                                    "Failed to encode DiagramSnapshot for '{fqn}': {e}"
+                                ),
+                                source_info: d.source_info.clone(),
+                                kind: CompilationErrorKind::DuplicateElement {
+                                    name: fqn.clone(),
+                                },
+                            });
+                            continue;
+                        }
+                    };
+
+                    let pkg_path = pkg_segments(d);
+                    let package_id = if pkg_path.is_empty() {
+                        ctx.model.root_package
+                    } else {
+                        ctx.model.get_or_create_package(&pkg_path)
+                    };
+
+                    let chunk = match ctx.model.chunks.get_mut(chunk_id as usize) {
+                        Some(c) => c,
+                        None => continue, // pathological: no chunk yet
+                    };
+                    let local_idx = chunk.alloc_element(
+                        ElementNode {
+                            name: d.name.value.clone(),
                             source_info: d.source_info.clone(),
-                            kind: CompilationErrorKind::DuplicateElement { name: fqn },
-                        });
-                        // Restore prior registration so subsequent
-                        // passes still see the earlier definition.
-                        registry.insert(prev.fqn.clone(), prev);
-                    }
+                            name_source_info: d.name.source_info.clone(),
+                            parent_package: package_id,
+                        },
+                        ModelElement::DSLInstance(DSLInstance {
+                            dsl_name: SmolStr::new(DIAGRAM_DSL_NAME),
+                            classifier_fqn: SmolStr::new(DIAGRAM_CLASSIFIER_FQN),
+                            data,
+                        }),
+                    );
+                    let id = ElementId::InstanceId {
+                        chunk_id,
+                        local_idx,
+                    };
+                    ctx.model.register_element(package_id, id);
                 }
             }
         }
@@ -326,5 +533,14 @@ fn build_fqn(d: &DiagramDef) -> SmolStr {
         SmolStr::new(format!("{pkg}::{}", d.name.value))
     } else {
         d.name.value.clone()
+    }
+}
+
+/// Package path as `Vec<SmolStr>` segments for
+/// [`PureModel::get_or_create_package`].
+fn pkg_segments(d: &DiagramDef) -> Vec<SmolStr> {
+    match d.package() {
+        Some(pkg) => pkg.segments().into_iter().cloned().collect(),
+        None => Vec::new(),
     }
 }

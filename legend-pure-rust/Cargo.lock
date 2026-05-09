@@ -1275,6 +1275,8 @@ dependencies = [
  "legend-pure-parser-lexer",
  "legend-pure-parser-parser",
  "legend-pure-parser-pure",
+ "postcard",
+ "serde",
  "smol_str",
  "thiserror 2.0.18",
 ]
