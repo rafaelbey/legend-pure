@@ -76,6 +76,7 @@ fn synthetic_user_repo(user_source: &str) -> Repo {
             content: user_source.into(),
         }],
         meta: Some(meta),
+        source_root: None,
     }
 }
 

@@ -261,8 +261,9 @@ impl LanguageServer for Backend {
         let Some(canonical) = ws.canonical_path_for(&uri) else {
             return Ok(None);
         };
+        let resolver = |c: &str| ws.file_uri_for_canonical(c);
         Ok(
-            handlers::definition_for_position(model, &canonical, position, &uri)
+            handlers::definition_for_position(model, &canonical, position, &uri, &resolver)
                 .map(GotoDefinitionResponse::Scalar),
         )
     }

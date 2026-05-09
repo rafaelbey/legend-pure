@@ -33,7 +33,7 @@
 //!   reserved by the enum's exhaustiveness contract; see
 //!   `docs/PUREM_FORMAT.md`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use legend_pure_parser_ast::SourceInfo;
@@ -150,6 +150,14 @@ pub enum Repo {
         /// Descriptor metadata, populated when the repo was built from
         /// a descriptor JSON; `None` when built via [`Repo::from_filesystem`].
         meta: Option<RepoMeta>,
+        /// Absolute path to the directory the repo was loaded from.
+        /// Populated by [`Repo::from_descriptor`] / [`Repo::from_filesystem`];
+        /// `None` for synthetic in-memory repos that were built without
+        /// touching the filesystem (test fixtures). Consumers needing
+        /// a canonical-path → on-disk URL mapping (LSP goto-definition,
+        /// IDE outline-jump) read this; `None` means "this repo is not
+        /// addressable on disk".
+        source_root: Option<PathBuf>,
     },
     /// Pre-compiled `.purem` snapshot. The blob is the output of
     /// [`legend_pure_parser_pure::purem::write_repo`]; loading is a
@@ -279,6 +287,7 @@ impl Repo {
             prefix,
             files,
             meta: Some(meta),
+            source_root: Some(source_root),
         })
     }
 
@@ -308,6 +317,7 @@ impl Repo {
             prefix,
             files,
             meta: None,
+            source_root: Some(root.to_path_buf()),
         })
     }
 
@@ -432,6 +442,19 @@ impl Repo {
         match self {
             Self::Purem { blob, .. } => Some(blob),
             Self::Embedded { .. } | Self::Filesystem { .. } => None,
+        }
+    }
+
+    /// Absolute path to the directory the repo was loaded from. `Some`
+    /// only for [`Repo::Filesystem`] variants whose constructor
+    /// recorded it ([`Repo::from_descriptor`] / [`Repo::from_filesystem`]).
+    /// Used by IDE tooling to map canonical URLs back to on-disk paths
+    /// for cross-file goto-definition.
+    #[must_use]
+    pub fn source_root(&self) -> Option<&Path> {
+        match self {
+            Self::Filesystem { source_root, .. } => source_root.as_deref(),
+            Self::Embedded { .. } | Self::Purem { .. } => None,
         }
     }
 
