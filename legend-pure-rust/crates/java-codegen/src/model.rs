@@ -341,5 +341,6 @@ pub(crate) fn element_kind(e: &Element) -> &'static str {
         Element::Unit(_) => "Unit",
         Element::PackageableMultiplicity(_) => "Multiplicity",
         Element::Package(_) => "Package",
+        Element::DSLInstance(_) => "DSLInstance",
     }
 }

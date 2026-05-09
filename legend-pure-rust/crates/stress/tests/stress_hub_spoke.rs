@@ -152,7 +152,8 @@ fn validate_model(
                 Element::Unit(_) => units += 1,
                 Element::PrimitiveType(_)
                 | Element::PackageableMultiplicity(_)
-                | Element::Package(_) => {} // bootstrap only
+                | Element::Package(_)
+                | Element::DSLInstance(_) => {} // bootstrap / DSL — out of scope
             }
         }
     }

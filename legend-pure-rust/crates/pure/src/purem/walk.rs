@@ -105,6 +105,20 @@ fn walk_element_ids_inner(element: &mut Element, visit: &mut dyn FnMut(&mut Elem
         Element::Package(_) => {
             // Package entries hold a PackageId, not an element-level ref.
         }
+        Element::DSLInstance(_) => {
+            // DSL instances carry an opaque Postcard payload that the
+            // contributing DSL extension owns. The Pure walker doesn't
+            // know its shape and therefore can't visit any ElementId
+            // refs inside it. Two consequences worth flagging:
+            //
+            // 1. Cross-element references inside a DSL payload are not
+            //    redirected on slice/merge — DSLs that need cross-repo
+            //    refs must encode them as FQNs themselves.
+            // 2. The slice/merge `external_refs` table is M3-only.
+            //
+            // Both are acceptable for the current Diagram pilot
+            // (diagrams reference Classes by FQN already in their AST).
+        }
     }
 }
 

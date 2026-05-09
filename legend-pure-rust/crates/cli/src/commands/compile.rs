@@ -259,7 +259,8 @@ fn print_success_stats(
                 Element::Unit(_) => unit_count += 1,
                 Element::PrimitiveType(_)
                 | Element::PackageableMultiplicity(_)
-                | Element::Package(_) => {}
+                | Element::Package(_)
+                | Element::DSLInstance(_) => {}
             }
         }
     }

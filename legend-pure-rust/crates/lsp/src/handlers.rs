@@ -114,6 +114,7 @@ fn render_element_label(model: &PureModel, id: ElementId) -> Option<String> {
         Element::Unit(_) => "unit",
         Element::PackageableMultiplicity(_) => "multiplicity",
         Element::Package(_) => "package",
+        Element::DSLInstance(d) => return Some(format!("**{}** `{}`", d.dsl_name, model.element_name(id))),
     };
     let name = model.element_name(id);
     Some(format!("**{label}** `{name}`"))
@@ -264,6 +265,7 @@ fn symbol_kind_for(element: &Element) -> SymbolKind {
         Element::Unit(_) => SymbolKind::CONSTANT,
         Element::PackageableMultiplicity(_) => SymbolKind::CONSTANT,
         Element::Package(_) => SymbolKind::PACKAGE,
+        Element::DSLInstance(_) => SymbolKind::OBJECT,
     }
 }
 

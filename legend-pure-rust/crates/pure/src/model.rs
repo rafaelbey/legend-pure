@@ -123,6 +123,54 @@ pub enum Element {
     /// This variant carries the `PackageId` so `get_element` works uniformly
     /// for all `ElementId` variants.
     Package(PackageId),
+
+    /// A DSL-defined instance (Diagram, Mapping, Database, …).
+    ///
+    /// First-class graph citizen for DSL crates: an `Element::DSLInstance`
+    /// is allocated in a chunk and registered in its package, just like a
+    /// `Class` or `Function`, so it round-trips through `.purem` slice/merge
+    /// for free. The payload itself is **opaque** to the Pure compiler —
+    /// only the contributing DSL extension knows how to decode `data`.
+    ///
+    /// `dsl_name` keys the registry (`"Diagram"`, `"Mapping"`,
+    /// `"RelationalDatabase"`, …); `classifier_fqn` is the FQN of the M3
+    /// metaclass this instance is an instance of (e.g.
+    /// `"meta::pure::diagram::Diagram"`); `data` is whatever Postcard-
+    /// serialised payload the DSL crate produced.
+    ///
+    /// Adding a DSL instance to the graph is the alternative to side-car
+    /// `extension_arenas` — it inverts the BACKLOG framing: instead of
+    /// per-extension `RefCell<HashMap>` state that gets dropped on
+    /// slice/merge, DSL data rides through the chunk machinery alongside
+    /// every other element.
+    DSLInstance(DSLInstance),
+}
+
+// ---------------------------------------------------------------------------
+// DSLInstance — opaque-bytes payload for DSL-defined elements
+// ---------------------------------------------------------------------------
+
+/// A DSL-defined instance carried opaquely in `Element::DSLInstance`.
+///
+/// The Pure crate doesn't deserialise `data` — that's the contributing
+/// DSL extension's job. To enumerate diagrams, callers walk
+/// `model.elements()` filtering on `dsl_name == "Diagram"` and call into
+/// `legend_pure_dsl_diagram` to decode each payload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DSLInstance {
+    /// Stable DSL identifier — `"Diagram"`, `"Mapping"`,
+    /// `"RelationalDatabase"`, etc. Matches `ast::DSLElement::kind()`.
+    pub dsl_name: SmolStr,
+
+    /// FQN of the M3 metaclass this instance is an instance of, e.g.
+    /// `"meta::pure::diagram::Diagram"`. Used for type-system
+    /// classification (`getAll(Diagram)` returns these) without forcing
+    /// every consumer to decode `data`.
+    pub classifier_fqn: SmolStr,
+
+    /// DSL-specific Postcard-encoded payload. Pure-core treats this as
+    /// opaque bytes; only the named DSL knows the type.
+    pub data: Vec<u8>,
 }
 
 // ---------------------------------------------------------------------------
@@ -410,7 +458,13 @@ impl PureModel {
                     | Element::Unit(_)
                     | Element::PrimitiveType(_)
                     | Element::PackageableMultiplicity(_)
-                    | Element::Package(_) => {}
+                    | Element::Package(_)
+                    | Element::DSLInstance(_) => {
+                        // DSL instances carry opaque payloads; no
+                        // M3-level edges to register here. DSL crates
+                        // build their own indexes by walking
+                        // `Element::DSLInstance` themselves.
+                    }
                 }
             }
         }
