@@ -2522,18 +2522,15 @@ function test::pctRunner<Z|y>(
 }
 
 #[test]
-#[ignore = "Z-prop audit (Item 3) finding: simple eval(f, 'wrong') is \
-            now caught by the ty_auth-driven auth/constraint split \
-            (function_type_one_arg_wrong_type_errors un-ignored), but \
-            the higher-order shape — where the type mismatch lives \
-            INSIDE a nested Function<{Function<{->String[1]}>[1]->\
-            Integer[1]}> slot — still doesn't error. The auth/constraint \
-            tracking propagates one level of FunctionType, not two. \
-            P1 follow-up: extend bind_type_with_mode to track the \
-            inside_structural depth so nested-FunctionType arg-type \
-            mismatches surface. Tracked under 'Authoritative vs \
-            constraint bindings — higher-order propagation' in BACKLOG."]
 fn function_type_higher_order_wrong_inner_type_errors() {
+    // Driving test for `is_type_compatible_structural` (Item 3 wiring,
+    // commit pending). The mismatch lives inside a nested
+    // `Function<{Function<{->String[1]}>[1]->Integer[1]}>` slot. The
+    // earlier `is_type_compatible` only compared outer element ids
+    // (Function == Function → compatible), so the inner FunctionType
+    // mismatch (String vs Integer return) was invisible. The
+    // structural variant recurses through type_arguments and inner
+    // FunctionTypes and rejects this.
     // Same PCT shape, but the inner Function shape doesn't match the
     // PCT's expectation. `pct: Function<{Function<{->Integer[1]}>[1]->Integer[1]}>`
     // shouldn't accept an `f: Function<{->String[1]}>`. With eval's

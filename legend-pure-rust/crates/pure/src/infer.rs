@@ -979,7 +979,17 @@ fn validate_call_arguments(
         if arg_eid == Some(bootstrap::NIL_ID) {
             continue;
         }
-        if !crate::resolve::is_type_compatible(arg_eid, &param_te, ctx.model) {
+        // Structural compat (type-arguments-aware). Catches mismatches
+        // that live inside parametric wrappers — `Function<{Function<{
+        // ->String}>->…}>` vs `Function<{Function<{->Integer}>->…}>`
+        // at nested depth. The previous nominal-only check
+        // (`is_type_compatible`) considered these compatible because
+        // the outer element id matches.
+        if !crate::resolve::is_type_compatible_structural(
+            &arg_ty.type_expr,
+            &param_te,
+            ctx.model,
+        ) {
             let arg_name = arg_eid
                 .map(|e| ctx.model.element_name(e).to_string())
                 .unwrap_or_else(|| "<unknown>".to_string());
