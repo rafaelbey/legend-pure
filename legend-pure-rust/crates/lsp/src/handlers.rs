@@ -137,12 +137,19 @@ fn render_element_label(model: &PureModel, id: ElementId) -> Option<String> {
 /// identifier-only span) rather than the full element body, so
 /// IntelliJ highlights the name on goto-def, not the entire
 /// declaration.
-#[must_use]
+///
+/// `uri_for_canonical` resolves a target's canonical source path
+/// (the compiler's `/repo/file.pure` form) to an on-disk
+/// `file://` URL when the target lives in a different file from
+/// the click. Callers wired to a [`crate::workspace::Workspace`]
+/// pass `&|c| ws.file_uri_for_canonical(c)`; tests that don't
+/// care about cross-file goto can pass `&|_| None`.
 pub fn definition_for_position(
     model: &PureModel,
     canonical_path: &str,
     position: Position,
     file_uri: &Url,
+    uri_for_canonical: &dyn Fn(&str) -> Option<Url>,
 ) -> Option<Location> {
     let (line, column) = convert::position_to_1indexed(position);
     let located = model.locate(canonical_path, line, column)?;
@@ -150,13 +157,13 @@ pub fn definition_for_position(
     // Try to resolve the cursor's specific symbol target first.
     if let LocatedKind::ValueSpec(vs) = located.kind
         && let Some(target) = resolve_value_spec_target(vs)
-        && let Some(loc) = element_location(model, target, file_uri)
+        && let Some(loc) = element_location(model, target, file_uri, uri_for_canonical)
     {
         return Some(loc);
     }
 
     // Fallback: jump to the owning element's name span.
-    element_location(model, located.element, file_uri)
+    element_location(model, located.element, file_uri, uri_for_canonical)
 }
 
 /// If a [`ValueSpec`] kind directly references a resolved element,
@@ -180,33 +187,47 @@ fn resolve_value_spec_target(vs: &legend_pure_parser_pure::types::ValueSpec) -> 
 }
 
 /// Return a [`Location`] pointing at an element's name span. Returns
-/// None for invalid IDs or Package targets (Packages have no source
+/// `None` for invalid IDs or Package targets (Packages have no source
 /// of their own that's worth navigating to).
 ///
-/// The URI returned is the **click-origin** URI rather than the
-/// target's canonical source path. This means same-file goto-def
-/// works (jumping from a body back to the function header, or from
-/// a use-site to a sibling declaration in the same file). Cross-file
-/// goto-def — e.g. clicking on `String` to jump into the platform
-/// repo — requires mapping the target's canonical path back to a
-/// real on-disk URL, which needs `Repo::Filesystem` to retain its
-/// `source_root` (it currently doesn't). Tracked as a follow-up.
-fn element_location(model: &PureModel, id: ElementId, file_uri: &Url) -> Option<Location> {
-    model.try_get_element(id)?;
+/// Two paths:
+///
+/// - **Same-file** — the target's canonical source path is a suffix
+///   of the click URI's filesystem path. The click URI is reused so
+///   the IDE keeps focus on the buffer the user is editing
+///   (matters for unsaved-buffer goto-def).
+/// - **Cross-file** — the target lives in a different file. We ask
+///   `uri_for_canonical` to map the canonical to a real on-disk URL
+///   (open buffer first, then `Repo::Filesystem::source_root`).
+///   Returns `None` when the target's repo has no on-disk source
+///   (embedded / `.purem`) — IDEs can't open something that doesn't
+///   exist on disk.
+fn element_location(
+    model: &PureModel,
+    id: ElementId,
+    file_uri: &Url,
+    uri_for_canonical: &dyn Fn(&str) -> Option<Url>,
+) -> Option<Location> {
+    if model.try_get_element(id).is_none() {
+        return None;
+    }
     if matches!(id, ElementId::Package(_)) {
         return None;
     }
     let node = model.get_node(id);
-    // Only navigate when the target is in the same file as the
-    // click — otherwise we'd return a `file://<canonical>` URI that
-    // doesn't exist on disk and the IDE silently fails to open it.
-    let click_path = file_uri.to_file_path().ok()?;
-    let canonical_tail = node.source_info.source.trim_start_matches('/');
-    if !click_path.ends_with(canonical_tail) {
-        return None;
-    }
+    let target_canonical = node.source_info.source.as_str();
+    let target_uri = if let Ok(click_path) = file_uri.to_file_path()
+        && click_path.ends_with(target_canonical.trim_start_matches('/'))
+    {
+        // Same-file goto: keep the click URI (preserves unsaved buffer).
+        file_uri.clone()
+    } else {
+        // Cross-file goto: ask the workspace where this canonical
+        // lives on disk.
+        uri_for_canonical(target_canonical)?
+    };
     Some(Location {
-        uri: file_uri.clone(),
+        uri: target_uri,
         range: range_from_source_info(&node.name_source_info),
     })
 }
@@ -438,10 +459,91 @@ mod tests {
         // name span (just the function-name identifier, not the whole
         // body). For `function test::greet(...)` the name `greet`
         // starts at line 1 col 16 (1-indexed) → 0-indexed col 15.
-        let loc = definition_for_position(&model, "fixture.pure", pos(2, 2), &uri)
+        let no_cross_file: &dyn Fn(&str) -> Option<Url> = &|_| None;
+        let loc = definition_for_position(&model, "fixture.pure", pos(2, 2), &uri, no_cross_file)
             .expect("definition must resolve");
         assert_eq!(loc.range.start.line, 0);
         assert_eq!(loc.range.start.character, 15);
+    }
+
+    /// Verifies the cross-file branch of `element_location`: when the
+    /// click URI's filesystem path doesn't match the target's
+    /// canonical, the resolver is consulted and its URL is returned
+    /// verbatim.
+    ///
+    /// Built manually instead of through `compile_fixture` because
+    /// `pipeline::compile` on bare fixtures (without the platform)
+    /// produces a partial model whose function bodies haven't been
+    /// lowered to ValueSpecs — so `locate` can't find a navigable
+    /// expression at a call site to drive the integration path. The
+    /// unit test exercises the same `element_location` code path the
+    /// integration would hit once body-lowering survives partial
+    /// compiles.
+    #[test]
+    fn element_location_uses_resolver_for_cross_file_target() {
+        use legend_pure_parser_ast::SourceInfo;
+        use legend_pure_parser_pure::ids::ElementId;
+        use legend_pure_parser_pure::model::{
+            Element as ModelElement, ElementNode, ModelChunk, PureModel,
+        };
+        use legend_pure_parser_pure::nodes::function::Function;
+        use legend_pure_parser_pure::types::{Multiplicity, TypeExpr};
+
+        let mut model = PureModel::new();
+        let test_pkg = model.get_or_create_package(&[smol_str::SmolStr::new("test")]);
+
+        let chunk_id: u16 = 0;
+        let mut chunk = ModelChunk::new(chunk_id);
+        // Function declared in lib.pure (different file from the click).
+        let lib_si = SourceInfo::new("/proj/lib.pure", 1, 1, 4, 1);
+        let name_si = SourceInfo::new("/proj/lib.pure", 1, 16, 1, 21);
+        let func_idx = chunk.alloc_element(
+            ElementNode {
+                name: smol_str::SmolStr::new("greet__String_1_"),
+                source_info: lib_si,
+                name_source_info: name_si,
+                parent_package: test_pkg,
+            },
+            ModelElement::Function(Function {
+                function_name: smol_str::SmolStr::new("greet"),
+                is_native: false,
+                parameters: std::sync::Arc::from(Vec::new()),
+                return_type: TypeExpr::Unresolved,
+                return_multiplicity: Multiplicity::PureOne,
+                body: std::sync::Arc::from(Vec::new()),
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+            }),
+        );
+        let func_id = ElementId::InstanceId {
+            chunk_id,
+            local_idx: func_idx,
+        };
+        model.chunks.push(chunk);
+        model.register_element(test_pkg, func_id);
+
+        // Click happened in app.pure; target lives in lib.pure.
+        let app_uri = Url::parse("file:///abs/proj/app.pure").unwrap();
+        let lib_disk_uri = Url::parse("file:///abs/proj/lib.pure").unwrap();
+
+        let lib_disk_uri_clone = lib_disk_uri.clone();
+        let resolver: &dyn Fn(&str) -> Option<Url> = &move |canonical: &str| {
+            (canonical == "/proj/lib.pure").then(|| lib_disk_uri_clone.clone())
+        };
+
+        let loc = element_location(&model, func_id, &app_uri, resolver)
+            .expect("cross-file element_location must resolve");
+        assert_eq!(loc.uri, lib_disk_uri);
+        // Range comes from the target's name span — col 16 (1-indexed)
+        // → 0-indexed col 15.
+        assert_eq!(loc.range.start.line, 0);
+        assert_eq!(loc.range.start.character, 15);
+
+        // And: when the resolver returns None for a cross-file target,
+        // element_location returns None (no phantom click-URI fallback
+        // to a wrong file).
+        let dead_resolver: &dyn Fn(&str) -> Option<Url> = &|_| None;
+        assert!(element_location(&model, func_id, &app_uri, dead_resolver).is_none());
     }
 
     #[test]

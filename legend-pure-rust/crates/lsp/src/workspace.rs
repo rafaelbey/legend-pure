@@ -154,6 +154,52 @@ impl Workspace {
         }
         None
     }
+
+    /// Inverse of [`Self::canonical_path_for`]: given a canonical
+    /// source path the compiler emits (e.g. `/user_proj/foo/bar.pure`),
+    /// produce a `file://` URL the IDE can navigate to.
+    ///
+    /// Resolution order:
+    /// 1. If an open buffer's URL maps to this canonical (via
+    ///    [`Self::canonical_path_for`]), reuse its URL.
+    /// 2. Walk [`Self::base_repos`] for a [`Repo::Filesystem`] whose
+    ///    `prefix` matches the canonical's leading segment AND whose
+    ///    `source_root` was populated. Reconstruct the on-disk path
+    ///    as `source_root.join(canonical[prefix.len()..])`.
+    ///
+    /// Returns `None` for canonicals served from [`Repo::Embedded`] /
+    /// [`Repo::Purem`] (no on-disk source) or filesystem repos built
+    /// without a `source_root` (synthetic test fixtures).
+    #[must_use]
+    pub fn file_uri_for_canonical(&self, canonical: &str) -> Option<Url> {
+        for uri in self.open_buffers.keys() {
+            if self.canonical_path_for(uri).as_deref() == Some(canonical) {
+                return Some(uri.clone());
+            }
+        }
+        for repo in &self.base_repos {
+            let Repo::Filesystem {
+                prefix,
+                source_root,
+                ..
+            } = repo
+            else {
+                continue;
+            };
+            let Some(root) = source_root else { continue };
+            let Some(rel) = canonical.strip_prefix(prefix.as_str()) else {
+                continue;
+            };
+            // Strip the leading '/' so `join` treats `rel` as relative
+            // — otherwise `join("/abs")` discards the root.
+            let rel = rel.trim_start_matches('/');
+            let disk = root.join(rel);
+            if let Ok(url) = Url::from_file_path(&disk) {
+                return Some(url);
+            }
+        }
+        None
+    }
 }
 
 /// Summary of a compile pass; full per-source diagnostics live on
@@ -162,4 +208,97 @@ impl Workspace {
 pub struct CompileOutcome {
     /// Total number of errors produced.
     pub error_count: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use legend_pure_core_platform::repo::OwnedSourceFile;
+    use std::path::PathBuf;
+
+    fn fs_repo_with_root(prefix: &str, source_root: PathBuf, files: Vec<&str>) -> Repo {
+        let owned = files
+            .into_iter()
+            .map(|p| OwnedSourceFile {
+                path: p.to_string(),
+                content: String::new(),
+            })
+            .collect();
+        Repo::Filesystem {
+            prefix: prefix.to_string(),
+            files: owned,
+            meta: None,
+            source_root: Some(source_root),
+        }
+    }
+
+    #[test]
+    fn file_uri_for_canonical_resolves_via_source_root() {
+        // /tmp/proj/lib.pure is the on-disk file; canonical is /proj/lib.pure
+        let repo = fs_repo_with_root(
+            "/proj",
+            PathBuf::from("/tmp/proj"),
+            vec!["/proj/lib.pure", "/proj/sub/foo.pure"],
+        );
+        let ws = Workspace::new(vec![repo], Vec::new());
+
+        let url = ws
+            .file_uri_for_canonical("/proj/lib.pure")
+            .expect("filesystem repo with source_root must resolve");
+        assert_eq!(url.scheme(), "file");
+        assert!(
+            url.path().ends_with("/tmp/proj/lib.pure"),
+            "got path: {}",
+            url.path()
+        );
+
+        let nested = ws
+            .file_uri_for_canonical("/proj/sub/foo.pure")
+            .expect("nested canonical must resolve");
+        assert!(nested.path().ends_with("/tmp/proj/sub/foo.pure"));
+    }
+
+    #[test]
+    fn file_uri_for_canonical_returns_none_without_source_root() {
+        // Synthetic test fixture: source_root is None.
+        let repo = Repo::Filesystem {
+            prefix: "/proj".to_string(),
+            files: vec![OwnedSourceFile {
+                path: "/proj/x.pure".into(),
+                content: String::new(),
+            }],
+            meta: None,
+            source_root: None,
+        };
+        let ws = Workspace::new(vec![repo], Vec::new());
+        assert!(ws.file_uri_for_canonical("/proj/x.pure").is_none());
+    }
+
+    #[test]
+    fn file_uri_for_canonical_returns_none_for_unknown_canonical() {
+        let repo = fs_repo_with_root(
+            "/proj",
+            PathBuf::from("/tmp/proj"),
+            vec!["/proj/lib.pure"],
+        );
+        let ws = Workspace::new(vec![repo], Vec::new());
+        // Canonical's prefix doesn't match any repo.
+        assert!(ws.file_uri_for_canonical("/other/lib.pure").is_none());
+    }
+
+    #[test]
+    fn file_uri_for_canonical_prefers_open_buffer_url() {
+        // When a buffer is open for the matching canonical, that URL
+        // is returned in preference to the synthesised disk URL.
+        let repo = fs_repo_with_root(
+            "/proj",
+            PathBuf::from("/tmp/proj"),
+            vec!["/proj/lib.pure"],
+        );
+        let mut ws = Workspace::new(vec![repo], Vec::new());
+        let buffer_uri = Url::parse("file:///tmp/proj/lib.pure").unwrap();
+        ws.set_open_buffer(buffer_uri.clone(), "...".into());
+        let resolved = ws.file_uri_for_canonical("/proj/lib.pure").unwrap();
+        assert_eq!(resolved, buffer_uri);
+    }
 }
