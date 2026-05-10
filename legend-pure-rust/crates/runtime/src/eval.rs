@@ -61,7 +61,7 @@ use crate::date::PureDate;
 use crate::error::{PureException, PureExceptionKind, PureRuntimeError, StackFrame};
 use crate::heap::{ObjectHandle, RuntimeHeap};
 use crate::hooks::{EvalHooks, NoOpHooks};
-use crate::native::{Evaluated, NativeFunction, NativeRegistry};
+use crate::native::{Evaluated, NativeFunction, NativeRegistry, RuntimeExtension};
 use crate::value::{FunctionValue, LambdaClosure, Value};
 
 /// Evaluator state — holds mutable context during expression evaluation.
@@ -174,6 +174,26 @@ impl<'model> Evaluator<'model, NoOpHooks> {
         // `&'static NativeRegistry` coerces freely into `&'model …`
         // since `'static: 'model`.
         Self::new(model, leaked_default_registry())
+    }
+
+    /// Create a new evaluator backed by the platform standard registry
+    /// plus the given extensions.
+    ///
+    /// Each call allocates and leaks a fresh `NativeRegistry`. Use only
+    /// at startup or in tests; the per-thread cache used by
+    /// [`Evaluator::new_default`] is bypassed because the extension set
+    /// varies per caller. For production paths with a stable extension
+    /// set, build the registry once with
+    /// [`NativeRegistry::with_extensions`] and reuse it via
+    /// [`Evaluator::new`].
+    #[must_use]
+    pub fn new_default_with_extensions(
+        model: &'model PureModel,
+        extensions: &[&dyn RuntimeExtension],
+    ) -> Self {
+        let registry: &'static NativeRegistry =
+            Box::leak(Box::new(NativeRegistry::with_extensions(extensions)));
+        Self::new(model, registry)
     }
 }
 

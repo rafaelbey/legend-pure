@@ -36,8 +36,10 @@
 //!
 //! 4. **Extension Points** — Traits for compiled function dispatch
 //!    (`CompiledFunction`), struct-based class access
-//!    ([`TypedObject`](heap::TypedObject)), and external runtime environments
-//!    (`RuntimeEnv`).
+//!    ([`TypedObject`](heap::TypedObject)), external runtime environments
+//!    (`RuntimeEnv`), and a native-function plugin SPI for downstream
+//!    extension packages ([`RuntimeExtension`](native::RuntimeExtension)
+//!    — the mirror of the compiler's `CompilerExtension`).
 //!
 //! # Example (future)
 //!

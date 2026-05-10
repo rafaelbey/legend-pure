@@ -380,6 +380,73 @@ impl fmt::Debug for NativeRegistry {
 }
 
 // ---------------------------------------------------------------------------
+// RuntimeExtension — plugin SPI for downstream native packages
+// ---------------------------------------------------------------------------
+
+/// Plugin contract for registering additional native functions into a
+/// [`NativeRegistry`].
+///
+/// Downstream crates (e.g. legend-engine extension function packages
+/// that ship `mutateAdd`, store-specific natives, etc.) implement this
+/// trait and pass instances to [`NativeRegistry::with_extensions`].
+/// Mirrors the compiler's `CompilerExtension` trait at
+/// `crates/pure/src/extension.rs` — same lifecycle (build once, then
+/// immutable for the evaluator's lifetime).
+///
+/// Extensions stay out of the platform crate: the platform is the
+/// minimum surface every Pure program can call. `mutateAdd` and other
+/// consumer-defined natives live in their own crate and register at
+/// runtime through this trait. See `docs/runtime/metaprogramming.md`
+/// §5 for the invariant this layering enforces.
+///
+/// # Example
+///
+/// ```ignore
+/// use legend_pure_runtime::native::{NativeFunction, NativeRegistry, RuntimeExtension};
+///
+/// struct MyExtension;
+///
+/// impl RuntimeExtension for MyExtension {
+///     fn name(&self) -> &'static str { "my-extension" }
+///     fn register_natives(&self, registry: &mut NativeRegistry) {
+///         registry.register("myNative_String_1__String_1_", MyNative);
+///     }
+/// }
+///
+/// let registry = NativeRegistry::with_extensions(&[&MyExtension]);
+/// // registry now contains the platform standard set + MyExtension's natives.
+/// ```
+pub trait RuntimeExtension {
+    /// Human-readable identifier for diagnostics and tracing.
+    /// Recommended format: kebab-case crate-or-package name.
+    fn name(&self) -> &'static str;
+
+    /// Register the extension's natives into the registry. Called exactly
+    /// once during [`NativeRegistry::with_extensions`].
+    fn register_natives(&self, registry: &mut NativeRegistry);
+}
+
+impl NativeRegistry {
+    /// Create a registry pre-loaded with the platform standard natives
+    /// plus every extension's contributions.
+    ///
+    /// Extensions are registered in the slice order; later extensions
+    /// can override earlier ones (mirrors [`register`]'s last-write-wins
+    /// semantics). Extension natives override platform natives if they
+    /// share a mangled FQN — use this with care.
+    ///
+    /// [`register`]: NativeRegistry::register
+    #[must_use]
+    pub fn with_extensions(extensions: &[&dyn RuntimeExtension]) -> Self {
+        let mut registry = Self::standard();
+        for ext in extensions {
+            ext.register_natives(&mut registry);
+        }
+        registry
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Argument validation helpers
 // ---------------------------------------------------------------------------
 
