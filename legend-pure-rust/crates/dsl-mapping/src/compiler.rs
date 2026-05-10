@@ -385,6 +385,81 @@ impl CompilerExtension for MappingExtension {
         // `model.repo_visibility` is empty.
         validate_repo_visibility(&registry, ctx.model, ctx.errors);
     }
+
+    /// Surface Mapping-DSL reference sites to the IDE's reference
+    /// index. Each entry becomes a clickable region that goto-def
+    /// can navigate from.
+    ///
+    /// Covered today:
+    /// - **Class-mapping target class** — `pkg::Firm : Pure { … }`
+    ///   click `pkg::Firm` → jumps to the Class declaration.
+    /// - **Pure-body source class** — `~src pkg::SrcClass` → jumps
+    ///   to that class.
+    /// - **Mapping include target** — `include other::Mapping` →
+    ///   jumps to the included Mapping element.
+    fn walk_references(
+        &self,
+        model: &legend_pure_parser_pure::model::PureModel,
+        visit: &mut dyn FnMut(legend_pure_parser_pure::refs::Reference),
+    ) {
+        let registry = self.mappings.borrow();
+        for (_, reg) in registry.iter() {
+            for include in &reg.def.includes {
+                push_element_ref(
+                    model,
+                    &include.included,
+                    legend_pure_parser_pure::refs::RefKind::TypeRef,
+                    visit,
+                );
+            }
+            for cm in &reg.def.class_mappings {
+                push_element_ref(
+                    model,
+                    &cm.class,
+                    legend_pure_parser_pure::refs::RefKind::TypeRef,
+                    visit,
+                );
+                if let crate::ast::ClassMappingBody::Pure(body) = &cm.body
+                    && let Some(src) = &body.src_class
+                {
+                    push_element_ref(
+                        model,
+                        src,
+                        legend_pure_parser_pure::refs::RefKind::TypeRef,
+                        visit,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Resolve a `PackageableElementPtr` to an `ElementId` and emit a
+/// reference for it. No-op if the FQN doesn't resolve (the validator
+/// will have already raised `UnresolvedElement`).
+fn push_element_ref(
+    model: &legend_pure_parser_pure::model::PureModel,
+    ptr: &PackageableElementPtr,
+    kind: legend_pure_parser_pure::refs::RefKind,
+    visit: &mut dyn FnMut(legend_pure_parser_pure::refs::Reference),
+) {
+    use legend_pure_parser_ast::element::PackageableElement;
+    let target_id = if let Some(pkg) = ptr.package() {
+        model.resolve_in_package(pkg, ptr.name())
+    } else {
+        model.resolve_by_path(std::slice::from_ref(ptr.name()))
+    };
+    let Some(target_id) = target_id else { return };
+    if matches!(target_id, ElementId::Package(_)) {
+        return;
+    }
+    let target = model.get_node(target_id).name_source_info.clone();
+    visit(legend_pure_parser_pure::refs::Reference {
+        range: ptr.source_info.clone(),
+        kind,
+        target_element: Some(target_id),
+        target,
+    });
 }
 
 // ---------------------------------------------------------------------------

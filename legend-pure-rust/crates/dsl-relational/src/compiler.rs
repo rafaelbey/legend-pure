@@ -586,6 +586,47 @@ impl CompilerExtension for RelationalExtension {
         // positives).
         validate_predicate_return_types(&dbs, &resolved, ctx.errors);
     }
+
+    /// Surface Relational-DSL reference sites to the IDE's reference
+    /// index.
+    ///
+    /// Covered today:
+    /// - **Database include target** — `include other::Db` →
+    ///   jumps to the included Database element.
+    ///
+    /// Schema/table/column refs and the join-tree FQNs follow once
+    /// the relational AST tracks their per-segment spans. Today they
+    /// flow as `db.schema.table.col` strings without per-segment
+    /// `SourceInfo`, so we can't yet surface a clickable region per
+    /// segment.
+    fn walk_references(
+        &self,
+        model: &legend_pure_parser_pure::model::PureModel,
+        visit: &mut dyn FnMut(legend_pure_parser_pure::refs::Reference),
+    ) {
+        use legend_pure_parser_ast::element::PackageableElement;
+        let dbs = self.databases.borrow();
+        for reg in dbs.values() {
+            for include in &reg.def.includes {
+                let target_id = if let Some(pkg) = include.included.package() {
+                    model.resolve_in_package(pkg, include.included.name())
+                } else {
+                    model.resolve_by_path(std::slice::from_ref(include.included.name()))
+                };
+                let Some(target_id) = target_id else { continue };
+                if matches!(target_id, legend_pure_parser_pure::ids::ElementId::Package(_)) {
+                    continue;
+                }
+                let target = model.get_node(target_id).name_source_info.clone();
+                visit(legend_pure_parser_pure::refs::Reference {
+                    range: include.included.source_info.clone(),
+                    kind: legend_pure_parser_pure::refs::RefKind::TypeRef,
+                    target_element: Some(target_id),
+                    target,
+                });
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
