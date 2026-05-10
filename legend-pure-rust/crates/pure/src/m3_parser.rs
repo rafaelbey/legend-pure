@@ -1606,8 +1606,6 @@ impl<'a> M3Parser<'a> {
                 Element::Profile(Profile {
                     stereotypes: vec![],
                     tags: vec![],
-                    stereotype_source_infos: Vec::new(),
-                    tag_source_infos: Vec::new(),
                 }),
             );
             return;
@@ -1643,19 +1641,20 @@ impl<'a> M3Parser<'a> {
 
         self.eat(&Token::RBrace);
 
+        // m3 bootstrap parser doesn't carry per-name source info — the
+        // IDE can't navigate to declarations inside m3-bootstrapped
+        // Profiles (e.g. `meta::pure::profiles::test`) without these.
+        // Wrap each name with the bootstrap-source sentinel so the
+        // shape matches parser-loaded profiles; the reference index
+        // recognises the sentinel and skips emitting entries for it.
+        use crate::nodes::profile::bootstrap_spanned_name;
         self.alloc_element(
             name,
             package_segments,
-            // m3 bootstrap parser doesn't carry per-name source info — the IDE
-// can't navigate to declarations inside m3-bootstrapped Profiles
-// (e.g. `meta::pure::profiles::test`) yet. Parser-loaded profiles
-// fill these in.
-Element::Profile(Profile {
-    stereotypes,
-    tags,
-    stereotype_source_infos: Vec::new(),
-    tag_source_infos: Vec::new(),
-}),
+            Element::Profile(Profile {
+                stereotypes: stereotypes.into_iter().map(bootstrap_spanned_name).collect(),
+                tags: tags.into_iter().map(bootstrap_spanned_name).collect(),
+            }),
         );
     }
 
@@ -1912,10 +1911,8 @@ mod tests {
         assert_eq!(nodes.get(0).name, "ProtocolInfo");
 
         if let Element::Profile(p) = elements.get(0) {
-            assert_eq!(
-                p.stereotypes,
-                vec![SmolStr::new("inferred"), SmolStr::new("excluded")]
-            );
+            let names: Vec<&str> = p.stereotypes.iter().map(|s| s.value.as_str()).collect();
+            assert_eq!(names, vec!["inferred", "excluded"]);
             assert!(p.tags.is_empty());
         } else {
             panic!("Expected Profile, got {:?}", elements.get(0));
@@ -1995,9 +1992,10 @@ mod tests {
             .find(|&i| nodes.get(i).name == "ProtocolInfo")
             .expect("ProtocolInfo should exist");
         if let Element::Profile(p) = elements.get(protocol_idx) {
+            let names: Vec<&str> = p.stereotypes.iter().map(|s| s.value.as_str()).collect();
             assert_eq!(
-                p.stereotypes,
-                vec![SmolStr::new("inferred"), SmolStr::new("excluded")],
+                names,
+                vec!["inferred", "excluded"],
                 "ProtocolInfo should have stereotypes inferred and excluded"
             );
         } else {
