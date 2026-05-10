@@ -120,6 +120,23 @@ pub const MAP_STATS: &Classifier = "meta::pure::functions::collection::MapStats"
 /// dispatch through the appropriate lambda.
 pub const GETTER_OVERRIDE: &Classifier = "meta::pure::metamodel::type::GetterOverride";
 
+/// `meta::pure::metamodel::type::ConstraintsOverride` — heap wrapper
+/// carrying a `constraintsManager` lambda
+/// (`Function<{Any[1]->Any[1]}>`) used by the 6-arg `dynamicNew`
+/// overload to replace the default constraint-check pass. When the
+/// manager is invoked, its return value replaces the dynamicNew result
+/// (parity with Java `DefaultConstraintHandler.handleConstraints`).
+pub const CONSTRAINTS_OVERRIDE: &Classifier =
+    "meta::pure::metamodel::type::ConstraintsOverride";
+
+/// `meta::pure::metamodel::type::ConstraintsGetterOverride` — combined
+/// override carrying both the getter-hook lambdas (inherited from
+/// `GetterOverride`) and the `constraintsManager`. Allocated by
+/// `dynamicNew` when the 6-arg overload supplies *both* getter hooks
+/// and a constraints manager.
+pub const CONSTRAINTS_GETTER_OVERRIDE: &Classifier =
+    "meta::pure::metamodel::type::ConstraintsGetterOverride";
+
 /// `meta::pure::metamodel::valuespecification::VariableExpression` —
 /// AST-metamodel node for a `$name` variable reference. Produced by
 /// `deactivate(varRef)` so the AST can be introspected.
