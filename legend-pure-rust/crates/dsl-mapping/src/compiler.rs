@@ -42,6 +42,12 @@
 //!    its target property's declared type (subtype check).
 //! 10. Each transform's inferred multiplicity must fit within the
 //!     target property's declared multiplicity (range subsumption).
+//! 11. XStore `crossExpression` must infer to `Boolean[1]` with
+//!     `$this` / `$that` bound to the resolved source / target
+//!     set-impl classes. Java parity with `XStoreProcessor` —
+//!     skipped when either ID is absent or the ID doesn't resolve to
+//!     a class-mapping owning class (an earlier visibility / shape
+//!     diagnostic has already fired).
 //!
 //! These rules use `legend_pure_parser_pure::extension::lower_and_infer_expression`
 //! and the public `is_subtype` / `is_multiplicity_compatible` helpers
@@ -415,6 +421,7 @@ fn validate_mapping(
             m,
             &visible_ids,
             &visible_enum_mappings,
+            registry,
             model,
             auto_imports,
             errors,
@@ -489,11 +496,13 @@ fn validate_mapping(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_class_mapping(
     cm: &ClassMapping,
     owner: &MappingDef,
     visible_ids: &HashSet<SmolStr>,
     visible_enum_mappings: &HashMap<SmolStr, SmolStr>,
+    registry: &HashMap<SmolStr, RegisteredMapping>,
     model: &PureModel,
     auto_imports: &[SmolStr],
     errors: &mut Vec<CompilationError>,
@@ -620,7 +629,17 @@ fn validate_class_mapping(
                     },
                 });
             }
-            validate_xstore_body(body, &target_fqn, assoc_id, visible_ids, model, errors);
+            validate_xstore_body(
+                body,
+                &target_fqn,
+                assoc_id,
+                visible_ids,
+                owner,
+                registry,
+                model,
+                auto_imports,
+                errors,
+            );
         }
         ClassMappingBody::Foreign(_) => {
             // Foreign DSL bodies are validated by the foreign DSL's
@@ -1618,12 +1637,16 @@ fn is_data_type(model: &PureModel, ty: &ResolvedType) -> bool {
 // Stage-7 — XStore body validation
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn validate_xstore_body(
     body: &XStoreClassMappingBody,
     target_assoc_fqn: &str,
     target_assoc_id: Option<ElementId>,
     visible_ids: &HashSet<SmolStr>,
+    owner: &MappingDef,
+    registry: &HashMap<SmolStr, RegisteredMapping>,
     model: &PureModel,
+    auto_imports: &[SmolStr],
     errors: &mut Vec<CompilationError>,
 ) {
     // Collect the association's property names once. When the
@@ -1641,17 +1664,26 @@ fn validate_xstore_body(
             &property_names,
             target_assoc_id,
             visible_ids,
+            owner,
+            registry,
+            model,
+            auto_imports,
             errors,
         );
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_xstore_property_mapping(
     pm: &XStorePropertyMapping,
     target_assoc_fqn: &str,
     property_names: &HashSet<String>,
     target_assoc_id: Option<ElementId>,
     visible_ids: &HashSet<SmolStr>,
+    owner: &MappingDef,
+    registry: &HashMap<SmolStr, RegisteredMapping>,
+    model: &PureModel,
+    auto_imports: &[SmolStr],
     errors: &mut Vec<CompilationError>,
 ) {
     // Property name must exist on the association — only when the
@@ -1746,11 +1778,79 @@ fn validate_xstore_property_mapping(
             },
         });
     }
-    // TODO(stage-7+): once src/tgt set-impls are resolved, lower the
-    // crossExpression with `this`/`that` bindings derived from each
-    // referenced set-impl's class. Java's XStoreProcessor builds
-    // those VariableExpressions and lowers the lambda; this Rust
-    // port intentionally stops at structural validation for Stage 7.
+    // Java-parity lowering of `crossExpression` with `$this` / `$that`
+    // bound to the resolved source / target set-impl classes. Mirrors
+    // `XStoreProcessor.processCrossPropertyMapping` —
+    // `getSetImplementationClass(src/tgt)` → `buildParam("this"/"that", _, [1])`
+    // → `matcher.fullMatch(crossExpression, state_with_vars)`. We
+    // only run this when both IDs are present and both resolve;
+    // otherwise an earlier diagnostic in this same function has
+    // already pointed the user at the structural problem.
+    let (Some(src_id_str), Some(tgt_id_str)) =
+        (&pm.source_set_impl_id, &pm.target_set_impl_id)
+    else {
+        return;
+    };
+    let Some(src_class_id) = resolve_set_impl_class(model, registry, owner, src_id_str) else {
+        return;
+    };
+    let Some(tgt_class_id) = resolve_set_impl_class(model, registry, owner, tgt_id_str) else {
+        return;
+    };
+
+    // `[1]` mirrors Java's `Multiplicity::PureOne` on `buildParam`.
+    // Generic type-argument propagation through `$this`/`$that` is
+    // intentionally absent in v1 — matches the existing
+    // AggregationAware / filter sites, which also pass empty
+    // `type_arguments`. Captured in BACKLOG as a follow-up.
+    let bindings: Vec<(SmolStr, TypeExpr, Multiplicity)> = vec![
+        (
+            SmolStr::new_static("this"),
+            TypeExpr::Named {
+                element: src_class_id,
+                type_arguments: Vec::new(),
+                multiplicity_arguments: Vec::new(),
+                value_arguments: Vec::new(),
+            },
+            Multiplicity::PureOne,
+        ),
+        (
+            SmolStr::new_static("that"),
+            TypeExpr::Named {
+                element: tgt_class_id,
+                type_arguments: Vec::new(),
+                multiplicity_arguments: Vec::new(),
+                value_arguments: Vec::new(),
+            },
+            Multiplicity::PureOne,
+        ),
+    ];
+
+    // Lower-and-infer pushes its own errors (unresolved properties,
+    // dispatch failures, …) into `errors` and returns `None` in
+    // that case. The Boolean[1] check is the value-add this site
+    // owns; downstream cascade is already covered.
+    if let Some(cross_ty) =
+        lower_and_infer_expression(model, auto_imports, &pm.cross_expression, &bindings, errors)
+        && !is_boolean_one(model, &cross_ty)
+    {
+        errors.push(CompilationError {
+            message: format!(
+                "XStore crossExpression on '{}.{}' must return Boolean[1], got {}",
+                target_assoc_fqn,
+                pm.property_name,
+                describe_type(&cross_ty, model)
+            ),
+            source_info: pm.cross_expression.source_info().clone(),
+            // TODO(error-kinds): see the same TypeMismatch TODO at
+            // `validate_pure_body` — UnsupportedExpression is the
+            // closest existing variant for a typed-but-wrong-shape
+            // diagnostic.
+            kind: CompilationErrorKind::UnsupportedExpression {
+                kind: SmolStr::new_static("XStoreCrossExpressionReturnType"),
+            },
+        });
+    }
 }
 
 fn association_property_names(model: &PureModel, assoc_id: ElementId) -> HashSet<String> {
@@ -1780,6 +1880,49 @@ fn resolve_class(model: &PureModel, fqn: &str) -> Option<ElementId> {
     }
     let id = model.resolve_by_path(&segments)?;
     matches!(model.get_element(id), ModelElement::Class(_)).then_some(id)
+}
+
+/// Walk `current_mapping` plus its transitive includes looking for a
+/// `ClassMapping` whose effective ID matches `set_impl_id`. The
+/// effective ID is the explicit `[id]` when present, otherwise the
+/// class FQN's simple name (see `visible_class_mapping_ids`). Returns
+/// the target class's resolved `ElementId` when found and the target
+/// resolves to a `Class`.
+///
+/// Java parity: `MappingValidator.validateId(...)` →
+/// `XStoreProcessor.getSetImplementationClass(...)` for the resolved
+/// `InstanceSetImplementation`'s owning class.
+fn resolve_set_impl_class(
+    model: &PureModel,
+    registry: &HashMap<SmolStr, RegisteredMapping>,
+    current_mapping: &MappingDef,
+    set_impl_id: &str,
+) -> Option<ElementId> {
+    let mut visited: HashSet<SmolStr> = HashSet::new();
+    let mut queue: VecDeque<&MappingDef> = VecDeque::new();
+    queue.push_back(current_mapping);
+    visited.insert(build_fqn(current_mapping));
+
+    while let Some(cur) = queue.pop_front() {
+        for cm in &cur.class_mappings {
+            let explicit = cm.id.as_deref();
+            let default = cm.class.name.as_str();
+            if explicit == Some(set_impl_id) || (explicit.is_none() && default == set_impl_id) {
+                let target_fqn = ptr_fqn(&cm.class);
+                return resolve_class(model, &target_fqn);
+            }
+        }
+        for inc in &cur.includes {
+            let fqn = ptr_fqn(&inc.included);
+            if !visited.insert(fqn.clone()) {
+                continue;
+            }
+            if let Some(reg) = registry.get(&fqn) {
+                queue.push_back(&reg.def);
+            }
+        }
+    }
+    None
 }
 
 fn resolve_enumeration(model: &PureModel, fqn: &str) -> Option<ElementId> {
