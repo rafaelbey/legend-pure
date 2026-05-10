@@ -45,10 +45,19 @@
 //!      identifier value in a [`MilestoneSpec`] references a column on
 //!      the same table.
 //!
-//! Validators that need lambda lowering (e.g. checking a Filter
-//! predicate has Boolean[1] return type) are deliberately deferred to
-//! Stage 5+ when the relational mapping body lands and the
-//! `lower_and_infer_expression` plumbing on `op_operation` matures.
+//! Phase B' (this revision) — predicate `Boolean[1]` return-type
+//! validation:
+//!
+//!   6. Every Filter / Join / MultiGrainFilter `op_operation` body
+//!      must reduce to `Boolean` (or `Any` for unmodeled
+//!      DynaFunctions). Inferred by
+//!      [`crate::op_typer::infer_op_type`] using the owning
+//!      database's resolved-table snapshot for column-type lookups.
+//!      Java parity: `DatabaseProcessor` / `RelationalOperationElementProcessor`
+//!      validate the predicate's `_genericType` after expression
+//!      inference; we take the narrow path (classify-by-shape +
+//!      column-type lookup) since full DynaFunction → Pure-function
+//!      lowering is RT-1 / INT-1 territory.
 //!
 //! See [`crates/dsl-mapping/src/compiler.rs`] for the trait-shape
 //! template these validators follow.
@@ -569,7 +578,113 @@ impl CompilerExtension for RelationalExtension {
         // each association can be mapped at most once per Mapping
         // (Java parity: TestAssociationMappingValidation).
         validate_association_mapping_targets(&class_mappings, ctx.model, ctx.errors);
+        // Phase B': Filter / Join / MultiGrainFilter predicate
+        // bodies must return Boolean[1]. Uses the resolved
+        // snapshots already populated by `define_bodies` for
+        // column-type lookups; un-modeled DynaFunctions and
+        // unresolved column refs type as `Any` (silent, no false
+        // positives).
+        validate_predicate_return_types(&dbs, &resolved, ctx.errors);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase B' — predicate Boolean[1] validation
+// ---------------------------------------------------------------------------
+
+/// Walk every Filter / Join / MultiGrainFilter on every registered
+/// database; classify the body's top-level result via
+/// [`crate::op_typer::infer_op_type`]; emit a diagnostic when the
+/// body is neither `Boolean` nor `Any`.
+///
+/// Java parity: the Filter / Join predicate inference in
+/// `DatabaseProcessor` / `RelationalOperationElementProcessor` —
+/// they error on a non-`Boolean[1]` body. We take the narrow path
+/// (allowing `Any` for un-modeled DynaFunctions and unresolved
+/// column refs) so this validator can't false-positive while full
+/// DynaFunction lowering stays deferred.
+fn validate_predicate_return_types(
+    dbs: &HashMap<SmolStr, RegisteredDatabase>,
+    resolved: &HashMap<SmolStr, crate::processor::ResolvedDatabase>,
+    errors: &mut Vec<CompilationError>,
+) {
+    use crate::op_typer::OpTypeScope;
+
+    for (db_fqn, reg) in dbs.iter() {
+        let scope = resolved
+            .get(db_fqn)
+            .map_or_else(OpTypeScope::empty, |snap| {
+                OpTypeScope::from_tables(&snap.tables_by_name)
+            });
+        for elem in &reg.def.elements {
+            match elem {
+                DatabaseElement::Filter(f) => check_predicate(
+                    &f.body,
+                    &f.name.value,
+                    "Filter",
+                    db_fqn.as_str(),
+                    scope,
+                    &f.source_info,
+                    errors,
+                ),
+                DatabaseElement::Join(j) => check_predicate(
+                    &j.body,
+                    &j.name.value,
+                    "Join",
+                    db_fqn.as_str(),
+                    scope,
+                    &j.source_info,
+                    errors,
+                ),
+                DatabaseElement::MultiGrainFilter(m) => check_predicate(
+                    &m.body,
+                    &m.name.value,
+                    "MultiGrainFilter",
+                    db_fqn.as_str(),
+                    scope,
+                    &m.source_info,
+                    errors,
+                ),
+                _ => {}
+            }
+        }
+    }
+}
+
+fn check_predicate(
+    body: &OpExpr,
+    name: &SmolStr,
+    kind: &str,
+    db_fqn: &str,
+    scope: crate::op_typer::OpTypeScope<'_>,
+    source_info: &SourceInfo,
+    errors: &mut Vec<CompilationError>,
+) {
+    use crate::op_typer::{OpType, infer_op_type};
+
+    let ty = infer_op_type(body, scope);
+    if matches!(ty, OpType::Boolean | OpType::Any) {
+        return;
+    }
+    let actual = match ty {
+        OpType::Boolean | OpType::Any => unreachable!(),
+        OpType::Numeric => "Numeric",
+        OpType::String => "String",
+        OpType::Date => "Date",
+    };
+    errors.push(CompilationError {
+        message: format!(
+            "{kind} predicate '{name}' in database '{db_fqn}' must return Boolean[1], \
+             got {actual}"
+        ),
+        source_info: source_info.clone(),
+        // TODO(error-kinds): same TypeMismatch story as the
+        // dsl-mapping ~filter return-type rule — closest existing
+        // variant.
+        kind: CompilationErrorKind::UnsupportedExpression {
+            kind: SmolStr::new_static("RelationalPredicateReturnType"),
+        },
+    });
 }
 
 // ---------------------------------------------------------------------------
