@@ -22,8 +22,15 @@ repository.workspace = true
 
 [dependencies]
 legend-pure-parser-ast = { path = "../ast" }
+legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-pure = { path = "../pure" }
 legend-pure-core-platform = { path = "../core-platform-pure" }
+# DSL extensions — the LSP is the integration point that owns
+# DSL knowledge so `core-platform-pure` can stay below them in
+# the dep graph.
+legend-pure-dsl-mapping = { path = "../dsl-mapping" }
+legend-pure-dsl-relational = { path = "../dsl-relational" }
+legend-pure-dsl-store = { path = "../dsl-store" }
 
 tower-lsp = { workspace = true }
 tokio = { workspace = true }

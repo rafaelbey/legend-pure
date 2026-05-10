@@ -1383,6 +1383,9 @@ version = "0.1.0"
 dependencies = [
  "dashmap 6.1.0",
  "legend-pure-core-platform",
+ "legend-pure-dsl-mapping",
+ "legend-pure-dsl-relational",
+ "legend-pure-dsl-store",
  "legend-pure-parser-ast",
  "legend-pure-parser-parser",
  "legend-pure-parser-pure",
