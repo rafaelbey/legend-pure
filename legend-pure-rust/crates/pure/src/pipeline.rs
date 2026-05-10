@@ -598,7 +598,7 @@ fn resolve_m3_supertypes(model: &mut PureModel) {
             continue;
         };
         let type_params: std::collections::HashSet<SmolStr> =
-            c.type_parameters.iter().cloned().collect();
+            c.type_parameters.iter().map(|tp| tp.name.clone()).collect();
 
         // Resolves M3 stub forms into their final TypeExpr shapes:
         //
@@ -1334,7 +1334,7 @@ fn pass_define_class_bodies(
                 let type_arguments: Vec<crate::types::TypeExpr> = c
                     .type_parameters
                     .iter()
-                    .map(|name| crate::types::TypeExpr::Generic(name.clone()))
+                    .map(|tp| crate::types::TypeExpr::Generic(tp.name.clone()))
                     .collect();
                 let multiplicity_arguments: Vec<crate::types::Multiplicity> = c
                     .multiplicity_parameters
@@ -1513,11 +1513,11 @@ fn create_shell(element: &ast::Element) -> Element {
         // hydration order: the *target* of the reference already
         // advertises its declared arity / name list at Pass 1.
         ast::Element::Class(c) => Element::Class(Class {
-            type_parameter_variances: vec![
-                crate::nodes::class::Variance::default();
-                c.type_parameters.len()
-            ],
-            type_parameters: c.type_parameters.clone(),
+            type_parameters: c
+                .type_parameters
+                .iter()
+                .map(|name| crate::nodes::class::TypeParameter::invariant(name.clone()))
+                .collect(),
             multiplicity_parameters: c.multiplicity_parameters.clone(),
             type_variable_parameters: vec![],
             super_types: vec![],
@@ -1713,11 +1713,11 @@ fn hydrate_element_signature(
             let type_variable_parameters =
                 lower_type_variable_parameters(&class_def.type_variable_parameters, ctx, errors);
             Element::Class(Class {
-                type_parameter_variances: vec![
-                    crate::nodes::class::Variance::default();
-                    class_def.type_parameters.len()
-                ],
-                type_parameters: class_def.type_parameters.clone(),
+                type_parameters: class_def
+                    .type_parameters
+                    .iter()
+                    .map(|name| crate::nodes::class::TypeParameter::invariant(name.clone()))
+                    .collect(),
                 multiplicity_parameters: class_def.multiplicity_parameters.clone(),
                 type_variable_parameters,
                 super_types,

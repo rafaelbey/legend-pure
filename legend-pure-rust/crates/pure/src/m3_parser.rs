@@ -508,10 +508,10 @@ impl<'a> M3Parser<'a> {
     // -----------------------------------------------------------------------
 
     fn parse_class_body(&mut self, name: &SmolStr, package_segments: &[SmolStr]) {
+        use crate::nodes::class::TypeParameter;
         let mut properties = Vec::new();
         let mut super_types = Vec::new();
-        let mut type_parameters: Vec<SmolStr> = Vec::new();
-        let mut type_parameter_variances: Vec<crate::nodes::class::Variance> = Vec::new();
+        let mut type_parameters: Vec<TypeParameter> = Vec::new();
         let mut multiplicity_parameters: Vec<SmolStr> = Vec::new();
 
         if !self.at(&Token::LBrace) {
@@ -521,7 +521,6 @@ impl<'a> M3Parser<'a> {
                 package_segments,
                 Element::Class(Class {
                     type_parameters: vec![],
-                    type_parameter_variances: vec![],
                     multiplicity_parameters: Vec::new(),
                     type_variable_parameters: vec![],
                     super_types: vec![],
@@ -579,8 +578,11 @@ impl<'a> M3Parser<'a> {
                             // contravariant via this metamodel-level
                             // form.
                             let (params, variances) = self.parse_type_parameters();
-                            type_parameters = params;
-                            type_parameter_variances = variances;
+                            type_parameters = params
+                                .into_iter()
+                                .zip(variances)
+                                .map(|(name, variance)| TypeParameter::new(name, variance))
+                                .collect();
                         }
                         "multiplicityParameters" => {
                             // Class.properties[multiplicityParameters] :
@@ -616,7 +618,6 @@ impl<'a> M3Parser<'a> {
             package_segments,
             Element::Class(Class {
                 type_parameters,
-                type_parameter_variances,
                 multiplicity_parameters,
                 type_variable_parameters: vec![],
                 super_types,

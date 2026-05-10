@@ -1680,8 +1680,8 @@ fn compute_type_arg_bindings(
 ) -> crate::resolve::GenericBindings {
     let mut out = crate::resolve::GenericBindings::default();
     if let Some(Element::Class(class)) = model.try_get_element(class_id) {
-        for (param_name, arg) in class.type_parameters.iter().zip(type_arguments.iter()) {
-            out.ty.insert(param_name.clone(), arg.clone());
+        for (param, arg) in class.type_parameters.iter().zip(type_arguments.iter()) {
+            out.ty.insert(param.name.clone(), arg.clone());
         }
         for (param_name, arg) in class
             .multiplicity_parameters
@@ -2946,7 +2946,6 @@ mod tests {
             },
             ModelElement::Class(Class {
                 type_parameters: Vec::new(),
-                type_parameter_variances: Vec::new(),
                 multiplicity_parameters: Vec::new(),
                 type_variable_parameters: Vec::new(),
                 super_types: Vec::new(),
@@ -3052,7 +3051,6 @@ mod tests {
             },
             ModelElement::Class(Class {
                 type_parameters: Vec::new(),
-                type_parameter_variances: Vec::new(),
                 multiplicity_parameters: Vec::new(),
                 type_variable_parameters: Vec::new(),
                 super_types: Vec::new(),

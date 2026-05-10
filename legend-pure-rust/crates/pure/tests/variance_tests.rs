@@ -273,20 +273,14 @@ fn variance_property_class_in_loaded_platform_carries_contravariant_flag() {
         class.type_parameters
     );
     assert_eq!(
-        class.type_parameter_variances.len(),
-        2,
-        "Property must carry one variance flag per type-parameter: {:?}",
-        class.type_parameter_variances
-    );
-    assert_eq!(
-        class.type_parameter_variances[0],
+        class.type_parameters[0].variance,
         legend_pure_parser_pure::nodes::class::Variance::Contravariant,
         "Property's first type-parameter (T) must be Contravariant — \
          m3.pure declares ^TypeParameter{{name:'T', contravariant:true}}; \
          if this assertion breaks, the m3 parser dropped the flag."
     );
     assert_eq!(
-        class.type_parameter_variances[1],
+        class.type_parameters[1].variance,
         legend_pure_parser_pure::nodes::class::Variance::Invariant,
         "Property's second type-parameter (V) must be Invariant — \
          m3.pure has no variance flag for V."

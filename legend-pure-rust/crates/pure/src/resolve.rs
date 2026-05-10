@@ -1827,10 +1827,10 @@ pub(crate) fn find_property_with_inheritance(
             continue;
         };
         if let Some(p) = c.properties.iter().find(|p| p.name == *property) {
-            return Some((p.type_expr.clone(), c.type_parameters.clone()));
+            return Some((p.type_expr.clone(), c.type_parameter_names()));
         }
         if let Some(q) = c.qualified_properties.iter().find(|q| q.name == *property) {
-            return Some((q.return_type.clone(), c.type_parameters.clone()));
+            return Some((q.return_type.clone(), c.type_parameter_names()));
         }
         for st in &c.super_types {
             if let TypeExpr::Named { element, .. } = st {
@@ -3063,15 +3063,7 @@ fn subtype_view(
         c.type_parameters
             .iter()
             .zip(arg_type_args.iter())
-            .enumerate()
-            .map(|(i, (name, te))| {
-                let variance = c
-                    .type_parameter_variances
-                    .get(i)
-                    .copied()
-                    .unwrap_or_default();
-                (name.clone(), lift_for_variance(variance, te))
-            })
+            .map(|(tp, te)| (tp.name.clone(), lift_for_variance(tp.variance, te)))
             .collect()
     } else {
         HashMap::new()
@@ -4207,8 +4199,9 @@ mod tests {
                 parent_package: model.root_package,
             },
             Element::Class(Class {
-                type_parameters: vec![SmolStr::new("T")],
-                type_parameter_variances: vec![crate::nodes::class::Variance::default()],
+                type_parameters: vec![crate::nodes::class::TypeParameter::invariant(SmolStr::new(
+                    "T",
+                ))],
                 multiplicity_parameters: Vec::new(),
                 type_variable_parameters: Vec::new(),
                 super_types: Vec::new(),
@@ -4230,7 +4223,6 @@ mod tests {
             },
             Element::Class(Class {
                 type_parameters: Vec::new(),
-                type_parameter_variances: Vec::new(),
                 multiplicity_parameters: Vec::new(),
                 type_variable_parameters: Vec::new(),
                 super_types: Vec::new(),

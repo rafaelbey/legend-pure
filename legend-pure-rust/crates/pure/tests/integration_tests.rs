@@ -2920,7 +2920,12 @@ fn m3_property_parametric_types_preserved() {
                             node.name,
                             p.name,
                             name,
-                            target.type_parameters.join(", ")
+                            target
+                                .type_parameters
+                                .iter()
+                                .map(|tp| tp.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
                         ));
                     }
                 }

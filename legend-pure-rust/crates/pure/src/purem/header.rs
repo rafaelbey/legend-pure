@@ -83,6 +83,8 @@ const SCHEMA_FINGERPRINT_TYPES: &str = concat!(
     "PrimitiveType{super_type,super_type_value_arguments,type_variable_parameters,constraints}",
     // crates/pure/src/nodes/*.rs
     "Class{type_parameters,type_variable_parameters,super_types,properties,qualified_properties,constraints,stereotypes,tagged_values}",
+    "TypeParameter{name,variance}",
+    "Variance{Invariant,Covariant,Contravariant}",
     "Property{name,source_info,type_expr,multiplicity,aggregation,default_value,stereotypes,tagged_values}",
     "QualifiedProperty{name,source_info,parameters,return_type,return_multiplicity,body,stereotypes,tagged_values}",
     "Constraint{name,source_info,function,enforcement_level,external_id,message}",
