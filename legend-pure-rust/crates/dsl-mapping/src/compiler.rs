@@ -64,10 +64,19 @@ use legend_pure_parser_pure::extension::{
     CompilerExtension, DeclareCtx, ValidateCtx, lower_and_infer_expression,
 };
 use legend_pure_parser_pure::ids::ElementId;
-use legend_pure_parser_pure::model::{Element as ModelElement, PureModel};
+use legend_pure_parser_pure::model::{
+    DSLInstance, Element as ModelElement, ElementNode, PureModel,
+};
 use legend_pure_parser_pure::resolve::{is_multiplicity_compatible, is_subtype};
 use legend_pure_parser_pure::types::{Multiplicity, ResolvedType, TypeExpr};
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
+
+/// Stable name used to key Mapping payloads in `Element::DSLInstance`.
+pub const MAPPING_DSL_NAME: &str = "Mapping";
+
+/// FQN of the M3 metaclass `Mapping` instances are typed against.
+pub const MAPPING_CLASSIFIER_FQN: &str = "meta::pure::mapping::Mapping";
 
 use crate::ast::{
     AggregateSpecification, AggregationAwareClassMappingBody, AggregationFunctionSpec,
@@ -99,6 +108,106 @@ pub struct RegisteredMapping {
     pub fqn: SmolStr,
 }
 
+/// Compiled, serializable form of a Mapping — what survives a `.purem`
+/// round-trip via `Element::DSLInstance.data`.
+///
+/// Captures only **identifying** metadata: FQN, list of include FQNs,
+/// per-class-mapping summary (target class FQN + body kind tag +
+/// optional id/extends/mapping_name). Lossless `MappingDef` round-trip
+/// is follow-up work; the snapshot is enough to demonstrate the
+/// architectural round-trip and support consumers that need to
+/// enumerate which mappings live in a loaded `.purem`.
+///
+/// Decoupled from `legend-pure-parser-ast`'s non-serde types
+/// (`PackageableElementPtr`, `SourceInfo`, `SpannedString`) so the
+/// architectural rule "ast crate has no serde" stays intact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MappingSnapshot {
+    /// FQN this snapshot's mapping lives at, e.g.
+    /// `"model::test::M2MMapping"`.
+    pub fqn: SmolStr,
+    /// FQNs of the mappings included via `include` clauses.
+    pub includes: Vec<SmolStr>,
+    /// Per-class-mapping summary in source order.
+    pub class_mappings: Vec<ClassMappingSnapshot>,
+}
+
+/// Summary of one class-mapping inside a [`MappingSnapshot`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClassMappingSnapshot {
+    /// FQN of the mapped class.
+    pub class_fqn: SmolStr,
+    /// Body-kind tag — `"Pure"`, `"Enumeration"`, `"Operation"`,
+    /// `"AggregationAware"`, `"XStore"`, or `"Foreign"` (for DSL-
+    /// extension bodies like Relational).
+    pub body_kind: SmolStr,
+    /// Optional class-mapping id (`[id]`).
+    pub id: Option<SmolStr>,
+    /// Optional `extends [superId]`.
+    pub extends: Option<SmolStr>,
+    /// Optional mapping-instance display name following parserName.
+    pub mapping_name: Option<SmolStr>,
+    /// `*` prefix indicating this mapping is the root for its class.
+    pub is_root: bool,
+}
+
+impl MappingSnapshot {
+    /// Build a snapshot from an in-memory `MappingDef` AST.
+    #[must_use]
+    pub fn from_def(def: &MappingDef, fqn: SmolStr) -> Self {
+        let includes = def.includes.iter().map(|i| ptr_fqn(&i.included)).collect();
+        let class_mappings = def
+            .class_mappings
+            .iter()
+            .map(|cm| ClassMappingSnapshot {
+                class_fqn: ptr_fqn(&cm.class),
+                body_kind: class_mapping_body_kind(&cm.body),
+                id: cm.id.clone(),
+                extends: cm.extends.clone(),
+                mapping_name: cm.mapping_name.clone(),
+                is_root: cm.is_root,
+            })
+            .collect();
+        Self {
+            fqn,
+            includes,
+            class_mappings,
+        }
+    }
+
+    /// Encode for storage in `Element::DSLInstance.data`.
+    ///
+    /// # Errors
+    /// Postcard never fails on well-typed inputs in practice, but the
+    /// error is propagated rather than panicking.
+    pub fn encode(&self) -> Result<Vec<u8>, postcard::Error> {
+        postcard::to_allocvec(self)
+    }
+
+    /// Decode a payload produced by [`Self::encode`].
+    ///
+    /// # Errors
+    /// Returns the underlying Postcard error on corrupt or truncated
+    /// input.
+    pub fn decode(bytes: &[u8]) -> Result<Self, postcard::Error> {
+        postcard::from_bytes(bytes)
+    }
+}
+
+fn class_mapping_body_kind(body: &ClassMappingBody) -> SmolStr {
+    match body {
+        ClassMappingBody::Pure(_) => SmolStr::new_static("Pure"),
+        ClassMappingBody::Enumeration(_) => SmolStr::new_static("Enumeration"),
+        ClassMappingBody::Operation(_) => SmolStr::new_static("Operation"),
+        ClassMappingBody::AggregationAware(_) => SmolStr::new_static("AggregationAware"),
+        ClassMappingBody::XStore(_) => SmolStr::new_static("XStore"),
+        // Foreign DSL-extension bodies (e.g. Relational) — use the
+        // foreign type's `kind` tag so the snapshot can identify
+        // which extension contributed.
+        ClassMappingBody::Foreign(f) => SmolStr::new(f.kind()),
+    }
+}
+
 impl MappingExtension {
     /// Construct an empty extension.
     #[must_use]
@@ -106,11 +215,40 @@ impl MappingExtension {
         Self::default()
     }
 
-    /// Snapshot of all registered mappings keyed by FQN. Useful for
-    /// tests, codegen, and downstream stages.
+    /// Snapshot of all registered mappings keyed by FQN. Returns the
+    /// extension's in-process state — use this immediately after a
+    /// fresh compile to see the rich AST. After a `.purem` round-trip
+    /// this map is empty; use [`Self::mappings_from_model`] instead.
     #[must_use]
     pub fn mappings(&self) -> HashMap<SmolStr, RegisteredMapping> {
         self.mappings.borrow().clone()
+    }
+
+    /// Snapshot of all registered mappings **as graph elements** —
+    /// walks `model.elements()` for `Element::DSLInstance` entries
+    /// keyed `"Mapping"` and decodes each payload.
+    ///
+    /// Survives `.purem` slice/merge: every mapping registered during
+    /// the original compile reappears here after a fresh model is
+    /// built from a serialised slice. Decoding errors are dropped
+    /// silently — a well-formed `.purem` will never produce them.
+    #[must_use]
+    pub fn mappings_from_model(model: &PureModel) -> Vec<(SmolStr, MappingSnapshot)> {
+        let mut out = Vec::new();
+        for chunk in &model.chunks {
+            for (_, element) in chunk.elements.iter() {
+                let ModelElement::DSLInstance(d) = element else {
+                    continue;
+                };
+                if d.dsl_name.as_str() != MAPPING_DSL_NAME {
+                    continue;
+                }
+                if let Ok(snapshot) = MappingSnapshot::decode(&d.data) {
+                    out.push((snapshot.fqn.clone(), snapshot));
+                }
+            }
+        }
+        out
     }
 }
 
@@ -121,6 +259,12 @@ impl CompilerExtension for MappingExtension {
 
     fn declare(&self, ctx: &mut DeclareCtx<'_>) {
         let mut registry = self.mappings.borrow_mut();
+        // Pass 1 already created the slice's chunk and pushed it onto
+        // `model.chunks`; the just-created chunk is the last one. We
+        // allocate `Element::DSLInstance` rows there alongside the M3
+        // elements parsed from the same source file.
+        let chunk_id = (ctx.model.chunks.len().saturating_sub(1)) as u16;
+
         for source_file in ctx.source_files {
             for section in &source_file.sections {
                 if section.kind.as_str() != crate::ast::SECTION_KIND {
@@ -135,22 +279,78 @@ impl CompilerExtension for MappingExtension {
                     };
 
                     let fqn = build_fqn(m);
-                    if let Some(prev) = registry.insert(
+                    if registry.contains_key(&fqn) {
+                        ctx.errors.push(CompilationError {
+                            message: format!("Duplicate mapping '{fqn}'"),
+                            source_info: m.source_info.clone(),
+                            kind: CompilationErrorKind::DuplicateElement {
+                                name: fqn.clone(),
+                            },
+                        });
+                        // First registration wins; skip the second so
+                        // we don't double-register the graph element.
+                        continue;
+                    }
+
+                    // Dual-write 1/2 — extension RefCell (existing API).
+                    registry.insert(
                         fqn.clone(),
                         RegisteredMapping {
                             def: m.clone(),
                             fqn: fqn.clone(),
                         },
-                    ) {
-                        ctx.errors.push(CompilationError {
-                            message: format!("Duplicate mapping '{fqn}'"),
+                    );
+
+                    // Dual-write 2/2 — model graph as `Element::DSLInstance`.
+                    // Same pattern as Diagram pilot: encodes a
+                    // `MappingSnapshot` so the mapping round-trips
+                    // through `.purem` slice/merge.
+                    let snapshot = MappingSnapshot::from_def(m, fqn.clone());
+                    let data = match snapshot.encode() {
+                        Ok(bytes) => bytes,
+                        Err(e) => {
+                            ctx.errors.push(CompilationError {
+                                message: format!(
+                                    "Failed to encode MappingSnapshot for '{fqn}': {e}"
+                                ),
+                                source_info: m.source_info.clone(),
+                                kind: CompilationErrorKind::DuplicateElement {
+                                    name: fqn.clone(),
+                                },
+                            });
+                            continue;
+                        }
+                    };
+
+                    let pkg_path = pkg_segments(m);
+                    let package_id = if pkg_path.is_empty() {
+                        ctx.model.root_package
+                    } else {
+                        ctx.model.get_or_create_package(&pkg_path)
+                    };
+
+                    let chunk = match ctx.model.chunks.get_mut(chunk_id as usize) {
+                        Some(c) => c,
+                        None => continue,
+                    };
+                    let local_idx = chunk.alloc_element(
+                        ElementNode {
+                            name: m.name.value.clone(),
                             source_info: m.source_info.clone(),
-                            kind: CompilationErrorKind::DuplicateElement { name: fqn },
-                        });
-                        // Restore prior registration so subsequent
-                        // passes still see the earlier definition.
-                        registry.insert(prev.fqn.clone(), prev);
-                    }
+                            name_source_info: m.name.source_info.clone(),
+                            parent_package: package_id,
+                        },
+                        ModelElement::DSLInstance(DSLInstance {
+                            dsl_name: SmolStr::new(MAPPING_DSL_NAME),
+                            classifier_fqn: SmolStr::new(MAPPING_CLASSIFIER_FQN),
+                            data,
+                        }),
+                    );
+                    let id = ElementId::InstanceId {
+                        chunk_id,
+                        local_idx,
+                    };
+                    ctx.model.register_element(package_id, id);
                 }
             }
         }
@@ -1698,6 +1898,15 @@ fn build_fqn(m: &MappingDef) -> SmolStr {
         SmolStr::new(format!("{pkg}::{}", m.name.value))
     } else {
         m.name.value.clone()
+    }
+}
+
+/// Package path as `Vec<SmolStr>` segments for
+/// `PureModel::get_or_create_package`.
+fn pkg_segments(m: &MappingDef) -> Vec<SmolStr> {
+    match m.package() {
+        Some(pkg) => pkg.segments().into_iter().cloned().collect(),
+        None => Vec::new(),
     }
 }
 

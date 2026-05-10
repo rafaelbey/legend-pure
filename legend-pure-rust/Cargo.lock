@@ -1310,6 +1310,8 @@ dependencies = [
  "legend-pure-parser-lexer",
  "legend-pure-parser-parser",
  "legend-pure-parser-pure",
+ "postcard",
+ "serde",
  "smol_str",
 ]
 
@@ -1324,6 +1326,8 @@ dependencies = [
  "legend-pure-parser-lexer",
  "legend-pure-parser-parser",
  "legend-pure-parser-pure",
+ "postcard",
+ "serde",
  "smol_str",
 ]
 

@@ -31,7 +31,9 @@ legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-lexer = { path = "../lexer" }
 legend-pure-parser-pure = { path = "../pure" }
 legend-pure-parser-compose = { path = "../compose" }
-smol_str = { workspace = true }
+postcard = { version = "1", features = ["alloc"] }
+serde = { workspace = true, features = ["derive"] }
+smol_str = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 indoc = "2"
