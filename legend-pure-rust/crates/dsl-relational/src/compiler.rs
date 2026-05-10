@@ -58,9 +58,21 @@ use std::collections::{HashMap, HashSet};
 
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::element::Element as AstElement;
+use legend_pure_parser_ast::element::PackageableElement as _;
 use legend_pure_parser_pure::error::{CompilationError, CompilationErrorKind};
 use legend_pure_parser_pure::extension::{CompilerExtension, DeclareCtx, ValidateCtx};
+use legend_pure_parser_pure::ids::ElementId;
+use legend_pure_parser_pure::model::{
+    DSLInstance, Element as ModelElement, ElementNode, PureModel,
+};
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
+
+/// Stable name used to key Database payloads in `Element::DSLInstance`.
+pub const DATABASE_DSL_NAME: &str = "RelationalDatabase";
+
+/// FQN of the M3 metaclass `Database` instances are typed against.
+pub const DATABASE_CLASSIFIER_FQN: &str = "meta::relational::metamodel::Database";
 
 use crate::ast::{
     DatabaseDef, DatabaseElement, EmbeddedMapping, EmbeddedMappingTrailer, Filter,
@@ -175,6 +187,153 @@ impl RelationalExtension {
     pub fn resolved_class_mappings(&self) -> Vec<crate::processor::ResolvedClassMapping> {
         self.resolved_class_mappings.borrow().clone()
     }
+
+    /// Snapshot of all registered databases **as graph elements** —
+    /// walks `model.elements()` for `Element::DSLInstance` entries
+    /// keyed `"RelationalDatabase"` and decodes each payload.
+    ///
+    /// Survives `.purem` slice/merge: every database registered during
+    /// the original compile reappears here after a fresh model is
+    /// built from a serialised slice. Decoding errors are dropped
+    /// silently.
+    ///
+    /// Relational class mappings (`Class : Relational { ... }` bodies
+    /// inside `###Mapping` sections) are covered by the Mapping
+    /// extension's own snapshot — `body_kind == "Relational"` —
+    /// because they live in `MappingDef.class_mappings`, not in
+    /// `DatabaseDef`. This reader handles only the Database side.
+    #[must_use]
+    pub fn databases_from_model(model: &PureModel) -> Vec<(SmolStr, DatabaseSnapshot)> {
+        let mut out = Vec::new();
+        for chunk in &model.chunks {
+            for (_, element) in chunk.elements.iter() {
+                let ModelElement::DSLInstance(d) = element else {
+                    continue;
+                };
+                if d.dsl_name.as_str() != DATABASE_DSL_NAME {
+                    continue;
+                }
+                if let Ok(snapshot) = DatabaseSnapshot::decode(&d.data) {
+                    out.push((snapshot.fqn.clone(), snapshot));
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Compiled, serializable form of a Database — what survives a `.purem`
+/// round-trip via `Element::DSLInstance.data`.
+///
+/// Captures only **identifying** structural data: FQN, include FQNs,
+/// per-element kind/name summary (schema → tables/views; top-level
+/// table/view names; join/filter/multi-grain-filter names). Lossless
+/// `DatabaseDef` round-trip is follow-up work; the snapshot is enough
+/// to demonstrate the architectural round-trip.
+///
+/// Decoupled from `legend-pure-parser-ast`'s non-serde types so the
+/// architectural rule "ast crate has no serde" stays intact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DatabaseSnapshot {
+    /// FQN of the database, e.g. `"model::test::MyDb"`.
+    pub fqn: SmolStr,
+    /// FQNs of databases included via `include`.
+    pub includes: Vec<SmolStr>,
+    /// Schema names with their table/view counts.
+    pub schemas: Vec<SchemaSnapshot>,
+    /// Top-level (default-schema) table names, in source order.
+    pub default_tables: Vec<SmolStr>,
+    /// Top-level (default-schema) view names, in source order.
+    pub default_views: Vec<SmolStr>,
+    /// Join names, in source order.
+    pub joins: Vec<SmolStr>,
+    /// Filter names, in source order.
+    pub filters: Vec<SmolStr>,
+    /// MultiGrainFilter names, in source order.
+    pub multi_grain_filters: Vec<SmolStr>,
+}
+
+/// Per-schema summary inside a [`DatabaseSnapshot`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SchemaSnapshot {
+    /// Schema name.
+    pub name: SmolStr,
+    /// Table names in this schema, in source order.
+    pub tables: Vec<SmolStr>,
+    /// View names in this schema, in source order.
+    pub views: Vec<SmolStr>,
+}
+
+impl DatabaseSnapshot {
+    /// Build a snapshot from an in-memory `DatabaseDef` AST.
+    #[must_use]
+    pub fn from_def(def: &DatabaseDef, fqn: SmolStr) -> Self {
+        let includes = def
+            .includes
+            .iter()
+            .map(|inc| ptr_fqn(&inc.included))
+            .collect();
+        let mut schemas = Vec::new();
+        let mut default_tables = Vec::new();
+        let mut default_views = Vec::new();
+        let mut joins = Vec::new();
+        let mut filters = Vec::new();
+        let mut multi_grain_filters = Vec::new();
+        for elem in &def.elements {
+            match elem {
+                DatabaseElement::Schema(s) => schemas.push(SchemaSnapshot {
+                    name: s.name.value.clone(),
+                    tables: s.tables.iter().map(|t| t.name.value.clone()).collect(),
+                    views: s.views.iter().map(|v| v.name.value.clone()).collect(),
+                }),
+                DatabaseElement::Table(t) => default_tables.push(t.name.value.clone()),
+                DatabaseElement::View(v) => default_views.push(v.name.value.clone()),
+                DatabaseElement::Join(j) => joins.push(j.name.value.clone()),
+                DatabaseElement::Filter(f) => filters.push(f.name.value.clone()),
+                DatabaseElement::MultiGrainFilter(m) => {
+                    multi_grain_filters.push(m.name.value.clone());
+                }
+            }
+        }
+        Self {
+            fqn,
+            includes,
+            schemas,
+            default_tables,
+            default_views,
+            joins,
+            filters,
+            multi_grain_filters,
+        }
+    }
+
+    /// Encode for storage in `Element::DSLInstance.data`.
+    ///
+    /// # Errors
+    /// Postcard never fails on well-typed inputs in practice, but the
+    /// error is propagated rather than panicking.
+    pub fn encode(&self) -> Result<Vec<u8>, postcard::Error> {
+        postcard::to_allocvec(self)
+    }
+
+    /// Decode a payload produced by [`Self::encode`].
+    ///
+    /// # Errors
+    /// Returns the underlying Postcard error on corrupt or truncated
+    /// input.
+    pub fn decode(bytes: &[u8]) -> Result<Self, postcard::Error> {
+        postcard::from_bytes(bytes)
+    }
+}
+
+/// FQN string for a `PackageableElementPtr` (database includes use
+/// the same shape Mapping uses internally).
+fn ptr_fqn(p: &legend_pure_parser_ast::annotation::PackageableElementPtr) -> SmolStr {
+    if let Some(pkg) = &p.package {
+        SmolStr::new(format!("{pkg}::{}", p.name))
+    } else {
+        p.name.clone()
+    }
 }
 
 impl CompilerExtension for RelationalExtension {
@@ -193,6 +352,10 @@ impl CompilerExtension for RelationalExtension {
             for section in &source.sections {
                 match section.kind.as_str() {
                     "Relational" => {
+                        // Pass 1 created the slice's chunk; allocate
+                        // `Element::DSLInstance` rows there alongside
+                        // the M3 elements parsed from the same file.
+                        let chunk_id = (ctx.model.chunks.len().saturating_sub(1)) as u16;
                         for element in &section.elements {
                             let AstElement::DSLElement(boxed) = element else {
                                 continue;
@@ -205,11 +368,70 @@ impl CompilerExtension for RelationalExtension {
                                 ctx.errors.push(CompilationError {
                                     message: format!("Duplicate Database '{fqn}'"),
                                     source_info: db.source_info.clone(),
-                                    kind: CompilationErrorKind::DuplicateElement { name: fqn },
+                                    kind: CompilationErrorKind::DuplicateElement {
+                                        name: fqn.clone(),
+                                    },
                                 });
                                 continue;
                             }
-                            by_fqn.insert(fqn, RegisteredDatabase { def: (*db).clone() });
+
+                            // Dual-write 1/2 — extension RefCell.
+                            by_fqn.insert(
+                                fqn.clone(),
+                                RegisteredDatabase { def: (*db).clone() },
+                            );
+
+                            // Dual-write 2/2 — model graph as
+                            // `Element::DSLInstance`. Same pattern as
+                            // the Diagram + Mapping pilots.
+                            let snapshot = DatabaseSnapshot::from_def(db, fqn.clone());
+                            let data = match snapshot.encode() {
+                                Ok(bytes) => bytes,
+                                Err(e) => {
+                                    ctx.errors.push(CompilationError {
+                                        message: format!(
+                                            "Failed to encode DatabaseSnapshot for '{fqn}': {e}"
+                                        ),
+                                        source_info: db.source_info.clone(),
+                                        kind: CompilationErrorKind::DuplicateElement {
+                                            name: fqn.clone(),
+                                        },
+                                    });
+                                    continue;
+                                }
+                            };
+
+                            let pkg_path: Vec<SmolStr> = db
+                                .package()
+                                .map(|p| p.segments().into_iter().cloned().collect())
+                                .unwrap_or_default();
+                            let package_id = if pkg_path.is_empty() {
+                                ctx.model.root_package
+                            } else {
+                                ctx.model.get_or_create_package(&pkg_path)
+                            };
+                            let chunk = match ctx.model.chunks.get_mut(chunk_id as usize) {
+                                Some(c) => c,
+                                None => continue,
+                            };
+                            let local_idx = chunk.alloc_element(
+                                ElementNode {
+                                    name: db.name.value.clone(),
+                                    source_info: db.source_info.clone(),
+                                    name_source_info: db.name.source_info.clone(),
+                                    parent_package: package_id,
+                                },
+                                ModelElement::DSLInstance(DSLInstance {
+                                    dsl_name: SmolStr::new(DATABASE_DSL_NAME),
+                                    classifier_fqn: SmolStr::new(DATABASE_CLASSIFIER_FQN),
+                                    data,
+                                }),
+                            );
+                            let id = ElementId::InstanceId {
+                                chunk_id,
+                                local_idx,
+                            };
+                            ctx.model.register_element(package_id, id);
                         }
                     }
                     "Mapping" => {
