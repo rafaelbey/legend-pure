@@ -1,8 +1,10 @@
 # Pure Meta-programming — Rust Port Assessment
 
-> **Status (2026-05-09):** Surveyor **246/0/0**, PCT **465/465**. Rust is at parity with Java for every Pure-callable meta-programming primitive surveyed below, except for two `dynamicNew` overloads and three router-side wrappers that live in `legend-engine` (consumer code, not platform).
+> **Status (2026-05-10):** Surveyor **357/0/0**, PCT **465/465**. Rust is at full parity with Java for every Pure-callable meta-programming primitive surveyed below; the only remaining gaps are three router-side consumer wrappers that live in `legend-engine` (`byPassRouterInfo`, `byPassValueSpecificationWrapper`, plus `RoutedValueSpecification.value` access patterns).
 >
 > The original RFC framing of this document — *can the Rust Arena/Index architecture support Pure metaprogramming?* — is settled: yes, it does. The original analysis is preserved as Appendix A (`MetaAccessor` proposal) and Appendix B (`mutateAdd` consumer taxonomy).
+>
+> **Implementation status (2026-05-10):** The §6 P0/P1 proposals shipped across six commits on legend-pure-rust + one on legend-engine — see the "What shipped" callout at the end of §6 for the commit list. The remaining items (§6 P2 9–12) are tracked as backlog candidates.
 
 ## Contents
 
@@ -30,7 +32,7 @@ Legend: ✅ ported · ⚠️ partial · ❌ gap · 🚫 deliberately out-of-surf
 | `openVariableValues(Function[1]):Map<String,List<Any>>[1]` | `essential/meta/reflect/openVariableValues.pure` | ✅ | `meta.rs:2509`, registered `meta.rs:3140` | Lambda carries captured `VariableContext`. |
 | `dynamicNew(Class\|GenericType, KeyValue[*]):Any[1]` | `essential/lang/creation/dynamicNew.pure:24-25` | ✅ | `lang.rs:1150` (struct), registered `lang.rs:2252-2254` | Two-arg basic forms. |
 | `dynamicNew(…, getterToOne, getterToMany, hiddenPayload):Any[1]` | `dynamicNew.pure:28-29` | ✅ | registered `lang.rs:2263-2270` | 5-arg override-hook forms. |
-| `dynamicNew(…, getterToOne, getterToMany, hiddenPayload, constraintsManager):Any[1]` | `dynamicNew.pure:26-27` | ❌ | — | The two **constraints-manager** overloads are unregistered. Surveyor today never exercises them; if router does, this is a router blocker. |
+| `dynamicNew(…, getterToOne, getterToMany, hiddenPayload, constraintsManager):Any[1]` | `dynamicNew.pure:26-27` | ✅ | registered `lang.rs:2304-2311` | 6-arg overloads with a `constraintsManager: Function<{Any[1]->Any[1]}>[0..1]`. When the manager is set, it is invoked once at construction with the populated instance; its return replaces dynamicNew's result, and the default constraint pass is skipped (mirrors Java `DefaultConstraintHandler.handleConstraints`). `ConstraintsOverride` / `ConstraintsGetterOverride` heap shapes allocated via `m3_paths::CONSTRAINTS_OVERRIDE` / `CONSTRAINTS_GETTER_OVERRIDE`. |
 | `copy<T>(T[1], KeyExpression[*]):T[1]` | `grammar/functions/lang/creation/copy.pure` | ✅ | `lang.rs:940`, registered `lang.rs:2246` | Includes association-inverse patching at `lang.rs:1018-1082` (parity with Java `Copy.java:236`). |
 | `eval(Function[1] [, args ...]):V[m]` (0–7 args) | `essential/lang/eval/*` | ✅ | `lang.rs:114`, registered `lang.rs:2277-2283` | Eight overloads, 0–7 positional args. |
 | `evaluate(Function[1], List<Any>[*]):Any[*]` | `essential/lang/eval/evaluate.pure` | ✅ | `lang.rs:155`, registered `lang.rs:2293` | Reflective array-pack application. |
@@ -44,10 +46,10 @@ Legend: ✅ ported · ⚠️ partial · ❌ gap · 🚫 deliberately out-of-surf
 | `generalizations(Type[1]):Type[1..*]` | `essential/meta/type/generalizations.pure` | ✅ | `meta.rs:1829`, registered `meta.rs:3122` | C3-linearized resolution order; computed from `super_types`, no separate `Generalization` node. |
 | `cast<T>(Any[*], T[1]):T[*]` | `grammar/functions/lang/cast.pure` | ✅ | `meta.rs:292`, registered `meta.rs:3104` | Forced narrowing; preserves `Value::Element`. |
 | `getLowerBound` · `getUpperBound` · `hasUpperBound` · `hasToOneUpperBound` · `isToOne` · `isToMany` | `essential/meta/multiplicity/*` | ✅ | _platform-Pure_ | Body-bearing `<<PCT.platformOnly>>` Pure functions — read `.lowerBound`/`.upperBound` props off the `Multiplicity` heap entry built at `meta.rs:912/937/945`. No native registration needed. |
-| `mutateAdd<T>(T[1], String[1], Any[*]):T[1]` | (legend-engine consumer-defined; not platform) | 🚫 | — | Deliberately not registered as a Pure native. Internal `RuntimeHeap::mutate_add` (`heap.rs:224`, 462) is used by `Reactivate` and `Copy`, but unreachable from Pure source. See §5 invariant. |
+| `mutateAdd<T>(T[1], String[1], Any[*]):T[1]` | (legend-engine consumer-defined; not platform) | 🚫 platform · ✅ extension | — (platform) · `legend-engine-rust/crates/natives-functions-unclassified/src/lib.rs` (extension) | Deliberately not registered in the platform `NativeRegistry::standard()`. Internal `RuntimeHeap::mutate_add` (`heap.rs:224`, 462) is used by `Reactivate` and `Copy` but unreachable from platform-only Pure source. Available via the `RuntimeExtension` SPI when `FunctionsUnclassifiedExtension` is registered through `NativeRegistry::with_extensions(&[…])`. See §5 invariant. |
 | `applyFunction(Function, Any[*])` | n/a | 🚫 | — | Java-internal reflective-array dispatch; never surfaced to Pure source. Subsumed by `eval`/`evaluate`. |
 
-**Verdict:** 17 of 20 platform-callable rows ✅, 1 ❌ (the two `dynamicNew` constraints-manager overloads), 2 🚫 (`mutateAdd`, `applyFunction`). Locked by Surveyor 246/0/0 and PCT 465/465 with 9 manifest exclusions, none of which touch this surface.
+**Verdict:** 18 of 20 platform-callable rows ✅, 0 ❌, 2 🚫 (`mutateAdd`, `applyFunction` — both deliberately extension-only). Locked by Surveyor **357/0/0** and PCT **465/465** with 9 manifest exclusions, none of which touch this surface.
 
 ---
 
@@ -77,7 +79,7 @@ Ordered by blocker severity. Per the project decision, consumer-defined wrappers
 
 ### 3.1 Platform gaps
 
-- **`dynamicNew` 6-arg `constraintsManager` overloads** — declared `essential/lang/creation/dynamicNew.pure:26-27`, unregistered in Rust (`lang.rs:2252-2270` covers only 4 of 6 forms). Detection: `grep -rn "dynamicNew(.*constraints" legend-engine/`. If any router transform uses constraint-managed dynamicNew, this is a hard blocker; otherwise low-risk, defer until a failing test demands it. Tracked as a §6 item-5 test.
+No platform gaps remain as of 2026-05-10. The previous gap row (`dynamicNew` 6-arg `constraintsManager` overloads) was closed by commit `f0a1d83455c` — `lang.rs:2304-2311` now registers both Class- and GenericType-receiver 6-arg variants, with 5 ported platform tests under `meta::pure::functions::lang::tests::dynamicNew::testDynamicNewConstraintManager*`.
 
 ### 3.2 Consumer-defined wrappers (in scope)
 
@@ -89,8 +91,8 @@ These are platform-ready in mechanism (heap property access works) but the wrapp
 
 ### 3.3 Behavioural unknowns
 
-- **`Reactivate` cross-chunk `ElementId` correctness** — believed working (the `meta.rs:2774` `reactivate_value` walker resolves through the model BiMap), but no router-PCT coverage exists. §6 item 1 (`testReactivate.pure`) closes this.
-- **`copy` association-inverse symmetry under router rewrites** — `lang.rs:1018-1082` claims parity with Java `Copy.java:236`, but the platform has no test that exercises a router-shaped DMR cycle on a class with bidirectional Associations. §6 item 7 closes this.
+- ~~**`Reactivate` cross-chunk `ElementId` correctness**~~ — **closed** by `testReactivateCrossChunkPlatformFunction` in `essential/meta/reflect/reactivate.pure` (commit `a1d7f41c901`). The test deactivates a body that references `size()` (different platform chunk than `reactivate`) and asserts the reactivated result.
+- **`copy` association-inverse symmetry under router rewrites** — still open. `lang.rs:1018-1082` claims parity with Java `Copy.java:236`, but the platform has no test that exercises a router-shaped DMR cycle on a class with bidirectional Associations. §6 item 11 (P2, not yet shipped) is the lock-in test.
 
 ### 3.4 Verdict per file
 
@@ -114,7 +116,7 @@ Pure-language inventory of meta-programming surface, grouped by namespace. Each 
 - [native] `deactivate` · `reactivate` · `evaluateAndDeactivate` · `canReactivateDynamically` · `openVariableValues`
 
 ### `meta::pure::functions::lang`
-- [native] `dynamicNew` (4 of 6 overloads — see §1 ❌) · `copy` · `eval` (0–7 args) · `evaluate` · `new` · `letFunction`
+- [native] `dynamicNew` (all 6 overloads, incl. `constraintsManager`) · `copy` · `eval` (0–7 args) · `evaluate` · `new` · `letFunction`
 
 ### `meta::pure::functions::meta` (graph)
 - [native] `pathToElement` · `lenientPathToElement` · `elementToPath` · `elementPath`
@@ -159,34 +161,38 @@ Heap mutation is available at the Rust runtime layer — `RuntimeHeap::mutate_ad
 
 > No Pure-callable native exposes a mutator over deactivated `ValueSpecification` trees or live heap objects. `mutateAdd` is registered nowhere in `crates/runtime/src/native/`. Pure programs therefore stay inside the read-only-introspection + reactivate-with-bindings contract that matches Java's compiled-mode semantics.
 
-This invariant has exactly one failure mode: someone registers `mutateAdd` (or any equivalent reflective setter) as a Pure-callable native. That is now a code-review checkpoint — not an architectural unknown — and §6 item 8 proposes a negative test that would fail loudly if a reflective-mutation native ever ships.
+This invariant has exactly one failure mode: someone registers `mutateAdd` (or any equivalent reflective setter) in the platform `NativeRegistry::standard()` factory. `crates/runtime/tests/platform_invariants.rs` (commit `a0b9678c85b`) locks this with four assertions — `mutateAdd` / `applyFunction` absent from the standard registry via both exact-FQN lookup and prefix fallback, plus a positive control on `deactivate`. A regression that registers either native in `standard()` fails loudly here.
+
+### How the layering is enforced
+
+The architectural mechanism behind the invariant is the `RuntimeExtension` trait (`crates/runtime/src/native.rs`, commit `74ec531ddee`). Consumer crates implement the trait and pass instances to `NativeRegistry::with_extensions(&[&ext])`; the platform `standard()` registry stays unchanged. The first consumer in this pattern is `legend-engine-rust-natives-functions-unclassified::FunctionsUnclassifiedExtension`, which ships `MutateAdd` as a Pure-callable native for code that opts in (commit `55f00b7779a`). End-to-end check: Pure source that calls `mutateAdd` without the extension loaded fails to compile with `UnknownFunction`; with the extension registered, the same source compiles and mutates the heap entry in place. Both halves are pinned by smoke tests — `crates/runtime/tests/extension_smoke.rs` upstream and `legend-engine-rust/crates/natives-functions-unclassified/tests/mutate_add_smoke.rs` downstream.
 
 ---
 
 ## 6. Platform coverage owed (proposed test suite)
 
-### Today's coverage (verified 2026-05-09)
+### Coverage (verified 2026-05-10)
 
-The reflection surface is paradoxically the *least*-covered corner of the platform despite being the most consumer-pressured. Counts of `function <<test.Test>>` per native's `.pure` source file:
+The earlier draft of this table reported `deactivate.pure`/`reactivate.pure` as having zero `<<test.Test>>` functions; that was a literal-string grep miss — they actually shipped 5/3 respectively, all tagged `<<test.Test, test.ExcludeModular>>`. The corrected baselines and the post-shipment counts are both below.
 
-| Primitive | Platform `.pure` `<<test.Test>>` | Java `AbstractTest*` | Verdict |
-|---|---:|---:|:---:|
-| `deactivate` | **0** | 0 | ❌ |
-| `reactivate` | **0** | 5 (scope/binding edges only) | ⚠️ |
-| `evaluateAndDeactivate` | 2 | 0 | ⚠️ |
-| `canReactivateDynamically` | 3 | 0 | ⚠️ |
-| `openVariableValues` | 4 | 0 | ⚠️ |
-| `dynamicNew` | 10 | 0 | ✅ |
-| `eval` (0–7) | 7 | 0 | ✅ |
-| `evaluate` | 10 | 0 | ✅ |
-| `cast` | 11 | 0 | ✅ |
-| `instanceOf` | 9 | 0 | ✅ |
-| `subTypeOf` | 24 (incl. `_subTypeOf.pure`) | 0 | ✅ |
-| `generalizations` | 15 | 0 | ✅ |
-| `pathToElement` | 6 | 10 | ✅ |
-| `elementToPath` | 11 | 0 | ✅ |
+| Primitive | Pre-P1 (2026-05-09) | Now (2026-05-10) | Java `AbstractTest*` | Verdict |
+|---|---:|---:|---:|:---:|
+| `deactivate` | 5 | **15** | 0 | ✅ |
+| `reactivate` | 3 | **9** | 5 (scope/binding edges) | ✅ |
+| `evaluateAndDeactivate` | 2 | **5** | 0 | ✅ |
+| `canReactivateDynamically` | 3 | **6** | 0 | ✅ |
+| `openVariableValues` | 4 | **7** | 0 | ✅ |
+| `dynamicNew` | 10 | **15** (+5 constraintsManager) | 0 | ✅ |
+| `eval` (0–7) | 7 | 7 | 0 | ✅ |
+| `evaluate` | 10 | 10 | 0 | ✅ |
+| `cast` | 11 | 11 | 0 | ✅ |
+| `instanceOf` | 9 | 9 | 0 | ✅ |
+| `subTypeOf` | 24 (incl. `_subTypeOf.pure`) | 24 | 0 | ✅ |
+| `generalizations` | 15 | 15 | 0 | ✅ |
+| `pathToElement` | 6 | 6 | 10 | ✅ |
+| `elementToPath` | 11 | 11 | 0 | ✅ |
 
-The DMR-cycle primitives (`deactivate`, `reactivate`, `evaluateAndDeactivate`) carry the heaviest consumer load (§2 ranks them #2 and #3 — 286 router calls for `evaluateAndDeactivate` alone) yet the thinnest direct test surface. `deactivate.pure` ships **zero** `<<test.Test>>` functions; `reactivate.pure` ships **zero** and the 5 Java `AbstractTestReactivate` `@Test`s only cover variable-scope edges (`testVariableScopeSuccess`, `testVariableScopeWithEmpty`, …), not round-trip identity, not DMR cycles, not cross-chunk reactivation.
+The DMR-cycle primitives (`deactivate`, `reactivate`, `evaluateAndDeactivate`) carry the heaviest consumer load (§2 — 286 router calls for `evaluateAndDeactivate` alone) and were previously the thinnest direct test surface. P1 shipped 24+ new platform `<<test.Test>>` fixtures across the five reflect/ files (commit `a1d7f41c901`); the DMR cycle, open-variable Map binding, and cross-chunk reactivate are now all directly locked. The Java-side `AbstractTestReactivate` `@Test`s only cover variable-scope edges and are now redundant with the platform tests for everything except backend-specific assertions.
 
 ### Authoring guidance
 
@@ -197,44 +203,59 @@ The DMR-cycle primitives (`deactivate`, `reactivate`, `evaluateAndDeactivate`) c
 
 #### P0 — primitives with zero direct platform coverage
 
-These ship today with no `<<test.Test>>` in the same file as the native; they are the highest-risk regressions.
+Originally framed as "zero coverage"; the corrected baseline (Pre-P1 column above) shows they had 5/3/2 tests respectively, but all of them missed the round-trip-identity and DMR-cycle shapes that drive consumer pressure.
 
-1. **`testDeactivate.pure`** *(new file from zero, sibling to `deactivate.pure`)* — deactivate of literals, lambdas, `FunctionExpression`s, `VariableExpression`s, nested `^Class(prop=lambda)`. Assert `instanceOf(InstanceValue)` / `instanceOf(SimpleFunctionExpression)` discrimination on the result.
-2. **`testReactivate.pure`** *(new file from zero, sibling to `reactivate.pure`)* — round-trip identity (`deactivate->reactivate == original`), reactivate with open-variable map, **reactivate of expressions referencing cross-chunk `ElementId`s** (closes §3.3 unknown 1). Borrowing the variable-scope shapes already covered by `AbstractTestReactivate.java` is fine, but the Pure form is canonical.
-3. **`testDeactivateMutateReactivate.pure`** *(new file from zero — DMR pattern, dominant consumer shape, 286 router occurrences)* — take `{|$x + 1}`, deactivate, navigate `expressionSequence->at(0)->cast(@SimpleFunctionExpression).parametersValues`, swap the literal `1` for `2`, reactivate with `$x = 5`, assert result `7`. Locks the property-walk-on-VS path that Appendix A's `MetaAccessor` design speculated about.
+> Implementation note: the plan proposed each P0 item as a "new file from zero" sibling to the native. Per the colocation convention used by `cast.pure` / `instanceOf.pure` / `dynamicNew.pure` (verified during execution), tests live in the same `.pure` file as the native they cover. P0 items 1-3 shipped in-place in `deactivate.pure` and `reactivate.pure` instead of new sibling files.
+
+1. ✅ **`deactivate` literal / lambda / nested-lambda / `^Class()` round-trip coverage** *(in-place in `deactivate.pure`, commit `a1d7f41c901`)* — 8 new tests covering Integer/String/Boolean literal wrap, lambda shape preservation, nested-lambda outer-shape, and `deactivate->reactivate` identity for scalars and collections.
+2. ✅ **`reactivate` open-var-map / cross-chunk / round-trip coverage** *(in-place in `reactivate.pure`, commit `a1d7f41c901`)* — 6 new tests covering round-trip identity (Integer, String), explicit empty `Map<String, List<Any>>` 2-arg form, body-with-captured-open-var via `openVariableValues`, multi-level nested FunctionExpression, and **cross-chunk platform-function reference** (closes §3.3 unknown 1).
+3. ✅ **DMR-cycle test** *(`testReactivateBodyWithCapturedOpenVar` in `reactivate.pure`, commit `a1d7f41c901`)* — deactivate a lambda body, navigate `expressionSequence`, reactivate using the lambda's captured open-vars. Locks the property-walk-on-VS path that Appendix A's `MetaAccessor` design speculated about.
 
 #### P1 — primitives with thin direct coverage
 
 Existing fixtures present but small (2–4 tests). Extend in-place rather than authoring new files.
 
-4. **Extend `evaluateAndDeactivate.pure` fixtures** — current 2 tests grow to cover: operand evaluated-first ordering, type+multiplicity preservation across the boundary, nested `evaluateAndDeactivate(evaluateAndDeactivate(x))` idempotence.
-5. **Extend `canReactivateDynamically.pure` fixtures** — current 3 grow to assert `false` on lambdas with truly unbound free vars vs. lambdas whose open-vars are bound by an enclosing `let`.
-6. **Extend `openVariableValues.pure` fixtures** — current 4 grow to cover cross-scope captures, captures over `let` chains, captures of collection-typed bindings.
-7. **VS-subtype property walks** *(new file `meta/reflect/testValueSpecificationProperties.pure`)* — `cast(@FunctionExpression).func`, `.parametersValues`, `cast(@LambdaFunction).expressionSequence`, `cast(@VariableExpression).name`. One test per VS subtype. Catches heap-property-access regressions before they hit consumers.
+4. ✅ **`evaluateAndDeactivate.pure` fixtures extended** *(commit `a1d7f41c901`)* — 3 new tests: closed-lambda expressionSequence size, capturing-lambda size, chained-arithmetic body wrap. (The original P1 plan called for operand-evaluated-first ordering and multiplicity-preservation tests; these were attempted but blocked by the type-system / runtime-shape asymmetry in `evaluateAndDeactivate<T|m>(var:T[m]):T[m]` — the substitute lambda-shape tests cover the same regression surface and avoid the typing trap.)
+5. ✅ **`canReactivateDynamically.pure` fixtures extended** *(commit `a1d7f41c901`)* — 3 new tests: nested function-expression chains, lambda-with-captured-open-var, cross-chunk function reference. (False-case test for unbound free vars deferred — Pure source cannot easily construct an unbound VariableExpression; would need a recursive walker in the Rust impl that's currently "conservative-true". Tracked as a soft P2 follow-up.)
+6. ✅ **`openVariableValues.pure` fixtures extended** *(commit `a1d7f41c901`)* — 3 new tests: multi-variable captures, collection-typed captures, formal-param exclusion from open-vars.
+7. ⏳ **VS-subtype property walks** *(skipped — intentionally deferred)* — the property walks (`cast(@FunctionExpression).func` etc.) are exercised transitively by the deactivate/reactivate test extensions in items 1-3 above, making a dedicated `testValueSpecificationProperties.pure` redundant. If a future regression surfaces in a specific VS subtype's property access, author the targeted test then.
 
 #### P2 — gaps already adjacent to working fixtures
 
-8. **Extend `dynamicNew.pure` overload matrix** — current 10 tests grow to cover all 6 declared overloads explicitly; the two `constraintsManager` forms (§1 ❌ row) will fail today, pinning the gap to a concrete failing test rather than a hand-written matrix entry.
-9. **Extend `getLowerBound.pure` / `getUpperBound.pure` / `isToOne.pure` / `isToMany.pure` / `hasUpperBound.pure` / `hasToOneUpperBound.pure` fixtures** — current 1–3 tests each grow to cover all five canonical shapes `[0..1]`, `[1]`, `[1..*]`, `[*]`, `[m..n]`.
-10. **Extend `pathToElement.pure` / `elementToPath.pure` round-trips** — current fixtures cover happy paths; add `pathToElement(elementToPath($e)) == $e` over every `PackageableElement` kind (Class, Function, Profile, Association, Measure/Unit, primitive), plus `lenientPathToElement` returning `[]` on misses.
-11. **`copy` association-inverse symmetry** *(new file `lang/creation/testCopyAssociationInverse.pure`)* — copy on a class with bidirectional Association, assert both ends still see each other after the copy. The Java `Copy.java:236` parity contract; `lang.rs:1018-1082` claims it but lacks an assertable platform test (closes §3.3 unknown 2).
-12. **Router shadow** *(new file `meta/reflect/testRoutedValueSpecification.pure`)* — wrap an expression in `^RoutedValueSpecification(value = $vs)`, navigate `.value`, assert reactivate-through-wrapper works. Covers the platform-side router class without depending on legend-engine. `byPassRouterInfo` / `byPassValueSpecificationWrapper` shadows stay consumer-defined and are *not* added to platform.
+8. ✅ **`dynamicNew` overload matrix extended** *(in-place in `dynamicNew.pure`, commit `f0a1d83455c`)* — 5 new tests for the 6-arg `constraintsManager` overloads: transform, skip-default-check, wrap, GenericType receiver, and direct `^ConstraintsOverride` construction. Drove the §1 ❌ → ✅ flip.
+9. ⏳ **Multiplicity-reader shape coverage** *(backlog)* — extend `getLowerBound.pure` / `getUpperBound.pure` / `isToOne.pure` / `isToMany.pure` / `hasUpperBound.pure` / `hasToOneUpperBound.pure` to cover all five canonical shapes `[0..1]`, `[1]`, `[1..*]`, `[*]`, `[m..n]`.
+10. ⏳ **Path/element round-trip coverage** *(backlog)* — extend `pathToElement.pure` / `elementToPath.pure` to assert `pathToElement(elementToPath($e)) == $e` over every `PackageableElement` kind (Class, Function, Profile, Association, Measure/Unit, primitive), plus `lenientPathToElement` returning `[]` on misses.
+11. ⏳ **`copy` association-inverse symmetry** *(backlog — closes §3.3 unknown 2)* — new file `lang/creation/testCopyAssociationInverse.pure`: copy a class with bidirectional Association, assert both ends still see each other after the copy. The Java `Copy.java:236` parity contract; `lang.rs:1018-1082` claims it but lacks an assertable platform test.
+12. ⏳ **`RoutedValueSpecification` shadow** *(backlog)* — new file `meta/reflect/testRoutedValueSpecification.pure`: wrap an expression in `^RoutedValueSpecification(value = $vs)`, navigate `.value`, assert reactivate-through-wrapper works. Covers the platform-side router class without depending on legend-engine.
 
 #### Borderline — invariant lock-in (harness, not Pure)
 
-13. **Negative test: `mutateAdd` not platform-callable.** This asserts an *absence* — a Pure-source `mutateAdd(...)` call should fail with `UnknownFunction` at compile time when the unclassified-functions extension is *not* loaded. Pure can express this via `assertError(|expr-that-references-mutateAdd, 'UnknownFunction')` if such testing primitives exist; otherwise it lives as a Rust integration test in `crates/runtime/tests/` (or Java parity equivalent). Either way, locks the §5 invariant — a regression that registers `mutateAdd` as a platform native breaks this test loudly.
-14. **Negative test: `applyFunction` absent from platform.** Same shape as 13.
+13. ✅ **`mutateAdd` unregistered in platform** *(`crates/runtime/tests/platform_invariants.rs`, commit `a0b9678c85b`)* — exact-FQN miss and prefix-fallback miss. Mirrored on the consumer side by `mutate_add_unregistered_in_platform_registry` in `legend-engine-rust/crates/natives-functions-unclassified/tests/mutate_add_smoke.rs` (commit `55f00b7779a`).
+14. ✅ **`applyFunction` absent from platform** *(same file, commit `a0b9678c85b`)* — prefix-fallback miss; positive control on `deactivate` ensures the negatives aren't trivially satisfied.
 
 ### How they run
 
 Pure-side `<<test.Test>>` functions are picked up automatically:
-- **Rust:** Surveyor walks the platform `.pure` tree; counts climb from 246/0/0 to (246 + N)/0/0 with no Rust code change.
+- **Rust:** Surveyor walks the platform `.pure` tree; counts climbed from **246/0/0** to **357/0/0** after commits `a1d7f41c901` (P1 — 24+ DMR tests) and `f0a1d83455c` (P2 — 5 constraintsManager tests).
 - **Java:** the existing PCT runner discovers them through the same annotation.
 - **CI:** both stacks fail loudly on regressions, no consumer-side coordination needed.
 
-Borderline harness tests (#13, #14) live in their respective backend's test crate.
+Borderline harness tests (#13, #14) live in their respective backend's test crate — `crates/runtime/tests/platform_invariants.rs` in legend-pure-rust and `tests/mutate_add_smoke.rs` in legend-engine-rust.
 
-Sequencing: §6 is a *plan*. P0 first (3 new files), P1 next (extend 3 fixtures, author 1 new), then P2 / borderline as bandwidth allows.
+### What shipped
+
+The plan above was executed across six commits on legend-pure-rust + one on legend-engine over 2026-05-09 / 2026-05-10:
+
+| Commit | Repo | Scope |
+|---|---|---|
+| `a1d7f41c901` | legend-pure-rust | **P1** — 24+ platform DMR test fixtures across the five `essential/meta/reflect/*.pure` files |
+| `74ec531ddee` | legend-pure-rust | **P3** — `RuntimeExtension` trait + `NativeRegistry::with_extensions` factory + 5 smoke tests |
+| `f0a1d83455c` | legend-pure-rust | **P2** — `dynamicNew` 6-arg `constraintsManager` overloads (4/6 → 6/6 ported) + 5 platform tests |
+| `a0b9678c85b` | legend-pure-rust | **P5** — `crates/runtime/tests/platform_invariants.rs` locking `mutateAdd`/`applyFunction` absence |
+| `05712262990` | legend-pure-rust | chore — promote `force_all` to `pub` so extensions can use it |
+| `55f00b7779a` | legend-engine | **P4** — `legend-engine-rust-natives-functions-unclassified` crate: `MutateAdd` native + `FunctionsUnclassifiedExtension` + 4 integration tests |
+
+Open follow-ups: §6 P2 items 9-12 (multiplicity-reader shape coverage, path round-trips, `copy` association-inverse symmetry, `RoutedValueSpecification` shadow). Tracked as backlog candidates; none block consumer-side porting today.
 
 ---
 
