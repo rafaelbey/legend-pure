@@ -1295,61 +1295,87 @@ impl NativeFunction for DynamicNew {
 
         // Override-bearing overloads land here as
         // `dynamicNew(class|gt, kvs, getterToOne, getterToMany,
-        // hiddenPayload [, constraintsManager])`. Allocate a
-        // `GetterOverride` heap wrapper carrying every non-empty
-        // hook + payload, then bind it to the new instance's
+        // hiddenPayload [, constraintsManager])`. Allocate the
+        // appropriate heap wrapper carrying every non-empty hook +
+        // payload + manager, then bind it to the new instance's
         // `elementOverride` slot so `eval_property_access` can
-        // intercept absent property reads via the lambdas. Mirrors
-        // Java Pure's `GetterOverride` metamodel object (m3.pure
-        // `meta::pure::metamodel::type::GetterOverride`).
-        if values.len() >= 5 {
-            let getter_to_one = &values[2];
-            let getter_to_many = &values[3];
-            let hidden_payload = &values[4];
-            let any_set = !matches!(getter_to_one, Value::Unit)
-                || !matches!(getter_to_many, Value::Unit)
-                || !matches!(hidden_payload, Value::Unit);
-            if any_set {
-                let override_obj = ctx
-                    .heap_mut()
-                    .alloc_dynamic(crate::m3_paths::GETTER_OVERRIDE);
-                if !matches!(getter_to_one, Value::Unit) {
-                    ctx.heap_mut().mutate_add(
-                        &override_obj,
-                        "getterOverrideToOne",
-                        std::slice::from_ref(getter_to_one),
-                    )?;
-                }
-                if !matches!(getter_to_many, Value::Unit) {
-                    ctx.heap_mut().mutate_add(
-                        &override_obj,
-                        "getterOverrideToMany",
-                        std::slice::from_ref(getter_to_many),
-                    )?;
-                }
-                if !matches!(hidden_payload, Value::Unit) {
-                    ctx.heap_mut().mutate_add(
-                        &override_obj,
-                        "hiddenPayload",
-                        std::slice::from_ref(hidden_payload),
-                    )?;
-                }
+        // intercept absent property reads via the lambdas and so the
+        // metamodel-shape contract from
+        // `testClassConstraintHandlerSignature` (reading `.constraintsManager`
+        // off the override) holds. Mirrors Java Pure's
+        // `GetterOverride` / `ConstraintsOverride` /
+        // `ConstraintsGetterOverride` metamodel objects in m3.pure.
+        let getter_to_one = values.get(2).cloned().unwrap_or(Value::Unit);
+        let getter_to_many = values.get(3).cloned().unwrap_or(Value::Unit);
+        let hidden_payload = values.get(4).cloned().unwrap_or(Value::Unit);
+        let constraints_manager = values.get(5).cloned().unwrap_or(Value::Unit);
+        let getter_set = !matches!(getter_to_one, Value::Unit)
+            || !matches!(getter_to_many, Value::Unit)
+            || !matches!(hidden_payload, Value::Unit);
+        let manager_set = !matches!(constraints_manager, Value::Unit);
+        if getter_set || manager_set {
+            let override_class = match (getter_set, manager_set) {
+                (true, true) => crate::m3_paths::CONSTRAINTS_GETTER_OVERRIDE,
+                (true, false) => crate::m3_paths::GETTER_OVERRIDE,
+                (false, true) => crate::m3_paths::CONSTRAINTS_OVERRIDE,
+                (false, false) => unreachable!(),
+            };
+            let override_obj = ctx.heap_mut().alloc_dynamic(override_class);
+            if !matches!(getter_to_one, Value::Unit) {
                 ctx.heap_mut().mutate_add(
-                    &obj,
-                    "elementOverride",
-                    &[Value::Object(override_obj)],
+                    &override_obj,
+                    "getterOverrideToOne",
+                    std::slice::from_ref(&getter_to_one),
                 )?;
             }
+            if !matches!(getter_to_many, Value::Unit) {
+                ctx.heap_mut().mutate_add(
+                    &override_obj,
+                    "getterOverrideToMany",
+                    std::slice::from_ref(&getter_to_many),
+                )?;
+            }
+            if !matches!(hidden_payload, Value::Unit) {
+                ctx.heap_mut().mutate_add(
+                    &override_obj,
+                    "hiddenPayload",
+                    std::slice::from_ref(&hidden_payload),
+                )?;
+            }
+            if manager_set {
+                ctx.heap_mut().mutate_add(
+                    &override_obj,
+                    "constraintsManager",
+                    std::slice::from_ref(&constraints_manager),
+                )?;
+            }
+            ctx.heap_mut().mutate_add(
+                &obj,
+                "elementOverride",
+                &[Value::Object(override_obj)],
+            )?;
         }
 
-        // Run the class's `[==]` constraints against the populated
-        // instance — `^Class(...)` does this in `finish_construction`,
-        // and `dynamicNew` carries the same Pure-level contract per
-        // platform test `testConstraintWithDynamicNewNoOverrides`.
-        // No type-variable values flow through this path; we pass
-        // an empty slice (matches the `^Class(...)` codepath when no
-        // `<T|m>` arguments are supplied).
-        evaluate_class_constraints(ctx, class_id, obj.clone(), &[])?;
+        // Constraint handling. Two paths:
+        //   (a) `constraintsManager` set — invoke it with the populated
+        //       instance; its return value becomes the dynamicNew
+        //       result, replacing the constructed object. Default
+        //       constraint checks are SKIPPED in this branch — parity
+        //       with Java `DefaultConstraintHandler.handleConstraints`
+        //       which short-circuits to the manager when present
+        //       (see testClassConstraintHandler, testClassConstraintHandlerCopyAfterDynamicNew).
+        //   (b) no manager — run the class's `[==]` constraints
+        //       against the populated instance, as `^Class(...)` does
+        //       in `finish_construction`. No type-variable values flow
+        //       through this path; we pass an empty slice (matches the
+        //       `^Class(...)` codepath when no `<T|m>` arguments are
+        //       supplied).
+        let result_value = if manager_set {
+            ctx.call_function(&constraints_manager, &[Value::Object(obj.clone())])?
+        } else {
+            evaluate_class_constraints(ctx, class_id, obj.clone(), &[])?;
+            Value::Object(obj)
+        };
 
         // NOTE: `dynamicNew` is intentionally permissive about missing
         // required properties — `testCyclicalReferencesAreNotImplicit`
@@ -1359,7 +1385,7 @@ impl NativeFunction for DynamicNew {
         // produced; the dynamicNew-allocated object itself is NOT pushed.
         ConstructionFrame::drain_if_outermost(ctx)?;
 
-        Ok(Evaluated::new(Value::Object(obj)))
+        Ok(Evaluated::new(result_value))
     }
 
     fn signature(&self) -> &'static str {
@@ -2266,6 +2292,21 @@ pub fn register(registry: &mut NativeRegistry) {
     );
     registry.register(
         "dynamicNew_GenericType_1__KeyValue_MANY__Function_$0_1$__Function_$0_1$__Any_$0_1$__Any_1_",
+        DynamicNew,
+    );
+    // 6-arg `constraintsManager`-bearing overloads (declared at
+    // platform/pure/essential/lang/creation/dynamicNew.pure:26-27).
+    // When the trailing `Function<{Any[1]->Any[1]}>[0..1]` is set, the
+    // manager replaces the default constraint check — see
+    // `DynamicNew::execute` for the dispatch logic and platform tests
+    // `testClassConstraintHandler` / `testEvaluateConstraint` for
+    // expected semantics.
+    registry.register(
+        "dynamicNew_Class_1__KeyValue_MANY__Function_$0_1$__Function_$0_1$__Any_$0_1$__Function_$0_1$__Any_1_",
+        DynamicNew,
+    );
+    registry.register(
+        "dynamicNew_GenericType_1__KeyValue_MANY__Function_$0_1$__Function_$0_1$__Any_$0_1$__Function_$0_1$__Any_1_",
         DynamicNew,
     );
 
