@@ -44,12 +44,21 @@ fn parse(source: &str) -> SourceFile {
 }
 
 #[allow(clippy::needless_pass_by_value)] // tests pass Vec<SourceFile> directly for ergonomics
-fn compile_with_diagram(sources: Vec<SourceFile>, extension: &DiagramExtension) -> Vec<String> {
+fn compile_with_diagram(
+    sources: Vec<SourceFile>,
+    extension: &DiagramExtension,
+) -> (
+    Vec<String>,
+    legend_pure_parser_pure::model::PureModel,
+) {
     let exts: [&dyn CompilerExtension; 1] = [extension];
     let result = legend_pure_parser_pure::pipeline::compile_with_extensions(&sources, &[], &exts);
     match result {
-        Ok(_) => Vec::new(),
-        Err(p) => p.errors.iter().map(|e| e.message.clone()).collect(),
+        Ok(model) => (Vec::new(), model),
+        Err(p) => (
+            p.errors.iter().map(|e| e.message.clone()).collect(),
+            p.model,
+        ),
     }
 }
 
@@ -67,13 +76,15 @@ fn extension_registers_diagram_under_fqn() {
     "};
     let file = parse(source);
     let extension = DiagramExtension::new();
-    let errors = compile_with_diagram(vec![file], &extension);
+    let (errors, model) = compile_with_diagram(vec![file], &extension);
 
-    let registered = extension.diagrams();
+    let registered = DiagramExtension::diagrams_from_model(&model);
     assert!(
-        registered.contains_key("model::test::TinyDiagram"),
+        registered
+            .iter()
+            .any(|(fqn, _)| fqn.as_str() == "model::test::TinyDiagram"),
         "expected diagram FQN registered; got keys: {:?}",
-        registered.keys().collect::<Vec<_>>()
+        registered.iter().map(|(fqn, _)| fqn).collect::<Vec<_>>()
     );
 
     // No validation errors: the TypeView's `model::test::A` was
@@ -115,7 +126,7 @@ fn validate_reports_unresolved_class_in_typeview() {
     "};
     let file = parse(source);
     let extension = DiagramExtension::new();
-    let errors = compile_with_diagram(vec![file], &extension);
+    let (errors, _model) = compile_with_diagram(vec![file], &extension);
 
     assert!(
         errors
@@ -140,7 +151,7 @@ fn validate_reports_dangling_edge_endpoints() {
     "};
     let file = parse(source);
     let extension = DiagramExtension::new();
-    let errors = compile_with_diagram(vec![file], &extension);
+    let (errors, _model) = compile_with_diagram(vec![file], &extension);
 
     assert!(
         errors
@@ -163,7 +174,7 @@ fn duplicate_diagram_fqn_reports_error() {
     "};
     let file = parse(source);
     let extension = DiagramExtension::new();
-    let errors = compile_with_diagram(vec![file], &extension);
+    let (errors, model) = compile_with_diagram(vec![file], &extension);
 
     assert!(
         errors
@@ -172,9 +183,11 @@ fn duplicate_diagram_fqn_reports_error() {
         "expected duplicate-diagram error; got {errors:?}",
     );
     // First registration is preserved.
-    let map = extension.diagrams();
+    let map = DiagramExtension::diagrams_from_model(&model);
     assert_eq!(
-        map.keys().filter(|k| k.contains("DupDiagram")).count(),
+        map.iter()
+            .filter(|(fqn, _)| fqn.as_str().contains("DupDiagram"))
+            .count(),
         1,
         "expected exactly one DupDiagram entry"
     );

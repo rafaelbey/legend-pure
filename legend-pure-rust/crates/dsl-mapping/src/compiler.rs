@@ -215,15 +215,6 @@ impl MappingExtension {
         Self::default()
     }
 
-    /// Snapshot of all registered mappings keyed by FQN. Returns the
-    /// extension's in-process state — use this immediately after a
-    /// fresh compile to see the rich AST. After a `.purem` round-trip
-    /// this map is empty; use [`Self::mappings_from_model`] instead.
-    #[must_use]
-    pub fn mappings(&self) -> HashMap<SmolStr, RegisteredMapping> {
-        self.mappings.borrow().clone()
-    }
-
     /// Snapshot of all registered mappings **as graph elements** —
     /// walks `model.elements()` for `Element::DSLInstance` entries
     /// keyed `"Mapping"` and decodes each payload.

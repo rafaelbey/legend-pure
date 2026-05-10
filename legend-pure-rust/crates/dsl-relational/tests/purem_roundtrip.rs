@@ -24,13 +24,9 @@ use legend_pure_parser_pure::extension::CompilerExtension;
 use legend_pure_parser_pure::pipeline::{compile_with_extensions, init_bootstrap_model};
 use legend_pure_parser_pure::purem::{merge_slice, read_repo, slice_by_repo, write_repo};
 
-/// Simple Pure header so the slice's chunk has at least one M3
-/// element — see the dsl-mapping test's note about the empty-chunk
-/// edge case, out of scope for this pilot.
+/// DSL-only source — exercises the `pass_declare` fix that pushes a
+/// chunk for any non-empty source file.
 const FIXTURE: &str = indoc! {r"
-    ###Pure
-    Class pkg::Sentinel {}
-
     ###Relational
     Database pkg::PaymentsDb
     (
@@ -110,13 +106,6 @@ fn relational_purem_roundtrip_preserves_databases() {
         "DatabaseSnapshot must match exactly through .purem round-trip"
     );
 
-    // ----- Phase 6: legacy databases() on a fresh extension is empty
-    let fresh_extension = RelationalExtension::new();
-    assert!(
-        fresh_extension.databases().is_empty(),
-        "fresh extension has no in-process state; round-trip flows \
-         through the graph instead"
-    );
 }
 
 #[test]
@@ -124,9 +113,6 @@ fn relational_purem_roundtrip_preserves_includes_and_filters() {
     // Database with an include + a Filter, so the snapshot exercises
     // both `includes` and `filters` fields.
     let source = indoc! {r"
-        ###Pure
-        Class pkg::Sentinel {}
-
         ###Relational
         Database pkg::CommonDb
         (

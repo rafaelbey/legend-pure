@@ -86,15 +86,21 @@ fn agg_body(m: &MappingDef, idx: usize) -> &AggregationAwareClassMappingBody {
     body
 }
 
-fn compile(sources: Vec<SourceFile>) -> (Vec<CompilationError>, MappingExtension) {
+fn compile(
+    sources: Vec<SourceFile>,
+) -> (
+    Vec<CompilationError>,
+    MappingExtension,
+    legend_pure_parser_pure::model::PureModel,
+) {
     let extension = MappingExtension::new();
     let exts: [&dyn CompilerExtension; 1] = [&extension];
     let result = legend_pure_parser_pure::pipeline::compile_with_extensions(&sources, &[], &exts);
-    let errors = match result {
-        Ok(_) => Vec::new(),
-        Err(p) => p.errors,
+    let (errors, model) = match result {
+        Ok(model) => (Vec::new(), model),
+        Err(p) => (p.errors, p.model),
     };
-    (errors, extension)
+    (errors, extension, model)
 }
 
 // ----- Parser coverage --------------------------------------------------
@@ -335,7 +341,7 @@ fn aggregation_aware_with_pure_mappings_validates_clean() {
         )
     "};
     let file = parse("agg_clean.pure", source);
-    let (errors, ext) = compile(vec![file]);
+    let (errors, _ext, model) = compile(vec![file]);
     let agg_errors: Vec<_> = errors
         .iter()
         .filter(|e| {
@@ -349,7 +355,11 @@ fn aggregation_aware_with_pure_mappings_validates_clean() {
         "expected no AggregationAware-validator errors; got: {:#?}",
         agg_errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
-    assert!(ext.mappings().contains_key("my::test::SalesMapping"));
+    assert!(
+        MappingExtension::mappings_from_model(&model)
+            .iter()
+            .any(|(fqn, _)| fqn.as_str() == "my::test::SalesMapping")
+    );
 }
 
 #[test]
@@ -388,7 +398,7 @@ fn nested_main_mapping_unknown_property_errors() {
         )
     "};
     let file = parse("agg_nested_unknown.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     assert!(
         errors.iter().any(|e| e.message.contains("doesNotExist")),
         "expected unknown-property error in nested main mapping; got: {:#?}",
@@ -436,7 +446,7 @@ fn map_fn_returning_class_errors() {
         )
     "};
     let file = parse("agg_bad_mapfn.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     assert!(
         errors
             .iter()
@@ -491,7 +501,7 @@ fn aggregate_fn_returning_class_errors() {
         )
     "};
     let file = parse("agg_bad_aggfn.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     assert!(
         errors
             .iter()
