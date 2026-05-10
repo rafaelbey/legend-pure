@@ -306,7 +306,7 @@ impl NativeFunction for Cast {
         // Forced `Value::Element` drops them; we peek the original spec
         // tree so `cast(10, @P(8))` can bind `x = 8` for the constraint
         // evaluation below. The compiler stores them as
-        // `TypeExpr::Named { value_arguments, … }` in the `TypeReference`
+        // `TypeExpr::Named { value_arguments }` in the `TypeReference`
         // ExprKind produced by `@P(8)` — see `lower_type_reference`.
         let type_value_args: Vec<legend_pure_parser_pure::types::ConstValue> = if args.len() > 1 {
             match &*args[1].kind {

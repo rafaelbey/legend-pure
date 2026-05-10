@@ -1462,6 +1462,7 @@ impl<'a> M3Parser<'a> {
                 type_arguments,
                 multiplicity_arguments,
                 value_arguments: vec![crate::types::ConstValue::String(raw.to_string())],
+                source_info: None,
             }
         }
     }
@@ -1605,6 +1606,8 @@ impl<'a> M3Parser<'a> {
                 Element::Profile(Profile {
                     stereotypes: vec![],
                     tags: vec![],
+                    stereotype_source_infos: Vec::new(),
+                    tag_source_infos: Vec::new(),
                 }),
             );
             return;
@@ -1643,7 +1646,16 @@ impl<'a> M3Parser<'a> {
         self.alloc_element(
             name,
             package_segments,
-            Element::Profile(Profile { stereotypes, tags }),
+            // m3 bootstrap parser doesn't carry per-name source info — the IDE
+// can't navigate to declarations inside m3-bootstrapped Profiles
+// (e.g. `meta::pure::profiles::test`) yet. Parser-loaded profiles
+// fill these in.
+Element::Profile(Profile {
+    stereotypes,
+    tags,
+    stereotype_source_infos: Vec::new(),
+    tag_source_infos: Vec::new(),
+}),
         );
     }
 

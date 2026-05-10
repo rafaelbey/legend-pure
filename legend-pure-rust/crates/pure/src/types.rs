@@ -59,6 +59,17 @@ pub enum TypeExpr {
     Named {
         /// The resolved element (`Class`, `Enum`, `PrimitiveType`, `Measure`, `Unit`).
         element: ElementId,
+        /// Source range covering the named-element identifier in the
+        /// surface text (`String`, `Person`, `meta::pure::Foo`).
+        /// Populated by the resolver when the type expression came
+        /// through the parser. `None` for snapshot-loaded types,
+        /// m3-bootstrap types, and synthetically constructed `Named`
+        /// variants. Used by IDE goto-def to underline + click a
+        /// type reference at any position it appears (`extends`,
+        /// parameter type, return type, property type, generic
+        /// argument, …).
+        #[serde(default)]
+        source_info: Option<SourceInfo>,
         /// Generic type arguments: `<String, Integer>`.
         type_arguments: Vec<TypeExpr>,
         /// Generic multiplicity arguments: the `*` in `Holder<String|*>`.
@@ -684,6 +695,7 @@ mod tests {
             type_arguments: vec![],
             multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
+            source_info: None,
         };
         assert!(matches!(ty, TypeExpr::Named { .. }));
     }
@@ -699,6 +711,7 @@ mod tests {
             type_arguments: vec![],
             multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
+            source_info: None,
         };
         let list_ty = TypeExpr::Named {
             element: ElementId::InstanceId {
@@ -708,6 +721,7 @@ mod tests {
             type_arguments: vec![string_ty],
             multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
+            source_info: None,
         };
         if let TypeExpr::Named { type_arguments, .. } = &list_ty {
             assert_eq!(type_arguments.len(), 1);
@@ -725,6 +739,7 @@ mod tests {
             type_arguments: vec![],
             multiplicity_arguments: Vec::new(),
             value_arguments: vec![ConstValue::Integer(255)],
+            source_info: None,
         };
         if let TypeExpr::Named {
             value_arguments, ..
@@ -746,6 +761,7 @@ mod tests {
             type_arguments: vec![],
             multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
+            source_info: None,
         };
         let boolean = TypeExpr::Named {
             element: ElementId::InstanceId {
@@ -755,6 +771,7 @@ mod tests {
             type_arguments: vec![],
             multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
+            source_info: None,
         };
         let ft = TypeExpr::FunctionType {
             parameters: vec![(string, Multiplicity::PureOne)],

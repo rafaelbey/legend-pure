@@ -373,6 +373,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                 type_arguments: Vec::new(),
                 multiplicity_arguments: Vec::new(),
                 value_arguments: Vec::new(),
+                source_info: None,
             },
             multiplicity: Multiplicity::PureOne,
         }),
@@ -406,6 +407,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                         type_arguments: Vec::new(),
                         multiplicity_arguments: Vec::new(),
                         value_arguments: Vec::new(),
+                        source_info: None,
                     },
                     Multiplicity::ZeroOrMany,
                 )
@@ -480,6 +482,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                                 type_arguments: Vec::new(),
                                 multiplicity_arguments: Vec::new(),
                                 value_arguments: Vec::new(),
+                                source_info: None,
                             }
                         }
                     }
@@ -490,6 +493,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                     type_arguments: Vec::new(),
                     multiplicity_arguments: Vec::new(),
                     value_arguments: Vec::new(),
+                    source_info: None,
                 });
 
             Some(ResolvedType {
@@ -532,6 +536,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                     type_arguments: Vec::new(),
                     multiplicity_arguments: Vec::new(),
                     value_arguments: Vec::new(),
+                    source_info: None,
                 },
                 multiplicity: Multiplicity::PureOne,
             })
@@ -559,6 +564,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                     type_arguments: Vec::new(),
                     multiplicity_arguments: Vec::new(),
                     value_arguments: Vec::new(),
+                    source_info: None,
                 },
                 multiplicity: Multiplicity::PureOne,
             }),
@@ -582,6 +588,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                         type_arguments: Vec::new(),
                         multiplicity_arguments: Vec::new(),
                         value_arguments: Vec::new(),
+                        source_info: None,
                     },
                     multiplicity: Multiplicity::PureOne,
                 })
@@ -606,6 +613,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                         type_arguments: Vec::new(),
                         multiplicity_arguments: Vec::new(),
                         value_arguments: Vec::new(),
+                        source_info: None,
                     },
                     multiplicity: Multiplicity::PureOne,
                 })
@@ -634,6 +642,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                     type_arguments: Vec::new(),
                     multiplicity_arguments: Vec::new(),
                     value_arguments: Vec::new(),
+                    source_info: None,
                 },
                 multiplicity: Multiplicity::PureOne,
             }),
@@ -805,6 +814,7 @@ fn process_let_function_call(
             type_arguments: Vec::new(),
             multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
+            source_info: None,
         },
         multiplicity: Multiplicity::Range {
             lower: 0,
@@ -1508,6 +1518,7 @@ fn infer_property_access(
                     type_arguments: vec![],
                     multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
+                    source_info: None,
                 },
                 multiplicity: Multiplicity::ZeroOrMany,
             });
@@ -1582,6 +1593,7 @@ fn infer_property_access(
                 type_arguments: vec![],
                 multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
+                source_info: None,
             },
             multiplicity: Multiplicity::PureOne,
         });
@@ -1615,6 +1627,7 @@ fn infer_property_access(
                 type_arguments: vec![],
                 multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
+                source_info: None,
             },
             multiplicity: Multiplicity::ZeroOrMany,
         });
@@ -1972,6 +1985,7 @@ fn primitive(element_id: crate::ids::ElementId) -> ResolvedType {
             type_arguments: Vec::new(),
             multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
+            source_info: None,
         },
         multiplicity: Multiplicity::PureOne,
     }
@@ -2165,6 +2179,7 @@ mod tests {
             type_arguments: Vec::new(),
             multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
+            source_info: None,
         }
     }
 

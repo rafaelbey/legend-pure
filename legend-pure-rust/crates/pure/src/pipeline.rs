@@ -544,6 +544,7 @@ fn wire_any_reflective_properties(model: &mut PureModel) {
             type_arguments: vec![],
             multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
+            source_info: None,
         },
         multiplicity: Multiplicity::ZeroOrOne,
         source_info: synth.clone(),
@@ -559,6 +560,7 @@ fn wire_any_reflective_properties(model: &mut PureModel) {
             type_arguments: vec![],
             multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
+            source_info: None,
         },
         multiplicity: Multiplicity::ZeroOrOne,
         source_info: synth,
@@ -626,6 +628,7 @@ fn resolve_m3_supertypes(model: &mut PureModel) {
                             type_arguments: vec![],
                             multiplicity_arguments: Vec::new(),
                             value_arguments: vec![],
+                            source_info: None,
                         };
                     }
                 }
@@ -720,6 +723,7 @@ fn resolve_m3_supertypes(model: &mut PureModel) {
                 type_arguments: vec![],
                 multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
+                source_info: None,
             });
         }
     }
@@ -1358,6 +1362,7 @@ fn pass_define_class_bodies(
                     type_arguments,
                     multiplicity_arguments,
                     value_arguments: Vec::new(),
+                    source_info: None,
                 })
             }
             Element::Association(_) => Some(crate::types::TypeExpr::Named {
@@ -1365,6 +1370,7 @@ fn pass_define_class_bodies(
                 type_arguments: Vec::new(),
                 multiplicity_arguments: Vec::new(),
                 value_arguments: Vec::new(),
+                source_info: None,
             }),
             Element::PrimitiveType(p) => {
                 for tvp in &p.type_variable_parameters {
@@ -1378,6 +1384,7 @@ fn pass_define_class_bodies(
                     type_arguments: Vec::new(),
                     multiplicity_arguments: Vec::new(),
                     value_arguments: Vec::new(),
+                    source_info: None,
                 })
             }
             _ => None,
@@ -1550,6 +1557,7 @@ fn create_shell(element: &ast::Element) -> Element {
                         type_arguments: vec![],
                         multiplicity_arguments: Vec::new(),
                         value_arguments: vec![],
+                        source_info: None,
                     },
                     multiplicity: Multiplicity::PureOne,
                     source_info: p.source_info.clone(),
@@ -1564,6 +1572,7 @@ fn create_shell(element: &ast::Element) -> Element {
                     type_arguments: vec![],
                     multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
+                    source_info: None,
                 },
                 return_multiplicity: Multiplicity::PureOne,
                 body: Vec::new().into(),
@@ -1582,6 +1591,7 @@ fn create_shell(element: &ast::Element) -> Element {
                         type_arguments: vec![],
                         multiplicity_arguments: Vec::new(),
                         value_arguments: vec![],
+                        source_info: None,
                     },
                     multiplicity: Multiplicity::PureOne,
                     source_info: p.source_info.clone(),
@@ -1596,6 +1606,7 @@ fn create_shell(element: &ast::Element) -> Element {
                     type_arguments: vec![],
                     multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
+                    source_info: None,
                 },
                 return_multiplicity: Multiplicity::PureOne,
                 body: Vec::new().into(),
@@ -1606,6 +1617,16 @@ fn create_shell(element: &ast::Element) -> Element {
         ast::Element::Profile(p) => Element::Profile(Profile {
             stereotypes: p.stereotype_names.iter().map(|s| s.value.clone()).collect(),
             tags: p.tag_names.iter().map(|t| t.value.clone()).collect(),
+            stereotype_source_infos: p
+                .stereotype_names
+                .iter()
+                .map(|s| Some(s.source_info.clone()))
+                .collect(),
+            tag_source_infos: p
+                .tag_names
+                .iter()
+                .map(|t| Some(t.source_info.clone()))
+                .collect(),
         }),
         ast::Element::Association(_) => Element::Association(Association {
             properties: vec![],
@@ -1769,6 +1790,16 @@ fn hydrate_element_signature(
                 .map(|s| s.value.clone())
                 .collect(),
             tags: prof_def.tag_names.iter().map(|t| t.value.clone()).collect(),
+            stereotype_source_infos: prof_def
+                .stereotype_names
+                .iter()
+                .map(|s| Some(s.source_info.clone()))
+                .collect(),
+            tag_source_infos: prof_def
+                .tag_names
+                .iter()
+                .map(|t| Some(t.source_info.clone()))
+                .collect(),
         }),
         ast::Element::Function(func_def) => {
             let parameters = lower_parameters(&func_def.parameters, ctx, errors);
@@ -1778,6 +1809,7 @@ fn hydrate_element_signature(
                     type_arguments: vec![],
                     multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
+                    source_info: None,
                 });
             let return_multiplicity = resolve::lower_multiplicity(&func_def.return_multiplicity);
             let stereotypes = resolve::resolve_stereotypes(&func_def.stereotypes, ctx, errors);
@@ -1853,6 +1885,7 @@ fn hydrate_element_signature(
                     type_arguments: vec![],
                     multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
+                    source_info: None,
                 });
             let return_multiplicity = resolve::lower_multiplicity(&func_def.return_multiplicity);
             let stereotypes = resolve::resolve_stereotypes(&func_def.stereotypes, ctx, errors);
@@ -2251,6 +2284,7 @@ fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
                             type_arguments: Vec::new(),
                             multiplicity_arguments: Vec::new(),
                             value_arguments: Vec::new(),
+                            source_info: None,
                         },
                         multiplicity: crate::types::Multiplicity::PureOne,
                         source_info: chunk.nodes.get(local_idx).source_info.clone(),

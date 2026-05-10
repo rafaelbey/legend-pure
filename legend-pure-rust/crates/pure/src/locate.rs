@@ -222,9 +222,11 @@ fn refine_in_element<'a>(best: &mut Located<'a>, element: &'a Element, cursor: C
             }
         }
         // Enumeration / Profile / Measure / Unit / PrimitiveType /
-        // PackageableMultiplicity / Package have no compiled bodies
-        // worth narrowing into for tier-1 LSP needs. The header span
-        // returned by the caller already covers them.
+        // PackageableMultiplicity / Package / DSLInstance have no
+        // compiled sub-nodes worth refining into for tier-1 LSP needs.
+        // Reference-kind navigation (stereotypes, tagged values, type
+        // refs) goes through the new `crate::refs::ReferenceIndex`
+        // instead of locator extension.
         _ => {}
     }
 }
