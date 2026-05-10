@@ -50,14 +50,23 @@
 //!   round-trip; structural `op_operation` parsing arrives in Stage 2.
 //! - `include <fqn>` directives at the top of the database body.
 //!
-//! What's *not* in Stage 1 (deferred):
-//! - Structural `op_operation` AST (binary/unary/variadic, DynaFunction,
-//!   TableAliasColumn, …) — Stage 2.
-//! - Milestoning specs on Tables — Stage 3.
-//! - Validators (include DAG, table/column/PK existence, join refs) —
-//!   Stage 4.
-//! - `Relational` class-mapping body for `###Mapping` — Stages 5–7.
-//! - Association-mapping integration — Stage 7.
+//! Shipped since Stage 1:
+//! - Structural `op_operation` AST (Stage 2).
+//! - Milestoning specs on Tables (Stage 3).
+//! - Validators (include DAG, table/column/PK existence, join refs,
+//!   class-mapping target identity, op-body column resolution,
+//!   association-mapping arity, predicate `Boolean[1]` return-type
+//!   check) — Stages 4 / Phase A* / B*.
+//! - `Relational` class-mapping body for `###Mapping` (Stages 5–7).
+//! - Association-mapping integration (Stage 7).
+//!
+//! Still deferred:
+//! - Full DynaFunction → Pure-function lowering (the predicate type
+//!   check accepts unknown DynaFunctions as `Any`-typed; only the
+//!   well-known boolean-shaped DynaFunctions on
+//!   [`op_typer::KNOWN_BOOLEAN_DYNAFUNCTIONS`] are typed as
+//!   `Boolean`). Tracked in `legend-engine-rust/docs/integration/`
+//!   under RT-1 / INT-1.
 //!
 //! See `~/.claude/plans/lets-plan-for-implementing-lucky-scott.md` for
 //! the full staging.
@@ -65,5 +74,6 @@
 pub mod ast;
 pub mod compiler;
 pub mod compose;
+pub mod op_typer;
 pub mod parser;
 pub mod processor;
