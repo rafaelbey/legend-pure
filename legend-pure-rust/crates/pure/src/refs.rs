@@ -37,7 +37,8 @@ use std::collections::HashMap;
 use crate::annotations::{StereotypeRef, TaggedValueRef};
 use crate::ids::ElementId;
 use crate::model::{Element, PureModel};
-use crate::types::{ExprKind, TypeExpr, ValueSpec};
+use crate::nodes::class::Class;
+use crate::types::{ExprKind, Parameter, TypeExpr, ValueSpec};
 
 /// What kind of source reference this is. Carried for IDE rendering
 /// hints (semantic-token coloring, distinct hover labels) and for
@@ -267,14 +268,16 @@ fn walk_element_references(
                 walk_type_expr(model, &p.type_expr, visit);
             }
             walk_type_expr(model, &f.return_type, visit);
+            // Body expressions get the function's parameters as the
+            // outermost scope so `$paramName` references can resolve.
+            let scope: [&[Parameter]; 1] = [f.parameters.as_ref()];
             for expr in f.body.iter() {
-                walk_value_spec_references(model, expr, visit);
+                walk_value_spec_in_scope(model, expr, &scope, visit);
             }
         }
         Element::Class(c) => {
             walk_stereotypes(model, &c.stereotypes, visit);
             walk_tagged_values(model, &c.tagged_values, visit);
-            // `extends Foo` — clickable on each super type.
             for st in &c.super_types {
                 walk_type_expr(model, st, visit);
             }
@@ -293,8 +296,9 @@ fn walk_element_references(
                     walk_type_expr(model, &p.type_expr, visit);
                 }
                 walk_type_expr(model, &qp.return_type, visit);
+                let scope: [&[Parameter]; 1] = [qp.parameters.as_ref()];
                 for expr in qp.body.iter() {
-                    walk_value_spec_references(model, expr, visit);
+                    walk_value_spec_in_scope(model, expr, &scope, visit);
                 }
             }
             for con in &c.constraints {
@@ -319,8 +323,9 @@ fn walk_element_references(
                     walk_type_expr(model, &p.type_expr, visit);
                 }
                 walk_type_expr(model, &qp.return_type, visit);
+                let scope: [&[Parameter]; 1] = [qp.parameters.as_ref()];
                 for expr in qp.body.iter() {
-                    walk_value_spec_references(model, expr, visit);
+                    walk_value_spec_in_scope(model, expr, &scope, visit);
                 }
             }
         }
@@ -366,16 +371,18 @@ fn walk_stereotypes(
 }
 
 /// Look up a stereotype name on a Profile element and return the
-/// source span of its declaration line, if the parser captured one.
+/// source span of its declaration line. Returns `None` for the
+/// bootstrap-source sentinel — m3-bootstrap profiles fall back to
+/// the Profile's own name span at the call site.
 fn stereotype_decl_span(profile_element: &Element, name: &SmolStr) -> Option<SourceInfo> {
     let Element::Profile(profile) = profile_element else {
         return None;
     };
-    profile
-        .stereotypes
-        .iter()
-        .position(|n| n == name)
-        .and_then(|i| profile.stereotype_source_infos.get(i).cloned().flatten())
+    let decl = profile.stereotypes.iter().find(|n| &n.value == name)?;
+    if decl.source_info.source.as_str() == crate::nodes::profile::BOOTSTRAP_SOURCE {
+        return None;
+    }
+    Some(decl.source_info.clone())
 }
 
 /// Same as [`walk_stereotypes`] but for tagged values. Click on
@@ -407,50 +414,109 @@ fn walk_tagged_values(
     }
 }
 
-/// Recursively walk a [`ValueSpec`] tree and emit one [`Reference`]
-/// per resolved cross-element pointer. Single match arm per
-/// [`ExprKind`] variant — adding a new "this expression points at
-/// element X" rule = one push call here.
-///
-/// For variants whose target requires scope tracking
-/// (`Variable` → parameter, `PropertyCall` → declaring class) the
-/// walker DOES NOT emit a reference: those still flow through the
-/// locate-based handler dispatch in `crates/lsp/src/handlers.rs`
-/// for now. Migration to the index is follow-up work.
+/// Convenience entry-point used by call sites that don't have a
+/// scope stack handy (default-value expressions, constraints).
 fn walk_value_spec_references(
     model: &PureModel,
     vs: &ValueSpec,
     visit: &mut dyn FnMut(Reference),
 ) {
+    walk_value_spec_in_scope(model, vs, &[], visit);
+}
+
+/// Recursively walk a [`ValueSpec`] tree and emit one [`Reference`]
+/// per resolved cross-element pointer. Single match arm per
+/// [`ExprKind`] variant — adding a new "this expression points at
+/// element X" rule = one push call here.
+///
+/// `scope` is a stack of parameter slices, innermost last. Each
+/// nested [`ExprKind::Lambda`] pushes its parameters; each
+/// [`ExprKind::Variable`] reads from the stack innermost-first to
+/// find the binding parameter (function / QP / lambda). Let-binding
+/// scope (the `letFunction("name", value)` desugar) is not yet
+/// resolved by the index — those Variables fall through to the
+/// locate-based handler.
+fn walk_value_spec_in_scope(
+    model: &PureModel,
+    vs: &ValueSpec,
+    scope: &[&[Parameter]],
+    visit: &mut dyn FnMut(Reference),
+) {
     match &*vs.kind {
         ExprKind::FunctionCall(d) => {
-            // `pkg::someFn(args)` or `target->fn(args)`. Emit the
-            // call's resolved-target reference, then recurse into
-            // arguments.
-            if let Some(target_element) = d.function {
-                if let Some(target) = element_target_span(model, target_element) {
-                    let range = call_name_span(vs, d.arguments.first(), &d.function_name)
+            if let Some(target_element) = d.function
+                && let Some(target) = element_target_span(model, target_element)
+            {
+                let range = call_name_span(vs, d.arguments.first(), &d.function_name)
+                    .unwrap_or_else(|| vs.source_info.clone());
+                visit(Reference {
+                    range,
+                    kind: RefKind::FunctionCall,
+                    target_element: Some(target_element),
+                    target,
+                });
+            }
+            for arg in &d.arguments {
+                walk_value_spec_in_scope(model, arg, scope, visit);
+            }
+        }
+        ExprKind::PropertyCall(d) => {
+            // `$x.foo` — recover the property's declaring class from
+            // the receiver's `type_info`, then look up the property
+            // by name and emit a Reference targeting its source span.
+            if let Some(receiver) = d.arguments.first() {
+                if let Some(prop_target) =
+                    property_decl_span(model, receiver, &d.function_name, /*qualified*/ false)
+                {
+                    let range = call_after_receiver_span(vs, receiver, &d.function_name)
                         .unwrap_or_else(|| vs.source_info.clone());
                     visit(Reference {
                         range,
-                        kind: RefKind::FunctionCall,
-                        target_element: Some(target_element),
-                        target,
+                        kind: RefKind::PropertyCall,
+                        target_element: None,
+                        target: prop_target,
                     });
                 }
             }
             for arg in &d.arguments {
-                walk_value_spec_references(model, arg, visit);
+                walk_value_spec_in_scope(model, arg, scope, visit);
             }
         }
-        ExprKind::PropertyCall(d) | ExprKind::QualifiedPropertyCall(d) => {
-            // PropertyCall doesn't carry `function: Some(ElementId)` —
-            // resolution requires receiver type info. Walking still
-            // recurses into arguments so nested calls / type-refs get
-            // emitted.
-            for arg in &d.arguments {
-                walk_value_spec_references(model, arg, visit);
+        ExprKind::QualifiedPropertyCall(d) => {
+            if let Some(receiver) = d.arguments.first() {
+                if let Some(qp_target) =
+                    property_decl_span(model, receiver, &d.function_name, /*qualified*/ true)
+                {
+                    let range = call_after_receiver_span(vs, receiver, &d.function_name)
+                        .unwrap_or_else(|| vs.source_info.clone());
+                    visit(Reference {
+                        range,
+                        kind: RefKind::QualifiedPropertyCall,
+                        target_element: None,
+                        target: qp_target,
+                    });
+                }
             }
+            for arg in &d.arguments {
+                walk_value_spec_in_scope(model, arg, scope, visit);
+            }
+        }
+        ExprKind::Variable { name } => {
+            // Search the scope stack innermost-first.
+            for params in scope.iter().rev() {
+                if let Some(p) = params.iter().find(|p| &p.name == name) {
+                    visit(Reference {
+                        range: vs.source_info.clone(),
+                        kind: RefKind::Variable,
+                        target_element: None,
+                        target: p.source_info.clone(),
+                    });
+                    return;
+                }
+            }
+            // Unbound variable — likely a let-binding the index
+            // doesn't yet resolve. Locate-based fallback may pick it
+            // up, but emit nothing here.
         }
         ExprKind::PackageableElementRef { element } => {
             if let Some(target) = element_target_span(model, *element) {
@@ -484,19 +550,20 @@ fn walk_value_spec_references(
                 });
             }
         }
-        ExprKind::Lambda { body, .. } => {
+        ExprKind::Lambda { parameters, body } => {
+            // Push the lambda's parameters onto the scope stack for
+            // the body walk; pop on return.
+            let mut nested: Vec<&[Parameter]> = scope.iter().copied().collect();
+            nested.push(parameters);
             for expr in body {
-                walk_value_spec_references(model, expr, visit);
+                walk_value_spec_in_scope(model, expr, &nested, visit);
             }
         }
         ExprKind::Collection { elements } => {
             for el in elements {
-                walk_value_spec_references(model, el, visit);
+                walk_value_spec_in_scope(model, el, scope, visit);
             }
         }
-        // Literals and Variable: no refs to emit. Variable's target
-        // is the binding parameter, resolved via scope walk in the
-        // legacy locate-based handler.
         _ => {}
     }
 }
@@ -563,16 +630,118 @@ fn call_name_span(
 }
 
 /// Look up a tag name on a Profile element and return the source
-/// span of its declaration line.
+/// span of its declaration line. Same bootstrap-sentinel guard as
+/// [`stereotype_decl_span`].
 fn tag_decl_span(profile_element: &Element, name: &SmolStr) -> Option<SourceInfo> {
     let Element::Profile(profile) = profile_element else {
         return None;
     };
-    profile
-        .tags
-        .iter()
-        .position(|n| n == name)
-        .and_then(|i| profile.tag_source_infos.get(i).cloned().flatten())
+    let decl = profile.tags.iter().find(|n| &n.value == name)?;
+    if decl.source_info.source.as_str() == crate::nodes::profile::BOOTSTRAP_SOURCE {
+        return None;
+    }
+    Some(decl.source_info.clone())
+}
+
+/// Resolve a `PropertyCall` / `QualifiedPropertyCall` to its
+/// declaring class member's source span via the receiver's
+/// `type_info`.
+///
+/// `qualified` selects which list to search (`properties` for
+/// PropertyCall, `qualified_properties` for QPCall). Falls back to
+/// the OTHER list if the primary lookup misses, since the parser
+/// can't always tell the kinds apart statically and the resolver
+/// picks the right one.
+///
+/// Walks the supertype chain too — `$person.address` lands on the
+/// `address` declaration even when it's inherited.
+fn property_decl_span(
+    model: &PureModel,
+    receiver: &ValueSpec,
+    name: &smol_str::SmolStr,
+    qualified: bool,
+) -> Option<SourceInfo> {
+    let receiver_ty = receiver.type_info.as_deref()?;
+    let TypeExpr::Named { element, .. } = &receiver_ty.type_expr else {
+        return None;
+    };
+    let mut visited = std::collections::HashSet::new();
+    walk_class_chain(model, *element, &mut visited, &mut |class| {
+        if !qualified
+            && let Some(p) = class.properties.iter().find(|p| &p.name == name)
+        {
+            return Some(p.source_info.clone());
+        }
+        if let Some(qp) = class
+            .qualified_properties
+            .iter()
+            .find(|q| &q.name == name)
+        {
+            return Some(qp.source_info.clone());
+        }
+        // Fallback: try the OTHER list — the parser sometimes
+        // produces PropertyCall when the resolved member is a QP and
+        // vice versa, depending on disambiguation order.
+        if qualified
+            && let Some(p) = class.properties.iter().find(|p| &p.name == name)
+        {
+            return Some(p.source_info.clone());
+        }
+        None
+    })
+}
+
+/// Walk the receiver class + every transitive super-class, calling
+/// `visit` on each. Returns the first `Some` result. Used by
+/// property navigation to find inherited members.
+fn walk_class_chain<R>(
+    model: &PureModel,
+    start: ElementId,
+    visited: &mut std::collections::HashSet<ElementId>,
+    visit: &mut dyn FnMut(&Class) -> Option<R>,
+) -> Option<R> {
+    if !visited.insert(start) {
+        return None;
+    }
+    let Element::Class(class) = model.try_get_element(start)? else {
+        return None;
+    };
+    if let Some(hit) = visit(class) {
+        return Some(hit);
+    }
+    for st in &class.super_types {
+        if let TypeExpr::Named { element, .. } = st
+            && let Some(hit) = walk_class_chain(model, *element, visited, visit)
+        {
+            return Some(hit);
+        }
+    }
+    None
+}
+
+/// Compute the source range covering the property/QP name in a
+/// `receiver.name(args?)` expression. Name lives between
+/// `receiver.end + 1` (skip the dot) and either the `(` (QP) or the
+/// expression end (PropertyCall).
+fn call_after_receiver_span(
+    vs: &ValueSpec,
+    receiver: &ValueSpec,
+    name: &smol_str::SmolStr,
+) -> Option<SourceInfo> {
+    let outer = &vs.source_info;
+    if receiver.source_info.end_line != outer.end_line {
+        return None;
+    }
+    let name_start_col = receiver.source_info.end_column.checked_add(1)?;
+    let name_len: u32 = name.len().try_into().ok()?;
+    let name_end_col = name_start_col.checked_add(name_len).map(|c| c - 1)?;
+    Some(SourceInfo::new(
+        outer.source.as_str(),
+        receiver.source_info.end_line,
+        name_start_col,
+        receiver.source_info.end_line,
+        name_end_col,
+    ))
 }
 
 /// Recursively walk a [`TypeExpr`] tree and emit one [`Reference`]

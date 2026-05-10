@@ -740,9 +740,12 @@ pub(crate) fn resolve_stereotypes(
             // hydration order.
             match ctx.model.try_get_element(profile_id) {
                 Some(Element::Profile(profile)) => {
-                    if !profile.stereotypes.iter().any(|name| name == &s.value) {
-                        let profile_stereos: Vec<&str> =
-                            profile.stereotypes.iter().map(SmolStr::as_str).collect();
+                    if !profile.stereotypes.iter().any(|n| n.value == s.value) {
+                        let profile_stereos: Vec<&str> = profile
+                            .stereotypes
+                            .iter()
+                            .map(|n| n.value.as_str())
+                            .collect();
                         errors.push(CompilationError {
                             message: format!(
                                 "Stereotype '{}' does not exist in the Profile. \
@@ -817,9 +820,9 @@ pub(crate) fn resolve_tagged_values(
             // (Pass-1 shell populates `Profile.tags`).
             match ctx.model.try_get_element(profile_id) {
                 Some(Element::Profile(profile)) => {
-                    if !profile.tags.iter().any(|name| name == &tv.tag.value) {
+                    if !profile.tags.iter().any(|n| n.value == tv.tag.value) {
                         let profile_tags: Vec<&str> =
-                            profile.tags.iter().map(SmolStr::as_str).collect();
+                            profile.tags.iter().map(|n| n.value.as_str()).collect();
                         errors.push(CompilationError {
                             message: format!(
                                 "Tag '{}' does not exist in the Profile. \

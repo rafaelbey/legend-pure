@@ -1615,18 +1615,8 @@ fn create_shell(element: &ast::Element) -> Element {
             })
         }
         ast::Element::Profile(p) => Element::Profile(Profile {
-            stereotypes: p.stereotype_names.iter().map(|s| s.value.clone()).collect(),
-            tags: p.tag_names.iter().map(|t| t.value.clone()).collect(),
-            stereotype_source_infos: p
-                .stereotype_names
-                .iter()
-                .map(|s| Some(s.source_info.clone()))
-                .collect(),
-            tag_source_infos: p
-                .tag_names
-                .iter()
-                .map(|t| Some(t.source_info.clone()))
-                .collect(),
+            stereotypes: p.stereotype_names.clone(),
+            tags: p.tag_names.clone(),
         }),
         ast::Element::Association(_) => Element::Association(Association {
             properties: vec![],
@@ -1784,22 +1774,8 @@ fn hydrate_element_signature(
             })
         }
         ast::Element::Profile(prof_def) => Element::Profile(Profile {
-            stereotypes: prof_def
-                .stereotype_names
-                .iter()
-                .map(|s| s.value.clone())
-                .collect(),
-            tags: prof_def.tag_names.iter().map(|t| t.value.clone()).collect(),
-            stereotype_source_infos: prof_def
-                .stereotype_names
-                .iter()
-                .map(|s| Some(s.source_info.clone()))
-                .collect(),
-            tag_source_infos: prof_def
-                .tag_names
-                .iter()
-                .map(|t| Some(t.source_info.clone()))
-                .collect(),
+            stereotypes: prof_def.stereotype_names.clone(),
+            tags: prof_def.tag_names.clone(),
         }),
         ast::Element::Function(func_def) => {
             let parameters = lower_parameters(&func_def.parameters, ctx, errors);
