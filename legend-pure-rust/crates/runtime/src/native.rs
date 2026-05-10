@@ -493,7 +493,7 @@ pub fn expect_min_args<T>(func_name: &str, args: &[T], min: usize) -> Result<(),
 ///
 /// # Errors
 /// Propagates the first `PureException` raised while forcing an argument.
-pub(crate) fn force_all(
+pub fn force_all(
     args: &[ValueSpec],
     ctx: &mut dyn EvalContextTrait,
 ) -> Result<Vec<Value>, PureException> {
