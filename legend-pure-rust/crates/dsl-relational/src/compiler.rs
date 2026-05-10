@@ -159,18 +159,6 @@ impl RelationalExtension {
         Self::default()
     }
 
-    /// Snapshot of the databases registered during the most recent
-    /// `declare()` pass — keyed by FQN. Cloned because the internal
-    /// state is `RefCell`-locked while validation runs.
-    #[must_use]
-    pub fn databases(&self) -> HashMap<SmolStr, DatabaseDef> {
-        self.databases
-            .borrow()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.def.clone()))
-            .collect()
-    }
-
     /// Snapshot of the per-database resolved state built during Pass 2b.
     /// Keyed by database FQN. Empty until [`CompilerExtension::define_bodies`]
     /// runs — call this only post-compile.

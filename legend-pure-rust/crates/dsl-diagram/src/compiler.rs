@@ -101,10 +101,22 @@ pub struct DiagramSnapshot {
     /// FQN this snapshot's diagram lives at, e.g.
     /// `"model::test::TinyDiagram"`.
     pub fqn: SmolStr,
+    /// Optional geometry header (`width`, `height`) from the
+    /// `Diagram name(width=…, height=…)` declaration.
+    pub geometry: Option<DiagramGeometrySnapshot>,
     /// Per-view summary — kind tag + optional referenced FQN. The
     /// referenced FQN is `None` for `GeneralizationView` (which only
     /// references local TypeView ids, not model elements).
     pub views: Vec<DiagramViewSnapshot>,
+}
+
+/// Round-trippable form of `DiagramGeometry`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiagramGeometrySnapshot {
+    /// Width in diagram coordinates.
+    pub width: f64,
+    /// Height in diagram coordinates.
+    pub height: f64,
 }
 
 /// One view's compiled-form summary.
@@ -156,7 +168,15 @@ impl DiagramSnapshot {
                 },
             })
             .collect();
-        Self { fqn, views }
+        let geometry = def.geometry.as_ref().map(|g| DiagramGeometrySnapshot {
+            width: g.width,
+            height: g.height,
+        });
+        Self {
+            fqn,
+            geometry,
+            views,
+        }
     }
 
     /// Encode for storage in `Element::DSLInstance.data`.
@@ -182,15 +202,6 @@ impl DiagramExtension {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Snapshot of all registered diagrams keyed by FQN. Returns the
-    /// extension's in-process state — use this immediately after a
-    /// fresh compile to see the rich AST. After a `.purem` round-trip
-    /// this map is empty; use [`Self::diagrams_from_model`] instead.
-    #[must_use]
-    pub fn diagrams(&self) -> HashMap<SmolStr, RegisteredDiagram> {
-        self.diagrams.borrow().clone()
     }
 
     /// Snapshot of all registered diagrams **as graph elements** —

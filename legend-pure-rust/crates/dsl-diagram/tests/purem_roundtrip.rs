@@ -18,12 +18,11 @@
 //! the chunk machinery carries DSL-defined elements through `.purem`
 //! exactly the way it carries `Class` / `Function`.
 //!
-//! The RefCell registry side (`extension.diagrams()`) is *deliberately
-//! not* asserted on the post-merge model — it's an in-process artefact
-//! of the original compile and is **expected** to be empty after a
-//! `.purem` round-trip. That's the whole point of the
-//! `Element::DSLInstance` move: the round-trip lives in the graph, not
-//! in side-car state.
+//! All reads route through `DiagramExtension::diagrams_from_model`,
+//! which walks the graph for `Element::DSLInstance` rows keyed
+//! `"Diagram"`. The legacy `extension.diagrams()` post-compile
+//! accessor was removed when the RefCell was demoted to a private
+//! during-compile cache.
 
 use indoc::indoc;
 use legend_pure_dsl_diagram::compiler::DiagramExtension;
@@ -115,13 +114,4 @@ fn diagram_purem_roundtrip_preserves_diagrams() {
         "DiagramSnapshot must match exactly through .purem round-trip"
     );
 
-    // ----- Phase 6: confirm the legacy RefCell is empty on the fresh
-    //               extension. This is by design — `.purem` round-trips
-    //               the graph, not the extension's in-process state.
-    let fresh_extension = DiagramExtension::new();
-    assert!(
-        fresh_extension.diagrams().is_empty(),
-        "fresh extension has no in-process state; round-trip flows \
-         through the graph instead"
-    );
 }

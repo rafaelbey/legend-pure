@@ -846,10 +846,18 @@ fn pass_declare(
         }
     }
 
-    // Only push when the chunk actually carries declarations. An empty
-    // source list (e.g. an empty repo in a classpath) should be a no-op,
-    // not a stray empty chunk in the model.
-    if chunk.nodes.len() > 0 {
+    // Push the chunk if there are *any* source files for this slice —
+    // even if zero M3 elements were declared. DSL extensions allocate
+    // their `Element::DSLInstance` rows into this same chunk via
+    // `declare()`, and need it to exist (and to be the last chunk so
+    // their `chunks.len() - 1` lookup hits it). A source file with
+    // only `###Mapping` / `###Diagram` / `###Relational` sections
+    // produces zero M3 declarations but is otherwise valid.
+    //
+    // An empty source list (no files at all — e.g. an empty repo in a
+    // classpath) stays a no-op: nothing to allocate into the chunk
+    // for, no chunk pushed.
+    if !source_files.is_empty() {
         model.chunks.push(chunk);
     }
     (declarations, unit_mappings)

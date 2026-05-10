@@ -90,15 +90,21 @@ fn operation_body(m: &MappingDef, idx: usize) -> &OperationClassMappingBody {
     body
 }
 
-fn compile(sources: Vec<SourceFile>) -> (Vec<CompilationError>, MappingExtension) {
+fn compile(
+    sources: Vec<SourceFile>,
+) -> (
+    Vec<CompilationError>,
+    MappingExtension,
+    legend_pure_parser_pure::model::PureModel,
+) {
     let extension = MappingExtension::new();
     let exts: [&dyn CompilerExtension; 1] = [&extension];
     let result = legend_pure_parser_pure::pipeline::compile_with_extensions(&sources, &[], &exts);
-    let errors = match result {
-        Ok(_) => Vec::new(),
-        Err(p) => p.errors,
+    let (errors, model) = match result {
+        Ok(model) => (Vec::new(), model),
+        Err(p) => (p.errors, p.model),
     };
-    (errors, extension)
+    (errors, extension, model)
 }
 
 // ----- Parser coverage --------------------------------------------------
@@ -276,7 +282,7 @@ fn union_of_two_pure_instances_validates_clean() {
         )
     "};
     let file = parse("op_clean.pure", source);
-    let (errors, ext) = compile(vec![file]);
+    let (errors, _ext, model) = compile(vec![file]);
     let op_errors: Vec<_> = errors
         .iter()
         .filter(|e| {
@@ -288,7 +294,11 @@ fn union_of_two_pure_instances_validates_clean() {
         "expected no Operation-validator errors; got: {:#?}",
         op_errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
-    assert!(ext.mappings().contains_key("my::test::PersonMapping"));
+    assert!(
+        MappingExtension::mappings_from_model(&model)
+            .iter()
+            .any(|(fqn, _)| fqn.as_str() == "my::test::PersonMapping")
+    );
 }
 
 #[test]
@@ -315,7 +325,7 @@ fn empty_parameters_validates_clean() {
         )
     "};
     let file = parse("op_empty_clean.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     let op_errors: Vec<_> = errors
         .iter()
         .filter(|e| {
@@ -355,7 +365,7 @@ fn simple_name_does_not_silently_match_overload() {
         )
     "};
     let file = parse("op_simple_name.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     assert!(
         errors
             .iter()
@@ -392,7 +402,7 @@ fn unresolved_operation_function_errors() {
         )
     "};
     let file = parse("op_unresolved_fn.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     assert!(
         errors.iter().any(|e| {
             e.message.contains("Operation function") && e.message.contains("doesNotExist")
@@ -434,7 +444,7 @@ fn unknown_parameter_id_errors() {
         )
     "};
     let file = parse("op_unknown_param.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     assert!(
         errors.iter().any(|e| {
             e.message.contains("Operation parameter") && e.message.contains("notARealId")

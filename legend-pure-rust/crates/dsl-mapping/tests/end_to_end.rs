@@ -114,9 +114,9 @@ fn user_mapping_block_registers_against_loaded_platform() {
         .collect();
     let result =
         legend_pure_parser_pure::pipeline::compile_with_extensions(&all_files, &imports, &exts);
-    let errors = match result {
-        Ok(_) => Vec::new(),
-        Err(p) => p.errors,
+    let (errors, model) = match result {
+        Ok(model) => (Vec::new(), model),
+        Err(p) => (p.errors, p.model),
     };
 
     // Stage 2 must not introduce any new compile errors; lambdas
@@ -132,11 +132,13 @@ fn user_mapping_block_registers_against_loaded_platform() {
     );
 
     // The MappingExtension registry must contain the user FQN.
-    let registered = extension.mappings();
+    let registered = MappingExtension::mappings_from_model(&model);
     assert!(
-        registered.contains_key("my::test::FirmMapping"),
+        registered
+            .iter()
+            .any(|(fqn, _)| fqn.as_str() == "my::test::FirmMapping"),
         "expected my::test::FirmMapping in registry; got keys: {:?}",
-        registered.keys().collect::<Vec<_>>()
+        registered.iter().map(|(fqn, _)| fqn).collect::<Vec<_>>()
     );
 }
 

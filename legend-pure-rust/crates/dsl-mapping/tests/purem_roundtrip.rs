@@ -16,11 +16,11 @@
 //! path: compile → walk graph → slice → write `.purem` → read → merge
 //! → walk graph again. Mirrors `crates/dsl-diagram/tests/purem_roundtrip.rs`.
 //!
-//! The RefCell registry side (`extension.mappings()`) is not asserted
-//! on the post-merge model — it's an in-process artefact of the
-//! original compile and is **expected** to be empty after a `.purem`
-//! round-trip. The graph-walk side (`MappingExtension::mappings_from_model`)
-//! is the durable read.
+//! All reads route through `MappingExtension::mappings_from_model`,
+//! which walks the graph for `Element::DSLInstance` rows keyed
+//! `"Mapping"`. The legacy `extension.mappings()` post-compile
+//! accessor was removed when the RefCell was demoted to a private
+//! during-compile cache.
 
 use indoc::indoc;
 use legend_pure_dsl_mapping::compiler::MappingExtension;
@@ -30,14 +30,12 @@ use legend_pure_parser_pure::extension::CompilerExtension;
 use legend_pure_parser_pure::pipeline::{compile_with_extensions, init_bootstrap_model};
 use legend_pure_parser_pure::purem::{merge_slice, read_repo, slice_by_repo, write_repo};
 
-// Pure section first so the slice's chunk has at least one M3
-// element. Without an M3 element, the round-trip behaves
-// differently — a follow-up question, but not in scope for the
-// pilot which mirrors the Diagram test's source shape.
+// DSL-only source — exercises the `pass_declare` fix that pushes a
+// chunk for any non-empty source file (not just chunks with M3
+// declarations). Earlier versions of the pipeline only pushed a
+// chunk when M3 nodes were allocated, so DSL-only sources fell into
+// the bootstrap chunk's range and a 1..N slice came up empty.
 const FIXTURE: &str = indoc! {r"
-    ###Pure
-    Class pkg::Firm { legalName : String[1]; }
-
     ###Mapping
     Mapping pkg::M
     (
@@ -113,13 +111,6 @@ fn mapping_purem_roundtrip_preserves_mappings() {
         "MappingSnapshot must match exactly through .purem round-trip"
     );
 
-    // ----- Phase 6: legacy RefCell on a fresh extension is empty ----
-    let fresh_extension = MappingExtension::new();
-    assert!(
-        fresh_extension.mappings().is_empty(),
-        "fresh extension has no in-process state; round-trip flows \
-         through the graph instead"
-    );
 }
 
 #[test]
@@ -127,9 +118,6 @@ fn mapping_purem_roundtrip_preserves_includes() {
     // Two mappings, one includes the other. The snapshot's
     // `includes` field must round-trip the FQN.
     let source = indoc! {r"
-        ###Pure
-        Class pkg::Firm { legalName : String[1]; }
-
         ###Mapping
         Mapping pkg::Base
         (

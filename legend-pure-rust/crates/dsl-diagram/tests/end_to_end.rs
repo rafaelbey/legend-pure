@@ -109,11 +109,17 @@ fn parse(source: &str) -> SourceFile {
     })
 }
 
-fn errors_after_compile(file: SourceFile, ext: &DiagramExtension) -> Vec<String> {
+fn compile_for_test(
+    file: SourceFile,
+    ext: &DiagramExtension,
+) -> (Vec<String>, legend_pure_parser_pure::model::PureModel) {
     let exts: [&dyn CompilerExtension; 1] = [ext];
     match legend_pure_parser_pure::pipeline::compile_with_extensions(&[file], &[], &exts) {
-        Ok(_) => Vec::new(),
-        Err(p) => p.errors.iter().map(|e| e.message.clone()).collect(),
+        Ok(model) => (Vec::new(), model),
+        Err(p) => (
+            p.errors.iter().map(|e| e.message.clone()).collect(),
+            p.model,
+        ),
     }
 }
 
@@ -121,7 +127,7 @@ fn errors_after_compile(file: SourceFile, ext: &DiagramExtension) -> Vec<String>
 fn full_fixture_compiles_without_diagram_errors_and_registers_diagram() {
     let file = parse(FIXTURE);
     let extension = DiagramExtension::new();
-    let errors = errors_after_compile(file, &extension);
+    let (errors, model) = compile_for_test(file, &extension);
 
     // Filter to diagram-layer errors. Anything from M3 (e.g. an
     // import the platform isn't loaded for) is not the contract
@@ -141,33 +147,36 @@ fn full_fixture_compiles_without_diagram_errors_and_registers_diagram() {
         "expected zero diagram errors; got {diagram_errors:?}",
     );
 
-    let registered = extension.diagrams();
+    let registered = DiagramExtension::diagrams_from_model(&model);
     let diagram = registered
-        .get("model::test::TestDiagram")
+        .iter()
+        .find(|(fqn, _)| fqn.as_str() == "model::test::TestDiagram")
+        .map(|(_, snap)| snap)
         .unwrap_or_else(|| {
             panic!(
                 "expected `model::test::TestDiagram` in registry; keys: {:?}",
-                registered.keys().collect::<Vec<_>>()
+                registered.iter().map(|(fqn, _)| fqn).collect::<Vec<_>>()
             )
         });
 
-    assert_eq!(diagram.def.views.len(), 5);
-    let geom = diagram.def.geometry.as_ref().expect("geometry");
+    assert_eq!(diagram.views.len(), 5);
+    let geom = diagram.geometry.as_ref().expect("geometry");
     assert!((geom.width - 5000.3).abs() < 1e-6);
     assert!((geom.height - 2700.6).abs() < 1e-6);
 
     // Tally view kinds: 2 TypeView, 1 AssociationView, 1 PropertyView,
-    // 1 GeneralizationView.
+    // 1 GeneralizationView. Snapshot uses the textual `view_kind` tag.
     let mut type_count = 0;
     let mut assoc_count = 0;
     let mut prop_count = 0;
     let mut gen_count = 0;
-    for v in &diagram.def.views {
-        match v {
-            DiagramView::Type(_) => type_count += 1,
-            DiagramView::Association(_) => assoc_count += 1,
-            DiagramView::Property(_) => prop_count += 1,
-            DiagramView::Generalization(_) => gen_count += 1,
+    for v in &diagram.views {
+        match v.view_kind.as_str() {
+            "TypeView" => type_count += 1,
+            "AssociationView" => assoc_count += 1,
+            "PropertyView" => prop_count += 1,
+            "GeneralizationView" => gen_count += 1,
+            _ => {}
         }
     }
     assert_eq!(

@@ -55,15 +55,21 @@ fn parse(name: &str, source: &str) -> SourceFile {
     }
 }
 
-fn compile_with_mapping(sources: Vec<SourceFile>) -> (Vec<CompilationError>, MappingExtension) {
+fn compile_with_mapping(
+    sources: Vec<SourceFile>,
+) -> (
+    Vec<CompilationError>,
+    MappingExtension,
+    legend_pure_parser_pure::model::PureModel,
+) {
     let extension = MappingExtension::new();
     let exts: [&dyn CompilerExtension; 1] = [&extension];
     let result = legend_pure_parser_pure::pipeline::compile_with_extensions(&sources, &[], &exts);
-    let errors = match result {
-        Ok(_) => Vec::new(),
-        Err(p) => p.errors,
+    let (errors, model) = match result {
+        Ok(model) => (Vec::new(), model),
+        Err(p) => (p.errors, p.model),
     };
-    (errors, extension)
+    (errors, extension, model)
 }
 
 /// Filter to errors whose message mentions Mapping-DSL concepts so we
@@ -113,7 +119,7 @@ fn valid_model_to_model_mapping_emits_no_validator_diagnostics() {
         )
     "};
     let file = parse("valid_m2m.pure", source);
-    let (errors, ext) = compile_with_mapping(vec![file]);
+    let (errors, _ext, model) = compile_with_mapping(vec![file]);
     let dsl_errors = mapping_dsl_errors(&errors);
     assert!(
         dsl_errors.is_empty(),
@@ -123,10 +129,13 @@ fn valid_model_to_model_mapping_emits_no_validator_diagnostics() {
     // Defence against silent skip: confirm the MappingExtension actually
     // ran and registered the user mapping. Without this, "zero Mapping
     // errors" would also pass if the extension never executed at all.
+    let registered = MappingExtension::mappings_from_model(&model);
     assert!(
-        ext.mappings().contains_key("my::test::FirmMapping"),
+        registered
+            .iter()
+            .any(|(fqn, _)| fqn.as_str() == "my::test::FirmMapping"),
         "MappingExtension did not register the user mapping; registry keys: {:?}",
-        ext.mappings().keys().collect::<Vec<_>>()
+        registered.iter().map(|(fqn, _)| fqn).collect::<Vec<_>>()
     );
 }
 
@@ -149,7 +158,7 @@ fn unknown_property_on_target_class_errors() {
         )
     "};
     let file = parse("unknown_prop.pure", source);
-    let (errors, _ext) = compile_with_mapping(vec![file]);
+    let (errors, _ext, _model) = compile_with_mapping(vec![file]);
     let unknown: Vec<_> = errors
         .iter()
         .filter(|e| {
@@ -187,7 +196,7 @@ fn unresolved_src_class_errors() {
         )
     "};
     let file = parse("unresolved_src.pure", source);
-    let (errors, _ext) = compile_with_mapping(vec![file]);
+    let (errors, _ext, _model) = compile_with_mapping(vec![file]);
     assert!(
         errors
             .iter()
@@ -210,7 +219,7 @@ fn unresolved_target_class_errors() {
         )
     "};
     let file = parse("unresolved_target.pure", source);
-    let (errors, _ext) = compile_with_mapping(vec![file]);
+    let (errors, _ext, _model) = compile_with_mapping(vec![file]);
     assert!(
         errors
             .iter()
@@ -240,7 +249,7 @@ fn unresolved_super_mapping_id_errors() {
         )
     "};
     let file = parse("unresolved_super.pure", source);
-    let (errors, _ext) = compile_with_mapping(vec![file]);
+    let (errors, _ext, _model) = compile_with_mapping(vec![file]);
     assert!(
         errors
             .iter()
@@ -273,7 +282,7 @@ fn cyclic_mapping_include_errors() {
         )
     "};
     let file = parse("cyclic.pure", source);
-    let (errors, _ext) = compile_with_mapping(vec![file]);
+    let (errors, _ext, _model) = compile_with_mapping(vec![file]);
     let cycle_errors: Vec<_> = errors
         .iter()
         .filter(|e| e.message.contains("Cyclic mapping include"))
@@ -318,7 +327,7 @@ fn acyclic_3_level_mapping_include_passes() {
         )
     "};
     let file = parse("acyclic.pure", source);
-    let (errors, _ext) = compile_with_mapping(vec![file]);
+    let (errors, _ext, _model) = compile_with_mapping(vec![file]);
     assert!(
         !errors
             .iter()
@@ -343,7 +352,7 @@ fn unresolved_mapping_include_errors() {
         )
     "};
     let file = parse("unresolved_include.pure", source);
-    let (errors, _ext) = compile_with_mapping(vec![file]);
+    let (errors, _ext, _model) = compile_with_mapping(vec![file]);
     assert!(
         errors
             .iter()
@@ -370,7 +379,7 @@ fn duplicate_class_mapping_id_within_mapping_errors() {
         )
     "};
     let file = parse("dup_cm_id.pure", source);
-    let (errors, _ext) = compile_with_mapping(vec![file]);
+    let (errors, _ext, _model) = compile_with_mapping(vec![file]);
     assert!(
         errors
             .iter()
@@ -412,7 +421,7 @@ fn cross_mapping_super_id_resolution_succeeds() {
         )
     "};
     let file = parse("cross_super.pure", source);
-    let (errors, _ext) = compile_with_mapping(vec![file]);
+    let (errors, _ext, _model) = compile_with_mapping(vec![file]);
     let super_errors: Vec<_> = errors
         .iter()
         .filter(|e| e.message.contains("Super class-mapping"))

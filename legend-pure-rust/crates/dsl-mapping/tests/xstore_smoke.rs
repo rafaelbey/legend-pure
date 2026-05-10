@@ -82,15 +82,21 @@ fn xstore_body(m: &MappingDef, idx: usize) -> &XStoreClassMappingBody {
     body
 }
 
-fn compile(sources: Vec<SourceFile>) -> (Vec<CompilationError>, MappingExtension) {
+fn compile(
+    sources: Vec<SourceFile>,
+) -> (
+    Vec<CompilationError>,
+    MappingExtension,
+    legend_pure_parser_pure::model::PureModel,
+) {
     let extension = MappingExtension::new();
     let exts: [&dyn CompilerExtension; 1] = [&extension];
     let result = legend_pure_parser_pure::pipeline::compile_with_extensions(&sources, &[], &exts);
-    let errors = match result {
-        Ok(_) => Vec::new(),
-        Err(p) => p.errors,
+    let (errors, model) = match result {
+        Ok(model) => (Vec::new(), model),
+        Err(p) => (p.errors, p.model),
     };
-    (errors, extension)
+    (errors, extension, model)
 }
 
 // ----- Parser coverage --------------------------------------------------
@@ -244,7 +250,7 @@ fn xstore_bridging_two_pure_instances_validates_clean() {
         )
     "};
     let file = parse("xstore_clean.pure", source);
-    let (errors, ext) = compile(vec![file]);
+    let (errors, _ext, model) = compile(vec![file]);
     let xs_errors: Vec<_> = errors
         .iter()
         .filter(|e| e.message.contains("XStore") || e.message.contains("Association "))
@@ -254,7 +260,11 @@ fn xstore_bridging_two_pure_instances_validates_clean() {
         "expected no XStore-validator errors; got: {:#?}",
         xs_errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
-    assert!(ext.mappings().contains_key("my::test::FirmPersonMapping"));
+    assert!(
+        MappingExtension::mappings_from_model(&model)
+            .iter()
+            .any(|(fqn, _)| fqn.as_str() == "my::test::FirmPersonMapping")
+    );
 }
 
 #[test]
@@ -276,7 +286,7 @@ fn target_resolving_to_class_not_association_errors() {
         )
     "};
     let file = parse("xstore_target_class.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     assert!(
         errors
             .iter()
@@ -317,7 +327,7 @@ fn unknown_property_on_association_errors() {
         )
     "};
     let file = parse("xstore_unknown_prop.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     assert!(
         errors.iter().any(|e| e.message.contains("Association")
             && e.message.contains("Firm_Person")
@@ -363,7 +373,7 @@ fn bare_property_mapping_without_ids_errors_at_validate_time() {
         )
     "};
     let file = parse("xstore_bare_validate.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     assert!(
         errors.iter().any(|e| {
             e.message.contains("XStore property mapping")
@@ -404,7 +414,7 @@ fn unknown_set_impl_id_errors() {
         )
     "};
     let file = parse("xstore_unknown_setimpl.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     assert!(
         errors
             .iter()

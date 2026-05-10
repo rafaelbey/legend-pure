@@ -83,15 +83,21 @@ fn enumeration_body(m: &MappingDef) -> &EnumerationClassMappingBody {
     body
 }
 
-fn compile(sources: Vec<SourceFile>) -> (Vec<CompilationError>, MappingExtension) {
+fn compile(
+    sources: Vec<SourceFile>,
+) -> (
+    Vec<CompilationError>,
+    MappingExtension,
+    legend_pure_parser_pure::model::PureModel,
+) {
     let extension = MappingExtension::new();
     let exts: [&dyn CompilerExtension; 1] = [&extension];
     let result = legend_pure_parser_pure::pipeline::compile_with_extensions(&sources, &[], &exts);
-    let errors = match result {
-        Ok(_) => Vec::new(),
-        Err(p) => p.errors,
+    let (errors, model) = match result {
+        Ok(model) => (Vec::new(), model),
+        Err(p) => (p.errors, p.model),
     };
-    (errors, extension)
+    (errors, extension, model)
 }
 
 // ----- Parser coverage --------------------------------------------------
@@ -216,13 +222,17 @@ fn string_sourced_enum_mapping_validates_clean() {
         )
     "};
     let file = parse("clean_enum.pure", source);
-    let (errors, ext) = compile(vec![file]);
+    let (errors, _ext, model) = compile(vec![file]);
     assert!(
         errors.is_empty(),
         "expected a clean compile; got: {:#?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
-    assert!(ext.mappings().contains_key("my::test::ColorMapping"));
+    assert!(
+        MappingExtension::mappings_from_model(&model)
+            .iter()
+            .any(|(fqn, _)| fqn.as_str() == "my::test::ColorMapping")
+    );
 }
 
 #[test]
@@ -244,7 +254,7 @@ fn target_resolving_to_class_not_enum_errors() {
         )
     "};
     let file = parse("target_class.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     assert!(
         errors
             .iter()
@@ -276,7 +286,7 @@ fn unknown_target_enum_value_errors() {
         )
     "};
     let file = parse("unknown_enum_value.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     assert!(
         errors
             .iter()
@@ -306,7 +316,7 @@ fn mixed_source_value_kinds_errors() {
         )
     "};
     let file = parse("mixed_kinds.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     assert!(
         errors
             .iter()
@@ -343,7 +353,7 @@ fn unknown_source_enum_value_errors() {
         )
     "};
     let file = parse("bad_src_enum_val.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     assert!(
         errors
             .iter()

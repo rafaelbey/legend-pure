@@ -54,15 +54,21 @@ fn parse(name: &str, source: &str) -> SourceFile {
     }
 }
 
-fn compile(sources: Vec<SourceFile>) -> (Vec<CompilationError>, MappingExtension) {
+fn compile(
+    sources: Vec<SourceFile>,
+) -> (
+    Vec<CompilationError>,
+    MappingExtension,
+    legend_pure_parser_pure::model::PureModel,
+) {
     let extension = MappingExtension::new();
     let exts: [&dyn CompilerExtension; 1] = [&extension];
     let result = legend_pure_parser_pure::pipeline::compile_with_extensions(&sources, &[], &exts);
-    let errors = match result {
-        Ok(_) => Vec::new(),
-        Err(p) => p.errors,
+    let (errors, model) = match result {
+        Ok(model) => (Vec::new(), model),
+        Err(p) => (p.errors, p.model),
     };
-    (errors, extension)
+    (errors, extension, model)
 }
 
 #[test]
@@ -95,7 +101,7 @@ fn boolean_filter_and_matching_transforms_validate_clean() {
         )
     "};
     let file = parse("clean.pure", source);
-    let (errors, ext) = compile(vec![file]);
+    let (errors, _ext, model) = compile(vec![file]);
     let mapping_errors: Vec<_> = errors
         .iter()
         .filter(|e| {
@@ -113,7 +119,9 @@ fn boolean_filter_and_matching_transforms_validate_clean() {
             .collect::<Vec<_>>()
     );
     assert!(
-        ext.mappings().contains_key("my::test::FirmMapping"),
+        MappingExtension::mappings_from_model(&model)
+            .iter()
+            .any(|(fqn, _)| fqn.as_str() == "my::test::FirmMapping"),
         "extension did not register the mapping"
     );
 }
@@ -145,7 +153,7 @@ fn filter_returning_integer_errors_with_boolean_message() {
         )
     "};
     let file = parse("filter_int.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     assert!(
         errors.iter().any(|e| e.message.contains("~filter")
             && e.message.contains("Boolean[1]")
@@ -181,7 +189,7 @@ fn transform_with_wrong_type_errors_with_subtype_message() {
         )
     "};
     let file = parse("transform_wrong.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     assert!(
         errors.iter().any(|e| e.message.contains("Transform")
             && e.message.contains("legalName")
@@ -218,7 +226,7 @@ fn transform_with_wrong_multiplicity_errors() {
         )
     "};
     let file = parse("transform_mult.pure", source);
-    let (errors, _ext) = compile(vec![file]);
+    let (errors, _ext, _model) = compile(vec![file]);
     assert!(
         errors.iter().any(|e| e.message.contains("Transform")
             && e.message.contains("legalName")

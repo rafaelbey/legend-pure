@@ -39,12 +39,21 @@ fn parse(source: &str) -> SourceFile {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn compile_with_mapping(sources: Vec<SourceFile>, extension: &MappingExtension) -> Vec<String> {
+fn compile_with_mapping(
+    sources: Vec<SourceFile>,
+    extension: &MappingExtension,
+) -> (
+    Vec<String>,
+    legend_pure_parser_pure::model::PureModel,
+) {
     let exts: [&dyn CompilerExtension; 1] = [extension];
     let result = legend_pure_parser_pure::pipeline::compile_with_extensions(&sources, &[], &exts);
     match result {
-        Ok(_) => Vec::new(),
-        Err(p) => p.errors.iter().map(|e| e.message.clone()).collect(),
+        Ok(model) => (Vec::new(), model),
+        Err(p) => (
+            p.errors.iter().map(|e| e.message.clone()).collect(),
+            p.model,
+        ),
     }
 }
 
@@ -62,13 +71,13 @@ fn extension_registers_mapping_under_fqn() {
     "};
     let file = parse(source);
     let extension = MappingExtension::new();
-    let _errors = compile_with_mapping(vec![file], &extension);
+    let (_errors, model) = compile_with_mapping(vec![file], &extension);
 
-    let registered = extension.mappings();
+    let registered = MappingExtension::mappings_from_model(&model);
     assert!(
-        registered.contains_key("pkg::M"),
+        registered.iter().any(|(fqn, _)| fqn.as_str() == "pkg::M"),
         "expected mapping FQN registered; got keys: {:?}",
-        registered.keys().collect::<Vec<_>>()
+        registered.iter().map(|(fqn, _)| fqn).collect::<Vec<_>>()
     );
 }
 
@@ -87,7 +96,7 @@ fn duplicate_mapping_fqn_reports_error_and_keeps_first() {
     "};
     let file = parse(source);
     let extension = MappingExtension::new();
-    let errors = compile_with_mapping(vec![file], &extension);
+    let (errors, model) = compile_with_mapping(vec![file], &extension);
 
     assert!(
         errors
@@ -95,9 +104,11 @@ fn duplicate_mapping_fqn_reports_error_and_keeps_first() {
             .any(|e| e.contains("Duplicate mapping") && e.contains("pkg::M")),
         "expected duplicate-mapping error; got {errors:?}"
     );
-    let map = extension.mappings();
+    let map = MappingExtension::mappings_from_model(&model);
     assert_eq!(
-        map.keys().filter(|k| k.contains("pkg::M")).count(),
+        map.iter()
+            .filter(|(fqn, _)| fqn.as_str().contains("pkg::M"))
+            .count(),
         1,
         "expected exactly one pkg::M entry preserved"
     );
