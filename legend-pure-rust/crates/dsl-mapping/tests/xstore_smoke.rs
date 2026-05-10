@@ -424,3 +424,189 @@ fn unknown_set_impl_id_errors() {
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+// ----- crossExpression lowering: Boolean[1] type-check -----------------
+
+#[test]
+fn cross_expression_with_boolean_return_validates_clean() {
+    // Pins the new XStore lowering's negative side: when $this/$that
+    // resolve and the cross-expression returns Boolean[1], no
+    // XStoreCrossExpressionReturnType diagnostic is emitted.
+    // Subset of `xstore_bridging_two_pure_instances_validates_clean`
+    // with an exact error-kind assertion so future regressions in
+    // `is_boolean_one` surface here.
+    let source = indoc! {r"
+        ###Pure
+        Class my::test::Firm
+        {
+          id : String[1];
+        }
+
+        Class my::test::Person
+        {
+          firmId : String[1];
+        }
+
+        Association my::test::Firm_Person
+        {
+          firm : my::test::Firm[1];
+          employees : my::test::Person[*];
+        }
+
+        Class my::test::FirmSrc { id : String[1]; }
+        Class my::test::PersonSrc { firmId : String[1]; }
+
+        ###Mapping
+        Mapping my::test::M
+        (
+          *my::test::Firm[firm_set] : Pure
+          {
+            ~src my::test::FirmSrc
+            id : $src.id
+          }
+          *my::test::Person[employee_set] : Pure
+          {
+            ~src my::test::PersonSrc
+            firmId : $src.firmId
+          }
+          my::test::Firm_Person : XStore
+          {
+            firm[employee_set, firm_set] : $this.firmId == $that.id
+          }
+        )
+    "};
+    let file = parse("xstore_clean_bool.pure", source);
+    let (errors, _ext, _model) = compile(vec![file]);
+    let return_type_errors: Vec<&str> = errors
+        .iter()
+        .filter(|e| {
+            e.message
+                .contains("XStore crossExpression on")
+                && e.message.contains("must return Boolean[1]")
+        })
+        .map(|e| e.message.as_str())
+        .collect();
+    assert!(
+        return_type_errors.is_empty(),
+        "no XStoreCrossExpressionReturnType error expected on clean cross-expression; got: {:#?}",
+        return_type_errors
+    );
+}
+
+#[test]
+fn cross_expression_non_boolean_return_errors() {
+    // Cross-expression `$this.firmId` lowers to String[1] — not
+    // Boolean[1]. The new validator must emit a pointed error
+    // message naming the association property and including the
+    // actual inferred type spelling.
+    let source = indoc! {r"
+        ###Pure
+        Class my::test::Firm
+        {
+          id : String[1];
+        }
+
+        Class my::test::Person
+        {
+          firmId : String[1];
+        }
+
+        Association my::test::Firm_Person
+        {
+          firm : my::test::Firm[1];
+          employees : my::test::Person[*];
+        }
+
+        Class my::test::FirmSrc { id : String[1]; }
+        Class my::test::PersonSrc { firmId : String[1]; }
+
+        ###Mapping
+        Mapping my::test::M
+        (
+          *my::test::Firm[firm_set] : Pure
+          {
+            ~src my::test::FirmSrc
+            id : $src.id
+          }
+          *my::test::Person[employee_set] : Pure
+          {
+            ~src my::test::PersonSrc
+            firmId : $src.firmId
+          }
+          my::test::Firm_Person : XStore
+          {
+            firm[employee_set, firm_set] : $this.firmId
+          }
+        )
+    "};
+    let file = parse("xstore_non_bool.pure", source);
+    let (errors, _ext, _model) = compile(vec![file]);
+    assert!(
+        errors.iter().any(|e| {
+            e.message
+                .contains("XStore crossExpression on 'my::test::Firm_Person.firm'")
+                && e.message.contains("must return Boolean[1]")
+                && e.message.contains("String")
+        }),
+        "expected XStoreCrossExpressionReturnType error mentioning String; got: {:#?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn cross_expression_unknown_property_via_this_binding_propagates() {
+    // Locks the `$this` binding: if `$this` is bound to the
+    // source-set-impl's class (employee_set → Person), then
+    // accessing `$this.notAField` must emit an UnknownProperty
+    // error on Person — proving the lowering wires the binding,
+    // not just builds a synthetic any-typed `$this`.
+    let source = indoc! {r"
+        ###Pure
+        Class my::test::Firm
+        {
+          id : String[1];
+        }
+
+        Class my::test::Person
+        {
+          firmId : String[1];
+        }
+
+        Association my::test::Firm_Person
+        {
+          firm : my::test::Firm[1];
+          employees : my::test::Person[*];
+        }
+
+        Class my::test::FirmSrc { id : String[1]; }
+        Class my::test::PersonSrc { firmId : String[1]; }
+
+        ###Mapping
+        Mapping my::test::M
+        (
+          *my::test::Firm[firm_set] : Pure
+          {
+            ~src my::test::FirmSrc
+            id : $src.id
+          }
+          *my::test::Person[employee_set] : Pure
+          {
+            ~src my::test::PersonSrc
+            firmId : $src.firmId
+          }
+          my::test::Firm_Person : XStore
+          {
+            firm[employee_set, firm_set] : $this.notAField == $that.id
+          }
+        )
+    "};
+    let file = parse("xstore_unknown_prop.pure", source);
+    let (errors, _ext, _model) = compile(vec![file]);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("notAField")),
+        "expected unknown-property error mentioning `notAField`; got: {:#?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
