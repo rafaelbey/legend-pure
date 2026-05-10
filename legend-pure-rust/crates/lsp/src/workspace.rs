@@ -29,9 +29,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use legend_pure_core_platform::repo::{self, Repo};
+use legend_pure_dsl_mapping::compiler::MappingExtension;
+use legend_pure_dsl_mapping::parser::MappingSectionParser;
+use legend_pure_dsl_relational::compiler::RelationalExtension;
+use legend_pure_dsl_relational::parser::RelationalSectionParser;
+use legend_pure_dsl_store::compiler::RelationStoreExtension;
+use legend_pure_parser_parser::SectionParser;
 use legend_pure_parser_pure::error::CompilationError;
+use legend_pure_parser_pure::extension::CompilerExtension;
 use legend_pure_parser_pure::model::PureModel;
-use legend_pure_parser_pure::refs::{ReferenceIndex, build_reference_index};
+use legend_pure_parser_pure::refs::{ReferenceIndex, build_reference_index_with_extensions};
 use smol_str::SmolStr;
 use tower_lsp::lsp_types::Url;
 
@@ -125,7 +132,28 @@ impl Workspace {
     /// per-source diagnostic index on `self`.
     pub fn compile(&mut self) -> CompileOutcome {
         let snapshot = self.snapshot_repos();
-        let result = repo::load(&snapshot, &self.auto_imports);
+        // Fresh DSL extensions per compile — each carries `RefCell`
+        // state populated during `declare`/`define_*` and walked by
+        // `walk_references`. Reusing across compiles would accumulate
+        // stale entries unless every extension's `declare` started
+        // with a clear, which today's implementations don't do.
+        let mapping = MappingExtension::new();
+        let relational = RelationalExtension::new();
+        let store = RelationStoreExtension::new();
+        let extensions: [&dyn CompilerExtension; 3] = [&mapping, &relational, &store];
+        let result = repo::load_with_extensions(
+            &snapshot,
+            &self.auto_imports,
+            &extensions,
+            // Each repo gets fresh section parsers. `SectionParser`
+            // is not `Clone`, so we instantiate inside the closure.
+            &mut || -> Vec<Box<dyn SectionParser>> {
+                vec![
+                    Box::new(MappingSectionParser::new()),
+                    Box::new(RelationalSectionParser),
+                ]
+            },
+        );
         let (model, errors) = match result {
             Ok(m) => (m, Vec::<CompilationError>::new()),
             Err(partial) => (partial.model, partial.errors),
@@ -139,10 +167,13 @@ impl Workspace {
         }
         self.diagnostics = by_source;
         let model_arc = Arc::new(model);
-        // Build the reference index from the freshly-compiled model.
-        // Cheap (single linear walk over chunks) and centralizes
-        // every clickable source span for the LSP request handlers.
-        self.references = Some(Arc::new(build_reference_index(&model_arc)));
+        // Build the reference index from the freshly-compiled model,
+        // including DSL extension contributions. Cheap (single linear
+        // walk over chunks + each extension's RefCell).
+        self.references = Some(Arc::new(build_reference_index_with_extensions(
+            &model_arc,
+            &extensions,
+        )));
         self.model = Some(model_arc);
         CompileOutcome {
             error_count: errors.len(),

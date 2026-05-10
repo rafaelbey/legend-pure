@@ -639,11 +639,41 @@ fn walk_files_with_skip(
 /// resolved elements.
 #[allow(clippy::result_large_err)]
 pub fn load(repos: &[Repo], auto_imports: &[SmolStr]) -> Result<PureModel, PartialPureModel> {
+    load_with_extensions(repos, auto_imports, &[], &mut || Vec::new())
+}
+
+/// Like [`load`] but lets the caller supply DSL section parsers and
+/// compiler extensions.
+///
+/// `core-platform-pure` lives below the DSL crates in the workspace
+/// dep graph, so it can't import them directly. Callers that *do*
+/// know about the DSL crates (the LSP server, CLI commands that
+/// process `###Mapping` / `###Relational` / `###Store` sources) pass
+/// the extensions in via this entry point.
+///
+/// `section_parsers_factory` is a closure rather than a slice
+/// because [`legend_pure_parser_parser::SectionParser`] is not
+/// `Clone`. The function is invoked per repo so each compile gets
+/// fresh parsers without sharing mutable state across repos.
+///
+/// `extensions` flows into both the slice compile pass and
+/// `finalize_model`, so DSL extensions get every lifecycle hook
+/// (`declare`, `define_signatures`, `define_bodies`, `validate`,
+/// and the new `walk_references`).
+///
+/// # Errors
+///
+/// Same as [`load`].
+#[allow(clippy::result_large_err)]
+pub fn load_with_extensions(
+    repos: &[Repo],
+    auto_imports: &[SmolStr],
+    extensions: &[&dyn legend_pure_parser_pure::extension::CompilerExtension],
+    section_parsers_factory: &mut dyn FnMut() -> Vec<Box<dyn legend_pure_parser_parser::SectionParser>>,
+) -> Result<PureModel, PartialPureModel> {
     let sorted = match crate::topo::topo_sort_repos(repos) {
         Ok(s) => s,
         Err(topo_err) => {
-            // Surface the topo failure as a single PartialPureModel error
-            // and bail before doing any compile work.
             let model = init_bootstrap_model();
             return Err(PartialPureModel {
                 model,
@@ -659,14 +689,16 @@ pub fn load(repos: &[Repo], auto_imports: &[SmolStr]) -> Result<PureModel, Parti
     for repo in sorted {
         match repo {
             Repo::Embedded { .. } | Repo::Filesystem { .. } => {
-                let (parsed_files, parse_errs) = parse_repo_sources(repo);
+                let section_parsers = section_parsers_factory();
+                let (parsed_files, parse_errs) =
+                    parse_repo_sources_with_sections(repo, section_parsers);
                 errors.extend(parse_errs);
                 let lowerers = default_island_lowerers();
                 let (_range, slice_errs) = pipeline::compile_repo_slice_with_islands(
                     &mut model,
                     &parsed_files,
                     auto_imports,
-                    &[],
+                    extensions,
                     &lowerers,
                 );
                 errors.extend(slice_errs);
@@ -690,7 +722,7 @@ pub fn load(repos: &[Repo], auto_imports: &[SmolStr]) -> Result<PureModel, Parti
         }
     }
 
-    errors.extend(pipeline::finalize_model(&mut model, auto_imports, &[]));
+    errors.extend(pipeline::finalize_model(&mut model, auto_imports, extensions));
 
     if errors.is_empty() {
         Ok(model)
@@ -703,17 +735,47 @@ pub fn load(repos: &[Repo], auto_imports: &[SmolStr]) -> Result<PureModel, Parti
 ///
 /// Translates parse errors into [`CompilationError`]s so the merged
 /// `load` accumulator handles every error class uniformly.
+#[allow(dead_code)]
 fn parse_repo_sources(
     repo: &Repo,
 ) -> (
     Vec<legend_pure_parser_ast::section::SourceFile>,
     Vec<CompilationError>,
 ) {
+    parse_repo_sources_with_sections(repo, Vec::new())
+}
+
+/// Same as [`parse_repo_sources`] but routes `###Section` declarations
+/// through the supplied DSL section parsers (Mapping, Relational,
+/// Store, …). Sections whose `kind` doesn't match any registered
+/// parser fall through to the default behaviour and end up as
+/// [`legend_pure_parser_ast::section::Section`] entries with an
+/// unparsed body.
+fn parse_repo_sources_with_sections(
+    repo: &Repo,
+    section_parsers: Vec<Box<dyn legend_pure_parser_parser::SectionParser>>,
+) -> (
+    Vec<legend_pure_parser_ast::section::SourceFile>,
+    Vec<CompilationError>,
+) {
     let mut parsed_files = Vec::new();
     let mut errors = Vec::new();
+    let mut section_parsers = section_parsers;
     for (content, name) in repo.sources() {
-        match legend_pure_parser_parser::parse_with_islands(content, name, default_island_parsers())
-        {
+        // `parse_with_sections` consumes `Vec<Box<...>>`; refill from
+        // the caller's factory between files. Using `take` lets us
+        // pass the same vec on the LAST file without an extra clone
+        // — earlier iterations get an empty vec since DSL parsers
+        // can't be cloned. This is fine for repos that don't mix
+        // DSL and non-DSL files; if they do, callers should re-call
+        // `load_with_extensions` per-repo.
+        let parsers = std::mem::take(&mut section_parsers);
+        match legend_pure_parser_parser::parse_with_sections(
+            content,
+            name,
+            default_island_parsers(),
+            parsers,
+        ) {
             Ok(sf) => parsed_files.push(sf),
             Err(partial) => {
                 parsed_files.push(partial.source_file);
