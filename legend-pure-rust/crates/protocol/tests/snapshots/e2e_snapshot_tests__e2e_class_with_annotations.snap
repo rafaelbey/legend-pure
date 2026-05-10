@@ -87,14 +87,14 @@ expression: json
         {
           "profile": "temporal",
           "profileSourceInformation": {
-            "endColumn": 16,
+            "endColumn": 17,
             "endLine": 17,
             "sourceId": "class_with_annotations.pure",
             "startColumn": 9,
             "startLine": 17
           },
           "sourceInformation": {
-            "endColumn": 16,
+            "endColumn": 33,
             "endLine": 17,
             "sourceId": "class_with_annotations.pure",
             "startColumn": 9,

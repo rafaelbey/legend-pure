@@ -151,6 +151,7 @@ pub(super) fn lower_new_instance(
             type_arguments: resolved_type_args,
             multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
+            source_info: None,
         },
         multiplicity: crate::types::Multiplicity::PureOne,
     }));

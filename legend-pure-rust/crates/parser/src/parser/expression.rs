@@ -17,6 +17,7 @@ use super::R;
 use super::{ParserContext, split_package_name, unquote_string};
 use crate::error::ParseError;
 use legend_pure_parser_ast::SourceInfo;
+use legend_pure_parser_ast::source_info::Spanned;
 use legend_pure_parser_ast::annotation::{PackageableElementPtr, Parameter};
 use legend_pure_parser_ast::expression::{
     ArithmeticExpr, ArithmeticOp, ArrowFunction, BooleanLiteral, CollectionExpr, ComparisonExpr,
@@ -182,11 +183,18 @@ impl Parser {
         let mut expr = self.parse_primary()?;
         loop {
             if self.cursor.check(TokenKind::Arrow) {
-                let si = self.cursor.current_source_info();
+                // Capture the target's span BEFORE we wrap it — used as
+                // the start of the combined `target->fn(args)` span so
+                // IDE goto / hover can locate the call from clicks
+                // anywhere inside the chain. The `->` and function-name
+                // spans alone (which the original code used) are far
+                // too narrow.
+                let target_si = expr.source_info().clone();
+                let arrow_si = self.cursor.current_source_info();
                 self.cursor.advance();
                 let (func_name, func_si) = self.cursor.expect_identifier_or_keyword()?;
                 // Build fully qualified path for the function
-                let mut path = Package::root(func_name, func_si);
+                let mut path = Package::root(func_name, func_si.clone());
                 while self.cursor.eat(TokenKind::PathSep) {
                     let (seg, seg_si) = self.cursor.expect_identifier_or_keyword()?;
                     path = path.child(seg, seg_si);
@@ -195,7 +203,9 @@ impl Parser {
                 let func = PackageableElementPtr {
                     package: pkg,
                     name,
-                    source_info: si.clone(),
+                    // Function-pointer's source_info is the function-name
+                    // span, not the `->` token. Goto-def underlines this.
+                    source_info: func_si,
                 };
                 self.cursor.expect(TokenKind::LParen)?;
                 let mut args = Vec::new();
@@ -203,12 +213,23 @@ impl Parser {
                     args.push(self.parse_expression()?);
                     self.cursor.eat(TokenKind::Comma);
                 }
+                // Capture the closing `)`'s span before consuming so the
+                // combined source_info covers the whole call.
+                let close_si = self.cursor.current_source_info();
                 self.cursor.expect(TokenKind::RParen)?;
+                let combined_si = SourceInfo::new(
+                    target_si.source.clone(),
+                    target_si.start_line,
+                    target_si.start_column,
+                    close_si.end_line,
+                    close_si.end_column,
+                );
+                let _ = arrow_si; // kept for trace-debug if ever needed
                 expr = Expression::ArrowFunction(ArrowFunction {
                     target: Box::new(expr),
                     function: func,
                     arguments: args,
-                    source_info: si,
+                    source_info: combined_si,
                 });
             } else if self.cursor.check(TokenKind::Dot) {
                 let si = self.cursor.current_source_info();

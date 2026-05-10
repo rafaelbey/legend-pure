@@ -61,6 +61,7 @@ pub(super) fn lower_type_reference(
                     type_arguments: vec![],
                     multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
+                    source_info: None,
                 },
                 multiplicity: Multiplicity::PureOne,
             },
@@ -140,6 +141,7 @@ pub(crate) fn build_packageable_element_ref(
                 type_arguments: vec![],
                 multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
+                source_info: None,
             },
         };
         Box::new(ResolvedType {
@@ -148,6 +150,7 @@ pub(crate) fn build_packageable_element_ref(
                 type_arguments: vec![inner_te],
                 multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
+                source_info: None,
             },
             multiplicity: Multiplicity::PureOne,
         })

@@ -21,10 +21,11 @@ use legend_pure_parser_pure::error::CompilationError;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::locate::{Located, LocatedKind};
 use legend_pure_parser_pure::model::{Element, PureModel};
+use legend_pure_parser_pure::refs::ReferenceIndex;
 use legend_pure_parser_pure::types::{ResolvedType, TypeExpr, ValueSpec};
 use tower_lsp::lsp_types::{
-    CodeLens, Command, Diagnostic, DocumentSymbol, Hover, HoverContents, Location, MarkupContent,
-    MarkupKind, Position, SymbolKind, Url,
+    CodeLens, Command, Diagnostic, DocumentSymbol, Hover, HoverContents, Location, LocationLink,
+    MarkupContent, MarkupKind, Position, SymbolKind, Url,
 };
 
 use crate::convert::{self, range_from_source_info};
@@ -147,36 +148,270 @@ fn render_element_label(model: &PureModel, id: ElementId) -> Option<String> {
 /// care about cross-file goto can pass `&|_| None`.
 pub fn definition_for_position(
     model: &PureModel,
+    references: Option<&ReferenceIndex>,
     canonical_path: &str,
     position: Position,
     file_uri: &Url,
     uri_for_canonical: &dyn Fn(&str) -> Option<Url>,
-) -> Option<Location> {
+) -> Option<LocationLink> {
     let (line, column) = convert::position_to_1indexed(position);
-    let located = model.locate(canonical_path, line, column)?;
-
-    if let LocatedKind::ValueSpec(vs) = located.kind {
-        // 1. Property / qualified-property access: receiver type →
-        //    declaring class → property's source span.
-        if let Some(loc) = property_target_location(model, vs, file_uri, uri_for_canonical) {
-            return Some(loc);
-        }
-        // 2. Variable: walk owning function's parameters for a name
-        //    match. Lambda params, let-bindings and QP-body variables
-        //    are not handled yet — see resolve_variable_target.
-        if let Some(loc) = variable_target_location(model, located.element, vs, file_uri) {
-            return Some(loc);
-        }
-        // 3. Element-targeted kinds (FunctionCall, TypeReference, …).
-        if let Some(target) = resolve_value_spec_target(vs)
-            && let Some(loc) = element_location(model, target, file_uri, uri_for_canonical)
-        {
-            return Some(loc);
-        }
+    // 1) Reference-index first: every kind it covers (stereotypes
+    //    today; tagged values, type refs, etc. as the index grows)
+    //    bypasses the locate-based dispatch entirely. The index is
+    //    O(refs-in-file) lookup, faster and more accurate than the
+    //    AST-walking path because it's built from the resolver's
+    //    own data.
+    if let Some(idx) = references
+        && let Some(reference) = idx.find_at(canonical_path, line, column)
+    {
+        let target_canonical = reference.target.source.as_str();
+        let target_uri = if target_canonical == canonical_path {
+            file_uri.clone()
+        } else {
+            uri_for_canonical(target_canonical)?
+        };
+        return Some(LocationLink {
+            origin_selection_range: Some(range_from_source_info(&reference.range)),
+            target_uri,
+            target_range: range_from_source_info(&reference.target),
+            target_selection_range: range_from_source_info(&reference.target),
+        });
     }
 
-    // Fallback: jump to the owning element's name span.
-    element_location(model, located.element, file_uri, uri_for_canonical)
+    // 2) Fallback: locate-based dispatch for kinds the index doesn't
+    //    yet cover (variables, expression-body refs, definition-site
+    //    no-op nav).
+    let located = model.locate(canonical_path, line, column)?;
+    // Range in the source file the IDE should underline on ⌘-hover.
+    // Must be tight (single-token-ish) — IntelliJ skips rendering the
+    // hint when the range spans multiple lines, which is what
+    // `located.span` would give us for clicks on element headers.
+    let origin_selection_range = range_from_source_info(
+        &origin_span_for_located(model, &located),
+    );
+
+    let target_location = match located.kind {
+        LocatedKind::ValueSpec(vs) => {
+            // 1. Property / qualified-property access.
+            // 2. Variable → owning function's parameters.
+            // 3. Element-targeted kinds (FunctionCall, TypeReference, …).
+            // 4. ValueSpec without a resolvable target → None.
+            property_target_location(model, vs, file_uri, uri_for_canonical)
+                .or_else(|| variable_target_location(model, located.element, vs, file_uri))
+                .or_else(|| {
+                    resolve_value_spec_target(vs)
+                        .and_then(|t| element_location(model, t, file_uri, uri_for_canonical))
+                })?
+        }
+        LocatedKind::Parameter(_)
+        | LocatedKind::Property(_)
+        | LocatedKind::QualifiedProperty(_)
+        | LocatedKind::Constraint(_) => {
+            // Cursor is on a definition site itself (parameter,
+            // property, QP, constraint). Returning that location
+            // is a no-op nav and correct.
+            element_location(model, located.element, file_uri, uri_for_canonical)?
+        }
+        LocatedKind::Element => {
+            // The locator falls back to `Element` whenever it can't
+            // refine into a more specific node — including whitespace
+            // and noise *inside* the element body. We must NOT treat
+            // those positions as navigable: doing so makes the entire
+            // function body show the cmd-hover affordance and makes
+            // a click anywhere jump to the function header. Only
+            // return a location when the cursor actually sits on
+            // the element's name identifier.
+            let node = model.get_node(located.element);
+            if !cursor_in_source_info(&node.name_source_info, line, column) {
+                return None;
+            }
+            element_location(model, located.element, file_uri, uri_for_canonical)?
+        }
+    };
+    Some(location_link(origin_selection_range, target_location))
+}
+
+/// Inclusive (line, column) test: is `(line, column)` (1-indexed)
+/// inside `si`'s span? End boundary is exclusive — clicking exactly
+/// at `end_column` is past the last character.
+fn cursor_in_source_info(si: &SourceInfo, line: u32, column: u32) -> bool {
+    if line < si.start_line || line > si.end_line {
+        return false;
+    }
+    if line == si.start_line && column < si.start_column {
+        return false;
+    }
+    if line == si.end_line && column >= si.end_column {
+        return false;
+    }
+    true
+}
+
+/// Pick the tightest source span that makes sense as the click's
+/// origin for cmd-hover.
+///
+/// IntelliJ refuses to render the cmd-hover underline when the
+/// origin spans multiple lines, so this never returns a multi-line
+/// span if it can help it.
+///
+/// Strategy:
+///   - `Element` / `Parameter` / `Property` / `QualifiedProperty`:
+///     use the declaration's name span (single identifier).
+///   - `ValueSpec` of `PropertyCall` / `QualifiedPropertyCall`:
+///     subtract the receiver's span from the expression's span to
+///     recover the property-name range. Heuristic; assumes single
+///     line (`receiver.foo`) which is overwhelmingly the common case.
+///   - `ValueSpec` of `FunctionCall` with simple name: take the
+///     `function_name`'s length from the start of the expression.
+///   - Other `ValueSpec` kinds: full span (already small —
+///     `Variable`, `EnumValue`, `TypeReference`).
+fn origin_span_for_located(model: &PureModel, located: &Located<'_>) -> SourceInfo {
+    match located.kind {
+        LocatedKind::Element => model.get_node(located.element).name_source_info.clone(),
+        LocatedKind::Parameter(p) => p.source_info.clone(),
+        LocatedKind::Property(p) => p.source_info.clone(),
+        LocatedKind::QualifiedProperty(qp) => qp.source_info.clone(),
+        LocatedKind::Constraint(_) => located.span.clone(),
+        LocatedKind::ValueSpec(vs) => narrow_value_spec_span(vs).unwrap_or_else(|| vs.source_info.clone()),
+    }
+}
+
+/// Compute a sub-span of `vs.source_info` covering just the named
+/// identifier inside the expression — `foo` in `$x.foo`, the function
+/// name in `pkg::someFunc(args)` or `target->someFunc(args)`. Returns
+/// `None` when the heuristic can't safely narrow (e.g. multi-line
+/// expressions).
+fn narrow_value_spec_span(vs: &ValueSpec) -> Option<SourceInfo> {
+    use legend_pure_parser_pure::types::ExprKind;
+    let outer = &vs.source_info;
+    match &*vs.kind {
+        // `$x.foo` — name is at the end of the expression, on the
+        // same line as the receiver. Use the function name's length
+        // to back-compute the start column.
+        ExprKind::PropertyCall(d) => narrow_trailing_name(outer, &d.function_name),
+        // `$x.qp(args)` — name is between the receiver and the
+        // opening paren. The receiver's span tells us where the dot
+        // is; the name follows. Length of name gives the end column.
+        ExprKind::QualifiedPropertyCall(d) => narrow_after_receiver(outer, d.arguments.first()?, &d.function_name),
+        // FunctionCall has two surface forms after lowering, both
+        // collapsed to the same AST node:
+        //   1. Direct:   `pkg::someFunc(args)` — name at the start.
+        //   2. Arrow:    `target->someFunc(args)` — name AFTER
+        //      `arguments[0]` (the target) and the `->` operator.
+        // Distinguish by checking whether arguments[0]'s source_info
+        // starts at the same column as the outer expression: if it
+        // does, the target consumed the leading position so the name
+        // lives between the target and the opening paren.
+        ExprKind::FunctionCall(d) => {
+            if let Some(arg0) = d.arguments.first()
+                && arg0.source_info.start_line == outer.start_line
+                && arg0.source_info.start_column == outer.start_column
+            {
+                narrow_arrow_function_name(outer, arg0, &d.function_name)
+            } else {
+                narrow_leading_name(outer, &d.function_name)
+            }
+        }
+        // Variable, EnumValue, TypeReference, literals: the
+        // expression's full span IS the identifier.
+        _ => None,
+    }
+}
+
+fn narrow_trailing_name(outer: &SourceInfo, name: &smol_str::SmolStr) -> Option<SourceInfo> {
+    if outer.start_line != outer.end_line {
+        return None;
+    }
+    let name_len: u32 = name.len().try_into().ok()?;
+    let start_col = outer.end_column.checked_sub(name_len)?;
+    Some(SourceInfo::new(
+        outer.source.as_str(),
+        outer.end_line,
+        start_col,
+        outer.end_line,
+        outer.end_column,
+    ))
+}
+
+fn narrow_after_receiver(
+    outer: &SourceInfo,
+    receiver: &ValueSpec,
+    name: &smol_str::SmolStr,
+) -> Option<SourceInfo> {
+    if receiver.source_info.end_line != outer.end_line {
+        return None;
+    }
+    // Skip past the dot following the receiver.
+    let name_start_col = receiver.source_info.end_column.checked_add(1)?;
+    let name_len: u32 = name.len().try_into().ok()?;
+    let name_end_col = name_start_col.checked_add(name_len)?;
+    Some(SourceInfo::new(
+        receiver.source_info.source.as_str(),
+        receiver.source_info.end_line,
+        name_start_col,
+        receiver.source_info.end_line,
+        name_end_col,
+    ))
+}
+
+fn narrow_leading_name(outer: &SourceInfo, name: &smol_str::SmolStr) -> Option<SourceInfo> {
+    if outer.start_line != outer.end_line {
+        return None;
+    }
+    let name_len: u32 = name.len().try_into().ok()?;
+    let end_col = outer.start_column.checked_add(name_len)?;
+    Some(SourceInfo::new(
+        outer.source.as_str(),
+        outer.start_line,
+        outer.start_column,
+        outer.start_line,
+        end_col,
+    ))
+}
+
+/// Arrow form `target->name(args)` — name lives just past the `->`
+/// operator that follows the target's span. Returns the (`start_col`
+/// inclusive, `end_col` exclusive) span of the name itself.
+///
+/// Assumes the target and the rest sit on a single line; multi-line
+/// arrow expressions return None and the caller falls back to the
+/// full expression span.
+fn narrow_arrow_function_name(
+    outer: &SourceInfo,
+    target: &ValueSpec,
+    name: &smol_str::SmolStr,
+) -> Option<SourceInfo> {
+    if target.source_info.end_line != outer.end_line {
+        return None;
+    }
+    // Skip past the two-char `->` operator.
+    let name_start_col = target.source_info.end_column.checked_add(2)?;
+    let name_len: u32 = name.len().try_into().ok()?;
+    let name_end_col = name_start_col.checked_add(name_len)?;
+    Some(SourceInfo::new(
+        outer.source.as_str(),
+        target.source_info.end_line,
+        name_start_col,
+        target.source_info.end_line,
+        name_end_col,
+    ))
+}
+
+/// Wrap a target [`Location`] and origin range as a [`LocationLink`].
+/// IntelliJ's GoTo Declaration pipeline reads `origin_selection_range`
+/// to draw the ⌘-hover underline + cursor-change affordance — bare
+/// `Location` responses don't carry that information so the IDE has
+/// nothing to highlight on the source side.
+fn location_link(origin: tower_lsp::lsp_types::Range, target: Location) -> LocationLink {
+    LocationLink {
+        origin_selection_range: Some(origin),
+        target_uri: target.uri,
+        // We don't track a separate "selection" range vs full
+        // declaration range — same span for both. IntelliJ uses
+        // target_selection_range when scrolling to the destination.
+        target_range: target.range,
+        target_selection_range: target.range,
+    }
 }
 
 /// If a [`ValueSpec`] kind directly references a resolved element,
@@ -570,10 +805,16 @@ mod tests {
         // the parameter `name`, declared at line 1 col 22 (1-indexed)
         // → 0-indexed col 21.
         let no_cross_file: &dyn Fn(&str) -> Option<Url> = &|_| None;
-        let loc = definition_for_position(&model, "fixture.pure", pos(2, 2), &uri, no_cross_file)
+        let loc = definition_for_position(&model, None, "fixture.pure", pos(2, 2), &uri, no_cross_file)
             .expect("definition must resolve");
-        assert_eq!(loc.range.start.line, 0);
-        assert_eq!(loc.range.start.character, 21);
+        assert_eq!(loc.target_range.start.line, 0);
+        assert_eq!(loc.target_range.start.character, 21);
+        // origin_selection_range tells the IDE which source range to
+        // underline on ⌘-hover. Must be populated.
+        assert!(
+            loc.origin_selection_range.is_some(),
+            "LocationLink must populate origin_selection_range so the IDE can render the underline",
+        );
     }
 
     #[test]
@@ -648,6 +889,7 @@ mod tests {
                 type_arguments: Vec::new(),
                 multiplicity_arguments: Vec::new(),
                 value_arguments: Vec::new(),
+                source_info: None,
             },
             multiplicity: Multiplicity::PureOne,
         };
@@ -703,42 +945,61 @@ function test::nameOf(p: test::Person[1]): String[1]
         // The body line is line 8 (1-indexed). `$p.name` starts at
         // col 3; `name` itself is at col 6. LSP positions are 0-indexed
         // → (line 7, col 5+).
-        let loc = definition_for_position(&model, "fixture.pure", pos(7, 6), &uri, no_cross_file)
-            .expect("property goto must resolve");
-        eprintln!("property-goto resolved to {loc:?}");
-        // Property `name` is declared on line 3 (1-indexed) = line 2
-        // (0-indexed), col 3 (1-indexed) = col 2 (0-indexed). If the
-        // receiver's type_info wasn't populated by compile (partial
-        // model), property goto can't fire — fall through is OK; the
-        // assertion below treats that as a soft-fail until partial
-        // models populate body type info.
-        if loc.range.start.line == 2 {
-            assert_eq!(loc.range.start.character, 2);
-        } else {
-            // Document the alternate paths so a future improvement
-            // (full type-info propagation in partial compiles) makes
-            // this test stricter without surprising anyone.
-            eprintln!(
-                "property goto did not fire — got line {}, falling back path",
-                loc.range.start.line
-            );
-        }
+        let loc = definition_for_position(&model, None, "fixture.pure", pos(7, 6), &uri, no_cross_file);
+        // Property goto requires `type_info` populated on the
+        // receiver, which only happens after a full Pass-2.5 compile.
+        // `compile_fixture` produces a partial model without bodies
+        // lowered to typed ValueSpecs, so this integration test is
+        // *correctly* expected to return None today: the property-call
+        // ValueSpec exists but its receiver lacks `type_info`, so we
+        // fall through every resolve_value_spec_target case.
+        //
+        // Previously this test was a "soft pass" because the handler
+        // had a fallback that navigated whitespace clicks to the
+        // enclosing function header. That fallback is gone (it made
+        // the entire function body appear navigable), so we now
+        // assert the strict behaviour. The synthetic-model unit test
+        // `property_target_location_resolves_via_receiver_type_info`
+        // covers the success case.
+        assert!(
+            loc.is_none(),
+            "without type_info, property goto correctly returns None; got {loc:?}",
+        );
     }
 
     #[test]
-    fn definition_falls_back_to_owning_element_for_literal() {
-        // A click on a string-literal body has no symbol target, so
-        // the handler falls back to the owning function's name span.
+    fn definition_returns_none_for_value_spec_without_target() {
+        // A click on a string-literal body has no symbol target. The
+        // handler used to fall back to the owning function's name span,
+        // which was confusing — clicking on `'hello'` would jump to
+        // `msg`, suggesting `'hello'` is defined there. Now it returns
+        // None and the IDE shows "Cannot find declaration to go to".
         let src = "function test::msg(): String[1]\n{\n  'hello'\n}\n";
         let model = compile_fixture("fixture.pure", src);
         let uri = Url::parse("file:///fixture.pure").unwrap();
         let no_cross_file: &dyn Fn(&str) -> Option<Url> = &|_| None;
-        // `function test::msg(...)` — the name `msg` starts at line 1
-        // col 16 (1-indexed) → 0-indexed col 15.
-        let loc = definition_for_position(&model, "fixture.pure", pos(2, 4), &uri, no_cross_file)
-            .expect("definition fallback must resolve");
-        assert_eq!(loc.range.start.line, 0);
-        assert_eq!(loc.range.start.character, 15);
+        let loc = definition_for_position(&model, None, "fixture.pure", pos(2, 4), &uri, no_cross_file);
+        assert!(
+            loc.is_none(),
+            "click on a literal must not navigate to the enclosing function: got {loc:?}",
+        );
+    }
+
+    #[test]
+    fn definition_returns_self_for_definition_site_click() {
+        // Click on the function name itself (the definition site, not
+        // a use-site). LocatedKind::Element is the located kind here,
+        // so element_location is invoked directly and returns the
+        // element's name span — no-op navigation.
+        let src = "function test::msg(): String[1]\n{\n  'hello'\n}\n";
+        let model = compile_fixture("fixture.pure", src);
+        let uri = Url::parse("file:///fixture.pure").unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Url> = &|_| None;
+        // `msg` starts at line 1 col 16 (1-indexed) → 0-indexed col 15.
+        let loc = definition_for_position(&model, None, "fixture.pure", pos(0, 16), &uri, no_cross_file)
+            .expect("definition-site click should still produce a location");
+        assert_eq!(loc.target_range.start.line, 0);
+        assert_eq!(loc.target_range.start.character, 15);
     }
 
     /// Verifies the cross-file branch of `element_location`: when the
@@ -923,6 +1184,7 @@ Class test::Person
                 stereotypes: vec![StereotypeRef {
                     profile: profile_id,
                     value: smol_str::SmolStr::new("Test"),
+                    source_info: None,
                 }],
                 tagged_values: Vec::new(),
             }),

@@ -14,6 +14,7 @@
 
 //! Compiled Profile node.
 
+use legend_pure_parser_ast::SourceInfo;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
@@ -28,4 +29,16 @@ pub struct Profile {
     pub stereotypes: Vec<SmolStr>,
     /// Tag names declared by this profile.
     pub tags: Vec<SmolStr>,
+    /// Source spans of each stereotype declaration, position-aligned
+    /// with `stereotypes`. Populated by the parser; `None` per slot
+    /// for snapshot-loaded or m3-bootstrap profiles whose
+    /// declarations didn't come through the parser. Used by IDE
+    /// goto-def to navigate from a `<<P.stereo>>` use-site to the
+    /// `stereo` line within the Profile body.
+    #[serde(default)]
+    pub stereotype_source_infos: Vec<Option<SourceInfo>>,
+    /// Source spans of each tag declaration, position-aligned with
+    /// `tags`. Same shape and rationale as `stereotype_source_infos`.
+    #[serde(default)]
+    pub tag_source_infos: Vec<Option<SourceInfo>>,
 }

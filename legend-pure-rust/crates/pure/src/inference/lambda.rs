@@ -228,6 +228,7 @@ pub(crate) fn bind_from_lambda_body(
         type_arguments: vec![],
         multiplicity_arguments: Vec::new(),
         value_arguments: vec![],
+        source_info: None,
     };
     resolve::bind_type(return_type, &body_te, &mut bindings.ty, model);
 

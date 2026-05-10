@@ -717,6 +717,7 @@ fn validate_pure_body(
                     type_arguments: Vec::new(),
                     multiplicity_arguments: Vec::new(),
                     value_arguments: Vec::new(),
+                    source_info: None,
                 },
                 Multiplicity::PureOne,
             )]
@@ -810,6 +811,7 @@ fn validate_property_mapping(
             type_arguments: Vec::new(),
             multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
+            source_info: None,
         };
         (prop_type, prop_mult)
     } else {
@@ -1488,6 +1490,7 @@ fn validate_model_operation(
             type_arguments: Vec::new(),
             multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
+            source_info: None,
         },
         Multiplicity::PureOne,
     )];

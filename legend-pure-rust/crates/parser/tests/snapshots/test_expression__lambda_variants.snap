@@ -119,9 +119,9 @@ SourceFile {
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 4,
-                                            start_column: 14,
+                                            start_column: 16,
                                             end_line: 4,
-                                            end_column: 15,
+                                            end_column: 21,
                                         },
                                     },
                                     arguments: [
@@ -194,9 +194,9 @@ SourceFile {
                                     source_info: SourceInfo {
                                         source: "test.pure",
                                         start_line: 4,
-                                        start_column: 14,
+                                        start_column: 5,
                                         end_line: 4,
-                                        end_column: 15,
+                                        end_column: 33,
                                     },
                                 },
                             ),

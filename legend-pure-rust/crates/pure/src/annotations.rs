@@ -17,6 +17,7 @@
 //! At the Pure semantic level, annotation references point to resolved
 //! `ElementId`s (the Profile element) rather than string paths.
 
+use legend_pure_parser_ast::SourceInfo;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
@@ -36,6 +37,13 @@ pub struct StereotypeRef {
     pub profile: ElementId,
     /// The stereotype name within the profile.
     pub value: SmolStr,
+    /// Source range covering the entire `profile.value` reference inside
+    /// the surrounding `<<...>>`. Populated by [`crate::resolve::resolve_stereotypes`]
+    /// from the AST. `None` for synthetic refs constructed by tests or
+    /// loaded from purem snapshots that don't carry source info.
+    /// Used by IDE goto / hover to know which source range is clickable.
+    #[serde(default)]
+    pub source_info: Option<SourceInfo>,
 }
 
 // ---------------------------------------------------------------------------
@@ -54,6 +62,11 @@ pub struct TaggedValueRef {
     pub tag: SmolStr,
     /// The string value assigned to this tag.
     pub value: String,
+    /// Source range covering the entire `profile.tag` reference inside
+    /// the surrounding `{...}`. Same shape and rationale as
+    /// [`StereotypeRef::source_info`].
+    #[serde(default)]
+    pub source_info: Option<SourceInfo>,
 }
 
 // ---------------------------------------------------------------------------
@@ -72,6 +85,7 @@ mod tests {
                 local_idx: 10,
             },
             value: SmolStr::new("deprecated"),
+            source_info: None,
         };
         assert_eq!(s.value, "deprecated");
     }
@@ -85,6 +99,7 @@ mod tests {
             },
             tag: SmolStr::new("description"),
             value: "A person".to_string(),
+            source_info: None,
         };
         assert_eq!(tv.tag, "description");
         assert_eq!(tv.value, "A person");

@@ -256,6 +256,7 @@ pub fn walk_type(ty: &mut TypeExpr, visit: &mut dyn FnMut(&mut ElementId)) {
             type_arguments,
             multiplicity_arguments: _,
             value_arguments: _,
+            source_info: _,
         } => {
             visit(element);
             for arg in type_arguments {

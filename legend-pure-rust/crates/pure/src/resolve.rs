@@ -299,6 +299,13 @@ pub(crate) fn resolve_type_ref(
         type_arguments,
         multiplicity_arguments,
         value_arguments,
+        // The AST `TypeReference.source_info` covers the full type
+        // reference span (`Foo`, `meta::pure::Foo<T>`). Stored on the
+        // resolved `TypeExpr::Named` so the IDE goto-def index can
+        // emit a clickable region for every type ref position
+        // (`extends`, parameter type, return type, property type,
+        // generic argument, …).
+        source_info: Some(type_ref.source_info.clone()),
     })
 }
 
@@ -464,6 +471,8 @@ pub(crate) fn resolve_type_spec(
                     type_arguments: vec![],
                     multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
+                    // Full `Measure~Unit` reference span — clickable region.
+                    source_info: Some(ur.source_info.clone()),
                 })
             } else {
                 let display = SmolStr::new(format!("{}~{}", ur.measure.full_path(), ur.unit));
@@ -497,6 +506,8 @@ pub(crate) fn resolve_type_spec(
                 type_arguments: vec![TypeExpr::Relation(columns)],
                 multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
+                // Relation literal span (`@(cols)` / `Relation<(cols)>`).
+                source_info: Some(rt.source_info.clone()),
             })
         }
         ast_type::TypeSpec::Function(ft) => {
@@ -883,6 +894,10 @@ pub(crate) fn resolve_stereotypes(
             Some(StereotypeRef {
                 profile: profile_id,
                 value: s.value.clone(),
+                // The AST's `s.source_info` covers the full
+                // `profile.value` reference span inside `<<...>>`,
+                // which is what the IDE needs to underline + click on.
+                source_info: Some(s.source_info.clone()),
             })
         })
         .collect()
@@ -957,6 +972,7 @@ pub(crate) fn resolve_tagged_values(
                 profile: profile_id,
                 tag: tv.tag.value.clone(),
                 value: tv.value.clone(),
+                source_info: Some(tv.source_info.clone()),
             })
         })
         .collect()
@@ -1590,6 +1606,7 @@ pub(crate) fn infer_typeexpr_from_valuespec(
         type_arguments: vec![],
         multiplicity_arguments: Vec::new(),
         value_arguments: vec![],
+        source_info: None,
     };
     // Honour pre-set `type_info` first — this is the canonical
     // "lowering captures parametric type info; consumers read from
@@ -1668,6 +1685,7 @@ pub(crate) fn infer_typeexpr_from_valuespec(
                     type_arguments: vec![],
                     multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
+                    source_info: None,
                 }),
                 None => None,
             }
@@ -1762,6 +1780,7 @@ fn typeexpr_lub(
                 type_arguments: lub_args,
                 multiplicity_arguments: lub_margs,
                 value_arguments: vec![],
+                source_info: None,
             };
         }
         // Different elements — fall back to element-level LUB
@@ -1772,6 +1791,7 @@ fn typeexpr_lub(
             type_arguments: vec![],
             multiplicity_arguments: vec![],
             value_arguments: vec![],
+            source_info: None,
         };
     }
     // Mixed structural / generic / non-Named — clone the first.
@@ -2990,6 +3010,7 @@ fn subtype_view(
             type_arguments: arg_type_args.to_vec(),
             multiplicity_arguments: arg_mult_args.to_vec(),
             value_arguments: vec![],
+            source_info: None,
         });
     }
 
@@ -3022,6 +3043,7 @@ fn subtype_view(
         type_arguments: vec![],
         multiplicity_arguments: Vec::new(),
         value_arguments: vec![],
+        source_info: None,
     };
     let nil_eid = crate::bootstrap::NIL_ID;
     let lift_for_variance = |variance: crate::nodes::class::Variance, te: &TypeExpr| -> TypeExpr {
@@ -3089,6 +3111,7 @@ fn subtype_view(
                 type_arguments: substituted_args,
                 multiplicity_arguments: substituted_margs,
                 value_arguments: vec![],
+                source_info: None,
             });
         }
         if let Some(view) = subtype_view(
@@ -3271,6 +3294,7 @@ pub(crate) fn type_lub(
                     type_arguments: lub_args,
                     multiplicity_arguments: lub_margs,
                     value_arguments: vec![],
+                    source_info: None,
                 }
             } else {
                 // Different elements — fall back to hierarchy LUB,
@@ -3284,6 +3308,7 @@ pub(crate) fn type_lub(
                     type_arguments: vec![],
                     multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
+                    source_info: None,
                 }
             }
         }
@@ -3317,6 +3342,7 @@ pub(crate) fn type_lub(
                 type_arguments: vec![],
                 multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
+                source_info: None,
             };
             let len = a_params.len().max(b_params.len());
             let mut params = Vec::with_capacity(len);
@@ -3344,6 +3370,7 @@ pub(crate) fn type_lub(
             type_arguments: vec![],
             multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
+            source_info: None,
         },
     }
 }
@@ -3440,6 +3467,7 @@ pub(crate) fn substitute_type_with_mults(
             type_arguments,
             multiplicity_arguments,
             value_arguments,
+            source_info,
         } => TypeExpr::Named {
             element: *element,
             type_arguments: type_arguments
@@ -3451,6 +3479,9 @@ pub(crate) fn substitute_type_with_mults(
                 .map(|m| substitute_mult(m, mult_bindings))
                 .collect(),
             value_arguments: value_arguments.clone(),
+            // Substitution preserves the source range of the original
+            // (the user-clickable identifier hasn't moved).
+            source_info: source_info.clone(),
         },
         TypeExpr::FunctionType {
             parameters,

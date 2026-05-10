@@ -269,9 +269,16 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let resolver = |c: &str| ws.file_uri_for_canonical(c);
+        let references = ws.references.as_deref();
+        // `Link` (LocationLink[]) instead of `Scalar` (Location):
+        // origin_selection_range tells IntelliJ which source range to
+        // underline on ⌘-hover. Without it the request flows but the
+        // visual affordance never renders.
         Ok(
-            handlers::definition_for_position(model, &canonical, position, &uri, &resolver)
-                .map(GotoDefinitionResponse::Scalar),
+            handlers::definition_for_position(
+                model, references, &canonical, position, &uri, &resolver,
+            )
+            .map(|link| GotoDefinitionResponse::Link(vec![link])),
         )
     }
 

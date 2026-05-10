@@ -75,6 +75,7 @@ fn infer_let_type(
         type_arguments: vec![],
         multiplicity_arguments: Vec::new(),
         value_arguments: vec![],
+        source_info: None,
     };
 
     // Honour pre-set `type_info` first — same canonical
@@ -228,6 +229,7 @@ fn infer_let_type(
                                     type_arguments: lub_args,
                                     multiplicity_arguments: lub_margs,
                                     value_arguments: vec![],
+                                    source_info: None,
                                 }
                             } else {
                                 // Mixed or non-Named types — fall back to current
@@ -317,6 +319,7 @@ fn infer_let_type(
                     type_arguments: vec![function_type],
                     multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
+                    source_info: None,
                 }
             } else {
                 function_type

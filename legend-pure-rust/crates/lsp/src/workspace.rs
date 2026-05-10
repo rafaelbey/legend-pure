@@ -31,6 +31,7 @@ use std::sync::Arc;
 use legend_pure_core_platform::repo::{self, Repo};
 use legend_pure_parser_pure::error::CompilationError;
 use legend_pure_parser_pure::model::PureModel;
+use legend_pure_parser_pure::refs::{ReferenceIndex, build_reference_index};
 use smol_str::SmolStr;
 use tower_lsp::lsp_types::Url;
 
@@ -45,6 +46,12 @@ pub struct Workspace {
     /// goto / outline can serve answers without recompiling on every
     /// keypress.
     pub model: Option<Arc<PureModel>>,
+    /// Reference index built alongside `model` after each compile.
+    /// Carries every clickable source span and its target — drives
+    /// goto-def, find-references, hover, and the future
+    /// semanticTokens response. Rebuilt per compile because source
+    /// spans move when the user edits.
+    pub references: Option<Arc<ReferenceIndex>>,
     /// Diagnostics from the most recent compile, keyed by canonical
     /// source path (as the compiler sees it). The handler turns these
     /// into per-URL `publishDiagnostics`.
@@ -61,6 +68,7 @@ impl Workspace {
             base_repos,
             open_buffers: HashMap::new(),
             model: None,
+            references: None,
             diagnostics: HashMap::new(),
             auto_imports,
         }
@@ -130,7 +138,12 @@ impl Workspace {
                 .push(err.clone());
         }
         self.diagnostics = by_source;
-        self.model = Some(Arc::new(model));
+        let model_arc = Arc::new(model);
+        // Build the reference index from the freshly-compiled model.
+        // Cheap (single linear walk over chunks) and centralizes
+        // every clickable source span for the LSP request handlers.
+        self.references = Some(Arc::new(build_reference_index(&model_arc)));
+        self.model = Some(model_arc);
         CompileOutcome {
             error_count: errors.len(),
         }
