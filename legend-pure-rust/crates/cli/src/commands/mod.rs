@@ -33,5 +33,6 @@ pub mod parse;
 pub mod plan;
 pub mod publish;
 pub mod repl;
+pub mod run;
 pub mod snapshot;
 pub mod test;
