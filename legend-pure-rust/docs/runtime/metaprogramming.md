@@ -1,10 +1,10 @@
 # Pure Meta-programming — Rust Port Assessment
 
-> **Status (2026-05-10):** Surveyor **357/0/0**, PCT **465/465**. Rust is at full parity with Java for every Pure-callable meta-programming primitive surveyed below; the only remaining gaps are three router-side consumer wrappers that live in `legend-engine` (`byPassRouterInfo`, `byPassValueSpecificationWrapper`, plus `RoutedValueSpecification.value` access patterns).
+> **Status (2026-05-10):** Surveyor **371/0/0**, PCT **465/465**. Rust is at full parity with Java for every Pure-callable meta-programming primitive surveyed below; the only remaining gaps are two router-side consumer wrappers that live in `legend-engine` (`byPassRouterInfo`, `byPassValueSpecificationWrapper`).
 >
 > The original RFC framing of this document — *can the Rust Arena/Index architecture support Pure metaprogramming?* — is settled: yes, it does. The original analysis is preserved as Appendix A (`MetaAccessor` proposal) and Appendix B (`mutateAdd` consumer taxonomy).
 >
-> **Implementation status (2026-05-10):** The §6 P0/P1 proposals shipped across six commits on legend-pure-rust + one on legend-engine — see the "What shipped" callout at the end of §6 for the commit list. The remaining items (§6 P2 9–12) are tracked as backlog candidates.
+> **Implementation status (2026-05-10):** All §6 P0/P1/P2 proposals (items 1–12) plus the Borderline harness tests (13–14) shipped across ten commits on legend-pure-rust + one on legend-engine — see the "What shipped" callout at the end of §6 for the commit list. No open follow-ups remain.
 
 ## Contents
 
@@ -49,7 +49,7 @@ Legend: ✅ ported · ⚠️ partial · ❌ gap · 🚫 deliberately out-of-surf
 | `mutateAdd<T>(T[1], String[1], Any[*]):T[1]` | (legend-engine consumer-defined; not platform) | 🚫 platform · ✅ extension | — (platform) · `legend-engine-rust/crates/natives-functions-unclassified/src/lib.rs` (extension) | Deliberately not registered in the platform `NativeRegistry::standard()`. Internal `RuntimeHeap::mutate_add` (`heap.rs:224`, 462) is used by `Reactivate` and `Copy` but unreachable from platform-only Pure source. Available via the `RuntimeExtension` SPI when `FunctionsUnclassifiedExtension` is registered through `NativeRegistry::with_extensions(&[…])`. See §5 invariant. |
 | `applyFunction(Function, Any[*])` | n/a | 🚫 | — | Java-internal reflective-array dispatch; never surfaced to Pure source. Subsumed by `eval`/`evaluate`. |
 
-**Verdict:** 18 of 20 platform-callable rows ✅, 0 ❌, 2 🚫 (`mutateAdd`, `applyFunction` — both deliberately extension-only). Locked by Surveyor **357/0/0** and PCT **465/465** with 9 manifest exclusions, none of which touch this surface.
+**Verdict:** 18 of 20 platform-callable rows ✅, 0 ❌, 2 🚫 (`mutateAdd`, `applyFunction` — both deliberately extension-only). Locked by Surveyor **371/0/0** and PCT **465/465** with 9 manifest exclusions, none of which touch this surface.
 
 ---
 
@@ -92,7 +92,7 @@ These are platform-ready in mechanism (heap property access works) but the wrapp
 ### 3.3 Behavioural unknowns
 
 - ~~**`Reactivate` cross-chunk `ElementId` correctness**~~ — **closed** by `testReactivateCrossChunkPlatformFunction` in `essential/meta/reflect/reactivate.pure` (commit `a1d7f41c901`). The test deactivates a body that references `size()` (different platform chunk than `reactivate`) and asserts the reactivated result.
-- **`copy` association-inverse symmetry under router rewrites** — still open. `lang.rs:1018-1082` claims parity with Java `Copy.java:236`, but the platform has no test that exercises a router-shaped DMR cycle on a class with bidirectional Associations. §6 item 11 (P2, not yet shipped) is the lock-in test.
+- ~~**`copy` association-inverse symmetry under router rewrites**~~ — **closed** by `testCopyAssociationInverseAfterDMR` in `grammar/functions/lang/creation/copy.pure` (commit `f895bcd9a33`). The test takes `$pierre->deactivate()->reactivate()->cast(@LA_Person)` to round-trip through DMR, then copies via `^$recovered(firstName='Bob')`, and asserts that `firmX.employees` contains both the original and the copy — proving the inverse-link cache survives the DMR cycle.
 
 ### 3.4 Verdict per file
 
@@ -223,10 +223,10 @@ Existing fixtures present but small (2–4 tests). Extend in-place rather than a
 #### P2 — gaps already adjacent to working fixtures
 
 8. ✅ **`dynamicNew` overload matrix extended** *(in-place in `dynamicNew.pure`, commit `f0a1d83455c`)* — 5 new tests for the 6-arg `constraintsManager` overloads: transform, skip-default-check, wrap, GenericType receiver, and direct `^ConstraintsOverride` construction. Drove the §1 ❌ → ✅ flip.
-9. ⏳ **Multiplicity-reader shape coverage** *(backlog)* — extend `getLowerBound.pure` / `getUpperBound.pure` / `isToOne.pure` / `isToMany.pure` / `hasUpperBound.pure` / `hasToOneUpperBound.pure` to cover all five canonical shapes `[0..1]`, `[1]`, `[1..*]`, `[*]`, `[m..n]`.
-10. ⏳ **Path/element round-trip coverage** *(backlog)* — extend `pathToElement.pure` / `elementToPath.pure` to assert `pathToElement(elementToPath($e)) == $e` over every `PackageableElement` kind (Class, Function, Profile, Association, Measure/Unit, primitive), plus `lenientPathToElement` returning `[]` on misses.
-11. ⏳ **`copy` association-inverse symmetry** *(backlog — closes §3.3 unknown 2)* — new file `lang/creation/testCopyAssociationInverse.pure`: copy a class with bidirectional Association, assert both ends still see each other after the copy. The Java `Copy.java:236` parity contract; `lang.rs:1018-1082` claims it but lacks an assertable platform test.
-12. ⏳ **`RoutedValueSpecification` shadow** *(backlog)* — new file `meta/reflect/testRoutedValueSpecification.pure`: wrap an expression in `^RoutedValueSpecification(value = $vs)`, navigate `.value`, assert reactivate-through-wrapper works. Covers the platform-side router class without depending on legend-engine.
+9. ✅ **Multiplicity-reader shape coverage** *(in-place across 6 multiplicity readers, commit `9e41a18a3bf`)* — 8 new tests filling the bimodal gap. `hasToOneUpperBound.pure` and `isToMany.pure` went from 0 → 2 tests each (named-multiplicity coverage); the other four readers gained `^Multiplicity(lowerBound=^MultiplicityValue(value=N), upperBound=^MultiplicityValue(value=M))` arbitrary-bound tests proving the readers walk the heap-property chain on user-constructed (non-bootstrap) Multiplicity instances.
+10. ✅ **Path/element round-trip coverage** *(in-place in `pathToElement.pure` + `elementToPath.pure`, commit `ce663b25531`)* — 2 new tests: `testPathElementRoundTrip` (Class, Measure, primitive, Package) and `testElementToPathRoundTrip` (both `::` and `.` separators). The `_` separator is excluded with an inline comment — identifiers like `CC_Person` contain underscores, so `pathToElement(..., '_')` re-splits incorrectly; the gap is in the separator design, not the round-trip implementation.
+11. ✅ **`copy` association-inverse symmetry** *(in-place in `copy.pure`, commit `f895bcd9a33` — closes §3.3 unknown 2)* — `testCopyAssociationInverseAfterDMR`: builds `^LA_Person(firm=^LA_Firm(...))`, round-trips through `deactivate()->reactivate()->cast(@LA_Person)` to recover the same Rc'd heap entry, then copies via `^$recovered(firstName='Bob')`, asserting `firmX.employees` contains both originals. Proves the inverse-link cache survives DMR.
+12. ✅ **`RoutedValueSpecification` shadow** *(in-place in `routing.pure`, commit `2b1074958c8`)* — 3 new tests: construction with explicit `genericType`/`multiplicity` (required-PureOne props inherited from `ValueSpecification`); reactivate-through-wrapper mirroring the `byPassRouterInfo()` shape; two-level nested wrap. Authoring note in `routing.pure` header documents why explicit `genericType`/`multiplicity` are necessary — `evaluateAndDeactivate(body).genericType` returns empty in the Rust heap, so reading them off the body doesn't work.
 
 #### Borderline — invariant lock-in (harness, not Pure)
 
@@ -236,7 +236,7 @@ Existing fixtures present but small (2–4 tests). Extend in-place rather than a
 ### How they run
 
 Pure-side `<<test.Test>>` functions are picked up automatically:
-- **Rust:** Surveyor walks the platform `.pure` tree; counts climbed from **246/0/0** to **357/0/0** after commits `a1d7f41c901` (P1 — 24+ DMR tests) and `f0a1d83455c` (P2 — 5 constraintsManager tests).
+- **Rust:** Surveyor walks the platform `.pure` tree; counts climbed from **246/0/0** to **371/0/0** across commits `a1d7f41c901` (P1 — 24+ DMR tests), `f0a1d83455c` (P2 — 5 constraintsManager tests), `2b1074958c8` (Item 12 — 3 RoutedValueSpecification tests), `9e41a18a3bf` (Item 9 — 8 multiplicity tests), `f895bcd9a33` (Item 11 — 1 copy-DMR test), and `ce663b25531` (Item 10 — 2 round-trip tests).
 - **Java:** the existing PCT runner discovers them through the same annotation.
 - **CI:** both stacks fail loudly on regressions, no consumer-side coordination needed.
 
@@ -244,7 +244,7 @@ Borderline harness tests (#13, #14) live in their respective backend's test crat
 
 ### What shipped
 
-The plan above was executed across six commits on legend-pure-rust + one on legend-engine over 2026-05-09 / 2026-05-10:
+The plan above was executed across ten commits on legend-pure-rust + one on legend-engine over 2026-05-09 / 2026-05-10:
 
 | Commit | Repo | Scope |
 |---|---|---|
@@ -254,8 +254,12 @@ The plan above was executed across six commits on legend-pure-rust + one on lege
 | `a0b9678c85b` | legend-pure-rust | **P5** — `crates/runtime/tests/platform_invariants.rs` locking `mutateAdd`/`applyFunction` absence |
 | `05712262990` | legend-pure-rust | chore — promote `force_all` to `pub` so extensions can use it |
 | `55f00b7779a` | legend-engine | **P4** — `legend-engine-rust-natives-functions-unclassified` crate: `MutateAdd` native + `FunctionsUnclassifiedExtension` + 4 integration tests |
+| `2b1074958c8` | legend-pure-rust | **§6 Item 12** — `RoutedValueSpecification` shadow tests in `routing.pure` |
+| `9e41a18a3bf` | legend-pure-rust | **§6 Item 9** — multiplicity-reader shape coverage across 6 files |
+| `f895bcd9a33` | legend-pure-rust | **§6 Item 11** — `copy` association-inverse symmetry after DMR (closes §3.3 unknown 2) |
+| `ce663b25531` | legend-pure-rust | **§6 Item 10** — path/element round-trip identity |
 
-Open follow-ups: §6 P2 items 9-12 (multiplicity-reader shape coverage, path round-trips, `copy` association-inverse symmetry, `RoutedValueSpecification` shadow). Tracked as backlog candidates; none block consumer-side porting today.
+No open follow-ups from this work stream remain. The plan's §6 P0/P1/P2 + Borderline items are all shipped. Further coverage extensions belong to consumer-side porting (e.g. once legend-engine `byPassRouterInfo` becomes loadable, add platform shadow tests for `StoreClusteredValueSpecification.value`).
 
 ---
 
