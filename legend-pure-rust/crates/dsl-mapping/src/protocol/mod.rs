@@ -63,6 +63,7 @@
 pub mod class_mapping;
 pub mod convert;
 pub mod include;
+pub mod pure;
 
 use serde::{Deserialize, Serialize};
 
