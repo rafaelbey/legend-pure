@@ -613,6 +613,7 @@ fn resolve_m3_supertypes(model: &mut PureModel) {
         // Recursive (closure-style) so nested cases like
         // `Class.properties: Property<Class<T>, Any>[*]` resolve all the
         // way down. Implemented via a fn so it can call itself.
+        #[allow(clippy::items_after_statements)] // nested fn is intentional — it captures no caller state and recurses; lifting it out separates the recursive routine from its only caller
         fn resolve_in_place(
             ty: &mut TypeExpr,
             name_to_id: &HashMap<SmolStr, ElementId>,
@@ -675,15 +676,14 @@ fn resolve_m3_supertypes(model: &mut PureModel) {
             // here, the strong count exceeds 1 and we'd silently
             // deep-clone every QP's parameter list — defeating the
             // optimisation. Fail loudly instead.
-            let params_mut = match std::sync::Arc::get_mut(&mut qp.parameters) {
-                Some(slice) => slice,
-                None => panic!(
+            let Some(params_mut) = std::sync::Arc::get_mut(&mut qp.parameters) else {
+                panic!(
                     "M3 QP parameters Arc<[Parameter]> must be uniquely \
                      owned at resolve time; refcount is \
                      {} (a Class/QP was cloned between m3_parser/bootstrap \
                      and resolve_m3_supertypes)",
                     std::sync::Arc::strong_count(&qp.parameters),
-                ),
+                );
             };
             for param in params_mut.iter_mut() {
                 resolve_in_place(&mut param.type_expr);

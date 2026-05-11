@@ -576,8 +576,7 @@ fn parse_filter_view_block_after_tilde(
         }
         let join_end = right
             .last()
-            .map(|r| r.source_info.clone())
-            .unwrap_or_else(|| head.source_info.clone());
+            .map_or_else(|| head.source_info.clone(), |r| r.source_info.clone());
         let join_sequence = JoinSequence {
             head,
             right,
@@ -800,7 +799,7 @@ fn parse_op_atomic(ctx: &mut ParserContext<'_>) -> Result<OpExpr, ParseError> {
 
     // Trailing comparison operator?
     if let Some(op) = peek_compare_op(ctx) {
-        let op_span = consume_compare_op(ctx)?;
+        let op_span = consume_compare_op(ctx);
         let rhs = parse_col_with_db_or_constant(ctx)?;
         let span = merge_si(lhs.source_info(), rhs.source_info());
         return Ok(OpExpr::Compare {
@@ -970,15 +969,13 @@ fn parse_op_column(
     }
     let scope_end = scope
         .last()
-        .map(|s| s.source_info.clone())
-        .unwrap_or_else(|| alias.source_info.clone());
+        .map_or_else(|| alias.source_info.clone(), |s| s.source_info.clone());
     let pk_end = consume_primary_key_flag(ctx)?;
     let primary_key = pk_end.is_some();
     let end_si = pk_end.unwrap_or(scope_end);
     let start_si = db
         .as_ref()
-        .map(|p| p.source_info.clone())
-        .unwrap_or_else(|| alias.source_info.clone());
+        .map_or_else(|| alias.source_info.clone(), |p| p.source_info.clone());
     Ok(OpExpr::Column(OpColumn::Aliased {
         db,
         alias,
@@ -1130,7 +1127,7 @@ fn peek_compare_op(ctx: &mut ParserContext<'_>) -> Option<BinOp> {
 /// come through depending on lex options; consume both halves when
 /// the second half is an `Equals` / `Greater` token immediately
 /// following the first.
-fn consume_compare_op(ctx: &mut ParserContext<'_>) -> Result<SourceInfo, ParseError> {
+fn consume_compare_op(ctx: &mut ParserContext<'_>) -> SourceInfo {
     let first = ctx.cursor().advance().clone();
     match first.kind {
         TokenKind::Greater | TokenKind::Less => {
@@ -1139,12 +1136,12 @@ fn consume_compare_op(ctx: &mut ParserContext<'_>) -> Result<SourceInfo, ParseEr
                 || (first.kind == TokenKind::Less && next == TokenKind::Greater)
             {
                 let second = ctx.cursor().advance().clone();
-                Ok(merge_si(&first.source_info, &second.source_info))
+                merge_si(&first.source_info, &second.source_info)
             } else {
-                Ok(first.source_info)
+                first.source_info
             }
         }
-        _ => Ok(first.source_info),
+        _ => first.source_info,
     }
 }
 
@@ -1526,8 +1523,7 @@ fn parse_simple_scope_info(ctx: &mut ParserContext<'_>) -> Result<SimpleScopeInf
     }
     let end = scope
         .last()
-        .map(|s| s.source_info.clone())
-        .unwrap_or_else(|| table.source_info.clone());
+        .map_or_else(|| table.source_info.clone(), |s| s.source_info.clone());
     Ok(SimpleScopeInfo {
         table: table.clone(),
         scope,
@@ -1600,8 +1596,7 @@ fn parse_join_col_with_db_or_constant(
         }
         let seq_end = right
             .last()
-            .map(|r| r.source_info.clone())
-            .unwrap_or_else(|| head.source_info.clone());
+            .map_or_else(|| head.source_info.clone(), |r| r.source_info.clone());
         let join = JoinSequence {
             head,
             right,
@@ -1615,8 +1610,7 @@ fn parse_join_col_with_db_or_constant(
         };
         let end = column
             .as_ref()
-            .map(|c| c.source_info().clone())
-            .unwrap_or_else(|| join.source_info.clone());
+            .map_or_else(|| join.source_info.clone(), |c| c.source_info().clone());
         return Ok(JoinColWithDbOrConstant {
             db,
             join: Some(join),
@@ -1654,8 +1648,7 @@ fn parse_op_column_inner(ctx: &mut ParserContext<'_>) -> Result<OpColumn, ParseE
     }
     let scope_end = scope
         .last()
-        .map(|s| s.source_info.clone())
-        .unwrap_or_else(|| alias.source_info.clone());
+        .map_or_else(|| alias.source_info.clone(), |s| s.source_info.clone());
     let pk_end = consume_primary_key_flag(ctx)?;
     let primary_key = pk_end.is_some();
     let end_si = pk_end.unwrap_or(scope_end);
@@ -1786,10 +1779,10 @@ fn parse_scope(ctx: &mut ParserContext<'_>) -> Result<ScopedMapping, ParseError>
     debug_assert_eq!(kw.text.as_str(), "scope");
     ctx.cursor().expect(TokenKind::LParen)?;
     let db = parse_required_db_qualifier(ctx)?;
-    let scope = if !ctx.cursor().check(TokenKind::RParen) {
-        Some(parse_simple_scope_info(ctx)?)
-    } else {
+    let scope = if ctx.cursor().check(TokenKind::RParen) {
         None
+    } else {
+        Some(parse_simple_scope_info(ctx)?)
     };
     ctx.cursor().expect(TokenKind::RParen)?;
     ctx.cursor().expect(TokenKind::LParen)?;
@@ -1914,16 +1907,15 @@ fn parse_embedded_mapping(ctx: &mut ParserContext<'_>) -> Result<EmbeddedMapping
 
     // Optional trailing `Inline [id]` or `Otherwise (…)`.
     let trailer = parse_optional_embedded_mapping_trailer(ctx)?;
-    let end_si = trailer
-        .as_ref()
-        .map(|t| match t {
+    let end_si = trailer.as_ref().map_or_else(
+        || close.source_info.clone(),
+        |t| match t {
             EmbeddedMappingTrailer::Inline(r) => r.source_info.clone(),
             EmbeddedMappingTrailer::Otherwise(maps) => maps
                 .last()
-                .map(|m| m.source_info.clone())
-                .unwrap_or_else(|| close.source_info.clone()),
-        })
-        .unwrap_or_else(|| close.source_info.clone());
+                .map_or_else(|| close.source_info.clone(), |m| m.source_info.clone()),
+        },
+    );
     Ok(EmbeddedMapping {
         primary_key,
         mapping_lines,
@@ -1996,8 +1988,7 @@ fn parse_otherwise_join(ctx: &mut ParserContext<'_>) -> Result<OtherwiseJoin, Pa
     }
     let seq_end = right
         .last()
-        .map(|r| r.source_info.clone())
-        .unwrap_or_else(|| head.source_info.clone());
+        .map_or_else(|| head.source_info.clone(), |r| r.source_info.clone());
     let join_sequence = JoinSequence {
         head,
         right,

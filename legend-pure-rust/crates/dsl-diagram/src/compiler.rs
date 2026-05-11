@@ -310,9 +310,8 @@ impl CompilerExtension for DiagramExtension {
                         ctx.model.get_or_create_package(&pkg_path)
                     };
 
-                    let chunk = match ctx.model.chunks.get_mut(chunk_id as usize) {
-                        Some(c) => c,
-                        None => continue, // pathological: no chunk yet
+                    let Some(chunk) = ctx.model.chunks.get_mut(chunk_id as usize) else {
+                        continue; // pathological: no chunk yet
                     };
                     let local_idx = chunk.alloc_element(
                         ElementNode {

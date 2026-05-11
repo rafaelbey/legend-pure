@@ -487,8 +487,7 @@ fn cross_expression_with_boolean_return_validates_clean() {
         .collect();
     assert!(
         return_type_errors.is_empty(),
-        "no XStoreCrossExpressionReturnType error expected on clean cross-expression; got: {:#?}",
-        return_type_errors
+        "no XStoreCrossExpressionReturnType error expected on clean cross-expression; got: {return_type_errors:#?}"
     );
 }
 

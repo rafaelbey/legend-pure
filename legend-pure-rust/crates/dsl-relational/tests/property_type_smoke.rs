@@ -53,7 +53,7 @@ fn compile_errors(source: &str) -> Vec<String> {
         Box::new(MappingExtension::new()),
         Box::new(RelationalExtension::new()),
     ];
-    let exts: Vec<&dyn CompilerExtension> = extensions.iter().map(|e| e.as_ref()).collect();
+    let exts: Vec<&dyn CompilerExtension> = extensions.iter().map(AsRef::as_ref).collect();
     let result = legend_pure_parser_pure::pipeline::compile_with_extensions(&[file], &[], &exts);
     match result {
         Ok(_) => Vec::new(),

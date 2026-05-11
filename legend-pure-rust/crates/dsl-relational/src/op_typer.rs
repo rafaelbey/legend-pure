@@ -175,13 +175,13 @@ pub fn infer_op_type(expr: &OpExpr, scope: OpTypeScope<'_>) -> OpType {
             };
             col.pure_type.map_or(OpType::Any, classify_column_type)
         }
-        OpExpr::Column(OpColumn::Target { .. }) => OpType::Any,
+        OpExpr::Column(OpColumn::Target { .. }) | OpExpr::Array { .. } => OpType::Any,
         OpExpr::Literal(OpLiteral::String { .. }) => OpType::String,
         OpExpr::Literal(OpLiteral::Integer { .. } | OpLiteral::Float { .. }) => OpType::Numeric,
-        OpExpr::Array { .. } => OpType::Any,
     }
 }
 
+#[allow(clippy::elidable_lifetime_names)] // explicit 'a links scope.tables_by_name to caller's borrow lifetime; elision drops the connection
 fn scope_tables<'a>(scope: OpTypeScope<'a>) -> Option<&'a HashMap<SmolStr, ResolvedTable>> {
     scope.tables_by_name
 }

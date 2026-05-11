@@ -133,7 +133,7 @@ fn read_col_spec_array_names(
         )));
     }
     let mut out = Vec::with_capacity(name_values.len());
-    for v in name_values.iter() {
+    for v in &name_values {
         match v {
             Value::String(s) => out.push(s.clone()),
             other => {

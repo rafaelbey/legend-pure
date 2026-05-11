@@ -26,7 +26,7 @@ use std::process::Command;
 
 use legend_pure_java_codegen::{FqnInput, Options, generate};
 
-const SOURCE: &str = r#"
+const SOURCE: &str = r"
 Class user_test::Address
 {
     street: String[1];
@@ -43,7 +43,7 @@ function user_test::makePerson(firstName: String[1]): user_test::Person[1]
 {
     ^user_test::Person(firstName=$firstName, addresses=[]);
 }
-"#;
+";
 
 fn javac_available() -> bool {
     Command::new("javac")

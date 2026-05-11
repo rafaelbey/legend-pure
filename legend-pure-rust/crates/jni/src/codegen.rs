@@ -315,7 +315,7 @@ mod tests {
     fn run_codegen_strips_comments_blank_and_directive_lines() {
         let lines = vec![
             "# this is a comment".to_owned(),
-            "".to_owned(),
+            String::new(),
             "   ".to_owned(),
             "@pkg: ignored.here".to_owned(),
             "meta::pure::functions::math::plus_Integer_MANY__Integer_1_".to_owned(),

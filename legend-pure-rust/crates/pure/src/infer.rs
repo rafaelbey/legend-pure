@@ -669,8 +669,8 @@ fn set_and_return(expr: &mut ValueSpec, result: Option<ResolvedType>) -> Option<
 /// `VarTypes` map suitable for `resolve::infer_generic_bindings`.
 fn collect_var_types(ctx: &InferCtx<'_>) -> crate::resolve::VarTypes {
     let mut out = crate::resolve::VarTypes::new();
-    for scope in ctx.scopes.iter() {
-        for (name, rt) in scope.bindings.iter() {
+    for scope in &ctx.scopes {
+        for (name, rt) in &scope.bindings {
             out.insert(
                 name.clone(),
                 (rt.type_expr.clone(), rt.multiplicity.clone()),
@@ -986,12 +986,13 @@ fn validate_call_arguments(
         // (`is_type_compatible`) considered these compatible because
         // the outer element id matches.
         if !crate::resolve::is_type_compatible_structural(&arg_ty.type_expr, &param_te, ctx.model) {
-            let arg_name = arg_eid
-                .map(|e| ctx.model.element_name(e).to_string())
-                .unwrap_or_else(|| "<unknown>".to_string());
+            let arg_name = arg_eid.map_or_else(
+                || "<unknown>".to_string(),
+                |e| ctx.model.element_name(e).to_string(),
+            );
             let param_name = match &param_te {
                 TypeExpr::Named { element, .. } => ctx.model.element_name(*element).to_string(),
-                _ => format!("{:?}", param_te),
+                _ => format!("{param_te:?}"),
             };
             let arg_si = arg_source_infos.get(arg_idx).cloned().unwrap_or_else(|| {
                 arg_source_infos.first().cloned().unwrap_or_else(|| {
@@ -2098,12 +2099,14 @@ pub fn check_body_return_signature(
     // future regression into a per-function diagnostic instead of a
     // silent miss.
     if !crate::resolve::is_type_compatible(actual_eid, expected_type, model) {
-        let actual = actual_eid
-            .map(|e| model.element_name(e).to_string())
-            .unwrap_or_else(|| "<unknown>".to_string());
-        let expected = expected_eid
-            .map(|e| model.element_name(e).to_string())
-            .unwrap_or_else(|| "<unknown>".to_string());
+        let actual = actual_eid.map_or_else(
+            || "<unknown>".to_string(),
+            |e| model.element_name(e).to_string(),
+        );
+        let expected = expected_eid.map_or_else(
+            || "<unknown>".to_string(),
+            |e| model.element_name(e).to_string(),
+        );
         errors.push(crate::error::CompilationError {
             message: format!(
                 "Function '{function_name}' declares return type {expected} but body returns {actual}"

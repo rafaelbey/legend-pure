@@ -404,9 +404,8 @@ impl CompilerExtension for RelationalExtension {
                             } else {
                                 ctx.model.get_or_create_package(&pkg_path)
                             };
-                            let chunk = match ctx.model.chunks.get_mut(chunk_id as usize) {
-                                Some(c) => c,
-                                None => continue,
+                            let Some(chunk) = ctx.model.chunks.get_mut(chunk_id as usize) else {
+                                continue;
                             };
                             let local_idx = chunk.alloc_element(
                                 ElementNode {
@@ -607,7 +606,7 @@ fn validate_predicate_return_types(
 ) {
     use crate::op_typer::OpTypeScope;
 
-    for (db_fqn, reg) in dbs.iter() {
+    for (db_fqn, reg) in dbs {
         let scope = resolved
             .get(db_fqn)
             .map_or_else(OpTypeScope::empty, |snap| {
@@ -1909,18 +1908,17 @@ fn resolve_visible_joins(
     dbs: &HashMap<SmolStr, RegisteredDatabase>,
 ) -> Result<HashSet<SmolStr>, Box<dyn FnOnce(SmolStr) -> CompilationError>> {
     let db_fqn = packageable_fqn(db);
-    match dbs.get(&db_fqn) {
-        Some(reg) => Ok(collect_visible_joins(&reg.def, dbs)),
-        None => {
-            let si = db.source_info.clone();
-            Err(Box::new(move |owner: SmolStr| CompilationError {
-                message: format!("'{owner}': join reference targets unknown Database '{db_fqn}'"),
-                source_info: si,
-                kind: CompilationErrorKind::UnresolvedElement {
-                    path: db_fqn.clone(),
-                },
-            }))
-        }
+    if let Some(reg) = dbs.get(&db_fqn) {
+        Ok(collect_visible_joins(&reg.def, dbs))
+    } else {
+        let si = db.source_info.clone();
+        Err(Box::new(move |owner: SmolStr| CompilationError {
+            message: format!("'{owner}': join reference targets unknown Database '{db_fqn}'"),
+            source_info: si,
+            kind: CompilationErrorKind::UnresolvedElement {
+                path: db_fqn.clone(),
+            },
+        }))
     }
 }
 
@@ -2265,8 +2263,7 @@ fn walk_jc_for_chain(
             let scope_source_table = s
                 .scope
                 .as_ref()
-                .map(|info| info.table.value.clone())
-                .unwrap_or_else(|| source_table.clone());
+                .map_or_else(|| source_table.clone(), |info| info.table.value.clone());
             for line in &s.mapping_lines {
                 walk_line_for_chain(
                     line,
@@ -2340,8 +2337,7 @@ fn walk_line_for_chain(
                             .otherwise_join
                             .db
                             .as_ref()
-                            .map(packageable_fqn)
-                            .unwrap_or_else(|| source_db_fqn.clone());
+                            .map_or_else(|| source_db_fqn.clone(), packageable_fqn);
                         check_chain_in_sequence(
                             &m.otherwise_join.join_sequence,
                             &oj_db,
@@ -2372,8 +2368,7 @@ fn check_chain_in_join_col(
     let chain_db = jc
         .db
         .as_ref()
-        .map(packageable_fqn)
-        .unwrap_or_else(|| source_db_fqn.clone());
+        .map_or_else(|| source_db_fqn.clone(), packageable_fqn);
     // Trailing column after `|` — its alias is the chain's claimed
     // target table.
     let target_alias = jc.column.as_ref().and_then(|c| match c {
@@ -3191,8 +3186,7 @@ fn walk_line_for_inline_subtypes(
             kind: CompilationErrorKind::InvalidAssociation {
                 name: owner.clone(),
                 reason: SmolStr::new(format!(
-                    "Inline target '{}' is not a subtype of '{}'",
-                    inline_class_fqn, target_fqn
+                    "Inline target '{inline_class_fqn}' is not a subtype of '{target_fqn}'"
                 )),
             },
         });

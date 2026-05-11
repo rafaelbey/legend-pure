@@ -232,10 +232,10 @@ fn collect_databases(file: &SourceFile) -> Vec<&DatabaseDef> {
             continue;
         }
         for elem in &section.elements {
-            if let AstElement::DSLElement(boxed) = elem {
-                if let Some(db) = boxed.as_any().downcast_ref::<DatabaseDef>() {
-                    out.push(db);
-                }
+            if let AstElement::DSLElement(boxed) = elem
+                && let Some(db) = boxed.as_any().downcast_ref::<DatabaseDef>()
+            {
+                out.push(db);
             }
         }
     }

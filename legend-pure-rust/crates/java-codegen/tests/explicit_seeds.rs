@@ -21,13 +21,13 @@ mod common;
 
 use legend_pure_java_codegen::{CodegenError, FqnInput, Options, generate};
 
-const CLASS_ONLY_SOURCE: &str = r#"
+const CLASS_ONLY_SOURCE: &str = r"
 Class user_test::Standalone
 {
     label: String[1];
     count: Integer[0..1];
 }
-"#;
+";
 
 #[test]
 fn extra_class_seed_emits_interface_with_no_function_request() {
@@ -70,7 +70,7 @@ fn extra_class_seed_emits_interface_with_no_function_request() {
     );
 }
 
-const ASSOCIATION_SOURCE: &str = r#"
+const ASSOCIATION_SOURCE: &str = r"
 Class user_test::Account
 {
     name: String[1];
@@ -86,7 +86,7 @@ Association user_test::AccountTrader
     accounts: user_test::Account[*];
     traders: user_test::Trader[*];
 }
-"#;
+";
 
 #[test]
 fn association_seed_pulls_in_both_endpoint_classes() {

@@ -31,7 +31,7 @@ pub(crate) enum TypePosition<'a> {
     Return,
 }
 
-impl<'a> TypePosition<'a> {
+impl TypePosition<'_> {
     pub(crate) fn describe(self) -> String {
         match self {
             Self::Parameter(name) => format!("parameter '{name}'"),
@@ -105,10 +105,12 @@ fn wrap_multiplicity(inner: JavaType, mult: &Multiplicity) -> JavaType {
             source: format!("java.util.Optional<{}>", inner.source),
             carries_user_type: inner.carries_user_type,
         },
-        Multiplicity::ZeroOrMany | Multiplicity::OneOrMany => JavaType {
-            source: format!("Iterable<{}>", inner.source),
-            carries_user_type: inner.carries_user_type,
-        },
+        Multiplicity::ZeroOrMany | Multiplicity::OneOrMany | Multiplicity::Variable(_) => {
+            JavaType {
+                source: format!("Iterable<{}>", inner.source),
+                carries_user_type: inner.carries_user_type,
+            }
+        }
         Multiplicity::Range { lower, upper } => {
             // [n..n] → singleton when both are 1; treat anything else as
             // many. The marshaller still reads the runtime list element-wise.
@@ -121,10 +123,6 @@ fn wrap_multiplicity(inner: JavaType, mult: &Multiplicity) -> JavaType {
                 }
             }
         }
-        Multiplicity::Variable(_) => JavaType {
-            source: format!("Iterable<{}>", inner.source),
-            carries_user_type: inner.carries_user_type,
-        },
     }
 }
 
@@ -141,12 +139,12 @@ fn render_inner_type(
     // we even try to render the outer Named ref.
     reject_nested_function_types(type_expr, function_fqn, position)?;
     match type_expr {
-        TypeExpr::Named { element, .. } => render_named(model, *element, opts, bootstrap),
+        TypeExpr::Named { element, .. } => Ok(render_named(model, *element, opts, bootstrap)),
         TypeExpr::FunctionType { .. } => Err(CodegenError::FunctionTypedParameter {
             fqn: function_fqn.to_owned(),
             position: position.describe(),
         }),
-        TypeExpr::Relation(_) => Err(CodegenError::RelationTyped {
+        TypeExpr::Relation(_) | TypeExpr::AlgebraUnion(_, _) => Err(CodegenError::RelationTyped {
             fqn: function_fqn.to_owned(),
             position: position.describe(),
         }),
@@ -161,10 +159,6 @@ fn render_inner_type(
                 carries_user_type: false,
             }),
         },
-        TypeExpr::AlgebraUnion(_, _) => Err(CodegenError::RelationTyped {
-            fqn: function_fqn.to_owned(),
-            position: position.describe(),
-        }),
         TypeExpr::Unresolved => match generic_policy {
             GenericPolicy::Reject => Err(CodegenError::GenericTyped {
                 fqn: function_fqn.to_owned(),
@@ -184,26 +178,26 @@ fn render_named(
     id: ElementId,
     opts: &Options,
     bootstrap: Bootstrap,
-) -> Result<JavaType, CodegenError> {
+) -> JavaType {
     let element = model.get_element(id);
     let segments = pure_fqn_segments(model, id);
-    let leaf_name = segments.last().map(smol_str::SmolStr::as_str).unwrap_or("");
+    let leaf_name = segments.last().map_or("", smol_str::SmolStr::as_str);
 
     // Special-case the M3 bootstrap supertypes by canonical ID. The
     // FQN-walk-based check below misses them because their
     // `parent_package` points at root, but they're routed cleanly by
     // identity.
     if bootstrap.is_any(id) {
-        return Ok(JavaType {
+        return JavaType {
             source: "Object".to_owned(),
             carries_user_type: false,
-        });
+        };
     }
     if bootstrap.is_nil(id) {
-        return Ok(JavaType {
+        return JavaType {
             source: "Void".to_owned(),
             carries_user_type: false,
-        });
+        };
     }
 
     // External bindings — emitted by another module — win over every
@@ -214,18 +208,18 @@ fn render_named(
     if !opts.external_bindings.is_empty() {
         let pure_fqn = pure_fqn_string(model, id);
         if let Some(java_fqn) = opts.external_bindings.get(&pure_fqn) {
-            return Ok(JavaType {
+            return JavaType {
                 source: java_fqn.clone(),
                 carries_user_type: true,
-            });
+            };
         }
     }
 
     if let Some(java) = primitive_java_type(element, leaf_name, &segments) {
-        return Ok(JavaType {
+        return JavaType {
             source: java.to_owned(),
             carries_user_type: false,
-        });
+        };
     }
 
     // Platform classes (anything under `meta::pure::*`) are out of scope
@@ -234,10 +228,10 @@ fn render_named(
     // user code; users who need typed access to M3 metamodel objects
     // can still reach them via PureRustInstance.
     if is_platform_class(&segments) {
-        return Ok(JavaType {
+        return JavaType {
             source: "Object".to_owned(),
             carries_user_type: false,
-        });
+        };
     }
 
     match element {
@@ -245,31 +239,18 @@ fn render_named(
             let pkg_segments = pure_package_segments_of(model, id);
             let java_pkg = join_java_package(&opts.java_root_package, &pkg_segments);
             let java_simple = safe_java_identifier(leaf_name);
-            Ok(JavaType {
+            JavaType {
                 source: format!("{java_pkg}.{java_simple}"),
                 carries_user_type: true,
-            })
+            }
         }
-        Element::PrimitiveType(_) => {
-            // A primitive whose simple name we don't have a Java mapping
-            // for — fall back to Object so the call still compiles.
-            Ok(JavaType {
-                source: "Object".to_owned(),
-                carries_user_type: false,
-            })
-        }
-        Element::Measure(_) | Element::Unit(_) => {
-            // Treat measures/units as opaque; they round-trip via
-            // PureRustInstance.
-            Ok(JavaType {
-                source: "Object".to_owned(),
-                carries_user_type: false,
-            })
-        }
-        _ => Ok(JavaType {
+        _ => JavaType {
+            // PrimitiveType, Measure, Unit, and any other variant fall
+            // back to opaque Object — the caller already routes generics,
+            // function types, and relations through earlier match arms.
             source: "Object".to_owned(),
             carries_user_type: false,
-        }),
+        },
     }
 }
 

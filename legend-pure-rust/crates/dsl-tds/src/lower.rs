@@ -149,7 +149,7 @@ pub(crate) fn column_overrides(columns: &[TDSColumn]) -> Vec<ColumnOverride> {
         .map(|col| match &col.type_ref {
             None => ColumnOverride::default(),
             Some(t) => ColumnOverride {
-                type_tag: classify_type_name(t.name.as_str()),
+                type_tag: Some(classify_type_name(t.name.as_str())),
                 multiplicity: t
                     .multiplicity
                     .as_ref()
@@ -168,15 +168,15 @@ pub(crate) fn column_overrides(columns: &[TDSColumn]) -> Vec<ColumnOverride> {
 /// no package qualification still fall through to [`ColumnType::Other`]
 /// so the resolver — not the TDS DSL — decides whether the symbol is
 /// resolvable.
-fn classify_type_name(name: &str) -> Option<ColumnType> {
+fn classify_type_name(name: &str) -> ColumnType {
     match name {
-        "Integer" => Some(ColumnType::Integer),
-        "Float" => Some(ColumnType::Float),
-        "Decimal" => Some(ColumnType::Decimal),
-        "Boolean" => Some(ColumnType::Boolean),
-        "String" => Some(ColumnType::String),
-        "StrictDate" | "Date" => Some(ColumnType::StrictDate),
-        "DateTime" => Some(ColumnType::DateTime),
+        "Integer" => ColumnType::Integer,
+        "Float" => ColumnType::Float,
+        "Decimal" => ColumnType::Decimal,
+        "Boolean" => ColumnType::Boolean,
+        "String" => ColumnType::String,
+        "StrictDate" | "Date" => ColumnType::StrictDate,
+        "DateTime" => ColumnType::DateTime,
         _ => {
             // Qualified path: split on the final `::` separator. The
             // suffix is the bare class name; the prefix (if any) is the
@@ -185,10 +185,10 @@ fn classify_type_name(name: &str) -> Option<ColumnType> {
                 Some((pkg, n)) => (Some(SmolStr::new(pkg)), SmolStr::new(n)),
                 None => (None, SmolStr::new(name)),
             };
-            Some(ColumnType::Other {
+            ColumnType::Other {
                 package,
                 name: bare,
-            })
+            }
         }
     }
 }

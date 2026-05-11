@@ -506,7 +506,7 @@ fn validate_access_levels(model: &PureModel) -> Vec<CompilationError> {
 
     if access::access_profile_id(model).is_none() {
         return errors;
-    };
+    }
 
     // Memoize per-element access level — callees are referenced many
     // times across a chunk; recomputing per ref is wasteful.
@@ -712,12 +712,7 @@ fn walk_expr_kind_refs(
         ExprKind::PackageableElementRef { element } => {
             emit(*element, si);
         }
-        ExprKind::RelationLiteral { columns } => {
-            for col in columns {
-                emit(col.type_element, si);
-            }
-        }
-        ExprKind::ColSpecArrayLiteral { columns, .. } => {
+        ExprKind::RelationLiteral { columns } | ExprKind::ColSpecArrayLiteral { columns, .. } => {
             for col in columns {
                 emit(col.type_element, si);
             }

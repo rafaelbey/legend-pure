@@ -25,7 +25,7 @@ use std::collections::HashMap;
 
 use legend_pure_java_codegen::{FqnInput, Options, generate};
 
-const TWO_MODULE_SOURCE: &str = r#"
+const TWO_MODULE_SOURCE: &str = r"
 Class user_test::Account
 {
     name: String[1];
@@ -37,7 +37,7 @@ Class user_test::Mapping extends user_test::Account
     parent: user_test::Account[0..1];
     siblings: user_test::Account[*];
 }
-"#;
+";
 
 /// Real-world cross-module composition: an upstream module emits
 /// `Account` under `org.upstream.gen`. A downstream module declares

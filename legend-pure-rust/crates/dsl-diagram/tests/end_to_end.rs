@@ -151,13 +151,15 @@ fn full_fixture_compiles_without_diagram_errors_and_registers_diagram() {
     let diagram = registered
         .iter()
         .find(|(fqn, _)| fqn.as_str() == "model::test::TestDiagram")
-        .map(|(_, snap)| snap)
-        .unwrap_or_else(|| {
-            panic!(
-                "expected `model::test::TestDiagram` in registry; keys: {:?}",
-                registered.iter().map(|(fqn, _)| fqn).collect::<Vec<_>>()
-            )
-        });
+        .map_or_else(
+            || {
+                panic!(
+                    "expected `model::test::TestDiagram` in registry; keys: {:?}",
+                    registered.iter().map(|(fqn, _)| fqn).collect::<Vec<_>>()
+                )
+            },
+            |(_, snap)| snap,
+        );
 
     assert_eq!(diagram.views.len(), 5);
     let geom = diagram.geometry.as_ref().expect("geometry");

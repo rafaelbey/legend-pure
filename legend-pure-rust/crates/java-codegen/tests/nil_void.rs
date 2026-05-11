@@ -22,14 +22,14 @@ mod common;
 
 use legend_pure_java_codegen::{FqnInput, Options, generate};
 
-const NIL_CLASS_SOURCE: &str = r#"
+const NIL_CLASS_SOURCE: &str = r"
 Class user_test::HasNilProp
 {
     label: String[1];
     nada: meta::pure::metamodel::type::Nil[*];
     maybeNada: meta::pure::metamodel::type::Nil[0..1];
 }
-"#;
+";
 
 #[test]
 fn nil_property_renders_as_void() {

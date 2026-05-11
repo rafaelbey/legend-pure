@@ -333,10 +333,10 @@ fn collect_mappings(file: &SourceFile) -> Vec<&MappingDef> {
             continue;
         }
         for elem in &section.elements {
-            if let AstElement::DSLElement(boxed) = elem {
-                if let Some(m) = boxed.as_any().downcast_ref::<MappingDef>() {
-                    out.push(m);
-                }
+            if let AstElement::DSLElement(boxed) = elem
+                && let Some(m) = boxed.as_any().downcast_ref::<MappingDef>()
+            {
+                out.push(m);
             }
         }
     }

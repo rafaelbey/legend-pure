@@ -69,11 +69,11 @@ fn tic_pick_t_t_with_unrelated_args_lubs_silently() {
     // (Integer, String) to Any. No `TestFunctionTypeInference` test
     // asserts an error here. The user has previously confirmed this
     // is the desired behaviour ("integer and string should yield Any").
-    let source = r#"
+    let source = r"
 ###Pure
 native function test::pick<T>(a: T[1], b: T[1]): T[1];
 function test::caller(): Any[1] { pick(1, 'x') }
-"#;
+";
     compile_with_imports(&[source], &[])
         .expect("pick<T>(1, 'x') must silently widen T to Any (Java parity)");
 }
@@ -92,7 +92,7 @@ fn tic_eval_wrong_arg_strict_mode_errors() {
     // `param:Integer`, and 'not an int' (a String) is rejected. Always
     // on — the historical `with_strict_mode` toggle was removed once
     // the platform reached zero errors under strict.
-    let source = r#"
+    let source = r"
 ###Pure
 native function test::eval<T,V|m,n>(
     func: meta::pure::metamodel::function::Function<{T[n]->V[m]}>[1],
@@ -101,7 +101,7 @@ native function test::eval<T,V|m,n>(
 function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->String[1]}>[1]): String[1] {
     $f->eval('not an int')
 }
-"#;
+";
     let result = compile_with_imports(&[source], &[]);
     let partial = result.expect_err(
         "Strict mode: T binds Integer authoritatively from FunctionType slot; \
@@ -143,7 +143,7 @@ fn tic_recursive_generic_fn_no_unbound_param_error() {
     // TypeInferenceContext.java:741). Locks the
     // `inference_precision_sweep` win where this fn dropped from
     // body-Any to Type-typed.
-    let source = r#"
+    let source = r"
 ###Pure
 Class test::Generalization { general: test::T[1]; }
 Class test::T { generalizations: test::Generalization[*]; }
@@ -153,7 +153,7 @@ function test::getAllTypeGeneralisations(class: test::T[1]): test::T[*] {
     let generalisations = $class.generalizations->map(g | $g.general->test::getAllTypeGeneralisations());
     $class->concatenate($generalisations);
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "Recursive generic fn must resolve through target_ctx — no spurious \
          unbound-T diagnostic.",
@@ -168,7 +168,7 @@ function test::getAllTypeGeneralisations(class: test::T[1]): test::T[*] {
 fn tic_higher_order_pct_runner() {
     // Already locked by `function_type_higher_order_pct_shape_typechecks`.
     // Re-pinned here so the test set is self-contained.
-    let source = r#"
+    let source = r"
 ###Pure
 native function test::eval<T,V|m,n>(
     func: meta::pure::metamodel::function::Function<{T[n]->V[m]}>[1],
@@ -182,7 +182,7 @@ function test::pctRunner<Z|y>(
 ): Z[y] {
     $pct->eval($f)
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "PCT-style higher-order eval(pct, f) must dispatch with nested \
          FunctionType binding.",
@@ -201,13 +201,13 @@ fn tic_unbound_multiplicity_at_nested_call_currently_silent() {
     // outermost (caller's enclosing fn isn't parametric in m); inside
     // a parametric body it stays silent — this test pins that lenient
     // case to match Java.
-    let source = r#"
+    let source = r"
 ###Pure
 native function test::stubM<T|m>(t: T[1]): T[m];
 function test::caller(): Integer[1] {
     test::stubM(1)
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "Default mode: unbound m at nested call site compiles silently \
          (Java parity).",
@@ -236,14 +236,14 @@ fn tic_lambda_param_with_unbound_t_currently_silent() {
     // expected-type path; the eager
     // `CannotInferLambdaParameterTypes` diagnostic only fires when
     // the expected type lands on `Unresolved` (a different site).
-    let source = r#"
+    let source = r"
 ###Pure
 native function test::needsPred<T>(
     pred: meta::pure::metamodel::function::Function<{T[1]->Boolean[1]}>[1]
 ): Boolean[1];
 native function test::isPositive(x: Integer[1]): Boolean[1];
 function test::caller(): Boolean[1] { test::needsPred(x | $x->test::isPositive()) }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "Lambda param expected as Generic(T) doesn't trigger \
          CannotInferLambdaParameterTypes — matches Java parity.",
@@ -259,7 +259,7 @@ fn tic_collection_of_lambdas_match() {
     // Already locked at the platform level via
     // `__classMappingByClass`. Re-pinned here as a small synthetic so
     // the new context machinery has an explicit smoke test.
-    let source = r#"
+    let source = r"
 ###Pure
 Class test::Box<T> { value: T[1]; }
 native function test::match<T,V|m,n>(
@@ -271,7 +271,7 @@ function test::handler(b: test::Box<Integer>[1]): Integer[1] {
         x: test::Box<Integer>[1] | $x.value
     ])
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "match([λ]) — Collection-of-lambdas must drive V binding from each \
          lambda's body.",
@@ -288,7 +288,7 @@ fn tic_match_z_genericType_rawType_toOne() {
     // is a property on Any/ValueSpec; .rawType returns Type[0..1];
     // ->toOne() should bind T=Type. The unresolved-T check fires if
     // it doesn't.
-    let source = r#"
+    let source = r"
 ###Pure
 Class test::T {}
 Class test::GT { rawType: test::T[0..1]; }
@@ -303,7 +303,7 @@ function test::caller<Z|y>(f: meta::pure::metamodel::function::Function<{meta::p
     let z = test::myEval($f, | test::myDeact(1));
     $z.genericType.rawType->test::myToOne()
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "let-bound result of eval, chained through .genericType.rawType->toOne(): \
          the property chain must propagate the let-bound type so toOne binds T.",
@@ -319,14 +319,14 @@ fn tic_enum_value_class_chain() {
     // metamodel function. T should bind to the enum type. Strict
     // mode currently emits "type parameter T was not resolved at
     // call to 'class'".
-    let source = r#"
+    let source = r"
 ###Pure
 Enum test::EntityKind { CITY, COUNTRY }
 native function test::myClass<T>(any: T[*]): meta::pure::metamodel::type::Class<T>[1];
 function test::caller(): meta::pure::metamodel::type::Class<test::EntityKind>[1] {
     test::EntityKind.CITY->test::myClass()
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "Enum value access (EntityKind.CITY) should be typed as EntityKind[1]; \
          ->class() should bind T=EntityKind.",
@@ -345,7 +345,7 @@ fn tic_pair_via_fold_then_chain() {
     // multi-pass inference engine (Java's
     // `TypeInferenceObserver`-driven approach) is the structural
     // fix.
-    let source = r#"
+    let source = r"
 ###Pure
 Class test::PM {}
 Class test::Pair<U, V> {
@@ -361,7 +361,7 @@ function test::caller(items: test::PM[*], seed: test::Pair<test::List<test::PM>,
 let result = test::myFold($items, {pm, a | $a}, $seed);
 $result.first.values->test::myFirst()
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "fold(...)->cast(@Pair<List<X>>) result threads through \
      let, then .first.values->first() binds T=X. Locks the \
@@ -378,7 +378,7 @@ fn tic_pair_first_values_first_chain() {
     // .values (on List<X>) returns X[*]; ->first<T|m>(...) binds
     // T=X. Strict mode currently emits "type parameter T was not
     // resolved" — locks the case.
-    let source = r#"
+    let source = r"
 ###Pure
 Class test::PropertyMapping {}
 Class test::Pair<U, V> {
@@ -392,7 +392,7 @@ native function test::myFirst<T|m>(coll: T[m]): T[0..1];
 function test::caller(p: test::Pair<test::List<test::PropertyMapping>, test::List<test::PropertyMapping>>[1]): test::PropertyMapping[0..1] {
 $p.first.values->test::myFirst()
 }
-"#;
+";
     {
         compile_with_imports(&[source], &[]).expect(
             "Pair<List<X>>.first.values->first() chain: each step must \
@@ -436,7 +436,7 @@ fn tic_let_bound_collection_of_lambdas_match() {
     // `Named<LambdaFunction>{[]}` and the always-on return-check
     // emits "type parameter T was not resolved at call to 'match'"
     // (28 platform errors at match.pure trace to this case).
-    let source = r#"
+    let source = r"
 ###Pure
 native function test::match<T,V|m,n>(
 var: T[1],
@@ -450,7 +450,7 @@ let lambdas = [
 ];
 1->test::match($lambdas)
 }
-"#;
+";
     {
         compile_with_imports(&[source], &[]).expect(
             "let-bound [λ1, λ2, ...] preserves FunctionType slot through \
@@ -465,7 +465,7 @@ let lambdas = [
 
 #[test]
 fn tic_function_ref_eval_two_args_binds_through_lift() {
-    let source = r#"
+    let source = r"
 ###Pure
 native function test::myrem(a: Integer[1], b: Integer[1]): Integer[1];
 native function test::myEval2<T,U,V|m,n,p>(
@@ -476,7 +476,7 @@ b: U[p]
 function test::caller(): Integer[1] {
 test::myrem_Integer_1__Integer_1__Integer_1_->test::myEval2(12, 5)
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "Function-ref + 2-arg eval: T/U/V/m/n/p all bind from \
      the lifted FunctionType.",
@@ -494,13 +494,13 @@ fn tic_lambda_body_toOneMany_binds_T() {
     // platform pattern. A 0-arg lambda whose body is a generic call.
     // The inner generic must bind even when the lambda is a value
     // passed elsewhere.
-    let source = r#"
+    let source = r"
 ###Pure
 native function test::myToOneMany<T>(values: T[*]): T[1..*];
 function test::caller(): meta::pure::metamodel::function::Function<{->String[1..*]}>[1] {
 {| test::myToOneMany('a') }
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "Inner generic call inside a 0-arg lambda body must bind \
          T from the call's argument.",
@@ -526,7 +526,7 @@ fn tic_m3_metamodel_chain_binds_through_property_steps() {
     // GenericType-shaped class) and `Holder { gt: G[0..1] }`. Every
     // generic call (`myToOne`, `myAt`) must bind its T from the
     // chain.
-    let source = r#"
+    let source = r"
 ###Pure
 Class test::G { rawType: test::T[0..1]; typeArguments: test::G[*]; }
 Class test::T {}
@@ -536,7 +536,7 @@ native function test::myAt<X>(coll: X[*], i: Integer[1]): X[1];
 function test::caller(h: test::Holder[1]): test::T[1] {
     $h.gt->test::myToOne().typeArguments->test::myAt(0).rawType->test::myToOne()
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "M3 chain: each step's type binds through; X resolves \
          at every toOne/at call.",
@@ -554,7 +554,7 @@ fn tic_let_copy_carries_type_for_method_chain() {
     // binds Address. Without this, var_types[p2] stays empty,
     // .address fails type-resolution, and downstream toOne reports
     // "T was not resolved" (~22 platform errors in copy.pure pre-fix).
-    let source = r#"
+    let source = r"
 ###Pure
 Class test::Address { name: String[1]; }
 Class test::Person { name: String[1]; address: test::Address[0..1]; }
@@ -563,7 +563,7 @@ function test::caller(p: test::Person[1]): test::Address[1] {
 let p2 = ^$p(name='David');
 $p2.address->test::toOne()
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "let-bound copy must carry source's type to var_types so \
          the downstream property + toOne chain binds correctly.",
@@ -580,7 +580,7 @@ fn tic_lambda_body_property_of_pair_eval() {
     // accessing `.first` (which is F1) inside the predicate. The
     // first lambda body's `$f.first->eval()` requires `eval<V|m>(func:Function<{->V[m]}>):V[m]`
     // to bind V from the property's substituted type.
-    let source = r#"
+    let source = r"
 ###Pure
 Class test::Pair<U,V> { first: U[1]; second: V[1]; }
 native function test::pair<U,V>(first: U[1], second: V[1]): test::Pair<U,V>[1];
@@ -591,7 +591,7 @@ function test::caller<T|m>(
 ): test::Pair<meta::pure::metamodel::function::Function<{->Boolean[1]}>, meta::pure::metamodel::function::Function<{->T[m]}>>[0..1] {
     $condList->test::find(f | $f.first->test::eval())
 }
-"#;
+";
     let result = compile_with_imports(&[source], &[]);
     if let Err(p) = &result {
         for e in &p.errors {
@@ -613,7 +613,7 @@ fn tic_collection_lub_preserves_type_args() {
     // Mirrors the platform's `newMap([pair(1,'a'), pair(2,'b')])`
     // pattern. The Collection LUB must preserve `Pair<Integer,String>`
     // so newMap's `<U,V>` bind from the arg.
-    let source = r#"
+    let source = r"
 ###Pure
 Class test::Pair<U,V> {}
 native function test::pair<U,V>(first: U[1], second: V[1]): test::Pair<U,V>[1];
@@ -621,7 +621,7 @@ native function test::newMap<U,V>(pairs: test::Pair<U,V>[*]): test::Pair<U,V>[1]
 function test::caller(): test::Pair<Integer,String>[1] {
 test::newMap([test::pair(1, 'a'), test::pair(2, 'b')])
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "Collection LUB must preserve Pair<Integer,String> through \
          newMap's <U,V> bind.",
@@ -638,7 +638,7 @@ fn tic_subtype_view_walks_two_levels() {
     // chain. `MyProp<L> extends MyAbs<L>` and `MyAbs<F> extends MyFunc<F>`.
     // myEval<T>(p:MyFunc<T>):T against `MyProp<Integer>` must walk two
     // hops to extract T:=Integer.
-    let source = r#"
+    let source = r"
 ###Pure
 Class test::MyFunc<F> {}
 Class test::MyAbs<F> extends test::MyFunc<F> {}
@@ -647,7 +647,7 @@ native function test::myEval<T>(p: test::MyFunc<T>[1]): T[1];
 function test::caller(p: test::MyProp<Integer>[1]): Integer[1] {
     test::myEval($p)
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "Two-level subtype walk: MyProp → MyAbs → MyFunc, T binds \
          through both hops.",
@@ -665,7 +665,7 @@ fn tic_subtype_view_with_function_type_arg() {
     // `MyProp<L>` extends `MyFunc<{L[1]->L[1]}>` (FunctionType inside).
     // `eval<T>(f:MyFunc<{T[1]->T[1]}>):T` against `MyProp<Integer>`
     // must extract T:=Integer through the FunctionType slot.
-    let source = r#"
+    let source = r"
 ###Pure
 Class test::MyFunc<F> {}
 Class test::MyProp<L> extends test::MyFunc<test::Box<L>> {}
@@ -674,7 +674,7 @@ native function test::myEval<T>(p: test::MyFunc<test::Box<T>>[1]): T[1];
 function test::caller(p: test::MyProp<Integer>[1]): Integer[1] {
     test::myEval($p)
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "Subtype walk with nested generic class: T must bind \
          Integer through Box<L>.",
@@ -698,7 +698,7 @@ fn tic_subtype_view_binds_function_against_property_subtype() {
     // should bind T:=Int, V:=Str, k:=*, and the return type becomes
     // Str[*]. Without the supertype-view, T/V/k stay Variable/Generic
     // and the unresolved-generic check fires.
-    let source = r#"
+    let source = r"
 ###Pure
 Class test::MyFunc<F> {}
 Class test::MyProp<L> extends test::MyFunc<L> {}
@@ -706,7 +706,7 @@ native function test::myEval<T>(p: test::MyFunc<T>[1]): T[1];
 function test::caller(p: test::MyProp<Integer>[1]): Integer[1] {
     test::myEval($p)
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "Subtype-view binding: MyFunc<T> param against MyProp<L> \
          arg must walk MyProp's supertype chain to extract \
@@ -726,11 +726,11 @@ fn tic_two_branch_all_converge_lubs_to_any() {
     // Re-pin here as the explicit "all-converged → constraint mode"
     // assertion so a future change that flips the dispatch
     // direction breaks loudly.
-    let source = r#"
+    let source = r"
 ###Pure
 native function test::pick<T>(a: T[1], b: T[1]): T[1];
 function test::caller(): Any[1] { test::pick(1, 'x') }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "Two-branch dispatch (all-converged → Constraint mode): \
          pick<T>(1, 'x') LUBs T to Any silently. If this fails, the \
@@ -755,7 +755,7 @@ fn tic_two_branch_lambda_unconverged_uses_authoritative() {
     // called as `evalWithSeed(7, x | $x)`, T binds Integer
     // authoritatively from the seed; the lambda's later contribution
     // (when its body is processed in pass 2) doesn't widen T to Any.
-    let source = r#"
+    let source = r"
 ###Pure
 native function test::evalWithSeed<T>(
     seed: T[1],
@@ -764,7 +764,7 @@ native function test::evalWithSeed<T>(
 function test::caller(): Integer[1] {
     test::evalWithSeed(7, x | $x)
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "Two-branch dispatch (lambda unconverged → Authoritative \
          mode): T binds Integer from the seed; the lambda's body \
@@ -789,7 +789,7 @@ fn tic_two_branch_fold_accumulator_preserved_under_authoritative() {
     // Locks the case both prior spikes broke. If this fails after a
     // structural change, the lambda-body-as-V-source pathway is
     // mis-classified.
-    let source = r#"
+    let source = r"
 ###Pure
 native function test::cast<T>(any: Any[*], t: T[1]): T[*];
 native function test::fold<T,V|m>(
@@ -801,7 +801,7 @@ native function test::add<T>(set: T[*], val: T[1]): T[1..*];
 function test::caller(): Any[*] {
     [1, 2, 3]->test::fold({val: Integer[1], acc: Any[*] | test::add($acc, $val)}, [])
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "Two-branch dispatch must NOT regress fold-style chains. \
          T:=Integer authoritatively from arg 0; V:=Nil from arg 2; \
@@ -822,7 +822,7 @@ fn tic_fold_lambda_body_v_source() {
     // arg. Locks that the new context machinery preserves Java's
     // ordering: lambda return registers into the parent context AFTER
     // the accumulator's constraint-bind ran.
-    let source = r#"
+    let source = r"
 ###Pure
 native function test::cast<T>(any: Any[*], t: T[1]): T[*];
 native function test::fold<T,V|m>(
@@ -834,7 +834,7 @@ native function test::add<T>(set: T[*], val: T[1]): T[1..*];
 function test::caller(): Any[*] {
     [1, 2, 3]->test::fold({val: Integer[1], acc: Any[*] | test::add($acc, $val)}, [])
 }
-"#;
+";
     compile_with_imports(&[source], &[]).expect(
         "fold's V binds from the lambda body's add() return — not from the \
          accumulator's empty-list. Locks the platform fold-pattern that \

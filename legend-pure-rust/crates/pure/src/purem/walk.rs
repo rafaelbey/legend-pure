@@ -56,6 +56,8 @@ fn walk_element_ids_inner(element: &mut Element, visit: &mut dyn FnMut(&mut Elem
             }
         }
         Element::Function(f) => walk_function(f, visit),
+        #[allow(clippy::match_same_arms)]
+        // distinct reasons per variant — keep the explanatory comments greppable
         Element::Profile(_) => {
             // Profile only carries stereotype / tag *names* (not refs).
             // Nothing to walk.
@@ -99,9 +101,12 @@ fn walk_element_ids_inner(element: &mut Element, visit: &mut dyn FnMut(&mut Elem
                 walk_constraint(c, visit);
             }
         }
+        #[allow(clippy::match_same_arms)]
+        // distinct reasons per variant — keep the explanatory comments greppable
         Element::PackageableMultiplicity(_) => {
             // No ElementId references; a Multiplicity is structural data.
         }
+        #[allow(clippy::match_same_arms)]
         Element::Package(_) => {
             // Package entries hold a PackageId, not an element-level ref.
         }
@@ -322,13 +327,7 @@ fn walk_expr_kind(kind: &mut ExprKind, visit: &mut dyn FnMut(&mut ElementId)) {
         ExprKind::PackageableElementRef { element } => {
             visit(element);
         }
-        ExprKind::RelationLiteral { columns } => {
-            for col in columns {
-                visit(&mut col.type_element);
-                walk_multiplicity(&mut col.multiplicity, visit);
-            }
-        }
-        ExprKind::ColSpecArrayLiteral { columns, .. } => {
+        ExprKind::RelationLiteral { columns } | ExprKind::ColSpecArrayLiteral { columns, .. } => {
             for col in columns {
                 visit(&mut col.type_element);
                 walk_multiplicity(&mut col.multiplicity, visit);

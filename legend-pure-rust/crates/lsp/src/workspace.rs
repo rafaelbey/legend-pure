@@ -102,7 +102,7 @@ impl Workspace {
                     for f in files.iter_mut() {
                         let canonical_tail = f.path.trim_start_matches('/');
                         if disk_path.ends_with(canonical_tail) {
-                            f.content = content.clone();
+                            f.content.clone_from(content);
                             break;
                         }
                     }
