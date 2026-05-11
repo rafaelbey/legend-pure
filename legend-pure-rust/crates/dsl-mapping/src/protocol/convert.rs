@@ -24,13 +24,21 @@
 //! lambda, …) lands in c2-c6.
 
 use legend_pure_parser_ast::annotation::PackageableElementPtr;
+use legend_pure_parser_ast::expression::Expression;
+use legend_pure_parser_ast::source_info::Spanned;
 use legend_pure_parser_protocol::v1::source_info::SourceInformation;
+use legend_pure_parser_protocol::v1::value_spec::LambdaFunction;
 
 use crate::ast::{
-    ClassMapping, ClassMappingBody, MappingDef, MappingInclude, StoreSubstitution,
+    ClassMapping, ClassMappingBody, LocalPropertyDecl, MappingDef, MappingInclude,
+    PureClassMappingBody, PurePropertyMapping, StoreSubstitution,
 };
 use crate::protocol::class_mapping::{ProtocolClassMapping, ProtocolClassMappingHeader};
 use crate::protocol::include::{ProtocolMappingInclude, ProtocolMappingIncludeMapping};
+use crate::protocol::pure::{
+    ProtocolLocalMappingPropertyInfo, ProtocolPropertyMapping, ProtocolPropertyPointer,
+    ProtocolPureInstanceClassMapping, ProtocolPurePropertyMapping,
+};
 use crate::protocol::ProtocolMapping;
 
 /// Convert an AST `MappingDef` to its protocol JSON representation.
@@ -89,7 +97,9 @@ impl From<&ClassMapping> for ProtocolClassMapping {
             source_information: Some(source_info_from(&cm.source_info)),
         };
         match &cm.body {
-            ClassMappingBody::Pure(_) => ProtocolClassMapping::PureInstance(header),
+            ClassMappingBody::Pure(body) => ProtocolClassMapping::PureInstance(
+                pure_instance_from_body(body, header, ptr_to_fqn(&cm.class)),
+            ),
             ClassMappingBody::Operation(body) => {
                 if body.validation_function.is_some() {
                     ProtocolClassMapping::MergeOperation(header)
@@ -102,13 +112,144 @@ impl From<&ClassMapping> for ProtocolClassMapping {
             // Enumeration / XStore / Foreign bodies don't route to
             // `classMappings` in Java — `enumerationMappings` and
             // `associationMappings` are sibling lists. We don't yet
-            // emit those in c1; treat them as `PureInstance` headers
-            // for now so the dispatcher stays exhaustive. c4/c7 will
+            // emit those in c1; carry them through the `PureInstance`
+            // variant so the dispatcher stays exhaustive. c4/c7 will
             // split them out properly.
             ClassMappingBody::Enumeration(_)
             | ClassMappingBody::XStore(_)
-            | ClassMappingBody::Foreign(_) => ProtocolClassMapping::PureInstance(header),
+            | ClassMappingBody::Foreign(_) => ProtocolClassMapping::PureInstance(
+                ProtocolPureInstanceClassMapping {
+                    header,
+                    src_class: None,
+                    source_class_source_information: None,
+                    property_mappings: Vec::new(),
+                    filter: None,
+                },
+            ),
         }
+    }
+}
+
+/// Build a `ProtocolPureInstanceClassMapping` from a `PureClassMappingBody`.
+///
+/// `target_class_fqn` carries the outer class FQN — it's needed by
+/// each `PropertyPointer.class` field on every property mapping
+/// since the AST stores it once on the parent `ClassMapping`.
+fn pure_instance_from_body(
+    body: &PureClassMappingBody,
+    header: ProtocolClassMappingHeader,
+    target_class_fqn: String,
+) -> ProtocolPureInstanceClassMapping {
+    let src_class = body.src_class.as_ref().map(ptr_to_fqn);
+    let source_class_source_information = body
+        .src_class
+        .as_ref()
+        .map(|p| source_info_from(&p.source_info));
+    let property_mappings = body
+        .property_mappings
+        .iter()
+        .map(|pm| pure_property_mapping_from_ast(pm, &target_class_fqn))
+        .collect();
+    let filter = body.filter.as_ref().map(lambda_wrap);
+    ProtocolPureInstanceClassMapping {
+        header,
+        src_class,
+        source_class_source_information,
+        property_mappings,
+        filter,
+    }
+}
+
+fn pure_property_mapping_from_ast(
+    pm: &PurePropertyMapping,
+    target_class_fqn: &str,
+) -> ProtocolPropertyMapping {
+    let property = ProtocolPropertyPointer {
+        class: target_class_fqn.to_string(),
+        property: pm.property_name.to_string(),
+        source_information: Some(source_info_from(&pm.source_info)),
+    };
+    let local_mapping_property = pm
+        .local_property
+        .as_ref()
+        .map(local_mapping_property_from);
+    let enum_mapping_id = pm.transformer.as_ref().map(ToString::to_string);
+    let transform = lambda_wrap(&pm.transform);
+    // Java's `explodeProperty` is `Boolean` (nullable). Emit `Some(true)`
+    // when the `*` modifier was set; `None` (absent) otherwise — round-
+    // trip stable with Java JSON that omits the field for non-exploding
+    // mappings.
+    let explode_property = pm.explode.then_some(true);
+    ProtocolPropertyMapping::PurePropertyMapping(ProtocolPurePropertyMapping {
+        property,
+        source: None,
+        target: None,
+        local_mapping_property,
+        enum_mapping_id,
+        transform,
+        explode_property,
+        source_information: Some(source_info_from(&pm.source_info)),
+    })
+}
+
+fn local_mapping_property_from(local: &LocalPropertyDecl) -> ProtocolLocalMappingPropertyInfo {
+    use legend_pure_parser_ast::type_ref::Multiplicity as AstMult;
+    use legend_pure_parser_protocol::v1::multiplicity::Multiplicity as ProtoMult;
+
+    // Render the type path as a `::`-joined FQN (Java's
+    // `LocalMappingPropertyInfo.type` is a plain string).
+    let type_path = if let Some(pkg) = &local.type_ref.package {
+        format!("{pkg}::{}", local.type_ref.name)
+    } else {
+        local.type_ref.name.to_string()
+    };
+    let multiplicity = match &local.multiplicity {
+        AstMult::PureOne => ProtoMult {
+            lower_bound: 1,
+            upper_bound: Some(1),
+        },
+        AstMult::ZeroOrOne => ProtoMult {
+            lower_bound: 0,
+            upper_bound: Some(1),
+        },
+        AstMult::OneOrMany => ProtoMult {
+            lower_bound: 1,
+            upper_bound: None,
+        },
+        AstMult::ZeroOrMany => ProtoMult {
+            lower_bound: 0,
+            upper_bound: None,
+        },
+        AstMult::Range { lower, upper } => ProtoMult {
+            lower_bound: *lower,
+            upper_bound: *upper,
+        },
+        // `Variable(name)` doesn't have a numeric form. Java protocol
+        // doesn't carry variable multiplicities on
+        // `LocalMappingPropertyInfo` — emit a [0..*] placeholder that
+        // serializes cleanly. (No platform fixture currently uses
+        // variable multiplicity on a local mapping property.)
+        AstMult::Variable(_) => ProtoMult {
+            lower_bound: 0,
+            upper_bound: None,
+        },
+    };
+    ProtocolLocalMappingPropertyInfo {
+        type_path,
+        multiplicity,
+        source_information: Some(source_info_from(&local.source_info)),
+    }
+}
+
+/// Wrap a bare `Expression` (filter / transform body) as a
+/// no-parameter `LambdaFunction`. Java's
+/// `PureInstanceClassMappingParseTreeWalker.visitLambda:111-117`
+/// builds the same shape — `body = [valueSpec]`, `parameters = []`.
+fn lambda_wrap(expr: &Expression) -> LambdaFunction {
+    LambdaFunction {
+        body: vec![legend_pure_parser_protocol::v1::convert::convert_expression_typed(expr)],
+        parameters: Vec::new(),
+        source_information: Some(source_info_from(expr.source_info())),
     }
 }
 

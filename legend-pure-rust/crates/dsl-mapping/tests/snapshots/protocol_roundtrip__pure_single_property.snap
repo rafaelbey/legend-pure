@@ -1,0 +1,47 @@
+---
+source: crates/dsl-mapping/tests/protocol_roundtrip.rs
+expression: json
+---
+{
+  "classMappings": [
+    {
+      "_type": "pureInstance",
+      "class": "my::test::Firm",
+      "propertyMappings": [
+        {
+          "_type": "purePropertyMapping",
+          "property": {
+            "class": "my::test::Firm",
+            "property": "legalName",
+            "sourceInformation": "<source-info>"
+          },
+          "sourceInformation": "<source-info>",
+          "transform": {
+            "body": [
+              {
+                "_type": "property",
+                "parameters": [
+                  {
+                    "_type": "var",
+                    "name": "src",
+                    "sourceInformation": "<source-info>"
+                  }
+                ],
+                "property": "name",
+                "sourceInformation": "<source-info>"
+              }
+            ],
+            "sourceInformation": "<source-info>"
+          }
+        }
+      ],
+      "root": false,
+      "sourceClassSourceInformation": "<source-info>",
+      "sourceInformation": "<source-info>",
+      "srcClass": "my::test::FirmSrc"
+    }
+  ],
+  "name": "M",
+  "package": "my::test",
+  "sourceInformation": "<source-info>"
+}

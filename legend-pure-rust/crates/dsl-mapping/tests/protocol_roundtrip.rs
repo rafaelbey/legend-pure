@@ -139,6 +139,123 @@ fn mapping_with_includes_serializes_include_list() {
     });
 }
 
+// ---------------------------------------------------------------------------
+// c2 coverage — PureInstanceClassMapping body
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pure_body_with_single_property_serializes_with_lambda_transform() {
+    // Single property `legalName : $src.name` exercises the property
+    // pointer + transform-wrapped-as-lambda Java-parity contract.
+    // Note Java's PureInstanceClassMapping JSON discriminator is
+    // `pureInstance`; property-mapping discriminator is
+    // `purePropertyMapping`.
+    let source = indoc! {r"
+        ###Mapping
+        Mapping my::test::M
+        (
+          my::test::Firm : Pure
+          {
+            ~src my::test::FirmSrc
+            legalName : $src.name
+          }
+        )
+    "};
+    let file = parse("pure_single.pure", source);
+    let m = first_mapping(&file);
+    let (json, _) = round_trip(m);
+    insta::with_settings!({sort_maps => true}, {
+        insta::assert_json_snapshot!("pure_single_property", json, {
+            ".sourceInformation" => "<source-info>",
+            ".classMappings[].sourceInformation" => "<source-info>",
+            ".classMappings[].sourceClassSourceInformation" => "<source-info>",
+            ".classMappings[].propertyMappings[].sourceInformation" => "<source-info>",
+            ".classMappings[].propertyMappings[].property.sourceInformation" => "<source-info>",
+            ".classMappings[].propertyMappings[].transform.sourceInformation" => "<source-info>",
+            ".classMappings[].propertyMappings[].transform.body[].sourceInformation" => "<source-info>",
+            ".classMappings[].propertyMappings[].transform.body[].parameters[].sourceInformation" => "<source-info>",
+        });
+    });
+}
+
+#[test]
+fn pure_body_with_filter_and_multiple_properties() {
+    // `~filter`, `~src`, two property mappings: all top-level body
+    // fields exercised in one shape. Filter wraps as a no-parameter
+    // `LambdaFunction` per Java's
+    // PureInstanceClassMappingParseTreeWalker.visitLambda.
+    let source = indoc! {r"
+        ###Mapping
+        Mapping my::test::M
+        (
+          my::test::Firm : Pure
+          {
+            ~src my::test::FirmSrc
+            ~filter $src.active == true
+            legalName : $src.name,
+            count : $src.employees
+          }
+        )
+    "};
+    let file = parse("pure_filter.pure", source);
+    let m = first_mapping(&file);
+    let (json, _) = round_trip(m);
+    let body = &json["classMappings"][0];
+    assert_eq!(body["_type"], "pureInstance");
+    assert_eq!(body["srcClass"], "my::test::FirmSrc");
+    assert!(
+        body.get("filter").is_some(),
+        "~filter must materialize as a LambdaFunction; got: {body}"
+    );
+    assert_eq!(
+        body["propertyMappings"].as_array().map_or(0, Vec::len),
+        2,
+        "two property mappings expected; got: {body}"
+    );
+    assert_eq!(
+        body["propertyMappings"][0]["_type"], "purePropertyMapping",
+        "property-mapping discriminator must be `purePropertyMapping` (Java parity)"
+    );
+}
+
+#[test]
+fn pure_body_with_local_property_serializes_local_mapping_property_info() {
+    // `+computed : String[1] : $src.name` exercises the local-
+    // property declaration form. The localMappingProperty field
+    // carries `type` + `multiplicity` per Java's
+    // LocalMappingPropertyInfo.
+    let source = indoc! {r"
+        ###Mapping
+        Mapping my::test::M
+        (
+          my::test::Firm : Pure
+          {
+            ~src my::test::FirmSrc
+            +computed : String[1] : $src.name
+          }
+        )
+    "};
+    let file = parse("pure_local.pure", source);
+    let m = first_mapping(&file);
+    let (json, _) = round_trip(m);
+    let pm = &json["classMappings"][0]["propertyMappings"][0];
+    assert_eq!(pm["_type"], "purePropertyMapping");
+    let local = &pm["localMappingProperty"];
+    assert_eq!(
+        local["type"], "String",
+        "localMappingProperty.type must reflect declared type; got: {pm}"
+    );
+    let mult = &local["multiplicity"];
+    assert_eq!(
+        mult["lowerBound"], 1,
+        "PureOne lower bound; got: {pm}"
+    );
+    assert_eq!(
+        mult["upperBound"], 1,
+        "PureOne upper bound; got: {pm}"
+    );
+}
+
 #[test]
 fn include_with_three_substitutions_loses_pair_per_java_parity() {
     // Multi-substitution AST: Java's protocol JSON only carries ONE

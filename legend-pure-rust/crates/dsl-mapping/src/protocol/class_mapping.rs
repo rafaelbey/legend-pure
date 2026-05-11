@@ -23,22 +23,30 @@ use serde::{Deserialize, Serialize};
 
 use legend_pure_parser_protocol::v1::source_info::SourceInformation;
 
+use crate::protocol::pure::ProtocolPureInstanceClassMapping;
+
 /// Discriminated union over the 5 Java class-mapping body kinds.
 ///
 /// The `_type` JSON tag distinguishes variants — `pureInstance` /
 /// `operation` / `mergeOperation` / `aggregationAware` / `relation`
 /// (`ClassMapping.java:25-32`).
 ///
-/// **c1 status:** variants are present with the shared fields
-/// (`id`, `class`, `root`, `extendsClassMappingId`,
-/// `sourceInformation`) only. Body data lands in c2-c6.
+/// Each variant carries a body struct that `#[serde(flatten)]`s the
+/// shared header fields (id, class, root, …) alongside body-specific
+/// data — matching Java's `extends ClassMapping` layout where every
+/// concrete class has the abstract base's fields at the top JSON level.
+///
+/// **Status by variant**:
+/// - `PureInstance` — body landed in c2.
+/// - `Operation` / `MergeOperation` — header-only stub (c3).
+/// - `AggregationAware` — header-only stub (c5).
+/// - `Relation` — header-only stub (c6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "_type")]
 pub enum ProtocolClassMapping {
     /// Pure-instance class mapping (`_type = "pureInstance"`).
-    /// Body data (filter, src class, property mappings) lands in c2.
     #[serde(rename = "pureInstance")]
-    PureInstance(ProtocolClassMappingHeader),
+    PureInstance(ProtocolPureInstanceClassMapping),
 
     /// Operation class mapping (`_type = "operation"`). Body data
     /// (operation function FQN + parameter IDs) lands in c3.
