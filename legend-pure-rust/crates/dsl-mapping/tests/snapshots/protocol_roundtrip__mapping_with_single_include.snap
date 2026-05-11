@@ -1,0 +1,18 @@
+---
+source: crates/dsl-mapping/tests/protocol_roundtrip.rs
+expression: json
+---
+{
+  "includedMappings": [
+    {
+      "_type": "mappingIncludeMapping",
+      "includedMapping": "my::test::Inner",
+      "sourceDatabasePath": "my::test::DbA",
+      "sourceInformation": "<source-info>",
+      "targetDatabasePath": "my::test::DbB"
+    }
+  ],
+  "name": "Outer",
+  "package": "my::test",
+  "sourceInformation": "<source-info>"
+}

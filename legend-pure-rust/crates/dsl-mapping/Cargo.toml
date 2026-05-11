@@ -31,12 +31,15 @@ legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-lexer = { path = "../lexer" }
 legend-pure-parser-pure = { path = "../pure" }
 legend-pure-parser-compose = { path = "../compose" }
+legend-pure-parser-protocol = { path = "../protocol" }
 postcard = { version = "1", features = ["alloc"] }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 smol_str = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 indoc = "2"
+insta = { workspace = true, features = ["redactions"] }
 # end_to_end.rs loads the embedded platform repos and exercises the
 # section parser end-to-end.
 legend-pure-core-platform = { path = "../core-platform-pure" }

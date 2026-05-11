@@ -1,0 +1,9 @@
+---
+source: crates/dsl-mapping/tests/protocol_roundtrip.rs
+expression: json
+---
+{
+  "name": "EmptyMapping",
+  "package": "my::test",
+  "sourceInformation": "<source-info>"
+}
