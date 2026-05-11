@@ -577,7 +577,7 @@ fn validate_class_mapping(
                     },
                 });
             }
-            validate_operation_body(body, visible_ids, model, errors);
+            validate_operation_body(body, visible_ids, model, auto_imports, errors);
         }
         ClassMappingBody::AggregationAware(body) => {
             // AggregationAware bodies also want a Class target —
@@ -1318,6 +1318,7 @@ fn validate_operation_body(
     body: &OperationClassMappingBody,
     visible_ids: &HashSet<SmolStr>,
     model: &PureModel,
+    auto_imports: &[SmolStr],
     errors: &mut Vec<CompilationError>,
 ) {
     // 1. Operation function path must resolve to a Function in the
@@ -1373,6 +1374,19 @@ fn validate_operation_body(
                 },
             });
         }
+    }
+    // 3. Merge form: lower the validation lambda so any expression-
+    //    side errors (unresolved refs, lambda-param-type inference,
+    //    bad dispatch) surface as compilation diagnostics. Java parity:
+    //    `ClassMappingFirstPassBuilder.visitMerge` runs the lambda
+    //    through `HelperValueSpecificationBuilder.buildLambda` which
+    //    feeds it into the same compilation pipeline. No empty
+    //    `src_binding` — the lambda's own `|param: T[m] | ...` clause
+    //    declares its parameters. Return-type shape is intentionally
+    //    NOT enforced: Java doesn't constrain it either (mirrors the
+    //    T2.4 audit verdict for the operation-function signature).
+    if let Some(lambda) = &body.validation_function {
+        let _ = lower_and_infer_expression(model, auto_imports, lambda, &[], errors);
     }
 }
 
@@ -1583,7 +1597,7 @@ fn validate_nested_class_mapping(
             validate_enumeration_body(body, target_class_fqn, None, model, errors);
         }
         ClassMappingBody::Operation(body) => {
-            validate_operation_body(body, visible_ids, model, errors);
+            validate_operation_body(body, visible_ids, model, auto_imports, errors);
         }
         ClassMappingBody::AggregationAware(body) => {
             // Recursive case: AggregationAware nested under
