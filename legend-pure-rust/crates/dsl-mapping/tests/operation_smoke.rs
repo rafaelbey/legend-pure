@@ -56,16 +56,6 @@ fn parse(name: &str, source: &str) -> SourceFile {
     }
 }
 
-fn try_parse(name: &str, source: &str) -> Result<SourceFile, Vec<String>> {
-    legend_pure_parser_parser::parse_with_sections(
-        source,
-        name,
-        legend_pure_parser_parser::island::default_island_parsers(),
-        vec![Box::new(MappingSectionParser::new())],
-    )
-    .map_err(|p| p.errors.iter().map(ToString::to_string).collect())
-}
-
 fn first_mapping(file: &SourceFile) -> &MappingDef {
     for section in &file.sections {
         for elem in &section.elements {
@@ -168,11 +158,12 @@ fn parses_operation_with_trailing_semicolon() {
 }
 
 #[test]
-fn merge_form_is_rejected_with_pointed_error() {
-    // The `mergeParameters` form (`[ids], { lambda }`) is reserved
-    // for a follow-up sub-stage. Make sure we surface a deliberate
-    // diagnostic rather than mis-parsing it as an empty parameter
-    // list (or worse, silently consuming the bracket as an id).
+fn merge_form_parses_with_validation_lambda() {
+    // `mergeParameters` shape — `[ids], <validation lambda>`. Java
+    // parity: `OperationClassMappingParserGrammar.g4:31` + walker at
+    // `OperationClassMappingParseTreeWalker.visitMergeOperationClassMapping`.
+    // The lambda becomes `validation_function: Some(...)`; parameters
+    // populate as in the simple form.
     let source = indoc! {r"
         ###Mapping
         Mapping pkg::M
@@ -183,12 +174,77 @@ fn merge_form_is_rejected_with_pointed_error() {
           }
         )
     "};
-    let result = try_parse("merge.pure", source);
-    let errors = result.expect_err("expected the merge form to be rejected");
+    let file = parse("merge.pure", source);
+    let body = operation_body(first_mapping(&file), 0);
+    assert_eq!(body.parameters.len(), 2, "two merge parameters");
+    assert_eq!(body.parameters[0].id.as_str(), "p1");
+    assert_eq!(body.parameters[1].id.as_str(), "p2");
     assert!(
-        errors.iter().any(|e| e.contains("mergeParameters")),
-        "expected error message to mention mergeParameters; got: {errors:?}"
+        body.validation_function.is_some(),
+        "merge form must capture the validation lambda"
     );
+}
+
+#[test]
+fn simple_form_keeps_validation_function_none() {
+    // Pin: the simple `(id, id)` form must NOT populate
+    // validation_function — otherwise the composer would emit the
+    // merge shape and break round-trip on every existing operation
+    // mapping.
+    let source = indoc! {r"
+        ###Mapping
+        Mapping pkg::M
+        (
+          *pkg::Person[op] : Operation
+          {
+            pkg::ops::union(rel1, rel2)
+          }
+        )
+    "};
+    let file = parse("simple.pure", source);
+    let body = operation_body(first_mapping(&file), 0);
+    assert_eq!(body.parameters.len(), 2);
+    assert!(
+        body.validation_function.is_none(),
+        "simple form must leave validation_function = None"
+    );
+}
+
+#[test]
+fn merge_form_round_trips_through_composer() {
+    use legend_pure_dsl_mapping::compose::compose_mapping_section;
+
+    let source = indoc! {r"
+        ###Mapping
+        Mapping pkg::M
+        (
+          *pkg::Person[op] : Operation
+          {
+            pkg::ops::merge([p1, p2], { p1: pkg::A[1], p2: pkg::B[1] | $p1.id == $p2.id })
+          }
+        )
+    "};
+    let file = parse("merge_rt.pure", source);
+    let m = first_mapping(&file);
+    let composed = compose_mapping_section(&[m]);
+    // Composer must emit the bracketed-parameters form with comma +
+    // lambda — proves both branches of `write_operation_body` are
+    // exercised.
+    assert!(
+        composed.contains("[p1, p2]"),
+        "composer must emit bracketed parameters for merge form; composed:\n{composed}"
+    );
+    assert!(
+        composed.contains("|"),
+        "composer must replay the lambda body; composed:\n{composed}"
+    );
+
+    // Round-trip: re-parse the composed text and confirm structural
+    // fidelity (parameters + validation_function survive).
+    let file2 = parse("merge_rt2.pure", &composed);
+    let body2 = operation_body(first_mapping(&file2), 0);
+    assert_eq!(body2.parameters.len(), 2);
+    assert!(body2.validation_function.is_some());
 }
 
 #[test]

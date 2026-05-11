@@ -604,30 +604,44 @@ fn parse_operation_body(
     ctx.cursor().expect(TokenKind::LParen)?;
 
     let mut parameters = Vec::new();
+    let mut validation_function: Option<Expression> = None;
+
     if !ctx.cursor().check(TokenKind::RParen) {
-        // Reject the `mergeParameters` form (`[id, ...], { lambda }`)
-        // up-front rather than mis-parsing it as an empty parameter
-        // list. The simple form's first token is an identifier
-        // (parameter ID); the merge form's first token is `[`.
+        // Two grammar shapes — discriminate by the first token:
+        //   - `[` → mergeParameters form: `[id, ...], <lambda>`
+        //   - identifier → simple parameters form: `id, ...`
+        // (Java parity:
+        // `OperationClassMappingParserGrammar.g4:20,31,34`.)
         if ctx.cursor().check(TokenKind::LBracket) {
-            let tok = ctx.cursor().peek().clone();
-            return Err(ParseError::Unexpected {
-                message:
-                    "Operation `mergeParameters` form (`[id, …], { lambda }`) is not supported \
-                     yet — Stage 5 ships only the simple `(id, …)` parameter form; merge \
-                     arrives in a follow-up sub-stage."
-                        .to_string(),
-                source_info: tok.source_info,
-            });
-        }
-        loop {
-            let id_tok = ctx.cursor().expect(TokenKind::Identifier)?;
-            parameters.push(OperationParameter {
-                id: SmolStr::new(id_tok.text.clone()),
-                source_info: id_tok.source_info,
-            });
-            if !ctx.cursor().eat(TokenKind::Comma) {
-                break;
+            ctx.cursor().expect(TokenKind::LBracket)?;
+            if !ctx.cursor().check(TokenKind::RBracket) {
+                loop {
+                    let id_tok = ctx.cursor().expect(TokenKind::Identifier)?;
+                    parameters.push(OperationParameter {
+                        id: SmolStr::new(id_tok.text.clone()),
+                        source_info: id_tok.source_info,
+                    });
+                    if !ctx.cursor().eat(TokenKind::Comma) {
+                        break;
+                    }
+                }
+            }
+            ctx.cursor().expect(TokenKind::RBracket)?;
+            ctx.cursor().expect(TokenKind::Comma)?;
+            // Validation lambda — any `combinedExpression`. Reuse the
+            // standard expression parser so `{x|...}` / function calls /
+            // arithmetic all round-trip cleanly.
+            validation_function = Some(ctx.parse_expression()?);
+        } else {
+            loop {
+                let id_tok = ctx.cursor().expect(TokenKind::Identifier)?;
+                parameters.push(OperationParameter {
+                    id: SmolStr::new(id_tok.text.clone()),
+                    source_info: id_tok.source_info,
+                });
+                if !ctx.cursor().eat(TokenKind::Comma) {
+                    break;
+                }
             }
         }
     }
@@ -640,6 +654,7 @@ fn parse_operation_body(
     Ok(OperationClassMappingBody {
         operation,
         parameters,
+        validation_function,
     })
 }
 

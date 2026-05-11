@@ -295,11 +295,25 @@ fn write_operation_body(out: &mut String, body: &OperationClassMappingBody) {
     out.push_str("    ");
     write_ptr(out, &body.operation);
     out.push('(');
-    for (i, p) in body.parameters.iter().enumerate() {
-        if i > 0 {
-            out.push_str(", ");
+    if let Some(validation) = &body.validation_function {
+        // mergeParameters form: `[id, ...], <validation lambda>`
+        out.push('[');
+        for (i, p) in body.parameters.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(p.id.as_str());
         }
-        out.push_str(p.id.as_str());
+        out.push_str("], ");
+        write_expression(out, validation);
+    } else {
+        // Simple parameters form: `id, ...`
+        for (i, p) in body.parameters.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(p.id.as_str());
+        }
     }
     out.push_str(")\n");
 }
