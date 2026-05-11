@@ -432,6 +432,125 @@ fn enumeration_mapping_with_enum_ref_source_value_serializes_discriminator() {
     assert_eq!(sv["value"], "GO");
 }
 
+// ---------------------------------------------------------------------------
+// c5 coverage — AggregationAware body
+// ---------------------------------------------------------------------------
+
+#[test]
+fn aggregation_aware_body_serializes_main_set_implementation_recursively() {
+    // Single-view AggregationAware with nested Pure mappings. Pins:
+    //  - `_type: aggregationAware` discriminator
+    //  - `mainSetImplementation` is itself a `_type: pureInstance`
+    //    ClassMapping carrying the outer class FQN
+    //  - `aggregateSetImplementations[]` carries `(index, setImpl,
+    //    aggregateSpecification)` per Java
+    //    `AggregateSetImplementationContainer.java:19-24`.
+    let source = indoc! {r"
+        ###Mapping
+        Mapping my::test::M
+        (
+          *my::test::Sales[s] : AggregationAware
+          {
+            Views : [
+              (
+                ~modelOperation : {
+                  ~canAggregate true,
+                  ~groupByFunctions ( $this.salesDate ),
+                  ~aggregateValues ( ( ~mapFn: $this.revenue, ~aggregateFn: $mapped->sum() ) )
+                },
+                ~aggregateMapping : Pure {
+                  ~src my::test::SalesAgg
+                  salesDate : $src.salesDate,
+                  revenue : $src.netRevenue
+                }
+              )
+            ],
+            ~mainMapping : Pure {
+              ~src my::test::SalesRaw
+              salesDate : $src.salesDate,
+              revenue : $src.revenue
+            }
+          }
+        )
+    "};
+    let file = parse("agg_simple.pure", source);
+    let m = first_mapping(&file);
+    let (json, _) = round_trip(m);
+    let cm = &json["classMappings"][0];
+    assert_eq!(cm["_type"], "aggregationAware");
+
+    let main = &cm["mainSetImplementation"];
+    assert_eq!(main["_type"], "pureInstance");
+    assert_eq!(
+        main["class"], "my::test::Sales",
+        "nested mainSetImplementation inherits outer class FQN"
+    );
+    assert_eq!(main["srcClass"], "my::test::SalesRaw");
+
+    let aggs = cm["aggregateSetImplementations"].as_array().expect("aggregates list");
+    assert_eq!(aggs.len(), 1);
+    let agg0 = &aggs[0];
+    assert_eq!(agg0["index"], 0);
+    assert_eq!(agg0["setImplementation"]["_type"], "pureInstance");
+    assert_eq!(agg0["setImplementation"]["srcClass"], "my::test::SalesAgg");
+    let spec = &agg0["aggregateSpecification"];
+    assert_eq!(spec["canAggregate"], true);
+    let gbf = spec["groupByFunctions"].as_array().expect("groupBy list");
+    assert_eq!(gbf.len(), 1);
+    assert!(
+        gbf[0]["groupByFn"]["body"].is_array(),
+        "each groupByFunction must wrap as LambdaFunction; got: {gbf:#?}"
+    );
+    let aggvals = spec["aggregateValues"].as_array().expect("aggregateValues list");
+    assert_eq!(aggvals.len(), 1);
+    assert!(aggvals[0]["mapFn"]["body"].is_array());
+    assert!(aggvals[0]["aggregateFn"]["body"].is_array());
+}
+
+#[test]
+fn aggregation_aware_with_can_aggregate_false_and_multiple_group_by_keys() {
+    // Pins `canAggregate: false` round-trip + multiple group-by
+    // expressions each wrapped as their own LambdaFunction.
+    let source = indoc! {r"
+        ###Mapping
+        Mapping my::test::M
+        (
+          *my::test::Sales[s] : AggregationAware
+          {
+            Views : [
+              (
+                ~modelOperation : {
+                  ~canAggregate false,
+                  ~groupByFunctions ( $this.salesDate, $this.region ),
+                  ~aggregateValues ( ( ~mapFn: $this.revenue, ~aggregateFn: $mapped->sum() ) )
+                },
+                ~aggregateMapping : Pure {
+                  ~src my::test::SalesAgg
+                  salesDate : $src.salesDate,
+                  region : $src.region,
+                  revenue : $src.revenue
+                }
+              )
+            ],
+            ~mainMapping : Pure {
+              ~src my::test::SalesRaw
+              salesDate : $src.salesDate,
+              region : $src.region,
+              revenue : $src.revenue
+            }
+          }
+        )
+    "};
+    let file = parse("agg_multi.pure", source);
+    let m = first_mapping(&file);
+    let (json, _) = round_trip(m);
+    let spec =
+        &json["classMappings"][0]["aggregateSetImplementations"][0]["aggregateSpecification"];
+    assert_eq!(spec["canAggregate"], false);
+    let gbf = spec["groupByFunctions"].as_array().expect("groupBy list");
+    assert_eq!(gbf.len(), 2, "two distinct group-by expressions");
+}
+
 #[test]
 fn include_with_three_substitutions_loses_pair_per_java_parity() {
     // Multi-substitution AST: Java's protocol JSON only carries ONE

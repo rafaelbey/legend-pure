@@ -30,9 +30,16 @@ use legend_pure_parser_protocol::v1::source_info::SourceInformation;
 use legend_pure_parser_protocol::v1::value_spec::LambdaFunction;
 
 use crate::ast::{
-    ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping,
+    AggregateSpecification, AggregateView, AggregationAwareClassMappingBody,
+    AggregationFunctionSpec, ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping,
     EnumerationClassMappingBody, LocalPropertyDecl, MappingDef, MappingInclude,
-    OperationClassMappingBody, PureClassMappingBody, PurePropertyMapping, StoreSubstitution,
+    NestedClassMapping, OperationClassMappingBody, PureClassMappingBody, PurePropertyMapping,
+    StoreSubstitution,
+};
+use crate::protocol::aggregation_aware::{
+    ProtocolAggregateFunction, ProtocolAggregateSetImplementationContainer,
+    ProtocolAggregateSpecification, ProtocolAggregationAwareClassMapping,
+    ProtocolGroupByFunction,
 };
 use crate::protocol::class_mapping::{ProtocolClassMapping, ProtocolClassMappingHeader};
 use crate::protocol::enumeration::{
@@ -132,7 +139,11 @@ impl From<&ClassMapping> for ProtocolClassMapping {
                     ProtocolClassMapping::Operation(operation_from_body(body, header))
                 }
             }
-            ClassMappingBody::AggregationAware(_) => ProtocolClassMapping::AggregationAware(header),
+            ClassMappingBody::AggregationAware(body) => {
+                ProtocolClassMapping::AggregationAware(Box::new(
+                    aggregation_aware_from_body(body, header, cm),
+                ))
+            }
             ClassMappingBody::RelationFunction(_) => ProtocolClassMapping::Relation(header),
             // Enumeration / XStore / Foreign bodies don't route to
             // `classMappings` in Java — `enumerationMappings` and
@@ -289,6 +300,92 @@ fn operation_from_body(
         parameters: body.parameters.iter().map(|p| p.id.to_string()).collect(),
         operation: MappingOperation::from_function_fqn(&ptr_to_fqn(&body.operation)),
     }
+}
+
+/// Build a `ProtocolAggregationAwareClassMapping` from the AST body
+/// + the outer `ClassMapping` (needed to thread the target class FQN
+/// through the nested mapping conversion — nested mappings inherit
+/// the outer class).
+fn aggregation_aware_from_body(
+    body: &AggregationAwareClassMappingBody,
+    header: ProtocolClassMappingHeader,
+    outer_cm: &ClassMapping,
+) -> ProtocolAggregationAwareClassMapping {
+    let main_set_implementation = Box::new(nested_to_class_mapping(&body.main_mapping, outer_cm));
+    let aggregate_set_implementations = body
+        .views
+        .iter()
+        .enumerate()
+        .map(|(idx, view)| aggregate_container_from_view(idx, view, outer_cm))
+        .collect();
+    ProtocolAggregationAwareClassMapping {
+        header,
+        main_set_implementation,
+        // Java's post-processor synthesises propertyMappings here from
+        // mainSetImplementation. AST doesn't carry that synthesised
+        // list — emit empty.
+        property_mappings: Vec::new(),
+        aggregate_set_implementations,
+    }
+}
+
+fn aggregate_container_from_view(
+    index: usize,
+    view: &AggregateView,
+    outer_cm: &ClassMapping,
+) -> ProtocolAggregateSetImplementationContainer {
+    ProtocolAggregateSetImplementationContainer {
+        // Java's `index` is `Long`; we feed the 0-based source order.
+        index: index as i64,
+        set_implementation: Box::new(nested_to_class_mapping(&view.aggregate_mapping, outer_cm)),
+        aggregate_specification: aggregate_specification_from(&view.model_operation),
+    }
+}
+
+fn aggregate_specification_from(spec: &AggregateSpecification) -> ProtocolAggregateSpecification {
+    ProtocolAggregateSpecification {
+        can_aggregate: spec.can_aggregate,
+        group_by_functions: spec
+            .group_by_functions
+            .iter()
+            .map(|expr| ProtocolGroupByFunction {
+                group_by_fn: lambda_wrap(expr),
+            })
+            .collect(),
+        aggregate_values: spec
+            .aggregate_values
+            .iter()
+            .map(aggregate_function_from)
+            .collect(),
+    }
+}
+
+fn aggregate_function_from(spec: &AggregationFunctionSpec) -> ProtocolAggregateFunction {
+    ProtocolAggregateFunction {
+        map_fn: lambda_wrap(&spec.map_fn),
+        aggregate_fn: lambda_wrap(&spec.aggregate_fn),
+    }
+}
+
+/// Convert a `NestedClassMapping` (`~mainMapping` / `~aggregateMapping`)
+/// to a full `ProtocolClassMapping`. Threads the outer class FQN
+/// through a synthetic `ClassMapping` so the nested body's conversion
+/// path lands on the right Java discriminator with the right `class`
+/// field.
+fn nested_to_class_mapping(nested: &NestedClassMapping, outer_cm: &ClassMapping) -> ProtocolClassMapping {
+    // Build a synthetic ClassMapping that inherits the outer's class
+    // + spans the nested body. `id`/`extends`/`is_root` reset to
+    // defaults — nested mappings carry none of those per the AST.
+    let synthetic = ClassMapping {
+        is_root: outer_cm.is_root,
+        class: outer_cm.class.clone(),
+        id: None,
+        extends: None,
+        mapping_name: None,
+        body: nested.body.clone(),
+        source_info: nested.source_info.clone(),
+    };
+    ProtocolClassMapping::from(&synthetic)
 }
 
 /// Build a `ProtocolEnumerationMapping` from an outer `ClassMapping`

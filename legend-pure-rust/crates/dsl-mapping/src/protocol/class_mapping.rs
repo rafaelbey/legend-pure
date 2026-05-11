@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use legend_pure_parser_protocol::v1::source_info::SourceInformation;
 
+use crate::protocol::aggregation_aware::ProtocolAggregationAwareClassMapping;
 use crate::protocol::operation::{
     ProtocolMergeOperationClassMapping, ProtocolOperationClassMapping,
 };
@@ -42,7 +43,7 @@ use crate::protocol::pure::ProtocolPureInstanceClassMapping;
 /// **Status by variant**:
 /// - `PureInstance` — body landed in c2.
 /// - `Operation` / `MergeOperation` — body landed in c3.
-/// - `AggregationAware` — header-only stub (c5).
+/// - `AggregationAware` — body landed in c5.
 /// - `Relation` — header-only stub (c6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "_type")]
@@ -60,9 +61,8 @@ pub enum ProtocolClassMapping {
     MergeOperation(ProtocolMergeOperationClassMapping),
 
     /// Aggregation-aware class mapping (`_type = "aggregationAware"`).
-    /// Body data (views + main mapping) lands in c5.
     #[serde(rename = "aggregationAware")]
-    AggregationAware(ProtocolClassMappingHeader),
+    AggregationAware(Box<ProtocolAggregationAwareClassMapping>),
 
     /// Relation-function class mapping (`_type = "relation"`). Body
     /// data (relation function FQN + property→column mappings) lands

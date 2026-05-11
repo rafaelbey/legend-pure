@@ -60,6 +60,7 @@
 //! (c2 Pure, c3 Operation/Merge, c4 Enumeration, c5 AggregationAware,
 //! c6 RelationFunction, c7 XStore + multi-substitution audit).
 
+pub mod aggregation_aware;
 pub mod class_mapping;
 pub mod convert;
 pub mod enumeration;
