@@ -57,7 +57,12 @@ cargo nextest run --workspace   # faster local test runner; doesn't run doctests
                                 # (run `cargo test --doc` separately if needed)
 cargo lint-lib          # strict: no unwrap/expect in library code
                         #   (alias → clippy --lib -D unwrap_used -D expect_used)
-cargo lint              # standard clippy on all targets
+cargo lint              # all targets, `-W clippy::all -W clippy::pedantic`
+                        # with a curated `-A` allowlist for the stylistic
+                        # categories the project doesn't enforce —
+                        # see `.cargo/config.toml` for the policy and why
+                        # each lint is off. Both this and `lint-lib` are
+                        # zero-warning gates.
 cargo fmt --check
 cargo audit             # alias → lint-lib + lint + test --all
 ./scripts/check-copyright.sh              # required on .rs/.toml/.pure/.sh
@@ -106,6 +111,7 @@ lint gates must pass.
 
 - Edition **2024**. `#![forbid(unsafe_code)]` in every crate except `jni`.
 - No `unwrap()` / `expect()` in library code — `cargo lint-lib` is a hard gate.
+- `cargo lint` (pedantic) must stay at zero warnings. The set of pedantic lints the project allows is codified in the `cargo lint` alias in `.cargo/config.toml` — every `-A` line carries a one-paragraph comment explaining why. Adding a new allow means a justified policy change, not a paper-over.
 - Public items need `///` doc comments (`#![deny(missing_docs)]` on public crates).
 - `SmolStr` (not `String`) for identifiers; 24-byte inline, O(1) clone.
 - `thiserror` for library error types; `miette` for CLI diagnostics.

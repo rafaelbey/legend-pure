@@ -34,7 +34,9 @@ cargo test --workspace
 # Lint (strict: no unwrap/expect in library code)
 cargo lint-lib
 
-# Lint (standard clippy, all targets)
+# Lint (pedantic clippy on all targets, with a curated allowlist
+# for stylistic categories the project doesn't enforce — see
+# `.cargo/config.toml`). Zero-warning gate.
 cargo lint
 cargo fmt --check
 
