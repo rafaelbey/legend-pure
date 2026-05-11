@@ -640,6 +640,116 @@ fn relation_function_body_with_local_mapping_property_serializes_decl() {
     assert_eq!(local["multiplicity"]["upperBound"], 1);
 }
 
+// ---------------------------------------------------------------------------
+// c7 coverage — XStore body + final multi-substitution audit
+// ---------------------------------------------------------------------------
+
+#[test]
+fn xstore_body_routes_into_association_mappings_sibling_list() {
+    // XStore bodies target Associations, not Classes — Java's
+    // `Mapping.associationMappings` is a sibling list. Pins:
+    //  - XStore body absent from `classMappings`
+    //  - present in `associationMappings` under `_type: xStore`
+    //  - `source` / `target` carry set-impl IDs from the
+    //    `[src, tgt]` bracket pair
+    //  - `crossExpression` wraps as a LambdaFunction.
+    let source = indoc! {r"
+        ###Pure
+        Class my::test::Firm
+        {
+          id : String[1];
+        }
+        Class my::test::Person
+        {
+          firmId : String[1];
+        }
+        Association my::test::Firm_Person
+        {
+          firm : my::test::Firm[1];
+          employees : my::test::Person[*];
+        }
+        Class my::test::FirmSrc { id : String[1]; }
+        Class my::test::PersonSrc { firmId : String[1]; }
+
+        ###Mapping
+        Mapping my::test::M
+        (
+          *my::test::Firm[firm_set] : Pure
+          {
+            ~src my::test::FirmSrc
+            id : $src.id
+          }
+          *my::test::Person[employee_set] : Pure
+          {
+            ~src my::test::PersonSrc
+            firmId : $src.firmId
+          }
+          my::test::Firm_Person : XStore
+          {
+            firm[employee_set, firm_set] : $this.firmId == $that.id
+          }
+        )
+    "};
+    let file = parse("xstore.pure", source);
+    let m = first_mapping(&file);
+    let (json, _) = round_trip(m);
+    assert_eq!(
+        json["classMappings"].as_array().map_or(0, Vec::len),
+        2,
+        "two Pure-bodied class mappings expected; got: {json}"
+    );
+    let assocs = json["associationMappings"].as_array().expect("associations");
+    assert_eq!(assocs.len(), 1);
+    let assoc = &assocs[0];
+    assert_eq!(assoc["_type"], "xStore");
+    assert_eq!(assoc["association"]["fullPath"], "my::test::Firm_Person");
+    let pm = &assoc["propertyMappings"][0];
+    assert_eq!(pm["property"]["property"], "firm");
+    assert_eq!(pm["source"], "employee_set");
+    assert_eq!(pm["target"], "firm_set");
+    assert!(
+        pm["crossExpression"]["body"].is_array(),
+        "crossExpression must wrap as a LambdaFunction; got: {pm:#?}"
+    );
+}
+
+#[test]
+fn xstore_property_mapping_without_set_impl_ids_omits_source_target() {
+    // Bare `propName : $expr` without the `[src, tgt]` bracket pair
+    // — `source` / `target` fields absent from JSON.
+    let source = indoc! {r"
+        ###Pure
+        Class my::test::A { x : String[1]; }
+        Class my::test::B { y : String[1]; }
+        Association my::test::A_B
+        {
+          a : my::test::A[1];
+          b : my::test::B[1];
+        }
+
+        ###Mapping
+        Mapping my::test::M
+        (
+          my::test::A_B : XStore
+          {
+            a : $this.x == $that.y
+          }
+        )
+    "};
+    let file = parse("xstore_bare.pure", source);
+    let m = first_mapping(&file);
+    let (json, _) = round_trip(m);
+    let pm = &json["associationMappings"][0]["propertyMappings"][0];
+    assert!(
+        pm.get("source").is_none(),
+        "bare property mapping must omit source; got: {pm}"
+    );
+    assert!(
+        pm.get("target").is_none(),
+        "bare property mapping must omit target; got: {pm}"
+    );
+}
+
 #[test]
 fn include_with_three_substitutions_loses_pair_per_java_parity() {
     // Multi-substitution AST: Java's protocol JSON only carries ONE

@@ -35,7 +35,8 @@ use crate::ast::{
     ClassMappingBody, EnumSourceValue, EnumValueMapping, EnumerationClassMappingBody,
     LocalPropertyDecl, MappingDef, MappingInclude, NestedClassMapping, OperationClassMappingBody,
     PureClassMappingBody, PurePropertyMapping, RelationFunctionClassMappingBody,
-    RelationFunctionPropertyMapping, StoreSubstitution,
+    RelationFunctionPropertyMapping, StoreSubstitution, XStoreClassMappingBody,
+    XStorePropertyMapping,
 };
 use crate::protocol::aggregation_aware::{
     ProtocolAggregateFunction, ProtocolAggregateSetImplementationContainer,
@@ -60,6 +61,9 @@ use crate::protocol::relation_function::{
     ProtocolBindingTransformer, ProtocolRelationFunctionClassMapping,
     ProtocolRelationFunctionPropertyMapping,
 };
+use crate::protocol::xstore::{
+    ProtocolAssociationMapping, ProtocolXStoreAssociationMapping, ProtocolXStorePropertyMapping,
+};
 use crate::protocol::ProtocolMapping;
 use legend_pure_parser_protocol::v1::value_spec::ProtocolPackageableElementPtr;
 
@@ -73,16 +77,22 @@ impl From<&MappingDef> for ProtocolMapping {
             Some(pkg) => pkg.to_string(),
             None => String::new(),
         };
-        // Split: Enumeration-bodied class mappings route into
-        // `enumeration_mappings`; everything else into `class_mappings`.
-        // Java's `Mapping.enumerationMappings` is a sibling list to
-        // `classMappings`, NOT under the `ClassMapping` discriminator.
+        // Three-way split: Enumeration-bodied class mappings route
+        // into `enumeration_mappings`, XStore-bodied class mappings
+        // into `association_mappings`, everything else into
+        // `class_mappings`. Java's `Mapping.{enumerationMappings,
+        // associationMappings}` are sibling lists to `classMappings`,
+        // NOT under the `ClassMapping` `_type` discriminator.
         let mut class_mappings = Vec::new();
         let mut enumeration_mappings = Vec::new();
+        let mut association_mappings = Vec::new();
         for cm in &m.class_mappings {
             match &cm.body {
                 ClassMappingBody::Enumeration(body) => {
                     enumeration_mappings.push(enumeration_mapping_from(cm, body));
+                }
+                ClassMappingBody::XStore(body) => {
+                    association_mappings.push(xstore_association_mapping_from(cm, body));
                 }
                 _ => class_mappings.push(ProtocolClassMapping::from(cm)),
             }
@@ -92,6 +102,7 @@ impl From<&MappingDef> for ProtocolMapping {
             name: m.name.value.to_string(),
             class_mappings,
             enumeration_mappings,
+            association_mappings,
             included_mappings: m.includes.iter().map(ProtocolMappingInclude::from).collect(),
             source_information: Some(source_info_from(&m.source_info)),
         }
@@ -306,6 +317,66 @@ fn operation_from_body(
         header,
         parameters: body.parameters.iter().map(|p| p.id.to_string()).collect(),
         operation: MappingOperation::from_function_fqn(&ptr_to_fqn(&body.operation)),
+    }
+}
+
+/// Build a `ProtocolAssociationMapping::XStore` from the outer
+/// `ClassMapping` + its inner `XStoreClassMappingBody`. The outer
+/// FQN is reinterpreted as an Association FQN here (XStore mappings
+/// target Associations, not Classes — the dsl-mapping validator
+/// enforces this at compile time).
+///
+/// Called only from the `MappingDef → ProtocolMapping` filter that
+/// routes XStore bodies into the `association_mappings` sibling
+/// list.
+fn xstore_association_mapping_from(
+    cm: &ClassMapping,
+    body: &XStoreClassMappingBody,
+) -> ProtocolAssociationMapping {
+    let association_fqn = ptr_to_fqn(&cm.class);
+    let id = cm.id.as_ref().map(ToString::to_string).unwrap_or_else(|| {
+        // Java default: association ID falls back to the association
+        // FQN (Java's `AssociationMapping.id` defaults from the
+        // class FQN when explicit `[id]` is absent).
+        association_fqn.clone()
+    });
+    ProtocolAssociationMapping::XStore(ProtocolXStoreAssociationMapping {
+        id,
+        association: ProtocolPackageableElementPtr {
+            full_path: association_fqn.clone(),
+            source_information: Some(source_info_from(&cm.class.source_info)),
+        },
+        // Stores spanned: derived from the cross-expression
+        // participants at plan-generation time on the Java side.
+        // Today we don't pre-compute this — emit empty.
+        stores: Vec::new(),
+        property_mappings: body
+            .property_mappings
+            .iter()
+            .map(|pm| xstore_property_mapping_from_ast(pm, &association_fqn))
+            .collect(),
+        source_information: Some(source_info_from(&cm.source_info)),
+    })
+}
+
+fn xstore_property_mapping_from_ast(
+    pm: &XStorePropertyMapping,
+    association_fqn: &str,
+) -> ProtocolXStorePropertyMapping {
+    let property = ProtocolPropertyPointer {
+        class: association_fqn.to_string(),
+        property: pm.property_name.to_string(),
+        source_information: Some(source_info_from(&pm.source_info)),
+    };
+    ProtocolXStorePropertyMapping {
+        property,
+        // XStore reuses `source` / `target` (Java PropertyMapping
+        // header fields) for the source / target set-implementation
+        // IDs declared in `[src, tgt]` brackets on the AST.
+        source: pm.source_set_impl_id.as_ref().map(ToString::to_string),
+        target: pm.target_set_impl_id.as_ref().map(ToString::to_string),
+        cross_expression: lambda_wrap(&pm.cross_expression),
+        source_information: Some(source_info_from(&pm.source_info)),
     }
 }
 
