@@ -1990,25 +1990,36 @@ pub(crate) fn is_type_compatible_structural(
             TypeExpr::FunctionType {
                 parameters: a_params,
                 return_type: a_ret,
-                ..
+                return_multiplicity: a_ret_mult,
             },
             TypeExpr::FunctionType {
                 parameters: p_params,
                 return_type: p_ret,
-                ..
+                return_multiplicity: p_ret_mult,
             },
         ) => {
             // Structural FunctionType comparison. Different parameter
-            // counts are an outright mismatch.
+            // counts are an outright mismatch. Per-position: both the
+            // type and the multiplicity must satisfy compat — Java
+            // parity for higher-order argument binding. Variance stays
+            // covariant-uniform here (matches the rest of the codebase);
+            // flipping to spec-correct contravariant params is a
+            // separate semantic change.
             if a_params.len() != p_params.len() {
                 return false;
             }
-            for ((a_te, _), (p_te, _)) in a_params.iter().zip(p_params.iter()) {
+            for ((a_te, a_mult), (p_te, p_mult)) in a_params.iter().zip(p_params.iter()) {
                 if !is_type_compatible_structural(a_te, p_te, model) {
                     return false;
                 }
+                if !is_multiplicity_compatible(Some(a_mult), p_mult) {
+                    return false;
+                }
             }
-            is_type_compatible_structural(a_ret, p_ret, model)
+            if !is_type_compatible_structural(a_ret, p_ret, model) {
+                return false;
+            }
+            is_multiplicity_compatible(Some(a_ret_mult), p_ret_mult)
         }
         _ => true,
     }
