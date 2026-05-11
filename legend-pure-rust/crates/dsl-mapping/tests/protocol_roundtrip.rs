@@ -551,6 +551,95 @@ fn aggregation_aware_with_can_aggregate_false_and_multiple_group_by_keys() {
     assert_eq!(gbf.len(), 2, "two distinct group-by expressions");
 }
 
+// ---------------------------------------------------------------------------
+// c6 coverage — RelationFunction body
+// ---------------------------------------------------------------------------
+
+#[test]
+fn relation_function_body_serializes_with_plain_property_mapping() {
+    // Single plain property mapping `legalName : name_col`. Pins:
+    //  - `_type: relation` discriminator (Java: `RelationFunctionClassMapping`)
+    //  - `relationFunction.fullPath` carries the function FQN
+    //  - `propertyMappings[0]._type` is `relationFunctionPropertyMapping`
+    //  - `column` field carries the column name
+    let source = indoc! {r"
+        ###Mapping
+        Mapping my::test::M
+        (
+          my::test::Firm : Relation
+          {
+            ~func my::test::myFn():meta::pure::metamodel::relation::Relation<Any>[1]
+            legalName : name_col
+          }
+        )
+    "};
+    let file = parse("rel_plain.pure", source);
+    let m = first_mapping(&file);
+    let (json, _) = round_trip(m);
+    let cm = &json["classMappings"][0];
+    assert_eq!(cm["_type"], "relation");
+    assert_eq!(cm["relationFunction"]["fullPath"], "my::test::myFn");
+    let pm = &cm["propertyMappings"][0];
+    assert_eq!(pm["_type"], "relationFunctionPropertyMapping");
+    assert_eq!(pm["property"]["class"], "my::test::Firm");
+    assert_eq!(pm["property"]["property"], "legalName");
+    assert_eq!(pm["column"], "name_col");
+}
+
+#[test]
+fn relation_function_body_with_binding_transformer_serializes_binding_field() {
+    // `Binding pkg::B :` transformer. Java's `BindingTransformer.binding`
+    // is a plain `String` FQN, `sourceInformation` is `@JsonIgnore`
+    // so absent from the wire. Pin the shape.
+    let source = indoc! {r"
+        ###Mapping
+        Mapping my::test::M
+        (
+          my::test::Firm : Relation
+          {
+            ~func my::test::myFn():meta::pure::metamodel::relation::Relation<Any>[1]
+            data : Binding my::test::TextBinding : text_col
+          }
+        )
+    "};
+    let file = parse("rel_binding.pure", source);
+    let m = first_mapping(&file);
+    let (json, _) = round_trip(m);
+    let pm = &json["classMappings"][0]["propertyMappings"][0];
+    let bt = &pm["bindingTransformer"];
+    assert_eq!(bt["binding"], "my::test::TextBinding");
+    assert!(
+        bt.get("sourceInformation").is_none(),
+        "BindingTransformer.sourceInformation is @JsonIgnore (Java); must not appear in JSON"
+    );
+}
+
+#[test]
+fn relation_function_body_with_local_mapping_property_serializes_decl() {
+    // `+computed : String[1] : composite_col` form. Pins
+    // `localMappingProperty` carrying `type` + `multiplicity`.
+    let source = indoc! {r"
+        ###Mapping
+        Mapping my::test::M
+        (
+          my::test::Firm : Relation
+          {
+            ~func my::test::myFn():meta::pure::metamodel::relation::Relation<Any>[1]
+            +computed : String[1] : composite_col
+          }
+        )
+    "};
+    let file = parse("rel_local.pure", source);
+    let m = first_mapping(&file);
+    let (json, _) = round_trip(m);
+    let pm = &json["classMappings"][0]["propertyMappings"][0];
+    assert_eq!(pm["column"], "composite_col");
+    let local = &pm["localMappingProperty"];
+    assert_eq!(local["type"], "String");
+    assert_eq!(local["multiplicity"]["lowerBound"], 1);
+    assert_eq!(local["multiplicity"]["upperBound"], 1);
+}
+
 #[test]
 fn include_with_three_substitutions_loses_pair_per_java_parity() {
     // Multi-substitution AST: Java's protocol JSON only carries ONE

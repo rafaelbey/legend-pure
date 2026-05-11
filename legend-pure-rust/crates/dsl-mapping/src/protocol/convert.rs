@@ -31,10 +31,11 @@ use legend_pure_parser_protocol::v1::value_spec::LambdaFunction;
 
 use crate::ast::{
     AggregateSpecification, AggregateView, AggregationAwareClassMappingBody,
-    AggregationFunctionSpec, ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping,
-    EnumerationClassMappingBody, LocalPropertyDecl, MappingDef, MappingInclude,
-    NestedClassMapping, OperationClassMappingBody, PureClassMappingBody, PurePropertyMapping,
-    StoreSubstitution,
+    AggregationFunctionSpec, BindingTransformer as AstBindingTransformer, ClassMapping,
+    ClassMappingBody, EnumSourceValue, EnumValueMapping, EnumerationClassMappingBody,
+    LocalPropertyDecl, MappingDef, MappingInclude, NestedClassMapping, OperationClassMappingBody,
+    PureClassMappingBody, PurePropertyMapping, RelationFunctionClassMappingBody,
+    RelationFunctionPropertyMapping, StoreSubstitution,
 };
 use crate::protocol::aggregation_aware::{
     ProtocolAggregateFunction, ProtocolAggregateSetImplementationContainer,
@@ -54,6 +55,10 @@ use crate::protocol::operation::{
 use crate::protocol::pure::{
     ProtocolLocalMappingPropertyInfo, ProtocolPropertyMapping, ProtocolPropertyPointer,
     ProtocolPureInstanceClassMapping, ProtocolPurePropertyMapping,
+};
+use crate::protocol::relation_function::{
+    ProtocolBindingTransformer, ProtocolRelationFunctionClassMapping,
+    ProtocolRelationFunctionPropertyMapping,
 };
 use crate::protocol::ProtocolMapping;
 use legend_pure_parser_protocol::v1::value_spec::ProtocolPackageableElementPtr;
@@ -144,7 +149,9 @@ impl From<&ClassMapping> for ProtocolClassMapping {
                     aggregation_aware_from_body(body, header, cm),
                 ))
             }
-            ClassMappingBody::RelationFunction(_) => ProtocolClassMapping::Relation(header),
+            ClassMappingBody::RelationFunction(body) => ProtocolClassMapping::Relation(
+                relation_function_from_body(body, header, ptr_to_fqn(&cm.class)),
+            ),
             // Enumeration / XStore / Foreign bodies don't route to
             // `classMappings` in Java — `enumerationMappings` and
             // `associationMappings` are sibling lists. We don't yet
@@ -299,6 +306,73 @@ fn operation_from_body(
         header,
         parameters: body.parameters.iter().map(|p| p.id.to_string()).collect(),
         operation: MappingOperation::from_function_fqn(&ptr_to_fqn(&body.operation)),
+    }
+}
+
+/// Build a `ProtocolRelationFunctionClassMapping` from the AST body.
+///
+/// Java's `RelationFunctionClassMapping.relationFunction` is a
+/// `PackageableElementPointer` carrying the function FQN. Our AST
+/// splits the FQN from the `():Return[m]` signature suffix for
+/// composer fidelity; the protocol JSON only carries the FQN. The
+/// suffix doesn't round-trip through JSON — that's a Java-parity
+/// quirk (Java's protocol stores the whole `getText()` string in
+/// the `id`/`idOrPath` field, but the actual FQN-only convention
+/// is what consumers read).
+fn relation_function_from_body(
+    body: &RelationFunctionClassMappingBody,
+    header: ProtocolClassMappingHeader,
+    target_class_fqn: String,
+) -> ProtocolRelationFunctionClassMapping {
+    let relation_function = ProtocolPackageableElementPtr {
+        full_path: ptr_to_fqn(&body.relation_function),
+        source_information: Some(source_info_from(&body.relation_function.source_info)),
+    };
+    let property_mappings = body
+        .property_mappings
+        .iter()
+        .map(|pm| relation_function_property_mapping_from_ast(pm, &target_class_fqn))
+        .collect();
+    ProtocolRelationFunctionClassMapping {
+        header,
+        relation_function,
+        property_mappings,
+    }
+}
+
+fn relation_function_property_mapping_from_ast(
+    pm: &RelationFunctionPropertyMapping,
+    target_class_fqn: &str,
+) -> ProtocolPropertyMapping {
+    let property = ProtocolPropertyPointer {
+        class: target_class_fqn.to_string(),
+        property: pm.property_name.to_string(),
+        source_information: Some(source_info_from(&pm.source_info)),
+    };
+    let local_mapping_property = pm
+        .local_mapping_property
+        .as_ref()
+        .map(local_mapping_property_from);
+    let binding_transformer = pm
+        .binding_transformer
+        .as_ref()
+        .map(binding_transformer_from);
+    ProtocolPropertyMapping::RelationFunctionPropertyMapping(
+        ProtocolRelationFunctionPropertyMapping {
+            property,
+            source: None,
+            target: None,
+            local_mapping_property,
+            column: pm.column.to_string(),
+            binding_transformer,
+            source_information: Some(source_info_from(&pm.source_info)),
+        },
+    )
+}
+
+fn binding_transformer_from(bt: &AstBindingTransformer) -> ProtocolBindingTransformer {
+    ProtocolBindingTransformer {
+        binding: ptr_to_fqn(&bt.binding),
     }
 }
 

@@ -85,6 +85,12 @@ pub enum ProtocolPropertyMapping {
     /// Pure-DSL property mapping (`_type = "purePropertyMapping"`).
     #[serde(rename = "purePropertyMapping")]
     PurePropertyMapping(ProtocolPurePropertyMapping),
+    /// Relation-function property mapping (c6, `_type =
+    /// "relationFunctionPropertyMapping"`).
+    #[serde(rename = "relationFunctionPropertyMapping")]
+    RelationFunctionPropertyMapping(
+        crate::protocol::relation_function::ProtocolRelationFunctionPropertyMapping,
+    ),
 }
 
 /// Java `PurePropertyMapping` — the model-to-model property body.

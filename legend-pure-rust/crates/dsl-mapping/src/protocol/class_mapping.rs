@@ -28,6 +28,7 @@ use crate::protocol::operation::{
     ProtocolMergeOperationClassMapping, ProtocolOperationClassMapping,
 };
 use crate::protocol::pure::ProtocolPureInstanceClassMapping;
+use crate::protocol::relation_function::ProtocolRelationFunctionClassMapping;
 
 /// Discriminated union over the 5 Java class-mapping body kinds.
 ///
@@ -44,7 +45,7 @@ use crate::protocol::pure::ProtocolPureInstanceClassMapping;
 /// - `PureInstance` — body landed in c2.
 /// - `Operation` / `MergeOperation` — body landed in c3.
 /// - `AggregationAware` — body landed in c5.
-/// - `Relation` — header-only stub (c6).
+/// - `Relation` — body landed in c6.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "_type")]
 pub enum ProtocolClassMapping {
@@ -64,11 +65,9 @@ pub enum ProtocolClassMapping {
     #[serde(rename = "aggregationAware")]
     AggregationAware(Box<ProtocolAggregationAwareClassMapping>),
 
-    /// Relation-function class mapping (`_type = "relation"`). Body
-    /// data (relation function FQN + property→column mappings) lands
-    /// in c6.
+    /// Relation-function class mapping (`_type = "relation"`).
     #[serde(rename = "relation")]
-    Relation(ProtocolClassMappingHeader),
+    Relation(ProtocolRelationFunctionClassMapping),
 }
 
 /// Common fields shared across every `ProtocolClassMapping` variant.
