@@ -67,6 +67,7 @@ pub mod enumeration;
 pub mod include;
 pub mod operation;
 pub mod pure;
+pub mod relation_function;
 
 use serde::{Deserialize, Serialize};
 
