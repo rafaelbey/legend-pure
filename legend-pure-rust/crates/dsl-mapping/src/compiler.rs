@@ -207,6 +207,7 @@ fn class_mapping_body_kind(body: &ClassMappingBody) -> SmolStr {
         ClassMappingBody::Operation(_) => SmolStr::new_static("Operation"),
         ClassMappingBody::AggregationAware(_) => SmolStr::new_static("AggregationAware"),
         ClassMappingBody::XStore(_) => SmolStr::new_static("XStore"),
+        ClassMappingBody::RelationFunction(_) => SmolStr::new_static("Relation"),
         // Foreign DSL-extension bodies (e.g. Relational) — use the
         // foreign type's `kind` tag so the snapshot can identify
         // which extension contributed.
@@ -635,6 +636,25 @@ fn validate_class_mapping(
                 auto_imports,
                 errors,
             );
+        }
+        ClassMappingBody::RelationFunction(_body) => {
+            // RelationFunction bodies want a Class target — each
+            // property mapping binds a property on that class to a
+            // column on the function's relation output.
+            if resolve_class(model, &target_fqn).is_none() {
+                errors.push(CompilationError {
+                    message: format!(
+                        "Class mapping target '{target_fqn}' does not resolve to a Class"
+                    ),
+                    source_info: cm.source_info.clone(),
+                    kind: CompilationErrorKind::UnresolvedElement {
+                        path: target_fqn.clone(),
+                    },
+                });
+            }
+            // Body-shape validation (function FQN resolution, column
+            // existence per property, binding-transformer resolution,
+            // local-mapping-property type checks) lands in commit 2.
         }
         ClassMappingBody::Foreign(_) => {
             // Foreign DSL bodies are validated by the foreign DSL's
@@ -1632,6 +1652,12 @@ fn validate_nested_class_mapping(
                 },
             });
         }
+        ClassMappingBody::RelationFunction(_) => {
+            // RelationFunction nested under AggregationAware ~aggregate
+            // Mapping is the Java-parity path for per-view relation-
+            // function aggregates. Body-shape validation lands in c2;
+            // for c1 we accept it as structurally valid.
+        }
         ClassMappingBody::Foreign(_) => {
             // Foreign nested bodies (e.g. Relational under
             // AggregationAware ~aggregateMapping) are validated by
@@ -2508,6 +2534,18 @@ fn check_body_refs_visibility(
             // catches the headline cases; the agg/xstore shapes
             // route through the same `class` field already
             // checked above.
+        }
+        ClassMappingBody::RelationFunction(b) => {
+            // Check the `~func` reference + each property mapping's
+            // optional binding-transformer profile target. Column
+            // identifiers are strings (not cross-package refs), so
+            // they don't contribute here.
+            check_element_ref_visibility(&b.relation_function, use_site, visible, model, errors);
+            for pm in &b.property_mappings {
+                if let Some(bt) = &pm.binding_transformer {
+                    check_element_ref_visibility(&bt.binding, use_site, visible, model, errors);
+                }
+            }
         }
         ClassMappingBody::Foreign(_) => {
             // Foreign DSLs (relational, etc.) own their own

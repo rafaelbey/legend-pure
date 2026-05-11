@@ -24,7 +24,8 @@ use crate::ast::{
     AggregateSpecification, AggregateView, AggregationAwareClassMappingBody,
     AggregationFunctionSpec, ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping,
     EnumerationClassMappingBody, MappingDef, MappingInclude, NestedClassMapping,
-    OperationClassMappingBody, PureClassMappingBody, PurePropertyMapping, StoreSubstitution,
+    OperationClassMappingBody, PureClassMappingBody, PurePropertyMapping,
+    RelationFunctionClassMappingBody, RelationFunctionPropertyMapping, StoreSubstitution,
     XStoreClassMappingBody, XStorePropertyMapping,
 };
 
@@ -152,6 +153,16 @@ fn write_class_mapping(out: &mut String, cm: &ClassMapping) {
             write_xstore_body(out, body);
             out.push_str("  }\n");
         }
+        ClassMappingBody::RelationFunction(body) => {
+            out.push_str("Relation");
+            if let Some(name) = &cm.mapping_name {
+                out.push(' ');
+                out.push_str(name.as_str());
+            }
+            out.push_str("\n  {\n");
+            write_relation_function_body(out, body);
+            out.push_str("  }\n");
+        }
         ClassMappingBody::Foreign(body) => {
             // Foreign body owns its own grammar text; print the
             // `parserName` and optional mapping name, then delegate.
@@ -193,6 +204,55 @@ fn write_xstore_property_mapping(out: &mut String, pm: &XStorePropertyMapping) {
     }
     out.push_str(" : ");
     write_expression(out, &pm.cross_expression);
+}
+
+fn write_relation_function_body(out: &mut String, body: &RelationFunctionClassMappingBody) {
+    // `~func pkg::fn():Return[m]` line.
+    out.push_str("    ~func ");
+    write_ptr(out, &body.relation_function);
+    if let Some(sig) = &body.function_signature_suffix {
+        out.push_str(sig.as_str());
+    }
+    out.push('\n');
+
+    // Property mappings (comma-separated, trailing newline).
+    for (i, pm) in body.property_mappings.iter().enumerate() {
+        write_relation_function_property_mapping(out, pm);
+        if i + 1 < body.property_mappings.len() {
+            out.push(',');
+        }
+        out.push('\n');
+    }
+}
+
+fn write_relation_function_property_mapping(
+    out: &mut String,
+    pm: &RelationFunctionPropertyMapping,
+) {
+    use std::fmt::Write as _;
+    out.push_str("    ");
+    if pm.local_mapping_property.is_some() {
+        out.push('+');
+    }
+    out.push_str(pm.property_name.as_str());
+    if let Some(local) = &pm.local_mapping_property {
+        out.push_str(" : ");
+        // Reuse the parser-compose crate's helpers — same pattern as
+        // `write_property_mapping` for `PurePropertyMapping`'s local
+        // form. Multiplicity's Display already includes the `[...]`
+        // brackets.
+        let mut w = legend_pure_parser_compose::writer::IndentWriter::new();
+        legend_pure_parser_compose::type_ref::compose_type_reference(&mut w, &local.type_ref);
+        out.push_str(&w.finish());
+        let _ = write!(out, "{}", local.multiplicity);
+    }
+    out.push_str(" : ");
+    if let Some(bt) = &pm.binding_transformer {
+        out.push_str("Binding ");
+        write_ptr(out, &bt.binding);
+        out.push_str(" : ");
+    }
+    out.push_str(pm.column.as_str());
 }
 
 fn write_aggregation_aware_body(out: &mut String, body: &AggregationAwareClassMappingBody) {
@@ -280,6 +340,11 @@ fn write_nested_class_mapping(out: &mut String, keyword: &str, n: &NestedClassMa
         ClassMappingBody::XStore(b) => {
             out.push_str("\n    {\n");
             write_xstore_body(out, b);
+            out.push_str("    }\n");
+        }
+        ClassMappingBody::RelationFunction(b) => {
+            out.push_str("\n    {\n");
+            write_relation_function_body(out, b);
             out.push_str("    }\n");
         }
         ClassMappingBody::Foreign(b) => {

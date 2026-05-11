@@ -44,11 +44,12 @@ use smol_str::SmolStr;
 
 use crate::ast::{
     AggregateSpecification, AggregateView, AggregationAwareClassMappingBody,
-    AggregationFunctionSpec, ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping,
-    EnumerationClassMappingBody, ForeignClassMappingBody, LocalPropertyDecl, MappingDef,
-    MappingInclude, NestedClassMapping, OperationClassMappingBody, OperationParameter,
-    PureClassMappingBody, PurePropertyMapping, SECTION_KIND, StoreSubstitution,
-    XStoreClassMappingBody, XStorePropertyMapping,
+    AggregationFunctionSpec, BindingTransformer, ClassMapping, ClassMappingBody, EnumSourceValue,
+    EnumValueMapping, EnumerationClassMappingBody, ForeignClassMappingBody, LocalPropertyDecl,
+    MappingDef, MappingInclude, NestedClassMapping, OperationClassMappingBody, OperationParameter,
+    PureClassMappingBody, PurePropertyMapping, RelationFunctionClassMappingBody,
+    RelationFunctionPropertyMapping, SECTION_KIND, StoreSubstitution, XStoreClassMappingBody,
+    XStorePropertyMapping,
 };
 
 fn err_unexpected(expected: &str, found: &str, source_info: SourceInfo) -> ParseError {
@@ -331,6 +332,9 @@ fn parse_class_mapping_body(
             parse_aggregation_aware_body(ctx, foreign_parsers)?,
         )),
         "XStore" => ClassMappingBody::XStore(parse_xstore_body(ctx)?),
+        "Relation" => {
+            ClassMappingBody::RelationFunction(Box::new(parse_relation_function_body(ctx)?))
+        }
         other => {
             // Foreign body parser registered for this `parserName`?
             if let Some(p) = foreign_parsers.iter().find(|p| p.kind() == other) {
@@ -340,8 +344,8 @@ fn parse_class_mapping_body(
                     message: format!(
                         "Mapping sub-parser '{other}' is not supported \
                          (built-ins: 'Pure', 'EnumerationMapping', 'Operation', \
-                         'AggregationAware', 'XStore'; foreign DSLs register via \
-                         `MappingSectionParser::with_body_parsers`)"
+                         'AggregationAware', 'XStore', 'Relation'; foreign DSLs \
+                         register via `MappingSectionParser::with_body_parsers`)"
                     ),
                     source_info: parser_name_si.clone(),
                 });
@@ -927,6 +931,229 @@ fn parse_xstore_property_mapping(
         source_set_impl_id,
         target_set_impl_id,
         cross_expression,
+        source_info: merge_si(&start_si, &end_si),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// RelationFunctionClassMappingBody — Stage 8
+//
+// Java grammar (`RelationFunctionMappingParserGrammar.g4`):
+//
+//   relationFunctionMapping:
+//       RELATION_FUNC functionIdentifier (singlePropertyMapping (',' singlePropertyMapping)*)?
+//   singlePropertyMapping:
+//       singleLocalPropertyMapping | singleNonLocalPropertyMapping
+//   singleLocalPropertyMapping:
+//       '+' qualifiedName ':' type multiplicity relationFunctionPropertyMapping
+//   singleNonLocalPropertyMapping:
+//       qualifiedName relationFunctionPropertyMapping
+//   relationFunctionPropertyMapping:
+//       ':' transformer? identifier
+//   bindingTransformer:
+//       'Binding' qualifiedName ':'
+//
+// RELATION_FUNC is `~func` (Java keyword). `functionIdentifier` per
+// M3ParserGrammar.g4:280 is `qualifiedName '(' params? ')' ':' returnType`.
+// Java's walker captures the whole signature via `getText()`; we mirror
+// that by parsing the qualified name and preserving the `():Return[m]`
+// suffix verbatim in `function_signature_suffix` for composer round-trip.
+// ---------------------------------------------------------------------------
+
+fn parse_relation_function_body(
+    ctx: &mut ParserContext<'_>,
+) -> Result<RelationFunctionClassMappingBody, ParseError> {
+    let start_si = ctx.cursor().current_source_info();
+    ctx.cursor().expect(TokenKind::LBrace)?;
+
+    // `~func` keyword line.
+    expect_tilde_keyword(ctx, "func")?;
+    let relation_function = parse_packageable_ptr(ctx)?;
+
+    // Optional `(params...):Return[m]` suffix — captured verbatim for
+    // round-trip composer fidelity. Java's walker uses `getText()` on
+    // the whole `functionIdentifier` rule, so what we serialize back
+    // must round-trip the exact original spelling.
+    let function_signature_suffix = if ctx.cursor().check(TokenKind::LParen) {
+        Some(capture_function_signature_suffix(ctx)?)
+    } else {
+        None
+    };
+
+    // Property mappings (comma-separated, trailing comma allowed —
+    // matches the same convention as the XStore body).
+    let mut property_mappings = Vec::new();
+    while !ctx.cursor().check(TokenKind::RBrace) && !ctx.cursor().check(TokenKind::Eof) {
+        property_mappings.push(parse_relation_function_property_mapping(ctx)?);
+        ctx.cursor().eat(TokenKind::Comma);
+    }
+
+    let end_si = ctx.cursor().current_source_info();
+    ctx.cursor().expect(TokenKind::RBrace)?;
+
+    Ok(RelationFunctionClassMappingBody {
+        relation_function,
+        function_signature_suffix,
+        property_mappings,
+        source_info: merge_si(&start_si, &end_si),
+    })
+}
+
+/// Captures the `(params?):Return[m]` suffix as raw source text so the
+/// composer can replay it verbatim. We don't parse it structurally yet —
+/// validators that need it will, when they need it.
+///
+/// The suffix starts at `(` and runs through the closing `]` of the
+/// return-type multiplicity (or until the next property mapping token
+/// — a `+`, a property identifier followed by `:`, or `}`).
+fn capture_function_signature_suffix(
+    ctx: &mut ParserContext<'_>,
+) -> Result<SmolStr, ParseError> {
+    let mut buf = String::new();
+
+    // Consume `(...)`.
+    ctx.cursor().expect(TokenKind::LParen)?;
+    buf.push('(');
+    let mut depth = 1usize;
+    while depth > 0 {
+        if ctx.cursor().check(TokenKind::Eof) {
+            return Err(ParseError::Unexpected {
+                message: "Unterminated function-identifier parameter list".to_string(),
+                source_info: ctx.cursor().current_source_info(),
+            });
+        }
+        if ctx.cursor().check(TokenKind::LParen) {
+            depth += 1;
+        } else if ctx.cursor().check(TokenKind::RParen) {
+            depth -= 1;
+        }
+        let tok = ctx.cursor().peek().clone();
+        buf.push_str(tok.text.as_str());
+        ctx.cursor().advance();
+    }
+
+    // Optional `: Return[m]` return-type clause.
+    if ctx.cursor().check(TokenKind::Colon) {
+        ctx.cursor().expect(TokenKind::Colon)?;
+        buf.push(':');
+        // The return type is a `TypeReference[Multiplicity]` shape; we
+        // can leverage the existing type parser to consume it cleanly.
+        let type_ref = ctx.parse_type_reference()?;
+        // Render via Display — TypeReference's Display matches its
+        // canonical source spelling (verified by the lexer-roundtrip
+        // tests in `crates/compose`).
+        buf.push_str(&type_ref_to_text(&type_ref));
+        ctx.cursor().expect(TokenKind::LBracket)?;
+        buf.push('[');
+        let mult = ctx.parse_multiplicity()?;
+        buf.push_str(&multiplicity_to_text(&mult));
+        ctx.cursor().expect(TokenKind::RBracket)?;
+        buf.push(']');
+    }
+
+    Ok(SmolStr::new(buf))
+}
+
+/// Render a parsed TypeReference back into source text. Local helper —
+/// the composer crate has the canonical implementation but pulling it
+/// in here would create a layering cycle; this minimal renderer is
+/// sufficient for the signature-suffix preservation use case.
+fn type_ref_to_text(t: &legend_pure_parser_ast::type_ref::TypeReference) -> String {
+    let mut out = String::new();
+    if let Some(pkg) = &t.package {
+        out.push_str(&pkg.to_string());
+        out.push_str("::");
+    }
+    out.push_str(t.name.as_str());
+    if !t.type_arguments.is_empty() {
+        out.push('<');
+        for (i, ta) in t.type_arguments.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            out.push_str(&type_ref_to_text(ta));
+        }
+        out.push('>');
+    }
+    out
+}
+
+/// Minimal multiplicity → text renderer mirroring source spelling.
+fn multiplicity_to_text(m: &legend_pure_parser_ast::type_ref::Multiplicity) -> String {
+    use legend_pure_parser_ast::type_ref::Multiplicity as M;
+    match m {
+        M::PureOne => "1".to_string(),
+        M::ZeroOrOne => "0..1".to_string(),
+        M::OneOrMany => "1..*".to_string(),
+        M::ZeroOrMany => "*".to_string(),
+        M::Range { lower, upper } => match upper {
+            Some(u) => format!("{lower}..{u}"),
+            None => format!("{lower}..*"),
+        },
+        M::Variable(name) => name.to_string(),
+    }
+}
+
+fn parse_relation_function_property_mapping(
+    ctx: &mut ParserContext<'_>,
+) -> Result<RelationFunctionPropertyMapping, ParseError> {
+    let start_si = ctx.cursor().current_source_info();
+
+    // `+` prefix → local-property declaration.
+    let is_local = ctx.cursor().eat(TokenKind::Plus);
+
+    // Property name (qualified name allowed by Java but uncommon; we
+    // store the bare name from the last segment).
+    let prop_tok = ctx.cursor().expect(TokenKind::Identifier)?;
+    let property_name = SmolStr::new(prop_tok.text.clone());
+
+    let local_mapping_property = if is_local {
+        ctx.cursor().expect(TokenKind::Colon)?;
+        let local_start = ctx.cursor().current_source_info();
+        let type_ref = ctx.parse_type_reference()?;
+        ctx.cursor().expect(TokenKind::LBracket)?;
+        let multiplicity = ctx.parse_multiplicity()?;
+        ctx.cursor().expect(TokenKind::RBracket)?;
+        let local_end = ctx.cursor().current_source_info();
+        Some(LocalPropertyDecl {
+            type_ref,
+            multiplicity,
+            source_info: merge_si(&local_start, &local_end),
+        })
+    } else {
+        None
+    };
+
+    // Colon before the relation-function-property-mapping body.
+    ctx.cursor().expect(TokenKind::Colon)?;
+
+    // Optional `Binding pkg::SomeBinding :` transformer.
+    let binding_transformer = if ctx.cursor().check(TokenKind::Identifier)
+        && ctx.cursor().peek().text == "Binding"
+    {
+        let kw = ctx.cursor().peek().clone();
+        ctx.cursor().advance();
+        let binding = parse_packageable_ptr(ctx)?;
+        let end = ctx.cursor().current_source_info();
+        ctx.cursor().expect(TokenKind::Colon)?;
+        Some(BindingTransformer {
+            binding,
+            source_info: merge_si(&kw.source_info, &end),
+        })
+    } else {
+        None
+    };
+
+    // Column name (single identifier).
+    let col_tok = ctx.cursor().expect(TokenKind::Identifier)?;
+    let column = SmolStr::new(col_tok.text.clone());
+    let end_si = col_tok.source_info;
+
+    Ok(RelationFunctionPropertyMapping {
+        property_name,
+        local_mapping_property,
+        binding_transformer,
+        column,
         source_info: merge_si(&start_si, &end_si),
     })
 }
