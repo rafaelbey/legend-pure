@@ -88,7 +88,7 @@ use crate::ast::{
     AggregateSpecification, AggregationAwareClassMappingBody, AggregationFunctionSpec,
     ClassMapping, ClassMappingBody, EnumSourceValue, EnumerationClassMappingBody, MappingDef,
     NestedClassMapping, OperationClassMappingBody, PureClassMappingBody, PurePropertyMapping,
-    XStoreClassMappingBody, XStorePropertyMapping,
+    RelationFunctionClassMappingBody, XStoreClassMappingBody, XStorePropertyMapping,
 };
 
 /// Compiler extension for the `###Mapping` DSL.
@@ -637,11 +637,12 @@ fn validate_class_mapping(
                 errors,
             );
         }
-        ClassMappingBody::RelationFunction(_body) => {
+        ClassMappingBody::RelationFunction(body) => {
             // RelationFunction bodies want a Class target — each
             // property mapping binds a property on that class to a
             // column on the function's relation output.
-            if resolve_class(model, &target_fqn).is_none() {
+            let class_id = resolve_class(model, &target_fqn);
+            if class_id.is_none() {
                 errors.push(CompilationError {
                     message: format!(
                         "Class mapping target '{target_fqn}' does not resolve to a Class"
@@ -652,9 +653,7 @@ fn validate_class_mapping(
                     },
                 });
             }
-            // Body-shape validation (function FQN resolution, column
-            // existence per property, binding-transformer resolution,
-            // local-mapping-property type checks) lands in commit 2.
+            validate_relation_function_body(body, &target_fqn, class_id, model, errors);
         }
         ClassMappingBody::Foreign(_) => {
             // Foreign DSL bodies are validated by the foreign DSL's
@@ -1893,6 +1892,163 @@ fn validate_xstore_property_mapping(
             },
         });
     }
+}
+
+// ---------------------------------------------------------------------------
+// Stage-8 — RelationFunctionClassMapping body validation (T2.2 c2)
+//
+// Mirrors Java's `ClassMappingSecondPassBuilder.visit(RelationFunctionClassMapping)`
+// + `PropertyMappingBuilder.visit(RelationFunctionPropertyMapping)`. Three
+// rules from Java that we surface as compilation diagnostics:
+//
+//  1. `relation_function` resolves to a Function in the model
+//     (exact-FQN lookup — same convention as `OperationClassMappingBody`).
+//  2. Each non-local property mapping's `property_name` exists on the
+//     target class (with supertype walk). Local-property mappings
+//     (`+name : Type[m] : col`) declare a new property and are exempt.
+//  3. Each property mapping's optional `binding_transformer.binding`
+//     resolves to a known element on the model.
+//
+// Function return-type validation (must be `Relation<...>[1]`) is
+// deferred until the relation metamodel is wired through the dispatch
+// engine — Java reads the function's metamodel-resolved return type
+// via `_functionType().._returnType()`, which depends on the
+// relation-store core platform being embedded (BACKLOG T1.4).
+// ---------------------------------------------------------------------------
+
+fn validate_relation_function_body(
+    body: &RelationFunctionClassMappingBody,
+    target_class_fqn: &str,
+    target_class_id: Option<ElementId>,
+    model: &PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    // 1. `~func` reference must resolve to a Function element.
+    //    Unlike `validate_operation_body`'s strict exact-FQN lookup
+    //    (Operation source spelling is already mangled, e.g.
+    //    `pkg::union_OperationSetImplementation_1__SetImplementation_MANY_`),
+    //    the RelationFunction grammar uses the readable signature form
+    //    `pkg::fn():Relation<...>[1]`. Our parser splits that into a
+    //    qualified-name pointer + a verbatim signature suffix, so the
+    //    qualified-name path won't resolve to the mangled function
+    //    element directly. Java's
+    //    `ClassMappingFirstPassBuilder.visit(RelationFunctionClassMapping)`
+    //    routes through `resolveFunction`, which is overload-tolerant.
+    //    Mirror that with `resolve_functions_by_name_in_package`:
+    //    accept if any function whose simple name matches lives in
+    //    the referenced package.
+    let fn_fqn = ptr_fqn(&body.relation_function);
+    let resolved_fn = resolve_function_overload_tolerant(model, &body.relation_function);
+    if resolved_fn.is_none() {
+        errors.push(CompilationError {
+            message: format!(
+                "RelationFunction `~func` '{fn_fqn}' does not resolve to a known function"
+            ),
+            source_info: body.relation_function.source_info.clone(),
+            kind: CompilationErrorKind::UnresolvedElement { path: fn_fqn },
+        });
+    }
+
+    // 2. Each non-local property mapping's name must exist on the
+    //    target class. Local property mappings (`+name : Type[m]`)
+    //    DECLARE a new property scoped to the mapping — they're
+    //    exempt from the existence rule (Java's `LocalMappingPropertyInfo`).
+    if let Some(class_id) = target_class_id {
+        for pm in &body.property_mappings {
+            if pm.local_mapping_property.is_some() {
+                continue;
+            }
+            if !class_has_property_anywhere(model, class_id, pm.property_name.as_str()) {
+                errors.push(CompilationError {
+                    message: format!(
+                        "Class '{target_class_fqn}' has no property '{}'",
+                        pm.property_name
+                    ),
+                    source_info: pm.source_info.clone(),
+                    kind: CompilationErrorKind::UnknownProperty {
+                        type_name: SmolStr::new(target_class_fqn),
+                        property_name: pm.property_name.clone(),
+                    },
+                });
+            }
+        }
+    }
+
+    // 3. Each `Binding pkg::B :` transformer's binding FQN must
+    //    resolve to *some* element on the model. We don't enforce
+    //    that the resolved element is a `Binding` instance because
+    //    `Binding` is contributed by the external-format DSL, which
+    //    isn't a core platform element type — same loose check
+    //    Java uses (`ImportStub.idOrPath` resolves to any element).
+    for pm in &body.property_mappings {
+        let Some(bt) = &pm.binding_transformer else {
+            continue;
+        };
+        let b_fqn = ptr_fqn(&bt.binding);
+        let b_segments: Vec<SmolStr> = b_fqn.split("::").map(SmolStr::new).collect();
+        if model.resolve_by_path(&b_segments).is_none() {
+            errors.push(CompilationError {
+                message: format!(
+                    "RelationFunction property '{}' Binding transformer target \
+                     '{b_fqn}' does not resolve to a known element",
+                    pm.property_name
+                ),
+                source_info: bt.source_info.clone(),
+                kind: CompilationErrorKind::UnresolvedElement { path: b_fqn },
+            });
+        }
+    }
+}
+
+/// Overload-tolerant function lookup. For a RelationFunction `~func`
+/// reference, our parser captures just the qualified-name pointer
+/// (`pkg::myFn`) and stores the `():Return[m]` suffix separately,
+/// so exact-FQN lookup against mangled element names won't match.
+/// Walk the referenced package's child functions and accept if at
+/// least one's simple name matches. Returns the first match (Java
+/// also returns one — the protocol layer assumes a single function
+/// owns the relation; later validation may tighten this to "exactly
+/// one match with the right return shape").
+fn resolve_function_overload_tolerant(
+    model: &PureModel,
+    ptr: &legend_pure_parser_ast::annotation::PackageableElementPtr,
+) -> Option<ElementId> {
+    let simple = SmolStr::new(ptr.name.as_str());
+    let pkg_id = match &ptr.package {
+        Some(pkg) => model.resolve_package(pkg)?,
+        None => model.root_package,
+    };
+    let candidates = model.resolve_functions_by_name_in_package(pkg_id, &simple);
+    candidates.into_iter().next()
+}
+
+/// "Does this class (or any supertype) carry a property — simple or
+/// qualified — with this name?" Wraps the supertype walk so the
+/// caller doesn't have to distinguish simple-vs-qualified properties
+/// (both count as "exists" for RelationFunction's existence rule).
+fn class_has_property_anywhere(model: &PureModel, class_id: ElementId, name: &str) -> bool {
+    let mut visited: HashSet<ElementId> = HashSet::new();
+    let mut stack: Vec<ElementId> = vec![class_id];
+    while let Some(id) = stack.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let ModelElement::Class(c) = model.get_element(id) else {
+            continue;
+        };
+        if c.properties.iter().any(|p| p.name == name) {
+            return true;
+        }
+        if c.qualified_properties.iter().any(|q| q.name == name) {
+            return true;
+        }
+        for st in &c.super_types {
+            if let TypeExpr::Named { element, .. } = st {
+                stack.push(*element);
+            }
+        }
+    }
+    false
 }
 
 fn association_property_names(model: &PureModel, assoc_id: ElementId) -> HashSet<String> {
