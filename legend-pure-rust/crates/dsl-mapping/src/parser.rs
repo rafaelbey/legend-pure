@@ -409,6 +409,17 @@ fn parse_pure_body(ctx: &mut ParserContext<'_>) -> Result<PureClassMappingBody, 
             let prop_tok = ctx.cursor().expect(TokenKind::Identifier)?;
             let prop_si = prop_tok.source_info.clone();
             let prop_name = SmolStr::new(prop_tok.text.clone());
+            // Java M3 grammar (M3CoreParser.g4:84) allows an optional
+            // `*` between the property header and the value colon —
+            // `propName *: transform` marks the transform as
+            // exploding into multiple property values. The flag is
+            // stored on `PurePropertyMapping.explode` and round-trips
+            // through the composer. It's mutually exclusive with the
+            // local-property `+name : Type[mult]` form syntactically
+            // (the local form consumes its own `: Type[mult] : `
+            // chunk first), so the check sits before any local-form
+            // parsing.
+            let is_explode = !is_local && ctx.cursor().eat(TokenKind::Star);
             ctx.cursor().expect(TokenKind::Colon)?;
 
             // Local-property type+mult declaration consumes the
@@ -460,7 +471,7 @@ fn parse_pure_body(ctx: &mut ParserContext<'_>) -> Result<PureClassMappingBody, 
                 property_name: prop_name,
                 transform,
                 transformer,
-                explode: false,
+                explode: is_explode,
                 local_property,
                 source_info: merge_si(&prop_si, &end_si),
             });
