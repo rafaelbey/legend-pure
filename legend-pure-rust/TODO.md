@@ -139,128 +139,6 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
-### T-20260510-04 — Repo visibility pattern not enforced against declared FQNs
-
-- **Type:** parity-gap
-- **Area:** compiler (repo loader / build)
-- **Priority:** P1
-- **Reporter:** Rafael
-- **Filed:** 2026-05-10
-
-**Summary**
-A repo's visibility/ownership `pattern` regex is not validated against the
-FQNs of the elements it ships. Adding an element whose FQN doesn't match
-the pattern is accepted silently. Java Pure rejects this at load time.
-
-**Repro / Context**
-Repo descriptor with `pattern = "((meta)|(system)|(apps::pure))(::.*)?"`
-ships `abc::Class`. The FQN `abc::Class` does not match — no element
-under `abc::…` is in the pattern's language. Expected: build-time error
-("element abc::Class is not within repo X's pattern"). Actual: no error.
-
-**Notes**
-- This is the layering primitive: a repo's `pattern` defines *which*
-  FQNs it is permitted to own. Without enforcement, repos can ship
-  anything and the cross-repo visibility check (T-style "is this
-  reference declared as a dependency?") loses its meaning, because
-  there's no reliable answer to "which repo does this element belong
-  to?".
-- Related BACKLOG row: "Repo descriptors + manifest (Pure-graph
-  composition) | P1" — step (4) in that plan is exactly this
-  validation. Today's `crates/core-platform-pure/build.rs` walks
-  hand-listed directories and never consults a regex. Even before the
-  full manifest-driven loader lands, the pattern check can be wired in
-  against the current hardcoded repo descriptors.
-- Where the check should live: at the loader / build-script seam, the
-  moment a `.pure` file's top-level FQNs are known. Build-time error
-  with the offending FQN + repo name + pattern, not a deferred
-  compile-pass diagnostic. (Compile-pass is fine as a fallback for
-  dynamically loaded slices, but build-time is the strong gate for
-  embedded repos.)
-- Existing cross-repo visibility validators to cross-reference for
-  pattern + error-shape consistency:
-  `crates/dsl-mapping/src/compiler.rs::validate_repo_visibility` and
-  `crates/dsl-relational/src/compiler.rs::validate_repo_visibility`
-  (memory: "DSL Path runtime architecture" / Mapping DSL state, Phase
-  2 / Phase D). Those handle *cross-repo references*; this bug is the
-  prior check that an element is in its own repo at all.
-- Sweep: also enforce that two repos don't both claim the same FQN
-  (overlap check across `pattern`s) — a related but separable
-  validator. Don't bundle into this fix unless cheap.
-
-<!-- agent-audit:start id=T-20260510-04 -->
-<!-- Agents: append entries below. Do not rewrite the developer block above. -->
-- 2026-05-11 02:30Z — claimed by claude-opus-4-7[1m] — wiring repo
-  pattern enforcement (Stage 2 of repo descriptors). Status: Investigating
-- 2026-05-11 03:15Z — design (revised after red-team test): placement is
-  **cross-chunk** in `validate(model)`, NOT hydration-inline. Initial
-  plan was hydration-inline at `pipeline::hydrate_element_signature`,
-  but DSL extensions (Mapping / Database / Diagram / Graph / TDS /
-  Path) allocate `Element::DSLInstance` rows directly in their
-  `define()` paths and bypass that hook entirely. A red-team test in
-  `crates/dsl-mapping/tests/repo_pattern_dsl_smoke.rs` confirmed the
-  gap: a `Mapping abc::M (...)` under `/platform/abc/m.pure` was
-  silently accepted while the corresponding `Class abc::Foo` correctly
-  errored. Cross-chunk in `validate(model)` walks every chunk's
-  top-level elements uniformly — same shape as `validate_repo_visibility`
-  at validate.rs:359 — and matches Java's `RepositoryPackageValidator`
-  which runs as a post-compile `MatchRunner`.
-- 2026-05-11 03:45Z — implementation:
-    * `regex` added to workspace deps + `pure` and `snapshot-builder`
-      crate Cargo.toml.
-    * `crates/pure/src/visibility.rs`: new `RepoPattern { source,
-      compiled }`, `RepoPatternMap`, `compile_repo_pattern` (anchors as
-      `^(?:…)$` to mirror Java `Matcher.matches()`).
-    * `crates/pure/src/model.rs`: new `PureModel.repo_patterns` field +
-      empty default in `new()`.
-    * `crates/pure/src/error.rs`: new `CompilationErrorKind::PackageNotInRepoPattern
-      { package, repo, pattern }`.
-    * `crates/pure/src/validate.rs`: new
-      `validate_repo_pattern_membership(model)` cross-chunk pass
-      emitting Java-parity message
-      `"Package <pkg> is not allowed in <repo>; only packages matching <pattern> are allowed"`.
-      Wired into `pub(crate) fn validate(model)` next to
-      `validate_repo_visibility`. Uses `node.parent_package` + `fqn_path::package_path`
-      to derive the package FQN — avoids the whole-tree scan that
-      `element_fqn_path` does.
-    * `crates/snapshot-builder/src/lib.rs`: `LoadedDescriptor.compiled_pattern`
-      stored at load time; descriptor regex compile failure surfaces
-      as `BuildError::Descriptor`; new `populate_repo_patterns` runs
-      next to `populate_repo_visibility`.
-    * `crates/lsp/src/diagnostics.rs` and
-      `crates/core-platform-pure/tests/categorize_errors.rs`: new
-      exhaustive-match arm for the new error kind.
-    * `crates/pure/tests/repo_pattern_smoke.rs`: 6 integration tests
-      (positive / negative / empty-map / unknown-use-site / anchored
-      `metadata` / function declaration outside pattern). All green.
-    * `crates/dsl-mapping/tests/repo_pattern_dsl_smoke.rs`: 2 DSL
-      integration tests pinning that `Element::DSLInstance` rows are
-      also gated (Mapping declared at `abc::M` under `/platform/...`
-      with platform pattern → violation; in-pattern Mapping → no
-      violation). Red-team guarantee against future placement
-      regressions.
-- 2026-05-11 04:10Z — verification:
-    * `cargo build --workspace` green.
-    * `cargo test -p legend-pure-parser-pure -p legend-pure-snapshot-builder
-      -p legend-pure-core-platform -p legend-pure-lsp` green incl. doctests.
-      Notably `snapshot-builder/tests/smoke.rs::builds_platform_purem_and_round_trips`
-      passes — exercises the new validator end-to-end against real
-      platform descriptors, so platform sweep is implicitly clean
-      (no shipped `.pure` source declares an FQN outside its repo's pattern).
-    * `cargo fmt --check` on all touched files: clean (per-file `rustfmt`).
-    * `cargo clippy --lib -p legend-pure-parser-pure -p legend-pure-snapshot-builder
-      -p legend-pure-lsp -- -D unwrap_used -D expect_used`: clean (warnings
-      pre-date this change).
-    * `./scripts/check-copyright.sh`: clean (433 files).
-    * Two pre-existing failures in `legend-pure-dsl-mapping-runtime::heap_population_smoke`
-      under nextest parallel execution are NOT caused by this change —
-      they pass when run in isolation, and the validator is a no-op in
-      those tests (no descriptor populates `repo_patterns`, source path
-      has no `/<repo>/` prefix). Out of scope.
-  Status: Fix proposed (working tree on branch `legend-pure-rust`,
-  uncommitted; awaiting explicit sign-off per workspace commit rule).
-<!-- agent-audit:end -->
-
 ### T-20260510-03 — FunctionType arity/types not checked when binding lambda argument
 
 - **Type:** parity-gap
@@ -814,5 +692,127 @@ Class abc::Foo
   conservative for `[1]`/`[0..1]`. Follow-up: file a TODO for the
   v2 "element-type compat against collection slot's element type"
   rule.
+<!-- agent-audit:end -->
+
+
+### T-20260510-04 — Repo visibility pattern not enforced against declared FQNs
+
+- **Type:** parity-gap
+- **Area:** compiler (repo loader / build)
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-10
+
+**Summary**
+A repo's visibility/ownership `pattern` regex is not validated against the
+FQNs of the elements it ships. Adding an element whose FQN doesn't match
+the pattern is accepted silently. Java Pure rejects this at load time.
+
+**Repro / Context**
+Repo descriptor with `pattern = "((meta)|(system)|(apps::pure))(::.*)?"`
+ships `abc::Class`. The FQN `abc::Class` does not match — no element
+under `abc::…` is in the pattern's language. Expected: build-time error
+("element abc::Class is not within repo X's pattern"). Actual: no error.
+
+**Notes**
+- This is the layering primitive: a repo's `pattern` defines *which*
+  FQNs it is permitted to own. Without enforcement, repos can ship
+  anything and the cross-repo visibility check (T-style "is this
+  reference declared as a dependency?") loses its meaning, because
+  there's no reliable answer to "which repo does this element belong
+  to?".
+- Related BACKLOG row: "Repo descriptors + manifest (Pure-graph
+  composition) | P1" — step (4) in that plan is exactly this
+  validation. Today's `crates/core-platform-pure/build.rs` walks
+  hand-listed directories and never consults a regex. Even before the
+  full manifest-driven loader lands, the pattern check can be wired in
+  against the current hardcoded repo descriptors.
+- Where the check should live: at the loader / build-script seam, the
+  moment a `.pure` file's top-level FQNs are known. Build-time error
+  with the offending FQN + repo name + pattern, not a deferred
+  compile-pass diagnostic. (Compile-pass is fine as a fallback for
+  dynamically loaded slices, but build-time is the strong gate for
+  embedded repos.)
+- Existing cross-repo visibility validators to cross-reference for
+  pattern + error-shape consistency:
+  `crates/dsl-mapping/src/compiler.rs::validate_repo_visibility` and
+  `crates/dsl-relational/src/compiler.rs::validate_repo_visibility`
+  (memory: "DSL Path runtime architecture" / Mapping DSL state, Phase
+  2 / Phase D). Those handle *cross-repo references*; this bug is the
+  prior check that an element is in its own repo at all.
+- Sweep: also enforce that two repos don't both claim the same FQN
+  (overlap check across `pattern`s) — a related but separable
+  validator. Don't bundle into this fix unless cheap.
+
+<!-- agent-audit:start id=T-20260510-04 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+- 2026-05-11 02:30Z — claimed by claude-opus-4-7[1m] — wiring repo
+  pattern enforcement (Stage 2 of repo descriptors). Status: Investigating
+- 2026-05-11 03:15Z — design (revised after red-team test): placement is
+  **cross-chunk** in `validate(model)`, NOT hydration-inline. Initial
+  plan was hydration-inline at `pipeline::hydrate_element_signature`,
+  but DSL extensions (Mapping / Database / Diagram / Graph / TDS /
+  Path) allocate `Element::DSLInstance` rows directly in their
+  `define()` paths and bypass that hook entirely. A red-team test in
+  `crates/dsl-mapping/tests/repo_pattern_dsl_smoke.rs` confirmed the
+  gap: a `Mapping abc::M (...)` under `/platform/abc/m.pure` was
+  silently accepted while the corresponding `Class abc::Foo` correctly
+  errored. Cross-chunk in `validate(model)` walks every chunk's
+  top-level elements uniformly — same shape as `validate_repo_visibility`
+  at validate.rs:359 — and matches Java's `RepositoryPackageValidator`
+  which runs as a post-compile `MatchRunner`.
+- 2026-05-11 03:45Z — implementation:
+    * `regex` added to workspace deps + `pure` and `snapshot-builder`
+      crate Cargo.toml.
+    * `crates/pure/src/visibility.rs`: new `RepoPattern { source,
+      compiled }`, `RepoPatternMap`, `compile_repo_pattern` (anchors as
+      `^(?:…)$` to mirror Java `Matcher.matches()`).
+    * `crates/pure/src/model.rs`: new `PureModel.repo_patterns` field +
+      empty default in `new()`.
+    * `crates/pure/src/error.rs`: new `CompilationErrorKind::PackageNotInRepoPattern
+      { package, repo, pattern }`.
+    * `crates/pure/src/validate.rs`: new
+      `validate_repo_pattern_membership(model)` cross-chunk pass
+      emitting Java-parity message
+      `"Package <pkg> is not allowed in <repo>; only packages matching <pattern> are allowed"`.
+      Wired into `pub(crate) fn validate(model)` next to
+      `validate_repo_visibility`. Uses `node.parent_package` + `fqn_path::package_path`
+      to derive the package FQN — avoids the whole-tree scan that
+      `element_fqn_path` does.
+    * `crates/snapshot-builder/src/lib.rs`: `LoadedDescriptor.compiled_pattern`
+      stored at load time; descriptor regex compile failure surfaces
+      as `BuildError::Descriptor`; new `populate_repo_patterns` runs
+      next to `populate_repo_visibility`.
+    * `crates/lsp/src/diagnostics.rs` and
+      `crates/core-platform-pure/tests/categorize_errors.rs`: new
+      exhaustive-match arm for the new error kind.
+    * `crates/pure/tests/repo_pattern_smoke.rs`: 6 integration tests
+      (positive / negative / empty-map / unknown-use-site / anchored
+      `metadata` / function declaration outside pattern). All green.
+    * `crates/dsl-mapping/tests/repo_pattern_dsl_smoke.rs`: 2 DSL
+      integration tests pinning that `Element::DSLInstance` rows are
+      also gated (Mapping declared at `abc::M` under `/platform/...`
+      with platform pattern → violation; in-pattern Mapping → no
+      violation). Red-team guarantee against future placement
+      regressions.
+- 2026-05-11 04:10Z — verification:
+    * `cargo build --workspace` green.
+    * `cargo test -p legend-pure-parser-pure -p legend-pure-snapshot-builder
+      -p legend-pure-core-platform -p legend-pure-lsp` green incl. doctests.
+      Notably `snapshot-builder/tests/smoke.rs::builds_platform_purem_and_round_trips`
+      passes — exercises the new validator end-to-end against real
+      platform descriptors, so platform sweep is implicitly clean
+      (no shipped `.pure` source declares an FQN outside its repo's pattern).
+    * `cargo fmt --check` on all touched files: clean (per-file `rustfmt`).
+    * `cargo clippy --lib -p legend-pure-parser-pure -p legend-pure-snapshot-builder
+      -p legend-pure-lsp -- -D unwrap_used -D expect_used`: clean (warnings
+      pre-date this change).
+    * `./scripts/check-copyright.sh`: clean (433 files).
+    * Two pre-existing failures in `legend-pure-dsl-mapping-runtime::heap_population_smoke`
+      under nextest parallel execution are NOT caused by this change —
+      they pass when run in isolation, and the validator is a no-op in
+      those tests (no descriptor populates `repo_patterns`, source path
+      has no `/<repo>/` prefix). Out of scope.
+  Status: Fix landed (commit f1a54784a6a).
 <!-- agent-audit:end -->
 
