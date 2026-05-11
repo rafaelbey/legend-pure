@@ -717,17 +717,11 @@ fn validate_pure_body(
                 describe_type(&filter_ty, model)
             ),
             source_info: filter.source_info().clone(),
-            // TODO(error-kinds): replace UnsupportedExpression with a
-            // dedicated `TypeMismatch { context, expected, actual }`
-            // variant. UnsupportedExpression means "shape we don't
-            // support yet" — a Boolean-vs-not-Boolean type mismatch
-            // is a typed expression that's wrong, not unsupported.
-            // The variant addition is a cross-crate change touching
-            // error categorizers + surveyor reports; tracked
-            // separately. For now the message string carries the
-            // intent.
-            kind: CompilationErrorKind::UnsupportedExpression {
-                kind: SmolStr::new_static("FilterReturnType"),
+            kind: CompilationErrorKind::TypeMismatch {
+                context: SmolStr::new_static("filter"),
+                target: SmolStr::new(target_class_fqn),
+                expected: SmolStr::new_static("Boolean[1]"),
+                actual: SmolStr::new(describe_type(&filter_ty, model)),
             },
         });
     }
@@ -866,10 +860,14 @@ fn validate_property_mapping(
                             pm.property_name
                         ),
                         source_info: pm.source_info.clone(),
-                        // TODO(error-kinds): same TypeMismatch refactor
-                        // as the Stage-3.5 rules — wants its own kind.
-                        kind: CompilationErrorKind::UnsupportedExpression {
-                            kind: SmolStr::new_static("EnumerationMappingTypeMismatch"),
+                        kind: CompilationErrorKind::TypeMismatch {
+                            context: SmolStr::new_static("enumeration mapping"),
+                            target: SmolStr::new(format!(
+                                "{target_class_fqn}.{}",
+                                pm.property_name
+                            )),
+                            expected: target_enum_fqn.clone(),
+                            actual: SmolStr::new(prop_type_str),
                         },
                     });
                 }
@@ -911,10 +909,11 @@ fn validate_property_mapping(
                 describe_type_expr(&prop_type, model)
             ),
             source_info: pm.transform.source_info().clone(),
-            // TODO(error-kinds): same as the filter rule above —
-            // wants a dedicated `TypeMismatch` variant.
-            kind: CompilationErrorKind::UnsupportedExpression {
-                kind: SmolStr::new_static("TransformReturnType"),
+            kind: CompilationErrorKind::TypeMismatch {
+                context: SmolStr::new_static("transform"),
+                target: SmolStr::new(format!("{target_class_fqn}.{}", pm.property_name)),
+                expected: SmolStr::new(describe_type_expr(&prop_type, model)),
+                actual: SmolStr::new(describe_type(&transform_ty, model)),
             },
         });
     }
@@ -932,11 +931,11 @@ fn validate_property_mapping(
                 describe_multiplicity(&prop_mult)
             ),
             source_info: pm.transform.source_info().clone(),
-            // TODO(error-kinds): a multiplicity mismatch deserves its
-            // own kind (`MultiplicityMismatch` or sibling of
-            // `TypeMismatch`). Same cross-crate refactor as above.
-            kind: CompilationErrorKind::UnsupportedExpression {
-                kind: SmolStr::new_static("TransformMultiplicity"),
+            kind: CompilationErrorKind::MultiplicityMismatch {
+                context: SmolStr::new_static("transform"),
+                target: SmolStr::new(format!("{target_class_fqn}.{}", pm.property_name)),
+                expected: SmolStr::new(describe_multiplicity(&prop_mult)),
+                actual: SmolStr::new(describe_multiplicity(&transform_ty.multiplicity)),
             },
         });
     }
@@ -1186,11 +1185,11 @@ fn validate_enumeration_body(
                             describe_source_kind(&kind)
                         ),
                         source_info: source_value_si(sv).clone(),
-                        // TODO(error-kinds): warrants a dedicated
-                        // `TypeMismatch` variant; same refactor as the
-                        // Stage-3.5 type-check rules.
-                        kind: CompilationErrorKind::UnsupportedExpression {
-                            kind: SmolStr::new_static("EnumSourceKindMismatch"),
+                        kind: CompilationErrorKind::TypeMismatch {
+                            context: SmolStr::new_static("enumeration source-value kind"),
+                            target: SmolStr::new(target_enum_fqn),
+                            expected: SmolStr::new(describe_source_kind(prev)),
+                            actual: SmolStr::new(describe_source_kind(&kind)),
                         },
                     });
                     // Stop after the first mismatch to avoid cascade
@@ -1216,8 +1215,11 @@ fn validate_enumeration_body(
                 ),
                 source_info: vm.source_info.clone(),
                 // Reuses UnknownProperty kind — semantically the
-                // closest existing variant. TODO(error-kinds):
-                // see the same TODO sites at the type-mismatch rules.
+                // closest existing variant (the enumeration is the
+                // "type" and the value name is the "property"). A
+                // dedicated `UnknownEnumerationValue` would be cleaner
+                // but is orthogonal to T3.3 (TypeMismatch /
+                // MultiplicityMismatch refactor) — defer separately.
                 kind: CompilationErrorKind::UnknownProperty {
                     type_name: SmolStr::new(target_enum_fqn),
                     property_name: vm.enum_value_name.clone(),
@@ -1502,10 +1504,11 @@ fn validate_aggregate_value(
                 describe_type(ty, model)
             ),
             source_info: av.map_fn.source_info().clone(),
-            // TODO(error-kinds): see the same TypeMismatch TODO at
-            // the Stage-3.5 filter rule — wants its own variant.
-            kind: CompilationErrorKind::UnsupportedExpression {
-                kind: SmolStr::new_static("AggregateMapFnReturnType"),
+            kind: CompilationErrorKind::TypeMismatch {
+                context: SmolStr::new_static("aggregation mapFn"),
+                target: SmolStr::new(target_class_fqn),
+                expected: SmolStr::new_static("DataType (primitive / enumeration)"),
+                actual: SmolStr::new(describe_type(ty, model)),
             },
         });
     }
@@ -1842,12 +1845,11 @@ fn validate_xstore_property_mapping(
                 describe_type(&cross_ty, model)
             ),
             source_info: pm.cross_expression.source_info().clone(),
-            // TODO(error-kinds): see the same TypeMismatch TODO at
-            // `validate_pure_body` — UnsupportedExpression is the
-            // closest existing variant for a typed-but-wrong-shape
-            // diagnostic.
-            kind: CompilationErrorKind::UnsupportedExpression {
-                kind: SmolStr::new_static("XStoreCrossExpressionReturnType"),
+            kind: CompilationErrorKind::TypeMismatch {
+                context: SmolStr::new_static("xstore crossExpression"),
+                target: SmolStr::new(format!("{target_assoc_fqn}.{}", pm.property_name)),
+                expected: SmolStr::new_static("Boolean[1]"),
+                actual: SmolStr::new(describe_type(&cross_ty, model)),
             },
         });
     }
