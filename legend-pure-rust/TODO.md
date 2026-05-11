@@ -139,6 +139,70 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260511-04 — `^Class(unknownProp = value)` doesn't error on properties that don't exist
+
+- **Type:** parity-gap
+- **Area:** compiler
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-11
+
+**Summary**
+A `^Class(...)` instance-construction `KeyExpression` doesn't check
+that the property name actually exists on the class (or any
+supertype). Supplying an undeclared property name is silently
+accepted. Java Pure rejects this.
+
+**Repro / Context**
+
+```pure
+Class abc::Class1
+{
+  propA : Integer[1];
+}
+
+// Expected: compile error — `propd` is not a property of `abc::Class1`.
+^abc::Class1(propd = '');
+```
+
+- Expected: compile error along the lines of
+  `"Class 'abc::Class1' has no property 'propd'"` (mirrors the
+  existing `UnknownProperty` diagnostic that fires on
+  `$x.propd` access — same idea, different binding site).
+- Actual: compiles clean.
+
+**Notes**
+- Same lowering seam as T-20260511-02 and T-20260511-03: the
+  `KeyExpression` resolver in `^Class(...)` lowering. Where supplied
+  keys are matched against the class's property list, an unmatched
+  key must produce `CompilationErrorKind::UnknownProperty` (reuse
+  the existing variant — same shape, same consumer expectations).
+- Sweep:
+  (a) supertype-walked: `propA` is fine when declared on a parent
+      `Class1` extends `Base { propA: …; }`, only fail when truly
+      absent across the whole supertype chain,
+  (b) reserved-name collision (e.g. `^Class(class = …)` — class is
+      a reserved keyword, should fail at parse, not here),
+  (c) typo near a real property name — the message should be plain
+      "no property X"; suggestion is nice-to-have but not required
+      for parity (Java's diagnostic is plain).
+- The four property-binding-site validators (T-20260511-01..04)
+  almost certainly share one walk: lower `^Class(...)`, resolve
+  receiver class + properties (with supertypes), for each supplied
+  key: (i) does it exist? (T-20260511-04) (ii) is the value
+  compatible with declared type+mult? (T-20260511-03); after all
+  keys: (iii) are all required keys supplied? (T-20260511-02).
+  T-20260511-01 (default-value type) is a separate site (class body,
+  not constructor) but uses the same compat helper.
+- The existing runtime-level "UnknownProperty" diagnostic kind
+  (`CompilationErrorKind::UnknownProperty { type_name, property_name }`
+  per workspace memory) is the right variant to emit. No new error
+  kind needed.
+
+<!-- agent-audit:start id=T-20260511-04 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
 ### T-20260511-03 — `^Class(prop = value)` doesn't type-check or multiplicity-check the supplied value
 
 - **Type:** parity-gap
