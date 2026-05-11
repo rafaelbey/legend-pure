@@ -14,7 +14,7 @@ expression: json
             "rawType": {
               "fullPath": "model::Person",
               "sourceInformation": {
-                "endColumn": 17,
+                "endColumn": 25,
                 "endLine": 19,
                 "sourceId": "association.pure",
                 "startColumn": 13,
@@ -22,7 +22,7 @@ expression: json
               }
             },
             "sourceInformation": {
-              "endColumn": 17,
+              "endColumn": 25,
               "endLine": 19,
               "sourceId": "association.pure",
               "startColumn": 13,
@@ -47,7 +47,7 @@ expression: json
             "rawType": {
               "fullPath": "model::Address",
               "sourceInformation": {
-                "endColumn": 20,
+                "endColumn": 29,
                 "endLine": 20,
                 "sourceId": "association.pure",
                 "startColumn": 16,
@@ -55,7 +55,7 @@ expression: json
               }
             },
             "sourceInformation": {
-              "endColumn": 20,
+              "endColumn": 29,
               "endLine": 20,
               "sourceId": "association.pure",
               "startColumn": 16,
