@@ -1349,6 +1349,8 @@ name = "legend-pure-dsl-relational-runtime"
 version = "0.1.0"
 dependencies = [
  "indoc",
+ "legend-pure-dsl-mapping",
+ "legend-pure-dsl-mapping-runtime",
  "legend-pure-dsl-relational",
  "legend-pure-parser-ast",
  "legend-pure-parser-parser",

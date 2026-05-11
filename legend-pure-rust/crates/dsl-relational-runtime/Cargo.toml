@@ -30,3 +30,7 @@ smol_str = { workspace = true }
 indoc = "2"
 legend-pure-parser-ast = { path = "../ast" }
 legend-pure-parser-parser = { path = "../parser" }
+# For the end-to-end main_table_wiring_smoke that wires Mapping +
+# Database + RelationalClassMapping populators together.
+legend-pure-dsl-mapping = { path = "../dsl-mapping" }
+legend-pure-dsl-mapping-runtime = { path = "../dsl-mapping-runtime" }
