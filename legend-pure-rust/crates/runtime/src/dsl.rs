@@ -97,24 +97,23 @@ pub struct DSLPopulationCtx<'a> {
 /// Called once during evaluator setup, after
 /// [`RuntimeHeap::bootstrap_metamodel`] has allocated the bare
 /// metamodel rows.
-pub fn run_populators(
-    model: &PureModel,
-    heap: &mut RuntimeHeap,
-    populators: &[&dyn DSLPopulator],
-) {
+pub fn run_populators(model: &PureModel, heap: &mut RuntimeHeap, populators: &[&dyn DSLPopulator]) {
     if populators.is_empty() {
         return;
     }
     // Snapshot dsl_name → populator into a HashMap for O(1) lookup.
-    let by_name: HashMap<&'static str, &dyn DSLPopulator> = populators
-        .iter()
-        .map(|p| (p.dsl_name(), *p))
-        .collect();
+    let by_name: HashMap<&'static str, &dyn DSLPopulator> =
+        populators.iter().map(|p| (p.dsl_name(), *p)).collect();
 
     // Collect the DSLInstance work-items up front so we can release
     // the immutable borrow on `model` before calling into the
     // populator (which takes `&mut heap` + `&model`).
-    let mut work: Vec<(legend_pure_parser_pure::ids::ElementId, smol_str::SmolStr, smol_str::SmolStr, Vec<u8>)> = Vec::new();
+    let mut work: Vec<(
+        legend_pure_parser_pure::ids::ElementId,
+        smol_str::SmolStr,
+        smol_str::SmolStr,
+        Vec<u8>,
+    )> = Vec::new();
     for chunk in &model.chunks {
         for (local_idx, element) in chunk.elements.iter() {
             let Element::DSLInstance(d) = element else {
@@ -127,7 +126,12 @@ pub fn run_populators(
                 chunk_id: chunk.chunk_id,
                 local_idx,
             };
-            work.push((eid, d.dsl_name.clone(), d.classifier_fqn.clone(), d.data.clone()));
+            work.push((
+                eid,
+                d.dsl_name.clone(),
+                d.classifier_fqn.clone(),
+                d.data.clone(),
+            ));
         }
     }
 

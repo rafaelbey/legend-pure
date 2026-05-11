@@ -145,13 +145,18 @@ pub fn infer_op_type(expr: &OpExpr, scope: OpTypeScope<'_>) -> OpType {
         OpExpr::Bool { .. } | OpExpr::Compare { .. } | OpExpr::IsNull { .. } => OpType::Boolean,
         OpExpr::Group { inner, .. } => infer_op_type(inner, scope),
         OpExpr::Function { name, .. } => {
-            if KNOWN_BOOLEAN_DYNAFUNCTIONS.iter().any(|n| *n == name.value.as_str()) {
+            if KNOWN_BOOLEAN_DYNAFUNCTIONS
+                .iter()
+                .any(|n| *n == name.value.as_str())
+            {
                 OpType::Boolean
             } else {
                 OpType::Any
             }
         }
-        OpExpr::Column(OpColumn::Aliased { alias, scope: cols, .. }) => {
+        OpExpr::Column(OpColumn::Aliased {
+            alias, scope: cols, ..
+        }) => {
             let Some(tables) = scope_tables(scope) else {
                 return OpType::Any;
             };
@@ -177,9 +182,7 @@ pub fn infer_op_type(expr: &OpExpr, scope: OpTypeScope<'_>) -> OpType {
     }
 }
 
-fn scope_tables<'a>(
-    scope: OpTypeScope<'a>,
-) -> Option<&'a HashMap<SmolStr, ResolvedTable>> {
+fn scope_tables<'a>(scope: OpTypeScope<'a>) -> Option<&'a HashMap<SmolStr, ResolvedTable>> {
     scope.tables_by_name
 }
 
@@ -283,10 +286,7 @@ mod tests {
             args: vec![],
             source_info: si(),
         };
-        assert_eq!(
-            infer_op_type(&expr, OpTypeScope::empty()),
-            OpType::Boolean
-        );
+        assert_eq!(infer_op_type(&expr, OpTypeScope::empty()), OpType::Boolean);
     }
 
     #[test]

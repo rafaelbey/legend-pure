@@ -480,8 +480,7 @@ fn cross_expression_with_boolean_return_validates_clean() {
     let return_type_errors: Vec<&str> = errors
         .iter()
         .filter(|e| {
-            e.message
-                .contains("XStore crossExpression on")
+            e.message.contains("XStore crossExpression on")
                 && e.message.contains("must return Boolean[1]")
         })
         .map(|e| e.message.as_str())
@@ -603,9 +602,7 @@ fn cross_expression_unknown_property_via_this_binding_propagates() {
     let file = parse("xstore_unknown_prop.pure", source);
     let (errors, _ext, _model) = compile(vec![file]);
     assert!(
-        errors
-            .iter()
-            .any(|e| e.message.contains("notAField")),
+        errors.iter().any(|e| e.message.contains("notAField")),
         "expected unknown-property error mentioning `notAField`; got: {:#?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );

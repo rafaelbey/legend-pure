@@ -110,7 +110,6 @@ fn mapping_purem_roundtrip_preserves_mappings() {
         post[0].1, pre[0].1,
         "MappingSnapshot must match exactly through .purem round-trip"
     );
-
 }
 
 #[test]

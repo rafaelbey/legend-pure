@@ -280,9 +280,7 @@ impl CompilerExtension for MappingExtension {
                         ctx.errors.push(CompilationError {
                             message: format!("Duplicate mapping '{fqn}'"),
                             source_info: m.source_info.clone(),
-                            kind: CompilationErrorKind::DuplicateElement {
-                                name: fqn.clone(),
-                            },
+                            kind: CompilationErrorKind::DuplicateElement { name: fqn.clone() },
                         });
                         // First registration wins; skip the second so
                         // we don't double-register the graph element.
@@ -311,9 +309,7 @@ impl CompilerExtension for MappingExtension {
                                     "Failed to encode MappingSnapshot for '{fqn}': {e}"
                                 ),
                                 source_info: m.source_info.clone(),
-                                kind: CompilationErrorKind::DuplicateElement {
-                                    name: fqn.clone(),
-                                },
+                                kind: CompilationErrorKind::DuplicateElement { name: fqn.clone() },
                             });
                             continue;
                         }
@@ -1786,8 +1782,7 @@ fn validate_xstore_property_mapping(
     // only run this when both IDs are present and both resolve;
     // otherwise an earlier diagnostic in this same function has
     // already pointed the user at the structural problem.
-    let (Some(src_id_str), Some(tgt_id_str)) =
-        (&pm.source_set_impl_id, &pm.target_set_impl_id)
+    let (Some(src_id_str), Some(tgt_id_str)) = (&pm.source_set_impl_id, &pm.target_set_impl_id)
     else {
         return;
     };

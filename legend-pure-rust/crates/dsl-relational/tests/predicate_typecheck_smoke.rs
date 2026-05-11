@@ -90,7 +90,9 @@ fn filter_compare_predicate_passes() {
     "};
     let errors = run_validator(source);
     assert!(
-        !errors.iter().any(|e| e.message.contains("predicate") && e.message.contains("active")),
+        !errors
+            .iter()
+            .any(|e| e.message.contains("predicate") && e.message.contains("active")),
         "no predicate-return-type error expected on Compare body; got: {errors:#?}"
     );
 }

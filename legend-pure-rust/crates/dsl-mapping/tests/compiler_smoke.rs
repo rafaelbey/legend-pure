@@ -42,10 +42,7 @@ fn parse(source: &str) -> SourceFile {
 fn compile_with_mapping(
     sources: Vec<SourceFile>,
     extension: &MappingExtension,
-) -> (
-    Vec<String>,
-    legend_pure_parser_pure::model::PureModel,
-) {
+) -> (Vec<String>, legend_pure_parser_pure::model::PureModel) {
     let exts: [&dyn CompilerExtension; 1] = [extension];
     let result = legend_pure_parser_pure::pipeline::compile_with_extensions(&sources, &[], &exts);
     match result {

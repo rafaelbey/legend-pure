@@ -247,10 +247,7 @@ fn validate_island(isl: &IslandExpression, model: &PureModel, errors: &mut Vec<C
     // can identify it; otherwise they fall back to the island span.
     // Skips when the per-row arity check above has already fired,
     // since `parse_and_infer` would just re-report that.
-    let arity_clean = tds
-        .rows
-        .iter()
-        .all(|row| row.len() == tds.columns.len());
+    let arity_clean = tds.rows.iter().all(|row| row.len() == tds.columns.len());
     if arity_clean {
         let canonical_csv = reconstruct_csv(tds);
         let overrides = column_overrides(&tds.columns);

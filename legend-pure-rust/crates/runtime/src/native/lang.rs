@@ -1349,11 +1349,8 @@ impl NativeFunction for DynamicNew {
                     std::slice::from_ref(&constraints_manager),
                 )?;
             }
-            ctx.heap_mut().mutate_add(
-                &obj,
-                "elementOverride",
-                &[Value::Object(override_obj)],
-            )?;
+            ctx.heap_mut()
+                .mutate_add(&obj, "elementOverride", &[Value::Object(override_obj)])?;
         }
 
         // Constraint handling. Two paths:

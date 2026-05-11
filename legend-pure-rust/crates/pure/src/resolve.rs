@@ -2636,8 +2636,7 @@ pub(crate) fn bind_type_with_mode(
                         return_multiplicity: _a_ret_mult,
                     } = arg_ty
                 {
-                    for ((p_ty, p_mult), (a_ty, a_mult)) in p_params.iter().zip(a_params.iter())
-                    {
+                    for ((p_ty, p_mult), (a_ty, a_mult)) in p_params.iter().zip(a_params.iter()) {
                         bind_type_with_mode(
                             p_ty, a_ty, out, ty_auth, mult_out, model, mode,
                             /* inside_structural */ false,

@@ -146,8 +146,7 @@ fn push_sort_info(
             Ok(())
         }
         other => Err(PureException::from(PureRuntimeError::type_mismatch(
-            "SortInfo",
-            other,
+            "SortInfo", other,
         ))),
     }
 }

@@ -114,7 +114,9 @@ fn render_element_label(model: &PureModel, id: ElementId) -> Option<String> {
         Element::Unit(_) => "unit",
         Element::PackageableMultiplicity(_) => "multiplicity",
         Element::Package(_) => "package",
-        Element::DSLInstance(d) => return Some(format!("**{}** `{}`", d.dsl_name, model.element_name(id))),
+        Element::DSLInstance(d) => {
+            return Some(format!("**{}** `{}`", d.dsl_name, model.element_name(id)));
+        }
     };
     let name = model.element_name(id);
     Some(format!("**{label}** `{name}`"))
@@ -160,9 +162,7 @@ pub fn definition_for_position(
 /// If a [`ValueSpec`] kind directly references a resolved element,
 /// return that element's `ElementId`. None for variables (need
 /// scope tracking), literals, lambdas, etc.
-fn resolve_value_spec_target(
-    vs: &legend_pure_parser_pure::types::ValueSpec,
-) -> Option<ElementId> {
+fn resolve_value_spec_target(vs: &legend_pure_parser_pure::types::ValueSpec) -> Option<ElementId> {
     use legend_pure_parser_pure::types::ExprKind;
     match &*vs.kind {
         ExprKind::FunctionCall(d) | ExprKind::QualifiedPropertyCall(d) => d.function,
@@ -190,11 +190,7 @@ fn resolve_value_spec_target(
 /// repo — requires mapping the target's canonical path back to a
 /// real on-disk URL, which needs `Repo::Filesystem` to retain its
 /// `source_root` (it currently doesn't). Tracked as a follow-up.
-fn element_location(
-    model: &PureModel,
-    id: ElementId,
-    file_uri: &Url,
-) -> Option<Location> {
+fn element_location(model: &PureModel, id: ElementId, file_uri: &Url) -> Option<Location> {
     model.try_get_element(id)?;
     if matches!(id, ElementId::Package(_)) {
         return None;
@@ -565,7 +561,11 @@ Class test::Person
         model.register_element(test_pkg, func_id);
 
         let lenses = code_lenses_for(&model, "fixture.pure");
-        assert_eq!(lenses.len(), 1, "expected one lens for the Test-tagged function");
+        assert_eq!(
+            lenses.len(),
+            1,
+            "expected one lens for the Test-tagged function"
+        );
         let cmd = lenses[0]
             .command
             .as_ref()

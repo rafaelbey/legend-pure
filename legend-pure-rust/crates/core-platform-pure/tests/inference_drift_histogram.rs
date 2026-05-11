@@ -40,7 +40,9 @@ use std::path::PathBuf;
 
 use legend_pure_core_platform::platform;
 use legend_pure_parser_pure::model::{Element, PureModel};
-use legend_pure_parser_pure::types::{ExprKind, FunctionCallData, Multiplicity, TypeExpr, ValueSpec};
+use legend_pure_parser_pure::types::{
+    ExprKind, FunctionCallData, Multiplicity, TypeExpr, ValueSpec,
+};
 
 /// Hard ceiling for total surviving Generic / Variable markers across
 /// all platform expressions.
@@ -268,9 +270,7 @@ fn walk_value_spec(spec: &ValueSpec, tally: &mut FnDrift) {
 fn count_generic(t: &TypeExpr) -> usize {
     match t {
         TypeExpr::Generic(_) => 1,
-        TypeExpr::Named {
-            type_arguments, ..
-        } => type_arguments.iter().map(count_generic).sum(),
+        TypeExpr::Named { type_arguments, .. } => type_arguments.iter().map(count_generic).sum(),
         TypeExpr::FunctionType {
             parameters,
             return_type,

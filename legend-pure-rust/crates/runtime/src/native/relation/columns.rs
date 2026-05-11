@@ -59,11 +59,7 @@ impl NativeFunction for Columns {
         for col in &parsed.columns {
             let column_obj = ctx.heap_mut().alloc_dynamic(m3_paths::COLUMN);
             ctx.heap_mut()
-                .mutate_add(
-                    &column_obj,
-                    "name",
-                    &[Value::String(col.name.clone())],
-                )
+                .mutate_add(&column_obj, "name", &[Value::String(col.name.clone())])
                 .map_err(PureException::from)?;
             ctx.heap_mut()
                 .mutate_add(&column_obj, "nameWildCard", &[Value::Boolean(false)])
