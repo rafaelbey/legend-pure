@@ -200,7 +200,10 @@ Class abc::Class1
   kind needed.
 
 <!-- agent-audit:start id=T-20260511-04 -->
-<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+- 2026-05-11 — claimed by claude-opus-4-7[1m] — bundled with
+  T-20260511-01/02/03 as one constructor-binding family fix.
+  Status: Fix landed (uncommitted; awaiting sign-off). See unified
+  details under T-20260511-01's audit block.
 <!-- agent-audit:end -->
 
 ### T-20260511-03 — `^Class(prop = value)` doesn't type-check or multiplicity-check the supplied value
@@ -282,7 +285,10 @@ Class abc::Class1
   the class body or a `KeyExpression` in `^Class(...)`.
 
 <!-- agent-audit:start id=T-20260511-03 -->
-<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+- 2026-05-11 — claimed by claude-opus-4-7[1m] — bundled with
+  T-20260511-01/02/04 as one constructor-binding family fix.
+  Status: Fix landed (uncommitted; awaiting sign-off). See unified
+  details under T-20260511-01's audit block.
 <!-- agent-audit:end -->
 
 ### T-20260511-02 — `^Class(...)` constructor doesn't check required properties are set
@@ -353,7 +359,10 @@ Class abc::Class1
   helper for "what does this property require?".
 
 <!-- agent-audit:start id=T-20260511-02 -->
-<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+- 2026-05-11 — claimed by claude-opus-4-7[1m] — bundled with
+  T-20260511-01/03/04 as one constructor-binding family fix.
+  Status: Fix landed (uncommitted; awaiting sign-off). See unified
+  details under T-20260511-01's audit block.
 <!-- agent-audit:end -->
 
 ### T-20260511-01 — Property default value not type-checked against declared property type
@@ -423,7 +432,74 @@ Class abc::Foo
   one may share the call-site discipline needed for the other.
 
 <!-- agent-audit:start id=T-20260511-01 -->
-<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+- 2026-05-11 — claimed by claude-opus-4-7[1m] — bundled with
+  T-20260511-02/03/04 as one constructor-binding family fix
+  (per the inbox notes: all four share a "given a property and a
+  value, are they compatible?" core operation).
+- 2026-05-11 — design (after Phase 1 exploration):
+  * Original plan: T-04 + T-02 eager in `lower_new_instance`,
+    T-01 + T-03 cross-chunk. Inputs to T-04 and T-02 are all known
+    syntactically.
+  * Empirical correction: `lower_new_instance` runs in Pass 2b BEFORE
+    `rebuild_derived_indexes()` (pipeline.rs:361, end of
+    `compile_repo_slice`), so association-injected ends aren't
+    queryable yet. All four must run cross-chunk in `validate(model)`.
+  * Java parity: T-02's missing-required check excludes
+    association-injected properties — Java's `NewInstance` validator
+    treats them as bidirectional runtime links, not constructor
+    inputs. Helpers split: `find_property_full_with_inheritance`
+    walks supertypes + injected (for T-03/T-04 key resolution);
+    `all_declared_properties_with_inheritance` walks supertypes only
+    (for T-02 required-set).
+- 2026-05-11 — implementation:
+  * `crates/pure/src/resolve.rs`: new `find_property_full_with_inheritance`,
+    `all_declared_properties_with_inheritance`; `mult_bounds` promoted
+    to `pub(crate)`.
+  * `crates/pure/src/infer.rs`: `render_type` promoted to `pub(crate)`.
+  * `crates/pure/src/error.rs`: three new variants —
+    `PropertyDefaultValueIncompatible`,
+    `ConstructorMissingRequiredProperty`,
+    `ConstructorPropertyTypeMismatch`.
+    T-04 reuses the existing `UnknownProperty` variant.
+  * `crates/pure/src/validate.rs`: new `validate_property_default_values`
+    (T-01) and `validate_constructor_bindings` (T-02 + T-03 + T-04),
+    both wired into `validate(model)` cross-chunk. New private
+    walker `visit_value_specs_in_element` recurses every ExprKind to
+    find every `FunctionCall("new", …)` regardless of nesting depth.
+  * `crates/pure/src/pipeline.rs::pass_infer`: extended with new
+    `TargetKind::ClassPropertyDefault` / `AssociationPropertyDefault`
+    arms so property default-values get their `type_info` populated
+    (latent gap surfaced while implementing T-01 — defaults were
+    lowered but never inferred).
+  * `crates/lsp/src/diagnostics.rs` +
+    `crates/core-platform-pure/tests/categorize_errors.rs`:
+    exhaustive-match arms for the three new error kinds.
+  * `crates/pure/tests/property_default_value_smoke.rs` — 5 tests
+    (T-01).
+  * `crates/pure/tests/constructor_binding_smoke.rs` — 9 tests
+    (T-02 / T-03 / T-04).
+- 2026-05-11 — verification:
+  * `cargo build --workspace` green.
+  * 14 new smoke tests green.
+  * `cargo test -p legend-pure-parser-pure -p legend-pure-snapshot-builder
+    -p legend-pure-core-platform -p legend-pure-lsp -p legend-pure-dsl-mapping
+    -p legend-pure-dsl-relational -p legend-pure-dsl-diagram` green
+    (incl. doctests).
+  * `cargo test -p legend-pure-snapshot-builder
+    builds_platform_purem_and_round_trips` green — the platform's real
+    `^Class(...)` constructor sites all satisfy the new validators
+    (implicit platform sweep).
+  * `cargo fmt --check` clean on touched files.
+  * `cargo clippy --lib -p legend-pure-parser-pure -- -D unwrap_used
+    -D expect_used` clean.
+  * `./scripts/check-copyright.sh` clean (436 files).
+  Status: Fix landed (uncommitted; awaiting sign-off per workspace
+  commit rule).
+- 2026-05-11 — `+=` (augmented) constructor bindings handled with the
+  same compat rule as `=` for v1. Correct for `[*]`/`[1..*]` slots,
+  conservative for `[1]`/`[0..1]`. Follow-up: file a TODO for the
+  v2 "element-type compat against collection slot's element type"
+  rule.
 <!-- agent-audit:end -->
 
 ### T-20260510-04 — Repo visibility pattern not enforced against declared FQNs

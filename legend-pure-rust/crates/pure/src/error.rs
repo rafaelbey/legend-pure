@@ -256,4 +256,46 @@ pub enum CompilationErrorKind {
         /// Reason text (the user-facing rule).
         reason: SmolStr,
     },
+    /// A class property's default-value expression has a
+    /// type/multiplicity incompatible with the property's declared
+    /// shape. Fires in the cross-chunk validator after Pass 2.5
+    /// inference has populated the lowered default-value's `type_info`.
+    PropertyDefaultValueIncompatible {
+        /// `::`-joined FQN of the class declaring the property.
+        class_name: SmolStr,
+        /// Name of the offending property.
+        property_name: SmolStr,
+        /// Declared property type + multiplicity, rendered as `T[m]`.
+        expected: SmolStr,
+        /// Inferred default-value type + multiplicity, rendered as
+        /// `T'[m']`.
+        actual: SmolStr,
+    },
+    /// A `^Class(...)` constructor omits a property with multiplicity
+    /// lower bound >= 1 that has no declared default value. Fires
+    /// eagerly in `lower_new_instance` — at the moment the constructor
+    /// is lowered, all required inputs (the class's property list with
+    /// supertypes + the supplied key set) are known.
+    ConstructorMissingRequiredProperty {
+        /// `::`-joined FQN of the class being constructed.
+        class_name: SmolStr,
+        /// Name of the required property that was not supplied.
+        property_name: SmolStr,
+    },
+    /// A `^Class(prop = val)` key binds a value whose type or
+    /// multiplicity is incompatible with the property's declared
+    /// shape. Combines type and multiplicity mismatch into one variant
+    /// (rendered text disambiguates), mirroring
+    /// `QualifiedPropertyArgTypeMismatch`.
+    ConstructorPropertyTypeMismatch {
+        /// `::`-joined FQN of the class being constructed.
+        class_name: SmolStr,
+        /// Name of the offending property.
+        property_name: SmolStr,
+        /// Declared property type + multiplicity, rendered as `T[m]`.
+        expected: SmolStr,
+        /// Inferred supplied-value type + multiplicity, rendered as
+        /// `T'[m']`.
+        actual: SmolStr,
+    },
 }

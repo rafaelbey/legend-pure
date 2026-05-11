@@ -1668,6 +1668,102 @@ pub(crate) fn find_property_with_inheritance(
     None
 }
 
+/// Walks the class hierarchy looking for `property`, returning the
+/// full [`Property`][p] shell from whichever class declares it.
+///
+/// Sibling to [`find_property_with_inheritance`] — same BFS over
+/// `super_types`, but exposes the full property record (including
+/// `multiplicity` and `default_value`) so constructor-binding
+/// validators can read every field. Doesn't return `qualified_properties`
+/// — those are bodies, not slot-shaped, so constructor binding doesn't
+/// apply.
+///
+/// [p]: crate::nodes::class::Property
+pub(crate) fn find_property_full_with_inheritance<'m>(
+    eid: ElementId,
+    property: &smol_str::SmolStr,
+    model: &'m crate::model::PureModel,
+) -> Option<&'m crate::nodes::class::Property> {
+    use crate::types::TypeExpr;
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(eid);
+    while let Some(current) = queue.pop_front() {
+        if !visited.insert(current) {
+            continue;
+        }
+        let Element::Class(c) = model.get_element(current) else {
+            continue;
+        };
+        if let Some(p) = c.properties.iter().find(|p| p.name == *property) {
+            return Some(p);
+        }
+        // Association-injected properties. The derived index registers
+        // each association under both end-class ids with the index of
+        // the property pointing AT that class; the property visible on
+        // it is the OTHER end (`1 - that_idx`). Same shape as infer.rs's
+        // resolver walk.
+        for (assoc_id, self_idx) in model.association_properties(current) {
+            let Element::Association(assoc) = model.get_element(*assoc_id) else {
+                continue;
+            };
+            let other_idx = 1 - *self_idx;
+            if let Some(p) = assoc.properties.get(other_idx)
+                && p.name == *property
+            {
+                return Some(p);
+            }
+        }
+        for st in &c.super_types {
+            if let TypeExpr::Named { element, .. } = st {
+                queue.push_back(*element);
+            }
+        }
+    }
+    None
+}
+
+/// Collect every distinct property *declared on* `eid` (or any
+/// super_type) — does NOT include association-injected properties.
+/// Subclass-declared properties shadow inherited ones with the same
+/// name (first hit wins in the BFS walk).
+///
+/// Used by the constructor missing-required check: Java's
+/// `NewInstance` validator considers only declared properties when
+/// determining the required-key set. Association-injected ends are
+/// bidirectional links populated by the *other* side at runtime, not
+/// by the constructor.
+pub(crate) fn all_declared_properties_with_inheritance<'m>(
+    eid: ElementId,
+    model: &'m crate::model::PureModel,
+) -> Vec<&'m crate::nodes::class::Property> {
+    use crate::types::TypeExpr;
+    let mut visited = std::collections::HashSet::new();
+    let mut seen_names = std::collections::HashSet::new();
+    let mut out: Vec<&'m crate::nodes::class::Property> = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(eid);
+    while let Some(current) = queue.pop_front() {
+        if !visited.insert(current) {
+            continue;
+        }
+        let Element::Class(c) = model.get_element(current) else {
+            continue;
+        };
+        for p in &c.properties {
+            if seen_names.insert(p.name.clone()) {
+                out.push(p);
+            }
+        }
+        for st in &c.super_types {
+            if let TypeExpr::Named { element, .. } = st {
+                queue.push_back(*element);
+            }
+        }
+    }
+    out
+}
+
 /// Walks the class hierarchy looking for `property`'s declared
 /// multiplicity (sibling to [`find_property_with_inheritance`] but
 /// returning the multiplicity instead of the type).
@@ -3329,7 +3425,7 @@ pub fn is_multiplicity_compatible(
 
 /// Returns (lower, upper) bounds for a multiplicity.
 /// `None` upper means unbounded (represented as `u32::MAX`).
-fn mult_bounds(m: &crate::types::Multiplicity) -> (u32, u32) {
+pub(crate) fn mult_bounds(m: &crate::types::Multiplicity) -> (u32, u32) {
     use crate::types::Multiplicity;
     match m {
         Multiplicity::PureOne => (1, 1),

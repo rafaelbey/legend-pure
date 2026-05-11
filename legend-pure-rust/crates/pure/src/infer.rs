@@ -1902,7 +1902,11 @@ fn resolve_qualified_property_overload(
 
 /// Renders a `TypeExpr` + `Multiplicity` as a Pure-style string like
 /// `Integer[1]` or `Foo<Bar>[*]` for use in diagnostic messages.
-fn render_type(model: &PureModel, type_expr: &TypeExpr, multiplicity: &Multiplicity) -> SmolStr {
+pub(crate) fn render_type(
+    model: &PureModel,
+    type_expr: &TypeExpr,
+    multiplicity: &Multiplicity,
+) -> SmolStr {
     let mut s = String::new();
     render_type_expr(model, type_expr, &mut s);
     s.push('[');

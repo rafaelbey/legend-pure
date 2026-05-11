@@ -42,9 +42,12 @@
 //!   are built, before the parent `Element` value is constructed.
 //!
 //! * **Cross-chunk** ([`validate`], called from
-//!   [`crate::pipeline::finalize_model`]): repo-boundary visibility
-//!   and the `<<access.private/protected>>` use-site walker. The
-//!   only validators whose inputs *genuinely* span multiple chunks.
+//!   [`crate::pipeline::finalize_model`]): repo-boundary visibility,
+//!   the `<<access.private/protected>>` use-site walker, repo
+//!   `pattern` membership, property default-value compat, and
+//!   constructor key-binding compat. Validators whose inputs span
+//!   multiple chunks OR need inferred `type_info` populated by
+//!   Pass 2.5.
 //!
 //! `.purem` chunks are trusted at merge time — the schema_hash in
 //! the purem header (`crate::purem::header`) is the coarse
@@ -69,6 +72,10 @@
 //! | `<<access.private/protected>>` respected across packages | cross-chunk | `NotAccessible` |
 //! | Cross-repo refs respect declared dependencies | cross-chunk | `NotVisible` |
 //! | Element's package matches its repo's allowed pattern | cross-chunk | `PackageNotInRepoPattern` |
+//! | Property default value type+mult compatible with declared shape | cross-chunk | `PropertyDefaultValueIncompatible` |
+//! | `^Class(prop=val)` value type+mult compatible with property | cross-chunk | `ConstructorPropertyTypeMismatch` |
+//! | `^Class(unknownKey=...)` resolves to a real property | cross-chunk | `UnknownProperty` |
+//! | `^Class()` supplies every required-no-default property | cross-chunk | `ConstructorMissingRequiredProperty` |
 
 use std::collections::{HashMap, HashSet};
 
@@ -106,6 +113,17 @@ pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
     // `pipeline::hydrate_element_signature`. A per-element call there
     // would silently miss every Mapping / Database / Diagram declaration.
     errors.extend(validate_repo_pattern_membership(model));
+
+    // Property default-value type+multiplicity compat — cross-chunk
+    // because the default-value expression's inferred `type_info` is
+    // populated by Pass 2.5 inference, not Pass 2b lowering.
+    errors.extend(validate_property_default_values(model));
+
+    // `^Class(prop = val)` value compat — cross-chunk for the same
+    // reason. T-04 (unknown key) and T-02 (missing required) fire
+    // eagerly at `lower::new_instance::lower_new_instance`; only the
+    // value-vs-property compat lives here.
+    errors.extend(validate_constructor_bindings(model));
 
     // Access-level (`<<access.private/protected>>`) use-site walk:
     // walks every `ElementId` reference inside each non-bootstrap
@@ -482,6 +500,310 @@ fn validate_repo_pattern_membership(model: &PureModel) -> Vec<CompilationError> 
         }
     }
     errors
+}
+
+// ---------------------------------------------------------------------------
+// Property Default-Value Validation (T-20260511-01)
+// ---------------------------------------------------------------------------
+
+/// Walks every class and association property whose `default_value`
+/// is `Some(_)` and checks that the lowered expression's inferred
+/// type+multiplicity is compatible with the property's declared
+/// `T[m]`. Cross-chunk because the value's `type_info` is populated
+/// by Pass 2.5 inference, not by Pass 2b lowering.
+///
+/// Java parity: `M3PropertyValidator` family. Reuses
+/// `resolve::is_type_compatible_structural` +
+/// `resolve::is_multiplicity_compatible` — the same helpers that gate
+/// qualified-property argument binding.
+fn validate_property_default_values(model: &PureModel) -> Vec<CompilationError> {
+    let mut errors = Vec::new();
+
+    for chunk in model.chunks.iter().skip(1) {
+        for (local_idx, element) in chunk.elements.iter() {
+            let owner_id = ElementId::InstanceId {
+                chunk_id: chunk.chunk_id,
+                local_idx,
+            };
+            match element {
+                Element::Class(c) => {
+                    let owner_fqn = SmolStr::new(
+                        crate::purem::fqn_path::element_fqn_path(model, owner_id).join("::"),
+                    );
+                    for prop in &c.properties {
+                        check_property_default(&owner_fqn, prop, model, &mut errors);
+                    }
+                }
+                Element::Association(a) => {
+                    let owner_fqn = SmolStr::new(
+                        crate::purem::fqn_path::element_fqn_path(model, owner_id).join("::"),
+                    );
+                    for prop in &a.properties {
+                        check_property_default(&owner_fqn, prop, model, &mut errors);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    errors
+}
+
+fn check_property_default(
+    owner_fqn: &SmolStr,
+    prop: &Property,
+    model: &PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    let Some(dv) = &prop.default_value else {
+        return;
+    };
+    // Pass 2.5 should have populated type_info on every reachable
+    // ValueSpec. If it's missing here, lowering or inference failed for
+    // this expression — a separate diagnostic will have been emitted.
+    // Don't compound the error.
+    let Some(rt) = dv.type_info.as_deref() else {
+        return;
+    };
+    let type_ok =
+        crate::resolve::is_type_compatible_structural(&rt.type_expr, &prop.type_expr, model);
+    let mult_ok =
+        crate::resolve::is_multiplicity_compatible(Some(&rt.multiplicity), &prop.multiplicity);
+    if !type_ok || !mult_ok {
+        let expected = crate::infer::render_type(model, &prop.type_expr, &prop.multiplicity);
+        let actual = crate::infer::render_type(model, &rt.type_expr, &rt.multiplicity);
+        errors.push(CompilationError {
+            message: format!(
+                "Default value of property '{owner}.{prop}' is '{actual}', incompatible with declared '{expected}'",
+                owner = owner_fqn,
+                prop = prop.name,
+            ),
+            source_info: prop.source_info.clone(),
+            kind: CompilationErrorKind::PropertyDefaultValueIncompatible {
+                class_name: owner_fqn.clone(),
+                property_name: prop.name.clone(),
+                expected,
+                actual,
+            },
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Constructor Value Binding Validation (T-20260511-03)
+// ---------------------------------------------------------------------------
+
+/// Walks every `^Class(...)` constructor expression in the model and
+/// fires the constructor-binding validators:
+///
+/// - T-20260511-04 (unknown key): each supplied key must resolve to a
+///   property on the class (walking supertypes + association-injected).
+/// - T-20260511-02 (missing required): each property with multiplicity
+///   lower bound >= 1 and no declared default value must be supplied.
+/// - T-20260511-03 (value compat): each supplied value's inferred
+///   type+multiplicity must be compatible with the property's declared
+///   shape.
+///
+/// All three live cross-chunk because they depend on the derived
+/// `association_properties` index — `rebuild_derived_indexes()` only
+/// runs at the *end* of `compile_repo_slice`, after every per-element
+/// lowering has completed, so `lower_new_instance` can't see
+/// association-injected ends yet. Plus T-03 needs inferred `type_info`
+/// from Pass 2.5.
+///
+/// `+=` (augmented) bindings are handled with the same compat rule as
+/// `=` in v1. Correct for `[*]` / `[1..*]` slots; conservatively
+/// rejects `+=` to single-value slots (which is semantically invalid
+/// anyway). The looser "element-type compat against the collection
+/// slot's element type" rule is a v2 follow-up.
+fn validate_constructor_bindings(model: &PureModel) -> Vec<CompilationError> {
+    let mut errors = Vec::new();
+
+    for chunk in model.chunks.iter().skip(1) {
+        for (_local_idx, element) in chunk.elements.iter() {
+            visit_value_specs_in_element(element, &mut |vs| {
+                check_new_call(vs, model, &mut errors);
+            });
+        }
+    }
+    errors
+}
+
+fn check_new_call(vs: &ValueSpec, model: &PureModel, errors: &mut Vec<CompilationError>) {
+    let ExprKind::FunctionCall(data) = vs.kind.as_ref() else {
+        return;
+    };
+    if data.function_name.as_str() != "new" {
+        return;
+    }
+    let args = &data.arguments;
+    // Layout: args[0] class ref, args[1] simple name, args[2] type-args
+    // collection, args[3] type-var-values collection, args[4..] = repeating
+    // (key: String, val: ValueSpec, augmented: Bool) triples.
+    if args.len() < 4 {
+        return;
+    }
+    let ExprKind::PackageableElementRef { element: class_id } = args[0].kind.as_ref() else {
+        return;
+    };
+    let class_id = *class_id;
+    let class_fqn: SmolStr =
+        SmolStr::new(crate::purem::fqn_path::element_fqn_path(model, class_id).join("::"));
+
+    let mut supplied: std::collections::HashSet<SmolStr> = std::collections::HashSet::new();
+    let mut i = 4;
+    while i + 2 < args.len() {
+        let key_arg = &args[i];
+        let val_arg = &args[i + 1];
+        // augmented bool at args[i + 2] — not used in v1 compat rule.
+        i += 3;
+
+        let ExprKind::StringLiteral(key) = key_arg.kind.as_ref() else {
+            continue;
+        };
+        supplied.insert(key.clone());
+
+        let Some(prop) = crate::resolve::find_property_full_with_inheritance(class_id, key, model)
+        else {
+            // T-04: unknown key.
+            errors.push(CompilationError {
+                message: format!("Class '{class_fqn}' has no property '{key}'"),
+                source_info: key_arg.source_info.clone(),
+                kind: CompilationErrorKind::UnknownProperty {
+                    type_name: class_fqn.clone(),
+                    property_name: key.clone(),
+                },
+            });
+            continue;
+        };
+        // T-03: value type+multiplicity compat.
+        let Some(rt) = val_arg.type_info.as_deref() else {
+            continue;
+        };
+        let type_ok =
+            crate::resolve::is_type_compatible_structural(&rt.type_expr, &prop.type_expr, model);
+        let mult_ok =
+            crate::resolve::is_multiplicity_compatible(Some(&rt.multiplicity), &prop.multiplicity);
+        if !type_ok || !mult_ok {
+            let expected = crate::infer::render_type(model, &prop.type_expr, &prop.multiplicity);
+            let actual = crate::infer::render_type(model, &rt.type_expr, &rt.multiplicity);
+            errors.push(CompilationError {
+                message: format!(
+                    "Property '{class_fqn}.{prop}' value '{actual}' is incompatible with declared '{expected}'",
+                    prop = prop.name,
+                ),
+                source_info: val_arg.source_info.clone(),
+                kind: CompilationErrorKind::ConstructorPropertyTypeMismatch {
+                    class_name: class_fqn.clone(),
+                    property_name: prop.name.clone(),
+                    expected,
+                    actual,
+                },
+            });
+        }
+    }
+    // T-02: every required-no-default *declared* property must be
+    // supplied. Association-injected ends are excluded — Java's
+    // `NewInstance` validator treats those as bidirectional runtime
+    // links populated from the other side, not constructor inputs.
+    for prop in crate::resolve::all_declared_properties_with_inheritance(class_id, model) {
+        let (lower, _upper) = crate::resolve::mult_bounds(&prop.multiplicity);
+        let is_required = lower >= 1 && prop.default_value.is_none();
+        if is_required && !supplied.contains(&prop.name) {
+            errors.push(CompilationError {
+                message: format!(
+                    "Missing required property '{prop}' on class '{class_fqn}'",
+                    prop = prop.name,
+                ),
+                source_info: vs.source_info.clone(),
+                kind: CompilationErrorKind::ConstructorMissingRequiredProperty {
+                    class_name: class_fqn.clone(),
+                    property_name: prop.name.clone(),
+                },
+            });
+        }
+    }
+}
+
+/// Recursively visit every `ValueSpec` inside `element` — used by the
+/// constructor-binding validator to find every `^Class(...)`
+/// expression regardless of nesting depth.
+fn visit_value_specs_in_element<F>(element: &Element, visit: &mut F)
+where
+    F: FnMut(&ValueSpec),
+{
+    match element {
+        Element::Class(c) => {
+            for prop in &c.properties {
+                if let Some(dv) = &prop.default_value {
+                    visit_value_spec_rec(dv, visit);
+                }
+            }
+            for qp in &c.qualified_properties {
+                for e in qp.body.iter() {
+                    visit_value_spec_rec(e, visit);
+                }
+            }
+            for con in &c.constraints {
+                visit_value_spec_rec(&con.function, visit);
+                if let Some(m) = &con.message {
+                    visit_value_spec_rec(m, visit);
+                }
+            }
+        }
+        Element::Function(f) => {
+            for e in f.body.iter() {
+                visit_value_spec_rec(e, visit);
+            }
+        }
+        Element::Association(a) => {
+            for prop in &a.properties {
+                if let Some(dv) = &prop.default_value {
+                    visit_value_spec_rec(dv, visit);
+                }
+            }
+            for qp in &a.qualified_properties {
+                for e in qp.body.iter() {
+                    visit_value_spec_rec(e, visit);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn visit_value_spec_rec<F>(vs: &ValueSpec, visit: &mut F)
+where
+    F: FnMut(&ValueSpec),
+{
+    visit(vs);
+    match vs.kind.as_ref() {
+        ExprKind::FunctionCall(d)
+        | ExprKind::PropertyCall(d)
+        | ExprKind::QualifiedPropertyCall(d) => {
+            for a in &d.arguments {
+                visit_value_spec_rec(a, visit);
+            }
+        }
+        ExprKind::Lambda { body, .. } => {
+            for e in body {
+                visit_value_spec_rec(e, visit);
+            }
+        }
+        ExprKind::Collection { elements } => {
+            for e in elements {
+                visit_value_spec_rec(e, visit);
+            }
+        }
+        ExprKind::PathLiteral { steps, .. } => {
+            for step in steps {
+                for p in &step.parameters {
+                    visit_value_spec_rec(p, visit);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 // ---------------------------------------------------------------------------
