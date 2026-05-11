@@ -68,12 +68,14 @@ pub mod include;
 pub mod operation;
 pub mod pure;
 pub mod relation_function;
+pub mod xstore;
 
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::class_mapping::ProtocolClassMapping;
 use crate::protocol::enumeration::ProtocolEnumerationMapping;
 use crate::protocol::include::ProtocolMappingInclude;
+use crate::protocol::xstore::ProtocolAssociationMapping;
 use legend_pure_parser_protocol::v1::source_info::SourceInformation;
 
 /// Protocol representation of a top-level `Mapping` (the `###Mapping`
@@ -118,6 +120,12 @@ pub struct ProtocolMapping {
     /// `Mapping.enumerationMappings`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enumeration_mappings: Vec<ProtocolEnumerationMapping>,
+    /// Association mappings — XStore-bodied class mappings route
+    /// here (Java parity: `Mapping.associationMappings`). The target
+    /// is an `Association`, not a `Class`, so they don't belong in
+    /// `classMappings`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub association_mappings: Vec<ProtocolAssociationMapping>,
     /// Mapping include declarations with optional store substitution.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub included_mappings: Vec<ProtocolMappingInclude>,
