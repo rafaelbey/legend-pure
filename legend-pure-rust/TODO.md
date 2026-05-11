@@ -139,6 +139,15 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+_(empty — all known parity gaps closed as of 2026-05-11)_
+
+---
+
+## Closed
+
+<!-- Resolved / migrated / wontfix items, newest first. Keep the full block
+     including the final audit-block status for posterity. -->
+
 ### T-20260511-05 — `format(...)` doesn't compile-time-check `%`-specifiers against arg types
 
 - **Type:** parity-gap
@@ -202,15 +211,106 @@ function abc::demo(): String[1] {
   variants.
 
 <!-- agent-audit:start id=T-20260511-05 -->
-<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+- 2026-05-11 — claimed by claude-opus-4-7[1m] — investigating the
+  format native at `crates/runtime/src/native/string.rs` plus the
+  Java reference upstream. Status: Investigating
+- 2026-05-11 — diagnosis correction: the TODO Notes block claimed
+  Java validates `format` at compile time
+  (`m3.compiler.validation.functionExpression.format`). That class
+  does not exist — verified by walking
+  `legend-pure-core/legend-pure-m3-core/src/main/java/.../compiler/
+  validation/`. Java validates format **only at runtime** in
+  `legend-pure-runtime-java-engine-interpreted/.../Format.java` and
+  `legend-pure-runtime-java-engine-compiled/.../PureStringFormat.java`
+  (throws `IllegalArgumentException("Expected <T>, got: <v>")`).
+  Three divergences with that runtime, not the compile-time gap the
+  TODO claimed:
+  * Rust `%d` silently coerced via `as_integer().unwrap_or(0)`
+    (`string.rs:602`).
+  * Rust `%f` fell through to `f64::NAN` for non-Number types and
+    auto-coerced Integer/Decimal — Java rejects all of those
+    (`Format.java:156` — `instanceOf(arg, M3Paths.Float)`).
+  * Rust `%t` silently fell through to `pure_to_string` for non-Date
+    args.
+  Specifier matrix correction: Java has no `%i`, `%e`, or `%b` — the
+  TODO Notes listed shapes that don't exist. Real set: `%s`, `%r`
+  (both Any), `%d` (Integer), `%f` (Float strict), `%t` (Date with
+  subtype OK), `%%` literal.
+- 2026-05-11 — user chose "Both: runtime parity + compile-time
+  validator" via clarification prompt (AskUserQuestion). Two-commit
+  pair:
+  * Commit 1 (runtime parity, `d4326dc8291`): tighten `%d`/`%f`/`%t`
+    arms in `Format::execute` to throw `"Expected <T>, got: <v>"`,
+    matching Java's exact message text from Format.java line numbers
+    quoted in the commit message. 7 new runtime tests +
+    3 positive-control regressions. Workspace + platform sweep
+    clean (no shipped Pure source relied on the silent coercion).
+  * Commit 2 (compile-time validator, `cbfa7b5298f`): new shared
+    `crates/pure/src/format_spec.rs` (`parse_format_specs`,
+    `required_primitive_for`); new `validate_format_specifiers`
+    cross-chunk pass wired into `validate(model)`. Two new
+    `CompilationErrorKind` variants + LSP / categorize arms. 11 new
+    tests pinning bug repro, positive controls, arity mismatches,
+    type mismatches, `%s`/`%r` accept-any, skip cases for dynamic
+    format string / dynamic args.
+- 2026-05-11 — surface-of-truth design choices documented in commit 2:
+  * Specifier matrix shared via `format_spec::required_primitive_for`
+    — single source of truth; the runtime parser at `string.rs:512-587`
+    semantically mirrors the same matrix (both pinned by tests; not
+    refactored to share code paths because the runtime interleaves
+    parsing with output building).
+  * `%s` and `%r` accept Any at compile time (Java parity — Java's
+    runtime calls `toString` / `toRepresentation` on any value). User
+    chose this branch explicitly via clarification prompt; the
+    tighter "%s requires String[1]" option was on the table and
+    declined.
+  * Subtype-aware type compat via `is_type_compatible_structural`:
+    `%t` accepts `DateTime` / `StrictDate` (both extend `Date` per
+    `bootstrap.rs:174-175`). `%d` and `%f` stay strict — Integer is
+    not a Float and vice-versa.
+  * Function ElementIds use mangled names
+    (`format_String_1__Any_MANY__String_1_`); the validator can't
+    use `resolve_by_path` keyed on the simple name "format". Walks
+    every Function whose `function_name == "format"` AND whose
+    package FQN is exactly `meta::pure::functions::string`. Future
+    overloads at the same FQN auto-pick-up.
+- 2026-05-11 — platform sweep:
+  Two PCT tests in
+  `legend-pure-core/.../format.pure:131,136`
+  (`testFormatTooFewInputs`, `testFormatTooManyInputs`) intentionally
+  test the **runtime** arity-mismatch error. Pre-fix the format
+  string was a literal; the new compile-time validator caught these
+  at compile time and broke the tests. Tweaked each to route the
+  format string through a `let` so the static validator silently
+  defers to runtime, preserving the test intent (asserting the
+  runtime's exact error message). No other platform `.pure` source
+  relied on the static-mismatch loophole.
+- 2026-05-11 — verification:
+  * `cargo build --workspace` clean.
+  * 11 new validator + 7 new runtime tests green; per-crate sweep
+    across pure, snapshot-builder, core-platform, lsp, runtime,
+    dsl-mapping, dsl-relational, dsl-diagram, dsl-tds, dsl-store,
+    dsl-graph, dsl-mapping-runtime, dsl-relational-runtime — clean.
+  * `builds_platform_purem_and_round_trips` clean (implicit sweep
+    of every shipped `format(...)` call site).
+  * `cargo fmt --check`, `cargo lint-lib`, copyright — clean on
+    touched files. The 2 pre-existing warnings in `dsl-mapping`
+    are unchanged.
+  Status: Fix landed (runtime parity: commit d4326dc8291; compile-time
+  validator: commit cbfa7b5298f).
+- 2026-05-11 — follow-ups (audit notes, not separate TODOs cut yet):
+  * Adjacent natives (`print` / `println`, URL formatters, DSL
+    string-template helpers) — none currently use format-style
+    specifiers; revisit if they're added.
+  * Shared-parser refactor: the runtime's inline byte scan
+    (`string.rs:512-587`) and `format_spec::parse_format_specs`
+    semantically mirror each other but aren't structurally
+    deduplicated — the runtime interleaves parsing with output
+    building and modifier-aware rendering. If they ever diverge,
+    both test suites pin the surface. Refactor when a third consumer
+    of the parser appears.
 <!-- agent-audit:end -->
 
----
-
-## Closed
-
-<!-- Resolved / migrated / wontfix items, newest first. Keep the full block
-     including the final audit-block status for posterity. -->
 
 ### T-20260510-01 — Import-less reference to another package resolves silently
 
