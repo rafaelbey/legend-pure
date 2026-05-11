@@ -256,6 +256,103 @@ fn pure_body_with_local_property_serializes_local_mapping_property_info() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// c3 coverage — Operation + MergeOperation bodies
+// ---------------------------------------------------------------------------
+
+#[test]
+fn operation_body_union_form_maps_fqn_to_mapping_operation_enum() {
+    // Java's `OperationClassMapping.operation` field is the enum
+    // `MappingOperation`, not the FQN. Mangled FQN
+    // `union_OperationSetImplementation_1__SetImplementation_MANY_`
+    // maps to `STORE_UNION` per `OperationClassMapping.java:27-31`.
+    let source = indoc! {r"
+        ###Mapping
+        Mapping my::test::M
+        (
+          my::test::Firm : Operation
+          {
+            meta::pure::router::operations::union_OperationSetImplementation_1__SetImplementation_MANY_(rel1, rel2)
+          }
+        )
+    "};
+    let file = parse("op_union.pure", source);
+    let m = first_mapping(&file);
+    let (json, _) = round_trip(m);
+    let body = &json["classMappings"][0];
+    assert_eq!(body["_type"], "operation");
+    assert_eq!(
+        body["operation"], "STORE_UNION",
+        "Java parity: FQN must map to MappingOperation enum name"
+    );
+    let params = body["parameters"].as_array().expect("parameters list");
+    assert_eq!(params.len(), 2);
+    assert_eq!(params[0], "rel1");
+    assert_eq!(params[1], "rel2");
+}
+
+#[test]
+fn operation_body_unknown_fqn_omits_operation_field_per_java_parity() {
+    // Java's `funcToOps.get(...)` returns `null` for FQNs outside the
+    // four router ops, so the `operation` field serializes as absent.
+    let source = indoc! {r"
+        ###Mapping
+        Mapping my::test::M
+        (
+          my::test::Firm : Operation
+          {
+            my::custom::userFunction(rel1)
+          }
+        )
+    "};
+    let file = parse("op_user_fn.pure", source);
+    let m = first_mapping(&file);
+    let (json, _) = round_trip(m);
+    let body = &json["classMappings"][0];
+    assert_eq!(body["_type"], "operation");
+    assert!(
+        body.get("operation").is_none(),
+        "Java parity: unknown FQN omits operation; got: {body}"
+    );
+}
+
+#[test]
+fn merge_operation_body_serializes_validation_function_as_lambda() {
+    // Merge form: `[ids], <validation lambda>`. Java's
+    // `MergeOperationClassMapping extends OperationClassMapping`
+    // adds `validationFunction: LambdaFunction`. The discriminator
+    // is `mergeOperation`.
+    let source = indoc! {r"
+        ###Mapping
+        Mapping my::test::M
+        (
+          *my::test::Firm[op] : Operation
+          {
+            meta::pure::router::operations::merge_OperationSetImplementation_1__SetImplementation_MANY_(
+              [p1, p2],
+              {p1: my::test::A[1], p2: my::test::B[1] | $p1.id == $p2.id}
+            )
+          }
+        )
+    "};
+    let file = parse("op_merge.pure", source);
+    let m = first_mapping(&file);
+    let (json, _) = round_trip(m);
+    let body = &json["classMappings"][0];
+    assert_eq!(body["_type"], "mergeOperation");
+    assert_eq!(body["operation"], "MERGE");
+    let params = body["parameters"].as_array().expect("parameters list");
+    assert_eq!(params.len(), 2);
+    assert!(
+        body["validationFunction"].is_object(),
+        "merge form must populate validationFunction as LambdaFunction; got: {body}"
+    );
+    assert!(
+        body["validationFunction"]["body"].is_array(),
+        "validationFunction must have body array; got: {body}"
+    );
+}
+
 #[test]
 fn include_with_three_substitutions_loses_pair_per_java_parity() {
     // Multi-substitution AST: Java's protocol JSON only carries ONE

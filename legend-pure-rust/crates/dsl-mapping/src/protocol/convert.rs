@@ -31,10 +31,13 @@ use legend_pure_parser_protocol::v1::value_spec::LambdaFunction;
 
 use crate::ast::{
     ClassMapping, ClassMappingBody, LocalPropertyDecl, MappingDef, MappingInclude,
-    PureClassMappingBody, PurePropertyMapping, StoreSubstitution,
+    OperationClassMappingBody, PureClassMappingBody, PurePropertyMapping, StoreSubstitution,
 };
 use crate::protocol::class_mapping::{ProtocolClassMapping, ProtocolClassMappingHeader};
 use crate::protocol::include::{ProtocolMappingInclude, ProtocolMappingIncludeMapping};
+use crate::protocol::operation::{
+    MappingOperation, ProtocolMergeOperationClassMapping, ProtocolOperationClassMapping,
+};
 use crate::protocol::pure::{
     ProtocolLocalMappingPropertyInfo, ProtocolPropertyMapping, ProtocolPropertyPointer,
     ProtocolPureInstanceClassMapping, ProtocolPurePropertyMapping,
@@ -102,9 +105,9 @@ impl From<&ClassMapping> for ProtocolClassMapping {
             ),
             ClassMappingBody::Operation(body) => {
                 if body.validation_function.is_some() {
-                    ProtocolClassMapping::MergeOperation(header)
+                    ProtocolClassMapping::MergeOperation(merge_operation_from_body(body, header))
                 } else {
-                    ProtocolClassMapping::Operation(header)
+                    ProtocolClassMapping::Operation(operation_from_body(body, header))
                 }
             }
             ClassMappingBody::AggregationAware(_) => ProtocolClassMapping::AggregationAware(header),
@@ -250,6 +253,44 @@ fn lambda_wrap(expr: &Expression) -> LambdaFunction {
         body: vec![legend_pure_parser_protocol::v1::convert::convert_expression_typed(expr)],
         parameters: Vec::new(),
         source_information: Some(source_info_from(expr.source_info())),
+    }
+}
+
+/// Build a `ProtocolOperationClassMapping` from the simple
+/// `parameters` form of `OperationClassMappingBody`.
+fn operation_from_body(
+    body: &OperationClassMappingBody,
+    header: ProtocolClassMappingHeader,
+) -> ProtocolOperationClassMapping {
+    ProtocolOperationClassMapping {
+        header,
+        parameters: body.parameters.iter().map(|p| p.id.to_string()).collect(),
+        operation: MappingOperation::from_function_fqn(&ptr_to_fqn(&body.operation)),
+    }
+}
+
+/// Build a `ProtocolMergeOperationClassMapping` from the
+/// `mergeParameters` form of `OperationClassMappingBody`. The caller
+/// guarantees `body.validation_function.is_some()` (only the
+/// dispatcher in `From<&ClassMapping>` routes here).
+fn merge_operation_from_body(
+    body: &OperationClassMappingBody,
+    header: ProtocolClassMappingHeader,
+) -> ProtocolMergeOperationClassMapping {
+    let validation_function = body
+        .validation_function
+        .as_ref()
+        .map(lambda_wrap)
+        .unwrap_or_else(|| LambdaFunction {
+            body: Vec::new(),
+            parameters: Vec::new(),
+            source_information: None,
+        });
+    ProtocolMergeOperationClassMapping {
+        header,
+        parameters: body.parameters.iter().map(|p| p.id.to_string()).collect(),
+        operation: MappingOperation::from_function_fqn(&ptr_to_fqn(&body.operation)),
+        validation_function,
     }
 }
 
