@@ -33,10 +33,21 @@ impl Parser {
         if self.cursor.check(TokenKind::LBrace) {
             return self.parse_function_type_as_type_ref();
         }
+        // `start` covers the FIRST token of the path; `path` (the
+        // outermost `Package`) carries the LAST segment's span.
+        // Merge them so the resulting `TypeReference.source_info`
+        // covers the WHOLE qualified name (`pkg::sub::Foo`), not
+        // just the leading `pkg`. Required for the goto-def index:
+        // `walk_type_expr` records a clickable region per
+        // `TypeExpr::Named`, and `find_at(line, column)` only
+        // matches positions inside that region. Without the merge,
+        // clicking on `Foo` after `extends pkg::sub::` falls
+        // outside the recorded span and goto silently no-ops.
         let start = self.cursor.current_source_info();
         let path = self.parse_package_path()?;
+        let fqn_span = start.merge(legend_pure_parser_ast::source_info::Spanned::source_info(&path));
         let (pkg, name) = split_package_name(&path);
-        self.finish_type_reference(start, pkg, name)
+        self.finish_type_reference(fqn_span, pkg, name)
     }
 
     /// Completes type reference parsing after the package path has been consumed.
