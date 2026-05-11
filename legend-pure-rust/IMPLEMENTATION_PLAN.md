@@ -19,7 +19,7 @@ Build a **Rust-based Pure grammar parser** using an **AST-first, TDD-driven** ap
 |----------|-----------|
 | **Edition** | Rust 2024 (`edition = "2024"`) |
 | **Formatting** | `rustfmt` — enforced in CI, zero-tolerance |
-| **Linting** | `clippy` with `#![warn(clippy::all, clippy::pedantic)]` — warnings = errors in CI |
+| **Linting** | `clippy` with `-W clippy::all -W clippy::pedantic` and a curated `-A` allowlist (codified in the `cargo lint` alias in `.cargo/config.toml`). Zero-warning gate in CI; `cargo lint-lib` additionally denies `unwrap_used` / `expect_used` in library code. |
 | **Error handling** | `thiserror` for library error types; no `unwrap()`/`expect()` in library code |
 | **Naming** | `snake_case` functions/variables, `PascalCase` types, `SCREAMING_SNAKE` constants |
 | **Visibility** | Default to `pub(crate)`; only `pub` what's part of the public API |

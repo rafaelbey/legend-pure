@@ -36,7 +36,9 @@ Run the validation: `./scripts/check-copyright.sh`
 
 - **Format**: `cargo fmt` (config in `rustfmt.toml`)
 - **Lint (strict)**: `cargo lint-lib` — no `unwrap()`/`expect()` in library code
-- **Lint (standard)**: `cargo lint` — standard clippy on all targets
+- **Lint (pedantic)**: `cargo lint` — `clippy::all` + `clippy::pedantic`,
+  with a curated allowlist for the stylistic categories the project
+  doesn't enforce (see `.cargo/config.toml`). **Zero-warning gate.**
 - **Docs**: All public items need `///` doc comments (`#![deny(missing_docs)]`)
 - **Unsafe**: Forbidden in all crates except `jni` (`#![forbid(unsafe_code)]`)
 
@@ -44,7 +46,7 @@ Run the validation: `./scripts/check-copyright.sh`
 
 - [ ] `cargo fmt --check` passes
 - [ ] `cargo lint-lib` passes (strict: no `unwrap()`/`expect()` in library code)
-- [ ] `cargo lint` passes (standard clippy on all targets)
+- [ ] `cargo lint` passes (pedantic with curated allows; zero warnings)
 - [ ] `cargo test --workspace` passes
 - [ ] `cargo llvm-cov --workspace --fail-under-lines 90` passes
 - [ ] New public items have doc comments
