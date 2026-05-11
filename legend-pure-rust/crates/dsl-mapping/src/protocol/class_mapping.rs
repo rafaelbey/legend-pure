@@ -23,6 +23,9 @@ use serde::{Deserialize, Serialize};
 
 use legend_pure_parser_protocol::v1::source_info::SourceInformation;
 
+use crate::protocol::operation::{
+    ProtocolMergeOperationClassMapping, ProtocolOperationClassMapping,
+};
 use crate::protocol::pure::ProtocolPureInstanceClassMapping;
 
 /// Discriminated union over the 5 Java class-mapping body kinds.
@@ -38,7 +41,7 @@ use crate::protocol::pure::ProtocolPureInstanceClassMapping;
 ///
 /// **Status by variant**:
 /// - `PureInstance` — body landed in c2.
-/// - `Operation` / `MergeOperation` — header-only stub (c3).
+/// - `Operation` / `MergeOperation` — body landed in c3.
 /// - `AggregationAware` — header-only stub (c5).
 /// - `Relation` — header-only stub (c6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -48,15 +51,13 @@ pub enum ProtocolClassMapping {
     #[serde(rename = "pureInstance")]
     PureInstance(ProtocolPureInstanceClassMapping),
 
-    /// Operation class mapping (`_type = "operation"`). Body data
-    /// (operation function FQN + parameter IDs) lands in c3.
+    /// Operation class mapping (`_type = "operation"`).
     #[serde(rename = "operation")]
-    Operation(ProtocolClassMappingHeader),
+    Operation(ProtocolOperationClassMapping),
 
     /// Merge operation class mapping (`_type = "mergeOperation"`).
-    /// Body data (parameters + validation lambda) lands in c3.
     #[serde(rename = "mergeOperation")]
-    MergeOperation(ProtocolClassMappingHeader),
+    MergeOperation(ProtocolMergeOperationClassMapping),
 
     /// Aggregation-aware class mapping (`_type = "aggregationAware"`).
     /// Body data (views + main mapping) lands in c5.
