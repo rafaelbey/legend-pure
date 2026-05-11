@@ -215,6 +215,21 @@ pub enum ClassMappingBody {
     /// the outer class-mapping FQN is reinterpreted as an
     /// `Association` FQN, not a `Class` FQN, by the validator.
     XStore(XStoreClassMappingBody),
+    /// `parserName == "Relation"` — ties a Pure function returning
+    /// `Relation<…>[1]` to per-property column mappings. Each
+    /// property maps to a named column on the function's relation
+    /// output, optionally through a `Binding` transformer or as a
+    /// `+ local : Type[mult]` declaration. Maps onto
+    /// `RelationFunctionInstanceSetImplementation` in the metamodel.
+    /// Boxed because the body carries an arbitrarily long
+    /// `property_mappings` vector plus the function signature's
+    /// parameter type vector — bigger than the other inline variants.
+    /// Java parity: protocol class
+    /// `RelationFunctionClassMapping` at
+    /// `legend-engine-protocol-pure/.../mapping/relationFunction/`;
+    /// grammar at
+    /// `legend-engine-language-pure-grammar/.../mapping/relationFunctionMapping/RelationFunctionMappingParserGrammar.g4`.
+    RelationFunction(Box<RelationFunctionClassMappingBody>),
     /// Body produced by a foreign [`ClassMappingBodyParser`] —
     /// e.g. Relational's `: Relational { ~mainTable [db]schema.tbl … }`
     /// shape — registered with [`MappingSectionParser`] via
@@ -476,6 +491,95 @@ pub struct OperationParameter {
     pub id: SmolStr,
     /// Span of the ID token, used to pin per-parameter validator
     /// diagnostics back to source.
+    pub source_info: SourceInfo,
+}
+
+// ---------------------------------------------------------------------------
+// RelationFunctionClassMappingBody — Stage 8
+// ---------------------------------------------------------------------------
+
+/// Body of a `: Relation { … }` class mapping.
+///
+/// Shape (Java grammar
+/// `RelationFunctionMappingParserGrammar.g4`):
+///
+/// ```text
+/// {
+///   ~func pkg::myRelationFn():Relation<Any>[1]
+///   firstName : name_col,
+///   lastName : surname_col,
+///   + computed : String[1] : composite_col
+/// }
+/// ```
+///
+/// Or with a binding transformer:
+///
+/// ```text
+/// {
+///   ~func pkg::myRelFn():Relation<Any>[1]
+///   data : Binding pkg::TextBinding : text_col
+/// }
+/// ```
+///
+/// Each property mapping pairs a property name (regular or
+/// `+`-prefixed local) with a column name on the function's relation
+/// output, optionally going through a `Binding` transformer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelationFunctionClassMappingBody {
+    /// Function FQN. Java captures the full
+    /// `qualifiedName(P1,…):Return[m]` text as a single string; we
+    /// store the qualified name in this `PackageableElementPtr` and
+    /// the signature suffix in [`Self::function_signature_suffix`].
+    pub relation_function: PackageableElementPtr,
+    /// Original textual form of the `():Return[m]` suffix following
+    /// the function's qualified name (e.g.
+    /// `"():meta::pure::metamodel::relation::Relation<Any>[1]"`).
+    /// Preserved verbatim for round-trip composer fidelity; the
+    /// validator parses it on demand. `None` when the grammar omits
+    /// the suffix (mangled-FQN form).
+    pub function_signature_suffix: Option<SmolStr>,
+    /// Per-property column mappings, in source order.
+    pub property_mappings: Vec<RelationFunctionPropertyMapping>,
+    /// Span of the entire body.
+    pub source_info: SourceInfo,
+}
+
+/// One property → column mapping inside a
+/// [`RelationFunctionClassMappingBody`].
+///
+/// Three shapes (Java grammar
+/// `singlePropertyMapping`):
+///
+/// 1. **Non-local**: `propertyName : column_name`
+/// 2. **With binding transformer**:
+///    `propertyName : Binding pkg::SomeBinding : column_name`
+/// 3. **Local declaration**:
+///    `+ propertyName : Type[mult] : column_name`
+///    Optionally combined with a binding transformer:
+///    `+ propertyName : Type[mult] : Binding pkg::SomeBinding : column_name`
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelationFunctionPropertyMapping {
+    /// Target property name on the outer class.
+    pub property_name: SmolStr,
+    /// `+ name : Type[mult]` declaration; `None` for non-local refs.
+    pub local_mapping_property: Option<LocalPropertyDecl>,
+    /// Optional `Binding pkg::SomeBinding :` transformer.
+    pub binding_transformer: Option<BindingTransformer>,
+    /// Column name on the function's relation output.
+    pub column: SmolStr,
+    /// Span of the entire entry.
+    pub source_info: SourceInfo,
+}
+
+/// A `Binding pkg::SomeBinding :` transformer prefix on a relation
+/// property mapping. Mirrors Java's `BindingTransformer` protocol
+/// class (lives in `legend-engine-protocol-pure-external-format`
+/// today; we model it inline since the DSL is the only consumer).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BindingTransformer {
+    /// FQN of the binding referenced by the transformer.
+    pub binding: PackageableElementPtr,
+    /// Span covering the `Binding pkg::SomeBinding` prefix.
     pub source_info: SourceInfo,
 }
 
