@@ -79,10 +79,28 @@ RUST_LOG=legend_pure_parser=debug cargo test
 # Benchmarks
 cargo bench --workspace
 cargo bench -p legend-pure-parser-stress --features heavy   # 100K-class tier
+
+# Skip the 8 DSL `.purem` artifact rebuilds (5-15 min off cold builds when
+# iterating outside the DSL crates — runtime can still load DSLs via
+# `--classpath kind=filesystem`).
+LEGEND_PURE_SKIP_DSL_SNAPSHOTS=1 cargo build --workspace
 ```
 
+### Build-time opt-ins
+
+Cold-build hot path: `crates/core-platform-pure/build.rs` compiles 9 Pure
+repos to `.purem` blobs on every cold build. Two quick wins:
+
+- **Faster linker (lld)** — `.cargo/config.toml.example` is checked in for
+  reference. Copy to `.cargo/config.local.toml` (gitignored) after
+  `brew install llvm` / `apt install lld` to cut link time 10-30%.
+- **Skip DSL snapshots** — `LEGEND_PURE_SKIP_DSL_SNAPSHOTS=1 cargo build`
+  bypasses the 8 `purem-artifact` rebuilds. Use when iterating outside
+  the DSL crates.
+
 CI (`/.github/workflows/rust.yml`) runs format-check → `lint-lib` → `lint` →
-`llvm-cov --fail-under-lines 85` → `bench`. All three lint gates must pass.
+`llvm-cov nextest --fail-under-lines 85` → doctests → `bench`. All three
+lint gates must pass.
 
 ## Code Conventions (enforced by CI)
 

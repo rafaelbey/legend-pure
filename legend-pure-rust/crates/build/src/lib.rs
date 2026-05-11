@@ -637,6 +637,7 @@ impl Embedder {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)] // mirrors emit_purem_artifact_repo; threading through a context struct hurts readability
     fn emit_purem_embedded_repo(
         &self,
         entry: &RepoEntry,
@@ -724,7 +725,7 @@ impl Embedder {
         .ok();
         writeln!(
             out,
-            "pub static REPO_{const_suffix}_MANIFESTS: &[(&'static str, &'static str)] = &["
+            "pub static REPO_{const_suffix}_MANIFESTS: &[(&str, &str)] = &["
         )
         .ok();
         for walk_entry in WalkDir::new(&source_root).sort_by_file_name() {
@@ -776,6 +777,7 @@ impl Embedder {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)] // see emit_purem_embedded_repo
     fn emit_purem_artifact_repo(
         &self,
         entry: &RepoEntry,
@@ -788,6 +790,29 @@ impl Embedder {
     ) -> Result<(), BuildError> {
         let (descriptor_canonical, descriptor) = self.read_descriptor(entry, manifest_dir)?;
         self.emit_rerun_directives(&descriptor_canonical, &descriptor)?;
+
+        // Inner-loop escape hatch: contributors iterating on parser /
+        // runtime / non-DSL code can `export LEGEND_PURE_SKIP_DSL_SNAPSHOTS=1`
+        // to skip the ~5-15 min spent rebuilding each DSL's `.purem` blob
+        // on every cold build. The CLI's `--classpath kind=filesystem`
+        // path can still load DSLs from sources when no `.purem`
+        // artifact is present. CI (and `cargo dist`) leave the env var
+        // unset and continue producing the full artifact set.
+        println!("cargo:rerun-if-env-changed=LEGEND_PURE_SKIP_DSL_SNAPSHOTS");
+        if std::env::var_os("LEGEND_PURE_SKIP_DSL_SNAPSHOTS").is_some() {
+            println!(
+                "cargo:warning=skipping DSL .purem build for `{name}` \
+                 (LEGEND_PURE_SKIP_DSL_SNAPSHOTS set). Unset to rebuild.",
+                name = descriptor.name,
+            );
+            // Still emit the meta consts so generated code compiles; the
+            // aggregator's `Repo::from_purem_file` call will simply find
+            // no file and skip the entry at runtime.
+            let const_suffix = sanitize_const(&descriptor.name);
+            self.emit_meta_const(&descriptor, &const_suffix, out);
+            self.emit_tests_meta_const(&descriptor, &const_suffix, out);
+            return Ok(());
+        }
 
         let target_snapshots_dir = resolve_target_snapshots_dir()?;
         fs::create_dir_all(&target_snapshots_dir).map_err(|source| BuildError::Io {
