@@ -68,6 +68,7 @@
 //! | Access stereotypes only on classes/functions | per-element | `AccessLevelNotAllowed` |
 //! | `<<access.private/protected>>` respected across packages | cross-chunk | `NotAccessible` |
 //! | Cross-repo refs respect declared dependencies | cross-chunk | `NotVisible` |
+//! | Element's package matches its repo's allowed pattern | cross-chunk | `PackageNotInRepoPattern` |
 
 use std::collections::{HashMap, HashSet};
 
@@ -98,6 +99,13 @@ pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
     // Repo-boundary visibility — cross-repo refs are inherently a
     // multi-chunk concern; only resolvable on the merged model.
     errors.extend(validate_repo_visibility(model));
+
+    // Repo `pattern` membership — has to be cross-chunk because DSL
+    // extensions allocate `Element::DSLInstance` rows directly through
+    // their `define()` paths, bypassing
+    // `pipeline::hydrate_element_signature`. A per-element call there
+    // would silently miss every Mapping / Database / Diagram declaration.
+    errors.extend(validate_repo_pattern_membership(model));
 
     // Access-level (`<<access.private/protected>>`) use-site walk:
     // walks every `ElementId` reference inside each non-bootstrap
@@ -389,6 +397,88 @@ fn validate_repo_visibility(model: &PureModel) -> Vec<CompilationError> {
                     });
                 }
             });
+        }
+    }
+    errors
+}
+
+// ---------------------------------------------------------------------------
+// Repo Pattern Membership Validation
+// ---------------------------------------------------------------------------
+
+/// Walks every chunk's top-level elements and emits
+/// [`CompilationErrorKind::PackageNotInRepoPattern`] for any element
+/// whose package path falls outside its repo's allowed-package regex.
+/// No-op when `model.repo_patterns` is empty, so existing tests that
+/// build a model without going through a real loader stay green.
+///
+/// Cross-chunk because DSL extensions allocate `Element::DSLInstance`
+/// rows directly in their `define()` paths, *bypassing*
+/// [`crate::pipeline::hydrate_element_signature`]. A per-element call
+/// at the M3 hydration seam would silently miss every Mapping /
+/// Database / Diagram declaration. Walking chunks here covers every
+/// allocation path uniformly — same shape as
+/// [`validate_repo_visibility`].
+///
+/// Java parity: `RepositoryPackageValidator` →
+/// `CodeRepository.isPackageAllowed`. Mirror the same error string so
+/// platform-test diffs against the Java implementation stay stable:
+///
+/// > `Package <pkg> is not allowed in <repo>; only packages matching <pattern> are allowed`
+///
+/// where `<pkg>` is the element's package path (`::`-joined; empty for
+/// root), `<repo>` is the use-site repo from
+/// [`crate::visibility::source_repo_name`], and `<pattern>` is the
+/// descriptor's pattern verbatim (not the `^(?:…)$`-wrapped internal
+/// form).
+fn validate_repo_pattern_membership(model: &PureModel) -> Vec<CompilationError> {
+    use crate::visibility::source_repo_name;
+
+    let mut errors = Vec::new();
+    if model.repo_patterns.is_empty() {
+        return errors;
+    }
+
+    // Skip chunk 0 (bootstrap) — its source has no repo prefix.
+    for chunk in model.chunks.iter().skip(1) {
+        for (local_idx, _element) in chunk.elements.iter() {
+            let node = chunk.nodes.get(local_idx);
+            let use_site = &node.source_info.source;
+            let Some(repo_name) = source_repo_name(use_site) else {
+                continue;
+            };
+            let Some(pat) = model.repo_patterns.get(&repo_name) else {
+                continue;
+            };
+
+            // The element's package = parent package's FQN, regardless
+            // of where the element name resolves. Using
+            // `node.parent_package` (set at allocation time) avoids
+            // the whole-tree scan in `element_fqn_path`.
+            let pkg_segments = crate::purem::fqn_path::package_path(model, node.parent_package);
+            let pkg_path: SmolStr = SmolStr::new(
+                pkg_segments
+                    .iter()
+                    .map(SmolStr::as_str)
+                    .collect::<Vec<_>>()
+                    .join("::"),
+            );
+
+            if !pat.compiled.is_match(&pkg_path) {
+                errors.push(CompilationError {
+                    message: format!(
+                        "Package {pkg_path} is not allowed in {repo_name}; \
+                         only packages matching {pattern} are allowed",
+                        pattern = pat.source,
+                    ),
+                    source_info: node.source_info.clone(),
+                    kind: CompilationErrorKind::PackageNotInRepoPattern {
+                        package: pkg_path,
+                        repo: repo_name,
+                        pattern: pat.source.clone(),
+                    },
+                });
+            }
         }
     }
     errors

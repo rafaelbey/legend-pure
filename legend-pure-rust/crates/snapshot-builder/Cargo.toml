@@ -36,6 +36,7 @@ serde_json = { workspace = true }
 smol_str = { workspace = true }
 thiserror = { workspace = true }
 walkdir = { workspace = true }
+regex = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

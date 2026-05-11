@@ -45,6 +45,64 @@ use crate::model::PureModel;
 ///   surrounding repo.
 pub type RepoVisibilityMap = HashMap<SmolStr, BTreeSet<SmolStr>>;
 
+/// A repo's `pattern` regex paired with the original source string.
+///
+/// The original `source` is preserved verbatim so error messages can
+/// quote it back to the user (Java parity:
+/// `RepositoryPackageValidator` reports
+/// `"only packages matching <pattern> are allowed"`).
+///
+/// `compiled` is the result of [`compile_repo_pattern`]: the source
+/// wrapped in `^(?:…)$` so Rust's [`regex::Regex::is_match`] (unanchored
+/// by default) matches Java's [`java.util.regex.Matcher::matches`]
+/// (fully anchored).
+#[derive(Debug, Clone)]
+pub struct RepoPattern {
+    /// Java-syntax pattern as written in the descriptor (e.g.
+    /// `((meta)|(system)|(apps::pure))(::.*)?`).
+    pub source: SmolStr,
+    /// Compiled, anchored regex matching the same language as
+    /// Java's `Pattern.compile(source).matcher(s).matches()`.
+    pub compiled: regex::Regex,
+}
+
+/// Per-repo pattern table: repo name → its compiled allowed-package
+/// pattern. Stored on [`PureModel::repo_patterns`][m]. Empty by default
+/// — when no patterns are registered, the membership check is a no-op,
+/// preserving every existing test that builds a model from raw source
+/// files without going through a real loader.
+///
+/// [m]: crate::model::PureModel::repo_patterns
+pub type RepoPatternMap = HashMap<SmolStr, RepoPattern>;
+
+/// Compile a Java-syntax repo pattern into an anchored Rust [`regex::Regex`].
+///
+/// Wraps the input as `^(?:src)$` so [`regex::Regex::is_match`]
+/// (unanchored by default in Rust) matches the same language as Java's
+/// `Pattern.compile(src).matcher(s).matches()` (fully anchored). The
+/// repo descriptors today use only basic alternation + grouping
+/// (e.g. `((meta)|(system)|(apps::pure))(::.*)?`) — fully compatible
+/// between Java's and Rust's regex flavours.
+///
+/// # Errors
+///
+/// Returns the underlying [`regex::Error`] if `src` is not a valid Rust
+/// regex. Callers (today: the snapshot-builder descriptor loader) should
+/// surface this as a build-time error so a malformed descriptor stops
+/// the build immediately.
+///
+/// ```
+/// use legend_pure_parser_pure::visibility::compile_repo_pattern;
+/// let re = compile_repo_pattern("(meta)(::.*)?").expect("valid");
+/// assert!(re.is_match("meta"));
+/// assert!(re.is_match("meta::pure"));
+/// // Anchored: `metadata` must NOT match `(meta)(::.*)?`.
+/// assert!(!re.is_match("metadata"));
+/// ```
+pub fn compile_repo_pattern(src: &str) -> Result<regex::Regex, regex::Error> {
+    regex::Regex::new(&format!("^(?:{src})$"))
+}
+
 /// Extract the repo name from a canonical source URL.
 ///
 /// Mirrors Java's `CompositeCodeStorage.getSourceRepoName`: the first

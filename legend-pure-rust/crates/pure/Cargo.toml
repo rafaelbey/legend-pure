@@ -28,6 +28,7 @@ thiserror.workspace = true
 tracing = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc"] }
 postcard = { version = "1", features = ["alloc"] }
+regex = { workspace = true }
 
 [dev-dependencies]
 legend-pure-parser-parser = { path = "../parser" }

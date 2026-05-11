@@ -301,6 +301,15 @@ pub struct PureModel {
     /// through a real loader.
     pub repo_visibility: crate::visibility::RepoVisibilityMap,
 
+    /// Per-repo allowed-package pattern table: repo name → compiled
+    /// regex over package paths the repo is permitted to ship. Empty by
+    /// default — populated by the snapshot-builder from descriptor
+    /// metadata. Pattern membership checks are no-ops when this map is
+    /// empty, preserving every existing test that builds a model
+    /// without going through a real loader. Java parity:
+    /// `RepositoryPackageValidator` + `CodeRepository.isPackageAllowed`.
+    pub repo_patterns: crate::visibility::RepoPatternMap,
+
     /// Derived indexes, computed post-freeze.
     derived: DerivedIndexes,
 }
@@ -324,6 +333,7 @@ impl PureModel {
             package_elements: vec![Element::Package(PackageId(root_idx))],
             extension_arenas: HashMap::new(),
             repo_visibility: HashMap::new(),
+            repo_patterns: HashMap::new(),
             derived: DerivedIndexes::default(),
         }
     }
