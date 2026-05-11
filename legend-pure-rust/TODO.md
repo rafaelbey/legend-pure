@@ -139,6 +139,59 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260510-04 — Repo visibility pattern not enforced against declared FQNs
+
+- **Type:** parity-gap
+- **Area:** compiler (repo loader / build)
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-10
+
+**Summary**
+A repo's visibility/ownership `pattern` regex is not validated against the
+FQNs of the elements it ships. Adding an element whose FQN doesn't match
+the pattern is accepted silently. Java Pure rejects this at load time.
+
+**Repro / Context**
+Repo descriptor with `pattern = "((meta)|(system)|(apps::pure))(::.*)?"`
+ships `abc::Class`. The FQN `abc::Class` does not match — no element
+under `abc::…` is in the pattern's language. Expected: build-time error
+("element abc::Class is not within repo X's pattern"). Actual: no error.
+
+**Notes**
+- This is the layering primitive: a repo's `pattern` defines *which*
+  FQNs it is permitted to own. Without enforcement, repos can ship
+  anything and the cross-repo visibility check (T-style "is this
+  reference declared as a dependency?") loses its meaning, because
+  there's no reliable answer to "which repo does this element belong
+  to?".
+- Related BACKLOG row: "Repo descriptors + manifest (Pure-graph
+  composition) | P1" — step (4) in that plan is exactly this
+  validation. Today's `crates/core-platform-pure/build.rs` walks
+  hand-listed directories and never consults a regex. Even before the
+  full manifest-driven loader lands, the pattern check can be wired in
+  against the current hardcoded repo descriptors.
+- Where the check should live: at the loader / build-script seam, the
+  moment a `.pure` file's top-level FQNs are known. Build-time error
+  with the offending FQN + repo name + pattern, not a deferred
+  compile-pass diagnostic. (Compile-pass is fine as a fallback for
+  dynamically loaded slices, but build-time is the strong gate for
+  embedded repos.)
+- Existing cross-repo visibility validators to cross-reference for
+  pattern + error-shape consistency:
+  `crates/dsl-mapping/src/compiler.rs::validate_repo_visibility` and
+  `crates/dsl-relational/src/compiler.rs::validate_repo_visibility`
+  (memory: "DSL Path runtime architecture" / Mapping DSL state, Phase
+  2 / Phase D). Those handle *cross-repo references*; this bug is the
+  prior check that an element is in its own repo at all.
+- Sweep: also enforce that two repos don't both claim the same FQN
+  (overlap check across `pattern`s) — a related but separable
+  validator. Don't bundle into this fix unless cheap.
+
+<!-- agent-audit:start id=T-20260510-04 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
 ### T-20260510-03 — FunctionType arity/types not checked when binding lambda argument
 
 - **Type:** parity-gap
