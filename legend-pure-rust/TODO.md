@@ -139,6 +139,76 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260511-01 — Property default value not type-checked against declared property type
+
+- **Type:** parity-gap
+- **Area:** compiler
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-11
+
+**Summary**
+A class property's default-value expression is not checked for type
+compatibility against the property's declared type+multiplicity. A
+default value of an incompatible type is silently accepted. Java Pure
+rejects this.
+
+**Repro / Context**
+
+```pure
+Class abc::Foo
+{
+  prop3 : Integer[1] = '';
+}
+```
+
+- Declared property type: `Integer[1]`.
+- Default value: `''` — a `String[1]` literal.
+- Expected: compile error — default-value expression type
+  `String[1]` is not compatible with declared property type
+  `Integer[1]`.
+- Actual: compiles clean.
+
+**Notes**
+- Sweep symmetric cases — all four should produce compile errors:
+  (a) wrong type (e.g. `prop : Integer[1] = ''`),
+  (b) wrong multiplicity (e.g. `prop : Integer[1] = [1, 2, 3]`,
+      `prop : Integer[1..*] = []`),
+  (c) wrong nested generic (e.g. `prop : List<String>[1] = ^List<Integer>(…)`),
+  (d) subtype OK in the covariant direction
+      (`prop : Number[1] = 1`), but not the contravariant one.
+- Same check almost certainly belongs on **qualified properties**'
+  body expressions (return type vs. body's inferred type) and on
+  **function bodies** (return type vs. last expression's type). The
+  TODO is just about property defaults; sweep adjacent sites for
+  the same hole as part of triage.
+- Property default values are lowered in Pass 2b
+  (`crates/pure/src/pipeline.rs::pass_define_class_bodies`) per
+  the comment at pipeline.rs:1674-1678 ("Default-value bodies are
+  lowered in Pass 2b… so type-based dispatch in any operator/function
+  call inside a default value sees real return types"). That's the
+  same seam where the type-compat check should fire: after the
+  default-value expression is lowered (so its inferred type is known)
+  and against the property's already-resolved
+  `type_expr + multiplicity` (already on the `Property` shell from
+  Pass 1).
+- Reuse `crate::infer::is_type_compatible_structural` (or whatever
+  the canonical compat function is — verify, don't trust): it's the
+  same routine that gates `cast(@T)`, function-call argument binding,
+  etc. The new validator should call it, not re-implement compat.
+- Error shape: parity with the analogous Java diagnostic. Likely
+  something like `"Default value of property 'X' has type Y[m], but
+  property declared as Z[n]"` — confirm against Java's
+  `M3PropertyValidator` / `ClassValidator` family before writing.
+- This bug is in the same family as T-20260510-03 (FunctionType arity/types
+  not checked when binding lambda argument) — both are "the structural
+  compat function exists but isn't called at this binding site". Fixing
+  one may share the call-site discipline needed for the other.
+
+<!-- agent-audit:start id=T-20260511-01 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
 ### T-20260510-04 — Repo visibility pattern not enforced against declared FQNs
 
 - **Type:** parity-gap
