@@ -139,6 +139,74 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260511-05 — `format(...)` doesn't compile-time-check `%`-specifiers against arg types
+
+- **Type:** parity-gap
+- **Area:** compiler
+- **Priority:** P2
+- **Reporter:** Rafael
+- **Filed:** 2026-05-11
+
+**Summary**
+`'…'->format([...])` accepts a list whose element types don't match
+the format string's `%`-specifiers. Java Pure validates this at compile
+time when the format string is a literal and the args list is a literal
+collection.
+
+**Repro / Context**
+
+```pure
+function abc::demo(): String[1] {
+    '%s %d %d'->format(['hello', 'world', 4])
+}
+```
+
+- Expected: compile error — position 2 (`%d`) expects Integer but got
+  String (`'world'`).
+- Actual: compiles and runs (runtime silently coerces / accepts).
+
+**Notes**
+- Java reference: format-string validation in
+  `m3.compiler.validation.functionExpression.format` (or equivalent
+  native-specific validator). Java's check runs only when both the
+  format string and the arg list are statically determinable.
+- Specifier matrix (confirm against Java at fix time):
+  `%s`=Any (no type constraint), `%d`/`%i`=Integer, `%f`/`%e`=Float
+  (or Number), `%t`=DateTime, `%r`=Number (raw), `%b`=Boolean,
+  `%%`=literal percent.
+- Two axes per specifier: (a) **arity** — count of `%`-specifiers
+  (excluding `%%`) must equal list length; (b) **per-position type**
+  — list element at position N is subtype-compatible with the
+  declared spec at position N. Multiplicity is always `[1]` per
+  element of the list — no multiplicity axis beyond arity.
+- Validator placement: post-inference, native-specific validator on
+  `format`'s `ElementId`. Most natural seam is a cross-chunk pass
+  in `validate(model)` (same family as the constructor-binding
+  validators), so it sees fully-inferred arg types. Skip silently
+  when either the receiver isn't a literal `String` or the arg list
+  isn't a literal `Collection` (`ExprKind::Collection` of literals /
+  inferable expressions) — runtime is the fallback for dynamic cases.
+- Adjacent natives worth sweeping for the same hole:
+  - `print` / `println` if they accept a format-style arg,
+  - other string-template helpers (`replace`-style templating, URL
+    formatters in DSLs).
+- This is parity-gap territory: a Pure user porting from Java will
+  expect the same compile-time signal. Today the bug is silently
+  swallowed at runtime (the `%d` formatter on a `String` coerces to
+  string and emits the wrong shape).
+- Error shape: new `CompilationErrorKind::FormatSpecifierTypeMismatch`
+  variant with `{ specifier: SmolStr, position: usize, expected_type:
+  SmolStr, got_type: SmolStr }`, plus a sibling
+  `FormatSpecifierArityMismatch { specifiers: usize, args: usize }`.
+  Confirm against Java's diagnostic shape before finalizing the
+  variants.
+
+<!-- agent-audit:start id=T-20260511-05 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
+---
+
 ### T-20260510-01 — Import-less reference to another package resolves silently
 
 - **Type:** parity-gap
