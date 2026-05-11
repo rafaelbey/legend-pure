@@ -338,6 +338,29 @@ Class other::Class2 extends Class1 {
     wildcard `import abc::*;` supported today) is orthogonal to this
     bug and deferred — the parser may or may not already accept the
     syntax; semantic plumbing is an `ImportScope` change.
+- 2026-05-11 — sweep follow-up: the original TODO note called out
+  "sweep every short-name → element resolution site, not just `extends`
+  and property types" with a hopeful (verify-don't-trust) list. The
+  structural fix lives at `resolve_unqualified` in
+  `crates/pure/src/resolve.rs` — every site below provably routes there
+  via `resolve_type_ref` (L167) or `resolve_element_ptr` (L969). Added 8
+  new tests to `crates/pure/tests/import_isolation_smoke.rs` (now 16
+  total) pinning the additional sites that the original 8 tests didn't
+  explicitly cover:
+  * function parameter type (no-import errors + with-import compiles),
+  * function return type,
+  * `^Class(...)` constructor receiver class FQN,
+  * `cast(@T)` type argument,
+  * Association end class type,
+  * Stereotype profile reference,
+  * Generic type argument inside `<…>` (uses a local generic `Class
+    lib::Box<T>` to stay self-contained — first attempt referenced
+    `meta::pure::functions::collection::List` which isn't in the test
+    bootstrap and produced a false-negative).
+  Workspace nextest: 1965/1965 (+16 over the 1949 baseline; all new
+  sweep tests green).
+  Status: Fix landed + sweep coverage confirmed (no additional fix
+  needed — central chokepoint covers every site).
 <!-- agent-audit:end -->
 
 
