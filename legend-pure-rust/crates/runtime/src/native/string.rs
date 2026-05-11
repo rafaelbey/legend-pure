@@ -599,7 +599,17 @@ impl NativeFunction for Format {
                 b'r' => result.push_str(&repr_value(&v)),
                 b's' => result.push_str(&pure_to_string(&v, ctx)?),
                 b'd' => {
-                    let n = v.as_integer().unwrap_or(0);
+                    // Java parity (`Format.java:105-108`): `%d` requires an
+                    // Integer. Pre-T-20260511-05 we silently coerced via
+                    // `.unwrap_or(0)`; Java throws and Pure semantics
+                    // demand the same.
+                    let Value::Integer(n) = v else {
+                        let got = pure_to_string(&v, ctx)?;
+                        return Err(PureRuntimeError::EvaluationError(format!(
+                            "Expected Integer, got: {got}"
+                        ))
+                        .into());
+                    };
                     let body = if let Some(w) = width {
                         if zero_pad {
                             // Zero-pad to width respecting sign.
@@ -617,15 +627,17 @@ impl NativeFunction for Format {
                     result.push_str(&body);
                 }
                 b'f' => {
-                    let f = match &v {
-                        Value::Float(f) => *f,
-                        #[allow(clippy::cast_precision_loss)]
-                        Value::Integer(i) => *i as f64,
-                        Value::Decimal(d) => {
-                            use rust_decimal::prelude::ToPrimitive;
-                            d.to_f64().unwrap_or(f64::NAN)
-                        }
-                        _ => f64::NAN,
+                    // Java parity (`Format.java:155-159`, `:175-179`): `%f`
+                    // requires a Float — strictly, not "anything coercible".
+                    // Pre-T-20260511-05 we accepted Integer / Decimal and
+                    // silently widened to f64 (with a non-Number falling
+                    // through to NaN); Java throws.
+                    let Value::Float(f) = v else {
+                        let got = pure_to_string(&v, ctx)?;
+                        return Err(PureRuntimeError::EvaluationError(format!(
+                            "Expected Float, got: {got}"
+                        ))
+                        .into());
                     };
                     let body = if let Some(p) = precision {
                         // Java's `%.Nf` rounds half-to-even (banker's),
@@ -637,9 +649,23 @@ impl NativeFunction for Format {
                     result.push_str(&body);
                 }
                 b't' => {
-                    if let (Some(pat), Value::Date(d)) = (&date_pattern, &v) {
+                    // Java parity (`Format.java:114-118`): `%t` requires a
+                    // Date. Pre-T-20260511-05 we silently fell through to
+                    // `pure_to_string` for any non-Date value.
+                    let Value::Date(d) = &v else {
+                        let got = pure_to_string(&v, ctx)?;
+                        return Err(PureRuntimeError::EvaluationError(format!(
+                            "Expected Date, got: {got}"
+                        ))
+                        .into());
+                    };
+                    if let Some(pat) = &date_pattern {
                         result.push_str(&format_date_pattern(d, pat));
                     } else {
+                        // No `{pattern}` — Java falls back to the Date's
+                        // default toString (`builder.append(date)` at
+                        // `Format.java:123`). The Pure user-facing string
+                        // form matches.
                         result.push_str(&pure_to_string(&v, ctx)?);
                     }
                 }
@@ -1141,7 +1167,7 @@ pub fn register(registry: &mut NativeRegistry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::{MockCtx, lit_collection, lit_int, lit_str};
+    use crate::native::{MockCtx, lit_collection, lit_float, lit_int, lit_str};
 
     #[test]
     fn string_plus() {
@@ -1272,6 +1298,96 @@ mod tests {
             .execute(&[lit_str("%s + %s"), coll], &mut MockCtx)
             .unwrap();
         assert_eq!(r.into_value(), Value::String("1 + 2".into()));
+    }
+
+    // T-20260511-05: Java parity for type mismatches at runtime.
+    // Pre-fix, %d on a String silently coerced to 0, %f to NaN, %t
+    // fell through to toString. Java throws `"Expected <T>, got: <v>"`
+    // (Format.java:107/117/158).
+
+    #[test]
+    fn format_d_on_string_errors() {
+        let coll = lit_collection(vec![lit_str("not an int")]);
+        let err = Format
+            .execute(&[lit_str("%d"), coll], &mut MockCtx)
+            .expect_err("%d on String must error");
+        assert!(
+            err.to_string()
+                .contains("Expected Integer, got: not an int"),
+            "Java-parity message text not found: {err}"
+        );
+    }
+
+    #[test]
+    fn format_d_on_float_errors() {
+        let coll = lit_collection(vec![lit_float(3.14)]);
+        let err = Format
+            .execute(&[lit_str("%d"), coll], &mut MockCtx)
+            .expect_err("%d on Float must error (Java rejects non-Integer)");
+        assert!(
+            err.to_string().contains("Expected Integer, got:"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn format_f_on_string_errors() {
+        let coll = lit_collection(vec![lit_str("not a float")]);
+        let err = Format
+            .execute(&[lit_str("%f"), coll], &mut MockCtx)
+            .expect_err("%f on String must error");
+        assert!(
+            err.to_string().contains("Expected Float, got: not a float"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn format_f_on_integer_errors() {
+        // Java's Format.java:156 requires `Instance.instanceOf(arg,
+        // M3Paths.Float, ...)` — strictly Float. Integer doesn't satisfy
+        // it, and Pre-fix Rust silently widened i64 → f64. Tightened.
+        let coll = lit_collection(vec![lit_int(42)]);
+        let err = Format
+            .execute(&[lit_str("%f"), coll], &mut MockCtx)
+            .expect_err("%f on Integer must error (Java rejects Integer for %f)");
+        assert!(
+            err.to_string().contains("Expected Float, got:"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn format_t_on_string_errors() {
+        let coll = lit_collection(vec![lit_str("not a date")]);
+        let err = Format
+            .execute(&[lit_str("%t"), coll], &mut MockCtx)
+            .expect_err("%t on String must error");
+        assert!(
+            err.to_string().contains("Expected Date, got: not a date"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn format_d_on_integer_compiles() {
+        // Positive control: the Java-parity tightening must not
+        // regress the well-formed case.
+        let coll = lit_collection(vec![lit_int(42)]);
+        let r = Format
+            .execute(&[lit_str("got %d"), coll], &mut MockCtx)
+            .unwrap();
+        assert_eq!(r.into_value(), Value::String("got 42".into()));
+    }
+
+    #[test]
+    fn format_f_on_float_compiles() {
+        let coll = lit_collection(vec![lit_float(3.14)]);
+        let r = Format
+            .execute(&[lit_str("%f"), coll], &mut MockCtx)
+            .unwrap();
+        // f64::to_string formatting — exact form pinned for regression.
+        assert_eq!(r.into_value(), Value::String("3.14".into()));
     }
 
     #[test]
