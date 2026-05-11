@@ -28,6 +28,15 @@ jobs:
           toolchain: stable
           components: clippy, rustfmt
 
+      - name: Install lld (faster linker)
+        run: sudo apt-get update && sudo apt-get install -y lld
+
+      - name: Enable lld for Rust compilation
+        # Routed through RUSTFLAGS instead of `.cargo/config.toml` so it's
+        # CI-only — local contributors opt in via
+        # `.cargo/config.toml.example` → `.cargo/config.local.toml`.
+        run: echo "RUSTFLAGS=-C link-arg=-fuse-ld=lld" >> $GITHUB_ENV
+
       - name: Cache Cargo dependencies
         uses: actions/cache@v4
         with:
@@ -41,6 +50,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.4
+
+      - name: Enable sccache as RUSTC_WRAPPER
+        # Caches rustc output across CI runs (keyed on input content), so
+        # branches with the same dep tree see compilation effectively free
+        # on the second run. Cold first run is unchanged.
+        run: |
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+
       - name: Check Formatting (cargo fmt)
         run: cargo fmt --check
 
@@ -50,11 +70,22 @@ jobs:
       - name: Standard Lint (cargo lint)
         run: cargo lint
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Install cargo-llvm-cov + cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
 
       - name: Build, Test, and Enforce 85% Coverage
-        run: cargo llvm-cov --workspace --exclude legend-pure-parser-stress --exclude legend-pure-parser-jni --fail-under-lines 85
+        # `cargo llvm-cov nextest` runs each #[test] in its own process,
+        # parallelized across all cores — typically 2-4× faster than the
+        # serial `cargo test` runner on this workspace.
+        run: cargo llvm-cov nextest --workspace --exclude legend-pure-parser-stress --exclude legend-pure-parser-jni --fail-under-lines 85
+
+      - name: Run Doctests
+        # nextest does not execute doctests; with `#![deny(missing_docs)]`
+        # on the public crates we have `///` examples that must keep
+        # compiling and (where executable) running.
+        run: cargo test --doc --workspace
 
       - name: Run Benchmarks (cargo bench)
         run: cargo bench --workspace

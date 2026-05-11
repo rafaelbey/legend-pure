@@ -123,3 +123,34 @@ debug = "line-tables-only"
 
 [profile.test]
 inherits = "dev"
+
+# Compile build scripts and proc-macros with optimization. Default cargo
+# build-override inherits opt-level=0 from dev, which makes our
+# `core-platform-pure` build script run the entire Pure compiler
+# interpreted-equivalent against ~244 files / ~1660 elements on every
+# cold build. opt-3 here is the single biggest cold-build win.
+[profile.dev.build-override]
+opt-level = 3
+codegen-units = 16
+
+[profile.test.build-override]
+opt-level = 3
+codegen-units = 16
+
+# Heavy frontend deps that every crate transitively waits on. Compiling
+# them unoptimized stretches the proc-macro expansion and serialization
+# critical path; opt-3 once, reuse everywhere.
+[profile.dev.package.syn]
+opt-level = 3
+[profile.dev.package.serde_derive]
+opt-level = 3
+[profile.dev.package.proc-macro2]
+opt-level = 3
+[profile.dev.package.quote]
+opt-level = 3
+[profile.dev.package.regex]
+opt-level = 3
+[profile.dev.package.regex-syntax]
+opt-level = 3
+[profile.dev.package.regex-automata]
+opt-level = 3
