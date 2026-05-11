@@ -25,6 +25,13 @@ legend-pure-parser-ast = { path = "../ast" }
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-pure = { path = "../pure" }
 legend-pure-core-platform = { path = "../core-platform-pure" }
+# Runtime: needed for `workspace/executeCommand` to evaluate
+# parameterless Pure functions from the gutter ▶ Run icon. The LSP
+# already has the workspace's compiled `PureModel` in memory, so
+# running the function in-process is materially cheaper (no model
+# rebuild) AND correct (sees the workspace's classpath + open
+# buffers) compared to shelling out to `legend run`.
+legend-pure-runtime = { path = "../runtime" }
 # DSL extensions — the LSP is the integration point that owns
 # DSL knowledge so `core-platform-pure` can stay below them in
 # the dep graph.

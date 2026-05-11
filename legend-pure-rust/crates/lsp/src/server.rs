@@ -28,11 +28,11 @@ use tower_lsp_server::jsonrpc::Result as JsonResult;
 use tower_lsp_server::ls_types::{
     CodeLens, CodeLensOptions, CodeLensParams, DidChangeTextDocumentParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
-    GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability, InitializeParams,
-    InitializeResult, InitializedParams, MessageType, OneOf, ServerCapabilities, ServerInfo,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Uri, WorkspaceSymbolParams,
-    WorkspaceSymbolResponse,
+    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, ExecuteCommandOptions,
+    ExecuteCommandParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, LSPAny,
+    MessageType, OneOf, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Uri, WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
 use tower_lsp_server::{Client, LanguageServer};
 
@@ -132,6 +132,32 @@ impl LanguageServer for Backend {
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 code_lens_provider: Some(CodeLensOptions {
                     resolve_provider: Some(false),
+                }),
+                // `▶ Run` / `▶ Run test` gutter clicks dispatch
+                // through `workspace/executeCommand`. The IDE-side
+                // gutter contributor (`PureRunLineMarkerContributor`
+                // in the IntelliJ plugin) sends one of these two
+                // command names with the function FQN as
+                // `arguments[0]`; the server evaluates the function
+                // against its in-memory `PureModel` and returns the
+                // rendered value. Goes through the LSP instead of a
+                // separate CLI subprocess so we hit the workspace's
+                // classpath + open buffers, not just the embedded
+                // platform.
+                execute_command_provider: Some(ExecuteCommandOptions {
+                    commands: vec![
+                        "legend.run".into(),
+                        "legend.runTest".into(),
+                        // `<<PCT.test>>` execution — takes `[fqn,
+                        // adapterFqn]` so the IDE-side popup can
+                        // pre-resolve which adapter to use.
+                        "legend.runPCT".into(),
+                        // Adapter discovery — returns `[{name,
+                        // fqn}]` from the compiled model. Backs
+                        // the PCT-adapter popup.
+                        "legend.listPctAdapters".into(),
+                    ],
+                    work_done_progress_options: Default::default(),
                 }),
                 ..ServerCapabilities::default()
             },
@@ -328,6 +354,40 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         Ok(Some(handlers::code_lenses_for(model, &canonical)))
+    }
+
+    async fn execute_command(
+        &self,
+        params: ExecuteCommandParams,
+    ) -> JsonResult<Option<LSPAny>> {
+        let command = params.command;
+        tracing::info!(
+            command = %command,
+            arg_count = params.arguments.len(),
+            "workspace/executeCommand",
+        );
+        // Run in the LSP's own runtime, against the workspace's
+        // compiled `PureModel`. This is what lets the gutter ▶
+        // icon see user-defined functions in the configured
+        // classpath — shelling out to `legend run` only ever
+        // loads the embedded platform.
+        let result = handlers::execute_legend_command(
+            self.workspace.clone(),
+            command.as_str(),
+            &params.arguments,
+        )
+        .await;
+        self.client
+            .log_message(
+                if result.error.is_some() {
+                    MessageType::WARNING
+                } else {
+                    MessageType::INFO
+                },
+                result.summary(),
+            )
+            .await;
+        Ok(Some(serde_json::to_value(&result).unwrap_or(serde_json::Value::Null)))
     }
 }
 

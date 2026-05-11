@@ -1242,6 +1242,7 @@ dependencies = [
  "legend-pure-parser-ast",
  "legend-pure-parser-parser",
  "legend-pure-parser-pure",
+ "legend-pure-runtime",
  "serde",
  "serde_json",
  "smol_str",
