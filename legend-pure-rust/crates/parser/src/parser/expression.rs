@@ -536,10 +536,18 @@ impl Parser {
                     vec![]
                 };
 
+                // Merge the start span (`^` token, captured before this
+                // match arm) with the path's last-segment span so
+                // `class_ref.source_info` covers the whole `^abc::Class1`
+                // prefix (sans `()`). Without this, the lowered
+                // `PackageableElementRef` carries a near-zero-width span
+                // and Cmd-click on `Class1` inside `^abc::Class1()` falls
+                // outside the index's recorded region.
+                let class_span = si.merge(legend_pure_parser_ast::source_info::Spanned::source_info(&path));
                 let class_ref = PackageableElementPtr {
                     package: pkg,
                     name,
-                    source_info: si.clone(),
+                    source_info: class_span,
                 };
                 // Optional instance name: `^Type name(props)`. The Java
                 // grammar accepts a single identifier between the type
@@ -738,6 +746,13 @@ impl Parser {
                     None
                 };
 
+                // Span the whole FQN (`abc::Sub::Name`) for the
+                // resulting `PackageableElementPtr.source_info` so the
+                // goto-def index records a clickable region covering
+                // every segment. Without this, the `si` we'd inherit
+                // is just the position before the path — a single-
+                // token span. Mirrors the merge done for type refs.
+                let fqn_span = si.merge(legend_pure_parser_ast::source_info::Spanned::source_info(&path));
                 if self.cursor.check(TokenKind::LParen) {
                     // Function call: name(args)
                     self.cursor.advance();
@@ -754,7 +769,7 @@ impl Parser {
                     let func = PackageableElementPtr {
                         package: pkg,
                         name,
-                        source_info: si.clone(),
+                        source_info: fqn_span.clone(),
                     };
                     Ok(Expression::FunctionApplication(FunctionApplication {
                         function: func,
@@ -770,11 +785,11 @@ impl Parser {
                     let element = PackageableElementPtr {
                         package: pkg,
                         name,
-                        source_info: si.clone(),
+                        source_info: fqn_span.clone(),
                     };
                     Ok(Expression::PackageableElementRef(PackageableElementRef {
                         element,
-                        source_info: si,
+                        source_info: fqn_span,
                     }))
                 }
             }

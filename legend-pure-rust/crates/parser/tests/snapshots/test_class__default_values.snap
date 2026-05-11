@@ -280,7 +280,7 @@ SourceFile {
                                                                 start_line: 23,
                                                                 start_column: 30,
                                                                 end_line: 23,
-                                                                end_column: 31,
+                                                                end_column: 38,
                                                             },
                                                         },
                                                         source_info: SourceInfo {
@@ -288,7 +288,7 @@ SourceFile {
                                                             start_line: 23,
                                                             start_column: 30,
                                                             end_line: 23,
-                                                            end_column: 31,
+                                                            end_column: 38,
                                                         },
                                                     },
                                                 ),
