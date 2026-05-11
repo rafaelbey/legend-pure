@@ -64,25 +64,41 @@ pub enum OpType {
 
 /// Lookup scope passed to [`infer_op_type`].
 ///
-/// Today carries only the owning database's resolved-table map
-/// (used to type column refs by their declared SQL type). Cross-db
-/// `[db]` qualifiers, include traversal, and `{target}` binding are
-/// deferred — see module doc.
+/// Two independently optional bindings:
+///
+/// - `tables_by_name` — the owning database's resolved-table map; used
+///   to type explicit alias refs (`tradeTable.col`).
+/// - `target_subject` — the implicit `{target}` subject table, used to
+///   type `{target}.col` refs against the column's declared SQL type.
+///   Plan-generation context decides what the subject is (e.g. the
+///   class-mapping's main table for a MultiGrainFilter, the other
+///   end of a Join chain, …). When unset, `{target}.col` defaults to
+///   `Any` — the existing conservative behaviour.
+///
+/// Cross-db `[db]` qualifiers and include traversal of the table map
+/// remain deferred — see module doc.
 #[derive(Clone, Copy)]
 pub struct OpTypeScope<'a> {
     /// Resolved tables visible directly on the owning database.
     /// `None` when the snapshot is missing (defensive — should not
     /// happen post-`define_bodies` but the typer must stay total).
     pub tables_by_name: Option<&'a HashMap<SmolStr, ResolvedTable>>,
+    /// Implicit subject table bound to `{target}`. `None` at the
+    /// Filter / Join / MultiGrainFilter declaration site (where the
+    /// subject is not yet decided); set by downstream consumers
+    /// (plan generation, class-mapping application) once the binding
+    /// is known.
+    pub target_subject: Option<&'a ResolvedTable>,
 }
 
 impl<'a> OpTypeScope<'a> {
     /// Build a scope from a `ResolvedDatabase`'s `tables_by_name`
-    /// map.
+    /// map. `{target}` stays unbound.
     #[must_use]
     pub fn from_tables(tables: &'a HashMap<SmolStr, ResolvedTable>) -> Self {
         Self {
             tables_by_name: Some(tables),
+            target_subject: None,
         }
     }
 
@@ -92,7 +108,23 @@ impl<'a> OpTypeScope<'a> {
     pub fn empty() -> Self {
         Self {
             tables_by_name: None,
+            target_subject: None,
         }
+    }
+
+    /// Augment a scope with an implicit `{target}` subject. The
+    /// subject's columns become reachable through
+    /// `OpColumn::Target { column, .. }` refs. Returns a new
+    /// `OpTypeScope` value (the original is `Copy`).
+    ///
+    /// Java parity: at plan-generation time, the surrounding
+    /// Filter / Join / MGF chain pins the subject before any SQL
+    /// emission walks the body — `{target}` resolves to a definite
+    /// table at that point.
+    #[must_use]
+    pub fn with_target_subject(mut self, subject: &'a ResolvedTable) -> Self {
+        self.target_subject = Some(subject);
+        self
     }
 }
 
@@ -149,8 +181,11 @@ pub const KNOWN_BOOLEAN_DYNAFUNCTIONS: &[&str] = &[
 ///   [`KNOWN_BOOLEAN_DYNAFUNCTIONS`]; otherwise [`OpType::Any`].
 /// - `Column(Aliased)` resolves the column on the scope's table
 ///   map; missed lookups return [`OpType::Any`].
-/// - `Column(Target)`: [`OpType::Any`] — `{target}` binding is
-///   context-dependent and not threaded today (out of scope).
+/// - `Column(Target)` resolves against `scope.target_subject` when
+///   set; falls back to [`OpType::Any`] when the subject is unbound
+///   (declaration-site context) or the column is not on the
+///   subject (defensive — caller is expected to validate column
+///   existence separately).
 /// - `Literal(String|Integer|Float)`: matching primitive type.
 /// - `Array`: [`OpType::Any`] (rarely sits at top-level; collection
 ///   semantics belong to the surrounding `in(...)` shape).
@@ -190,7 +225,20 @@ pub fn infer_op_type(expr: &OpExpr, scope: OpTypeScope<'_>) -> OpType {
             };
             col.pure_type.map_or(OpType::Any, classify_column_type)
         }
-        OpExpr::Column(OpColumn::Target { .. }) | OpExpr::Array { .. } => OpType::Any,
+        OpExpr::Column(OpColumn::Target { column, .. }) => {
+            // `{target}.col` types against the implicit subject when
+            // the caller pinned one; otherwise the declaration-site
+            // fallback to `Any` (no false positives on un-pinned
+            // bodies).
+            let Some(subject) = scope.target_subject else {
+                return OpType::Any;
+            };
+            let Some(col) = subject.column(column.value.as_str()) else {
+                return OpType::Any;
+            };
+            col.pure_type.map_or(OpType::Any, classify_column_type)
+        }
+        OpExpr::Array { .. } => OpType::Any,
         OpExpr::Literal(OpLiteral::String { .. }) => OpType::String,
         OpExpr::Literal(OpLiteral::Integer { .. } | OpLiteral::Float { .. }) => OpType::Numeric,
     }
@@ -315,5 +363,133 @@ mod tests {
             source_info: si(),
         });
         assert_eq!(infer_op_type(&expr, OpTypeScope::empty()), OpType::Any);
+    }
+
+    // -----------------------------------------------------------------
+    // `{target}` structural tracking (T3.2): when the caller pins an
+    // implicit subject, `{target}.col` types against the subject's
+    // declared column SQL type. When no subject is pinned, the column
+    // ref still defaults to `Any` (declaration-site safety net).
+    // -----------------------------------------------------------------
+
+    fn col(name: &str, pct: PureColumnType) -> crate::processor::ResolvedColumn {
+        crate::processor::ResolvedColumn {
+            name: SmolStr::new(name),
+            source_type: SmolStr::new("<test>"),
+            pure_type: Some(pct),
+            size: None,
+            scale: None,
+            primary_key: false,
+            not_null: false,
+        }
+    }
+
+    fn subject(name: &str, cols: Vec<crate::processor::ResolvedColumn>) -> ResolvedTable {
+        let columns_by_name: HashMap<SmolStr, usize> = cols
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.name.clone(), i))
+            .collect();
+        ResolvedTable {
+            schema: None,
+            name: SmolStr::new(name),
+            columns: cols,
+            columns_by_name,
+            milestoning: None,
+        }
+    }
+
+    fn target_col(name: &str) -> OpExpr {
+        OpExpr::Column(OpColumn::Target {
+            column: legend_pure_parser_ast::annotation::SpannedString {
+                value: SmolStr::new(name),
+                source_info: si(),
+            },
+            primary_key: false,
+            source_info: si(),
+        })
+    }
+
+    #[test]
+    fn target_column_types_against_pinned_subject_string_column() {
+        let t = subject("tradeTable", vec![col("name", PureColumnType::Varchar)]);
+        let scope = OpTypeScope::empty().with_target_subject(&t);
+        assert_eq!(infer_op_type(&target_col("name"), scope), OpType::String);
+    }
+
+    #[test]
+    fn target_column_types_against_pinned_subject_numeric_column() {
+        let t = subject(
+            "tradeTable",
+            vec![col("qty", PureColumnType::Integer), col("name", PureColumnType::Varchar)],
+        );
+        let scope = OpTypeScope::empty().with_target_subject(&t);
+        assert_eq!(infer_op_type(&target_col("qty"), scope), OpType::Numeric);
+    }
+
+    #[test]
+    fn target_column_unknown_column_on_subject_falls_back_to_any() {
+        // Mirror Java's behaviour: an unrecognised column name doesn't
+        // produce a false-positive type — separate column-existence
+        // validation owns that diagnostic. `infer_op_type` just stays
+        // total and conservative.
+        let t = subject("tradeTable", vec![col("qty", PureColumnType::Integer)]);
+        let scope = OpTypeScope::empty().with_target_subject(&t);
+        assert_eq!(
+            infer_op_type(&target_col("not_a_column"), scope),
+            OpType::Any
+        );
+    }
+
+    #[test]
+    fn target_column_without_subject_stays_any() {
+        // Existing behaviour preserved when no subject is pinned —
+        // ensures the typer can still be called from declaration-site
+        // validators (which have no implicit subject) without
+        // regression.
+        let scope = OpTypeScope::empty();
+        assert_eq!(infer_op_type(&target_col("month"), scope), OpType::Any);
+    }
+
+    #[test]
+    fn aliased_column_unaffected_by_target_subject() {
+        // Pinning a subject must not affect aliased refs — they
+        // resolve via `tables_by_name`, not the subject. Belt-and-
+        // braces: regression-protect the separation.
+        let t = subject("tradeTable", vec![col("name", PureColumnType::Varchar)]);
+        let scope = OpTypeScope::empty().with_target_subject(&t);
+        // No tables_by_name → aliased lookup fails → Any.
+        let aliased = OpExpr::Column(OpColumn::Aliased {
+            db: None,
+            alias: legend_pure_parser_ast::annotation::SpannedString {
+                value: SmolStr::new("tradeTable"),
+                source_info: si(),
+            },
+            scope: vec![legend_pure_parser_ast::annotation::SpannedString {
+                value: SmolStr::new("name"),
+                source_info: si(),
+            }],
+            primary_key: false,
+            source_info: si(),
+        });
+        assert_eq!(infer_op_type(&aliased, scope), OpType::Any);
+    }
+
+    #[test]
+    fn target_subject_drives_compare_predicate_inference() {
+        // The motivating use case: `{target}.col = literal` types as
+        // Boolean. The Compare wrapper already types as Boolean
+        // unconditionally — but verify the subject lookup happens
+        // inside the comparison's operand without panicking.
+        use crate::ast::BinOp;
+        let t = subject("tradeTable", vec![col("qty", PureColumnType::Integer)]);
+        let scope = OpTypeScope::empty().with_target_subject(&t);
+        let cmp = OpExpr::Compare {
+            op: BinOp::Eq,
+            lhs: Box::new(target_col("qty")),
+            rhs: Box::new(lit_int(0)),
+            source_info: si(),
+        };
+        assert_eq!(infer_op_type(&cmp, scope), OpType::Boolean);
     }
 }
