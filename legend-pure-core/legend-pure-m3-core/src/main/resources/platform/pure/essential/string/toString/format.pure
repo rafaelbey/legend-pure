@@ -128,10 +128,18 @@ function <<test.Test>> meta::pure::functions::string::tests::format::testFormatI
 
 function <<test.Test>> meta::pure::functions::string::tests::format::testFormatTooFewInputs():Boolean[1]
 {
-    assertError(|format('Hello %s %s', ['Catherine']), 'Too few arguments passed to format function. Format expression "Hello %s %s", number of arguments [1]');
+    // Format string and args list are intentionally arity-mismatched
+    // here to pin the runtime error; the Rust port's compile-time
+    // validator (T-20260511-05) only inspects literal call sites, so
+    // we route the format string through a `let` so the static
+    // validator silently defers to the runtime check below.
+    let fmt = 'Hello %s %s';
+    assertError(|$fmt->format(['Catherine']), 'Too few arguments passed to format function. Format expression "Hello %s %s", number of arguments [1]');
 }
 
 function <<test.Test>> meta::pure::functions::string::tests::format::testFormatTooManyInputs():Boolean[1]
 {
-    assertError(|format('Hello %s %s', ['Catherine', 'Joe', 'Katie']), 'Unused format args. [3] arguments provided to expression "Hello %s %s"');
+    // See `testFormatTooFewInputs` for the `let`-binding rationale.
+    let fmt = 'Hello %s %s';
+    assertError(|$fmt->format(['Catherine', 'Joe', 'Katie']), 'Unused format args. [3] arguments provided to expression "Hello %s %s"');
 }

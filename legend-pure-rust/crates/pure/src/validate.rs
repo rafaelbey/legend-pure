@@ -125,6 +125,13 @@ pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
     // value-vs-property compat lives here.
     errors.extend(validate_constructor_bindings(model));
 
+    // `format(literal-template, [literal-args])` specifier compat —
+    // an eager static check beyond Java parity (Java validates only
+    // at runtime). Skips silently when either the format string isn't
+    // a literal or the args list isn't a literal collection — runtime
+    // is the source of truth for dynamic cases.
+    errors.extend(validate_format_specifiers(model));
+
     // Access-level (`<<access.private/protected>>`) use-site walk:
     // walks every `ElementId` reference inside each non-bootstrap
     // element and checks the *target's* access level. Targets
@@ -722,6 +729,190 @@ fn check_new_call(vs: &ValueSpec, model: &PureModel, errors: &mut Vec<Compilatio
                 },
             });
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Format-specifier compile-time validation (T-20260511-05)
+//
+// Java parity reference: NONE — Java validates format only at runtime
+// (`Format.java` in `legend-pure-runtime/...`). This validator is a
+// strictly-stronger static signal, gated on both the format string AND
+// the args collection being literal so we never false-alarm on dynamic
+// cases. Spec types match Java's runtime check: `%d`=Integer (Format.java:105),
+// `%f`=Float (:156), `%t`=Date (:115); `%s` and `%r` accept any type
+// at runtime (Java calls `toString` / `toRepresentation`).
+// ---------------------------------------------------------------------------
+
+fn validate_format_specifiers(model: &PureModel) -> Vec<CompilationError> {
+    // Find every `format(...)` overload declared at FQN
+    // `meta::pure::functions::string::format`. Function ElementIds use
+    // mangled names (`format_String_1__Any_MANY__String_1_`), so
+    // `resolve_by_path` keyed on the simple name "format" misses them.
+    // Walk every Function once and collect the candidates whose
+    // package FQN matches the platform location and whose simple
+    // `function_name` is "format".
+    let format_pkg: [&str; 4] = ["meta", "pure", "functions", "string"];
+    let mut format_ids: Vec<crate::ids::ElementId> = Vec::new();
+    for chunk in model.chunks.iter() {
+        for (local_idx, el) in chunk.elements.iter() {
+            let crate::model::Element::Function(f) = el else {
+                continue;
+            };
+            if f.function_name.as_str() != "format" {
+                continue;
+            }
+            let id = crate::ids::ElementId::InstanceId {
+                chunk_id: chunk.chunk_id,
+                local_idx,
+            };
+            let fqn = crate::purem::fqn_path::element_fqn_path(model, id);
+            // `fqn` is the full path including the mangled name as
+            // the last segment; the package is the prefix.
+            if fqn.len() == format_pkg.len() + 1
+                && fqn
+                    .iter()
+                    .take(format_pkg.len())
+                    .zip(format_pkg.iter())
+                    .all(|(a, b)| a.as_str() == *b)
+            {
+                format_ids.push(id);
+            }
+        }
+    }
+    if format_ids.is_empty() {
+        // No platform `format` declaration loaded (bootstrap-only test
+        // fixture) — no-op, no call sites to validate.
+        return Vec::new();
+    }
+
+    let mut errors = Vec::new();
+    for chunk in model.chunks.iter().skip(1) {
+        for (_local_idx, element) in chunk.elements.iter() {
+            visit_value_specs_in_element(element, &mut |vs| {
+                check_format_call(vs, &format_ids, model, &mut errors);
+            });
+        }
+    }
+    errors
+}
+
+fn check_format_call(
+    vs: &ValueSpec,
+    format_ids: &[crate::ids::ElementId],
+    model: &PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    let ExprKind::FunctionCall(data) = vs.kind.as_ref() else {
+        return;
+    };
+    // Match by element id — short name "format" might collide with
+    // user-defined functions in any package. We collected every
+    // overload of `meta::pure::functions::string::format` upstream;
+    // any of them counts as the platform `format`.
+    let Some(target) = data.function else {
+        return;
+    };
+    if !format_ids.contains(&target) {
+        return;
+    }
+    if data.arguments.len() != 2 {
+        return;
+    }
+    // Receiver must be a literal string.
+    let ExprKind::StringLiteral(template) = data.arguments[0].kind.as_ref() else {
+        return;
+    };
+    // Args must be a literal collection. (A `Variable`-typed `Any[*]`
+    // also lowers through this path but we can't statically inspect
+    // its element types — runtime is the source of truth.)
+    let ExprKind::Collection { elements } = data.arguments[1].kind.as_ref() else {
+        return;
+    };
+
+    let specs = crate::format_spec::parse_format_specs(template);
+
+    // Arity diagnostic anchors on the args-collection node so the
+    // span lands on `[...]`, not the entire `'fmt'->format([...])`.
+    if specs.len() != elements.len() {
+        errors.push(CompilationError {
+            message: format!(
+                "format(...) expects {} argument(s) but the literal collection has {}",
+                specs.len(),
+                elements.len(),
+            ),
+            source_info: data.arguments[1].source_info.clone(),
+            kind: CompilationErrorKind::FormatSpecifierArityMismatch {
+                specifiers: specs.len(),
+                args: elements.len(),
+            },
+        });
+        // Continue with the matching prefix so per-position
+        // diagnostics still fire on overlapping indices.
+    }
+
+    let common = specs.len().min(elements.len());
+    for i in 0..common {
+        let spec = &specs[i];
+        let Some(expected_name) = crate::format_spec::required_primitive_for(spec.spec) else {
+            // %s / %r accept any type — Java parity.
+            continue;
+        };
+        let Some(expected_id) = primitive_id_for(&expected_name) else {
+            continue;
+        };
+        let Some(rt) = elements[i].type_info.as_deref() else {
+            // No inferred type — runtime is the fallback.
+            continue;
+        };
+        // Subtype-aware check: Java does `Instance.instanceOf(arg,
+        // M3Paths.<Type>)`, which honors the subtype chain. For
+        // `%t` that means a `DateTime` or `StrictDate` argument
+        // satisfies the `Date` constraint
+        // (`bootstrap.rs:174-175` — both extend `Date`). For
+        // `%d` / `%f`, Integer and Float are sibling primitives with
+        // no subtype relationship, so the structural check still
+        // strictly distinguishes them.
+        let expected_te = crate::types::TypeExpr::Named {
+            element: expected_id,
+            type_arguments: Vec::new(),
+            multiplicity_arguments: Vec::new(),
+            value_arguments: Vec::new(),
+        };
+        if crate::resolve::is_type_compatible_structural(&rt.type_expr, &expected_te, model) {
+            continue;
+        }
+        let actual = crate::infer::render_type(model, &rt.type_expr, &rt.multiplicity);
+        errors.push(CompilationError {
+            message: format!(
+                "format specifier '%{spec}' at argument {idx} expects {expected_name}, got {actual}",
+                spec = spec.spec,
+                idx = i,
+                expected_name = expected_name,
+                actual = actual,
+            ),
+            source_info: elements[i].source_info.clone(),
+            kind: CompilationErrorKind::FormatSpecifierTypeMismatch {
+                specifier: SmolStr::new(format!("%{}", spec.spec)),
+                arg_index: i,
+                expected: expected_name.clone(),
+                actual,
+            },
+        });
+    }
+}
+
+/// Map a Pure primitive name to its bootstrap `ElementId`.
+///
+/// `%d`/`%f`/`%t` are the only specifiers that constrain — the cases
+/// here are intentionally exhaustive over
+/// [`crate::format_spec::required_primitive_for`]'s `Some` returns.
+fn primitive_id_for(name: &SmolStr) -> Option<crate::ids::ElementId> {
+    match name.as_str() {
+        "Integer" => Some(crate::bootstrap::INTEGER_ID),
+        "Float" => Some(crate::bootstrap::FLOAT_ID),
+        "Date" => Some(crate::bootstrap::DATE_ID),
+        _ => None,
     }
 }
 

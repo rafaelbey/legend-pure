@@ -50,6 +50,7 @@ pub mod arena;
 pub mod bootstrap;
 pub mod error;
 pub mod extension;
+pub mod format_spec;
 pub mod fqn;
 pub mod ids;
 pub mod infer;

@@ -298,6 +298,51 @@ pub enum CompilationErrorKind {
         /// `T'[m']`.
         actual: SmolStr,
     },
+    /// A statically-resolvable `'…'->format([…])` call supplies an
+    /// argument whose inferred type doesn't satisfy the format
+    /// string's specifier at the corresponding position.
+    ///
+    /// Fires only when **both** the format-string receiver is a
+    /// `StringLiteral` and the args list is a literal `Collection` —
+    /// dynamic format strings or variable args lists silently defer
+    /// to the runtime, where the runtime-parity error
+    /// `"Expected <T>, got: <v>"` (Java parity, Format.java:107/117/158)
+    /// fires instead. Compile-time check at
+    /// [`crate::validate::validate_format_specifiers`].
+    ///
+    /// `%s` and `%r` accept any type (Java parity — both call
+    /// `toString` / `toRepresentation`); only `%d` (Integer),
+    /// `%f` (Float), and `%t` (Date) constrain. See
+    /// [`crate::format_spec::required_primitive_for`].
+    FormatSpecifierTypeMismatch {
+        /// The full specifier text including the leading `%`,
+        /// e.g. `"%d"`.
+        specifier: SmolStr,
+        /// 0-based position in the static args collection.
+        arg_index: usize,
+        /// Required primitive type rendered as a Pure type name
+        /// (e.g. `"Integer"`).
+        expected: SmolStr,
+        /// Inferred supplied-value type rendered as a Pure type
+        /// name.
+        actual: SmolStr,
+    },
+    /// The number of `%`-specifiers in a literal format string
+    /// doesn't equal the length of the literal args collection
+    /// at the same call site. Fires under the same static-only
+    /// gate as [`Self::FormatSpecifierTypeMismatch`].
+    ///
+    /// Java parity at runtime: `"Too few arguments passed to format
+    /// function..."` / `"Unused format args..."`
+    /// (Format.java:197-202). The compile-time variant is a
+    /// strictly-stronger eager signal beyond Java's runtime check.
+    FormatSpecifierArityMismatch {
+        /// Number of argument-consuming `%`-specifiers
+        /// (excluding `%%`).
+        specifiers: usize,
+        /// Number of elements in the supplied args collection.
+        args: usize,
+    },
     /// A signature references a multiplicity parameter name that the
     /// enclosing element's `<…|…>` clause doesn't declare. Fires
     /// resolver-eager — inside `resolve_type_ref` for the `<T|m>`
