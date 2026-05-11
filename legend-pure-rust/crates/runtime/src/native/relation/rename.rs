@@ -95,9 +95,7 @@ impl NativeFunction for Rename {
                 .any(|(i, c)| i != source_idx && c.name == to_name)
         {
             return Err(PureException::from(PureRuntimeError::EvaluationError(
-                format!(
-                    "rename: target column name '{to_name}' already exists in relation"
-                ),
+                format!("rename: target column name '{to_name}' already exists in relation"),
             )));
         }
 

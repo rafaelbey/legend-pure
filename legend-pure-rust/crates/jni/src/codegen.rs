@@ -29,9 +29,7 @@ use jni::JNIEnv;
 use jni::objects::{JClass, JObjectArray, JString};
 
 use legend_pure_core_platform::repo::{self, Repo};
-use legend_pure_java_codegen::{
-    FqnInput, JavaFile, Options, dispatch_bindings_by_kind, generate,
-};
+use legend_pure_java_codegen::{FqnInput, JavaFile, Options, dispatch_bindings_by_kind, generate};
 use smol_str::SmolStr;
 
 /// JNI entry called from
@@ -197,8 +195,14 @@ pub(crate) fn run_codegen(
             .insert(pure_fqn.clone(), java_fqn.clone());
     }
 
-    generate(&model, &requested, &extra_classes, &extra_associations, &opts)
-        .map_err(|e| e.to_string())
+    generate(
+        &model,
+        &requested,
+        &extra_classes,
+        &extra_associations,
+        &opts,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Pair the alternating `(pure_fqn, java_fqn)` flat array into a list
@@ -251,8 +255,7 @@ fn flatten_to_java_string_array<'local>(
     let string_class = env.find_class("java/lang/String")?;
     #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     let total_len = (files.len() * 2) as jni::sys::jsize;
-    let array =
-        env.new_object_array(total_len, &string_class, jni::objects::JObject::null())?;
+    let array = env.new_object_array(total_len, &string_class, jni::objects::JObject::null())?;
 
     for (i, file) in files.iter().enumerate() {
         let path_str = relative_path_with_forward_slashes(&file.relative_path);
@@ -288,31 +291,18 @@ mod tests {
     fn run_codegen_with_empty_inputs_errors_cleanly() {
         let err = run_codegen("com.example.gen", &[], &[], &[], &[], "", &[])
             .expect_err("empty seeds must error");
-        assert!(
-            err.contains("nothing to generate"),
-            "wrong error: {err}"
-        );
+        assert!(err.contains("nothing to generate"), "wrong error: {err}");
     }
 
     #[test]
     fn run_codegen_dispatches_bindings_lines() {
-        let lines = vec![
-            "meta::pure::functions::math::plus_Integer_MANY__Integer_1_".to_owned(),
-        ];
-        let files = run_codegen(
-            "com.example.gen",
-            &[],
-            &[],
-            &[],
-            &lines,
-            "",
-            &[],
-        )
-        .expect("plus dispatches and codegen succeeds");
+        let lines = vec!["meta::pure::functions::math::plus_Integer_MANY__Integer_1_".to_owned()];
+        let files = run_codegen("com.example.gen", &[], &[], &[], &lines, "", &[])
+            .expect("plus dispatches and codegen succeeds");
         assert!(
-            files.iter().any(|f| f
-                .relative_path
-                .ends_with("PureFunctions.java")),
+            files
+                .iter()
+                .any(|f| f.relative_path.ends_with("PureFunctions.java")),
             "facade not emitted: {:?}",
             files
                 .iter()
@@ -330,16 +320,8 @@ mod tests {
             "@pkg: ignored.here".to_owned(),
             "meta::pure::functions::math::plus_Integer_MANY__Integer_1_".to_owned(),
         ];
-        let files = run_codegen(
-            "com.example.gen",
-            &[],
-            &[],
-            &[],
-            &lines,
-            "",
-            &[],
-        )
-        .expect("comment + whitespace + directive lines stripped");
+        let files = run_codegen("com.example.gen", &[], &[], &[], &lines, "", &[])
+            .expect("comment + whitespace + directive lines stripped");
         assert!(!files.is_empty());
     }
 
@@ -348,10 +330,7 @@ mod tests {
         let lines = vec!["totally::made::up".to_owned()];
         let err = run_codegen("com.example.gen", &[], &[], &[], &lines, "", &[])
             .expect_err("unresolved entry must error");
-        assert!(
-            err.contains("totally::made::up"),
-            "wrong error: {err}"
-        );
+        assert!(err.contains("totally::made::up"), "wrong error: {err}");
     }
 
     #[test]
@@ -362,8 +341,8 @@ mod tests {
 
     #[test]
     fn pair_external_bindings_errors_on_odd_length() {
-        let err = pair_external_bindings(&["only-one".to_owned()])
-            .expect_err("odd length must error");
+        let err =
+            pair_external_bindings(&["only-one".to_owned()]).expect_err("odd length must error");
         assert!(err.contains("even-length"), "wrong error: {err}");
     }
 

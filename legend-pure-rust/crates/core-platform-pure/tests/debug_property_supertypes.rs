@@ -151,11 +151,7 @@ fn debug_property_supertypes() {
             legend_pure_parser_pure::model::Element::Class(c) => &c.super_types[..],
             _ => &[],
         };
-        println!(
-            "  [d={depth}] {} → {} super(s)",
-            node.name,
-            supers.len()
-        );
+        println!("  [d={depth}] {} → {} super(s)", node.name, supers.len());
         for (i, st) in supers.iter().enumerate() {
             println!("    [{i}] {st:?}");
         }

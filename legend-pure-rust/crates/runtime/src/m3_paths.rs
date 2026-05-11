@@ -126,8 +126,7 @@ pub const GETTER_OVERRIDE: &Classifier = "meta::pure::metamodel::type::GetterOve
 /// overload to replace the default constraint-check pass. When the
 /// manager is invoked, its return value replaces the dynamicNew result
 /// (parity with Java `DefaultConstraintHandler.handleConstraints`).
-pub const CONSTRAINTS_OVERRIDE: &Classifier =
-    "meta::pure::metamodel::type::ConstraintsOverride";
+pub const CONSTRAINTS_OVERRIDE: &Classifier = "meta::pure::metamodel::type::ConstraintsOverride";
 
 /// `meta::pure::metamodel::type::ConstraintsGetterOverride` — combined
 /// override carrying both the getter-hook lambdas (inherited from

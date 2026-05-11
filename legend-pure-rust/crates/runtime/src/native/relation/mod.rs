@@ -79,19 +79,13 @@ pub fn register(registry: &mut NativeRegistry) {
         "rename_Relation_1__ColSpec_1__ColSpec_1__Relation_1_",
         Rename,
     );
-    registry.register(
-        "select_Relation_1__ColSpec_1__Relation_1_",
-        SelectColSpec,
-    );
+    registry.register("select_Relation_1__ColSpec_1__Relation_1_", SelectColSpec);
     registry.register(
         "select_Relation_1__ColSpecArray_1__Relation_1_",
         SelectColSpecArray,
     );
     registry.register("columns_Relation_1__Column_MANY_", Columns);
-    registry.register(
-        "sort_Relation_1__SortInfo_MANY__Relation_1_",
-        Sort,
-    );
+    registry.register("sort_Relation_1__SortInfo_MANY__Relation_1_", Sort);
     registry.register("ascending_ColSpec_1__SortInfo_1_", Ascending);
     registry.register("descending_ColSpec_1__SortInfo_1_", Descending);
 }

@@ -171,8 +171,7 @@ fn project_tds(
             .iter()
             .position(|c| c.name.as_str() == name.as_str())
             .ok_or_else(|| {
-                let available: Vec<&str> =
-                    parsed.columns.iter().map(|c| c.name.as_str()).collect();
+                let available: Vec<&str> = parsed.columns.iter().map(|c| c.name.as_str()).collect();
                 PureException::from(PureRuntimeError::EvaluationError(format!(
                     "select: column '{name}' not present in receiver; have {available:?}"
                 )))

@@ -297,9 +297,7 @@ impl CompilerExtension for DiagramExtension {
                                     "Failed to encode DiagramSnapshot for '{fqn}': {e}"
                                 ),
                                 source_info: d.source_info.clone(),
-                                kind: CompilationErrorKind::DuplicateElement {
-                                    name: fqn.clone(),
-                                },
+                                kind: CompilationErrorKind::DuplicateElement { name: fqn.clone() },
                             });
                             continue;
                         }

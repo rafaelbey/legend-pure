@@ -113,5 +113,4 @@ fn diagram_purem_roundtrip_preserves_diagrams() {
         post[0].1, pre[0].1,
         "DiagramSnapshot must match exactly through .purem round-trip"
     );
-
 }

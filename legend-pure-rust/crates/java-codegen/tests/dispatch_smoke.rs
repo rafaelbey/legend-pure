@@ -84,11 +84,8 @@ fn unresolved_entry_surfaces_typed_error() {
 fn unsupported_kind_surfaces_typed_error() {
     let model = common::compile_with_platform(None);
     // Profiles aren't dispatchable by this helper.
-    let err = dispatch_bindings_by_kind(
-        &model,
-        &["meta::pure::profiles::doc".to_owned()],
-    )
-    .expect_err("profile entry must error");
+    let err = dispatch_bindings_by_kind(&model, &["meta::pure::profiles::doc".to_owned()])
+        .expect_err("profile entry must error");
     match err {
         CodegenError::BindingsFileEntryWrongKind { fqn, kind } => {
             assert_eq!(fqn, "meta::pure::profiles::doc");
@@ -101,8 +98,7 @@ fn unsupported_kind_surfaces_typed_error() {
 #[test]
 fn empty_input_returns_empty_buckets() {
     let model = common::compile_with_platform(None);
-    let dispatched =
-        dispatch_bindings_by_kind(&model, &[]).expect("empty input is fine");
+    let dispatched = dispatch_bindings_by_kind(&model, &[]).expect("empty input is fine");
     assert!(dispatched.functions.is_empty());
     assert!(dispatched.classes.is_empty());
     assert!(dispatched.associations.is_empty());

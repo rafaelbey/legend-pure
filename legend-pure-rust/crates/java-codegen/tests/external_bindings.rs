@@ -93,7 +93,8 @@ fn external_class_supertype_is_skipped_and_referenced_externally() {
         "Mapping must extend the imported Account: {src}"
     );
     assert!(
-        src.contains("org.upstream.gen.Account parent()") || src.contains("Optional<org.upstream.gen.Account> parent()"),
+        src.contains("org.upstream.gen.Account parent()")
+            || src.contains("Optional<org.upstream.gen.Account> parent()"),
         "parent property must reference imported Account: {src}"
     );
     assert!(

@@ -105,7 +105,6 @@ fn relational_purem_roundtrip_preserves_databases() {
         post[0].1, pre[0].1,
         "DatabaseSnapshot must match exactly through .purem round-trip"
     );
-
 }
 
 #[test]

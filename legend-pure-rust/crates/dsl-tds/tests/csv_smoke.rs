@@ -342,14 +342,8 @@ fn boolean_override_accepts_case_insensitive_true_false() {
         multiplicity: None,
     }];
     let parsed = parse_and_infer("flag\nTrue\nFALSE\n", &overrides).expect("should succeed");
-    assert!(matches!(
-        parsed.rows[0][0],
-        Some(TypedCell::Boolean(true))
-    ));
-    assert!(matches!(
-        parsed.rows[1][0],
-        Some(TypedCell::Boolean(false))
-    ));
+    assert!(matches!(parsed.rows[0][0], Some(TypedCell::Boolean(true))));
+    assert!(matches!(parsed.rows[1][0], Some(TypedCell::Boolean(false))));
 }
 
 // ---------------------------------------------------------------------------
@@ -452,9 +446,15 @@ fn qualified_class_override_carries_package_and_name() {
     }];
     let parsed = parse_and_infer("v\n\"[1,2,3]\"\n", &overrides).expect("should succeed");
     let ColumnType::Other { package, name } = &parsed.columns[0].type_tag else {
-        panic!("expected Other variant; got {:?}", parsed.columns[0].type_tag);
+        panic!(
+            "expected Other variant; got {:?}",
+            parsed.columns[0].type_tag
+        );
     };
-    assert_eq!(package.as_ref().unwrap().as_str(), "meta::pure::metamodel::variant");
+    assert_eq!(
+        package.as_ref().unwrap().as_str(),
+        "meta::pure::metamodel::variant"
+    );
     assert_eq!(name.as_str(), "Variant");
     // Cells stored as String — the runtime reconstructs the typed
     // value from the raw text.

@@ -373,7 +373,9 @@ fn diamond_overrides(
             // class — fall back to throwing at runtime so the generated
             // code still compiles. The proxy invocation handler routes
             // around this body in practice.
-            None => "java.util.Objects.requireNonNull(null, \"abstract diamond property\")".to_owned(),
+            None => {
+                "java.util.Objects.requireNonNull(null, \"abstract diamond property\")".to_owned()
+            }
         };
         out.push(DiamondOverride {
             name: name.clone(),
@@ -403,11 +405,10 @@ fn walk_ancestors_collecting(
         {
             if let Element::Class(ancestor) = model.get_element(*element) {
                 for prop in &ancestor.properties {
-                    by_name.entry(prop.name.as_str().to_owned()).or_default().push((
-                        *element,
-                        prop.type_expr.clone(),
-                        prop.multiplicity.clone(),
-                    ));
+                    by_name
+                        .entry(prop.name.as_str().to_owned())
+                        .or_default()
+                        .push((*element, prop.type_expr.clone(), prop.multiplicity.clone()));
                 }
                 // Association-injected props on the ancestor end up
                 // navigable from any subtype, same diamond risk.
@@ -415,8 +416,7 @@ fn walk_ancestors_collecting(
                 {
                     if let Element::Association(assoc) = model.get_element(*assoc_id)
                         && assoc.properties.len() == 2
-                        && let Some(injected) =
-                            assoc.properties.get(1 - *prop_idx_pointing_to_self)
+                        && let Some(injected) = assoc.properties.get(1 - *prop_idx_pointing_to_self)
                     {
                         by_name
                             .entry(injected.name.as_str().to_owned())

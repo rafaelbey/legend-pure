@@ -103,12 +103,12 @@ pub fn parse_manifest(raw_lines: &[String]) -> Result<ParsedManifest, CodegenErr
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix('@') {
-            let (key, value) = rest.split_once(':').ok_or_else(|| {
-                CodegenError::ManifestSyntax {
-                    line: trimmed.to_owned(),
-                    reason: "directive must be `@<key>: <value>`".to_owned(),
-                }
-            })?;
+            let (key, value) =
+                rest.split_once(':')
+                    .ok_or_else(|| CodegenError::ManifestSyntax {
+                        line: trimmed.to_owned(),
+                        reason: "directive must be `@<key>: <value>`".to_owned(),
+                    })?;
             let key = key.trim().to_owned();
             let value = value.trim().to_owned();
             match key.as_str() {

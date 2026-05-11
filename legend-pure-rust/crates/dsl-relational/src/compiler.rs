@@ -373,10 +373,7 @@ impl CompilerExtension for RelationalExtension {
                             }
 
                             // Dual-write 1/2 — extension RefCell.
-                            by_fqn.insert(
-                                fqn.clone(),
-                                RegisteredDatabase { def: (*db).clone() },
-                            );
+                            by_fqn.insert(fqn.clone(), RegisteredDatabase { def: (*db).clone() });
 
                             // Dual-write 2/2 — model graph as
                             // `Element::DSLInstance`. Same pattern as
@@ -1944,13 +1941,7 @@ fn validate_view_join_refs(
     if let Some(filter) = &v.filter
         && let Some(chain) = &filter.db_chain
     {
-        check_join_sequence_against_db(
-            &chain.join_sequence,
-            &chain.first_db,
-            dbs,
-            &owner,
-            errors,
-        );
+        check_join_sequence_against_db(&chain.join_sequence, &chain.first_db, dbs, &owner, errors);
     }
 
     // Each ViewColumnMappingLine value joins; explicit `[db]`
@@ -2106,13 +2097,7 @@ fn walk_view_for_db_refs(
     {
         check_db_ref_visibility(&chain.first_db, use_site, visible, databases, errors);
         check_db_ref_visibility(&chain.second_db, use_site, visible, databases, errors);
-        walk_join_sequence_for_db_refs(
-            &chain.join_sequence,
-            use_site,
-            visible,
-            databases,
-            errors,
-        );
+        walk_join_sequence_for_db_refs(&chain.join_sequence, use_site, visible, databases, errors);
     }
     if let Some(jcs) = &v.group_by {
         for jc in jcs {

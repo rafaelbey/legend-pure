@@ -42,9 +42,7 @@
 //! by callers through
 //! [`legend_pure_runtime::eval::Evaluator::new_default_with_dsl_populators`].
 
-use legend_pure_dsl_mapping::compiler::{
-    ClassMappingSnapshot, MAPPING_DSL_NAME, MappingSnapshot,
-};
+use legend_pure_dsl_mapping::compiler::{ClassMappingSnapshot, MAPPING_DSL_NAME, MappingSnapshot};
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::PureModel;
 use legend_pure_runtime::dsl::{DSLPopulationCtx, DSLPopulator};
@@ -100,11 +98,9 @@ impl DSLPopulator for MappingDSLPopulator {
             let cm_handle = allocate_class_mapping_row(&mut ctx, cm);
             class_mapping_values.push(Value::Object(cm_handle));
         }
-        let _ = ctx.heap.mutate_set(
-            &ctx.instance_handle,
-            "classMappings",
-            &class_mapping_values,
-        );
+        let _ = ctx
+            .heap
+            .mutate_set(&ctx.instance_handle, "classMappings", &class_mapping_values);
 
         // ---- includes: resolve each FQN to a Mapping element ref ----
         // Java keeps `includes` as `MappingInclude[*]` with includer

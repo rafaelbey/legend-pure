@@ -1708,9 +1708,7 @@ fn synthesise_milestoning_for_class_mapping(
             main_table_name,
             cm,
         );
-    } else if has_business_snapshot
-        && let Some(field) = by_key.get("BUS_SNAPSHOT_DATE").copied()
-    {
+    } else if has_business_snapshot && let Some(field) = by_key.get("BUS_SNAPSHOT_DATE").copied() {
         push_synth_binding(
             &mut bindings,
             "from",

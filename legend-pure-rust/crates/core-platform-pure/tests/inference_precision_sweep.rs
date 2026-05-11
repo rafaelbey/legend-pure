@@ -72,9 +72,7 @@ fn platform_inference_precision_under_ceiling() {
                 TypeExpr::Named { element, .. } => Some(*element),
                 _ => continue,
             };
-            if declared_eid == Some(bootstrap::ANY_ID)
-                || declared_eid == Some(bootstrap::NIL_ID)
-            {
+            if declared_eid == Some(bootstrap::ANY_ID) || declared_eid == Some(bootstrap::NIL_ID) {
                 continue;
             }
 

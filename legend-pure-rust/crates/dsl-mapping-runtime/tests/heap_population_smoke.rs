@@ -67,7 +67,9 @@ fn find_mapping_handle<'m, H: legend_pure_runtime::hooks::EvalHooks>(
     use legend_pure_parser_pure::model::Element;
     for chunk in &model.chunks {
         for (local_idx, element) in chunk.elements.iter() {
-            let Element::DSLInstance(d) = element else { continue };
+            let Element::DSLInstance(d) = element else {
+                continue;
+            };
             if d.dsl_name.as_str() != "Mapping" {
                 continue;
             }
@@ -136,14 +138,12 @@ fn mapping_class_mappings_property_populates_with_classifiers() {
     let evaluator = Evaluator::new_default_with_dsl_populators(&model, &[&populator]);
 
     // Walk the heap looking for the Mapping handle by classifier.
-    let mapping_handle = find_mapping_handle(&model, &evaluator)
-        .expect("must find a Mapping heap row");
+    let mapping_handle =
+        find_mapping_handle(&model, &evaluator).expect("must find a Mapping heap row");
 
     // Read `classMappings` — must be one entry, classified as
     // PureInstanceSetImplementation, with id="firm_set".
-    let class_mappings = mapping_handle
-        .borrow()
-        .get_property_values("classMappings");
+    let class_mappings = mapping_handle.borrow().get_property_values("classMappings");
     let cms: Vec<Value> = class_mappings.iter().cloned().collect();
     assert_eq!(
         cms.len(),
@@ -209,17 +209,14 @@ fn populator_handles_multiple_body_kinds() {
     let populator = MappingDSLPopulator;
     let evaluator = Evaluator::new_default_with_dsl_populators(&model, &[&populator]);
 
-    let mapping_handle = find_mapping_handle(&model, &evaluator)
-        .expect("must find a Mapping heap row");
+    let mapping_handle =
+        find_mapping_handle(&model, &evaluator).expect("must find a Mapping heap row");
 
-    let cms_pvec = mapping_handle
-        .borrow()
-        .get_property_values("classMappings");
+    let cms_pvec = mapping_handle.borrow().get_property_values("classMappings");
     let cms: Vec<Value> = cms_pvec.iter().cloned().collect();
     assert_eq!(cms.len(), 2, "expected 2 class-mappings");
 
-    let mut classifiers: Vec<String> =
-        cms.iter().filter_map(classifier_of_object).collect();
+    let mut classifiers: Vec<String> = cms.iter().filter_map(classifier_of_object).collect();
     classifiers.sort();
     assert_eq!(
         classifiers,
