@@ -231,3 +231,166 @@ Class abc::Class2 extends Class1 {
 ";
     try_compile(&[(src, "test.pure")]).expect("same-package short refs must compile");
 }
+
+// ---------------------------------------------------------------------------
+// Sweep — TODO T-20260510-01 lists "verify, don't trust the list" sites
+// beyond `extends` and property types. Pin each one with a no-import-errors
+// + with-import-compiles pair. The fix lives at `resolve_unqualified`
+// in `crates/pure/src/resolve.rs` (the chokepoint for short-name lookup);
+// every site below either reaches it via `resolve_type_ref` or via
+// `resolve_element_ptr` — these tests prove that's the actual structure
+// rather than the developer's hopeful claim.
+// ---------------------------------------------------------------------------
+
+// 9. Function parameter type — short cross-package ref
+//    (route: function-signature lowering → resolve_type_ref → resolve_unqualified).
+#[test]
+fn function_param_type_short_name_without_import_errors() {
+    let src = r"
+###Pure
+Class abc::Class1 {}
+
+function other::usesIt(c : Class1[1]) : Integer[1] { 1 }
+";
+    let err = try_compile(&[(src, "test.pure")]).expect_err("must not compile");
+    assert!(
+        !unresolved_hits(&err.errors, "Class1").is_empty(),
+        "function param type must reject cross-package short ref; got {:?}",
+        err.errors
+    );
+}
+
+#[test]
+fn function_param_type_short_name_with_import_compiles() {
+    let src = r"
+###Pure
+Class abc::Class1 {}
+
+###Pure
+import abc::*;
+
+function other::usesIt(c : Class1[1]) : Integer[1] { 1 }
+";
+    try_compile(&[(src, "test.pure")])
+        .expect("function param type must accept short ref with explicit import");
+}
+
+// 10. Function return type — short cross-package ref
+//     (same path as function param type but separately pinned).
+#[test]
+fn function_return_type_short_name_without_import_errors() {
+    let src = r"
+###Pure
+Class abc::Class1 {}
+
+function other::makeOne() : Class1[1] { ^abc::Class1() }
+";
+    let err = try_compile(&[(src, "test.pure")]).expect_err("must not compile");
+    assert!(
+        !unresolved_hits(&err.errors, "Class1").is_empty(),
+        "function return type must reject cross-package short ref; got {:?}",
+        err.errors
+    );
+}
+
+// 11. `^Class(...)` constructor receiver — short cross-package class FQN
+//     (route: constructor lowering → resolve_element_ptr → resolve_unqualified).
+#[test]
+fn constructor_receiver_short_name_without_import_errors() {
+    let src = r"
+###Pure
+Class abc::Class1 {}
+
+function other::makeOne() : abc::Class1[1] { ^Class1() }
+";
+    let err = try_compile(&[(src, "test.pure")]).expect_err("must not compile");
+    assert!(
+        !unresolved_hits(&err.errors, "Class1").is_empty(),
+        "^Class(...) receiver must reject cross-package short class ref; got {:?}",
+        err.errors
+    );
+}
+
+// 12. `cast(@T)` — short cross-package type ref inside `@…`
+//     (route: cast lowering → resolve_type_ref → resolve_unqualified).
+#[test]
+fn cast_type_arg_short_name_without_import_errors() {
+    let src = r"
+###Pure
+Class abc::Target {}
+
+function other::useCast(a : Any[1]) : Target[1] { $a->cast(@Target) }
+";
+    let err = try_compile(&[(src, "test.pure")]).expect_err("must not compile");
+    assert!(
+        !unresolved_hits(&err.errors, "Target").is_empty(),
+        "cast(@T) must reject cross-package short type ref; got {:?}",
+        err.errors
+    );
+}
+
+// 13. Association end class — short cross-package ref on either side.
+//     Java treats association ends as type refs; same path as property types.
+#[test]
+fn association_end_short_name_without_import_errors() {
+    let src = r"
+###Pure
+Class abc::Person {}
+
+Association other::PersonRel
+{
+  person : Person[1];
+  count : Integer[0..1];
+}
+";
+    let err = try_compile(&[(src, "test.pure")]).expect_err("must not compile");
+    assert!(
+        !unresolved_hits(&err.errors, "Person").is_empty(),
+        "Association end type must reject cross-package short ref; got {:?}",
+        err.errors
+    );
+}
+
+// 14. Stereotype profile reference — short cross-package profile name.
+//     (route: resolve_stereotypes → resolve_element_ptr → resolve_unqualified.)
+#[test]
+fn stereotype_profile_short_name_without_import_errors() {
+    let src = r#"
+###Pure
+Profile abc::myProfile { stereotypes : [interesting]; }
+
+Class <<myProfile.interesting>> other::Tagged {}
+"#;
+    let err = try_compile(&[(src, "test.pure")]).expect_err("must not compile");
+    assert!(
+        !unresolved_hits(&err.errors, "myProfile").is_empty(),
+        "stereotype profile ref must reject cross-package short profile; got {:?}",
+        err.errors
+    );
+}
+
+// 15. Generic type argument — short cross-package type ref inside `<…>`.
+//     (route: resolve_type_ref recurses through `type_arguments`.)
+//     Declare a local generic class to keep the test self-contained
+//     without relying on platform sources.
+#[test]
+fn generic_type_arg_short_name_without_import_errors() {
+    let src = r"
+###Pure
+Class abc::Inner {}
+
+Class lib::Box<T> {
+  contents : T[1];
+}
+
+function other::wrap() : lib::Box<Inner>[1] {
+  ^lib::Box<Inner>(contents = ^abc::Inner())
+}
+";
+    let err = try_compile(&[(src, "test.pure")]).expect_err("must not compile");
+    assert!(
+        !unresolved_hits(&err.errors, "Inner").is_empty(),
+        "generic type arg must reject cross-package short ref; got {:?}",
+        err.errors
+    );
+}
