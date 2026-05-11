@@ -285,7 +285,7 @@ pub fn compile_repo_slice_with_islands(
     // Resolve everything EXCEPT function expression bodies.
     // After this pass, all function signatures (params, return types) are
     // available for type-based dispatch during body compilation.
-    let (id_to_decl, mut import_scope_cache, mut resolve_caches) = pass_define_signatures(
+    let (id_to_decl, mut import_scope_cache) = pass_define_signatures(
         &sorted,
         source_files,
         &declarations,
@@ -316,7 +316,6 @@ pub fn compile_repo_slice_with_islands(
         source_files,
         &id_to_decl,
         &mut import_scope_cache,
-        &mut resolve_caches,
         auto_imports,
         model,
         island_lowerers,
@@ -336,7 +335,6 @@ pub fn compile_repo_slice_with_islands(
         source_files,
         &id_to_decl,
         &mut import_scope_cache,
-        &mut resolve_caches,
         auto_imports,
         model,
         island_lowerers,
@@ -1076,7 +1074,6 @@ fn pass_define_signatures<'a>(
 ) -> (
     HashMap<ElementId, &'a Declaration>,
     HashMap<(usize, usize), Vec<crate::resolve::ImportScope>>,
-    HashMap<(usize, usize), HashMap<SmolStr, crate::resolve::ResolveResult>>,
 ) {
     use crate::resolve::ImportScope;
 
@@ -1087,12 +1084,10 @@ fn pass_define_signatures<'a>(
         .map(|d| (d.id, d))
         .collect();
 
-    // Cache per-section import scopes and resolve caches
+    // Cache per-section import scopes. Resolve caches are per-element
+    // (allocated inside the loop) — sharing across elements is unsound
+    // because results depend on `self_package` (T-20260510-01).
     let mut import_scope_cache: HashMap<(usize, usize), Vec<ImportScope>> = HashMap::new();
-    let mut resolve_caches: HashMap<
-        (usize, usize),
-        HashMap<SmolStr, crate::resolve::ResolveResult>,
-    > = HashMap::new();
 
     for &id in sorted {
         let ElementId::InstanceId {
@@ -1113,38 +1108,36 @@ fn pass_define_signatures<'a>(
         };
         let ast_element = get_ast_element(source_files, decl);
 
-        // Build or retrieve the import scope for this element's section
+        // Build or retrieve the import scope for this element's section.
+        // The cached `Vec` MUST stay immutable across elements — the
+        // implicit self-package now lives on the per-element ctx
+        // (`self_package`) rather than being pushed onto this scope
+        // (T-20260510-01: pre-fix mutation leaked element A's package
+        // into element B's resolution within the same section).
         let scope_key = (decl.file_idx, decl.section_idx);
         let import_scopes = import_scope_cache.entry(scope_key).or_insert_with(|| {
             build_import_scope(source_files, decl.file_idx, decl.section_idx, auto_imports)
         });
 
-        // Implicit self-package: elements can see siblings in the same package
-        // without explicit imports (matches Java Pure compiler behavior).
-        if let Some(pkg) = ast_element.package() {
-            let pkg_str = pkg.to_string();
-            if !import_scopes
-                .iter()
-                .any(|s| s.package.to_string() == pkg_str)
-            {
-                import_scopes.push(ImportScope::from_path_str(&pkg_str));
-            }
-        }
-
-        // Get or create the per-section resolve cache
-        let resolve_cache = resolve_caches.entry(scope_key).or_default();
+        // Per-element resolve cache. Pre-fix this was per-section, but
+        // resolution results depend on `self_package` (which varies per
+        // element); sharing across elements re-introduced the leak even
+        // with the scope mutation removed.
+        let mut resolve_cache: HashMap<SmolStr, crate::resolve::ResolveResult> = HashMap::new();
 
         // Extract type + multiplicity parameters from the AST element
         // (Class<T,V|m>, function<T|m>).
         let type_params = ast_type_parameters(ast_element);
         let mult_params = ast_multiplicity_parameters(ast_element);
+        let self_pkg = ast_element.package();
 
         let mut ctx = ResolutionContext {
             model,
             import_scopes,
-            resolve_cache,
+            resolve_cache: &mut resolve_cache,
             type_parameters: &type_params,
             multiplicity_parameters: &mult_params,
+            self_package: self_pkg,
             variable_types: HashMap::new(),
             island_lowerers: &[],
         };
@@ -1163,7 +1156,7 @@ fn pass_define_signatures<'a>(
         *chunk.elements.get_mut(local_idx) = hydrated;
     }
 
-    (id_to_decl, import_scope_cache, resolve_caches)
+    (id_to_decl, import_scope_cache)
 }
 
 /// Pass 2b — compile function expression bodies.
@@ -1171,9 +1164,10 @@ fn pass_define_signatures<'a>(
 /// At this point all function signatures (params, return types) are fully
 /// resolved, enabling type-based dispatch in `resolve_function_call`.
 ///
-/// Takes `&mut` references to the per-section caches so the follow-up
-/// `pass_define_class_bodies` can reuse the populated import scopes and
-/// resolve memos.
+/// Takes `&mut` references to the per-section import-scope cache so the
+/// follow-up `pass_define_class_bodies` reuses the same populated scope.
+/// Resolve caches are per-element (allocated inside the loop) — sharing
+/// across elements is unsound because results depend on `self_package`.
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(
     level = "info",
@@ -1186,7 +1180,6 @@ fn pass_define_bodies(
     source_files: &[SourceFile],
     id_to_decl: &HashMap<ElementId, &Declaration>,
     import_scope_cache: &mut HashMap<(usize, usize), Vec<crate::resolve::ImportScope>>,
-    resolve_caches: &mut HashMap<(usize, usize), HashMap<SmolStr, crate::resolve::ResolveResult>>,
     auto_imports: &[SmolStr],
     model: &mut PureModel,
     island_lowerers: &[Box<dyn crate::island_lower::IslandLowerer>],
@@ -1209,20 +1202,13 @@ fn pass_define_bodies(
             build_import_scope(source_files, decl.file_idx, decl.section_idx, auto_imports)
         });
 
-        // Implicit self-package (same as Pass 2a)
-        if let Some(pkg) = ast_element.package() {
-            let pkg_str = pkg.to_string();
-            if !import_scopes
-                .iter()
-                .any(|s| s.package.to_string() == pkg_str)
-            {
-                import_scopes.push(crate::resolve::ImportScope::from_path_str(&pkg_str));
-            }
-        }
-        let resolve_cache = resolve_caches.entry(scope_key).or_default();
+        // Per-element resolve cache (see Pass 2a note) — sharing across
+        // elements is unsound when `self_package` varies.
+        let mut resolve_cache: HashMap<SmolStr, crate::resolve::ResolveResult> = HashMap::new();
 
         let type_params = ast_type_parameters(ast_element);
         let mult_params = ast_multiplicity_parameters(ast_element);
+        let self_pkg = ast_element.package();
 
         // Seed variable scope with the function's own resolved parameters
         let mut variable_types = HashMap::new();
@@ -1238,9 +1224,10 @@ fn pass_define_bodies(
         let mut ctx = ResolutionContext {
             model,
             import_scopes,
-            resolve_cache,
+            resolve_cache: &mut resolve_cache,
             type_parameters: &type_params,
             multiplicity_parameters: &mult_params,
+            self_package: self_pkg,
             variable_types,
             island_lowerers,
         };
@@ -1289,14 +1276,11 @@ fn pass_define_class_bodies(
     source_files: &[SourceFile],
     id_to_decl: &HashMap<ElementId, &Declaration>,
     import_scope_cache: &mut HashMap<(usize, usize), Vec<crate::resolve::ImportScope>>,
-    resolve_caches: &mut HashMap<(usize, usize), HashMap<SmolStr, crate::resolve::ResolveResult>>,
     auto_imports: &[SmolStr],
     model: &mut PureModel,
     island_lowerers: &[Box<dyn crate::island_lower::IslandLowerer>],
     errors: &mut Vec<CompilationError>,
 ) {
-    use crate::resolve::ImportScope;
-
     for &id in sorted {
         let Some(decl) = id_to_decl.get(&id) else {
             continue;
@@ -1315,19 +1299,14 @@ fn pass_define_class_bodies(
         let import_scopes = import_scope_cache.entry(scope_key).or_insert_with(|| {
             build_import_scope(source_files, decl.file_idx, decl.section_idx, auto_imports)
         });
-        if let Some(pkg) = ast_element.package() {
-            let pkg_str = pkg.to_string();
-            if !import_scopes
-                .iter()
-                .any(|s| s.package.to_string() == pkg_str)
-            {
-                import_scopes.push(ImportScope::from_path_str(&pkg_str));
-            }
-        }
-        let resolve_cache = resolve_caches.entry(scope_key).or_default();
+
+        // Per-element resolve cache (see Pass 2a note — sharing across
+        // elements is unsound because results depend on `self_package`).
+        let mut resolve_cache: HashMap<SmolStr, crate::resolve::ResolveResult> = HashMap::new();
 
         let type_params = ast_type_parameters(ast_element);
         let mult_params = ast_multiplicity_parameters(ast_element);
+        let self_pkg = ast_element.package();
 
         // Per-element variable scope: seeded with type-variable parameters
         // from parametric Classes / Primitives so `$x` inside a constraint
@@ -1400,9 +1379,10 @@ fn pass_define_class_bodies(
             let mut ctx = ResolutionContext {
                 model,
                 import_scopes,
-                resolve_cache,
+                resolve_cache: &mut resolve_cache,
                 type_parameters: &type_params,
                 multiplicity_parameters: &mult_params,
+                self_package: self_pkg,
                 variable_types,
                 island_lowerers,
             };

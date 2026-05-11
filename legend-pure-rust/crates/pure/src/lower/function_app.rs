@@ -301,6 +301,17 @@ fn candidates_by_arity(
                 push_filtered(found, &mut candidates);
             }
         }
+        // Implicit self-package (T-20260510-01): same precedence as
+        // `resolve_function_call`'s step 2b — only consulted when
+        // explicit imports yielded nothing, so explicit imports keep
+        // shadowing same-package siblings.
+        if candidates.is_empty()
+            && let Some(pkg) = ctx.self_package
+            && let Some(pkg_id) = ctx.model.resolve_package(pkg)
+        {
+            let found = ctx.model.resolve_functions_by_name_in_package(pkg_id, name);
+            push_filtered(found, &mut candidates);
+        }
     }
 
     candidates
