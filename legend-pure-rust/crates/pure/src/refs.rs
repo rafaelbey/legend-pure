@@ -464,17 +464,31 @@ fn walk_value_spec_in_scope(
             // `$x.foo` — recover the property's declaring class from
             // the receiver's `type_info`, then look up the property
             // by name and emit a Reference targeting its source span.
+            //
+            // Enum-value access (`abc::Abc.A`) parses + lowers as a
+            // PropertyCall too (the lowering doesn't have a special
+            // case for static enum-value access; the receiver is a
+            // `PackageableElementRef` to the enum). The property
+            // lookup naturally returns None for enums, so fall back
+            // to enum-value resolution: when the receiver is a
+            // `PackageableElementRef` to an `Enumeration` and
+            // `function_name` matches a declared value, emit a
+            // Reference targeting that value's source span.
             if let Some(receiver) = d.arguments.first() {
-                if let Some(prop_target) =
+                let prop_target =
                     property_decl_span(model, receiver, &d.function_name, /*qualified*/ false)
-                {
-                    let range = call_after_receiver_span(vs, receiver, &d.function_name)
-                        .unwrap_or_else(|| vs.source_info.clone());
+                        .or_else(|| enum_value_decl_span(model, receiver, &d.function_name));
+                if let Some(target) = prop_target {
+                    // `vs.source_info` is the member identifier's span
+                    // (set in `lower_member_access`). That's the
+                    // navigable region — clicks elsewhere on the
+                    // receiver land on the receiver's own ref via the
+                    // argument recursion below.
                     visit(Reference {
-                        range,
+                        range: vs.source_info.clone(),
                         kind: RefKind::PropertyCall,
                         target_element: None,
-                        target: prop_target,
+                        target,
                     });
                 }
             }
@@ -487,10 +501,8 @@ fn walk_value_spec_in_scope(
                 if let Some(qp_target) =
                     property_decl_span(model, receiver, &d.function_name, /*qualified*/ true)
                 {
-                    let range = call_after_receiver_span(vs, receiver, &d.function_name)
-                        .unwrap_or_else(|| vs.source_info.clone());
                     visit(Reference {
-                        range,
+                        range: vs.source_info.clone(),
                         kind: RefKind::QualifiedPropertyCall,
                         target_element: None,
                         target: qp_target,
@@ -691,6 +703,40 @@ fn property_decl_span(
     })
 }
 
+/// Enum-value navigation fallback for `Enum.Value` expressions.
+///
+/// The lowering pipeline turns `abc::Abc.A` into
+/// `PropertyCall(function_name="A", arguments=[PackageableElementRef("abc::Abc")])`
+/// — there's no distinct `ExprKind::EnumValue` produced in
+/// non-test code. `property_decl_span` naturally returns `None`
+/// for this shape because `Abc` is an Enumeration (no
+/// properties). This fallback recovers the navigation: if the
+/// receiver is a `PackageableElementRef` whose target is an
+/// `Enumeration` AND `name` matches one of its declared values,
+/// return that value's source span. Caller emits the Reference.
+fn enum_value_decl_span(
+    model: &PureModel,
+    receiver: &ValueSpec,
+    name: &smol_str::SmolStr,
+) -> Option<SourceInfo> {
+    // Static `Enum.Value` form: the receiver is a bare element
+    // reference (lowered as `PackageableElementRef`). Dynamic enum
+    // navigation (`$some_enum_var.A`) isn't covered here — that'd
+    // need the receiver's `type_info`, which the user-facing flow
+    // doesn't exercise today.
+    let crate::types::ExprKind::PackageableElementRef { element } = &*receiver.kind else {
+        return None;
+    };
+    let Element::Enumeration(enum_def) = model.try_get_element(*element)? else {
+        return None;
+    };
+    enum_def
+        .values
+        .iter()
+        .find(|v| &v.name == name)
+        .map(|v| v.source_info.clone())
+}
+
 /// Walk the receiver class + every transitive super-class, calling
 /// `visit` on each. Returns the first `Some` result. Used by
 /// property navigation to find inherited members.
@@ -717,31 +763,6 @@ fn walk_class_chain<R>(
         }
     }
     None
-}
-
-/// Compute the source range covering the property/QP name in a
-/// `receiver.name(args?)` expression. Name lives between
-/// `receiver.end + 1` (skip the dot) and either the `(` (QP) or the
-/// expression end (PropertyCall).
-fn call_after_receiver_span(
-    vs: &ValueSpec,
-    receiver: &ValueSpec,
-    name: &smol_str::SmolStr,
-) -> Option<SourceInfo> {
-    let outer = &vs.source_info;
-    if receiver.source_info.end_line != outer.end_line {
-        return None;
-    }
-    let name_start_col = receiver.source_info.end_column.checked_add(1)?;
-    let name_len: u32 = name.len().try_into().ok()?;
-    let name_end_col = name_start_col.checked_add(name_len).map(|c| c - 1)?;
-    Some(SourceInfo::new(
-        outer.source.as_str(),
-        receiver.source_info.end_line,
-        name_start_col,
-        receiver.source_info.end_line,
-        name_end_col,
-    ))
 }
 
 /// Recursively walk a [`TypeExpr`] tree and emit one [`Reference`]
