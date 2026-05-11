@@ -91,6 +91,11 @@ syn = "2"
 quote = "1"
 proc-macro2 = "1"
 
+# Regex (used for repo `pattern` enforcement; Java-syntax patterns
+# from descriptors are wrapped as `^(?:…)$` to mirror Java's anchored
+# `Matcher.matches()` semantics)
+regex = "1"
+
 # CLI
 clap = { version = "4", features = ["derive", "color"] }
 clap_complete = "4"

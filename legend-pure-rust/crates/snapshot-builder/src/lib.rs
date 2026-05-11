@@ -49,6 +49,7 @@ use legend_pure_parser_pure::pipeline::{compile_repo_slice, finalize_model, init
 use legend_pure_parser_pure::purem::{
     assert_no_dangling_refs, collect_test_partition, slice_by_repo_with_filter, write_repo,
 };
+use legend_pure_parser_pure::visibility::{RepoPattern, compile_repo_pattern};
 use serde::Deserialize;
 use smol_str::SmolStr;
 use thiserror::Error;
@@ -206,6 +207,7 @@ pub fn compile_to_purem(req: CompileRequest<'_>) -> Result<(), BuildError> {
 
     let mut model = init_bootstrap_model();
     populate_repo_visibility(&mut model, &descriptors);
+    populate_repo_patterns(&mut model, &descriptors);
 
     let mut target_range: Option<Range<u16>> = None;
     let mut errors: Vec<CompilationError> = Vec::new();
@@ -274,11 +276,11 @@ struct DescriptorJson {
     dependencies: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct LoadedDescriptor {
     name: String,
-    #[allow(dead_code)]
     pattern: String,
+    compiled_pattern: regex::Regex,
     dependencies: Vec<String>,
     source_root: PathBuf,
 }
@@ -305,9 +307,15 @@ fn load_descriptors(paths: &[PathBuf]) -> Result<Vec<LoadedDescriptor>, BuildErr
         if !source_root.is_dir() {
             return Err(BuildError::SourceRootMissing(source_root));
         }
+        let compiled_pattern =
+            compile_repo_pattern(&parsed.pattern).map_err(|e| BuildError::Descriptor {
+                path: p.clone(),
+                source: format!("invalid pattern regex {:?}: {e}", parsed.pattern).into(),
+            })?;
         out.push(LoadedDescriptor {
             name: parsed.name,
             pattern: parsed.pattern,
+            compiled_pattern,
             dependencies: parsed.dependencies,
             source_root,
         });
@@ -342,12 +350,7 @@ fn transitively_reachable(
     let mut out: Vec<LoadedDescriptor> = all
         .iter()
         .filter(|d| keep.contains(&d.name))
-        .map(|d| LoadedDescriptor {
-            name: d.name.clone(),
-            pattern: d.pattern.clone(),
-            dependencies: d.dependencies.clone(),
-            source_root: d.source_root.clone(),
-        })
+        .cloned()
         .collect();
     // Stable order by name for reproducibility — topo sort runs again
     // before compile and gives the actual load order.
@@ -420,6 +423,18 @@ fn populate_repo_visibility(model: &mut PureModel, descs: &[LoadedDescriptor]) {
             visible.insert(SmolStr::new(dep));
         }
         model.repo_visibility.insert(SmolStr::new(&d.name), visible);
+    }
+}
+
+fn populate_repo_patterns(model: &mut PureModel, descs: &[LoadedDescriptor]) {
+    for d in descs {
+        model.repo_patterns.insert(
+            SmolStr::new(&d.name),
+            RepoPattern {
+                source: SmolStr::new(&d.pattern),
+                compiled: d.compiled_pattern.clone(),
+            },
+        );
     }
 }
 

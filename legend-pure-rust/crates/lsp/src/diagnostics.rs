@@ -74,5 +74,6 @@ pub fn error_code(kind: &CompilationErrorKind) -> &'static str {
         CompilationErrorKind::UnresolvedMultiplicityParameter { .. } => {
             "unresolvedMultiplicityParameter"
         }
+        CompilationErrorKind::PackageNotInRepoPattern { .. } => "packageNotInRepoPattern",
     }
 }

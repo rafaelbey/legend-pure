@@ -43,6 +43,7 @@ fn categorize_platform_errors_detailed() {
                     legend_pure_parser_pure::error::CompilationErrorKind::AccessLevelNotAllowed { .. } => "AccessLevelNotAllowed",
                     legend_pure_parser_pure::error::CompilationErrorKind::UnresolvedTypeParameter { .. } => "UnresolvedTypeParameter",
                     legend_pure_parser_pure::error::CompilationErrorKind::UnresolvedMultiplicityParameter { .. } => "UnresolvedMultiplicityParameter",
+                    legend_pure_parser_pure::error::CompilationErrorKind::PackageNotInRepoPattern { .. } => "PackageNotInRepoPattern",
                 };
                 *by_kind.entry(kind_str.to_string()).or_default() += 1;
 

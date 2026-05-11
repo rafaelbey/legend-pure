@@ -209,6 +209,23 @@ pub enum CompilationErrorKind {
         /// Source path of the use site (e.g. `"/system/testFile.pure"`).
         source_id: SmolStr,
     },
+    /// A packageable element's package path is outside the language of
+    /// its repo's `pattern` regex. Java-parity:
+    /// `RepositoryPackageValidator` ("Package X is not allowed in Y;
+    /// only packages matching Z are allowed"). The check fires
+    /// hydration-inline against `model.repo_patterns`; no-op when no
+    /// patterns are registered (legacy fixtures without a real loader).
+    PackageNotInRepoPattern {
+        /// `::`-joined package path of the offending element. Empty
+        /// string for root-level elements.
+        package: SmolStr,
+        /// Name of the repo the element was loaded into (derived from
+        /// the source path's first segment).
+        repo: SmolStr,
+        /// The repo's allowed-package pattern, as written in the
+        /// descriptor (not the `^(?:…)$`-wrapped form used internally).
+        pattern: SmolStr,
+    },
     /// A reference targets a `<<access.private>>` or `<<access.protected>>`
     /// element from a package that the access rule disallows. Java-parity:
     /// `VisibilityValidation.throwAccessException` /
