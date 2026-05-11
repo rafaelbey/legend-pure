@@ -973,9 +973,6 @@ fn validate_call_arguments(
         if matches!(arg_eid, Some(crate::ids::ElementId::Package(_))) {
             continue;
         }
-        if matches!(param_te, TypeExpr::FunctionType { .. }) {
-            continue;
-        }
         if arg_eid == Some(bootstrap::NIL_ID) {
             continue;
         }
@@ -986,14 +983,12 @@ fn validate_call_arguments(
         // (`is_type_compatible`) considered these compatible because
         // the outer element id matches.
         if !crate::resolve::is_type_compatible_structural(&arg_ty.type_expr, &param_te, ctx.model) {
-            let arg_name = arg_eid.map_or_else(
-                || "<unknown>".to_string(),
-                |e| ctx.model.element_name(e).to_string(),
-            );
-            let param_name = match &param_te {
-                TypeExpr::Named { element, .. } => ctx.model.element_name(*element).to_string(),
-                _ => format!("{param_te:?}"),
-            };
+            // Render both sides through the same helper so FunctionType
+            // / Generic / nested-Named arguments are surfaced cleanly
+            // (the previous element-name-only path produced `<unknown>`
+            // for any non-Named arg type, e.g. lambda literals).
+            let arg_rendered = render_type(ctx.model, &arg_ty.type_expr, &arg_ty.multiplicity);
+            let param_rendered = render_type(ctx.model, &param_te, &param_mult);
             let arg_si = arg_source_infos.get(arg_idx).cloned().unwrap_or_else(|| {
                 arg_source_infos.first().cloned().unwrap_or_else(|| {
                     legend_pure_parser_ast::SourceInfo::new("<unknown>", 0, 0, 0, 0)
@@ -1004,8 +999,8 @@ fn validate_call_arguments(
                     "Argument {} of '{}': expected {}, got {}",
                     arg_idx + 1,
                     function_name,
-                    param_name,
-                    arg_name,
+                    param_rendered,
+                    arg_rendered,
                 ),
                 source_info: arg_si,
                 kind: crate::error::CompilationErrorKind::UnresolvedElement {
@@ -1935,7 +1930,28 @@ fn render_type_expr(model: &PureModel, type_expr: &TypeExpr, out: &mut String) {
             }
         }
         TypeExpr::Generic(name) => out.push_str(name),
-        TypeExpr::FunctionType { .. } => out.push_str("<FunctionType>"),
+        TypeExpr::FunctionType {
+            parameters,
+            return_type,
+            return_multiplicity,
+        } => {
+            out.push_str("Function<{");
+            for (i, (te, mult)) in parameters.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                render_type_expr(model, te, out);
+                out.push('[');
+                out.push_str(&render_multiplicity(mult));
+                out.push(']');
+            }
+            out.push_str("->");
+            render_type_expr(model, return_type, out);
+            out.push('[');
+            out.push_str(&render_multiplicity(return_multiplicity));
+            out.push(']');
+            out.push_str("}>");
+        }
         TypeExpr::AlgebraUnion(a, b) => {
             render_type_expr(model, a, out);
             out.push_str(" | ");
