@@ -822,9 +822,6 @@ fn is_same_or_sub_package(model: &PureModel, use_site: PackageId, target: Packag
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::annotations::StereotypeRef;
-    use crate::ids::PackageId;
-    use crate::model::PureModel;
     use crate::nodes::class::Property;
     use crate::types::Multiplicity;
 

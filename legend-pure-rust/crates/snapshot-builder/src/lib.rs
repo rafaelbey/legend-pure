@@ -237,7 +237,10 @@ pub fn compile_to_purem(req: CompileRequest<'_>) -> Result<(), BuildError> {
         });
     }
 
-    let range = target_range.expect("target was validated above");
+    // Target presence is validated at the top of this function — if the
+    // loop above didn't set `target_range`, the validation pass missed an
+    // input. Translate to a proper error rather than panic.
+    let range = target_range.ok_or_else(|| BuildError::UnknownTarget(req.target.to_string()))?;
     let partition = collect_test_partition(&model);
 
     let prod_slice = slice_by_repo_with_filter(&model, range.clone(), Some(&partition.prod));

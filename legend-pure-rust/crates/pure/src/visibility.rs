@@ -182,15 +182,11 @@ pub fn check_element_visible(
         return None;
     }
 
-    let Some(use_repo) = source_repo_name(use_site_source) else {
-        return None;
-    };
+    let use_repo = source_repo_name(use_site_source)?;
 
     // Use-site repo not in the map (e.g. test fixture loaded without a
     // descriptor) → no rules to enforce.
-    let Some(visible) = model.repo_visibility.get(&use_repo) else {
-        return None;
-    };
+    let visible = model.repo_visibility.get(&use_repo)?;
 
     // Packages are visible globally in v1. Java does a per-repo
     // `isPackageAllowed` walk; not yet replicated.

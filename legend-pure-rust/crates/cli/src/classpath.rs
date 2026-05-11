@@ -43,7 +43,6 @@
 //! ```
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use legend_pure_core_platform::repo::{Repo, RepoError, RepoMeta};
 use serde::Deserialize;
@@ -54,6 +53,7 @@ use thiserror::Error;
 #[derive(Debug)]
 pub struct Classpath {
     /// Resolved root for relative paths.
+    #[allow(dead_code)] // kept for Debug diagnostics
     pub root: PathBuf,
     /// Additional auto-imports declared in the TOML (caller still
     /// applies platform defaults on top).
@@ -431,6 +431,7 @@ pub fn synthetic_from_snapshots_dir(dir: &Path) -> Result<Classpath, ClasspathEr
 pub struct ResolvedClasspath {
     /// Source path the classpath came from, for diagnostics. `None`
     /// when the resolver fell back to embedded.
+    #[allow(dead_code)] // kept for Debug diagnostics
     pub source: Option<PathBuf>,
     /// Repos to load, deduped by name (classpath wins over embedded).
     pub repos: Vec<Repo>,

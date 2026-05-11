@@ -75,6 +75,7 @@ pub(crate) enum GenericPolicy {
 ///
 /// `function_fqn` is included only so error variants can attribute the
 /// failure to a specific Pure function.
+#[allow(clippy::too_many_arguments)] // every arg is load-bearing for type rendering; bundling hurts call-site clarity
 pub(crate) fn render_java_type(
     model: &PureModel,
     type_expr: &TypeExpr,

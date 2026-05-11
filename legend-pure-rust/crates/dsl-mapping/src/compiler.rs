@@ -2141,27 +2141,26 @@ fn validate_substitution_cycles(
             if reported {
                 break;
             }
-            if !color.contains_key(source) {
-                if let Some(cycle_node) =
+            if !color.contains_key(source)
+                && let Some(cycle_node) =
                     detect_cycle_dfs(source, &edges, &mut color, &mut Vec::new())
-                {
-                    let span = edges
-                        .get(&cycle_node)
-                        .and_then(|targets| targets.first())
-                        .map(|(_, s)| s.clone())
-                        .unwrap_or_else(|| reg.def.source_info.clone());
-                    errors.push(CompilationError {
-                        message: format!(
-                            "Cyclic Store Substitution for store '{cycle_node}' in mapping \
-                             hierarchy of '{mapping_fqn}'"
-                        ),
-                        source_info: span,
-                        kind: CompilationErrorKind::CyclicInheritance {
-                            element_name: cycle_node,
-                        },
-                    });
-                    reported = true;
-                }
+            {
+                let span = edges
+                    .get(&cycle_node)
+                    .and_then(|targets| targets.first())
+                    .map(|(_, s)| s.clone())
+                    .unwrap_or_else(|| reg.def.source_info.clone());
+                errors.push(CompilationError {
+                    message: format!(
+                        "Cyclic Store Substitution for store '{cycle_node}' in mapping \
+                         hierarchy of '{mapping_fqn}'"
+                    ),
+                    source_info: span,
+                    kind: CompilationErrorKind::CyclicInheritance {
+                        element_name: cycle_node,
+                    },
+                });
+                reported = true;
             }
         }
     }

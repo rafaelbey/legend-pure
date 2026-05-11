@@ -642,11 +642,10 @@ fn resolve_m3_supertypes(model: &mut PureModel) {
                     if *element == crate::bootstrap::ANY_ID
                         && value_arguments.len() == 1
                         && let crate::types::ConstValue::String(raw_name) = &value_arguments[0]
+                        && let Some(&resolved_id) = name_to_id.get(raw_name.as_str())
                     {
-                        if let Some(&resolved_id) = name_to_id.get(raw_name.as_str()) {
-                            *element = resolved_id;
-                            value_arguments.clear();
-                        }
+                        *element = resolved_id;
+                        value_arguments.clear();
                     }
                     // Recurse into inner type-arguments so `Property<Class<T>, Any>`
                     // resolves the nested `Class<T>` too.

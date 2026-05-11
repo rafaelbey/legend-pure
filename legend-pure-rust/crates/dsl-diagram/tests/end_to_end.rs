@@ -28,7 +28,7 @@
 //!   producing diagram-related errors
 
 use indoc::indoc;
-use legend_pure_dsl_diagram::ast::{DiagramDef, DiagramView};
+use legend_pure_dsl_diagram::ast::DiagramDef;
 use legend_pure_dsl_diagram::compiler::DiagramExtension;
 use legend_pure_dsl_diagram::compose::compose_diagram_section;
 use legend_pure_dsl_diagram::parser::DiagramSectionParser;

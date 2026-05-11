@@ -561,23 +561,22 @@ fn resolve_unqualified(
     // `meta::relational::metamodel::datatype::Boolean` brought in by
     // `import meta::relational::metamodel::datatype::*`) must NOT win
     // over the primitive when a Pure source writes the bare name.
-    if let Some(id) = ctx.model.resolve_by_path(std::slice::from_ref(name)) {
-        if let Some(elem) = ctx.model.try_get_element(id) {
-            if matches!(
-                elem,
-                crate::model::Element::PrimitiveType(_) | crate::model::Element::Class(_) // captures `Any` / `Nil` only via the
-                                                                                          // `is_root_class_alias` filter below
-            ) {
-                use crate::ids::ElementId as Eid;
-                let is_any_or_nil = matches!(
-                    id,
-                    Eid::InstanceId { chunk_id: 0, local_idx: 0 } // ANY
-                    | Eid::InstanceId { chunk_id: 0, local_idx: 1 } // NIL
-                );
-                if matches!(elem, crate::model::Element::PrimitiveType(_)) || is_any_or_nil {
-                    return Some(id);
-                }
-            }
+    if let Some(id) = ctx.model.resolve_by_path(std::slice::from_ref(name))
+        && let Some(elem) = ctx.model.try_get_element(id)
+        && matches!(
+            elem,
+            crate::model::Element::PrimitiveType(_) | crate::model::Element::Class(_) // captures `Any` / `Nil` only via the
+                                                                                      // `is_root_class_alias` filter below
+        )
+    {
+        use crate::ids::ElementId as Eid;
+        let is_any_or_nil = matches!(
+            id,
+            Eid::InstanceId { chunk_id: 0, local_idx: 0 } // ANY
+            | Eid::InstanceId { chunk_id: 0, local_idx: 1 } // NIL
+        );
+        if matches!(elem, crate::model::Element::PrimitiveType(_)) || is_any_or_nil {
+            return Some(id);
         }
     }
 
@@ -603,10 +602,10 @@ fn resolve_unqualified(
 
     // Step 3: Fall back to root-level M3 metaclass aliases (`Function`,
     // `Class`, `Property`, `Column`, …) when no import contributed.
-    if candidates.is_empty() {
-        if let Some(id) = ctx.model.resolve_by_path(std::slice::from_ref(name)) {
-            return Some(id);
-        }
+    if candidates.is_empty()
+        && let Some(id) = ctx.model.resolve_by_path(std::slice::from_ref(name))
+    {
+        return Some(id);
     }
 
     match candidates.len() {
@@ -2480,6 +2479,7 @@ pub(crate) fn bind_type(
 /// recursion below that — including `Named.type_arguments` and
 /// `subtype_view` walks — so a `Function<{List<T>→V}>`-style nested
 /// structural binding still records `T` as authoritative.
+#[allow(clippy::too_many_arguments)] // tightly-coupled inference state; threading via a struct hurts readability more than it helps
 pub(crate) fn bind_type_with_mode(
     param_ty: &crate::types::TypeExpr,
     arg_ty: &crate::types::TypeExpr,
@@ -2630,36 +2630,34 @@ pub(crate) fn bind_type_with_mode(
                 }) = p_args
                     .iter()
                     .find(|ta| matches!(ta, TypeExpr::FunctionType { .. }))
-                {
-                    if let TypeExpr::FunctionType {
+                    && let TypeExpr::FunctionType {
                         parameters: a_params,
                         return_type: a_ret,
                         return_multiplicity: _a_ret_mult,
                     } = arg_ty
+                {
+                    for ((p_ty, p_mult), (a_ty, a_mult)) in p_params.iter().zip(a_params.iter())
                     {
-                        for ((p_ty, p_mult), (a_ty, a_mult)) in p_params.iter().zip(a_params.iter())
-                        {
-                            bind_type_with_mode(
-                                p_ty, a_ty, out, ty_auth, mult_out, model, mode,
-                                /* inside_structural */ false,
-                            );
-                            bind_mult_with_mode(p_mult, a_mult, mult_out, mode);
-                        }
                         bind_type_with_mode(
-                            p_ret, a_ret, out, ty_auth, mult_out, model, mode,
+                            p_ty, a_ty, out, ty_auth, mult_out, model, mode,
                             /* inside_structural */ false,
                         );
-                        // Skip return-mult binding for the bridge:
-                        // the lambda's body return-mult would widen
-                        // the FT's `m`, regressing the platform's
-                        // QP-body shape `func():Float[1] {
-                        // if(true, |$this->map($valueFunc), |1.0) }`
-                        // (map returns Float[0..1] → m widens →
-                        // mismatches QP's Float[1]). Same Java
-                        // parity carve-out as
-                        // `inference::lambda::bind_from_lambda_body`.
-                        let _ = p_ret_mult;
+                        bind_mult_with_mode(p_mult, a_mult, mult_out, mode);
                     }
+                    bind_type_with_mode(
+                        p_ret, a_ret, out, ty_auth, mult_out, model, mode,
+                        /* inside_structural */ false,
+                    );
+                    // Skip return-mult binding for the bridge:
+                    // the lambda's body return-mult would widen
+                    // the FT's `m`, regressing the platform's
+                    // QP-body shape `func():Float[1] {
+                    // if(true, |$this->map($valueFunc), |1.0) }`
+                    // (map returns Float[0..1] → m widens →
+                    // mismatches QP's Float[1]). Same Java
+                    // parity carve-out as
+                    // `inference::lambda::bind_from_lambda_body`.
+                    let _ = p_ret_mult;
                 }
             }
         }
