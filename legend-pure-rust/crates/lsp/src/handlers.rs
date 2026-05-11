@@ -14,7 +14,7 @@
 
 //! Pure functions implementing each LSP request — pulled out of the
 //! `Backend` impl so they can be exercised in unit tests without a
-//! tokio runtime or `tower_lsp::Client`.
+//! tokio runtime or `tower_lsp_server::Client`.
 
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_pure::error::CompilationError;
@@ -23,9 +23,9 @@ use legend_pure_parser_pure::locate::{Located, LocatedKind};
 use legend_pure_parser_pure::model::{Element, PureModel};
 use legend_pure_parser_pure::refs::ReferenceIndex;
 use legend_pure_parser_pure::types::{ResolvedType, TypeExpr};
-use tower_lsp::lsp_types::{
+use tower_lsp_server::ls_types::{
     CodeLens, Command, Diagnostic, DocumentSymbol, Hover, HoverContents, Location, LocationLink,
-    MarkupContent, MarkupKind, Position, SymbolKind, Url,
+    MarkupContent, MarkupKind, OneOf, Position, SymbolKind, Uri, WorkspaceSymbol,
 };
 
 use crate::convert::{self, range_from_source_info};
@@ -149,8 +149,8 @@ pub fn definition_for_position(
     references: Option<&ReferenceIndex>,
     canonical_path: &str,
     position: Position,
-    file_uri: &Url,
-    uri_for_canonical: &dyn Fn(&str) -> Option<Url>,
+    file_uri: &Uri,
+    uri_for_canonical: &dyn Fn(&str) -> Option<Uri>,
 ) -> Option<LocationLink> {
     let (line, column) = convert::position_to_1indexed(position);
     // 1) Reference-index first: covers every navigable region the
@@ -225,11 +225,11 @@ fn cursor_in_source_info(si: &SourceInfo, line: u32, column: u32) -> bool {
 /// for cross-file goto.
 fn location_at_source_info(
     si: &SourceInfo,
-    file_uri: &Url,
-    uri_for_canonical: &dyn Fn(&str) -> Option<Url>,
+    file_uri: &Uri,
+    uri_for_canonical: &dyn Fn(&str) -> Option<Uri>,
 ) -> Option<Location> {
     let target_canonical = si.source.as_str();
-    let target_uri = if let Ok(click_path) = file_uri.to_file_path()
+    let target_uri = if let Some(click_path) = file_uri.to_file_path()
         && click_path.ends_with(target_canonical.trim_start_matches('/'))
     {
         file_uri.clone()
@@ -261,8 +261,8 @@ fn location_at_source_info(
 fn element_location(
     model: &PureModel,
     id: ElementId,
-    file_uri: &Url,
-    uri_for_canonical: &dyn Fn(&str) -> Option<Url>,
+    file_uri: &Uri,
+    uri_for_canonical: &dyn Fn(&str) -> Option<Uri>,
 ) -> Option<Location> {
     if model.try_get_element(id).is_none() {
         return None;
@@ -324,6 +324,227 @@ fn symbol_kind_for(element: &Element) -> SymbolKind {
         Element::Package(_) => SymbolKind::PACKAGE,
         Element::DSLInstance(_) => SymbolKind::OBJECT,
     }
+}
+
+/// Cap on the number of workspace symbols returned in one
+/// `workspace/symbol` response. IntelliJ takes whatever the server
+/// returns, sorts it client-side, and re-queries on every keystroke;
+/// returning every member of a 1.6 K-element platform with members
+/// expanded would yield 10 K+ entries — slow to serialize and pointless
+/// since the user never scrolls past a few dozen. Tune up if real
+/// usage shows the cap clipping legitimate matches.
+const WORKSPACE_SYMBOL_LIMIT: usize = 5000;
+
+/// Project-wide symbol search backing `workspace/symbol`. Walks every
+/// non-bootstrap chunk, emits one entry per top-level element plus
+/// one per class/association property + qualified property +
+/// constraint and one per enum value. Filters by case-insensitive
+/// substring on either the simple name or the FQN.
+///
+/// Bootstrap (chunk 0) is skipped — `Any`, `Nil`, primitives, and the
+/// m3 metamodel are already reachable via goto-def and would just
+/// clutter Cmd+O results.
+///
+/// `uri_for_canonical` is the [`crate::workspace::Workspace`]
+/// resolver that translates a canonical source path to the URL the
+/// IDE opened the file with. Symbols whose source can't be mapped
+/// (embedded `.purem`, etc.) are dropped — IDEs can't open something
+/// without a URL.
+#[must_use]
+pub fn workspace_symbols_for(
+    model: &PureModel,
+    query: &str,
+    uri_for_canonical: &dyn Fn(&str) -> Option<Uri>,
+) -> Vec<WorkspaceSymbol> {
+    let needle = query.to_lowercase();
+    let needle = needle.as_str();
+    let matches = |simple: &str, fqn: &str| -> bool {
+        if needle.is_empty() {
+            return true;
+        }
+        simple.to_lowercase().contains(needle) || fqn.to_lowercase().contains(needle)
+    };
+    let make_uri = |si: &SourceInfo| -> Option<Uri> { uri_for_canonical(si.source.as_str()) };
+
+    let mut out: Vec<WorkspaceSymbol> = Vec::new();
+    'chunks: for chunk in &model.chunks {
+        if chunk.chunk_id == 0 {
+            // Bootstrap chunk — skip per scope.
+            continue;
+        }
+        for (idx, node) in chunk.nodes.iter() {
+            let id = ElementId::InstanceId {
+                chunk_id: chunk.chunk_id,
+                local_idx: idx,
+            };
+            let element = chunk.elements.get(idx);
+            let fqn_path = legend_pure_parser_pure::purem::fqn_path::element_fqn_path(model, id);
+            let fqn = fqn_path.join("::");
+            let container = if fqn_path.len() > 1 {
+                Some(fqn_path[..fqn_path.len() - 1].join("::"))
+            } else {
+                None
+            };
+
+            if matches(node.name.as_str(), &fqn)
+                && let Some(uri) = make_uri(&node.name_source_info)
+            {
+                push_symbol(
+                    &mut out,
+                    fqn.clone(),
+                    container.clone(),
+                    symbol_kind_for(element),
+                    uri,
+                    &node.name_source_info,
+                );
+                if out.len() >= WORKSPACE_SYMBOL_LIMIT {
+                    break 'chunks;
+                }
+            }
+
+            // Drill into members. The element FQN is the container for
+            // members surfaced below.
+            match element {
+                Element::Class(c) => {
+                    for p in &c.properties {
+                        if !matches(p.name.as_str(), &format!("{fqn}.{}", p.name)) {
+                            continue;
+                        }
+                        let Some(uri) = make_uri(&p.source_info) else { continue };
+                        push_symbol(
+                            &mut out,
+                            p.name.to_string(),
+                            Some(fqn.clone()),
+                            SymbolKind::FIELD,
+                            uri,
+                            &p.source_info,
+                        );
+                        if out.len() >= WORKSPACE_SYMBOL_LIMIT {
+                            break 'chunks;
+                        }
+                    }
+                    for q in &c.qualified_properties {
+                        if !matches(q.name.as_str(), &format!("{fqn}.{}", q.name)) {
+                            continue;
+                        }
+                        let Some(uri) = make_uri(&q.source_info) else { continue };
+                        push_symbol(
+                            &mut out,
+                            q.name.to_string(),
+                            Some(fqn.clone()),
+                            SymbolKind::METHOD,
+                            uri,
+                            &q.source_info,
+                        );
+                        if out.len() >= WORKSPACE_SYMBOL_LIMIT {
+                            break 'chunks;
+                        }
+                    }
+                    for k in &c.constraints {
+                        let constraint_name = k.name.as_deref().unwrap_or("<unnamed>");
+                        if !matches(constraint_name, &format!("{fqn}.{constraint_name}")) {
+                            continue;
+                        }
+                        let Some(uri) = make_uri(&k.source_info) else { continue };
+                        push_symbol(
+                            &mut out,
+                            constraint_name.to_string(),
+                            Some(fqn.clone()),
+                            SymbolKind::KEY,
+                            uri,
+                            &k.source_info,
+                        );
+                        if out.len() >= WORKSPACE_SYMBOL_LIMIT {
+                            break 'chunks;
+                        }
+                    }
+                }
+                Element::Association(a) => {
+                    for p in &a.properties {
+                        if !matches(p.name.as_str(), &format!("{fqn}.{}", p.name)) {
+                            continue;
+                        }
+                        let Some(uri) = make_uri(&p.source_info) else { continue };
+                        push_symbol(
+                            &mut out,
+                            p.name.to_string(),
+                            Some(fqn.clone()),
+                            SymbolKind::FIELD,
+                            uri,
+                            &p.source_info,
+                        );
+                        if out.len() >= WORKSPACE_SYMBOL_LIMIT {
+                            break 'chunks;
+                        }
+                    }
+                    for q in &a.qualified_properties {
+                        if !matches(q.name.as_str(), &format!("{fqn}.{}", q.name)) {
+                            continue;
+                        }
+                        let Some(uri) = make_uri(&q.source_info) else { continue };
+                        push_symbol(
+                            &mut out,
+                            q.name.to_string(),
+                            Some(fqn.clone()),
+                            SymbolKind::METHOD,
+                            uri,
+                            &q.source_info,
+                        );
+                        if out.len() >= WORKSPACE_SYMBOL_LIMIT {
+                            break 'chunks;
+                        }
+                    }
+                }
+                Element::Enumeration(e) => {
+                    for v in &e.values {
+                        if !matches(v.name.as_str(), &format!("{fqn}.{}", v.name)) {
+                            continue;
+                        }
+                        let Some(uri) = make_uri(&v.source_info) else { continue };
+                        push_symbol(
+                            &mut out,
+                            v.name.to_string(),
+                            Some(fqn.clone()),
+                            SymbolKind::ENUM_MEMBER,
+                            uri,
+                            &v.source_info,
+                        );
+                        if out.len() >= WORKSPACE_SYMBOL_LIMIT {
+                            break 'chunks;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+fn push_symbol(
+    out: &mut Vec<WorkspaceSymbol>,
+    name: String,
+    container_name: Option<String>,
+    kind: SymbolKind,
+    uri: Uri,
+    si: &SourceInfo,
+) {
+    // The modern `WorkspaceSymbol` shape — `location` is an `Either`
+    // of full `Location` (with range) or just a `WorkspaceSymbolLocation`
+    // (uri-only, deferring the range until `workspaceSymbol/resolve`).
+    // Always emit the full `Location` since we know it from the model;
+    // saves the round-trip resolve call clients would otherwise make.
+    out.push(WorkspaceSymbol {
+        name,
+        kind,
+        tags: None,
+        container_name,
+        location: OneOf::Left(Location {
+            uri,
+            range: range_from_source_info(si),
+        }),
+        data: None,
+    });
 }
 
 fn detail_for(element: &Element) -> Option<String> {
@@ -454,7 +675,7 @@ mod tests {
         assert_eq!(d.message, "boom");
         assert_eq!(
             d.severity,
-            Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR)
+            Some(tower_lsp_server::ls_types::DiagnosticSeverity::ERROR)
         );
         // Range converts 1-indexed (2,3)-(2,8) to 0-indexed (1,2)-(1,7).
         assert_eq!(d.range.start.line, 1);
@@ -464,7 +685,7 @@ mod tests {
         // Code surfaces the kind tag.
         assert!(matches!(
             d.code.as_ref(),
-            Some(tower_lsp::lsp_types::NumberOrString::String(s)) if s == "unresolvedElement"
+            Some(tower_lsp_server::ls_types::NumberOrString::String(s)) if s == "unresolvedElement"
         ));
     }
 
@@ -498,11 +719,11 @@ mod tests {
     fn definition_resolves_variable_to_parameter_declaration() {
         let src = "function test::greet(name: String[1]): String[1]\n{\n  $name\n}\n";
         let model = compile_fixture("fixture.pure", src);
-        let uri = Url::parse("file:///fixture.pure").unwrap();
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
         // Cursor inside `$name` body. The Variable should resolve to
         // the parameter `name`, declared at line 1 col 22 (1-indexed)
         // → 0-indexed col 21.
-        let no_cross_file: &dyn Fn(&str) -> Option<Url> = &|_| None;
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
         let index = legend_pure_parser_pure::refs::build_reference_index(&model);
         let loc = definition_for_position(
             &model,
@@ -537,8 +758,8 @@ function test::nameOf(p: test::Person[1]): String[1]
 }
 ";
         let model = compile_fixture("fixture.pure", src);
-        let uri = Url::parse("file:///fixture.pure").unwrap();
-        let no_cross_file: &dyn Fn(&str) -> Option<Url> = &|_| None;
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
         // The body line is line 8 (1-indexed). `$p.name` starts at
         // col 3; `name` itself is at col 6. LSP positions are 0-indexed
         // → (line 7, col 5+).
@@ -573,8 +794,8 @@ function test::nameOf(p: test::Person[1]): String[1]
         // None and the IDE shows "Cannot find declaration to go to".
         let src = "function test::msg(): String[1]\n{\n  'hello'\n}\n";
         let model = compile_fixture("fixture.pure", src);
-        let uri = Url::parse("file:///fixture.pure").unwrap();
-        let no_cross_file: &dyn Fn(&str) -> Option<Url> = &|_| None;
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
         let loc = definition_for_position(&model, None, "fixture.pure", pos(2, 4), &uri, no_cross_file);
         assert!(
             loc.is_none(),
@@ -590,8 +811,8 @@ function test::nameOf(p: test::Person[1]): String[1]
         // element's name span — no-op navigation.
         let src = "function test::msg(): String[1]\n{\n  'hello'\n}\n";
         let model = compile_fixture("fixture.pure", src);
-        let uri = Url::parse("file:///fixture.pure").unwrap();
-        let no_cross_file: &dyn Fn(&str) -> Option<Url> = &|_| None;
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
         // `msg` starts at line 1 col 16 (1-indexed) → 0-indexed col 15.
         let loc = definition_for_position(&model, None, "fixture.pure", pos(0, 16), &uri, no_cross_file)
             .expect("definition-site click should still produce a location");
@@ -656,11 +877,11 @@ function test::nameOf(p: test::Person[1]): String[1]
         model.register_element(test_pkg, func_id);
 
         // Click happened in app.pure; target lives in lib.pure.
-        let app_uri = Url::parse("file:///abs/proj/app.pure").unwrap();
-        let lib_disk_uri = Url::parse("file:///abs/proj/lib.pure").unwrap();
+        let app_uri = "file:///abs/proj/app.pure".parse::<Uri>().unwrap();
+        let lib_disk_uri = "file:///abs/proj/lib.pure".parse::<Uri>().unwrap();
 
         let lib_disk_uri_clone = lib_disk_uri.clone();
-        let resolver: &dyn Fn(&str) -> Option<Url> = &move |canonical: &str| {
+        let resolver: &dyn Fn(&str) -> Option<Uri> = &move |canonical: &str| {
             (canonical == "/proj/lib.pure").then(|| lib_disk_uri_clone.clone())
         };
 
@@ -675,7 +896,7 @@ function test::nameOf(p: test::Person[1]): String[1]
         // And: when the resolver returns None for a cross-file target,
         // element_location returns None (no phantom click-URI fallback
         // to a wrong file).
-        let dead_resolver: &dyn Fn(&str) -> Option<Url> = &|_| None;
+        let dead_resolver: &dyn Fn(&str) -> Option<Uri> = &|_| None;
         assert!(element_location(&model, func_id, &app_uri, dead_resolver).is_none());
     }
 
@@ -807,5 +1028,79 @@ Class test::Person
             .expect("lens must carry a command");
         assert_eq!(cmd.command, "legend.runTest");
         assert_eq!(cmd.title, "▶ Run test");
+    }
+
+    /// Resolves a canonical path → `file:///<path>` URL. The
+    /// real workspace consults open buffers and source roots; for
+    /// handler tests we just synthesize a `file://` URL so the
+    /// handler emits a location that round-trips through
+    /// `SymbolInformation`. Returning `None` would suppress the
+    /// symbol entirely.
+    fn fixture_uri_resolver() -> impl Fn(&str) -> Option<Uri> {
+        |canonical| format!("file://{canonical}").parse::<Uri>().ok()
+    }
+
+    #[test]
+    fn workspace_symbols_lists_top_level_class_in_empty_query() {
+        let model = compile_fixture("fixture.pure", "Class test::Person {}");
+        let resolver = fixture_uri_resolver();
+        let syms = workspace_symbols_for(&model, "", &resolver);
+        let persons: Vec<&WorkspaceSymbol> = syms
+            .iter()
+            .filter(|s| s.name == "test::Person")
+            .collect();
+        assert_eq!(persons.len(), 1, "expected exactly one Person entry; got: {syms:?}");
+        assert_eq!(persons[0].kind, SymbolKind::CLASS);
+        assert_eq!(persons[0].container_name.as_deref(), Some("test"));
+    }
+
+    #[test]
+    fn workspace_symbols_matches_substring_case_insensitive() {
+        let src = "Class test::Person {}\nClass test::Profile {}\n";
+        let model = compile_fixture("fixture.pure", src);
+        let resolver = fixture_uri_resolver();
+        let syms = workspace_symbols_for(&model, "PerS", &resolver);
+        let names: Vec<&str> = syms.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"test::Person"),
+            "case-insensitive substring 'PerS' must match 'Person'; got {names:?}",
+        );
+        assert!(
+            !names.contains(&"test::Profile"),
+            "Profile must not match 'PerS'; got {names:?}",
+        );
+    }
+
+    #[test]
+    fn workspace_symbols_surfaces_properties_with_container_name() {
+        let src = "Class test::Person\n{\n  name: String[1];\n}\n";
+        let model = compile_fixture("fixture.pure", src);
+        let resolver = fixture_uri_resolver();
+        let syms = workspace_symbols_for(&model, "name", &resolver);
+        let field = syms
+            .iter()
+            .find(|s| s.kind == SymbolKind::FIELD && s.name == "name")
+            .unwrap_or_else(|| {
+                panic!("expected a FIELD symbol named 'name'; got: {syms:?}")
+            });
+        assert_eq!(
+            field.container_name.as_deref(),
+            Some("test::Person"),
+            "property's container_name must be the class FQN",
+        );
+    }
+
+    #[test]
+    fn workspace_symbols_skips_bootstrap_chunk() {
+        let model = compile_fixture("fixture.pure", "Class test::Person {}");
+        let resolver = fixture_uri_resolver();
+        let syms = workspace_symbols_for(&model, "", &resolver);
+        for bootstrap_name in ["Any", "Nil", "Integer", "String", "Boolean"] {
+            assert!(
+                !syms.iter().any(|s| s.name == bootstrap_name
+                    || s.name.ends_with(&format!("::{bootstrap_name}"))),
+                "bootstrap symbol {bootstrap_name:?} must not appear in workspace results"
+            );
+        }
     }
 }
