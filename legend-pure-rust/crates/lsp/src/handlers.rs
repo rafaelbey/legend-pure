@@ -800,9 +800,26 @@ pub async fn execute_legend_command(
     let arg1 = arg_str(arguments, 1).unwrap_or_default();
     tokio::task::spawn_blocking(move || {
         let registry = legend_pure_runtime::native::NativeRegistry::standard();
-        let mut evaluator =
-            legend_pure_runtime::eval::Evaluator::new(model_arc.as_ref(), &registry);
-        match command.as_str() {
+        // `CapturingHooks` intercepts the runtime's
+        // `console_output` (every Pure-level `print` / `println`
+        // routes through it via `EvalHooks::console_output`)
+        // into a per-run String buffer shared via Arc. We hold a
+        // second handle to the buffer outside the evaluator so we
+        // can drain it after the call returns and attach it to
+        // `extras.stdout`. Without this hook stdout would go to
+        // the IDE-spawned LSP's actual stdout, which the IDE
+        // doesn't surface anywhere visible.
+        //
+        // `Arc<Mutex<…>>` (not `Rc<RefCell<…>>`) because the
+        // closure must be `Send` for `tokio::task::spawn_blocking`.
+        let capture = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let hooks = CapturingHooks { buffer: capture.clone() };
+        let mut evaluator = legend_pure_runtime::eval::Evaluator::with_hooks(
+            model_arc.as_ref(),
+            &registry,
+            hooks,
+        );
+        let mut result = match command.as_str() {
             // `<<test::Test>>`-tagged functions must run through the
             // platform surveyor — that path navigates upstream
             // packages to discover `BeforePackage`/`AfterPackage`
@@ -820,7 +837,21 @@ pub async fn execute_legend_command(
             "legend.listPctAdapters" => list_pct_adapters(model_arc.as_ref()),
             // Default: plain function call.
             _ => run_function_directly(&mut evaluator, &arg0, &command),
+        };
+        // Drain the captured stdout and attach to extras. Drop
+        // the evaluator first so the hook's Rc gets released and
+        // the buffer is the sole owner — that lets us `take` the
+        // String without cloning.
+        drop(evaluator);
+        let captured = std::mem::take(
+            &mut *capture
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()),
+        );
+        if !captured.is_empty() {
+            merge_stdout_into_extras(&mut result, captured);
         }
+        result
     })
     .await
     .unwrap_or_else(|join_err| ExecuteCommandResult {
@@ -837,6 +868,66 @@ pub async fn execute_legend_command(
 /// can serialize it as (raw `String` or `JsonValue::String`).
 fn arg_str(arguments: &[serde_json::Value], i: usize) -> Option<String> {
     arguments.get(i).and_then(|v| v.as_str().map(String::from))
+}
+
+/// Custom [`EvalHooks`](legend_pure_runtime::hooks::EvalHooks)
+/// that captures Pure-level `print` / `println` output into an
+/// in-memory buffer.
+///
+/// The default `EvalHooks::console_output` writes to the LSP
+/// process's actual `stdout`, which the IDE doesn't surface
+/// anywhere visible. We need every chunk routed through the same
+/// `ExecuteCommandResult` round-trip as the rest of the eval
+/// outcome so the plugin can pipe it into the Pure Run tool
+/// window's `ConsoleView`. `Rc<RefCell<String>>` is fine here —
+/// the evaluator and its hooks run on a single `spawn_blocking`
+/// thread, so there's no cross-thread access on the buffer.
+struct CapturingHooks {
+    buffer: std::sync::Arc<std::sync::Mutex<String>>,
+}
+
+impl legend_pure_runtime::hooks::EvalHooks for CapturingHooks {
+    fn before_eval(&mut self, _source: &legend_pure_parser_ast::SourceInfo) {}
+    fn after_eval(
+        &mut self,
+        _source: &legend_pure_parser_ast::SourceInfo,
+        _result: &legend_pure_runtime::value::Value,
+    ) {
+    }
+    fn enter_function(
+        &mut self,
+        _name: &str,
+        _source: &legend_pure_parser_ast::SourceInfo,
+    ) {
+    }
+    fn leave_function(&mut self, _name: &str) {}
+    fn console_output(&mut self, msg: &str) {
+        if let Ok(mut guard) = self.buffer.lock() {
+            guard.push_str(msg);
+        }
+    }
+}
+
+/// Merge a captured stdout buffer into an [`ExecuteCommandResult`]'s
+/// `extras` field under a `stdout` key.
+///
+/// Preserves any existing extras (e.g. `failures`) by promoting
+/// them onto the same JSON object. When `extras` was previously
+/// `None` we construct a single-key object; when it was something
+/// other than an object (shouldn't happen with current handlers
+/// but the type allows it) we wrap it under a `prior` key rather
+/// than silently dropping it.
+fn merge_stdout_into_extras(result: &mut ExecuteCommandResult, stdout: String) {
+    let stdout_value = serde_json::Value::String(stdout);
+    let merged = match result.extras.take() {
+        None => serde_json::json!({ "stdout": stdout_value }),
+        Some(serde_json::Value::Object(mut map)) => {
+            map.insert("stdout".into(), stdout_value);
+            serde_json::Value::Object(map)
+        }
+        Some(other) => serde_json::json!({ "stdout": stdout_value, "prior": other }),
+    };
+    result.extras = Some(merged);
 }
 
 /// `legend.run` path — call the function directly with no arguments.
@@ -856,16 +947,30 @@ where
             error: None,
             extras: None,
         },
-        Err(e) => ExecuteCommandResult {
-            ok: false,
-            fqn: fqn.to_string(),
-            value: None,
-            // Drop the command name into the error context so the
-            // user can tell whether it was `legend.run` vs.
+        Err(e) => {
+            // Synthesize a one-element `FailureDetail` so the
+            // IDE-side renderer treats a plain `legend.run`
+            // failure the same way it does a test failure —
+            // structured message + clickable stack frames. Drop
+            // the command name into the error text so the user
+            // can tell whether it was `legend.run` vs.
             // `legend.runTest` that failed.
-            error: Some(format!("[{command}] {e}")),
-            extras: None,
-        },
+            let raw = e.to_string();
+            let (message, stack) = parse_failure_components(&raw);
+            let detail = FailureDetail {
+                fqn: fqn.to_string(),
+                message,
+                stack,
+            };
+            let extras = Some(serde_json::json!({ "failures": [detail] }));
+            ExecuteCommandResult {
+                ok: false,
+                fqn: fqn.to_string(),
+                value: None,
+                error: Some(format!("[{command}] {raw}")),
+                extras,
+            }
+        }
     }
 }
 
@@ -1018,12 +1123,25 @@ fn interpret_test_report(
         Ok(Value::Object(ref report_id)) => match read_test_report_summary(heap, report_id) {
             Ok(summary) => {
                 let ok = summary.fail_count == 0 && summary.error_count == 0;
+                let rendered = summary.render();
+                let extras = summary.extras();
+                tracing::info!(
+                    fqn = %fqn,
+                    failures = summary.failures.len(),
+                    rendered_len = rendered.len(),
+                    has_extras = extras.is_some(),
+                    rendered = %rendered,
+                    "test report dispatch",
+                );
                 ExecuteCommandResult {
                     ok,
                     fqn: fqn.to_string(),
-                    value: Some(summary.render()),
-                    error: if ok { None } else { Some(summary.render()) },
-                    extras: None,
+                    value: Some(rendered.clone()),
+                    error: if ok { None } else { Some(rendered) },
+                    // Structured failure list — the plugin renders
+                    // each entry as a clickable HTML anchor that
+                    // navigates to the failure's source position.
+                    extras,
                 }
             }
             Err(e) => ExecuteCommandResult {
@@ -1130,7 +1248,43 @@ struct TestReportSummary {
     error_count: i64,
     skip_count: i64,
     total_elapsed_ms: i64,
-    failures: Vec<(String, Option<String>)>,
+    failures: Vec<FailureDetail>,
+}
+
+/// Structured view of one failing test, ready for the IDE to
+/// render as a clickable link.
+///
+/// `stack` carries the whole `Full Stack:` section of the
+/// PureException — the innermost frame is where the exception
+/// actually fired (`toOne` raising "multiplicity violation",
+/// `assertEq` raising "expected != actual", etc.), and the
+/// outermost is the test entry point. The IDE renders each as a
+/// clickable link so the developer can pin the failure or walk
+/// up the call chain.
+#[derive(Debug, Clone, serde::Serialize)]
+struct FailureDetail {
+    fqn: String,
+    /// One-line human-readable message — the quoted body of the
+    /// PureException, stripped of surrounding quotes when present.
+    message: String,
+    /// Parsed call-stack frames, innermost first. Empty when the
+    /// PureException carried no stack (older / hand-rolled errors).
+    stack: Vec<StackFrame>,
+}
+
+/// One frame of a [`PureException`]'s call stack — the substring
+/// the runtime emits on each `\n    <name>     <-     resource:X
+/// line:Y column:Z` line.
+#[derive(Debug, Clone, serde::Serialize)]
+struct StackFrame {
+    /// Function name as printed by `printPureStackTrace`.
+    name: String,
+    /// Canonical source path of the call site (`/platform/.../X.pure`).
+    source: String,
+    /// 1-based line, matching `SourceInformation`.
+    line: u32,
+    /// 1-based column, matching `SourceInformation`.
+    column: u32,
 }
 
 impl TestReportSummary {
@@ -1144,31 +1298,223 @@ impl TestReportSummary {
             self.total_elapsed_ms,
         );
         if self.failures.is_empty() {
-            header
-        } else {
-            // Cap at the first few failures so the notification
-            // stays readable; the rest are still in the full
-            // report (which a future test-result tool-window
-            // would render in full).
-            let mut out = String::with_capacity(256);
-            out.push_str(&header);
-            for (fqn, msg) in self.failures.iter().take(5) {
-                out.push_str("\n  ✗ ");
-                out.push_str(fqn);
-                if let Some(m) = msg {
-                    let first_line = m.lines().next().unwrap_or("");
-                    if !first_line.is_empty() {
-                        out.push_str(" — ");
-                        out.push_str(first_line);
-                    }
-                }
+            return header;
+        }
+        // Cap at the first few failures so the notification stays
+        // readable; the rest are still in the full report (which a
+        // future test-result tool-window would render in full).
+        let mut out = String::with_capacity(256);
+        out.push_str(&header);
+        for f in self.failures.iter().take(5) {
+            out.push_str("\n  ✗ ");
+            out.push_str(&f.fqn);
+            if let Some(frame) = f.stack.first() {
+                out.push_str(&format!(" @ {}:{}", frame.source, frame.line));
             }
-            if self.failures.len() > 5 {
-                out.push_str(&format!("\n  … and {} more", self.failures.len() - 5));
+            if !f.message.is_empty() {
+                out.push_str("\n      ");
+                out.push_str(&f.message);
             }
-            out
+            for frame in f.stack.iter().take(8) {
+                out.push_str(&format!(
+                    "\n      at {} ({}:{}:{})",
+                    frame.name, frame.source, frame.line, frame.column,
+                ));
+            }
+        }
+        if self.failures.len() > 5 {
+            out.push_str(&format!("\n  … and {} more", self.failures.len() - 5));
+        }
+        out
+    }
+
+    /// Convert the structured failure list to JSON for the
+    /// `extras` slot. The plugin reads this to build clickable
+    /// HTML links per failure (`fqn`, `message`, `source`, `line`,
+    /// `column`). `extras` is `None` when there are no failures —
+    /// keeps the response payload small for the (much more
+    /// common) green-test path.
+    fn extras(&self) -> Option<serde_json::Value> {
+        if self.failures.is_empty() {
+            return None;
+        }
+        Some(serde_json::json!({
+            "failures": self.failures,
+        }))
+    }
+}
+
+/// Decompose a [`PureException`] string into the user-facing
+/// message plus its source location.
+///
+/// `PureException`'s `Display` (see `error.rs:276`) emits one of
+/// two shapes depending on whether the exception carried a
+/// `SourceInformation`. With source info:
+/// ```text
+/// Assert failure (resource:foo.pure line:5 column:3)
+/// "actual assertion message — may span multiple lines"
+/// Full Stack:
+///     frame1 <- ...
+/// ```
+/// Without source info (common for asserts raised through the
+/// `assert` native — the exception is constructed without a
+/// `SourceInformation`):
+/// ```text
+/// Assert failure
+/// "
+/// expected: 9.1
+/// actual:   9.0"
+/// Full Stack:
+///     testNumberPow_Function_1__Boolean_1_     <-     resource:/platform/.../pow.pure line:34 column:1
+///     assertEq     <-
+/// ```
+/// Both shapes are handled:
+///   * **Body** = everything between the first `"` and the last
+///     `"` that appears before `Full Stack:` (or end-of-string).
+///     Internal newlines become `" | "` so the notification
+///     stays readable on one line.
+///   * **Source** = parsed first from the parens after the kind
+///     name; if missing, falls back to the first `resource:X
+///     line:Y column:Z` triple found in the call stack — that's
+///     the innermost frame, which is where the user wants to
+///     navigate.
+fn parse_failure_components(msg: &str) -> (String, Vec<StackFrame>) {
+    let header = msg.lines().next().unwrap_or("");
+    let body = extract_quoted_body(msg);
+    let mut stack = parse_full_stack(msg);
+    // If the header had inline source info, treat that as a
+    // synthesized innermost frame so the user can click straight
+    // to the location even on exceptions with no proper call
+    // stack (older or hand-rolled errors).
+    if stack.is_empty() {
+        if let (Some(s), Some(l), Some(c)) = parse_source_info(header) {
+            stack.push(StackFrame {
+                name: header_kind(header).to_string(),
+                source: s,
+                line: l,
+                column: c,
+            });
         }
     }
+    let message = if body.is_empty() {
+        header.to_string()
+    } else {
+        body
+    };
+    (message, stack)
+}
+
+/// Pull the text between the first `"` and the last `"` that
+/// appears before the `Full Stack:` marker (or end-of-string).
+/// Compresses internal newlines into ` | ` separators so the body
+/// fits on one notification line.
+fn extract_quoted_body(msg: &str) -> String {
+    let first_quote = match msg.find('"') {
+        Some(i) => i,
+        None => return String::new(),
+    };
+    let stack_at = msg.find("\nFull Stack:").unwrap_or(msg.len());
+    let search_region = &msg[first_quote + 1..stack_at];
+    let last_quote_rel = match search_region.rfind('"') {
+        Some(i) => i,
+        None => search_region.len(),
+    };
+    let raw = &search_region[..last_quote_rel];
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+/// Parse every `Full Stack:` frame line into a [`StackFrame`].
+///
+/// Each line of the form
+/// `    <name>     <-     resource:<src> line:<n> column:<n>`
+/// becomes one entry. Order is preserved — exactly what
+/// PureException's `Display` emits, which is innermost-first (the
+/// frame nearest the actual error is at index 0). Frames that
+/// don't contain a complete `resource:/line:/column:` triple are
+/// skipped silently.
+fn parse_full_stack(msg: &str) -> Vec<StackFrame> {
+    let Some(start) = msg.find("\nFull Stack:") else {
+        return Vec::new();
+    };
+    let stack_section = &msg[start..];
+    let mut out = Vec::new();
+    for line in stack_section.lines().skip(1) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Split off the function name at `<-` so we don't pick up
+        // the arrow itself as part of the name.
+        let (name_part, location_part) = match trimmed.split_once("<-") {
+            Some((n, l)) => (n.trim().to_string(), l),
+            None => continue,
+        };
+        let mut source: Option<String> = None;
+        let mut line_num: Option<u32> = None;
+        let mut column: Option<u32> = None;
+        for part in location_part.split_whitespace() {
+            if let Some(v) = part.strip_prefix("resource:") {
+                source = Some(v.to_string());
+            } else if let Some(v) = part.strip_prefix("line:") {
+                line_num = v.parse().ok();
+            } else if let Some(v) = part.strip_prefix("column:") {
+                column = v.parse().ok();
+            }
+        }
+        if let (Some(s), Some(l), Some(c)) = (source, line_num, column) {
+            out.push(StackFrame {
+                name: name_part,
+                source: s,
+                line: l,
+                column: c,
+            });
+        }
+    }
+    out
+}
+
+/// Strip the location parens off a header so the synthesized frame
+/// is named after the kind (`Assert failure`, `Execution error`,
+/// …) without trailing noise.
+fn header_kind(header: &str) -> &str {
+    match header.find(" (") {
+        Some(i) => &header[..i],
+        None => header.trim(),
+    }
+}
+
+/// Pull `(source, line, column)` out of the location segment of a
+/// `PureException` header (`... (resource:X line:Y column:Z)`).
+///
+/// Returns `(None, None, None)` when the parens aren't present
+/// (no source info was attached to the exception). Robust against
+/// whitespace inside the parens and tolerates either of the
+/// integer parses failing.
+fn parse_source_info(header: &str) -> (Option<String>, Option<u32>, Option<u32>) {
+    let Some(open) = header.rfind('(') else {
+        return (None, None, None);
+    };
+    let Some(close_off) = header[open + 1..].rfind(')') else {
+        return (None, None, None);
+    };
+    let inner = &header[open + 1..open + 1 + close_off];
+    let mut source: Option<String> = None;
+    let mut line: Option<u32> = None;
+    let mut column: Option<u32> = None;
+    for part in inner.split_whitespace() {
+        if let Some(v) = part.strip_prefix("resource:") {
+            source = Some(v.to_string());
+        } else if let Some(v) = part.strip_prefix("line:") {
+            line = v.parse().ok();
+        } else if let Some(v) = part.strip_prefix("column:") {
+            column = v.parse().ok();
+        }
+    }
+    (source, line, column)
 }
 
 fn read_test_report_summary(
@@ -1194,8 +1540,40 @@ fn read_test_report_summary(
             continue;
         }
         let fqn = read_string_property(heap, rid, "fqn").unwrap_or_else(|_| "<unknown>".into());
-        let msg = read_string_property(heap, rid, "message").ok();
-        failures.push((fqn, msg));
+        let raw = read_string_property(heap, rid, "message").ok();
+        // Debug aid: log what we got off the heap so a stuck IDE
+        // can be diagnosed from `Help → Show Log in Finder`. Two
+        // common failure modes:
+        //   - raw=None → `TestResult.message` slot was never
+        //     populated. Surveyor / executePCTTest didn't classify
+        //     the result as FAIL/ERROR, or the populate path
+        //     dropped the message somewhere.
+        //   - raw=Some(s) but parse yields empty body → the
+        //     PureException Display ended up as just the kind
+        //     header (no quoted message body). Caller likely
+        //     raised a runtime error without setting the message.
+        tracing::info!(
+            test_fqn = %fqn,
+            status = %status,
+            raw_message_len = raw.as_deref().map(str::len).unwrap_or(0),
+            raw_head = %raw.as_deref().map(|s| s.chars().take(200).collect::<String>()).unwrap_or_default(),
+            "TestReport row read",
+        );
+        let (message, stack) = match raw.as_deref() {
+            Some(s) => parse_failure_components(s),
+            None => (String::new(), Vec::new()),
+        };
+        tracing::info!(
+            test_fqn = %fqn,
+            parsed_msg_len = message.len(),
+            frames = stack.len(),
+            "parsed failure components",
+        );
+        failures.push(FailureDetail {
+            fqn,
+            message,
+            stack,
+        });
     }
     Ok(TestReportSummary {
         pass_count,
