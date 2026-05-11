@@ -30,10 +30,16 @@ use legend_pure_parser_protocol::v1::source_info::SourceInformation;
 use legend_pure_parser_protocol::v1::value_spec::LambdaFunction;
 
 use crate::ast::{
-    ClassMapping, ClassMappingBody, LocalPropertyDecl, MappingDef, MappingInclude,
+    ClassMapping, ClassMappingBody, EnumSourceValue, EnumValueMapping,
+    EnumerationClassMappingBody, LocalPropertyDecl, MappingDef, MappingInclude,
     OperationClassMappingBody, PureClassMappingBody, PurePropertyMapping, StoreSubstitution,
 };
 use crate::protocol::class_mapping::{ProtocolClassMapping, ProtocolClassMappingHeader};
+use crate::protocol::enumeration::{
+    ProtocolEnumValueMapping, ProtocolEnumValueMappingEnumSourceValue,
+    ProtocolEnumValueMappingIntegerSourceValue, ProtocolEnumValueMappingSourceValue,
+    ProtocolEnumValueMappingStringSourceValue, ProtocolEnumerationMapping,
+};
 use crate::protocol::include::{ProtocolMappingInclude, ProtocolMappingIncludeMapping};
 use crate::protocol::operation::{
     MappingOperation, ProtocolMergeOperationClassMapping, ProtocolOperationClassMapping,
@@ -43,6 +49,7 @@ use crate::protocol::pure::{
     ProtocolPureInstanceClassMapping, ProtocolPurePropertyMapping,
 };
 use crate::protocol::ProtocolMapping;
+use legend_pure_parser_protocol::v1::value_spec::ProtocolPackageableElementPtr;
 
 /// Convert an AST `MappingDef` to its protocol JSON representation.
 ///
@@ -54,10 +61,25 @@ impl From<&MappingDef> for ProtocolMapping {
             Some(pkg) => pkg.to_string(),
             None => String::new(),
         };
+        // Split: Enumeration-bodied class mappings route into
+        // `enumeration_mappings`; everything else into `class_mappings`.
+        // Java's `Mapping.enumerationMappings` is a sibling list to
+        // `classMappings`, NOT under the `ClassMapping` discriminator.
+        let mut class_mappings = Vec::new();
+        let mut enumeration_mappings = Vec::new();
+        for cm in &m.class_mappings {
+            match &cm.body {
+                ClassMappingBody::Enumeration(body) => {
+                    enumeration_mappings.push(enumeration_mapping_from(cm, body));
+                }
+                _ => class_mappings.push(ProtocolClassMapping::from(cm)),
+            }
+        }
         Self {
             package_path,
             name: m.name.value.to_string(),
-            class_mappings: m.class_mappings.iter().map(ProtocolClassMapping::from).collect(),
+            class_mappings,
+            enumeration_mappings,
             included_mappings: m.includes.iter().map(ProtocolMappingInclude::from).collect(),
             source_information: Some(source_info_from(&m.source_info)),
         }
@@ -266,6 +288,79 @@ fn operation_from_body(
         header,
         parameters: body.parameters.iter().map(|p| p.id.to_string()).collect(),
         operation: MappingOperation::from_function_fqn(&ptr_to_fqn(&body.operation)),
+    }
+}
+
+/// Build a `ProtocolEnumerationMapping` from an outer `ClassMapping`
+/// + its inner `EnumerationClassMappingBody`. The outer FQN supplies
+/// the target enumeration; the inner body carries the per-value
+/// source-value lists.
+///
+/// Called only from the `MappingDef → ProtocolMapping` filter that
+/// routes Enumeration bodies into the sibling
+/// `enumeration_mappings` list rather than `class_mappings`.
+fn enumeration_mapping_from(
+    cm: &ClassMapping,
+    body: &EnumerationClassMappingBody,
+) -> ProtocolEnumerationMapping {
+    let enumeration_fqn = ptr_to_fqn(&cm.class);
+    let id = cm.id.as_ref().map(ToString::to_string).unwrap_or_else(|| {
+        // Java default: ID falls back to the enumeration's simple
+        // name (last `::` segment). `cm.class.name` already holds it.
+        cm.class.name.to_string()
+    });
+    ProtocolEnumerationMapping {
+        id,
+        enumeration: ProtocolPackageableElementPtr {
+            full_path: enumeration_fqn,
+            source_information: Some(source_info_from(&cm.class.source_info)),
+        },
+        enum_value_mappings: body
+            .value_mappings
+            .iter()
+            .map(enum_value_mapping_from)
+            .collect(),
+        source_information: Some(source_info_from(&cm.source_info)),
+    }
+}
+
+fn enum_value_mapping_from(vm: &EnumValueMapping) -> ProtocolEnumValueMapping {
+    ProtocolEnumValueMapping {
+        enum_value: vm.enum_value_name.to_string(),
+        source_values: vm
+            .source_values
+            .iter()
+            .map(enum_source_value_from)
+            .collect(),
+    }
+}
+
+fn enum_source_value_from(sv: &EnumSourceValue) -> ProtocolEnumValueMappingSourceValue {
+    match sv {
+        EnumSourceValue::String { value, .. } => ProtocolEnumValueMappingSourceValue::String(
+            ProtocolEnumValueMappingStringSourceValue {
+                value: value.to_string(),
+            },
+        ),
+        EnumSourceValue::Integer { value, .. } => ProtocolEnumValueMappingSourceValue::Integer(
+            ProtocolEnumValueMappingIntegerSourceValue {
+                // Java's source-value is `Integer` (32-bit). Truncate
+                // safely — Pure source integers exceeding i32 range
+                // are extraordinarily rare in enum-mapping contexts
+                // (these are enum source IDs, not numeric data).
+                value: i32::try_from(*value).unwrap_or(0),
+            },
+        ),
+        EnumSourceValue::EnumRef {
+            enumeration,
+            value_name,
+            ..
+        } => ProtocolEnumValueMappingSourceValue::Enum(
+            ProtocolEnumValueMappingEnumSourceValue {
+                enumeration: ptr_to_fqn(enumeration),
+                value: value_name.to_string(),
+            },
+        ),
     }
 }
 

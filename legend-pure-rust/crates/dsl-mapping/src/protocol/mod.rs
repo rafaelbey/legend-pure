@@ -62,6 +62,7 @@
 
 pub mod class_mapping;
 pub mod convert;
+pub mod enumeration;
 pub mod include;
 pub mod operation;
 pub mod pure;
@@ -69,6 +70,7 @@ pub mod pure;
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::class_mapping::ProtocolClassMapping;
+use crate::protocol::enumeration::ProtocolEnumerationMapping;
 use crate::protocol::include::ProtocolMappingInclude;
 use legend_pure_parser_protocol::v1::source_info::SourceInformation;
 
@@ -109,6 +111,11 @@ pub struct ProtocolMapping {
     /// `RelationFunctionClassMapping`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub class_mappings: Vec<ProtocolClassMapping>,
+    /// Enumeration mappings — class mappings whose target is an
+    /// Enumeration route here (Java parity:
+    /// `Mapping.enumerationMappings`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enumeration_mappings: Vec<ProtocolEnumerationMapping>,
     /// Mapping include declarations with optional store substitution.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub included_mappings: Vec<ProtocolMappingInclude>,

@@ -353,6 +353,85 @@ fn merge_operation_body_serializes_validation_function_as_lambda() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// c4 coverage — EnumerationMapping body
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enumeration_mapping_routes_into_enumeration_mappings_sibling_list() {
+    // Enumeration bodies don't appear under `classMappings`. Java's
+    // `Mapping.enumerationMappings` is a sibling list. Confirm:
+    // - empty `classMappings`
+    // - non-empty `enumerationMappings`
+    // - each enum value mapping carries source-value variants with
+    //   the expected discriminators.
+    let source = indoc! {r"
+        ###Pure
+        Enum my::test::Status
+        {
+          ACTIVE,
+          INACTIVE
+        }
+
+        ###Mapping
+        Mapping my::test::M
+        (
+          my::test::Status : EnumerationMapping
+          {
+            ACTIVE : 'A',
+            INACTIVE : ['I', 'X']
+          }
+        )
+    "};
+    let file = parse("enum_simple.pure", source);
+    let m = first_mapping(&file);
+    let (json, _) = round_trip(m);
+    assert!(
+        json.get("classMappings").is_none(),
+        "Enumeration body must NOT appear in classMappings; got: {json}"
+    );
+    let enums = json["enumerationMappings"].as_array().expect("enums list");
+    assert_eq!(enums.len(), 1);
+    let em = &enums[0];
+    assert_eq!(em["enumeration"]["fullPath"], "my::test::Status");
+    let vms = em["enumValueMappings"].as_array().expect("vms list");
+    assert_eq!(vms.len(), 2);
+    assert_eq!(vms[0]["enumValue"], "ACTIVE");
+    let sv0 = &vms[0]["sourceValues"];
+    assert_eq!(sv0[0]["_type"], "stringSourceValue");
+    assert_eq!(sv0[0]["value"], "A");
+    let sv1 = &vms[1]["sourceValues"];
+    assert_eq!(sv1.as_array().map_or(0, Vec::len), 2);
+}
+
+#[test]
+fn enumeration_mapping_with_enum_ref_source_value_serializes_discriminator() {
+    // `pkg::Other.VALUE` source value uses the
+    // `enumSourceValue` discriminator with `enumeration` + `value`
+    // fields (`EnumValueMappingEnumSourceValue.java:18-20`).
+    let source = indoc! {r"
+        ###Pure
+        Enum my::test::Status { ACTIVE }
+        Enum my::test::Other { GO }
+
+        ###Mapping
+        Mapping my::test::M
+        (
+          my::test::Status : EnumerationMapping
+          {
+            ACTIVE : my::test::Other.GO
+          }
+        )
+    "};
+    let file = parse("enum_ref.pure", source);
+    let m = first_mapping(&file);
+    let (json, _) = round_trip(m);
+    let sv = &json["enumerationMappings"][0]["enumValueMappings"][0]["sourceValues"][0];
+    assert_eq!(sv["_type"], "enumSourceValue");
+    assert_eq!(sv["enumeration"], "my::test::Other");
+    assert_eq!(sv["value"], "GO");
+}
+
 #[test]
 fn include_with_three_substitutions_loses_pair_per_java_parity() {
     // Multi-substitution AST: Java's protocol JSON only carries ONE
