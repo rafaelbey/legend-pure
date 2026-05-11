@@ -139,6 +139,88 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260511-03 — `^Class(prop = value)` doesn't type-check or multiplicity-check the supplied value
+
+- **Type:** parity-gap
+- **Area:** compiler
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-11
+
+**Summary**
+A `^Class(...)` instance-construction `KeyExpression` doesn't check
+that the supplied value's inferred type and multiplicity are compatible
+with the property's declared type and multiplicity. Wrong-type and
+wrong-multiplicity assignments are silently accepted. Java Pure rejects
+this.
+
+**Repro / Context**
+
+```pure
+Class abc::Class1
+{
+  propA : Integer[1];
+}
+
+^abc::Class1(propA = '');     // String on Integer — should fail
+^abc::Class1(propA = []);     // 0 on [1]          — should fail
+^abc::Class1(propA = [1, 2]); // 2 on [1]          — should fail
+```
+
+- Expected: compile error at each call. Type mismatch (case 1),
+  multiplicity-too-low (case 2: `[0]` doesn't satisfy `[1]`),
+  multiplicity-too-high (case 3: `[2]` doesn't satisfy `[1]`).
+- Actual: all three compile clean.
+
+**Notes**
+- Three distinct axes per `KeyExpression`, mirrors the function-call
+  argument-binding rules:
+  - **Type:** supplied expr's inferred element type is a subtype of
+    the property's declared type. Subtype OK
+    (`Integer` accepted for `Number[1]`), unrelated type fails.
+  - **Multiplicity lower bound:** supplied multiplicity's lower bound
+    `>=` property's lower bound. `[0]` (empty list literal) doesn't
+    satisfy `[1]` or `[1..*]`. Same rule as function arg binding.
+  - **Multiplicity upper bound:** supplied multiplicity's upper bound
+    `<=` property's upper bound. `[2]` doesn't satisfy `[1]` or
+    `[0..1]`.
+- The compat function to call is the same canonical one referenced
+  in T-20260511-01 and T-20260510-03 (FunctionType binding): likely
+  `is_type_compatible_structural` for type, plus a sibling
+  multiplicity-compat helper. Verify the actual name in
+  `crates/pure/src/infer.rs`. Reuse — don't re-implement.
+- Same lowering seam as T-20260511-02 (constructor `KeyExpression`
+  resolution); the three bugs share a binding-site walk: for each
+  supplied key, resolve the property by name, then validate
+  (type + mult). Required-property check (T-20260511-02) runs after
+  all keys are bound and diffs supplied-set against required-set on
+  the class.
+- Sweep adjacent cases that should also fail / pass correctly:
+  (a) `propA = $someVar` where `$someVar` is `String[1]` — fail,
+  (b) `propA = if(...){1}else{''}` — fail (joined return type is
+      `Any[1]` or similar, not `Integer`),
+  (c) `propA = 1` — pass,
+  (d) `propA = $intMaybe` where `$intMaybe: Integer[0..1]` against
+      a `[1]` slot — fail on multiplicity even though type is right,
+  (e) inherited properties supplied via `^Subclass(superProp = …)`
+      validated against the supertype's declared shape.
+- Error shape: parity with Java's `NewInstance` / property-binding
+  validator. Likely two distinct kinds (type vs. multiplicity) or
+  one combined kind with a discriminator — match what Java emits.
+  Cite the Java class + message string in the audit block at fix
+  time.
+- This is the third entry in the property-binding-site family
+  (T-20260511-01: default-value type, T-20260511-02: missing
+  required, T-20260511-03: supplied-value type/multiplicity).
+  Worth keeping in mind that all three may share infrastructure:
+  the "given a property and a value, are they compatible?" helper
+  is the same regardless of whether the value comes from a `=` in
+  the class body or a `KeyExpression` in `^Class(...)`.
+
+<!-- agent-audit:start id=T-20260511-03 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
 ### T-20260511-02 — `^Class(...)` constructor doesn't check required properties are set
 
 - **Type:** parity-gap
