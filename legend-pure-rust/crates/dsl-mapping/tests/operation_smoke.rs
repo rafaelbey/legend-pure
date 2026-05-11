@@ -509,3 +509,123 @@ fn unknown_parameter_id_errors() {
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Merge form validator coverage (T2.1 c2)
+//
+// Java parity: `ClassMappingFirstPassBuilder.visitMerge` lowers the
+// validation lambda through `HelperValueSpecificationBuilder.buildLambda`,
+// which feeds it to the same compilation pipeline as any other Pure
+// expression. The lambda's *return shape* is intentionally NOT
+// constrained (mirrors the T2.4 audit for the operation-function
+// signature); the validator's job is just to surface lowering-side
+// errors (unresolved refs, dispatch failures, type mismatches inside
+// the lambda body).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn merge_form_with_clean_lambda_validates_without_errors() {
+    let source = indoc! {r"
+        ###Pure
+        Class my::test::Person { firstName : String[1]; }
+        Class my::test::PersonSrc { firstName : String[1]; }
+
+        function my::test::merge() : meta::pure::mapping::SetImplementation[*]
+        {
+          []
+        }
+
+        ###Mapping
+        Mapping my::test::M
+        (
+          *my::test::Person[op] : Operation
+          {
+            my::test::merge__SetImplementation_MANY_(
+              [rel1, rel2],
+              {p1: my::test::Person[1], p2: my::test::Person[1] | $p1.firstName == $p2.firstName}
+            )
+          }
+
+          my::test::Person[rel1] : Pure
+          {
+            ~src my::test::PersonSrc
+            firstName : $src.firstName
+          }
+
+          my::test::Person[rel2] : Pure
+          {
+            ~src my::test::PersonSrc
+            firstName : $src.firstName
+          }
+        )
+    "};
+    let file = parse("op_merge_clean.pure", source);
+    let (errors, _ext, _model) = compile(vec![file]);
+    // Mirror the filter from `union_of_two_pure_instances_validates_clean`
+    // — without the platform loaded, `SetImplementation` itself
+    // doesn't resolve, but our concern here is the Operation-side
+    // validator + lambda lowering producing no errors.
+    let op_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| {
+            e.message.contains("Operation function")
+                || e.message.contains("Operation parameter")
+                || e.message.contains("notAProperty")
+        })
+        .collect();
+    assert!(
+        op_errors.is_empty(),
+        "merge form with clean lambda should produce no Operation-validator errors; got: {:#?}",
+        op_errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn merge_form_lambda_with_unknown_property_errors() {
+    // The validation lambda must be lowered through the standard
+    // expression pipeline — an unresolved property access on a
+    // lambda parameter surfaces as `UnknownProperty`, matching how
+    // any other lambda body would behave. This pins the c2
+    // validator wiring.
+    let source = indoc! {r"
+        ###Pure
+        Class my::test::Person { firstName : String[1]; }
+        Class my::test::PersonSrc { firstName : String[1]; }
+
+        function my::test::merge() : meta::pure::mapping::SetImplementation[*]
+        {
+          []
+        }
+
+        ###Mapping
+        Mapping my::test::M
+        (
+          *my::test::Person[op] : Operation
+          {
+            my::test::merge__SetImplementation_MANY_(
+              [rel1, rel2],
+              {p1: my::test::Person[1], p2: my::test::Person[1] | $p1.notAProperty == $p2.firstName}
+            )
+          }
+
+          my::test::Person[rel1] : Pure
+          {
+            ~src my::test::PersonSrc
+            firstName : $src.firstName
+          }
+
+          my::test::Person[rel2] : Pure
+          {
+            ~src my::test::PersonSrc
+            firstName : $src.firstName
+          }
+        )
+    "};
+    let file = parse("op_merge_bad_prop.pure", source);
+    let (errors, _ext, _model) = compile(vec![file]);
+    assert!(
+        errors.iter().any(|e| e.message.contains("notAProperty")),
+        "expected the validation lambda's unknown-property to surface; got: {:#?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
