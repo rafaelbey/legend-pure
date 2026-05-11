@@ -31,7 +31,6 @@
 use std::path::PathBuf;
 
 use legend_pure_lsp::LspConfig;
-use smol_str::SmolStr;
 
 use crate::diagnostics::CliError;
 
@@ -57,13 +56,9 @@ pub fn run(args: LspArgs, classpath_override: Option<&std::path::Path>) -> Resul
     let mut config = LspConfig::from_repos(resolved.repos);
     // Append any classpath-declared extra auto-imports on top of the
     // platform defaults (mirrors what `legend compile` does).
-    config.auto_imports.extend(
-        resolved
-            .extra_auto_imports
-            .iter()
-            .cloned()
-            .map(SmolStr::from),
-    );
+    config
+        .auto_imports
+        .extend(resolved.extra_auto_imports.iter().cloned());
     config.log_level = args.log_level;
 
     legend_pure_lsp::run(config).map_err(|e| CliError::Custom(format!("lsp server error: {e}")))
