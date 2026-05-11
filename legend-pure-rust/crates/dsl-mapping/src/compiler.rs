@@ -1889,6 +1889,11 @@ fn validate_xstore_property_mapping(
                 type_arguments: Vec::new(),
                 multiplicity_arguments: Vec::new(),
                 value_arguments: Vec::new(),
+                // Synthesised `$this` / `$that` bindings — no
+                // user-authored span. `None` keeps the goto-def
+                // reference index from emitting a clickable
+                // region pointing at internal scaffolding.
+                source_info: None,
             },
             Multiplicity::PureOne,
         ),
@@ -1899,6 +1904,7 @@ fn validate_xstore_property_mapping(
                 type_arguments: Vec::new(),
                 multiplicity_arguments: Vec::new(),
                 value_arguments: Vec::new(),
+                source_info: None,
             },
             Multiplicity::PureOne,
         ),
