@@ -139,80 +139,6 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
-### T-20260510-03 — FunctionType arity/types not checked when binding lambda argument
-
-- **Type:** parity-gap
-- **Area:** compiler
-- **Priority:** P1
-- **Reporter:** Rafael
-- **Filed:** 2026-05-10
-
-**Summary**
-When an argument of `Function<{P1,…→R}>` type is passed a lambda, the
-compiler does not check that the lambda's parameter list (count + types)
-or return type match the declared FunctionType. A lambda of the wrong
-arity / wrong parameter type is silently accepted.
-
-**Repro / Context**
-
-```pure
-function <<PCT.test>> meta::pure::functions::math::tests::pow::testComplexPow<Z|y>(
-    f:Function<{Function<{->Z[y]}>[1]->Z[y]}>[1]   // $f takes a zero-arg lambda returning Z[y]
-):Boolean[1]
-{
-    // OK — zero-arg lambda
-    assertEq(16.0, $f->eval(|2->pow(pow(2,2))));
-
-    // WRONG — one-arg lambda `a:String[1]|...` passed where a zero-arg
-    // lambda is required. Should not compile.
-    assertEqWithinTolerance(
-        182.88729271224377725957310758531093597412109375,
-        $f->eval(a:String[1]|pow(3.33,4.33)),
-        0.0000000000001);
-}
-```
-
-- Expected: compile error on the second call — argument's FunctionType
-  `{String[1]→…}` does not match the parameter's `{→Z[y]}` (parameter
-  count mismatch; would also mismatch on parameter type / return type
-  if arity were the same).
-- Actual: both calls compile.
-
-**Notes**
-- Generalisation: FunctionType compatibility must check **all three**
-  axes — parameter count, each parameter type+multiplicity, and the
-  return type+multiplicity. Plus the generic/multiplicity substitution
-  set on the way in. The unification rule for `Function<{A→B}>` vs.
-  `Function<{A'→B'}>` is per-position covariant/contravariant per the
-  language spec; whatever the spec says, the check must actually run.
-- Related but distinct: BACKLOG row "Full generic unification (`Z`
-  propagation)" and the un-ignored
-  `function_type_higher_order_wrong_inner_type_errors` test. That work
-  validated nested *type-argument* compatibility via
-  `is_type_compatible_structural`. This bug is about validating the
-  **FunctionType shell itself** at the binding site of a lambda
-  argument — likely the same compat function needs to recurse into
-  the lambda's actual parameters/return, not just trust nominal
-  Function-ness.
-- Suspect: argument→parameter binding in dispatch / higher-order eval
-  treats any callable value as compatible with `Function<{…}>` once
-  the outer name `Function` matches. Look at `crates/pure/src/infer.rs`
-  and the `eval`/`apply` dispatch path; cross-check against
-  `is_type_compatible_structural` to see whether it descends into
-  `FunctionType` parameter/return positions or stops at the named
-  shell.
-- Sweep symmetric cases: (a) wrong return type on the inner lambda,
-  (b) wrong multiplicity on a parameter, (c) extra/missing parameters,
-  (d) parameter type that isn't even a subtype of the declared one.
-  All four should produce compile errors.
-- As with T-20260510-02, the platform `.pure` source for this PCT test
-  will need fixing once the validator fires (the example here is
-  intentionally malformed by the reporter). Compiler fix lands first.
-
-<!-- agent-audit:start id=T-20260510-03 -->
-<!-- Agents: append entries below. Do not rewrite the developer block above. -->
-<!-- agent-audit:end -->
-
 ### T-20260510-02 — Undeclared multiplicity parameter in function signature compiles
 
 - **Type:** parity-gap
@@ -814,5 +740,140 @@ under `abc::…` is in the pattern's language. Expected: build-time error
       those tests (no descriptor populates `repo_patterns`, source path
       has no `/<repo>/` prefix). Out of scope.
   Status: Fix landed (commit f1a54784a6a).
+<!-- agent-audit:end -->
+
+
+### T-20260510-03 — FunctionType arity/types not checked when binding lambda argument
+
+- **Type:** parity-gap
+- **Area:** compiler
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-10
+
+**Summary**
+When an argument of `Function<{P1,…→R}>` type is passed a lambda, the
+compiler does not check that the lambda's parameter list (count + types)
+or return type match the declared FunctionType. A lambda of the wrong
+arity / wrong parameter type is silently accepted.
+
+**Repro / Context**
+
+```pure
+function <<PCT.test>> meta::pure::functions::math::tests::pow::testComplexPow<Z|y>(
+    f:Function<{Function<{->Z[y]}>[1]->Z[y]}>[1]   // $f takes a zero-arg lambda returning Z[y]
+):Boolean[1]
+{
+    // OK — zero-arg lambda
+    assertEq(16.0, $f->eval(|2->pow(pow(2,2))));
+
+    // WRONG — one-arg lambda `a:String[1]|...` passed where a zero-arg
+    // lambda is required. Should not compile.
+    assertEqWithinTolerance(
+        182.88729271224377725957310758531093597412109375,
+        $f->eval(a:String[1]|pow(3.33,4.33)),
+        0.0000000000001);
+}
+```
+
+- Expected: compile error on the second call — argument's FunctionType
+  `{String[1]→…}` does not match the parameter's `{→Z[y]}` (parameter
+  count mismatch; would also mismatch on parameter type / return type
+  if arity were the same).
+- Actual: both calls compile.
+
+**Notes**
+- Generalisation: FunctionType compatibility must check **all three**
+  axes — parameter count, each parameter type+multiplicity, and the
+  return type+multiplicity. Plus the generic/multiplicity substitution
+  set on the way in. The unification rule for `Function<{A→B}>` vs.
+  `Function<{A'→B'}>` is per-position covariant/contravariant per the
+  language spec; whatever the spec says, the check must actually run.
+- Related but distinct: BACKLOG row "Full generic unification (`Z`
+  propagation)" and the un-ignored
+  `function_type_higher_order_wrong_inner_type_errors` test. That work
+  validated nested *type-argument* compatibility via
+  `is_type_compatible_structural`. This bug is about validating the
+  **FunctionType shell itself** at the binding site of a lambda
+  argument — likely the same compat function needs to recurse into
+  the lambda's actual parameters/return, not just trust nominal
+  Function-ness.
+- Suspect: argument→parameter binding in dispatch / higher-order eval
+  treats any callable value as compatible with `Function<{…}>` once
+  the outer name `Function` matches. Look at `crates/pure/src/infer.rs`
+  and the `eval`/`apply` dispatch path; cross-check against
+  `is_type_compatible_structural` to see whether it descends into
+  `FunctionType` parameter/return positions or stops at the named
+  shell.
+- Sweep symmetric cases: (a) wrong return type on the inner lambda,
+  (b) wrong multiplicity on a parameter, (c) extra/missing parameters,
+  (d) parameter type that isn't even a subtype of the declared one.
+  All four should produce compile errors.
+- As with T-20260510-02, the platform `.pure` source for this PCT test
+  will need fixing once the validator fires (the example here is
+  intentionally malformed by the reporter). Compiler fix lands first.
+
+<!-- agent-audit:start id=T-20260510-03 -->
+- 2026-05-11 — claimed by claude-opus-4-7[1m] — picked from top of Open.
+- 2026-05-11 — root cause: `crates/pure/src/infer.rs:976-978` had a
+  3-line `if matches!(param_te, TypeExpr::FunctionType { .. }) { continue; }`
+  bypass that ran *immediately before* the structural compat call at
+  L988. `is_type_compatible_structural` (`resolve.rs:1946`) already
+  handles FunctionType correctly — its arm at L1989-2012 recurses
+  through arity + per-position types + return type. The skip was
+  load-bearing dead weight that hid every FunctionType-param
+  mismatch. Predates the structural-compat work (the earlier nominal
+  `is_type_compatible` indeed couldn't handle FunctionType, so
+  v1-of-this-validator was forced to skip).
+- 2026-05-11 — secondary gap inside `is_type_compatible_structural`'s
+  FunctionType arm: parameter tuple iteration dropped the
+  `Multiplicity` half (`for ((a_te, _), (p_te, _)) in …`) and the
+  return side never compared `return_multiplicity`. Sweep case (b)
+  from the TODO note (wrong parameter multiplicity) was unreachable.
+- 2026-05-11 — implementation:
+  * `crates/pure/src/infer.rs`: deleted the L976-978 bypass.
+  * `crates/pure/src/resolve.rs`: extended the FunctionType arm of
+    `is_type_compatible_structural` — destructure binds
+    `return_multiplicity` on both sides; per-position now also calls
+    `is_multiplicity_compatible(Some(a_mult), p_mult)`; trailing
+    return-side check also calls multiplicity compat. Variance stays
+    covariant-uniform (Java's contravariance is a separate semantic
+    change; deferred).
+  * `crates/pure/src/infer.rs::render_type_expr`: replaced the
+    `<FunctionType>` stub with a Pure-syntax renderer
+    (`Function<{T[m]->V[n]}>`), reusing the existing private
+    `render_multiplicity` helper. Diagnostic-message fallbacks at
+    L989/L995 switched from `element_name` / `format!("{:?}")` to
+    `render_type` so lambda args + FunctionType params surface
+    symmetrically (no more `got <unknown>` on lambda mismatches).
+  * `crates/pure/tests/integration_tests.rs`: 5 new tests covering
+    each axis — arity (1-arg for 0-arg, 2-arg for 1-arg), param type,
+    return type, param multiplicity, subtype-OK positive control.
+- 2026-05-11 — verification:
+  * `cargo build --workspace` green.
+  * 5 new + 6 pre-existing FunctionType tests in `integration_tests.rs`
+    all green; `function_type_higher_order_wrong_inner_type_errors`
+    still passes (now via a second error path — the structural-compat
+    diagnostic fires alongside the binding-inference + return-type
+    paths that existed before).
+  * Per-crate sweep: pure, snapshot-builder, core-platform-pure,
+    dsl-mapping, dsl-relational — all green.
+  * Platform end-to-end (`builds_platform_purem_and_round_trips`)
+    green — no shipped `.pure` source had latent FunctionType
+    arity/mult violations.
+  * `cargo fmt --check` clean. Copyright clean (440 files).
+    `cargo clippy --lib -- -D unwrap_used -D expect_used` clean
+    (the 2 warnings remaining are pre-existing).
+  Status: Fix landed (commit 8dd5df52ccb).
+- 2026-05-11 — follow-ups filed in notes (no separate TODOs cut yet):
+  * Variance: covariant-uniform for now; Java's contravariant params /
+    covariant return rule is a separate design pass.
+  * `narrow_candidates_by_type` (`resolve.rs:3574`) still calls
+    `is_type_compatible` (nominal) for narrowing — dispatch candidate
+    filter doesn't yet narrow on FunctionType shape; only
+    `validate_call_arguments` rejects post-pick.
+  * `CompilationErrorKind::UnresolvedElement { path: "argument-type-mismatch:…" }`
+    is a sentinel-string overload — fine for now, dedicated
+    `ArgumentTypeMismatch` kind worth adding once tooling needs it.
 <!-- agent-audit:end -->
 
