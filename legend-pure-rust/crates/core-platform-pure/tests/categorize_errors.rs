@@ -50,8 +50,6 @@ fn categorize_platform_errors_detailed() {
                     legend_pure_parser_pure::error::CompilationErrorKind::UndeclaredMultiplicityParameter { .. } => "UndeclaredMultiplicityParameter",
                     legend_pure_parser_pure::error::CompilationErrorKind::TypeMismatch { .. } => "TypeMismatch",
                     legend_pure_parser_pure::error::CompilationErrorKind::MultiplicityMismatch { .. } => "MultiplicityMismatch",
-                    legend_pure_parser_pure::error::CompilationErrorKind::FormatSpecifierTypeMismatch { .. } => "FormatSpecifierTypeMismatch",
-                    legend_pure_parser_pure::error::CompilationErrorKind::FormatSpecifierArityMismatch { .. } => "FormatSpecifierArityMismatch",
                 };
                 *by_kind.entry(kind_str.to_string()).or_default() += 1;
 
