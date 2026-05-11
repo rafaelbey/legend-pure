@@ -195,6 +195,37 @@ impl<'model> Evaluator<'model, NoOpHooks> {
             Box::leak(Box::new(NativeRegistry::with_extensions(extensions)));
         Self::new(model, registry)
     }
+
+    /// Build an evaluator that also runs DSL-instance populators
+    /// after the standard metamodel bootstrap.
+    ///
+    /// Populators project `Element::DSLInstance` payloads into heap
+    /// property values, so reflective Pure navigation
+    /// (`Mapping.all()->first().classMappings` and the like) returns
+    /// populated children rather than empty rows. See
+    /// [`crate::dsl::DSLPopulator`] for the trait contract.
+    ///
+    /// Uses the per-thread default native registry. For a custom
+    /// native set, use [`Evaluator::new`] then call
+    /// [`crate::dsl::run_populators`] directly on
+    /// [`Evaluator::heap_mut`] before evaluating.
+    #[must_use]
+    pub fn new_default_with_dsl_populators(
+        model: &'model PureModel,
+        populators: &[&dyn crate::dsl::DSLPopulator],
+    ) -> Self {
+        let mut heap = RuntimeHeap::new();
+        heap.bootstrap_metamodel(model);
+        crate::dsl::run_populators(model, &mut heap, populators);
+        Self {
+            model,
+            heap,
+            context: VariableContext::new(),
+            natives: leaked_default_registry(),
+            member_wrapper_cache: HashMap::new(),
+            hooks: NoOpHooks,
+        }
+    }
 }
 
 impl<'model, H: EvalHooks> Evaluator<'model, H> {
