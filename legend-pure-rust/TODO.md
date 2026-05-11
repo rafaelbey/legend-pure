@@ -139,369 +139,6 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
-### T-20260511-04 — `^Class(unknownProp = value)` doesn't error on properties that don't exist
-
-- **Type:** parity-gap
-- **Area:** compiler
-- **Priority:** P1
-- **Reporter:** Rafael
-- **Filed:** 2026-05-11
-
-**Summary**
-A `^Class(...)` instance-construction `KeyExpression` doesn't check
-that the property name actually exists on the class (or any
-supertype). Supplying an undeclared property name is silently
-accepted. Java Pure rejects this.
-
-**Repro / Context**
-
-```pure
-Class abc::Class1
-{
-  propA : Integer[1];
-}
-
-// Expected: compile error — `propd` is not a property of `abc::Class1`.
-^abc::Class1(propd = '');
-```
-
-- Expected: compile error along the lines of
-  `"Class 'abc::Class1' has no property 'propd'"` (mirrors the
-  existing `UnknownProperty` diagnostic that fires on
-  `$x.propd` access — same idea, different binding site).
-- Actual: compiles clean.
-
-**Notes**
-- Same lowering seam as T-20260511-02 and T-20260511-03: the
-  `KeyExpression` resolver in `^Class(...)` lowering. Where supplied
-  keys are matched against the class's property list, an unmatched
-  key must produce `CompilationErrorKind::UnknownProperty` (reuse
-  the existing variant — same shape, same consumer expectations).
-- Sweep:
-  (a) supertype-walked: `propA` is fine when declared on a parent
-      `Class1` extends `Base { propA: …; }`, only fail when truly
-      absent across the whole supertype chain,
-  (b) reserved-name collision (e.g. `^Class(class = …)` — class is
-      a reserved keyword, should fail at parse, not here),
-  (c) typo near a real property name — the message should be plain
-      "no property X"; suggestion is nice-to-have but not required
-      for parity (Java's diagnostic is plain).
-- The four property-binding-site validators (T-20260511-01..04)
-  almost certainly share one walk: lower `^Class(...)`, resolve
-  receiver class + properties (with supertypes), for each supplied
-  key: (i) does it exist? (T-20260511-04) (ii) is the value
-  compatible with declared type+mult? (T-20260511-03); after all
-  keys: (iii) are all required keys supplied? (T-20260511-02).
-  T-20260511-01 (default-value type) is a separate site (class body,
-  not constructor) but uses the same compat helper.
-- The existing runtime-level "UnknownProperty" diagnostic kind
-  (`CompilationErrorKind::UnknownProperty { type_name, property_name }`
-  per workspace memory) is the right variant to emit. No new error
-  kind needed.
-
-<!-- agent-audit:start id=T-20260511-04 -->
-- 2026-05-11 — claimed by claude-opus-4-7[1m] — bundled with
-  T-20260511-01/02/03 as one constructor-binding family fix.
-  Status: Fix landed (uncommitted; awaiting sign-off). See unified
-  details under T-20260511-01's audit block.
-<!-- agent-audit:end -->
-
-### T-20260511-03 — `^Class(prop = value)` doesn't type-check or multiplicity-check the supplied value
-
-- **Type:** parity-gap
-- **Area:** compiler
-- **Priority:** P1
-- **Reporter:** Rafael
-- **Filed:** 2026-05-11
-
-**Summary**
-A `^Class(...)` instance-construction `KeyExpression` doesn't check
-that the supplied value's inferred type and multiplicity are compatible
-with the property's declared type and multiplicity. Wrong-type and
-wrong-multiplicity assignments are silently accepted. Java Pure rejects
-this.
-
-**Repro / Context**
-
-```pure
-Class abc::Class1
-{
-  propA : Integer[1];
-}
-
-^abc::Class1(propA = '');     // String on Integer — should fail
-^abc::Class1(propA = []);     // 0 on [1]          — should fail
-^abc::Class1(propA = [1, 2]); // 2 on [1]          — should fail
-```
-
-- Expected: compile error at each call. Type mismatch (case 1),
-  multiplicity-too-low (case 2: `[0]` doesn't satisfy `[1]`),
-  multiplicity-too-high (case 3: `[2]` doesn't satisfy `[1]`).
-- Actual: all three compile clean.
-
-**Notes**
-- Three distinct axes per `KeyExpression`, mirrors the function-call
-  argument-binding rules:
-  - **Type:** supplied expr's inferred element type is a subtype of
-    the property's declared type. Subtype OK
-    (`Integer` accepted for `Number[1]`), unrelated type fails.
-  - **Multiplicity lower bound:** supplied multiplicity's lower bound
-    `>=` property's lower bound. `[0]` (empty list literal) doesn't
-    satisfy `[1]` or `[1..*]`. Same rule as function arg binding.
-  - **Multiplicity upper bound:** supplied multiplicity's upper bound
-    `<=` property's upper bound. `[2]` doesn't satisfy `[1]` or
-    `[0..1]`.
-- The compat function to call is the same canonical one referenced
-  in T-20260511-01 and T-20260510-03 (FunctionType binding): likely
-  `is_type_compatible_structural` for type, plus a sibling
-  multiplicity-compat helper. Verify the actual name in
-  `crates/pure/src/infer.rs`. Reuse — don't re-implement.
-- Same lowering seam as T-20260511-02 (constructor `KeyExpression`
-  resolution); the three bugs share a binding-site walk: for each
-  supplied key, resolve the property by name, then validate
-  (type + mult). Required-property check (T-20260511-02) runs after
-  all keys are bound and diffs supplied-set against required-set on
-  the class.
-- Sweep adjacent cases that should also fail / pass correctly:
-  (a) `propA = $someVar` where `$someVar` is `String[1]` — fail,
-  (b) `propA = if(...){1}else{''}` — fail (joined return type is
-      `Any[1]` or similar, not `Integer`),
-  (c) `propA = 1` — pass,
-  (d) `propA = $intMaybe` where `$intMaybe: Integer[0..1]` against
-      a `[1]` slot — fail on multiplicity even though type is right,
-  (e) inherited properties supplied via `^Subclass(superProp = …)`
-      validated against the supertype's declared shape.
-- Error shape: parity with Java's `NewInstance` / property-binding
-  validator. Likely two distinct kinds (type vs. multiplicity) or
-  one combined kind with a discriminator — match what Java emits.
-  Cite the Java class + message string in the audit block at fix
-  time.
-- This is the third entry in the property-binding-site family
-  (T-20260511-01: default-value type, T-20260511-02: missing
-  required, T-20260511-03: supplied-value type/multiplicity).
-  Worth keeping in mind that all three may share infrastructure:
-  the "given a property and a value, are they compatible?" helper
-  is the same regardless of whether the value comes from a `=` in
-  the class body or a `KeyExpression` in `^Class(...)`.
-
-<!-- agent-audit:start id=T-20260511-03 -->
-- 2026-05-11 — claimed by claude-opus-4-7[1m] — bundled with
-  T-20260511-01/02/04 as one constructor-binding family fix.
-  Status: Fix landed (uncommitted; awaiting sign-off). See unified
-  details under T-20260511-01's audit block.
-<!-- agent-audit:end -->
-
-### T-20260511-02 — `^Class(...)` constructor doesn't check required properties are set
-
-- **Type:** parity-gap
-- **Area:** compiler
-- **Priority:** P1
-- **Reporter:** Rafael
-- **Filed:** 2026-05-11
-
-**Summary**
-A `^Class(...)` instance-construction expression doesn't verify that
-every required property (multiplicity lower bound `>= 1` with no
-default value) is supplied via a `KeyExpression`. Constructing a class
-with required slots left empty is silently accepted. Java Pure rejects
-this.
-
-**Repro / Context**
-
-```pure
-Class abc::Class1
-{
-  propA : Integer[1];
-}
-
-// Expected: compile error — required property `propA` not supplied
-// and has no default value.
-^abc::Class1();
-```
-
-- Expected: compile error along the lines of `"Missing required property
-  'propA' on class 'abc::Class1' in constructor"` (confirm against Java's
-  shape — likely emitted from the same validator that checks property
-  arity at constructor sites).
-- Actual: compiles clean.
-
-**Notes**
-- Required = `multiplicity.lower_bound >= 1` AND no `default_value` on
-  the `Property` shell. A `[0..1]` / `[*]` / `[0..*]` property is
-  optional; `[1]` / `[1..*]` with no default is required.
-- Default-value satisfies the check: `propA : Integer[1] = 0;` should
-  make the empty-args constructor compile cleanly. (Once
-  T-20260511-01 lands, the default itself is type-checked — same
-  property shell, two adjacent validators.)
-- Sweep adjacent cases — all should produce a compile error:
-  (a) `^Class()` with required prop missing entirely,
-  (b) `^Class(otherProp = 1)` where the missing prop is required,
-  (c) inherited required props from a supertype that the constructor
-      doesn't supply (walk `super_types` chain, union the required
-      sets).
-- Constructor expression lowering happens in
-  `crates/pure/src/lowering/` (or wherever `^Class(...)` →
-  `ExprKind::*` happens — verify, don't trust). The check belongs
-  right after the keys are bound: at that point we know
-  (i) the receiver `Class`, (ii) the slice of supplied `KeyExpression`
-  names, (iii) the class's resolved properties (already on the
-  shell from Pass 1, with supertypes joinable via `super_types`).
-- Inherited-property walk should follow the same trail as the
-  `KeyExpression` resolver — wherever short-name keys are looked up
-  against the class's full property list, that's the list to diff
-  against required-set.
-- Error shape: parity with Java's diagnostic. The Java validator is
-  somewhere under `m3.compiler.validation.validator.*` — likely
-  `ClassValidator` or a `NewInstance` checker. Cite path + class
-  name in the audit block at fix time.
-- Same family as T-20260511-01 (property default value type check):
-  both add property-binding-site validators. Could share a small
-  helper for "what does this property require?".
-
-<!-- agent-audit:start id=T-20260511-02 -->
-- 2026-05-11 — claimed by claude-opus-4-7[1m] — bundled with
-  T-20260511-01/03/04 as one constructor-binding family fix.
-  Status: Fix landed (uncommitted; awaiting sign-off). See unified
-  details under T-20260511-01's audit block.
-<!-- agent-audit:end -->
-
-### T-20260511-01 — Property default value not type-checked against declared property type
-
-- **Type:** parity-gap
-- **Area:** compiler
-- **Priority:** P1
-- **Reporter:** Rafael
-- **Filed:** 2026-05-11
-
-**Summary**
-A class property's default-value expression is not checked for type
-compatibility against the property's declared type+multiplicity. A
-default value of an incompatible type is silently accepted. Java Pure
-rejects this.
-
-**Repro / Context**
-
-```pure
-Class abc::Foo
-{
-  prop3 : Integer[1] = '';
-}
-```
-
-- Declared property type: `Integer[1]`.
-- Default value: `''` — a `String[1]` literal.
-- Expected: compile error — default-value expression type
-  `String[1]` is not compatible with declared property type
-  `Integer[1]`.
-- Actual: compiles clean.
-
-**Notes**
-- Sweep symmetric cases — all four should produce compile errors:
-  (a) wrong type (e.g. `prop : Integer[1] = ''`),
-  (b) wrong multiplicity (e.g. `prop : Integer[1] = [1, 2, 3]`,
-      `prop : Integer[1..*] = []`),
-  (c) wrong nested generic (e.g. `prop : List<String>[1] = ^List<Integer>(…)`),
-  (d) subtype OK in the covariant direction
-      (`prop : Number[1] = 1`), but not the contravariant one.
-- Same check almost certainly belongs on **qualified properties**'
-  body expressions (return type vs. body's inferred type) and on
-  **function bodies** (return type vs. last expression's type). The
-  TODO is just about property defaults; sweep adjacent sites for
-  the same hole as part of triage.
-- Property default values are lowered in Pass 2b
-  (`crates/pure/src/pipeline.rs::pass_define_class_bodies`) per
-  the comment at pipeline.rs:1674-1678 ("Default-value bodies are
-  lowered in Pass 2b… so type-based dispatch in any operator/function
-  call inside a default value sees real return types"). That's the
-  same seam where the type-compat check should fire: after the
-  default-value expression is lowered (so its inferred type is known)
-  and against the property's already-resolved
-  `type_expr + multiplicity` (already on the `Property` shell from
-  Pass 1).
-- Reuse `crate::infer::is_type_compatible_structural` (or whatever
-  the canonical compat function is — verify, don't trust): it's the
-  same routine that gates `cast(@T)`, function-call argument binding,
-  etc. The new validator should call it, not re-implement compat.
-- Error shape: parity with the analogous Java diagnostic. Likely
-  something like `"Default value of property 'X' has type Y[m], but
-  property declared as Z[n]"` — confirm against Java's
-  `M3PropertyValidator` / `ClassValidator` family before writing.
-- This bug is in the same family as T-20260510-03 (FunctionType arity/types
-  not checked when binding lambda argument) — both are "the structural
-  compat function exists but isn't called at this binding site". Fixing
-  one may share the call-site discipline needed for the other.
-
-<!-- agent-audit:start id=T-20260511-01 -->
-- 2026-05-11 — claimed by claude-opus-4-7[1m] — bundled with
-  T-20260511-02/03/04 as one constructor-binding family fix
-  (per the inbox notes: all four share a "given a property and a
-  value, are they compatible?" core operation).
-- 2026-05-11 — design (after Phase 1 exploration):
-  * Original plan: T-04 + T-02 eager in `lower_new_instance`,
-    T-01 + T-03 cross-chunk. Inputs to T-04 and T-02 are all known
-    syntactically.
-  * Empirical correction: `lower_new_instance` runs in Pass 2b BEFORE
-    `rebuild_derived_indexes()` (pipeline.rs:361, end of
-    `compile_repo_slice`), so association-injected ends aren't
-    queryable yet. All four must run cross-chunk in `validate(model)`.
-  * Java parity: T-02's missing-required check excludes
-    association-injected properties — Java's `NewInstance` validator
-    treats them as bidirectional runtime links, not constructor
-    inputs. Helpers split: `find_property_full_with_inheritance`
-    walks supertypes + injected (for T-03/T-04 key resolution);
-    `all_declared_properties_with_inheritance` walks supertypes only
-    (for T-02 required-set).
-- 2026-05-11 — implementation:
-  * `crates/pure/src/resolve.rs`: new `find_property_full_with_inheritance`,
-    `all_declared_properties_with_inheritance`; `mult_bounds` promoted
-    to `pub(crate)`.
-  * `crates/pure/src/infer.rs`: `render_type` promoted to `pub(crate)`.
-  * `crates/pure/src/error.rs`: three new variants —
-    `PropertyDefaultValueIncompatible`,
-    `ConstructorMissingRequiredProperty`,
-    `ConstructorPropertyTypeMismatch`.
-    T-04 reuses the existing `UnknownProperty` variant.
-  * `crates/pure/src/validate.rs`: new `validate_property_default_values`
-    (T-01) and `validate_constructor_bindings` (T-02 + T-03 + T-04),
-    both wired into `validate(model)` cross-chunk. New private
-    walker `visit_value_specs_in_element` recurses every ExprKind to
-    find every `FunctionCall("new", …)` regardless of nesting depth.
-  * `crates/pure/src/pipeline.rs::pass_infer`: extended with new
-    `TargetKind::ClassPropertyDefault` / `AssociationPropertyDefault`
-    arms so property default-values get their `type_info` populated
-    (latent gap surfaced while implementing T-01 — defaults were
-    lowered but never inferred).
-  * `crates/lsp/src/diagnostics.rs` +
-    `crates/core-platform-pure/tests/categorize_errors.rs`:
-    exhaustive-match arms for the three new error kinds.
-  * `crates/pure/tests/property_default_value_smoke.rs` — 5 tests
-    (T-01).
-  * `crates/pure/tests/constructor_binding_smoke.rs` — 9 tests
-    (T-02 / T-03 / T-04).
-- 2026-05-11 — verification:
-  * `cargo build --workspace` green.
-  * 14 new smoke tests green.
-  * `cargo test -p legend-pure-parser-pure -p legend-pure-snapshot-builder
-    -p legend-pure-core-platform -p legend-pure-lsp -p legend-pure-dsl-mapping
-    -p legend-pure-dsl-relational -p legend-pure-dsl-diagram` green
-    (incl. doctests).
-  * `cargo test -p legend-pure-snapshot-builder
-    builds_platform_purem_and_round_trips` green — the platform's real
-    `^Class(...)` constructor sites all satisfy the new validators
-    (implicit platform sweep).
-  * `cargo fmt --check` clean on touched files.
-  * `cargo clippy --lib -p legend-pure-parser-pure -- -D unwrap_used
-    -D expect_used` clean.
-  * `./scripts/check-copyright.sh` clean (436 files).
-  Status: Fix landed (uncommitted; awaiting sign-off per workspace
-  commit rule).
-- 2026-05-11 — `+=` (augmented) constructor bindings handled with the
-  same compat rule as `=` for v1. Correct for `[*]`/`[1..*]` slots,
-  conservative for `[1]`/`[0..1]`. Follow-up: file a TODO for the
-  v2 "element-type compat against collection slot's element type"
-  rule.
-<!-- agent-audit:end -->
-
 ### T-20260510-04 — Repo visibility pattern not enforced against declared FQNs
 
 - **Type:** parity-gap
@@ -817,4 +454,365 @@ Class other::Class2 extends Class1 {
 <!-- Resolved / migrated / wontfix items, newest first. Keep the full block
      including the final audit-block status for posterity. -->
 
-_(empty)_
+### T-20260511-04 — `^Class(unknownProp = value)` doesn't error on properties that don't exist
+
+- **Type:** parity-gap
+- **Area:** compiler
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-11
+
+**Summary**
+A `^Class(...)` instance-construction `KeyExpression` doesn't check
+that the property name actually exists on the class (or any
+supertype). Supplying an undeclared property name is silently
+accepted. Java Pure rejects this.
+
+**Repro / Context**
+
+```pure
+Class abc::Class1
+{
+  propA : Integer[1];
+}
+
+// Expected: compile error — `propd` is not a property of `abc::Class1`.
+^abc::Class1(propd = '');
+```
+
+- Expected: compile error along the lines of
+  `"Class 'abc::Class1' has no property 'propd'"` (mirrors the
+  existing `UnknownProperty` diagnostic that fires on
+  `$x.propd` access — same idea, different binding site).
+- Actual: compiles clean.
+
+**Notes**
+- Same lowering seam as T-20260511-02 and T-20260511-03: the
+  `KeyExpression` resolver in `^Class(...)` lowering. Where supplied
+  keys are matched against the class's property list, an unmatched
+  key must produce `CompilationErrorKind::UnknownProperty` (reuse
+  the existing variant — same shape, same consumer expectations).
+- Sweep:
+  (a) supertype-walked: `propA` is fine when declared on a parent
+      `Class1` extends `Base { propA: …; }`, only fail when truly
+      absent across the whole supertype chain,
+  (b) reserved-name collision (e.g. `^Class(class = …)` — class is
+      a reserved keyword, should fail at parse, not here),
+  (c) typo near a real property name — the message should be plain
+      "no property X"; suggestion is nice-to-have but not required
+      for parity (Java's diagnostic is plain).
+- The four property-binding-site validators (T-20260511-01..04)
+  almost certainly share one walk: lower `^Class(...)`, resolve
+  receiver class + properties (with supertypes), for each supplied
+  key: (i) does it exist? (T-20260511-04) (ii) is the value
+  compatible with declared type+mult? (T-20260511-03); after all
+  keys: (iii) are all required keys supplied? (T-20260511-02).
+  T-20260511-01 (default-value type) is a separate site (class body,
+  not constructor) but uses the same compat helper.
+- The existing runtime-level "UnknownProperty" diagnostic kind
+  (`CompilationErrorKind::UnknownProperty { type_name, property_name }`
+  per workspace memory) is the right variant to emit. No new error
+  kind needed.
+
+<!-- agent-audit:start id=T-20260511-04 -->
+- 2026-05-11 — claimed by claude-opus-4-7[1m] — bundled with
+  T-20260511-01/02/03 as one constructor-binding family fix.
+  Status: Fix landed (commit c5b4d90a120). See unified
+  details under T-20260511-01's audit block.
+<!-- agent-audit:end -->
+
+### T-20260511-03 — `^Class(prop = value)` doesn't type-check or multiplicity-check the supplied value
+
+- **Type:** parity-gap
+- **Area:** compiler
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-11
+
+**Summary**
+A `^Class(...)` instance-construction `KeyExpression` doesn't check
+that the supplied value's inferred type and multiplicity are compatible
+with the property's declared type and multiplicity. Wrong-type and
+wrong-multiplicity assignments are silently accepted. Java Pure rejects
+this.
+
+**Repro / Context**
+
+```pure
+Class abc::Class1
+{
+  propA : Integer[1];
+}
+
+^abc::Class1(propA = '');     // String on Integer — should fail
+^abc::Class1(propA = []);     // 0 on [1]          — should fail
+^abc::Class1(propA = [1, 2]); // 2 on [1]          — should fail
+```
+
+- Expected: compile error at each call. Type mismatch (case 1),
+  multiplicity-too-low (case 2: `[0]` doesn't satisfy `[1]`),
+  multiplicity-too-high (case 3: `[2]` doesn't satisfy `[1]`).
+- Actual: all three compile clean.
+
+**Notes**
+- Three distinct axes per `KeyExpression`, mirrors the function-call
+  argument-binding rules:
+  - **Type:** supplied expr's inferred element type is a subtype of
+    the property's declared type. Subtype OK
+    (`Integer` accepted for `Number[1]`), unrelated type fails.
+  - **Multiplicity lower bound:** supplied multiplicity's lower bound
+    `>=` property's lower bound. `[0]` (empty list literal) doesn't
+    satisfy `[1]` or `[1..*]`. Same rule as function arg binding.
+  - **Multiplicity upper bound:** supplied multiplicity's upper bound
+    `<=` property's upper bound. `[2]` doesn't satisfy `[1]` or
+    `[0..1]`.
+- The compat function to call is the same canonical one referenced
+  in T-20260511-01 and T-20260510-03 (FunctionType binding): likely
+  `is_type_compatible_structural` for type, plus a sibling
+  multiplicity-compat helper. Verify the actual name in
+  `crates/pure/src/infer.rs`. Reuse — don't re-implement.
+- Same lowering seam as T-20260511-02 (constructor `KeyExpression`
+  resolution); the three bugs share a binding-site walk: for each
+  supplied key, resolve the property by name, then validate
+  (type + mult). Required-property check (T-20260511-02) runs after
+  all keys are bound and diffs supplied-set against required-set on
+  the class.
+- Sweep adjacent cases that should also fail / pass correctly:
+  (a) `propA = $someVar` where `$someVar` is `String[1]` — fail,
+  (b) `propA = if(...){1}else{''}` — fail (joined return type is
+      `Any[1]` or similar, not `Integer`),
+  (c) `propA = 1` — pass,
+  (d) `propA = $intMaybe` where `$intMaybe: Integer[0..1]` against
+      a `[1]` slot — fail on multiplicity even though type is right,
+  (e) inherited properties supplied via `^Subclass(superProp = …)`
+      validated against the supertype's declared shape.
+- Error shape: parity with Java's `NewInstance` / property-binding
+  validator. Likely two distinct kinds (type vs. multiplicity) or
+  one combined kind with a discriminator — match what Java emits.
+  Cite the Java class + message string in the audit block at fix
+  time.
+- This is the third entry in the property-binding-site family
+  (T-20260511-01: default-value type, T-20260511-02: missing
+  required, T-20260511-03: supplied-value type/multiplicity).
+  Worth keeping in mind that all three may share infrastructure:
+  the "given a property and a value, are they compatible?" helper
+  is the same regardless of whether the value comes from a `=` in
+  the class body or a `KeyExpression` in `^Class(...)`.
+
+<!-- agent-audit:start id=T-20260511-03 -->
+- 2026-05-11 — claimed by claude-opus-4-7[1m] — bundled with
+  T-20260511-01/02/04 as one constructor-binding family fix.
+  Status: Fix landed (commit c5b4d90a120). See unified
+  details under T-20260511-01's audit block.
+<!-- agent-audit:end -->
+
+### T-20260511-02 — `^Class(...)` constructor doesn't check required properties are set
+
+- **Type:** parity-gap
+- **Area:** compiler
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-11
+
+**Summary**
+A `^Class(...)` instance-construction expression doesn't verify that
+every required property (multiplicity lower bound `>= 1` with no
+default value) is supplied via a `KeyExpression`. Constructing a class
+with required slots left empty is silently accepted. Java Pure rejects
+this.
+
+**Repro / Context**
+
+```pure
+Class abc::Class1
+{
+  propA : Integer[1];
+}
+
+// Expected: compile error — required property `propA` not supplied
+// and has no default value.
+^abc::Class1();
+```
+
+- Expected: compile error along the lines of `"Missing required property
+  'propA' on class 'abc::Class1' in constructor"` (confirm against Java's
+  shape — likely emitted from the same validator that checks property
+  arity at constructor sites).
+- Actual: compiles clean.
+
+**Notes**
+- Required = `multiplicity.lower_bound >= 1` AND no `default_value` on
+  the `Property` shell. A `[0..1]` / `[*]` / `[0..*]` property is
+  optional; `[1]` / `[1..*]` with no default is required.
+- Default-value satisfies the check: `propA : Integer[1] = 0;` should
+  make the empty-args constructor compile cleanly. (Once
+  T-20260511-01 lands, the default itself is type-checked — same
+  property shell, two adjacent validators.)
+- Sweep adjacent cases — all should produce a compile error:
+  (a) `^Class()` with required prop missing entirely,
+  (b) `^Class(otherProp = 1)` where the missing prop is required,
+  (c) inherited required props from a supertype that the constructor
+      doesn't supply (walk `super_types` chain, union the required
+      sets).
+- Constructor expression lowering happens in
+  `crates/pure/src/lowering/` (or wherever `^Class(...)` →
+  `ExprKind::*` happens — verify, don't trust). The check belongs
+  right after the keys are bound: at that point we know
+  (i) the receiver `Class`, (ii) the slice of supplied `KeyExpression`
+  names, (iii) the class's resolved properties (already on the
+  shell from Pass 1, with supertypes joinable via `super_types`).
+- Inherited-property walk should follow the same trail as the
+  `KeyExpression` resolver — wherever short-name keys are looked up
+  against the class's full property list, that's the list to diff
+  against required-set.
+- Error shape: parity with Java's diagnostic. The Java validator is
+  somewhere under `m3.compiler.validation.validator.*` — likely
+  `ClassValidator` or a `NewInstance` checker. Cite path + class
+  name in the audit block at fix time.
+- Same family as T-20260511-01 (property default value type check):
+  both add property-binding-site validators. Could share a small
+  helper for "what does this property require?".
+
+<!-- agent-audit:start id=T-20260511-02 -->
+- 2026-05-11 — claimed by claude-opus-4-7[1m] — bundled with
+  T-20260511-01/03/04 as one constructor-binding family fix.
+  Status: Fix landed (commit c5b4d90a120). See unified
+  details under T-20260511-01's audit block.
+<!-- agent-audit:end -->
+
+### T-20260511-01 — Property default value not type-checked against declared property type
+
+- **Type:** parity-gap
+- **Area:** compiler
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-11
+
+**Summary**
+A class property's default-value expression is not checked for type
+compatibility against the property's declared type+multiplicity. A
+default value of an incompatible type is silently accepted. Java Pure
+rejects this.
+
+**Repro / Context**
+
+```pure
+Class abc::Foo
+{
+  prop3 : Integer[1] = '';
+}
+```
+
+- Declared property type: `Integer[1]`.
+- Default value: `''` — a `String[1]` literal.
+- Expected: compile error — default-value expression type
+  `String[1]` is not compatible with declared property type
+  `Integer[1]`.
+- Actual: compiles clean.
+
+**Notes**
+- Sweep symmetric cases — all four should produce compile errors:
+  (a) wrong type (e.g. `prop : Integer[1] = ''`),
+  (b) wrong multiplicity (e.g. `prop : Integer[1] = [1, 2, 3]`,
+      `prop : Integer[1..*] = []`),
+  (c) wrong nested generic (e.g. `prop : List<String>[1] = ^List<Integer>(…)`),
+  (d) subtype OK in the covariant direction
+      (`prop : Number[1] = 1`), but not the contravariant one.
+- Same check almost certainly belongs on **qualified properties**'
+  body expressions (return type vs. body's inferred type) and on
+  **function bodies** (return type vs. last expression's type). The
+  TODO is just about property defaults; sweep adjacent sites for
+  the same hole as part of triage.
+- Property default values are lowered in Pass 2b
+  (`crates/pure/src/pipeline.rs::pass_define_class_bodies`) per
+  the comment at pipeline.rs:1674-1678 ("Default-value bodies are
+  lowered in Pass 2b… so type-based dispatch in any operator/function
+  call inside a default value sees real return types"). That's the
+  same seam where the type-compat check should fire: after the
+  default-value expression is lowered (so its inferred type is known)
+  and against the property's already-resolved
+  `type_expr + multiplicity` (already on the `Property` shell from
+  Pass 1).
+- Reuse `crate::infer::is_type_compatible_structural` (or whatever
+  the canonical compat function is — verify, don't trust): it's the
+  same routine that gates `cast(@T)`, function-call argument binding,
+  etc. The new validator should call it, not re-implement compat.
+- Error shape: parity with the analogous Java diagnostic. Likely
+  something like `"Default value of property 'X' has type Y[m], but
+  property declared as Z[n]"` — confirm against Java's
+  `M3PropertyValidator` / `ClassValidator` family before writing.
+- This bug is in the same family as T-20260510-03 (FunctionType arity/types
+  not checked when binding lambda argument) — both are "the structural
+  compat function exists but isn't called at this binding site". Fixing
+  one may share the call-site discipline needed for the other.
+
+<!-- agent-audit:start id=T-20260511-01 -->
+- 2026-05-11 — claimed by claude-opus-4-7[1m] — bundled with
+  T-20260511-02/03/04 as one constructor-binding family fix
+  (per the inbox notes: all four share a "given a property and a
+  value, are they compatible?" core operation).
+- 2026-05-11 — design (after Phase 1 exploration):
+  * Original plan: T-04 + T-02 eager in `lower_new_instance`,
+    T-01 + T-03 cross-chunk. Inputs to T-04 and T-02 are all known
+    syntactically.
+  * Empirical correction: `lower_new_instance` runs in Pass 2b BEFORE
+    `rebuild_derived_indexes()` (pipeline.rs:361, end of
+    `compile_repo_slice`), so association-injected ends aren't
+    queryable yet. All four must run cross-chunk in `validate(model)`.
+  * Java parity: T-02's missing-required check excludes
+    association-injected properties — Java's `NewInstance` validator
+    treats them as bidirectional runtime links, not constructor
+    inputs. Helpers split: `find_property_full_with_inheritance`
+    walks supertypes + injected (for T-03/T-04 key resolution);
+    `all_declared_properties_with_inheritance` walks supertypes only
+    (for T-02 required-set).
+- 2026-05-11 — implementation:
+  * `crates/pure/src/resolve.rs`: new `find_property_full_with_inheritance`,
+    `all_declared_properties_with_inheritance`; `mult_bounds` promoted
+    to `pub(crate)`.
+  * `crates/pure/src/infer.rs`: `render_type` promoted to `pub(crate)`.
+  * `crates/pure/src/error.rs`: three new variants —
+    `PropertyDefaultValueIncompatible`,
+    `ConstructorMissingRequiredProperty`,
+    `ConstructorPropertyTypeMismatch`.
+    T-04 reuses the existing `UnknownProperty` variant.
+  * `crates/pure/src/validate.rs`: new `validate_property_default_values`
+    (T-01) and `validate_constructor_bindings` (T-02 + T-03 + T-04),
+    both wired into `validate(model)` cross-chunk. New private
+    walker `visit_value_specs_in_element` recurses every ExprKind to
+    find every `FunctionCall("new", …)` regardless of nesting depth.
+  * `crates/pure/src/pipeline.rs::pass_infer`: extended with new
+    `TargetKind::ClassPropertyDefault` / `AssociationPropertyDefault`
+    arms so property default-values get their `type_info` populated
+    (latent gap surfaced while implementing T-01 — defaults were
+    lowered but never inferred).
+  * `crates/lsp/src/diagnostics.rs` +
+    `crates/core-platform-pure/tests/categorize_errors.rs`:
+    exhaustive-match arms for the three new error kinds.
+  * `crates/pure/tests/property_default_value_smoke.rs` — 5 tests
+    (T-01).
+  * `crates/pure/tests/constructor_binding_smoke.rs` — 9 tests
+    (T-02 / T-03 / T-04).
+- 2026-05-11 — verification:
+  * `cargo build --workspace` green.
+  * 14 new smoke tests green.
+  * `cargo test -p legend-pure-parser-pure -p legend-pure-snapshot-builder
+    -p legend-pure-core-platform -p legend-pure-lsp -p legend-pure-dsl-mapping
+    -p legend-pure-dsl-relational -p legend-pure-dsl-diagram` green
+    (incl. doctests).
+  * `cargo test -p legend-pure-snapshot-builder
+    builds_platform_purem_and_round_trips` green — the platform's real
+    `^Class(...)` constructor sites all satisfy the new validators
+    (implicit platform sweep).
+  * `cargo fmt --check` clean on touched files.
+  * `cargo clippy --lib -p legend-pure-parser-pure -- -D unwrap_used
+    -D expect_used` clean.
+  * `./scripts/check-copyright.sh` clean (436 files).
+  Status: Fix landed (commit c5b4d90a120).
+- 2026-05-11 — `+=` (augmented) constructor bindings handled with the
+  same compat rule as `=` for v1. Correct for `[*]`/`[1..*]` slots,
+  conservative for `[1]`/`[0..1]`. Follow-up: file a TODO for the
+  v2 "element-type compat against collection slot's element type"
+  rule.
+<!-- agent-audit:end -->
+
