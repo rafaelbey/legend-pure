@@ -224,3 +224,109 @@ fn filter_with_unknown_dynafunction_does_not_emit_predicate_error() {
          got: {errors:#?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Java-parity pin on the boolean-shape DynaFunction allow-list (T3.1 audit)
+//
+// Java's canonical classifier
+// `meta::relational::functions::sqlQueryToString::isBooleanOperation`
+// lives at `legend-engine-xt-relationalStore-core-pure/.../sqlQueryToString/
+// dbExtension.pure:803`. The set below is its verbatim membership. Any
+// drift between Java's source-of-truth and our `KNOWN_BOOLEAN_DYNAFUNCTIONS`
+// is a parity regression — predicates that Java accepts would either
+// error or silently degrade to `Any` on our side.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn known_boolean_dynafunctions_match_java_isbooleanoperation_set() {
+    use legend_pure_dsl_relational::op_typer::KNOWN_BOOLEAN_DYNAFUNCTIONS;
+    use std::collections::HashSet;
+
+    // Verbatim copy of Java's `isBooleanOperation` list (dbExtension.pure:803).
+    let java_canonical: HashSet<&str> = [
+        "or",
+        "and",
+        "lessThan",
+        "lessThanEqual",
+        "greaterThan",
+        "greaterThanEqual",
+        "equal",
+        "notEqual",
+        "notEqualAnsi",
+        "startsWith",
+        "endsWith",
+        "contains",
+        "isEmpty",
+        "isNotEmpty",
+        "isNull",
+        "isNotNull",
+        "isAlphaNumeric",
+        "exists",
+        "not",
+        "in",
+        "isNumeric",
+        "matches",
+        "isDistinct",
+    ]
+    .into_iter()
+    .collect();
+    let ours: HashSet<&str> = KNOWN_BOOLEAN_DYNAFUNCTIONS.iter().copied().collect();
+
+    let missing: Vec<&&str> = java_canonical.difference(&ours).collect();
+    let extras: Vec<&&str> = ours.difference(&java_canonical).collect();
+
+    assert!(
+        missing.is_empty(),
+        "Java's isBooleanOperation accepts these names but ours rejects them: {missing:?}. \
+         Java accepting a predicate we reject is a parity regression; widen \
+         KNOWN_BOOLEAN_DYNAFUNCTIONS in op_typer.rs."
+    );
+    assert!(
+        extras.is_empty(),
+        "Ours has names Java's isBooleanOperation never accepts: {extras:?}. \
+         These cannot come from Java-emitted protocol; if they're meaningful for \
+         a Rust-only path, document why — otherwise drop them to keep parity tight."
+    );
+}
+
+#[test]
+fn filter_with_starts_with_dynafunction_passes() {
+    // `startsWith` is in Java's isBooleanOperation set. Pin it
+    // separately from the parity test so the SQL-emission work
+    // landing later (T1.4) trips on any accidental removal.
+    let source = indoc! {r"
+        ###Relational
+        Database pkg::Db
+        (
+          Table tradeTable ( id INTEGER PRIMARY KEY, status VARCHAR(10) )
+          Filter prefixed(startsWith(tradeTable.status, 'A'))
+        )
+    "};
+    let errors = run_validator(source);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("predicate") && e.message.contains("prefixed")),
+        "no predicate-return-type error expected on startsWith(...) body; got: {errors:#?}"
+    );
+}
+
+#[test]
+fn filter_with_is_empty_dynafunction_passes() {
+    // `isEmpty` is Java's null-check shape — must type Boolean.
+    let source = indoc! {r"
+        ###Relational
+        Database pkg::Db
+        (
+          Table tradeTable ( id INTEGER PRIMARY KEY, status VARCHAR(10) )
+          Filter blanks(isEmpty(tradeTable.status))
+        )
+    "};
+    let errors = run_validator(source);
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("predicate") && e.message.contains("blanks")),
+        "no predicate-return-type error expected on isEmpty(...) body; got: {errors:#?}"
+    );
+}
