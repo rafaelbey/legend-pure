@@ -424,23 +424,38 @@ pub struct EnumValueMapping {
 
 /// Body of an `Operation` class mapping.
 ///
-/// Shape:
-/// ```text
-/// {
-///   pkg::operations::union_OperationSetImplementation_1__SetImplementation_MANY_(rel1, rel2)
-/// }
-/// ```
+/// Two Java-grammar forms — both produce the same struct, with
+/// `validation_function` discriminating:
+///
+/// 1. **Simple `parameters` form** (most operations):
+///    ```text
+///    {
+///      pkg::operations::union_OperationSetImplementation_1__SetImplementation_MANY_(rel1, rel2)
+///    }
+///    ```
+///    `validation_function: None`.
+///
+/// 2. **`mergeParameters` form** (`MergeOperationSetImplementation`):
+///    ```text
+///    {
+///      pkg::operations::merge_OperationSetImplementation_1__SetImplementation_MANY_(
+///        [rel1, rel2],
+///        {row | $row->validate(...)}
+///      )
+///    }
+///    ```
+///    Parameters arrive bracketed, followed by a validation lambda
+///    that's invoked on the merged rows. `validation_function:
+///    Some(<lambda>)`. Java parity:
+///    `OperationClassMappingParseTreeWalker.visitMergeOperationClassMapping`
+///    + `mergeParameters` rule at
+///    `OperationClassMappingParserGrammar.g4:31`.
 ///
 /// The function path is typically a mangled FQN (Java's exact-FQN
 /// dispatch convention) of a function whose signature is
 /// `OperationSetImplementation[1] -> SetImplementation[*]`. Each
 /// parameter is a sibling class-mapping ID (whether explicit `[id]`
 /// or implicit class-name default).
-///
-/// This Stage-5 variant covers the simple `parameters` form; the
-/// `mergeParameters` form (with a validation lambda) is reserved for
-/// a follow-up sub-stage and would extend this struct (or split into
-/// a sibling `Merge` variant) when added.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OperationClassMappingBody {
     /// FQN of the operation function.
@@ -448,6 +463,9 @@ pub struct OperationClassMappingBody {
     /// Set-implementation IDs combined by the operation, in source
     /// order. Empty allowed (matches Java grammar's `()` form).
     pub parameters: Vec<OperationParameter>,
+    /// Validation lambda paired with the merge form. `None` for the
+    /// simple form. Round-trips verbatim through the composer.
+    pub validation_function: Option<Expression>,
 }
 
 /// One set-implementation-ID parameter inside an
