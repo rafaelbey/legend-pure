@@ -42,13 +42,24 @@
 //! callers through
 //! [`legend_pure_runtime::eval::Evaluator::new_default_with_dsl_populators`].
 
-use legend_pure_dsl_relational::compiler::{DATABASE_DSL_NAME, DatabaseSnapshot, SchemaSnapshot};
+use legend_pure_dsl_relational::compiler::{
+    DATABASE_DSL_NAME, DatabaseSnapshot, RELATIONAL_CLASS_MAPPING_DSL_NAME,
+    RelationalClassMappingSnapshot, SchemaSnapshot,
+};
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::PureModel;
 use legend_pure_runtime::dsl::{DSLPopulationCtx, DSLPopulator};
 use legend_pure_runtime::heap::ObjectHandle;
 use legend_pure_runtime::value::Value;
 use smol_str::SmolStr;
+
+/// M3 classifier for `meta::relational::metamodel::TableAlias`
+/// rows produced by [`RelationalClassMappingDSLPopulator`].
+pub const TABLE_ALIAS_CLASSIFIER: &str = "meta::relational::metamodel::TableAlias";
+
+/// M3 classifier FQN for the parent Mapping (used to locate the
+/// parent heap row by element-id chain).
+pub const MAPPING_CLASSIFIER: &str = "meta::pure::mapping::Mapping";
 
 /// M3 classifier FQNs used by relational metamodel.
 pub const DATABASE_CLASSIFIER: &str = "meta::relational::metamodel::Database";
@@ -197,4 +208,165 @@ fn resolve_fqn(model: &PureModel, fqn: &str) -> Option<ElementId> {
         return None;
     }
     model.resolve_by_path(&segments)
+}
+
+// ---------------------------------------------------------------------------
+// RelationalClassMappingDSLPopulator
+// ---------------------------------------------------------------------------
+
+/// Populator for the sidecar `RelationalClassMapping` DSLInstance
+/// rows emitted by `RelationalExtension::declare`.
+///
+/// Patches an already-allocated `RootRelationalInstanceSetImplementation`
+/// heap row (created by `MappingDSLPopulator`) with a `mainTableAlias`
+/// `TableAlias` heap row whose `relationalElement` slot points at the
+/// Table heap row allocated by [`RelationalDatabaseDSLPopulator`].
+///
+/// Depends on the runtime walking populators in chunk-element order,
+/// which means:
+///
+/// 1. `MappingDSLPopulator` runs first (Mapping rows declared before
+///    Database / RelationalClassMapping in the dsl-relational source
+///    walk),
+/// 2. `RelationalDatabaseDSLPopulator` runs next (Database rows
+///    declared before sidecar rows in the same source walk),
+/// 3. `RelationalClassMappingDSLPopulator` runs last (sidecar rows
+///    declared after both Mapping and Database rows are populated).
+///
+/// Pilot scope (T1.3 commit 3): only the `mainTableAlias` slot.
+/// Property mappings (`propertyMappings` collection), filters, and
+/// the join sequence are deferred to follow-up commits when the
+/// snapshot grows the corresponding fields.
+pub struct RelationalClassMappingDSLPopulator;
+
+impl DSLPopulator for RelationalClassMappingDSLPopulator {
+    fn dsl_name(&self) -> &'static str {
+        RELATIONAL_CLASS_MAPPING_DSL_NAME
+    }
+
+    fn populate(&self, ctx: DSLPopulationCtx<'_>) {
+        let snapshot = match RelationalClassMappingSnapshot::decode(ctx.instance_data) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        let Some(main_table) = snapshot.main_table.as_ref() else {
+            // Class-mapping has no `~mainTable`; nothing for this
+            // populator to do (Java treats this case as
+            // inherited-via-extends and other validators handle it).
+            return;
+        };
+
+        // -- find the class-mapping heap row to patch --
+        let Some(cm_handle) = find_class_mapping_row(
+            ctx.model,
+            ctx.heap,
+            &snapshot.mapping_fqn,
+            &snapshot.class_mapping_id,
+        ) else {
+            return;
+        };
+
+        // -- find the Table heap row inside the resolved Database --
+        let Some(table_handle) = find_table_row(
+            ctx.model,
+            ctx.heap,
+            &main_table.database_fqn,
+            &main_table.schema_name,
+            &main_table.table_name,
+        ) else {
+            return;
+        };
+
+        // -- allocate the TableAlias and wire it up --
+        let alias = ctx.heap.alloc_dynamic(TABLE_ALIAS_CLASSIFIER);
+        let _ = ctx.heap.mutate_set(
+            &alias,
+            "name",
+            &[Value::String(main_table.table_name.clone())],
+        );
+        let _ = ctx
+            .heap
+            .mutate_set(&alias, "relationalElement", &[Value::Object(table_handle)]);
+
+        let _ = ctx.heap.mutate_set(
+            &ctx.instance_handle,
+            "mainTableAlias",
+            &[Value::Object(alias.clone())],
+        );
+        // The class-mapping row created by `MappingDSLPopulator`
+        // gets the same TableAlias on its mainTableAlias slot so
+        // Pure-side navigation `m.classMappings->first().mainTableAlias`
+        // works whether the user starts from the parent Mapping or
+        // (in a future revision) directly from the sidecar.
+        let _ = ctx.heap.mutate_set(
+            &cm_handle,
+            "mainTableAlias",
+            &[Value::Object(alias)],
+        );
+    }
+}
+
+fn find_class_mapping_row(
+    model: &PureModel,
+    heap: &legend_pure_runtime::heap::RuntimeHeap,
+    mapping_fqn: &str,
+    class_mapping_id: &str,
+) -> Option<ObjectHandle> {
+    let mapping_id = resolve_fqn(model, mapping_fqn)?;
+    let mapping_handle = heap.object_for_element(mapping_id)?;
+    let cms = mapping_handle
+        .borrow()
+        .get_property_values("classMappings");
+    for v in cms.iter() {
+        let Value::Object(h) = v else {
+            continue;
+        };
+        let id_values = h.borrow().get_property_values("id");
+        let Some(Value::String(s)) = id_values.iter().next().cloned() else {
+            continue;
+        };
+        if s.as_str() == class_mapping_id {
+            return Some(h.clone());
+        }
+    }
+    None
+}
+
+fn find_table_row(
+    model: &PureModel,
+    heap: &legend_pure_runtime::heap::RuntimeHeap,
+    database_fqn: &str,
+    schema_name: &str,
+    table_name: &str,
+) -> Option<ObjectHandle> {
+    let db_id = resolve_fqn(model, database_fqn)?;
+    let db_handle = heap.object_for_element(db_id)?;
+    let schemas = db_handle.borrow().get_property_values("schemas");
+    for s_val in schemas.iter() {
+        let Value::Object(s_handle) = s_val else {
+            continue;
+        };
+        let s_name = s_handle.borrow().get_property_values("name");
+        let Some(Value::String(s_name_str)) = s_name.iter().next().cloned() else {
+            continue;
+        };
+        if s_name_str.as_str() != schema_name {
+            continue;
+        }
+        let tables = s_handle.borrow().get_property_values("tables");
+        for t_val in tables.iter() {
+            let Value::Object(t_handle) = t_val else {
+                continue;
+            };
+            let t_name = t_handle.borrow().get_property_values("name");
+            let Some(Value::String(t_name_str)) = t_name.iter().next().cloned() else {
+                continue;
+            };
+            if t_name_str.as_str() == table_name {
+                return Some(t_handle.clone());
+            }
+        }
+    }
+    None
 }

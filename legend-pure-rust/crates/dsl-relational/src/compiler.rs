@@ -80,6 +80,21 @@ use smol_str::SmolStr;
 /// Stable name used to key Database payloads in `Element::DSLInstance`.
 pub const DATABASE_DSL_NAME: &str = "RelationalDatabase";
 
+/// Stable name used to key Relational class-mapping payloads in
+/// `Element::DSLInstance`. One row per `pkg::Class : Relational
+/// { ~mainTable [db]Schema.Table ... }` line. Materialised as a
+/// SIDECAR — the row is invisible to top-level navigation; its job
+/// is to carry the data the runtime needs to patch the
+/// `RootRelationalInstanceSetImplementation` heap row that the
+/// Mapping populator already creates.
+pub const RELATIONAL_CLASS_MAPPING_DSL_NAME: &str = "RelationalClassMapping";
+
+/// FQN of the M3 metaclass the sidecar elements claim as classifier.
+/// Mirrors the heap-row classifier the Mapping populator assigns to
+/// `body_kind="Relational"` class-mappings.
+pub const RELATIONAL_CLASS_MAPPING_CLASSIFIER_FQN: &str =
+    "meta::relational::mappings::RootRelationalInstanceSetImplementation";
+
 /// FQN of the M3 metaclass `Database` instances are typed against.
 pub const DATABASE_CLASSIFIER_FQN: &str = "meta::relational::metamodel::Database";
 
@@ -261,6 +276,78 @@ pub struct SchemaSnapshot {
     pub views: Vec<SmolStr>,
 }
 
+/// Sidecar payload carrying the data needed to wire a relational
+/// class-mapping's `mainTableAlias` slot at runtime hydration time.
+///
+/// Encoded into `Element::DSLInstance.data` under
+/// [`RELATIONAL_CLASS_MAPPING_DSL_NAME`]. Read at evaluator setup by
+/// `RelationalClassMappingDSLPopulator` in `dsl-relational-runtime`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RelationalClassMappingSnapshot {
+    /// FQN of the enclosing `Mapping`, e.g. `"my::test::MyMapping"`.
+    /// Used by the populator to locate the parent Mapping heap row.
+    pub mapping_fqn: SmolStr,
+    /// Class-mapping id — the `[id]` if explicitly set, otherwise the
+    /// class FQN (same convention as `visible_class_mapping_ids`).
+    pub class_mapping_id: SmolStr,
+    /// `~mainTable [db]Schema.Table` reference. `None` when the body
+    /// has no `~mainTable` block.
+    pub main_table: Option<MainTableRef>,
+}
+
+/// `[db]Schema.Table` triple extracted from a `~mainTable` block.
+///
+/// Schema defaults to `"default"` for the `~mainTable [db]Table`
+/// shape (top-level table outside any `Schema` block). When the
+/// source has `~mainTable [db]Schema.Table`, the schema is captured
+/// literally.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MainTableRef {
+    /// Database FQN extracted from the `[db]` qualifier.
+    pub database_fqn: SmolStr,
+    /// Schema name (`"default"` for the unqualified form).
+    pub schema_name: SmolStr,
+    /// Table name.
+    pub table_name: SmolStr,
+}
+
+impl RelationalClassMappingSnapshot {
+    /// Encode for storage in `Element::DSLInstance.data`.
+    ///
+    /// # Errors
+    /// Returns the underlying Postcard error on encode failure.
+    pub fn encode(&self) -> Result<Vec<u8>, postcard::Error> {
+        postcard::to_allocvec(self)
+    }
+
+    /// Decode a payload produced by [`Self::encode`].
+    ///
+    /// # Errors
+    /// Returns the underlying Postcard error on corrupt or truncated
+    /// input.
+    pub fn decode(bytes: &[u8]) -> Result<Self, postcard::Error> {
+        postcard::from_bytes(bytes)
+    }
+}
+
+fn extract_main_table_ref(body: &RelationalClassMappingBody) -> Option<MainTableRef> {
+    let mt = body.main_table.as_ref()?;
+    let database_fqn = packageable_fqn(&mt.db);
+    // `~mainTable [db]Schema.Table` parses to `scope.table = "Schema"`
+    // and `scope.scope = ["Table"]`. `~mainTable [db]Table` parses to
+    // `scope.table = "Table"` and `scope.scope = []`.
+    let (schema_name, table_name) = if mt.scope.scope.is_empty() {
+        (SmolStr::new("default"), mt.scope.table.value.clone())
+    } else {
+        (mt.scope.table.value.clone(), mt.scope.scope[0].value.clone())
+    };
+    Some(MainTableRef {
+        database_fqn,
+        schema_name,
+        table_name,
+    })
+}
+
 impl DatabaseSnapshot {
     /// Build a snapshot from an in-memory `DatabaseDef` AST.
     #[must_use]
@@ -428,6 +515,11 @@ impl CompilerExtension for RelationalExtension {
                         }
                     }
                     "Mapping" => {
+                        // Sidecar DSLInstance rows for relational
+                        // class-mappings land in the same chunk Pass 1
+                        // just created for this source file. Same
+                        // pattern as the Database arm above.
+                        let chunk_id = (ctx.model.chunks.len().saturating_sub(1)) as u16;
                         for element in &section.elements {
                             let AstElement::DSLElement(boxed) = element else {
                                 continue;
@@ -465,12 +557,75 @@ impl CompilerExtension for RelationalExtension {
                                     cm.id.clone().unwrap_or_else(|| class_fqn.clone());
                                 relational_class_mappings.push(RegisteredRelationalClassMapping {
                                     mapping_fqn: mapping_fqn.clone(),
-                                    class_mapping_id,
+                                    class_mapping_id: class_mapping_id.clone(),
                                     class_fqn,
                                     extends: cm.extends.clone(),
                                     class_mapping_source_info: cm.source_info.clone(),
                                     body: body.clone(),
                                 });
+
+                                // Sidecar `Element::DSLInstance` row
+                                // carrying the data the
+                                // `RelationalClassMappingDSLPopulator`
+                                // reads at evaluator setup to patch
+                                // `RootRelationalInstanceSetImplementation.mainTableAlias`
+                                // onto the class-mapping heap row the
+                                // Mapping populator allocates. Sidecar
+                                // means: invisible to package
+                                // navigation, but routes through the
+                                // standard chunk-element machinery so
+                                // `.purem` slice/merge preserves it.
+                                let snapshot = RelationalClassMappingSnapshot {
+                                    mapping_fqn: mapping_fqn.clone(),
+                                    class_mapping_id: class_mapping_id.clone(),
+                                    main_table: extract_main_table_ref(body),
+                                };
+                                let data = match snapshot.encode() {
+                                    Ok(bytes) => bytes,
+                                    Err(e) => {
+                                        ctx.errors.push(CompilationError {
+                                            message: format!(
+                                                "Failed to encode RelationalClassMappingSnapshot for \
+                                                 '{mapping_fqn}.{class_mapping_id}': {e}"
+                                            ),
+                                            source_info: cm.source_info.clone(),
+                                            kind: CompilationErrorKind::UnresolvedElement {
+                                                path: class_mapping_id.clone(),
+                                            },
+                                        });
+                                        continue;
+                                    }
+                                };
+                                let Some(chunk) =
+                                    ctx.model.chunks.get_mut(chunk_id as usize)
+                                else {
+                                    continue;
+                                };
+                                let synthetic_name =
+                                    SmolStr::new(format!("{mapping_fqn}.{class_mapping_id}"));
+                                let _local_idx = chunk.alloc_element(
+                                    ElementNode {
+                                        name: synthetic_name,
+                                        source_info: cm.source_info.clone(),
+                                        name_source_info: cm.source_info.clone(),
+                                        parent_package: ctx.model.root_package,
+                                    },
+                                    ModelElement::DSLInstance(DSLInstance {
+                                        dsl_name: SmolStr::new(
+                                            RELATIONAL_CLASS_MAPPING_DSL_NAME,
+                                        ),
+                                        classifier_fqn: SmolStr::new(
+                                            RELATIONAL_CLASS_MAPPING_CLASSIFIER_FQN,
+                                        ),
+                                        data,
+                                    }),
+                                );
+                                // Note: NOT calling `register_element`.
+                                // Class-mappings aren't packageable; the
+                                // sidecar lives in the chunk arena
+                                // only, discoverable via element
+                                // iteration but invisible to FQN
+                                // navigation.
                             }
                         }
                     }
