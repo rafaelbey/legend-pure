@@ -207,6 +207,11 @@ function abc::demo(): String[1] {
 
 ---
 
+## Closed
+
+<!-- Resolved / migrated / wontfix items, newest first. Keep the full block
+     including the final audit-block status for posterity. -->
+
 ### T-20260510-01 — Import-less reference to another package resolves silently
 
 - **Type:** parity-gap
@@ -257,15 +262,84 @@ Class other::Class2 extends Class1 {
   an import — that's correct Java behaviour and must not regress.
 
 <!-- agent-audit:start id=T-20260510-01 -->
-<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+- 2026-05-11 — claimed by claude-opus-4-7[1m] — reproducing locally,
+  then auditing short-name resolution sites in `crates/pure/src/resolve.rs`.
+  Status: Investigating
+- 2026-05-11 — diagnosis revised after reading the resolver:
+  `resolve.rs`'s `resolve_unqualified` (L604-707) is sound — its step 2
+  import-scope scan is correctly gated on the scopes it's given, and
+  step 3's root-only fallback finds only root M3 aliases
+  (`resolve_by_path` is non-recursive — `model.rs:599-623`). The leak
+  is upstream in **`pipeline.rs`**:
+  * Pass 2a `pipeline.rs:1124-1132` and Pass 2b `:1213-1221` mutated
+    the section's cached `import_scopes` Vec in place with each
+    element's implicit self-package. When element A (in `abc::`) was
+    processed first, `abc::` got pushed; when element B (in `other::`)
+    was processed second, the cache contained BOTH `abc::` AND
+    `other::`. B's short-name lookup then resolved against the leaked
+    A-package entry.
+  * Secondary bug: `resolve_caches.entry(scope_key)` at
+    `pipeline.rs:1135 / :1222` keyed cached resolutions by section, so
+    element A's `name → ElementId` result also bled into element B's
+    identical-name lookup. Removing only the scope mutation without
+    scoping the cache per-element would have left the same leak.
+- 2026-05-11 — implementation:
+  * `crates/pure/src/resolve.rs`: new
+    `self_package: Option<&'a Package>` field on `ResolutionContext`
+    (mirrors `type_parameters` / `multiplicity_parameters`); new step
+    2b in `resolve_unqualified` and in `resolve_function_call`'s
+    unqualified branch — consulted only when explicit imports yielded
+    nothing, so explicit imports keep shadowing same-package siblings
+    (Java parity).
+  * `crates/pure/src/lower/function_app.rs`: same step 2b fallback in
+    `candidates_by_arity`, the lambda-inference helper that walks
+    `import_scopes` directly. Without this, parametric recursive fns
+    in the same package lost their lambda-expected-type derivation
+    (surfaced as a regression in
+    `tic_recursive_generic_fn_no_unbound_param_error`).
+  * `crates/pure/src/pipeline.rs`: deleted both in-place
+    `import_scopes.push(...)` mutation blocks; converted
+    `resolve_caches` from section-keyed `HashMap` to per-element local
+    `HashMap` (sharing across elements is unsound because results
+    depend on `self_package`); dropped the parameter from
+    `pass_define_bodies` / `pass_define_class_bodies` and the third
+    element from `pass_define_signatures`'s return tuple.
+  * `crates/pure/src/extension.rs`: `self_package: None` for
+    free-floating DSL expressions — `auto_imports` already covers the
+    visible namespace.
+  * `crates/pure/tests/import_isolation_smoke.rs` (new) — 8 tests:
+    bug repro (extends + property), with-import regression, FQN
+    regression, same-section two-packages leak, function-body
+    cross-pkg call, two-sections isolation, element-order
+    independence, same-package short-name regression.
+- 2026-05-11 — verification:
+  * `cargo build --workspace` green.
+  * 8 new import-isolation tests + 26 existing `inference_context`
+    tests + per-crate sweep across pure, snapshot-builder,
+    core-platform, lsp, dsl-mapping, dsl-relational, dsl-diagram,
+    runtime, dsl-tds, dsl-store, dsl-graph, dsl-mapping-runtime,
+    dsl-relational-runtime — all green.
+  * `builds_platform_purem_and_round_trips` green — the platform's
+    real `.pure` corpus is import-discipline clean, no shipped source
+    relied on the leak.
+  * `cargo fmt --check` clean on touched files. `cargo lint-lib` clean
+    (2 pre-existing warnings in `dsl-mapping` are unrelated).
+    Copyright clean (441 files).
+  Status: Fix landed (commit 1c47266dda8).
+- 2026-05-11 — follow-ups (audit notes, not separate TODOs cut yet):
+  * The TODO's original Notes block fingered `resolve.rs` as the
+    suspect; the actual leak was in `pipeline.rs`. Worth flagging so
+    future readers don't repeat the wrong-suspect path.
+  * Three short-name walkers now share the self-package fallback
+    (`resolve_unqualified`, `resolve_function_call`,
+    `candidates_by_arity`). If a fourth appears, it needs the same
+    pattern — grep `ctx.import_scopes` to audit.
+  * Java's specific-element-import form `import abc::Class1;` (vs. the
+    wildcard `import abc::*;` supported today) is orthogonal to this
+    bug and deferred — the parser may or may not already accept the
+    syntax; semantic plumbing is an `ImportScope` change.
 <!-- agent-audit:end -->
 
----
-
-## Closed
-
-<!-- Resolved / migrated / wontfix items, newest first. Keep the full block
-     including the final audit-block status for posterity. -->
 
 ### T-20260511-04 — `^Class(unknownProp = value)` doesn't error on properties that don't exist
 
