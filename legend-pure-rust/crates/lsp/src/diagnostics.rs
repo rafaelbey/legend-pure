@@ -89,5 +89,7 @@ pub fn error_code(kind: &CompilationErrorKind) -> &'static str {
         }
         CompilationErrorKind::TypeMismatch { .. } => "typeMismatch",
         CompilationErrorKind::MultiplicityMismatch { .. } => "multiplicityMismatch",
+        CompilationErrorKind::FormatSpecifierTypeMismatch { .. } => "formatSpecifierTypeMismatch",
+        CompilationErrorKind::FormatSpecifierArityMismatch { .. } => "formatSpecifierArityMismatch",
     }
 }
