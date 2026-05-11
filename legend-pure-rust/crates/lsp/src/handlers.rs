@@ -171,10 +171,9 @@ fn resolve_value_spec_target(
         // context, deferred.
         ExprKind::PackageableElementRef { element } => Some(*element),
         ExprKind::EnumValue { enum_element, .. } => Some(*enum_element),
-        ExprKind::TypeReference { type_expr } => match type_expr {
-            legend_pure_parser_pure::types::TypeExpr::Named { element, .. } => Some(*element),
-            _ => None,
-        },
+        ExprKind::TypeReference {
+            type_expr: legend_pure_parser_pure::types::TypeExpr::Named { element, .. },
+        } => Some(*element),
         _ => None,
     }
 }
@@ -196,9 +195,7 @@ fn element_location(
     id: ElementId,
     file_uri: &Url,
 ) -> Option<Location> {
-    if model.try_get_element(id).is_none() {
-        return None;
-    }
+    model.try_get_element(id)?;
     if matches!(id, ElementId::Package(_)) {
         return None;
     }

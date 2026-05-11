@@ -762,10 +762,13 @@ fn validate_include_graph(
                 color.insert(current, 2);
                 continue;
             }
-            // Advance the parent's index BEFORE recursing.
-            let last = stack
-                .last_mut()
-                .expect("stack non-empty in the body of `while let Some(_) = stack.last()`");
+            // Advance the parent's index BEFORE recursing. The `while let
+            // Some((current, idx)) = stack.last().cloned()` above guarantees
+            // stack is non-empty here; bail with unreachable! to keep clippy
+            // happy without restructuring the loop.
+            let Some(last) = stack.last_mut() else {
+                unreachable!("stack non-empty by loop guard");
+            };
             last.1 += 1;
             let target = include_fqn(&reg.def.includes[idx].included);
             if !dbs.contains_key(&target) {
@@ -1666,16 +1669,16 @@ fn validate_class_mapping_join_refs(
     // 1. FilterMappingBlock — when a join sequence is present, joins
     //    live in the OUTER `[db]` (i.e. `FilterMappingBlock.db`, the
     //    db the filter sequence walks FROM).
-    if let Some(filter_block) = &reg.body.filter {
-        if let Some(seq) = &filter_block.join_sequence {
-            check_filter_mapping_join_sequence(
-                seq,
-                &filter_block.db,
-                dbs,
-                &reg.class_mapping_id,
-                errors,
-            );
-        }
+    if let Some(filter_block) = &reg.body.filter
+        && let Some(seq) = &filter_block.join_sequence
+    {
+        check_filter_mapping_join_sequence(
+            seq,
+            &filter_block.db,
+            dbs,
+            &reg.class_mapping_id,
+            errors,
+        );
     }
 
     // Phase B7: contextual db for implicit-db join refs flows from
@@ -1938,16 +1941,16 @@ fn validate_view_join_refs(
 
     // FilterViewBlock — explicit `[db1]@joinSeq | [db2]` chain;
     // joins live in `db1`.
-    if let Some(filter) = &v.filter {
-        if let Some(chain) = &filter.db_chain {
-            check_join_sequence_against_db(
-                &chain.join_sequence,
-                &chain.first_db,
-                dbs,
-                &owner,
-                errors,
-            );
-        }
+    if let Some(filter) = &v.filter
+        && let Some(chain) = &filter.db_chain
+    {
+        check_join_sequence_against_db(
+            &chain.join_sequence,
+            &chain.first_db,
+            dbs,
+            &owner,
+            errors,
+        );
     }
 
     // Each ViewColumnMappingLine value joins; explicit `[db]`
@@ -2098,18 +2101,18 @@ fn walk_view_for_db_refs(
     databases: &HashMap<SmolStr, RegisteredDatabase>,
     errors: &mut Vec<CompilationError>,
 ) {
-    if let Some(filter) = &v.filter {
-        if let Some(chain) = &filter.db_chain {
-            check_db_ref_visibility(&chain.first_db, use_site, visible, databases, errors);
-            check_db_ref_visibility(&chain.second_db, use_site, visible, databases, errors);
-            walk_join_sequence_for_db_refs(
-                &chain.join_sequence,
-                use_site,
-                visible,
-                databases,
-                errors,
-            );
-        }
+    if let Some(filter) = &v.filter
+        && let Some(chain) = &filter.db_chain
+    {
+        check_db_ref_visibility(&chain.first_db, use_site, visible, databases, errors);
+        check_db_ref_visibility(&chain.second_db, use_site, visible, databases, errors);
+        walk_join_sequence_for_db_refs(
+            &chain.join_sequence,
+            use_site,
+            visible,
+            databases,
+            errors,
+        );
     }
     if let Some(jcs) = &v.group_by {
         for jc in jcs {
@@ -2171,10 +2174,8 @@ fn walk_join_col_for_db_refs(
     if let Some(seq) = &jc.join {
         walk_join_sequence_for_db_refs(seq, use_site, visible, databases, errors);
     }
-    if let Some(col) = &jc.column {
-        if let OpColumn::Aliased { db: Some(db), .. } = col {
-            check_db_ref_visibility(db, use_site, visible, databases, errors);
-        }
+    if let Some(OpColumn::Aliased { db: Some(db), .. }) = &jc.column {
+        check_db_ref_visibility(db, use_site, visible, databases, errors);
     }
 }
 
@@ -2452,22 +2453,22 @@ fn check_chain_in_sequence(
         }
     }
 
-    if let Some(target) = target_table {
-        if &current_source != target {
-            errors.push(CompilationError {
-                message: format!(
-                    "{owner}: join chain ends at table '{current_source}' \
-                     but the trailing column references table '{target}'"
-                ),
-                source_info: seq.source_info.clone(),
-                kind: CompilationErrorKind::InvalidAssociation {
-                    name: owner.clone(),
-                    reason: SmolStr::new(format!(
-                        "chain ends at '{current_source}', trailing column at '{target}'"
-                    )),
-                },
-            });
-        }
+    if let Some(target) = target_table
+        && &current_source != target
+    {
+        errors.push(CompilationError {
+            message: format!(
+                "{owner}: join chain ends at table '{current_source}' \
+                 but the trailing column references table '{target}'"
+            ),
+            source_info: seq.source_info.clone(),
+            kind: CompilationErrorKind::InvalidAssociation {
+                name: owner.clone(),
+                reason: SmolStr::new(format!(
+                    "chain ends at '{current_source}', trailing column at '{target}'"
+                )),
+            },
+        });
     }
 }
 
@@ -3077,6 +3078,7 @@ fn validate_inline_target_subtypes(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // mirrors walk_line_for_inline_subtypes; refactoring needs a shared context struct
 fn walk_for_inline_subtypes(
     e: &crate::ast::MappingElement,
     enclosing_class_id: legend_pure_parser_pure::ids::ElementId,
@@ -3117,6 +3119,7 @@ fn walk_for_inline_subtypes(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // see walk_for_inline_subtypes
 fn walk_line_for_inline_subtypes(
     line: &SingleMappingLine,
     enclosing_class_id: legend_pure_parser_pure::ids::ElementId,

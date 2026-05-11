@@ -91,25 +91,23 @@ pub(super) fn lower_navigation_path(
 
     // Validate the first step's property exists on the start type.
     // (Subsequent steps validated at runtime — see fn doc.)
-    if let Some(first_step) = e.path.first() {
-        if let TypeExpr::Named { element, .. } = &start_type {
-            if resolve::find_property_with_inheritance(*element, &first_step.property, ctx.model)
-                .is_none()
-            {
-                errors.push(CompilationError {
-                    message: format!(
-                        "Navigation path: property '{}' not found on type '{}'",
-                        first_step.property,
-                        e.start_type.full_path(),
-                    ),
-                    source_info: first_step.source_info.clone(),
-                    kind: crate::error::CompilationErrorKind::UnknownProperty {
-                        type_name: SmolStr::new(e.start_type.full_path()),
-                        property_name: first_step.property.clone(),
-                    },
-                });
-            }
-        }
+    if let Some(first_step) = e.path.first()
+        && let TypeExpr::Named { element, .. } = &start_type
+        && resolve::find_property_with_inheritance(*element, &first_step.property, ctx.model)
+            .is_none()
+    {
+        errors.push(CompilationError {
+            message: format!(
+                "Navigation path: property '{}' not found on type '{}'",
+                first_step.property,
+                e.start_type.full_path(),
+            ),
+            source_info: first_step.source_info.clone(),
+            kind: crate::error::CompilationErrorKind::UnknownProperty {
+                type_name: SmolStr::new(e.start_type.full_path()),
+                property_name: first_step.property.clone(),
+            },
+        });
     }
 
     let steps: Vec<PathStepLowered> = e

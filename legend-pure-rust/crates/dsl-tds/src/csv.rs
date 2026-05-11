@@ -515,11 +515,10 @@ fn parse_csv_line(line: &str, line_no: usize) -> Result<Vec<RawCell>, CsvError> 
         }
     }
 
-    if in_quote.is_some() {
+    if let Some(opening) = in_quote {
         return Err(CsvError {
             message: format!(
-                "Unterminated quoted string in TDS row (opening {} not closed)",
-                in_quote.unwrap()
+                "Unterminated quoted string in TDS row (opening {opening} not closed)"
             ),
             line: line_no,
             column: start + 1,
@@ -678,7 +677,7 @@ fn is_datetime_literal(s: &str) -> bool {
     }
     // ±HHMM
     if (tail.starts_with('+') || tail.starts_with('-')) && tail.len() == 5 {
-        return tail[1..].as_bytes().iter().all(u8::is_ascii_digit);
+        return tail.as_bytes()[1..].iter().all(u8::is_ascii_digit);
     }
     false
 }

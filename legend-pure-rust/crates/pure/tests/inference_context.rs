@@ -279,6 +279,7 @@ function test::handler(b: test::Box<Integer>[1]): Integer[1] {
 }
 
 #[test]
+#[allow(non_snake_case)] // mirrors the Pure identifiers under test
 fn tic_match_z_genericType_rawType_toOne() {
     // Mirror of match.pure:185:
     //   `let z = $f->eval(|...->deactivate());`
@@ -401,6 +402,7 @@ $p.first.values->test::myFirst()
 }
 
 #[test]
+#[allow(non_snake_case)] // mirrors the Pure identifiers under test
 fn tic_platform_canreactivate_lambda_evaluate_property_toOne_chain() {
     // Lock the canReactivateDynamically.pure:21 platform pattern at
     // the LOADED-PLATFORM level (rather than synthetic) since this
@@ -486,6 +488,7 @@ test::myrem_Integer_1__Integer_1__Integer_1_->test::myEval2(12, 5)
 // ---------------------------------------------------------------------------
 
 #[test]
+#[allow(non_snake_case)] // mirrors the Pure identifiers under test
 fn tic_lambda_body_toOneMany_binds_T() {
     // Mirror of `{|toOneMany('a')}.expressionSequence->at(0)`-style
     // platform pattern. A 0-arg lambda whose body is a generic call.
@@ -498,33 +501,32 @@ function test::caller(): meta::pure::metamodel::function::Function<{->String[1..
 {| test::myToOneMany('a') }
 }
 "#;
-    {
-        compile_with_imports(&[source], &[]).expect(
-            "Inner generic call inside a 0-arg lambda body must bind \
+    compile_with_imports(&[source], &[]).expect(
+        "Inner generic call inside a 0-arg lambda body must bind \
          T from the call's argument.",
-        );
-    }
+    );
+}
 
-    // ---------------------------------------------------------------------------
-    // 16. M3 metamodel chain: ($h.gt->toOne().typeArguments->at(0)).rawType
-    // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// 16. M3 metamodel chain: ($h.gt->toOne().typeArguments->at(0)).rawType
+// ---------------------------------------------------------------------------
 
-    #[test]
-    fn tic_m3_metamodel_chain_binds_through_property_steps() {
-        // Synthetic version of the platform's `functionType.pure:20` chain:
-        //   $f.classifierGenericType
-        //     ->toOne()
-        //     .typeArguments
-        //     ->at(0)
-        //     .rawType
-        //     ->toOne()
-        //
-        // Each link's type-info must flow into the next call's binding
-        // pass. Synthetic shape uses `G { rawType, typeArguments }` (a
-        // GenericType-shaped class) and `Holder { gt: G[0..1] }`. Every
-        // generic call (`myToOne`, `myAt`) must bind its T from the
-        // chain.
-        let source = r#"
+#[test]
+fn tic_m3_metamodel_chain_binds_through_property_steps() {
+    // Synthetic version of the platform's `functionType.pure:20` chain:
+    //   $f.classifierGenericType
+    //     ->toOne()
+    //     .typeArguments
+    //     ->at(0)
+    //     .rawType
+    //     ->toOne()
+    //
+    // Each link's type-info must flow into the next call's binding
+    // pass. Synthetic shape uses `G { rawType, typeArguments }` (a
+    // GenericType-shaped class) and `Holder { gt: G[0..1] }`. Every
+    // generic call (`myToOne`, `myAt`) must bind its T from the
+    // chain.
+    let source = r#"
 ###Pure
 Class test::G { rawType: test::T[0..1]; typeArguments: test::G[*]; }
 Class test::T {}
@@ -535,11 +537,10 @@ function test::caller(h: test::Holder[1]): test::T[1] {
     $h.gt->test::myToOne().typeArguments->test::myAt(0).rawType->test::myToOne()
 }
 "#;
-        compile_with_imports(&[source], &[]).expect(
-            "M3 chain: each step's type binds through; X resolves \
+    compile_with_imports(&[source], &[]).expect(
+        "M3 chain: each step's type binds through; X resolves \
          at every toOne/at call.",
-        );
-    }
+    );
 }
 
 // ---------------------------------------------------------------------------

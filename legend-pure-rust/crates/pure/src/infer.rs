@@ -791,7 +791,7 @@ fn process_let_function_call(
             kind: crate::error::CompilationErrorKind::DuplicateVariable { name: name.clone() },
         });
     }
-    let bound = arg_types[1].clone().unwrap_or_else(|| ResolvedType {
+    let bound = arg_types[1].clone().unwrap_or(ResolvedType {
         type_expr: TypeExpr::Unresolved,
         multiplicity: Multiplicity::PureOne,
     });

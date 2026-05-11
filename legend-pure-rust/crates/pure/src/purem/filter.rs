@@ -479,7 +479,8 @@ mod tests {
         );
         let (_r, errs) = compile_repo_slice(&mut model, &[sf], &[], &[]);
         assert!(errs.is_empty(), "{errs:?}");
-        finalize_model(&mut model, &[], &[]);
+        let finalize_errs = finalize_model(&mut model, &[], &[]);
+        assert!(finalize_errs.is_empty(), "{finalize_errs:?}");
         let part = collect_test_partition(&model);
 
         // Every non-chunk-0 element is in exactly one half.

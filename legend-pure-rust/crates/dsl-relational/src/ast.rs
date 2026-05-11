@@ -135,6 +135,7 @@ pub struct DatabaseInclude {
 /// One element inside a [`DatabaseDef`] body, in source order.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+#[allow(clippy::large_enum_variant)] // size disparity is intentional — hot paths match by variant and avoid the allocation cost of a Box indirection
 pub enum DatabaseElement {
     /// `Schema name ( table* | view* )`.
     Schema(Schema),
@@ -864,6 +865,7 @@ pub struct OneJoinRight {
 /// `scope(…)` wrapper.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+#[allow(clippy::large_enum_variant)] // see DatabaseElement
 pub enum MappingElement {
     /// Bare `prop : value` mapping line.
     Single(SingleMappingLine),
@@ -918,6 +920,7 @@ pub struct NonePlusMappingLine {
 /// sourceAndTargetMappingId? (embeddedMapping | relationalMapping)`.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
+#[allow(clippy::large_enum_variant)] // see DatabaseElement
 pub enum NonePlusMappingValue {
     /// `: transformer? joinColWithDbOrConstant` — Stage 5 form.
     Relational(RelationalMapping),

@@ -63,24 +63,24 @@ pub enum TopoError {
 /// [`TopoError::Cycle`] for circular dependencies, or
 /// [`TopoError::AnonymousRepo`] for repos missing `RepoMeta`.
 pub fn topo_sort_repos(repos: &[Repo]) -> Result<Vec<&Repo>, TopoError> {
-    // Validate: every repo must have meta (we need its name).
-    for (i, r) in repos.iter().enumerate() {
-        if r.meta().is_none() {
-            return Err(TopoError::AnonymousRepo(i));
-        }
-    }
+    // Validate: every repo must have meta (we need its name). Collect
+    // the metas up-front so the rest of the function can index them
+    // without re-validating.
+    let metas: Vec<&crate::repo::RepoMeta> = repos
+        .iter()
+        .enumerate()
+        .map(|(i, r)| r.meta().ok_or(TopoError::AnonymousRepo(i)))
+        .collect::<Result<Vec<_>, _>>()?;
 
     // Build name → index map.
     let mut name_to_idx: std::collections::HashMap<&str, usize> =
         std::collections::HashMap::with_capacity(repos.len());
-    for (i, r) in repos.iter().enumerate() {
-        let meta = r.meta().expect("checked above");
+    for (i, meta) in metas.iter().enumerate() {
         name_to_idx.insert(meta.name, i);
     }
 
     // Validate: every declared dep is present.
-    for r in repos {
-        let meta = r.meta().expect("checked above");
+    for meta in &metas {
         for dep in meta.dependencies {
             if !name_to_idx.contains_key(*dep) {
                 return Err(TopoError::MissingDep {
@@ -95,8 +95,7 @@ pub fn topo_sort_repos(repos: &[Repo]) -> Result<Vec<&Repo>, TopoError> {
     let n = repos.len();
     let mut in_degree: Vec<usize> = vec![0; n];
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for (i, r) in repos.iter().enumerate() {
-        let meta = r.meta().expect("checked above");
+    for (i, meta) in metas.iter().enumerate() {
         for dep_name in meta.dependencies {
             let dep_idx = name_to_idx[*dep_name];
             adj[dep_idx].push(i);
@@ -124,7 +123,7 @@ pub fn topo_sort_repos(repos: &[Repo]) -> Result<Vec<&Repo>, TopoError> {
         // Cycle. Collect every repo with non-zero in-degree.
         let mut in_cycle: Vec<String> = (0..n)
             .filter(|&i| in_degree[i] > 0)
-            .map(|i| repos[i].meta().expect("checked above").name.to_string())
+            .map(|i| metas[i].name.to_string())
             .collect();
         in_cycle.sort();
         return Err(TopoError::Cycle(in_cycle));

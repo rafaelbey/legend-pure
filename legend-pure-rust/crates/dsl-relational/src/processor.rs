@@ -904,10 +904,11 @@ fn resolve_view(
     for line in &v.columns {
         let value_binding =
             resolve_view_column_value(&line.value, owning_db_fqn, snapshots, visible_tables);
-        if let Some(b) = &value_binding {
-            if !b.unresolved_table && seen.insert(b.table_name.clone()) {
-                referenced.push(b.table_name.clone());
-            }
+        if let Some(b) = &value_binding
+            && !b.unresolved_table
+            && seen.insert(b.table_name.clone())
+        {
+            referenced.push(b.table_name.clone());
         }
         columns.push(ResolvedViewColumn {
             column_name: line.column_name.value.clone(),
@@ -917,15 +918,15 @@ fn resolve_view(
     }
 
     // Filter chain may reference additional tables — track those too.
-    if let Some(filter) = &v.filter {
-        if let Some(chain) = &filter.db_chain {
-            // The join sequence's chain doesn't carry direct
-            // table-name references at this layer; the joins point
-            // at Join elements whose bodies were already resolved
-            // by B2. We can revisit per-segment table inference in
-            // B7 once implicit-db chains land.
-            let _ = chain;
-        }
+    if let Some(filter) = &v.filter
+        && let Some(chain) = &filter.db_chain
+    {
+        // The join sequence's chain doesn't carry direct
+        // table-name references at this layer; the joins point
+        // at Join elements whose bodies were already resolved
+        // by B2. We can revisit per-segment table inference in
+        // B7 once implicit-db chains land.
+        let _ = chain;
     }
 
     let main_table = if referenced.len() == 1 {
@@ -1103,10 +1104,10 @@ fn walk_lookup_column(
         return None;
     }
     let snapshot = snapshots.get(db_fqn)?;
-    if let Some(t) = snapshot.tables_by_name.get(table_name) {
-        if let Some(idx) = t.columns_by_name.get(column_name) {
-            return Some((db_fqn.clone(), *idx));
-        }
+    if let Some(t) = snapshot.tables_by_name.get(table_name)
+        && let Some(idx) = t.columns_by_name.get(column_name)
+    {
+        return Some((db_fqn.clone(), *idx));
     }
     for include_fqn in &snapshot.include_fqns {
         if let Some(found) =
@@ -1430,10 +1431,11 @@ fn record_binding(
         ResolvedClassMappingPropertyKind::Plus { binding } => binding,
         ResolvedClassMappingPropertyKind::Embedded => return,
     };
-    if let Some(b) = binding {
-        if !b.unresolved_table && seen.insert(b.table_name.clone()) {
-            referenced.push(b.table_name.clone());
-        }
+    if let Some(b) = binding
+        && !b.unresolved_table
+        && seen.insert(b.table_name.clone())
+    {
+        referenced.push(b.table_name.clone());
     }
 }
 
@@ -1590,8 +1592,7 @@ pub fn apply_milestoning_synthesis(
         );
     }
 
-    for i in 0..class_mappings.len() {
-        let cm = &class_mappings[i];
+    for cm in class_mappings.iter_mut() {
         if let Some(parent_id) = &cm.extends {
             let parent_key = (cm.mapping_fqn.clone(), parent_id.clone());
             if by_id.get(&parent_key).copied().unwrap_or(false) {
@@ -1601,7 +1602,7 @@ pub fn apply_milestoning_synthesis(
         let Some(synthesised) = synthesise_milestoning_for_class_mapping(cm, snapshots) else {
             continue;
         };
-        class_mappings[i].synthesized_milestoning = Some(synthesised);
+        cm.synthesized_milestoning = Some(synthesised);
     }
 }
 
@@ -1670,25 +1671,25 @@ fn synthesise_milestoning_for_class_mapping(
             main_table_name,
             cm,
         );
-    } else if has_processing_snapshot {
-        if let Some(field) = by_key.get("PROCESSING_SNAPSHOT_DATE").copied() {
-            push_synth_binding(
-                &mut bindings,
-                "in",
-                Some(field),
-                db_fqn,
-                main_table_name,
-                cm,
-            );
-            push_synth_binding(
-                &mut bindings,
-                "out",
-                Some(field),
-                db_fqn,
-                main_table_name,
-                cm,
-            );
-        }
+    } else if has_processing_snapshot
+        && let Some(field) = by_key.get("PROCESSING_SNAPSHOT_DATE").copied()
+    {
+        push_synth_binding(
+            &mut bindings,
+            "in",
+            Some(field),
+            db_fqn,
+            main_table_name,
+            cm,
+        );
+        push_synth_binding(
+            &mut bindings,
+            "out",
+            Some(field),
+            db_fqn,
+            main_table_name,
+            cm,
+        );
     }
     if has_business {
         push_synth_binding(
@@ -1707,25 +1708,25 @@ fn synthesise_milestoning_for_class_mapping(
             main_table_name,
             cm,
         );
-    } else if has_business_snapshot {
-        if let Some(field) = by_key.get("BUS_SNAPSHOT_DATE").copied() {
-            push_synth_binding(
-                &mut bindings,
-                "from",
-                Some(field),
-                db_fqn,
-                main_table_name,
-                cm,
-            );
-            push_synth_binding(
-                &mut bindings,
-                "thru",
-                Some(field),
-                db_fqn,
-                main_table_name,
-                cm,
-            );
-        }
+    } else if has_business_snapshot
+        && let Some(field) = by_key.get("BUS_SNAPSHOT_DATE").copied()
+    {
+        push_synth_binding(
+            &mut bindings,
+            "from",
+            Some(field),
+            db_fqn,
+            main_table_name,
+            cm,
+        );
+        push_synth_binding(
+            &mut bindings,
+            "thru",
+            Some(field),
+            db_fqn,
+            main_table_name,
+            cm,
+        );
     }
 
     if bindings.is_empty() {

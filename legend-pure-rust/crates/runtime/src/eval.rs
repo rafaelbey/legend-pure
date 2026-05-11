@@ -460,7 +460,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 Ok(Value::Function(Box::new(FunctionValue::Path(
                     crate::value::PathClosure {
                         start_type: start_type.clone(),
-                        steps: steps.iter().cloned().collect::<Vec<_>>().into(),
+                        steps: steps.to_vec().into(),
                         name: name.clone(),
                         captures,
                     },
@@ -2168,7 +2168,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     /// For each step:
     ///  - If the step has parameters, treat it as a qualified
     ///    property invocation — evaluate parameters, push captures
-    ///    + a synthesized scope so those parameter expressions
+    ///    plus a synthesized scope so those parameter expressions
     ///    resolve, then call the QP via `invoke_qualified_property`.
     ///  - Otherwise treat it as a plain property access via
     ///    `apply_property_to_instance`.

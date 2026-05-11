@@ -67,7 +67,7 @@ pub fn element_fqn_path(model: &PureModel, id: ElementId) -> FqnPath {
     for pkg_idx in 0..model.global_packages.len() {
         let pkg_id = PackageId(pkg_idx);
         let pkg = model.get_package(pkg_id);
-        if !pkg.children_elements.iter().any(|&e| e == id) {
+        if !pkg.children_elements.contains(&id) {
             continue;
         }
         let mut path = package_path(model, pkg_id);

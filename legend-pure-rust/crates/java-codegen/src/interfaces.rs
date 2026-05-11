@@ -353,7 +353,9 @@ fn diamond_overrides(
         if distinct.len() < 2 {
             continue;
         }
-        let (_, ty_expr, mult) = decls.first().unwrap();
+        let Some((_, ty_expr, mult)) = decls.first() else {
+            continue;
+        };
         let return_ty = render_java_type(
             model,
             ty_expr,

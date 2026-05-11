@@ -141,8 +141,7 @@ pub fn slice_by_repo_with_filter(
 
     for source_chunk_id in chunk_range.start..chunk_range.end {
         let source_chunk = &model.chunks[source_chunk_id as usize];
-        #[allow(clippy::cast_possible_truncation)]
-        let slice_local_chunk_id = (source_chunk_id - chunk_range.start) as u16;
+        let slice_local_chunk_id = source_chunk_id - chunk_range.start;
         let mut new_chunk = ModelChunk::new(slice_local_chunk_id);
         let len = source_chunk.elements.len();
         for orig_local_idx in 0..len {
@@ -478,7 +477,8 @@ mod tests {
         let mut fresh = init_bootstrap_model();
         merge_slice(&mut fresh, animal_slice).expect("animal merge");
         merge_slice(&mut fresh, dog_slice).expect("dog merge");
-        finalize_model(&mut fresh, &[], &[]);
+        let finalize_errs = finalize_model(&mut fresh, &[], &[]);
+        assert!(finalize_errs.is_empty(), "{finalize_errs:?}");
 
         let dog_id = fresh
             .resolve_by_path(&[SmolStr::new("kennel"), SmolStr::new("Dog")])
@@ -521,7 +521,9 @@ mod tests {
         let keep_id = model
             .resolve_by_path(&[SmolStr::new("repo_a"), SmolStr::new("Keep")])
             .expect("Keep resolves");
-        let drop_id = model
+        // Confirm Drop exists in the pre-slice model — we'll assert it
+        // disappears from the slice below.
+        let _ = model
             .resolve_by_path(&[SmolStr::new("repo_a"), SmolStr::new("Drop")])
             .expect("Drop resolves");
 
