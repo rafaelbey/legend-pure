@@ -265,9 +265,7 @@ fn build_filesystem(root: &Path, entry: &RepoEntryToml) -> Result<Repo, Classpat
         let _ = dir;
         Err(ClasspathError::RepoBuild {
             name: entry.name.clone(),
-            source: RepoError::DescriptorParse(format!(
-                "kind=filesystem requires `descriptor = ...` (a Java repo descriptor JSON); the bare `path =` form is reserved",
-            )),
+            source: RepoError::DescriptorParse("kind=filesystem requires `descriptor = ...` (a Java repo descriptor JSON); the bare `path =` form is reserved".to_string()),
         })
     } else {
         Err(ClasspathError::RepoBuild {
@@ -479,10 +477,10 @@ pub fn resolve_classpath(
     }
 
     // Step 3: ancestor walk for legend-pure-classpath.toml.
-    if let Some(p) = discover_classpath(cwd) {
-        if let Ok(cp) = load_classpath(&p) {
-            return Ok(merge_with_embedded(cp, Some(p)));
-        }
+    if let Some(p) = discover_classpath(cwd)
+        && let Ok(cp) = load_classpath(&p)
+    {
+        return Ok(merge_with_embedded(cp, Some(p)));
     }
 
     // Step 4 + 5: next to binary.

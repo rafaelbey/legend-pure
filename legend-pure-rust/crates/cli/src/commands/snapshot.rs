@@ -137,10 +137,10 @@ fn write_all_repos(
             args.output.display()
         )));
     }
-    let mut single = SnapshotArgs {
+    let single = SnapshotArgs {
         output: args.output.join("platform.purem"),
         all: false,
         repo: None,
     };
-    write_single_blob(&mut single, model)
+    write_single_blob(&single, model)
 }
