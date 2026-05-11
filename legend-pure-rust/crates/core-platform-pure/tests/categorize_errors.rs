@@ -44,6 +44,9 @@ fn categorize_platform_errors_detailed() {
                     legend_pure_parser_pure::error::CompilationErrorKind::UnresolvedTypeParameter { .. } => "UnresolvedTypeParameter",
                     legend_pure_parser_pure::error::CompilationErrorKind::UnresolvedMultiplicityParameter { .. } => "UnresolvedMultiplicityParameter",
                     legend_pure_parser_pure::error::CompilationErrorKind::PackageNotInRepoPattern { .. } => "PackageNotInRepoPattern",
+                    legend_pure_parser_pure::error::CompilationErrorKind::PropertyDefaultValueIncompatible { .. } => "PropertyDefaultValueIncompatible",
+                    legend_pure_parser_pure::error::CompilationErrorKind::ConstructorMissingRequiredProperty { .. } => "ConstructorMissingRequiredProperty",
+                    legend_pure_parser_pure::error::CompilationErrorKind::ConstructorPropertyTypeMismatch { .. } => "ConstructorPropertyTypeMismatch",
                 };
                 *by_kind.entry(kind_str.to_string()).or_default() += 1;
 

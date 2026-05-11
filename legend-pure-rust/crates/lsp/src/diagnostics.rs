@@ -75,5 +75,14 @@ pub fn error_code(kind: &CompilationErrorKind) -> &'static str {
             "unresolvedMultiplicityParameter"
         }
         CompilationErrorKind::PackageNotInRepoPattern { .. } => "packageNotInRepoPattern",
+        CompilationErrorKind::PropertyDefaultValueIncompatible { .. } => {
+            "propertyDefaultValueIncompatible"
+        }
+        CompilationErrorKind::ConstructorMissingRequiredProperty { .. } => {
+            "constructorMissingRequiredProperty"
+        }
+        CompilationErrorKind::ConstructorPropertyTypeMismatch { .. } => {
+            "constructorPropertyTypeMismatch"
+        }
     }
 }

@@ -2204,6 +2204,12 @@ fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
     enum TargetKind {
         FunctionBody,
         QualifiedProperty(usize),
+        /// Class property default-value. `usize` indexes
+        /// `Class.properties`.
+        ClassPropertyDefault(usize),
+        /// Association property default-value. `usize` indexes
+        /// `Association.properties`.
+        AssociationPropertyDefault(usize),
     }
 
     let mut targets: Vec<InferTarget> = Vec::new();
@@ -2271,6 +2277,35 @@ fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
                             });
                         }
                     }
+                    // Property default-values — inferred so the
+                    // `validate_property_default_values` cross-chunk
+                    // pass can read `type_info` to check compat
+                    // (T-20260511-01). No params: defaults can't
+                    // reference `$this` (no instance exists yet).
+                    for (p_idx, prop) in c.properties.iter().enumerate() {
+                        if let Some(dv) = &prop.default_value {
+                            targets.push(InferTarget {
+                                chunk_idx,
+                                local_idx,
+                                kind: TargetKind::ClassPropertyDefault(p_idx),
+                                params: Vec::new(),
+                                body: vec![dv.clone()],
+                            });
+                        }
+                    }
+                }
+                Element::Association(a) => {
+                    for (p_idx, prop) in a.properties.iter().enumerate() {
+                        if let Some(dv) = &prop.default_value {
+                            targets.push(InferTarget {
+                                chunk_idx,
+                                local_idx,
+                                kind: TargetKind::AssociationPropertyDefault(p_idx),
+                                params: Vec::new(),
+                                body: vec![dv.clone()],
+                            });
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -2319,6 +2354,10 @@ fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
                     );
                 }
             }
+            // Default-value type/multiplicity compat is checked by
+            // `validate::validate_property_default_values` after
+            // inference completes; nothing to do here.
+            TargetKind::ClassPropertyDefault(_) | TargetKind::AssociationPropertyDefault(_) => {}
         }
     }
 
@@ -2336,6 +2375,22 @@ fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
             TargetKind::QualifiedProperty(qp_idx) => {
                 if let Element::Class(c) = element {
                     c.qualified_properties[qp_idx].body = target.body.into();
+                }
+            }
+            TargetKind::ClassPropertyDefault(p_idx) => {
+                if let Element::Class(c) = element {
+                    let mut body = target.body;
+                    if let Some(dv) = body.pop() {
+                        c.properties[p_idx].default_value = Some(dv);
+                    }
+                }
+            }
+            TargetKind::AssociationPropertyDefault(p_idx) => {
+                if let Element::Association(a) = element {
+                    let mut body = target.body;
+                    if let Some(dv) = body.pop() {
+                        a.properties[p_idx].default_value = Some(dv);
+                    }
                 }
             }
         }
