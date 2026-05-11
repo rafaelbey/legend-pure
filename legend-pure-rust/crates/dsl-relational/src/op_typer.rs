@@ -97,33 +97,48 @@ impl<'a> OpTypeScope<'a> {
 }
 
 /// DynaFunctions whose Java relational metamodel return type is
-/// `Boolean[1]`. Names mirror the Java `DynaFunctionRegistration`
-/// allow-list. Anything not in this list types as [`OpType::Any`].
+/// `Boolean[1]`. Names mirror the canonical Java classifier
+/// `meta::relational::functions::sqlQueryToString::isBooleanOperation`
+/// at `legend-engine-xt-relationalStore-core-pure/.../sqlQueryToString/
+/// dbExtension.pure:803` — the single source of truth for which
+/// DynaFunctions resolve to a SQL predicate.
 ///
-/// Sourced from Java's relational `DynaFunctionRegistration` /
-/// `RelationalOperationElement` boolean-shape entries. Conservative
-/// by design — adding a new DynaFunction here only widens the set
-/// of predicates we'll accept clean; it cannot accidentally produce
-/// new errors.
+/// Conservative by design: widening this list can only relax
+/// predicate-shape errors; it cannot introduce new failures. When
+/// SQL emission lands (plan T1.4), this list will gain a sibling
+/// table mapping each name to its SQL template — until then the
+/// full 104-entry registry lives upstream at `getDynaFunctionToSqlDefault`
+/// (extensionDefaults.pure:180).
 pub const KNOWN_BOOLEAN_DYNAFUNCTIONS: &[&str] = &[
+    // Logical
     "and",
     "or",
     "not",
+    // Comparison
     "equal",
+    "notEqual",
+    "notEqualAnsi",
     "lessThan",
     "lessThanEqual",
     "greaterThan",
     "greaterThanEqual",
-    "notEqual",
+    // String predicates
+    "startsWith",
+    "endsWith",
+    "contains",
+    "matches",
+    // Null + emptiness
     "isNull",
     "isNotNull",
+    "isEmpty",
+    "isNotEmpty",
+    // Character-class
+    "isAlphaNumeric",
+    "isNumeric",
+    // Set membership + existence
     "in",
-    "notIn",
-    "like",
     "exists",
-    "matchExpression",
-    "regexpLike",
-    "between",
+    "isDistinct",
 ];
 
 /// Walk an [`OpExpr`] and classify its top-level result.
