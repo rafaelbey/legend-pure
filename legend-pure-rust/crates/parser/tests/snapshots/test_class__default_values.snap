@@ -248,7 +248,7 @@ SourceFile {
                                             start_line: 23,
                                             start_column: 15,
                                             end_line: 23,
-                                            end_column: 16,
+                                            end_column: 23,
                                         },
                                     },
                                 ),
