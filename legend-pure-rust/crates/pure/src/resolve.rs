@@ -118,6 +118,22 @@ pub(crate) struct ResolutionContext<'a> {
     /// at the resolver-eager seams in [`resolve_type_ref`] and
     /// [`resolve_multiplicity_with_validation`].
     pub multiplicity_parameters: &'a [SmolStr],
+    /// AST package of the element currently being resolved.
+    ///
+    /// Pure's resolution precedence (Java parity) places explicit imports
+    /// above the implicit self-package: an `import meta::relational::*`
+    /// shadows the M3 root `Column` alias, but the using element's own
+    /// package only contributes when explicit imports yield no candidate.
+    ///
+    /// Carried on the per-element [`ResolutionContext`] so the section's
+    /// shared `import_scopes` cache stays immutable across elements —
+    /// pre-T-20260510-01, the implicit self-package was pushed onto the
+    /// cached `Vec`, leaking element A's package into element B's scope
+    /// when both lived in the same section.
+    ///
+    /// `None` for free-floating callers (tests, default-mult fallback,
+    /// island lowerers) whose resolution doesn't anchor to any element.
+    pub self_package: Option<&'a Package>,
     /// Variable types in scope. Maps variable name → (type, multiplicity).
     /// Populated from function parameters, let bindings, and lambda parameters.
     /// Used by dispatch to infer argument types for variable references.
@@ -656,6 +672,24 @@ fn resolve_unqualified(
         }
     }
 
+    // Step 2b: Implicit self-package — the using element's own package
+    // is always visible without an explicit `import …::*;` (Java parity).
+    // Runs ONLY when explicit imports yielded no candidate, so explicit
+    // imports continue to shadow same-package siblings (matches the
+    // existing same-package-via-explicit-import precedence in step 2).
+    //
+    // Lives on the per-element [`ResolutionContext::self_package`] rather
+    // than being pushed into the section's shared `import_scopes` cache —
+    // see T-20260510-01 for why mutating the cached scope leaked package
+    // A's namespace into element B's resolution when both shared a
+    // section.
+    if candidates.is_empty()
+        && let Some(pkg) = ctx.self_package
+        && let Some(id) = ctx.model.resolve_in_package(pkg, name)
+    {
+        return Some(id);
+    }
+
     // Step 3: Fall back to root-level M3 metaclass aliases (`Function`,
     // `Class`, `Property`, `Column`, …) when no import contributed.
     if candidates.is_empty()
@@ -1102,6 +1136,38 @@ pub(crate) fn resolve_function_call(
                 }
             }
         }
+        // Step 2b: Implicit self-package fallback. Only consulted when
+        // explicit imports yielded nothing — explicit imports shadow
+        // same-package siblings, matching `resolve_unqualified`'s
+        // precedence and Java parity. Lives on the per-element
+        // `ResolutionContext::self_package` rather than being pushed
+        // into the section's shared `import_scopes` cache
+        // (T-20260510-01: pre-fix mutation leaked element A's package
+        // into element B's resolution within the same section).
+        if all_candidates.is_empty()
+            && let Some(pkg) = ctx.self_package
+            && let Some(pkg_id) = ctx.model.resolve_package(pkg)
+        {
+            let found = ctx.model.resolve_functions_by_name_in_package(pkg_id, name);
+            let filtered: Vec<_> = found
+                .into_iter()
+                .filter(|&eid| {
+                    if let Element::Function(f) = ctx.model.get_element(eid) {
+                        f.parameters.len() == arg_count
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+            if !filtered.is_empty() {
+                let pkg_name = SmolStr::new(format!("{pkg}::{name}"));
+                if !contributing_packages.contains(&pkg_name) {
+                    contributing_packages.push(pkg_name);
+                }
+                all_candidates.extend(filtered);
+            }
+        }
+
         // Dedup: the same function ElementId can be discovered through
         // multiple import scopes (e.g. an explicit `import pkg::*` plus
         // an auto-import covering the same package). Without this, a
@@ -4165,6 +4231,7 @@ mod tests {
             resolve_cache: &mut cache,
             type_parameters: &type_params,
             multiplicity_parameters: &mult_params,
+            self_package: None,
             variable_types: HashMap::new(),
             island_lowerers: &[],
         };
@@ -4188,6 +4255,7 @@ mod tests {
             resolve_cache: &mut empty_cache,
             type_parameters: &type_params,
             multiplicity_parameters: &mult_params,
+            self_package: None,
             variable_types: HashMap::new(),
             island_lowerers: &[],
         };

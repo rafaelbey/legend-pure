@@ -215,6 +215,9 @@ pub fn lower_and_infer_expression(
         resolve_cache: &mut resolve_cache,
         type_parameters: &type_parameters,
         multiplicity_parameters: &multiplicity_parameters,
+        // No anchoring element for free-floating DSL expressions; the
+        // explicit `auto_imports` slice is the full visible namespace.
+        self_package: None,
         variable_types,
         island_lowerers: &[],
     };
