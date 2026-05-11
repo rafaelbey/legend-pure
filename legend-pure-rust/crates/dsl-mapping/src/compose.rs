@@ -386,6 +386,13 @@ fn write_property_mapping(out: &mut String, pm: &PurePropertyMapping) {
         out.push('+');
     }
     out.push_str(pm.property_name.as_str());
+    if pm.explode {
+        // Java M3 grammar puts the explode marker after the property
+        // header and before the value colon: `name *: transform`.
+        // Mutually exclusive with the local-form `+name : Type[m] :`
+        // (the parser rejects `+name *: …`).
+        out.push_str(" *");
+    }
     out.push_str(" : ");
     if let Some(local) = &pm.local_property {
         // Reuse the parser-compose crate's existing

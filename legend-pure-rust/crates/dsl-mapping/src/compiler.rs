@@ -1338,13 +1338,19 @@ fn validate_operation_body(
             kind: CompilationErrorKind::UnresolvedElement { path: fn_fqn },
         });
     }
-    // TODO(stage-5+): once the function is resolvable, also check its
-    // signature is `OperationSetImplementation[1] -> SetImplementation[*]`.
-    // The metamodel constraint is at mapping.pure:108 — same shape
-    // every operation function must satisfy. Not done here because
-    // the FunctionType-against-target shape comparison overlaps with
-    // the lower-and-infer machinery the Stage-3.5 rules rely on; a
-    // dedicated helper belongs in `legend_pure_parser_pure::resolve`.
+    // Java parity audit (2026-05-11): the operation-function
+    // signature is NOT validated against the metamodel slot type at
+    // mapping.pure:108 (`Function<{OperationSetImplementation[1] ->
+    // SetImplementation[*]}>[1]`). `OperationGraphBuilder` emits an
+    // ImportStub with `idOrPath` only, and
+    // `OperationSetImplementationProcessor.process` enforces only
+    // that the parameter IDs resolve against the mapping's
+    // `classMappingsById`. Existing fixtures (e.g. the surveyor
+    // `union_of_two_pure_instances` case) confirm Java accepts
+    // 0-arg functions like `(): SetImplementation[*]`; the metamodel
+    // slot type is documentation-only. Adding a Rust-side signature
+    // check here would diverge from Java parity ("no tactical
+    // test-pass hacks" — see CLAUDE.md). Closed as **won't do**.
 
     // 2. Each parameter ID must reference a class-mapping ID visible
     //    in this mapping (its own class mappings + transitively

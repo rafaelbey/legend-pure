@@ -161,3 +161,108 @@ fn unknown_parser_name_errors_with_registration_hint() {
          mechanism; got {msgs:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `*` explode marker on Pure property mappings (Java M3CoreParser.g4:84
+// `mappingLine: ... STAR? COLON ...`).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parses_pure_property_mapping_with_explode_marker() {
+    let source = indoc! {r"
+        ###Mapping
+        Mapping pkg::M
+        (
+          pkg::Firm : Pure
+          {
+            ~src pkg::FirmSource
+            aliases *: $src.aliasList,
+            name : $src.name
+          }
+        )
+    "};
+    let file = parse(source);
+    let m = first_mapping(&file);
+    let cm = &m.class_mappings[0];
+    let ClassMappingBody::Pure(body) = &cm.body else {
+        panic!("expected Pure body variant");
+    };
+    assert_eq!(body.property_mappings.len(), 2);
+    assert_eq!(body.property_mappings[0].property_name.as_str(), "aliases");
+    assert!(
+        body.property_mappings[0].explode,
+        "expected explode=true on `aliases *: …`"
+    );
+    assert_eq!(body.property_mappings[1].property_name.as_str(), "name");
+    assert!(
+        !body.property_mappings[1].explode,
+        "expected explode=false on regular `name : …`"
+    );
+}
+
+#[test]
+fn pure_property_mapping_without_star_keeps_explode_false() {
+    // Pin against accidental wiring that would set explode=true on
+    // every property mapping. The parser may have read its way past
+    // a `*` token earlier in the source (none here) — verify the
+    // bool stays false for plain `name : transform`.
+    let source = indoc! {r"
+        ###Mapping
+        Mapping pkg::M
+        (
+          pkg::Firm : Pure
+          {
+            ~src pkg::FirmSource
+            legalName : $src.name
+          }
+        )
+    "};
+    let file = parse(source);
+    let m = first_mapping(&file);
+    let cm = &m.class_mappings[0];
+    let ClassMappingBody::Pure(body) = &cm.body else {
+        panic!("expected Pure body");
+    };
+    assert!(!body.property_mappings[0].explode);
+}
+
+#[test]
+fn explode_marker_round_trips_through_composer() {
+    use legend_pure_dsl_mapping::compose::compose_mapping_section;
+
+    let source = indoc! {r"
+        ###Mapping
+        Mapping pkg::M
+        (
+          pkg::Firm : Pure
+          {
+            ~src pkg::FirmSource
+            aliases *: $src.aliasList
+          }
+        )
+    "};
+    let file = parse(source);
+    let m = first_mapping(&file);
+    let composed = compose_mapping_section(&[m]);
+    // The composer is allowed to insert spaces around the `*`
+    // explode marker. Assert the token is present after the
+    // property name; structural round-trip (next step) is the
+    // load-bearing fidelity check.
+    assert!(
+        composed.contains("aliases *"),
+        "composer must replay the `*` explode marker after the property name; composed:\n{composed}"
+    );
+
+    // Round-trip parse to confirm structural fidelity.
+    let file2 = parse(&composed);
+    let m2 = first_mapping(&file2);
+    let cm = &m2.class_mappings[0];
+    let ClassMappingBody::Pure(body) = &cm.body else {
+        panic!("expected Pure body after round-trip");
+    };
+    assert_eq!(body.property_mappings.len(), 1);
+    assert!(
+        body.property_mappings[0].explode,
+        "explode flag must survive parse → compose → parse"
+    );
+}
