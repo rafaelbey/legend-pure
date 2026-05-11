@@ -403,3 +403,190 @@ fn substitution_without_brackets_passes() {
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Multi-substitution invariants (T2.6 audit)
+//
+// Java's `MappingInclude.storeSubstitutions[]` is a vector, and the include
+// grammar accepts `[A -> B, C -> D, E -> F]`. Every consumer (composer, E1
+// endpoint validator, E2 cycle detector, E3 existence validator,
+// `collect_mapping_stores`, and `validate_repo_visibility`) must honour
+// ALL entries — never just the first. The fixtures below pin that
+// invariant: a single test with one valid sub at index 0 would silently
+// regress if a consumer collapsed the iteration to `.first()`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn multi_substitution_endpoint_validator_iterates_every_entry() {
+    // Three subs, EACH with a deliberately bad endpoint at a different
+    // position (source on #1, target on #2, source on #3). If E1 only
+    // checked `[0]`, only the first error would fire — three errors
+    // proves full iteration.
+    let errors = compile_errors(indoc! {r"
+        ###Pure
+        Class my::test::A { x : String[1]; }
+        Class my::test::B { y : String[1]; }
+        Class my::test::DbReal1 {}
+        Class my::test::DbReal2 {}
+        Class my::test::DbReal3 {}
+
+        ###Mapping
+        Mapping my::test::Inner
+        (
+          my::test::A : Pure { x : 'a' }
+        )
+
+        Mapping my::test::Outer
+        (
+          include my::test::Inner [
+            my::test::MissingSrc1 -> my::test::DbReal1,
+            my::test::DbReal2 -> my::test::MissingTgt2,
+            my::test::MissingSrc3 -> my::test::DbReal3
+          ]
+
+          my::test::B : Pure { y : 'b' }
+        )
+    "});
+    let endpoint_errs: Vec<&String> = errors
+        .iter()
+        .filter_map(|e| {
+            if e.message.contains("Store substitution source")
+                || e.message.contains("Store substitution target")
+            {
+                Some(&e.message)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert!(
+        endpoint_errs
+            .iter()
+            .any(|m| m.contains("my::test::MissingSrc1")),
+        "expected endpoint error citing first entry; got: {endpoint_errs:#?}"
+    );
+    assert!(
+        endpoint_errs
+            .iter()
+            .any(|m| m.contains("my::test::MissingTgt2")),
+        "expected endpoint error citing second entry; got: {endpoint_errs:#?}"
+    );
+    assert!(
+        endpoint_errs
+            .iter()
+            .any(|m| m.contains("my::test::MissingSrc3")),
+        "expected endpoint error citing third entry; got: {endpoint_errs:#?}"
+    );
+}
+
+#[test]
+fn multi_substitution_cycle_detector_sees_every_edge() {
+    // Three subs on one include forming a 3-cycle: DbA→DbB, DbB→DbC,
+    // DbC→DbA. If the cycle detector collapsed iteration to `.first()`
+    // it would only see the DbA→DbB edge and the cycle would be
+    // invisible.
+    let errors = compile_errors(indoc! {r"
+        ###Pure
+        Class my::test::A { x : String[1]; }
+        Class my::test::B { y : String[1]; }
+        Class my::test::DbA {}
+        Class my::test::DbB {}
+        Class my::test::DbC {}
+
+        ###Mapping
+        Mapping my::test::Inner
+        (
+          my::test::A : Pure { x : 'a' }
+        )
+
+        Mapping my::test::Outer
+        (
+          include my::test::Inner [
+            my::test::DbA -> my::test::DbB,
+            my::test::DbB -> my::test::DbC,
+            my::test::DbC -> my::test::DbA
+          ]
+
+          my::test::B : Pure { y : 'b' }
+        )
+    "});
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Cyclic Store Substitution")),
+        "expected 3-edge cycle to be detected; got: {:#?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn multi_substitution_round_trips_through_composer() {
+    use legend_pure_dsl_mapping::ast::MappingDef;
+    use legend_pure_dsl_mapping::compose::compose_mapping_section;
+    use legend_pure_parser_ast::element::Element as AstElement;
+
+    let source = indoc! {r"
+        ###Mapping
+        Mapping my::test::Outer
+        (
+          include my::test::Inner [my::test::DbA -> my::test::DbX, my::test::DbB -> my::test::DbY, my::test::DbC -> my::test::DbZ]
+
+          my::test::B : Pure
+          {
+            y : 'b'
+          }
+        )
+    "};
+    let file = parse(source);
+    let mapping: &MappingDef = file
+        .sections
+        .iter()
+        .flat_map(|s| s.elements.iter())
+        .filter_map(|e| match e {
+            AstElement::DSLElement(b) => b.as_any().downcast_ref::<MappingDef>(),
+            _ => None,
+        })
+        .next()
+        .expect("expected one MappingDef");
+    assert_eq!(
+        mapping.includes.len(),
+        1,
+        "expected exactly one include block"
+    );
+    assert_eq!(
+        mapping.includes[0].store_substitutions.len(),
+        3,
+        "parser must capture all three substitutions"
+    );
+
+    let composed = compose_mapping_section(&[mapping]);
+    for pair in [
+        ("DbA", "DbX"),
+        ("DbB", "DbY"),
+        ("DbC", "DbZ"),
+    ] {
+        let (src, tgt) = pair;
+        assert!(
+            composed.contains(src) && composed.contains(tgt),
+            "composer dropped substitution {src} -> {tgt}; composed:\n{composed}"
+        );
+    }
+
+    // Round-trip parse to confirm structural fidelity of all 3.
+    let file2 = parse(&composed);
+    let mapping2: &MappingDef = file2
+        .sections
+        .iter()
+        .flat_map(|s| s.elements.iter())
+        .filter_map(|e| match e {
+            AstElement::DSLElement(b) => b.as_any().downcast_ref::<MappingDef>(),
+            _ => None,
+        })
+        .next()
+        .expect("round-trip MappingDef");
+    assert_eq!(
+        mapping2.includes[0].store_substitutions.len(),
+        3,
+        "all three substitutions must survive parse -> compose -> parse"
+    );
+}
