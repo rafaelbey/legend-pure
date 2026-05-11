@@ -139,65 +139,6 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
-### T-20260510-02 — Undeclared multiplicity parameter in function signature compiles
-
-- **Type:** parity-gap
-- **Area:** compiler
-- **Priority:** P1
-- **Reporter:** Rafael
-- **Filed:** 2026-05-10
-
-**Summary**
-A function declares its generic and multiplicity parameters in `<…|…>`, but
-the body of the signature references a multiplicity name that was never
-declared. The compiler accepts it. Java Pure rejects this as an undeclared
-multiplicity parameter.
-
-**Repro / Context**
-
-```pure
-function <<PCT.test>> meta::pure::functions::math::tests::pow::testComplexPow<Z|h>(
-    f:Function<{Function<{->Z[y]}>[1]->Z[y]}>[1]
-):Boolean[1]
-{
-    assertEq(16.0, $f->eval(|2->pow(pow(2,2))));
-    assertEqWithinTolerance(182.88729271224377725957310758531093597412109375,
-                            $f->eval(|pow(3.33,4.33)), 0.0000000000001);
-}
-```
-
-- Declared params: type `Z`, multiplicity `h`.
-- Used in the signature: multiplicity `y` (twice, inside the nested
-  `Function<{->Z[y]}>` type). `y` is **not** declared.
-- Expected: compile error — "undeclared multiplicity parameter `y`".
-- Actual: compiles clean.
-
-**Notes**
-- This function exists in the platform tree today (PCT pow tests). The
-  fact that platform compile is "0 errors" means the validator is
-  missing — not that the input is valid.
-- Sweep the symmetric case: **undeclared type parameter** in the same
-  position. A signature like `<|h>(f:Function<{->Q[h]}>[1])` (no `Q`
-  declared) should also fail.
-- Resolution sites to check (verify, don't trust): function signatures,
-  qualified-property signatures, class type-parameter scopes, lambda
-  parameter types, generic constraints.
-- Suspect: when lowering `TypeRef`/`MultiplicityRef` inside a function
-  signature, an unbound name is silently treated as a free
-  `Generic(name)` / fresh multiplicity instead of being checked against
-  the enclosing element's declared parameter list. Likely in
-  `crates/pure/src/resolve.rs` or wherever signature type-args are
-  bound (look for the path that turns `Z[y]` into a `Named` /
-  `MultiplicityValue::Param`).
-- Once the validator fires, the platform `.pure` source for this PCT
-  test will need fixing — either rename `y → h` or declare `<Z|y,h>` /
-  `<Z|y>`. That's a separate platform-source change; the compiler fix
-  comes first so we see what else breaks.
-
-<!-- agent-audit:start id=T-20260510-02 -->
-<!-- Agents: append entries below. Do not rewrite the developer block above. -->
-<!-- agent-audit:end -->
-
 ### T-20260510-01 — Import-less reference to another package resolves silently
 
 - **Type:** parity-gap
@@ -875,5 +816,129 @@ function <<PCT.test>> meta::pure::functions::math::tests::pow::testComplexPow<Z|
   * `CompilationErrorKind::UnresolvedElement { path: "argument-type-mismatch:…" }`
     is a sentinel-string overload — fine for now, dedicated
     `ArgumentTypeMismatch` kind worth adding once tooling needs it.
+<!-- agent-audit:end -->
+
+
+### T-20260510-02 — Undeclared multiplicity parameter in function signature compiles
+
+- **Type:** parity-gap
+- **Area:** compiler
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-10
+
+**Summary**
+A function declares its generic and multiplicity parameters in `<…|…>`, but
+the body of the signature references a multiplicity name that was never
+declared. The compiler accepts it. Java Pure rejects this as an undeclared
+multiplicity parameter.
+
+**Repro / Context**
+
+```pure
+function <<PCT.test>> meta::pure::functions::math::tests::pow::testComplexPow<Z|h>(
+    f:Function<{Function<{->Z[y]}>[1]->Z[y]}>[1]
+):Boolean[1]
+{
+    assertEq(16.0, $f->eval(|2->pow(pow(2,2))));
+    assertEqWithinTolerance(182.88729271224377725957310758531093597412109375,
+                            $f->eval(|pow(3.33,4.33)), 0.0000000000001);
+}
+```
+
+- Declared params: type `Z`, multiplicity `h`.
+- Used in the signature: multiplicity `y` (twice, inside the nested
+  `Function<{->Z[y]}>` type). `y` is **not** declared.
+- Expected: compile error — "undeclared multiplicity parameter `y`".
+- Actual: compiles clean.
+
+**Notes**
+- This function exists in the platform tree today (PCT pow tests). The
+  fact that platform compile is "0 errors" means the validator is
+  missing — not that the input is valid.
+- Sweep the symmetric case: **undeclared type parameter** in the same
+  position. A signature like `<|h>(f:Function<{->Q[h]}>[1])` (no `Q`
+  declared) should also fail.
+- Resolution sites to check (verify, don't trust): function signatures,
+  qualified-property signatures, class type-parameter scopes, lambda
+  parameter types, generic constraints.
+- Suspect: when lowering `TypeRef`/`MultiplicityRef` inside a function
+  signature, an unbound name is silently treated as a free
+  `Generic(name)` / fresh multiplicity instead of being checked against
+  the enclosing element's declared parameter list. Likely in
+  `crates/pure/src/resolve.rs` or wherever signature type-args are
+  bound (look for the path that turns `Z[y]` into a `Named` /
+  `MultiplicityValue::Param`).
+- Once the validator fires, the platform `.pure` source for this PCT
+  test will need fixing — either rename `y → h` or declare `<Z|y,h>` /
+  `<Z|y>`. That's a separate platform-source change; the compiler fix
+  comes first so we see what else breaks.
+
+<!-- agent-audit:start id=T-20260510-02 -->
+- 2026-05-11 — claimed by claude-opus-4-7[1m] — picked from top of Open.
+- 2026-05-11 — root cause: three co-located gaps in `crates/pure/src/resolve.rs`.
+  (a) `resolve_type_ref`'s `MultiplicityArgument::Identifier` arm at L216
+  created `Multiplicity::Variable(name)` unconditionally.
+  (b) `lower_multiplicity` (L664) — context-free transformer used by
+  nine signature-side call sites — did the same for
+  `ast_type::Multiplicity::Variable(name)`.
+  (c) `ResolutionContext` (L102) carried `type_parameters` but no
+  sibling for multiplicity parameters. Plus a related downstream bug:
+  `resolve_function_type_sentinel` (L298) silently collapsed
+  `MultiplicityArgument::Identifier` to `Multiplicity::ZeroOrMany`
+  (L327/L345), losing the name entirely.
+- 2026-05-11 — implementation:
+  * `crates/pure/src/resolve.rs`: new `multiplicity_parameters` field
+    on `ResolutionContext`; new `resolve_multiplicity_with_validation`
+    helper; wired into nine signature-side call sites; `Identifier`
+    arm in mult-arg loop also routes through the helper; sentinel
+    decoder preserves `Variable` and validates it instead of
+    collapsing.
+  * `crates/pure/src/pipeline.rs`: new
+    `ast_multiplicity_parameters(element)` mirroring `ast_type_parameters`;
+    threaded into every ctx construction site (3 in pipeline + 1 in
+    extension + 2 in test fixtures).
+  * `crates/pure/src/error.rs`: new
+    `CompilationErrorKind::UndeclaredMultiplicityParameter { parameter }`
+    variant. Distinct from `UnresolvedMultiplicityParameter` (which
+    is post-dispatch at call sites).
+  * Exhaustive-match arms in `crates/lsp/src/diagnostics.rs` and
+    `crates/core-platform-pure/tests/categorize_errors.rs`.
+  * 5 new tests in `crates/pure/tests/integration_tests.rs`:
+    - Undeclared mult inside nested FunctionType (user's repro).
+    - Declared mult (regression).
+    - Undeclared top-level param mult.
+    - Undeclared class-property mult.
+    - Undeclared return-type mult.
+- 2026-05-11 — platform sweep:
+  surfaced one latent violation in
+  `legend-pure-core/.../essential/lang/cast/toMultiplicity.pure:17`,
+  where `<T|m>` declared `m` but the body used `z` twice. Fixed
+  in the same commit by renaming the declared parameter to `z`
+  (the natural choice — `m` was never used).
+- 2026-05-11 — verification:
+  * `cargo build --workspace` green.
+  * 5 new + 12 existing FunctionType tests in `integration_tests.rs`
+    all green; existing
+    `function_type_higher_order_wrong_inner_type_errors` continues
+    to pass.
+  * Per-crate sweep across pure, snapshot-builder, core-platform-pure,
+    lsp, dsl-mapping, dsl-relational — all green.
+  * `builds_platform_purem_and_round_trips` green — implicit platform
+    sweep across every shipped repo.
+  * `cargo fmt --check` clean. Copyright clean (440 files). Clippy
+    `lint-lib` clean.
+  Status: Fix landed (commit 73abe40d0d6).
+- 2026-05-11 — follow-ups (audit notes, not separate TODOs cut yet):
+  * Undeclared TYPE-parameter sweep (the TODO's symmetric case) —
+    deferred. `resolve_type_ref:191` partially covers it; the
+    remaining gap (single-letter name that happens to resolve to a
+    real class) is a semantic question.
+  * Relation-column multiplicity validation
+    (`resolve.rs:506`-area) — not signature-side; not in bug scope.
+  * Parser-level fix for `parse_function_type_as_type_ref` wrapping
+    return-side `Variable` in `Concrete` — addressed downstream via
+    the validating lower's "accept both wrapper shapes" pattern,
+    but a parser-side correction would be cleaner.
 <!-- agent-audit:end -->
 
