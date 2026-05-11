@@ -32,7 +32,7 @@ legend-pure-dsl-mapping = { path = "../dsl-mapping" }
 legend-pure-dsl-relational = { path = "../dsl-relational" }
 legend-pure-dsl-store = { path = "../dsl-store" }
 
-tower-lsp = { workspace = true }
+tower-lsp-server = { workspace = true }
 tokio = { workspace = true }
 dashmap = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

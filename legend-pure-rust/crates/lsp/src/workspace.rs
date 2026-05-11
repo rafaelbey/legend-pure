@@ -40,7 +40,7 @@ use legend_pure_parser_pure::extension::CompilerExtension;
 use legend_pure_parser_pure::model::PureModel;
 use legend_pure_parser_pure::refs::{ReferenceIndex, build_reference_index_with_extensions};
 use smol_str::SmolStr;
-use tower_lsp::lsp_types::Url;
+use tower_lsp_server::ls_types::Uri;
 
 /// Tracked state for an LSP workspace.
 pub struct Workspace {
@@ -48,7 +48,7 @@ pub struct Workspace {
     /// open-buffer overlays; this baseline is preserved for re-runs.
     pub base_repos: Vec<Repo>,
     /// Open buffers keyed by client URL.
-    pub open_buffers: HashMap<Url, String>,
+    pub open_buffers: HashMap<Uri, String>,
     /// Last compiled model, retained between requests so that hover /
     /// goto / outline can serve answers without recompiling on every
     /// keypress.
@@ -82,14 +82,14 @@ impl Workspace {
     }
 
     /// Record an open or modified buffer.
-    pub fn set_open_buffer(&mut self, uri: Url, content: String) {
+    pub fn set_open_buffer(&mut self, uri: Uri, content: String) {
         self.open_buffers.insert(uri, content);
     }
 
     /// Drop a closed buffer. After this, the next compile reads the
     /// file from disk again (Filesystem repo) or from the embedded
     /// blob (Purem repo).
-    pub fn close_buffer(&mut self, uri: &Url) {
+    pub fn close_buffer(&mut self, uri: &Uri) {
         self.open_buffers.remove(uri);
     }
 
@@ -109,7 +109,7 @@ impl Workspace {
             return out;
         }
         for (uri, content) in &self.open_buffers {
-            let Ok(disk_path) = uri.to_file_path() else {
+            let Some(disk_path) = uri.to_file_path() else {
                 continue;
             };
             for repo in &mut out {
@@ -184,8 +184,8 @@ impl Workspace {
     /// compiler uses for it. Returns `None` if the URL doesn't
     /// resolve to any known source path.
     #[must_use]
-    pub fn canonical_path_for(&self, uri: &Url) -> Option<String> {
-        let disk_path = uri.to_file_path().ok()?;
+    pub fn canonical_path_for(&self, uri: &Uri) -> Option<String> {
+        let disk_path = uri.to_file_path()?;
         for repo in &self.base_repos {
             if let Repo::Filesystem { files, .. } = repo {
                 for f in files {
@@ -215,7 +215,7 @@ impl Workspace {
     /// [`Repo::Purem`] (no on-disk source) or filesystem repos built
     /// without a `source_root` (synthetic test fixtures).
     #[must_use]
-    pub fn file_uri_for_canonical(&self, canonical: &str) -> Option<Url> {
+    pub fn file_uri_for_canonical(&self, canonical: &str) -> Option<Uri> {
         for uri in self.open_buffers.keys() {
             if self.canonical_path_for(uri).as_deref() == Some(canonical) {
                 return Some(uri.clone());
@@ -238,8 +238,8 @@ impl Workspace {
             // — otherwise `join("/abs")` discards the root.
             let rel = rel.trim_start_matches('/');
             let disk = root.join(rel);
-            if let Ok(url) = Url::from_file_path(&disk) {
-                return Some(url);
+            if let Some(uri) = Uri::from_file_path(&disk) {
+                return Some(uri);
             }
         }
         None
@@ -286,20 +286,25 @@ mod tests {
         );
         let ws = Workspace::new(vec![repo], Vec::new());
 
-        let url = ws
+        let uri = ws
             .file_uri_for_canonical("/proj/lib.pure")
             .expect("filesystem repo with source_root must resolve");
-        assert_eq!(url.scheme(), "file");
+        // The ls-types `Uri` type wraps `fluent_uri::Uri` whose
+        // `scheme()` returns a typed `Scheme` (not a `&str`) and
+        // whose `path()` returns a percent-encoded `EStr<Path>`.
+        // Round-trip through `as_str()` to test against plain
+        // strings — that's the on-wire form clients see anyway.
+        let url_str = uri.as_str();
+        assert!(url_str.starts_with("file://"), "got: {url_str}");
         assert!(
-            url.path().ends_with("/tmp/proj/lib.pure"),
-            "got path: {}",
-            url.path()
+            url_str.ends_with("/tmp/proj/lib.pure"),
+            "got: {url_str}"
         );
 
         let nested = ws
             .file_uri_for_canonical("/proj/sub/foo.pure")
             .expect("nested canonical must resolve");
-        assert!(nested.path().ends_with("/tmp/proj/sub/foo.pure"));
+        assert!(nested.as_str().ends_with("/tmp/proj/sub/foo.pure"));
     }
 
     #[test]
@@ -340,7 +345,7 @@ mod tests {
             vec!["/proj/lib.pure"],
         );
         let mut ws = Workspace::new(vec![repo], Vec::new());
-        let buffer_uri = Url::parse("file:///tmp/proj/lib.pure").unwrap();
+        let buffer_uri = "file:///tmp/proj/lib.pure".parse::<Uri>().unwrap();
         ws.set_open_buffer(buffer_uri.clone(), "...".into());
         let resolved = ws.file_uri_for_canonical("/proj/lib.pure").unwrap();
         assert_eq!(resolved, buffer_uri);

@@ -15,7 +15,7 @@
 //! Diagnostic conversion: Pure [`CompilationError`] → LSP [`Diagnostic`].
 
 use legend_pure_parser_pure::error::{CompilationError, CompilationErrorKind};
-use tower_lsp::lsp_types::{Diagnostic, NumberOrString};
+use tower_lsp_server::ls_types::{Diagnostic, NumberOrString};
 
 use crate::convert;
 
