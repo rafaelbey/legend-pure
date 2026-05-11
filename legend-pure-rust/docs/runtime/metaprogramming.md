@@ -14,8 +14,9 @@
 4. [Platform-completeness reference](#4-platform-completeness-reference)
 5. [Invariant: read-only meta-programming for Pure user code](#5-invariant-read-only-meta-programming-for-pure-user-code)
 6. [Platform coverage owed (proposed test suite)](#6-platform-coverage-owed-proposed-test-suite)
-7. [Appendix A — Original `MetaAccessor` proposal (historical)](#appendix-a--original-metaaccessor-proposal-historical)
-8. [Appendix B — `mutateAdd` consumer taxonomy](#appendix-b--mutateadd-consumer-taxonomy)
+7. [Engine-side usage audit](#7-engine-side-usage-audit)
+8. [Appendix A — Original `MetaAccessor` proposal (historical)](#appendix-a--original-metaaccessor-proposal-historical)
+9. [Appendix B — `mutateAdd` consumer taxonomy](#appendix-b--mutateadd-consumer-taxonomy)
 
 ---
 
@@ -260,6 +261,77 @@ The plan above was executed across ten commits on legend-pure-rust + one on lege
 | `ce663b25531` | legend-pure-rust | **§6 Item 10** — path/element round-trip identity |
 
 No open follow-ups from this work stream remain. The plan's §6 P0/P1/P2 + Borderline items are all shipped. Further coverage extensions belong to consumer-side porting (e.g. once legend-engine `byPassRouterInfo` becomes loadable, add platform shadow tests for `StoreClusteredValueSpecification.value`).
+
+---
+
+## 7. Engine-side usage audit
+
+§1 proves *what's ported*; this section proves *what's needed*. Together they close the coverage loop: every meta-programming primitive Engine actually consumes maps to a ✅ row in §1.
+
+### Scope and method
+
+Verified 2026-05-10: `grep -rho -e '<pattern>' --include='*.pure' --exclude-dir=target` across the full `/Users/cocobey73/Projects/legend-engine/` tree — 2,883 `.pure` files spanning `legend-engine-core-pure/` (router, preeval, mapping, modelToModel, extension framework, validation) and all 47 `legend-engine-xts-*` extension packages (relationalStore, sql, python, graphQL, java, dataquality, analytics, mongodb, …).
+
+### Verified primitive usage
+
+| Primitive | legend-engine calls | Rust |
+|---|---:|:---:|
+| `evaluateAndDeactivate` | 1,864 | ✅ |
+| `deactivate` | 47 | ✅ |
+| `reactivate` | 148 | ✅ |
+| `canReactivateDynamically` | 2 | ✅ |
+| `openVariables` + `openVariableValues` | 198 | ✅ |
+| `->eval(` | 2,818 | ✅ |
+| `->evaluate(` | 79 | ✅ |
+| `->cast(@` | 11,461 | ✅ |
+| `->instanceOf(` | 3,187 | ✅ |
+| `->subTypeOf(` | 86 | ✅ |
+| `->generalizations(` | 13 | ✅ |
+| `dynamicNew` | 57 | ✅ (6/6 overloads since `f0a1d83455c`) |
+| `new(` (explicit) | 221 | ✅ |
+| `.multiplicity` access | 723 | ✅ |
+| `->getLowerBound(` / `->getUpperBound(` | 39 / 35 | ✅ |
+| `->isToOne(` / `->isToMany(` | 19 / 22 | ✅ |
+| `->hasUpperBound(` | 41 | ✅ |
+| `elementToPath(` / `pathToElement(` | 3,134 / 269 | ✅ |
+| `->genericType(` / `.genericType` | 2,703 | ✅ |
+| `.func` / `.values` / `.expressionSequence` / `.parametersValues` | 11,574 combined | ✅ (heap property access) |
+| `^RoutedValueSpecification(...)` | 290 | ✅ (mechanism + shadow tests since `2b1074958c8`) |
+| `mutateAdd` | 97 | ✅ via extension (commit `55f00b7779a`) |
+| `byPassRouterInfo` / `byPassValueSpecificationWrapper` | 97 / 26 | ⚠️ consumer-defined wrappers (see §3.2) |
+
+**Verdict: 100% of meta-programming primitives Engine consumes are covered by the shipped Rust port.** No primitive in §1 is unused. No primitive heavily used by Engine is unported.
+
+### `j_invoke` — disambiguation
+
+A naïve audit might flag `->j_invoke(...)` (1,306 calls across `*javaPlatformBinding-pure/` modules) as a coverage gap. **It is not a meta-programming primitive.** Verified at `legend-engine-xts-java/legend-engine-xt-javaGeneration-pure/.../metamodel_factories.pure:2008`:
+
+```pure
+function meta::external::language::java::factory::j_invoke(
+    instance:Code[1], method:Method[1], args:Code[*]
+):Code[1]
+```
+
+It's a regular Pure function in the Java code-generation factory — takes a `Code[1]` (Java-AST node) and returns another `Code[1]`. Used only at Java code-generation time, not at Pure runtime. The Rust runtime supports it automatically via the user-function call path; no native registration needed. Documented here to lock the disambiguation so future audits don't re-flag it.
+
+### Extension natives (153 declarations)
+
+`grep -rn "native function" legend-engine/.../*-pure/.../resources/*.pure` returns 153 declarations across extension packages. **None are meta-programming primitives** — they are per-extension natives that, if consumed at runtime, would ship through the `RuntimeExtension` SPI (commit `74ec531ddee`). Categorized:
+
+| Category | Approx count | Status |
+|---|---:|---|
+| PCT-marked relation natives (`sort`, `distinct`, `extend`, `join`, …) | ~46 | Partially covered by `core_functions_relation` in `legend-engine-rust/`; tracked separately |
+| `mutateAdd` (legend-engine-pure-functions-unclassified) | 1 | ✅ via P4 (commit `55f00b7779a`) |
+| `legendCompileVSProtocol` (SQL extension — VS deserialization) | 1 | Out of meta-programming scope; own extension crate when needed |
+| `getTestConnection` / `parseSqlStatementToJson` (relationalStore) | 2 | Out of meta-programming scope; store-specific |
+| MongoDB test-server utils | 3 | Test-only; out of scope |
+| Other extension natives (Python factory, GraphQL, etc.) | ~100 | Per-extension porting; not meta-programming |
+
+The `mutateAdd` PoC (legend-engine-rust commit `55f00b7779a`) is the proven pattern for any of these that become consumer-critical.
+
+### What §7 does not change
+
+The §1 verdict (18 ✅ / 0 ❌ / 2 🚫), §3 router-readiness, §5 invariant, and §6 status all remain consistent. §7 is purely a confirmation that the shipped surface meets the demonstrated demand.
 
 ---
 
