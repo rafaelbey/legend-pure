@@ -84,5 +84,8 @@ pub fn error_code(kind: &CompilationErrorKind) -> &'static str {
         CompilationErrorKind::ConstructorPropertyTypeMismatch { .. } => {
             "constructorPropertyTypeMismatch"
         }
+        CompilationErrorKind::UndeclaredMultiplicityParameter { .. } => {
+            "undeclaredMultiplicityParameter"
+        }
     }
 }

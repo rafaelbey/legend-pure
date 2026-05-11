@@ -207,12 +207,14 @@ pub fn lower_and_infer_expression(
         .map(|(name, t, m)| (name.clone(), (t.clone(), m.clone())))
         .collect();
     let type_parameters: Vec<SmolStr> = Vec::new();
+    let multiplicity_parameters: Vec<SmolStr> = Vec::new();
 
     let mut ctx = crate::resolve::ResolutionContext {
         model,
         import_scopes: &import_scopes,
         resolve_cache: &mut resolve_cache,
         type_parameters: &type_parameters,
+        multiplicity_parameters: &multiplicity_parameters,
         variable_types,
         island_lowerers: &[],
     };

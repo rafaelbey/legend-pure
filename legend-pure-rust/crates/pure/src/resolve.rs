@@ -112,6 +112,12 @@ pub(crate) struct ResolutionContext<'a> {
     /// for `Class<T, V>` or function `<T|m>`). Names here resolve to
     /// `TypeExpr::Generic(name)` instead of going through import lookup.
     pub type_parameters: &'a [SmolStr],
+    /// Multiplicity parameters in scope (e.g., `["m"]` for `<T|m>`).
+    /// Multiplicity-position identifier names not in this list trigger
+    /// [`crate::error::CompilationErrorKind::UndeclaredMultiplicityParameter`]
+    /// at the resolver-eager seams in [`resolve_type_ref`] and
+    /// [`resolve_multiplicity_with_validation`].
+    pub multiplicity_parameters: &'a [SmolStr],
     /// Variable types in scope. Maps variable name → (type, multiplicity).
     /// Populated from function parameters, let bindings, and lambda parameters.
     /// Used by dispatch to infer argument types for variable references.
@@ -212,10 +218,23 @@ pub(crate) fn resolve_type_ref(
         .multiplicity_arguments
         .iter()
         .map(|ma| match ma {
-            ast_type::MultiplicityArgument::Identifier(name, _) => {
-                Multiplicity::Variable(name.clone())
+            ast_type::MultiplicityArgument::Identifier(name, mult_si) => {
+                resolve_multiplicity_with_validation(
+                    &ast_type::Multiplicity::Variable(name.clone()),
+                    mult_si,
+                    ctx,
+                    errors,
+                )
             }
-            ast_type::MultiplicityArgument::Concrete(m, _) => lower_multiplicity(m),
+            // The parser's `parse_function_type_as_type_ref` path
+            // (FUNCTION_TYPE_SENTINEL `TypeReference`) wraps the
+            // arrow's return-multiplicity as `Concrete(...)` even
+            // when the inner `ast_type::Multiplicity` is a
+            // `Variable(name)`. So we still need to validate the
+            // resulting form, not just the AST-tag-shape.
+            ast_type::MultiplicityArgument::Concrete(m, mult_si) => {
+                resolve_multiplicity_with_validation(m, mult_si, ctx, errors)
+            }
         })
         .collect();
 
@@ -298,14 +317,29 @@ fn resolve_function_type_sentinel(
         let param_type =
             resolve_type_ref(param_ref, ctx, errors).unwrap_or(TypeExpr::Generic("Any".into()));
 
-        // Each parameter's multiplicity is stored in its multiplicity_arguments[0]
+        // Each parameter's multiplicity is stored in its multiplicity_arguments[0].
+        // Both wrapper variants may carry a `Variable(name)` (the parser
+        // currently routes return-side variables through `Concrete` —
+        // see comment in `resolve_type_ref`'s mult-arg loop), so we run
+        // both through the validating lower so undeclared names emit
+        // `UndeclaredMultiplicityParameter` instead of being silently
+        // collapsed to `ZeroOrMany`.
         let param_mult =
             param_ref
                 .multiplicity_arguments
                 .first()
                 .map_or(Multiplicity::PureOne, |ma| match ma {
-                    ast_type::MultiplicityArgument::Concrete(m, _) => lower_multiplicity(m),
-                    ast_type::MultiplicityArgument::Identifier(_, _) => Multiplicity::ZeroOrMany,
+                    ast_type::MultiplicityArgument::Concrete(m, mult_si) => {
+                        resolve_multiplicity_with_validation(m, mult_si, ctx, errors)
+                    }
+                    ast_type::MultiplicityArgument::Identifier(name, mult_si) => {
+                        resolve_multiplicity_with_validation(
+                            &ast_type::Multiplicity::Variable(name.clone()),
+                            mult_si,
+                            ctx,
+                            errors,
+                        )
+                    }
                 });
 
         parameters.push((param_type, param_mult));
@@ -322,8 +356,17 @@ fn resolve_function_type_sentinel(
             .multiplicity_arguments
             .first()
             .map_or(Multiplicity::PureOne, |ma| match ma {
-                ast_type::MultiplicityArgument::Concrete(m, _) => lower_multiplicity(m),
-                ast_type::MultiplicityArgument::Identifier(_, _) => Multiplicity::ZeroOrMany,
+                ast_type::MultiplicityArgument::Concrete(m, mult_si) => {
+                    resolve_multiplicity_with_validation(m, mult_si, ctx, errors)
+                }
+                ast_type::MultiplicityArgument::Identifier(name, mult_si) => {
+                    resolve_multiplicity_with_validation(
+                        &ast_type::Multiplicity::Variable(name.clone()),
+                        mult_si,
+                        ctx,
+                        errors,
+                    )
+                }
             });
 
     Some(TypeExpr::FunctionType {
@@ -449,13 +492,23 @@ pub(crate) fn resolve_type_spec(
                 .map(|p| {
                     let te = resolve_type_ref(&p.type_ref, ctx, errors)
                         .unwrap_or(TypeExpr::Generic("Any".into()));
-                    let mult = lower_multiplicity(&p.multiplicity);
+                    let mult = resolve_multiplicity_with_validation(
+                        &p.multiplicity,
+                        &p.source_info,
+                        ctx,
+                        errors,
+                    );
                     (te, mult)
                 })
                 .collect();
             let return_type = resolve_type_ref(&ft.return_type, ctx, errors)
                 .unwrap_or(TypeExpr::Generic("Any".into()));
-            let return_multiplicity = lower_multiplicity(&ft.return_multiplicity);
+            let return_multiplicity = resolve_multiplicity_with_validation(
+                &ft.return_multiplicity,
+                &ft.source_info,
+                ctx,
+                errors,
+            );
             Some(TypeExpr::FunctionType {
                 parameters,
                 return_type: Box::new(return_type),
@@ -673,6 +726,37 @@ pub(crate) fn lower_multiplicity(m: &ast_type::Multiplicity) -> Multiplicity {
             upper: *upper,
         },
     }
+}
+
+/// Lower an AST [`ast_type::Multiplicity`] and, if it's a `Variable(name)`,
+/// emit [`crate::error::CompilationErrorKind::UndeclaredMultiplicityParameter`]
+/// when `name` isn't in `ctx.multiplicity_parameters`. Use this at every
+/// signature-side seam where a multiplicity slot might reference a
+/// parameter name (`p: T[m]`, function `return_multiplicity`,
+/// `Function<{...->V[m]}>`, …).
+///
+/// Non-Variable shapes (concrete literals, ranges) skip the check.
+/// Returns the same value `lower_multiplicity` would — emit-and-continue
+/// per the T-20260510-03 precedent.
+pub(crate) fn resolve_multiplicity_with_validation(
+    m: &ast_type::Multiplicity,
+    span: &legend_pure_parser_ast::SourceInfo,
+    ctx: &ResolutionContext<'_>,
+    errors: &mut Vec<crate::error::CompilationError>,
+) -> Multiplicity {
+    let result = lower_multiplicity(m);
+    if let Multiplicity::Variable(name) = &result
+        && !ctx.multiplicity_parameters.contains(name)
+    {
+        errors.push(crate::error::CompilationError {
+            message: format!("Undeclared multiplicity parameter '{name}'"),
+            source_info: span.clone(),
+            kind: crate::error::CompilationErrorKind::UndeclaredMultiplicityParameter {
+                parameter: name.clone(),
+            },
+        });
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -4074,11 +4158,13 @@ mod tests {
         let scopes = vec![import_scope];
         let mut cache = HashMap::new();
         let type_params: Vec<SmolStr> = Vec::new();
+        let mult_params: Vec<SmolStr> = Vec::new();
         let ctx = ResolutionContext {
             model: &model,
             import_scopes: &scopes,
             resolve_cache: &mut cache,
             type_parameters: &type_params,
+            multiplicity_parameters: &mult_params,
             variable_types: HashMap::new(),
             island_lowerers: &[],
         };
@@ -4101,6 +4187,7 @@ mod tests {
             import_scopes: &no_scopes,
             resolve_cache: &mut empty_cache,
             type_parameters: &type_params,
+            multiplicity_parameters: &mult_params,
             variable_types: HashMap::new(),
             island_lowerers: &[],
         };

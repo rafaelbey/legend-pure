@@ -298,4 +298,18 @@ pub enum CompilationErrorKind {
         /// `T'[m']`.
         actual: SmolStr,
     },
+    /// A signature references a multiplicity parameter name that the
+    /// enclosing element's `<…|…>` clause doesn't declare. Fires
+    /// resolver-eager — inside `resolve_type_ref` for the `<T|m>`
+    /// generic-argument form, and inside
+    /// `resolve_multiplicity_with_validation` for direct
+    /// multiplicity slots like `p: T[m]` or
+    /// `Function<{...->V[m]}>`. Distinct from
+    /// [`Self::UnresolvedMultiplicityParameter`] which is a
+    /// post-dispatch call-site error (Java parity:
+    /// `TypeInference.java:102`); this one is declaration-site.
+    UndeclaredMultiplicityParameter {
+        /// Name of the offending multiplicity parameter.
+        parameter: SmolStr,
+    },
 }
