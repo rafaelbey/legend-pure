@@ -139,6 +139,139 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260510-03 — FunctionType arity/types not checked when binding lambda argument
+
+- **Type:** parity-gap
+- **Area:** compiler
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-10
+
+**Summary**
+When an argument of `Function<{P1,…→R}>` type is passed a lambda, the
+compiler does not check that the lambda's parameter list (count + types)
+or return type match the declared FunctionType. A lambda of the wrong
+arity / wrong parameter type is silently accepted.
+
+**Repro / Context**
+
+```pure
+function <<PCT.test>> meta::pure::functions::math::tests::pow::testComplexPow<Z|y>(
+    f:Function<{Function<{->Z[y]}>[1]->Z[y]}>[1]   // $f takes a zero-arg lambda returning Z[y]
+):Boolean[1]
+{
+    // OK — zero-arg lambda
+    assertEq(16.0, $f->eval(|2->pow(pow(2,2))));
+
+    // WRONG — one-arg lambda `a:String[1]|...` passed where a zero-arg
+    // lambda is required. Should not compile.
+    assertEqWithinTolerance(
+        182.88729271224377725957310758531093597412109375,
+        $f->eval(a:String[1]|pow(3.33,4.33)),
+        0.0000000000001);
+}
+```
+
+- Expected: compile error on the second call — argument's FunctionType
+  `{String[1]→…}` does not match the parameter's `{→Z[y]}` (parameter
+  count mismatch; would also mismatch on parameter type / return type
+  if arity were the same).
+- Actual: both calls compile.
+
+**Notes**
+- Generalisation: FunctionType compatibility must check **all three**
+  axes — parameter count, each parameter type+multiplicity, and the
+  return type+multiplicity. Plus the generic/multiplicity substitution
+  set on the way in. The unification rule for `Function<{A→B}>` vs.
+  `Function<{A'→B'}>` is per-position covariant/contravariant per the
+  language spec; whatever the spec says, the check must actually run.
+- Related but distinct: BACKLOG row "Full generic unification (`Z`
+  propagation)" and the un-ignored
+  `function_type_higher_order_wrong_inner_type_errors` test. That work
+  validated nested *type-argument* compatibility via
+  `is_type_compatible_structural`. This bug is about validating the
+  **FunctionType shell itself** at the binding site of a lambda
+  argument — likely the same compat function needs to recurse into
+  the lambda's actual parameters/return, not just trust nominal
+  Function-ness.
+- Suspect: argument→parameter binding in dispatch / higher-order eval
+  treats any callable value as compatible with `Function<{…}>` once
+  the outer name `Function` matches. Look at `crates/pure/src/infer.rs`
+  and the `eval`/`apply` dispatch path; cross-check against
+  `is_type_compatible_structural` to see whether it descends into
+  `FunctionType` parameter/return positions or stops at the named
+  shell.
+- Sweep symmetric cases: (a) wrong return type on the inner lambda,
+  (b) wrong multiplicity on a parameter, (c) extra/missing parameters,
+  (d) parameter type that isn't even a subtype of the declared one.
+  All four should produce compile errors.
+- As with T-20260510-02, the platform `.pure` source for this PCT test
+  will need fixing once the validator fires (the example here is
+  intentionally malformed by the reporter). Compiler fix lands first.
+
+<!-- agent-audit:start id=T-20260510-03 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
+### T-20260510-02 — Undeclared multiplicity parameter in function signature compiles
+
+- **Type:** parity-gap
+- **Area:** compiler
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-10
+
+**Summary**
+A function declares its generic and multiplicity parameters in `<…|…>`, but
+the body of the signature references a multiplicity name that was never
+declared. The compiler accepts it. Java Pure rejects this as an undeclared
+multiplicity parameter.
+
+**Repro / Context**
+
+```pure
+function <<PCT.test>> meta::pure::functions::math::tests::pow::testComplexPow<Z|h>(
+    f:Function<{Function<{->Z[y]}>[1]->Z[y]}>[1]
+):Boolean[1]
+{
+    assertEq(16.0, $f->eval(|2->pow(pow(2,2))));
+    assertEqWithinTolerance(182.88729271224377725957310758531093597412109375,
+                            $f->eval(|pow(3.33,4.33)), 0.0000000000001);
+}
+```
+
+- Declared params: type `Z`, multiplicity `h`.
+- Used in the signature: multiplicity `y` (twice, inside the nested
+  `Function<{->Z[y]}>` type). `y` is **not** declared.
+- Expected: compile error — "undeclared multiplicity parameter `y`".
+- Actual: compiles clean.
+
+**Notes**
+- This function exists in the platform tree today (PCT pow tests). The
+  fact that platform compile is "0 errors" means the validator is
+  missing — not that the input is valid.
+- Sweep the symmetric case: **undeclared type parameter** in the same
+  position. A signature like `<|h>(f:Function<{->Q[h]}>[1])` (no `Q`
+  declared) should also fail.
+- Resolution sites to check (verify, don't trust): function signatures,
+  qualified-property signatures, class type-parameter scopes, lambda
+  parameter types, generic constraints.
+- Suspect: when lowering `TypeRef`/`MultiplicityRef` inside a function
+  signature, an unbound name is silently treated as a free
+  `Generic(name)` / fresh multiplicity instead of being checked against
+  the enclosing element's declared parameter list. Likely in
+  `crates/pure/src/resolve.rs` or wherever signature type-args are
+  bound (look for the path that turns `Z[y]` into a `Named` /
+  `MultiplicityValue::Param`).
+- Once the validator fires, the platform `.pure` source for this PCT
+  test will need fixing — either rename `y → h` or declare `<Z|y,h>` /
+  `<Z|y>`. That's a separate platform-source change; the compiler fix
+  comes first so we see what else breaks.
+
+<!-- agent-audit:start id=T-20260510-02 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
 ### T-20260510-01 — Import-less reference to another package resolves silently
 
 - **Type:** parity-gap
