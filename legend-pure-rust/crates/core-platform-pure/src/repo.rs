@@ -409,8 +409,7 @@ impl Repo {
     pub fn prefix(&self) -> &str {
         match self {
             Self::Embedded { prefix, .. } => prefix,
-            Self::Filesystem { prefix, .. } => prefix.as_str(),
-            Self::Purem { prefix, .. } => prefix.as_str(),
+            Self::Filesystem { prefix, .. } | Self::Purem { prefix, .. } => prefix.as_str(),
         }
     }
 
@@ -454,13 +453,21 @@ impl Repo {
     /// `.pure` files only — feeds [`crate::platform::parse_and_compile`].
     /// Empty for [`Repo::Purem`].
     pub fn sources(&self) -> Box<dyn Iterator<Item = (&str, &str)> + '_> {
-        Box::new(self.files().filter(|(_, path)| path.ends_with(".pure")))
+        Box::new(self.files().filter(|(_, path)| {
+            std::path::Path::new(path)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("pure"))
+        }))
     }
 
     /// `.json` manifests only. For `Repo::Purem` this surfaces the
     /// static `manifests` field populated by the build script.
     pub fn manifests(&self) -> Box<dyn Iterator<Item = (&str, &str)> + '_> {
-        Box::new(self.files().filter(|(_, path)| path.ends_with(".json")))
+        Box::new(self.files().filter(|(_, path)| {
+            std::path::Path::new(path)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+        }))
     }
 }
 
@@ -886,8 +893,7 @@ mod tests {
                 "expected SourceRootMissing, got: {}",
                 other
                     .err()
-                    .map(|e| format!("{e:?}"))
-                    .unwrap_or_else(|| "Ok(_)".into())
+                    .map_or_else(|| "Ok(_)".into(), |e| format!("{e:?}"))
             ),
         }
     }

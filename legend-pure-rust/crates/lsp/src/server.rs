@@ -157,7 +157,14 @@ impl LanguageServer for Backend {
                 match repo {
                     Repo::Filesystem { files, .. } => {
                         filesystem += 1;
-                        total_files += files.iter().filter(|f| f.path.ends_with(".pure")).count();
+                        total_files += files
+                            .iter()
+                            .filter(|f| {
+                                std::path::Path::new(&f.path)
+                                    .extension()
+                                    .is_some_and(|e| e.eq_ignore_ascii_case("pure"))
+                            })
+                            .count();
                     }
                     Repo::Purem { .. } => purem += 1,
                     _ => other += 1,

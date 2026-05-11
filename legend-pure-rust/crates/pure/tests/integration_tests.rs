@@ -2475,7 +2475,7 @@ fn function_type_one_arg_wrong_type_errors() {
     // Function<{Integer[1]->...}>. This MUST error — eval's T binds
     // to Integer from the FunctionType slot, then `param: T[n]` =
     // `Integer[1]` doesn't accept `String[1]`.
-    let source = r#"
+    let source = r"
 ###Pure
 native function test::eval<T,V|m,n>(
     func: meta::pure::metamodel::function::Function<{T[n]->V[m]}>[1],
@@ -2484,7 +2484,7 @@ native function test::eval<T,V|m,n>(
 function test::caller(f: meta::pure::metamodel::function::Function<{Integer[1]->String[1]}>[1]): String[1] {
     $f->eval('not an int')
 }
-"#;
+";
     let result = compile_with_imports(&[source], &[]);
     let partial = result.expect_err(
         "eval with String arg to Integer-typed Function param must surface an arg-type error",

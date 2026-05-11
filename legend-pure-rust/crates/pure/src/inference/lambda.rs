@@ -210,10 +210,10 @@ pub(crate) fn bind_from_lambda_body(
         } else {
             resolve::substitute_type(ft_ty, &bindings.ty)
         };
-        let mult = if !matches!(lp.multiplicity, Multiplicity::Variable(_)) {
-            lp.multiplicity.clone()
-        } else {
+        let mult = if matches!(lp.multiplicity, Multiplicity::Variable(_)) {
             resolve::substitute_mult(ft_mult, &bindings.mult)
+        } else {
+            lp.multiplicity.clone()
         };
         extended.insert(lp.name.clone(), (ty, mult));
     }

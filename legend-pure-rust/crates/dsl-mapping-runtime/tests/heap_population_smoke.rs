@@ -59,9 +59,9 @@ fn compile(file: SourceFile) -> legend_pure_parser_pure::model::PureModel {
 /// metamodel for `meta::pure::mapping::Mapping` isn't loaded into
 /// the test model — so we look up via the element's `ElementId`,
 /// not by classifier match.
-fn find_mapping_handle<'m, H: legend_pure_runtime::hooks::EvalHooks>(
+fn find_mapping_handle<H: legend_pure_runtime::hooks::EvalHooks>(
     model: &legend_pure_parser_pure::model::PureModel,
-    evaluator: &Evaluator<'m, H>,
+    evaluator: &Evaluator<'_, H>,
 ) -> Option<legend_pure_runtime::heap::ObjectHandle> {
     use legend_pure_parser_pure::ids::ElementId;
     use legend_pure_parser_pure::model::Element;

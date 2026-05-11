@@ -16,12 +16,12 @@ mod common;
 
 use legend_pure_java_codegen::{CodegenError, FqnInput, Options, generate};
 
-const FUNCTION_TYPED_SOURCE: &str = r#"
+const FUNCTION_TYPED_SOURCE: &str = r"
 function user_test::callIt(f: Function<{Integer[1]->String[1]}>[1]): String[1]
 {
     $f->eval(42);
 }
-"#;
+";
 
 #[test]
 fn function_typed_parameter_is_rejected_in_v1() {

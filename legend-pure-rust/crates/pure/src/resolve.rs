@@ -161,7 +161,7 @@ pub(crate) fn resolve_type_ref(
     // (`name=col_name, type_arguments=[col_type], multiplicity_arguments[0]=mult`).
     // Decode them back into `TypeExpr::Relation(columns)`.
     if type_ref.name == RELATION_TYPE_SENTINEL {
-        return resolve_relation_type_sentinel(type_ref, ctx, errors);
+        return Some(resolve_relation_type_sentinel(type_ref, ctx, errors));
     }
 
     // `?` wildcard type — used inside `SortInfo<(?:?)⊆T>`-style column
@@ -347,7 +347,7 @@ fn resolve_relation_type_sentinel(
     type_ref: &ast_type::TypeReference,
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
-) -> Option<TypeExpr> {
+) -> TypeExpr {
     let mut columns = Vec::with_capacity(type_ref.type_arguments.len());
     for col_ref in &type_ref.type_arguments {
         let type_expr = col_ref
@@ -369,7 +369,7 @@ fn resolve_relation_type_sentinel(
             multiplicity,
         });
     }
-    Some(TypeExpr::Relation(columns))
+    TypeExpr::Relation(columns)
 }
 
 /// Resolves an AST `TypeSpec` (type, unit reference, or relation type) to a Pure `TypeExpr`.
@@ -570,10 +570,13 @@ fn resolve_unqualified(
         )
     {
         use crate::ids::ElementId as Eid;
+        // Chunk-0 indices 0 / 1 are ANY / NIL respectively.
         let is_any_or_nil = matches!(
             id,
-            Eid::InstanceId { chunk_id: 0, local_idx: 0 } // ANY
-            | Eid::InstanceId { chunk_id: 0, local_idx: 1 } // NIL
+            Eid::InstanceId {
+                chunk_id: 0,
+                local_idx: 0 | 1,
+            }
         );
         if matches!(elem, crate::model::Element::PrimitiveType(_)) || is_any_or_nil {
             return Some(id);
@@ -1200,6 +1203,8 @@ pub(crate) fn infer_type_from_valuespec(
                             // accepts every param via the unknown-arg-permits
                             // branch in `is_type_compatible`; the latter would
                             // be rejected against non-Any params.
+                            #[allow(clippy::match_same_arms)]
+                            // documents the load-bearing Generic case explicitly
                             crate::types::TypeExpr::Generic(_) => None,
                             _ => None,
                         };
@@ -1233,6 +1238,8 @@ pub(crate) fn infer_type_from_valuespec(
                 crate::types::TypeExpr::Named { element, .. } => Some(element),
                 // Unbound generic from class-property substitution: report
                 // `None` (unknown). See sibling note above.
+                #[allow(clippy::match_same_arms)]
+                // documents the load-bearing Generic case explicitly
                 crate::types::TypeExpr::Generic(_) => None,
                 _ => None,
             }
@@ -2857,10 +2864,10 @@ fn bind_mult_with_mode(
 ) {
     use crate::inference::context::RegisterMode;
     use crate::types::Multiplicity;
+    use std::collections::hash_map::Entry;
     let Multiplicity::Variable(name) = p else {
         return;
     };
-    use std::collections::hash_map::Entry;
     let new_value = match mult_out.entry(name.clone()) {
         Entry::Vacant(e) => {
             e.insert(a.clone());

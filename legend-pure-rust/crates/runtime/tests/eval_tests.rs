@@ -167,7 +167,7 @@ fn compile_with_platform(user_source: &str) -> PureModel {
                 partial.errors.len()
             );
             for e in partial.errors.iter().take(5) {
-                eprintln!("  - {}", e);
+                eprintln!("  - {e}");
             }
             partial.model
         }

@@ -162,6 +162,7 @@ pub fn definition_for_position(
 /// If a [`ValueSpec`] kind directly references a resolved element,
 /// return that element's `ElementId`. None for variables (need
 /// scope tracking), literals, lambdas, etc.
+#[allow(clippy::match_same_arms)] // patterns intentionally distinct — each variant carries a different field binding even when the result shape coincides
 fn resolve_value_spec_target(vs: &legend_pure_parser_pure::types::ValueSpec) -> Option<ElementId> {
     use legend_pure_parser_pure::types::ExprKind;
     match &*vs.kind {
@@ -251,12 +252,10 @@ fn symbol_kind_for(element: &Element) -> SymbolKind {
         Element::Class(_) => SymbolKind::CLASS,
         Element::Enumeration(_) => SymbolKind::ENUM,
         Element::Function(_) => SymbolKind::FUNCTION,
-        Element::Profile(_) => SymbolKind::INTERFACE,
-        Element::Association(_) => SymbolKind::INTERFACE,
+        Element::Profile(_) | Element::Association(_) => SymbolKind::INTERFACE,
         Element::Measure(_) => SymbolKind::STRUCT,
         Element::PrimitiveType(_) => SymbolKind::TYPE_PARAMETER,
-        Element::Unit(_) => SymbolKind::CONSTANT,
-        Element::PackageableMultiplicity(_) => SymbolKind::CONSTANT,
+        Element::Unit(_) | Element::PackageableMultiplicity(_) => SymbolKind::CONSTANT,
         Element::Package(_) => SymbolKind::PACKAGE,
         Element::DSLInstance(_) => SymbolKind::OBJECT,
     }

@@ -236,10 +236,10 @@ fn is_concrete_type(ty: &crate::types::TypeExpr) -> bool {
         // body's property accesses and erased the type info needed
         // for downstream `eval`/`map`/`filter` to bind their own T/V.
         TypeExpr::Named { element, .. } => *element != crate::bootstrap::ANY_ID,
-        // FunctionType is concrete when its outer shape is known —
-        // same logic. Type-arguments and inner generics can survive.
-        TypeExpr::FunctionType { .. } => true,
-        TypeExpr::Relation(_) => true,
+        // FunctionType / Relation are concrete when their outer shape
+        // is known — same logic. Type-arguments and inner generics can
+        // survive.
+        TypeExpr::FunctionType { .. } | TypeExpr::Relation(_) => true,
         // `Generic` and `AlgebraUnion` are not concrete *at the head*
         // — the lambda lowering can't produce a useful expected type
         // from them (the enclosing scope may bind later, but the

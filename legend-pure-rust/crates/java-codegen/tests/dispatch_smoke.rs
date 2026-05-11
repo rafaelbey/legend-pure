@@ -20,7 +20,7 @@ mod common;
 
 use legend_pure_java_codegen::{CodegenError, dispatch_bindings_by_kind, parse_manifest};
 
-const MIXED_SOURCE: &str = r#"
+const MIXED_SOURCE: &str = r"
 Class user_test::Account
 {
     name: String[1];
@@ -36,7 +36,7 @@ Association user_test::AccountTrader
     accounts: user_test::Account[*];
     traders: user_test::Trader[*];
 }
-"#;
+";
 
 #[test]
 fn dispatches_mixed_manifest_into_per_kind_buckets() {
@@ -110,7 +110,7 @@ fn parse_manifest_extracts_pkg_and_functions_class_directives() {
         "# Header comment".to_owned(),
         "@pkg: org.example.gen".to_owned(),
         "@functions-class: ExampleFns".to_owned(),
-        "".to_owned(),
+        String::new(),
         "user_test::Account".to_owned(),
         "user_test::Trader".to_owned(),
     ];

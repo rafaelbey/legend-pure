@@ -322,9 +322,8 @@ impl CompilerExtension for MappingExtension {
                         ctx.model.get_or_create_package(&pkg_path)
                     };
 
-                    let chunk = match ctx.model.chunks.get_mut(chunk_id as usize) {
-                        Some(c) => c,
-                        None => continue,
+                    let Some(chunk) = ctx.model.chunks.get_mut(chunk_id as usize) else {
+                        continue;
                     };
                     let local_idx = chunk.alloc_element(
                         ElementNode {
@@ -2066,7 +2065,7 @@ fn validate_substitution_endpoints(
     model: &PureModel,
     errors: &mut Vec<CompilationError>,
 ) {
-    for (_mapping_fqn, reg) in registry.iter() {
+    for reg in registry.values() {
         for inc in &reg.def.includes {
             for sub in &inc.store_substitutions {
                 check_substitution_endpoint(&sub.source, "source", sub, model, errors);
@@ -2118,7 +2117,7 @@ fn validate_substitution_cycles(
     registry: &HashMap<SmolStr, RegisteredMapping>,
     errors: &mut Vec<CompilationError>,
 ) {
-    for (mapping_fqn, reg) in registry.iter() {
+    for (mapping_fqn, reg) in registry {
         // Edges (source_fqn → target_fqn) in the substitution graph
         // visible from this mapping. Tracking source spans on the
         // first occurrence so the diagnostic points back at the
@@ -2143,8 +2142,7 @@ fn validate_substitution_cycles(
                 let span = edges
                     .get(&cycle_node)
                     .and_then(|targets| targets.first())
-                    .map(|(_, s)| s.clone())
-                    .unwrap_or_else(|| reg.def.source_info.clone());
+                    .map_or_else(|| reg.def.source_info.clone(), |(_, s)| s.clone());
                 errors.push(CompilationError {
                     message: format!(
                         "Cyclic Store Substitution for store '{cycle_node}' in mapping \
@@ -2244,7 +2242,7 @@ fn validate_store_substitution_existence(
     registry: &HashMap<SmolStr, RegisteredMapping>,
     errors: &mut Vec<CompilationError>,
 ) {
-    for (mapping_fqn, reg) in registry.iter() {
+    for (mapping_fqn, reg) in registry {
         for inc in &reg.def.includes {
             let included_fqn = ptr_fqn(&inc.included);
             if !registry.contains_key(&included_fqn) {
@@ -2480,6 +2478,8 @@ fn check_body_refs_visibility(
                 }
             }
         }
+        #[allow(clippy::match_same_arms)]
+        // each arm carries a distinct reason — keep them separate for greppability
         ClassMappingBody::AggregationAware(_) | ClassMappingBody::XStore(_) => {
             // Nested mapping bodies + xstore — reach into them for
             // cross-refs in a follow-up. Today's coverage already

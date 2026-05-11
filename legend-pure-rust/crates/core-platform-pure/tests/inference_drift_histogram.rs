@@ -69,6 +69,8 @@ struct FnDrift {
 /// asserts the ceiling.
 #[test]
 fn inference_drift_histogram_under_ceiling() {
+    use std::fmt::Write as _;
+
     let model = match platform::load_platform() {
         Ok(m) => m,
         Err(p) => p.model,
@@ -113,20 +115,22 @@ fn inference_drift_histogram_under_ceiling() {
     // ---- Render Markdown report ----------------------------------------
     let mut report = String::new();
     report.push_str("# Inference-drift histogram\n\n");
-    report.push_str(&format!(
-        "**Total surviving Generic + Variable markers:** {total}\n\n",
-    ));
-    report.push_str(&format!("- Generic (type): {total_type}\n"));
-    report.push_str(&format!("- Variable (multiplicity): {total_mult}\n"));
-    report.push_str(&format!("- Functions with drift: {}\n", per_fn.len()));
-    report.push_str(&format!("- Ceiling: {DRIFT_CEILING}\n\n"));
+    writeln!(
+        report,
+        "**Total surviving Generic + Variable markers:** {total}\n"
+    )
+    .ok();
+    writeln!(report, "- Generic (type): {total_type}").ok();
+    writeln!(report, "- Variable (multiplicity): {total_mult}").ok();
+    writeln!(report, "- Functions with drift: {}", per_fn.len()).ok();
+    writeln!(report, "- Ceiling: {DRIFT_CEILING}\n").ok();
 
     report.push_str("## Drift by expression kind\n\n");
     report.push_str("| Kind | Count |\n|---|---|\n");
     let mut by_kind_sorted: Vec<(&&str, &usize)> = total_kind.iter().collect();
     by_kind_sorted.sort_by(|a, b| b.1.cmp(a.1));
     for (kind, count) in by_kind_sorted {
-        report.push_str(&format!("| {kind} | {count} |\n"));
+        writeln!(report, "| {kind} | {count} |").ok();
     }
     report.push('\n');
 
@@ -134,7 +138,7 @@ fn inference_drift_histogram_under_ceiling() {
     let buckets = drift_buckets(&per_fn);
     report.push_str("| Bucket | Functions |\n|---|---|\n");
     for (label, n) in &buckets {
-        report.push_str(&format!("| {label} | {n} |\n"));
+        writeln!(report, "| {label} | {n} |").ok();
     }
     report.push('\n');
 
@@ -147,13 +151,15 @@ fn inference_drift_histogram_under_ceiling() {
         total_b.cmp(&total_a)
     });
     for fd in sorted.iter().take(20) {
-        report.push_str(&format!(
-            "| `{}` | {} | {} | {} |\n",
+        writeln!(
+            report,
+            "| `{}` | {} | {} | {} |",
             fd.fqn,
             fd.type_drift,
             fd.mult_drift,
             fd.type_drift + fd.mult_drift
-        ));
+        )
+        .ok();
     }
     report.push('\n');
 

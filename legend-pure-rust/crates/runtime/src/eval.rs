@@ -49,6 +49,7 @@
 //! - `DebugHooks` (future, in `lsp` crate) — IDE debugging with breakpoints.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use im_rc::Vector as PVector;
 use legend_pure_parser_pure::ids::ElementId;
@@ -460,7 +461,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 Ok(Value::Function(Box::new(FunctionValue::Path(
                     crate::value::PathClosure {
                         start_type: start_type.clone(),
-                        steps: steps.to_vec().into(),
+                        steps: Rc::from(steps.as_slice()),
                         name: name.clone(),
                         captures,
                     },

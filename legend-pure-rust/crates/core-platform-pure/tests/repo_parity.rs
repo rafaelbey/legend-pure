@@ -90,7 +90,7 @@ fn embedded_and_filesystem_produce_equivalent_models() {
         .filter(|r| {
             matches!(
                 r.meta().map(|m| m.name),
-                Some("platform") | Some("platform_tests")
+                Some("platform" | "platform_tests")
             )
         })
         .collect();
@@ -153,9 +153,12 @@ fn from_descriptor_loads_real_platform_meta() {
         .any(|(_, p)| p == "/platform/pure/grammar/m3.pure");
     assert!(!has_m3, "m3.pure must be skipped");
 
-    let any_pure = repo
-        .files()
-        .any(|(_, p)| p.starts_with("/platform/pure/") && p.ends_with(".pure"));
+    let any_pure = repo.files().any(|(_, p)| {
+        p.starts_with("/platform/pure/")
+            && std::path::Path::new(p)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("pure"))
+    });
     assert!(
         any_pure,
         "expected at least one /platform/pure/...pure file from filesystem walk"

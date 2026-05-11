@@ -93,7 +93,7 @@ pub fn generate(
         )?);
     }
     for enum_id in &closure.enums {
-        files.push(enums::emit_enum(model, *enum_id, opts)?);
+        files.push(enums::emit_enum(model, *enum_id, opts));
     }
     Ok(files)
 }

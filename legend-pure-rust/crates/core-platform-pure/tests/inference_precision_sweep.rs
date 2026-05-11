@@ -86,9 +86,10 @@ fn platform_inference_precision_under_ceiling() {
 
             if actual_eid == Some(bootstrap::ANY_ID) && declared_eid != Some(bootstrap::ANY_ID) {
                 let node = chunk.nodes.get(local_idx);
-                let declared_name = declared_eid
-                    .map(|e| model.element_name(e).to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string());
+                let declared_name = declared_eid.map_or_else(
+                    || "<unknown>".to_string(),
+                    |e| model.element_name(e).to_string(),
+                );
                 imprecise.push(format!(
                     "{}: declared {} but body infers Any",
                     node.name, declared_name
@@ -108,8 +109,11 @@ fn platform_inference_precision_under_ceiling() {
         }
     }
 
+    #[allow(clippy::absurd_extreme_comparisons)]
+    // PRECISION_CEILING is the load-bearing knob; comparison shape stays uniform when ceiling changes
+    let within = imprecise.len() <= PRECISION_CEILING;
     assert!(
-        imprecise.len() <= PRECISION_CEILING,
+        within,
         "Inference precision regressed: {} > ceiling {}.\n{}",
         imprecise.len(),
         PRECISION_CEILING,

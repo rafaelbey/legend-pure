@@ -86,9 +86,8 @@ impl DSLPopulator for MappingDSLPopulator {
     }
 
     fn populate(&self, mut ctx: DSLPopulationCtx<'_>) {
-        let snapshot = match MappingSnapshot::decode(ctx.instance_data) {
-            Ok(s) => s,
-            Err(_) => return, // corrupt payload — stay evaluable
+        let Ok(snapshot) = MappingSnapshot::decode(ctx.instance_data) else {
+            return; // corrupt payload — stay evaluable
         };
 
         // ---- children: one heap row per class-mapping ----

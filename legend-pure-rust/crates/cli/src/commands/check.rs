@@ -131,7 +131,7 @@ pub fn run(args: CheckArgs) -> Result<(), CliError> {
                 }
                 for e in &partial.errors {
                     if json_mode {
-                        emit_json_diagnostic(path, e)?;
+                        emit_json_diagnostic(path, e);
                     } else {
                         eprintln!(
                             "      {} {}",
@@ -192,16 +192,12 @@ pub fn run(args: CheckArgs) -> Result<(), CliError> {
 }
 
 /// Emit one NDJSON line for a single parser diagnostic.
-fn emit_json_diagnostic(
-    path: &Path,
-    err: &legend_pure_parser_parser::error::ParseError,
-) -> Result<(), CliError> {
+fn emit_json_diagnostic(path: &Path, err: &legend_pure_parser_parser::error::ParseError) {
     // Build a small wire shape rather than serializing the raw enum:
     // we want a stable schema and a `file` field so consumers can group.
-    let (line, column, end_line, end_column) = err
-        .source_info()
-        .map(|si| (si.start_line, si.start_column, si.end_line, si.end_column))
-        .unwrap_or((0, 0, 0, 0));
+    let (line, column, end_line, end_column) = err.source_info().map_or((0, 0, 0, 0), |si| {
+        (si.start_line, si.start_column, si.end_line, si.end_column)
+    });
     let payload = serde_json::json!({
         "type": "diagnostic",
         "file": path.display().to_string(),
@@ -214,5 +210,4 @@ fn emit_json_diagnostic(
         },
     });
     println!("{payload}");
-    Ok(())
 }

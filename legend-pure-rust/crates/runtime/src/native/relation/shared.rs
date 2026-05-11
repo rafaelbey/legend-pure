@@ -226,14 +226,15 @@ pub(super) fn render_csv_from_columns_and_rows(
     buf.push_str(&header.join(", "));
     for row in rows {
         buf.push('\n');
-        let cells: Vec<String> = row.iter().map(render_cell).collect();
+        let cells: Vec<String> = row.iter().map(|c| render_cell(c.as_ref())).collect();
         buf.push_str(&cells.join(", "));
     }
     buf
 }
 
 /// Render a single [`TypedCell`] (or `None`) to its canonical CSV form.
-fn render_cell(cell: &Option<TypedCell>) -> String {
+#[allow(clippy::match_same_arms)] // Decimal/StrictDate/DateTime each produce a `SmolStr.to_string()` arm — keep them separate so future formatting tweaks per type are local edits
+fn render_cell(cell: Option<&TypedCell>) -> String {
     match cell {
         None => "''".to_string(),
         Some(TypedCell::Integer(i)) => i.to_string(),

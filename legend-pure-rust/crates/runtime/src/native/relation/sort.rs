@@ -264,11 +264,14 @@ fn compare_cells(a: Option<&TypedCell>, b: Option<&TypedCell>) -> Ordering {
             (TypedCell::Float(x), TypedCell::Integer(y)) => {
                 x.partial_cmp(&(*y as f64)).unwrap_or(Ordering::Equal)
             }
-            (TypedCell::Decimal(x), TypedCell::Decimal(y)) => x.as_str().cmp(y.as_str()),
             (TypedCell::Boolean(x), TypedCell::Boolean(y)) => x.cmp(y),
-            (TypedCell::String(x), TypedCell::String(y)) => x.as_str().cmp(y.as_str()),
-            (TypedCell::StrictDate(x), TypedCell::StrictDate(y)) => x.as_str().cmp(y.as_str()),
-            (TypedCell::DateTime(x), TypedCell::DateTime(y)) => x.as_str().cmp(y.as_str()),
+            // SmolStr-backed cells: lexicographic compare on the inner
+            // string. Distinct variants kept separate so the pattern
+            // shows in profiles per type.
+            (TypedCell::Decimal(x), TypedCell::Decimal(y))
+            | (TypedCell::String(x), TypedCell::String(y))
+            | (TypedCell::StrictDate(x), TypedCell::StrictDate(y))
+            | (TypedCell::DateTime(x), TypedCell::DateTime(y)) => x.as_str().cmp(y.as_str()),
             // Mixed-variant fallback — shouldn't happen for a single
             // homogeneously-typed TDS column. Tag-order by discriminant
             // index so the comparator stays total.

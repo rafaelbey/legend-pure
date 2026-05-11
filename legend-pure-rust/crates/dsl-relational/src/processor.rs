@@ -167,8 +167,8 @@ impl PureColumnType {
             "VARCHAR" => Some(Self::Varchar),
             "BINARY" => Some(Self::Binary),
             "VARBINARY" => Some(Self::Varbinary),
-            "TIMESTAMP" => Some(Self::Timestamp),
-            "DATETIME" => Some(Self::Timestamp), // common SQL alias
+            // common SQL alias for TIMESTAMP
+            "TIMESTAMP" | "DATETIME" => Some(Self::Timestamp),
             "DATE" => Some(Self::Date),
             "DECIMAL" => Some(Self::Decimal),
             "NUMERIC" => Some(Self::Numeric),
@@ -1408,8 +1408,8 @@ pub fn apply_extends_inheritance(class_mappings: &mut [ResolvedClassMapping]) {
             };
             current = &class_mappings[*idx];
             if current.main_table.is_some() {
-                main_table = current.main_table.clone();
-                primary_db = current.primary_database.clone();
+                main_table.clone_from(&current.main_table);
+                primary_db.clone_from(&current.primary_database);
             }
         }
         effective.push((main_table, primary_db));
@@ -1427,8 +1427,8 @@ fn record_binding(
     seen: &mut HashSet<SmolStr>,
 ) {
     let binding = match &prop.kind {
-        ResolvedClassMappingPropertyKind::Single { binding } => binding,
-        ResolvedClassMappingPropertyKind::Plus { binding } => binding,
+        ResolvedClassMappingPropertyKind::Single { binding }
+        | ResolvedClassMappingPropertyKind::Plus { binding } => binding,
         ResolvedClassMappingPropertyKind::Embedded => return,
     };
     if let Some(b) = binding

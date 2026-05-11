@@ -157,8 +157,8 @@ pub enum BuildError {
 /// rule.
 #[must_use]
 pub fn tests_output_path(output: &Path) -> PathBuf {
-    let stem = output.file_stem().map(|s| s.to_os_string());
-    let ext = output.extension().map(|s| s.to_os_string());
+    let stem = output.file_stem().map(std::ffi::OsStr::to_os_string);
+    let ext = output.extension().map(std::ffi::OsStr::to_os_string);
     let parent = output.parent();
     let new_name = match (stem, ext) {
         (Some(stem), Some(ext)) => {
@@ -200,7 +200,7 @@ pub fn compile_to_purem(req: CompileRequest<'_>) -> Result<(), BuildError> {
     // (which may be passed in for build-time convenience) don't get
     // compiled. This makes a build of `platform.purem` independent of
     // a broken DSL repo's compile errors.
-    let descriptors = transitively_reachable(&all_descriptors, req.target)?;
+    let descriptors = transitively_reachable(&all_descriptors, req.target);
     let order = topo_sort(&descriptors)?;
 
     let auto_imports: Vec<SmolStr> = req.auto_imports.iter().copied().map(SmolStr::new).collect();
@@ -330,10 +330,7 @@ fn load_descriptors(paths: &[PathBuf]) -> Result<Vec<LoadedDescriptor>, BuildErr
 /// `target` via the `dependencies` edges, including `target` itself.
 /// Any dep name that isn't in `all` is silently ignored — Java's
 /// resolver does the same and falls back to "external/unknown."
-fn transitively_reachable(
-    all: &[LoadedDescriptor],
-    target: &str,
-) -> Result<Vec<LoadedDescriptor>, BuildError> {
+fn transitively_reachable(all: &[LoadedDescriptor], target: &str) -> Vec<LoadedDescriptor> {
     let by_name: HashMap<&str, &LoadedDescriptor> =
         all.iter().map(|d| (d.name.as_str(), d)).collect();
     let mut keep: BTreeSet<String> = BTreeSet::new();
@@ -358,7 +355,7 @@ fn transitively_reachable(
     // Stable order by name for reproducibility — topo sort runs again
     // before compile and gives the actual load order.
     out.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(out)
+    out
 }
 
 fn topo_sort(descs: &[LoadedDescriptor]) -> Result<Vec<usize>, BuildError> {
@@ -499,13 +496,10 @@ fn parse_repo_sources(desc: &LoadedDescriptor) -> Result<Vec<SourceFile>, BuildE
                         count: partial.errors.len(),
                         first: format!(
                             "{}: {}",
-                            first
-                                .source_info()
-                                .map(|si| format!(
-                                    "{}:{}:{}",
-                                    si.source, si.start_line, si.start_column
-                                ))
-                                .unwrap_or_else(|| canonical.clone()),
+                            first.source_info().map_or_else(
+                                || canonical.clone(),
+                                |si| format!("{}:{}:{}", si.source, si.start_line, si.start_column),
+                            ),
                             first.message()
                         ),
                     });

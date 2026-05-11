@@ -342,12 +342,11 @@ impl Embedder {
             println!("cargo:rerun-if-changed={}", cargo_toml_path.display());
         }
 
-        let output = match self.output.clone() {
-            Some(p) => p,
-            None => {
-                let out_dir = env::var_os("OUT_DIR").ok_or(BuildError::Env("OUT_DIR"))?;
-                PathBuf::from(out_dir).join(DEFAULT_OUTPUT_NAME)
-            }
+        let output = if let Some(p) = self.output.clone() {
+            p
+        } else {
+            let out_dir = env::var_os("OUT_DIR").ok_or(BuildError::Env("OUT_DIR"))?;
+            PathBuf::from(out_dir).join(DEFAULT_OUTPUT_NAME)
         };
 
         let repos = &cargo_toml.package.metadata.legend_pure.repos;
@@ -427,12 +426,8 @@ impl Embedder {
         }
 
         if self.emit_default_aggregator {
-            self.emit_default_aggregator_fn(&default_repo_calls, &mut out)?;
-            self.emit_artifact_aggregator_fn(
-                &artifact_repo_calls,
-                &tests_artifact_calls,
-                &mut out,
-            )?;
+            self.emit_default_aggregator_fn(&default_repo_calls, &mut out);
+            self.emit_artifact_aggregator_fn(&artifact_repo_calls, &tests_artifact_calls, &mut out);
         }
 
         fs::write(&output, out).map_err(|source| BuildError::Io {
@@ -1036,7 +1031,7 @@ impl Embedder {
         prod_artifacts: &[EmittedRepo],
         tests_artifacts: &[EmittedRepo],
         out: &mut String,
-    ) -> Result<(), BuildError> {
+    ) {
         let cp = &self.crate_path;
         out.push_str("\n/// Build-script-emitted `.purem` artifact repos in declaration order.\n");
         out.push_str(
@@ -1084,14 +1079,9 @@ impl Embedder {
         }
         out.push_str("    out\n");
         out.push_str("}\n");
-        Ok(())
     }
 
-    fn emit_default_aggregator_fn(
-        &self,
-        emitted: &[EmittedRepo],
-        out: &mut String,
-    ) -> Result<(), BuildError> {
+    fn emit_default_aggregator_fn(&self, emitted: &[EmittedRepo], out: &mut String) {
         let cp = &self.crate_path;
         out.push_str("/// Default embedded repos in Cargo.toml declaration order.\n");
         out.push_str("/// Generated from `[[package.metadata.legend-pure.repos]]`.\n");
@@ -1141,7 +1131,6 @@ impl Embedder {
         }
         out.push_str("    ]\n");
         out.push_str("}\n");
-        Ok(())
     }
 }
 

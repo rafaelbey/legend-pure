@@ -261,8 +261,7 @@ fn validate_island(isl: &IslandExpression, model: &PureModel, errors: &mut Vec<C
                 tds.rows
                     .get(row_idx)
                     .and_then(|r| r.get(col_idx))
-                    .map(|c| c.source_info.clone())
-                    .unwrap_or_else(|| tds.source_info.clone())
+                    .map_or_else(|| tds.source_info.clone(), |c| c.source_info.clone())
             } else {
                 tds.source_info.clone()
             };

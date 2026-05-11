@@ -83,10 +83,10 @@ pub fn access_profile_id(model: &PureModel) -> Option<ElementId> {
 /// Stereotypes on the access profile attached to an element. Empty for
 /// elements that don't carry any (the common case) and for elements that
 /// don't carry stereotypes at all (`Profile`, `Measure`, …).
-pub fn access_level_stereotypes<'m>(
-    element: &'m Element,
+pub fn access_level_stereotypes(
+    element: &Element,
     access_profile: ElementId,
-) -> impl Iterator<Item = &'m StereotypeRef> + 'm {
+) -> impl Iterator<Item = &StereotypeRef> {
     element_stereotypes(element)
         .iter()
         .filter(move |s| s.profile == access_profile)

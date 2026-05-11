@@ -90,7 +90,7 @@ fn variance_eval_against_property_with_nil_owner_under_strict() {
     // is captured by m3_parser from `^TypeParameter{contravariant:
     // true}`. We exercise the same shape via a synthetic that
     // mimics the dynamicNew error site.
-    let source = r#"
+    let source = r"
 ###Pure
 Class test::D_A { a: String[1]; }
 native function test::myGetProperty(class: meta::pure::metamodel::type::Class<meta::pure::metamodel::type::Any>[1], name: String[1]):
@@ -103,7 +103,7 @@ native function test::myToOne<T|m>(coll: T[m]): T[1];
 function test::caller(r: test::D_A[1]): meta::pure::metamodel::type::Any[1] {
     test::myEval(test::myToOne(test::myGetProperty(test::D_A, 'a')), $r)
 }
-"#;
+";
     compile_with_imports(&[source]).expect(
         "Property<Nil,Any> contravariant lift through subtype_view \
          must produce Function<{Any->Any}>; eval binds T=Any so \
@@ -131,14 +131,14 @@ fn variance_invariant_class_keeps_nil_literal_through_substitution() {
     // independent of strict). This guards against accidentally
     // making every type-parameter slot behave like a contravariant
     // one.
-    let source = r#"
+    let source = r"
 ###Pure
 Class test::MyHolder<T> { value: T[1]; }
 native function test::takeStringHolder(h: test::MyHolder<String>[1]): meta::pure::metamodel::type::Any[1];
 function test::caller(): meta::pure::metamodel::type::Any[1] {
     test::takeStringHolder(^test::MyHolder<Integer>(value=1))
 }
-"#;
+";
     let result = compile_with_imports(&[source]);
     // Today the type-arg arity / mismatch check accepts this in
     // default mode (we're permissive on parametric type compat).
@@ -167,7 +167,7 @@ function test::caller(): meta::pure::metamodel::type::Any[1] {
 /// contravariance lift is leaking into invariant slots — bug.
 #[test]
 fn variance_negative_invariant_user_property_keeps_nil_literal() {
-    let source = r#"
+    let source = r"
 ###Pure
 Class test::D_A { a: String[1]; }
 Class test::MyProperty<U, V> { name: String[1]; }
@@ -181,7 +181,7 @@ native function test::myToOne<T|m>(coll: T[m]): T[1];
 function test::caller(r: test::D_A[1]): meta::pure::metamodel::type::Any[1] {
     test::myEval(test::myToOne(test::myGetMyProp(test::D_A, 'a')), $r)
 }
-"#;
+";
     // MyProperty doesn't extend Function so the structural lift via
     // subtype_view returns None — eval's binding has no
     // FunctionType to extract from arg 0. T is unbound; the
@@ -211,7 +211,7 @@ function test::caller(r: test::D_A[1]): meta::pure::metamodel::type::Any[1] {
 /// we don't introduce a false positive there.
 #[test]
 fn variance_default_mode_property_eval_compiles_clean() {
-    let source = r#"
+    let source = r"
 ###Pure
 Class test::D_A { a: String[1]; }
 native function test::myGetProperty(class: meta::pure::metamodel::type::Class<meta::pure::metamodel::type::Any>[1], name: String[1]):
@@ -224,7 +224,7 @@ native function test::myToOne<T|m>(coll: T[m]): T[1];
 function test::caller(r: test::D_A[1]): meta::pure::metamodel::type::Any[1] {
     test::myEval(test::myToOne(test::myGetProperty(test::D_A, 'a')), $r)
 }
-"#;
+";
     compile_with_imports(&[source])
         .expect("default mode is Java parity — Property<Nil> + eval(D_A) silently widens.");
 }
@@ -261,10 +261,8 @@ fn variance_property_class_in_loaded_platform_carries_contravariant_flag() {
             SmolStr::new("Property"),
         ])
         .expect("Property must resolve in the loaded platform");
-    let element = model.get_element(prop_eid);
-    let class = match element {
-        legend_pure_parser_pure::model::Element::Class(c) => c,
-        _ => panic!("Property is not a Class element"),
+    let legend_pure_parser_pure::model::Element::Class(class) = model.get_element(prop_eid) else {
+        panic!("Property is not a Class element");
     };
     // m3.pure declares Property's first type-parameter (T) with
     // `contravariant:true` and second (V) with no flag.

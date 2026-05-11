@@ -348,7 +348,8 @@ fn write_enum_source_value(out: &mut String, sv: &EnumSourceValue) {
             ..
         } => {
             if let Some(pkg) = &enumeration.package {
-                out.push_str(&format!("{pkg}"));
+                use std::fmt::Write as _;
+                let _ = write!(out, "{pkg}");
                 out.push_str("::");
             }
             out.push_str(enumeration.name.as_str());
@@ -379,6 +380,7 @@ fn write_pure_body(out: &mut String, body: &PureClassMappingBody) {
 }
 
 fn write_property_mapping(out: &mut String, pm: &PurePropertyMapping) {
+    use std::fmt::Write as _;
     out.push_str("    ");
     if pm.local_property.is_some() {
         out.push('+');
@@ -393,7 +395,7 @@ fn write_property_mapping(out: &mut String, pm: &PurePropertyMapping) {
         let mut w = legend_pure_parser_compose::writer::IndentWriter::new();
         legend_pure_parser_compose::type_ref::compose_type_reference(&mut w, &local.type_ref);
         out.push_str(&w.finish());
-        out.push_str(&format!("{}", local.multiplicity));
+        let _ = write!(out, "{}", local.multiplicity);
         out.push_str(" : ");
     }
     if let Some(name) = &pm.transformer {
@@ -405,8 +407,9 @@ fn write_property_mapping(out: &mut String, pm: &PurePropertyMapping) {
 }
 
 fn write_ptr(out: &mut String, ptr: &PackageableElementPtr) {
+    use std::fmt::Write as _;
     if let Some(pkg) = &ptr.package {
-        out.push_str(&format!("{pkg}"));
+        let _ = write!(out, "{pkg}");
         out.push_str("::");
     }
     out.push_str(ptr.name.as_str());
@@ -417,8 +420,9 @@ fn write_fqn(
     package: Option<&legend_pure_parser_ast::type_ref::Package>,
     name: &str,
 ) {
+    use std::fmt::Write as _;
     if let Some(pkg) = package {
-        out.push_str(&format!("{pkg}"));
+        let _ = write!(out, "{pkg}");
         out.push_str("::");
     }
     out.push_str(name);

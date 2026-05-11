@@ -38,7 +38,7 @@ struct FooBody {
 }
 
 impl ForeignClassMappingBody for FooBody {
-    fn kind(&self) -> &str {
+    fn kind(&self) -> &'static str {
         "Foo"
     }
     fn as_any(&self) -> &dyn Any {
@@ -67,7 +67,7 @@ impl ForeignClassMappingBody for FooBody {
 struct FooBodyParser;
 
 impl ClassMappingBodyParser for FooBodyParser {
-    fn kind(&self) -> &str {
+    fn kind(&self) -> &'static str {
         "Foo"
     }
 
@@ -133,7 +133,7 @@ fn first_mapping(file: &SourceFile) -> &MappingDef {
 fn foreign_body_parser_routes_by_kind() {
     // The `: Foo { ... }` body lands in ClassMappingBody::Foreign and
     // downcasts back to FooBody.
-    let source = indoc! {r#"
+    let source = indoc! {r"
         ###Mapping
         Mapping pkg::M
         (
@@ -142,7 +142,7 @@ fn foreign_body_parser_routes_by_kind() {
             'hello relational world'
           }
         )
-    "#};
+    "};
     let file = parse_with_foo(source);
     let m = first_mapping(&file);
     assert_eq!(m.class_mappings.len(), 1);
@@ -161,7 +161,7 @@ fn foreign_body_parser_routes_by_kind() {
 #[test]
 fn foreign_body_parser_unknown_kind_falls_through_to_error() {
     // No FooBodyParser registered → `Foo` is rejected.
-    let source = indoc! {r#"
+    let source = indoc! {r"
         ###Mapping
         Mapping pkg::M
         (
@@ -170,7 +170,7 @@ fn foreign_body_parser_unknown_kind_falls_through_to_error() {
             'x'
           }
         )
-    "#};
+    "};
     let result = legend_pure_parser_parser::parse_with_sections(
         source,
         "no_foo.pure",
@@ -190,7 +190,7 @@ fn foreign_body_parser_unknown_kind_falls_through_to_error() {
 fn foreign_body_alongside_built_in_pure() {
     // Mixed body kinds within a single ###Mapping: built-in Pure +
     // foreign Foo coexist.
-    let source = indoc! {r#"
+    let source = indoc! {r"
         ###Mapping
         Mapping pkg::M
         (
@@ -204,7 +204,7 @@ fn foreign_body_alongside_built_in_pure() {
             firstName : $src.first
           }
         )
-    "#};
+    "};
     let file = parse_with_foo(source);
     let m = first_mapping(&file);
     assert_eq!(m.class_mappings.len(), 2);

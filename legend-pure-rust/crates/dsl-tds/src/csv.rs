@@ -726,13 +726,13 @@ fn materialise_cell(
                 return Err("expected `true` or `false`");
             }
         }
-        ColumnType::String => TypedCell::String(unescape_string(v)),
+        // Arbitrary class column: store the raw text alongside literal
+        // strings. The runtime reconstructs the typed value from that
+        // string at execution time (e.g. `Variant` parses its own
+        // JSON-bearing payload).
+        ColumnType::String | ColumnType::Other { .. } => TypedCell::String(unescape_string(v)),
         ColumnType::StrictDate => TypedCell::StrictDate(SmolStr::new(v)),
         ColumnType::DateTime => TypedCell::DateTime(SmolStr::new(v)),
-        // Arbitrary class column: store the raw text. The runtime
-        // reconstructs the typed value from that string at execution
-        // time (e.g. `Variant` parses its own JSON-bearing payload).
-        ColumnType::Other { .. } => TypedCell::String(unescape_string(v)),
     }))
 }
 
