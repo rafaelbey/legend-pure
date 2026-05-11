@@ -2754,6 +2754,129 @@ function test::caller(): meta::pure::metamodel::type::Number[1] {
 }
 
 // ---------------------------------------------------------------------------
+// T-20260510-02 — Undeclared multiplicity parameter in signatures.
+// Resolver-eager validation: a multiplicity-position identifier must
+// match a name declared in the enclosing element's `<…|m,n>` clause.
+// ---------------------------------------------------------------------------
+
+fn count_undeclared_mult(errs: &[legend_pure_parser_pure::error::CompilationError]) -> usize {
+    errs.iter()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                legend_pure_parser_pure::error::CompilationErrorKind::UndeclaredMultiplicityParameter { .. }
+            )
+        })
+        .count()
+}
+
+#[test]
+fn undeclared_mult_inside_function_type_errors() {
+    // The user's repro: `<Z|h>` declares `h`, signature uses `y`.
+    let source = r"
+###Pure
+function test::caller<Z|h>(
+    f: meta::pure::metamodel::function::Function<{
+        meta::pure::metamodel::function::Function<{->Z[y]}>[1]->Z[y]
+    }>[1]
+): Z[h] {
+    fail('placeholder')->cast(@Z)->toMultiplicity(@Z[h])
+}
+";
+    // We don't need the body to typecheck — only that the SIGNATURE
+    // emits the undeclared-mult diagnostic. compile_with_imports may
+    // return either Ok or Err; either way we want the diagnostic kind
+    // to be present.
+    let errs = match compile_with_imports(&[source], &[]) {
+        Ok(_) => Vec::new(),
+        Err(p) => p.errors,
+    };
+    assert!(
+        count_undeclared_mult(&errs) >= 1,
+        "expected UndeclaredMultiplicityParameter; got: {errs:?}"
+    );
+}
+
+#[test]
+fn declared_mult_function_signature_clean() {
+    // Regression guard: every multiplicity name is declared. No
+    // UndeclaredMultiplicityParameter diagnostic should fire.
+    let source = r"
+###Pure
+function test::caller<Z|y>(
+    f: meta::pure::metamodel::function::Function<{
+        meta::pure::metamodel::function::Function<{->Z[y]}>[1]->Z[y]
+    }>[1]
+): Z[y] {
+    fail('placeholder')->cast(@Z)->toMultiplicity(@Z[y])
+}
+";
+    let errs = match compile_with_imports(&[source], &[]) {
+        Ok(_) => Vec::new(),
+        Err(p) => p.errors,
+    };
+    assert_eq!(
+        count_undeclared_mult(&errs),
+        0,
+        "declared mult name should not fire UndeclaredMultiplicityParameter; got: {errs:?}"
+    );
+}
+
+#[test]
+fn undeclared_mult_top_level_param_errors() {
+    let source = r"
+###Pure
+function test::caller<Z|h>(p: Z[y]): Z[h] {
+    $p
+}
+";
+    let errs = match compile_with_imports(&[source], &[]) {
+        Ok(_) => Vec::new(),
+        Err(p) => p.errors,
+    };
+    assert!(
+        count_undeclared_mult(&errs) >= 1,
+        "top-level param mult must be checked; got: {errs:?}"
+    );
+}
+
+#[test]
+fn undeclared_mult_class_property_errors() {
+    let source = r"
+###Pure
+Class test::C<T|m> {
+    p: T[n];
+}
+";
+    let errs = match compile_with_imports(&[source], &[]) {
+        Ok(_) => Vec::new(),
+        Err(p) => p.errors,
+    };
+    assert!(
+        count_undeclared_mult(&errs) >= 1,
+        "class property mult must be checked; got: {errs:?}"
+    );
+}
+
+#[test]
+fn undeclared_mult_return_type_errors() {
+    let source = r"
+###Pure
+function test::caller<Z|h>(p: Z[h]): Z[k] {
+    $p
+}
+";
+    let errs = match compile_with_imports(&[source], &[]) {
+        Ok(_) => Vec::new(),
+        Err(p) => p.errors,
+    };
+    assert!(
+        count_undeclared_mult(&errs) >= 1,
+        "function return mult must be checked; got: {errs:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // M3 property types — diagnostic & lock for the BACKLOG P1 ⚠️ Partial item
 // ---------------------------------------------------------------------------
 

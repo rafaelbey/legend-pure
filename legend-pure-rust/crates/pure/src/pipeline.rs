@@ -1134,14 +1134,17 @@ fn pass_define_signatures<'a>(
         // Get or create the per-section resolve cache
         let resolve_cache = resolve_caches.entry(scope_key).or_default();
 
-        // Extract type parameters from the AST element (Class<T,V>, function<T|m>)
+        // Extract type + multiplicity parameters from the AST element
+        // (Class<T,V|m>, function<T|m>).
         let type_params = ast_type_parameters(ast_element);
+        let mult_params = ast_multiplicity_parameters(ast_element);
 
         let mut ctx = ResolutionContext {
             model,
             import_scopes,
             resolve_cache,
             type_parameters: &type_params,
+            multiplicity_parameters: &mult_params,
             variable_types: HashMap::new(),
             island_lowerers: &[],
         };
@@ -1219,6 +1222,7 @@ fn pass_define_bodies(
         let resolve_cache = resolve_caches.entry(scope_key).or_default();
 
         let type_params = ast_type_parameters(ast_element);
+        let mult_params = ast_multiplicity_parameters(ast_element);
 
         // Seed variable scope with the function's own resolved parameters
         let mut variable_types = HashMap::new();
@@ -1236,6 +1240,7 @@ fn pass_define_bodies(
             import_scopes,
             resolve_cache,
             type_parameters: &type_params,
+            multiplicity_parameters: &mult_params,
             variable_types,
             island_lowerers,
         };
@@ -1322,6 +1327,7 @@ fn pass_define_class_bodies(
         let resolve_cache = resolve_caches.entry(scope_key).or_default();
 
         let type_params = ast_type_parameters(ast_element);
+        let mult_params = ast_multiplicity_parameters(ast_element);
 
         // Per-element variable scope: seeded with type-variable parameters
         // from parametric Classes / Primitives so `$x` inside a constraint
@@ -1396,6 +1402,7 @@ fn pass_define_class_bodies(
                 import_scopes,
                 resolve_cache,
                 type_parameters: &type_params,
+                multiplicity_parameters: &mult_params,
                 variable_types,
                 island_lowerers,
             };
@@ -1778,7 +1785,12 @@ fn hydrate_element_signature(
                     multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
                 });
-            let return_multiplicity = resolve::lower_multiplicity(&func_def.return_multiplicity);
+            let return_multiplicity = resolve::resolve_multiplicity_with_validation(
+                &func_def.return_multiplicity,
+                &func_def.source_info,
+                ctx,
+                errors,
+            );
             let stereotypes = resolve::resolve_stereotypes(&func_def.stereotypes, ctx, errors);
             let tagged_values =
                 resolve::resolve_tagged_values(&func_def.tagged_values, ctx, errors);
@@ -1853,7 +1865,12 @@ fn hydrate_element_signature(
                     multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
                 });
-            let return_multiplicity = resolve::lower_multiplicity(&func_def.return_multiplicity);
+            let return_multiplicity = resolve::resolve_multiplicity_with_validation(
+                &func_def.return_multiplicity,
+                &func_def.source_info,
+                ctx,
+                errors,
+            );
             let stereotypes = resolve::resolve_stereotypes(&func_def.stereotypes, ctx, errors);
             let tagged_values =
                 resolve::resolve_tagged_values(&func_def.tagged_values, ctx, errors);
@@ -1931,7 +1948,12 @@ fn lower_property_signatures(
         .iter()
         .filter_map(|p| {
             let type_expr = resolve::resolve_type_spec(&p.type_ref, ctx, errors)?;
-            let multiplicity = resolve::lower_multiplicity(&p.multiplicity);
+            let multiplicity = resolve::resolve_multiplicity_with_validation(
+                &p.multiplicity,
+                &p.source_info,
+                ctx,
+                errors,
+            );
             let aggregation = p.aggregation.map(lower_aggregation_kind);
             let stereotypes = resolve::resolve_stereotypes(&p.stereotypes, ctx, errors);
             let tagged_values = resolve::resolve_tagged_values(&p.tagged_values, ctx, errors);
@@ -1963,7 +1985,12 @@ fn lower_qualified_property_signatures(
         .iter()
         .filter_map(|qp| {
             let return_type = resolve::resolve_type_spec(&qp.return_type, ctx, errors)?;
-            let return_multiplicity = resolve::lower_multiplicity(&qp.return_multiplicity);
+            let return_multiplicity = resolve::resolve_multiplicity_with_validation(
+                &qp.return_multiplicity,
+                &qp.source_info,
+                ctx,
+                errors,
+            );
             let parameters = lower_parameters(&qp.parameters, ctx, errors);
             let stereotypes = resolve::resolve_stereotypes(&qp.stereotypes, ctx, errors);
             let tagged_values = resolve::resolve_tagged_values(&qp.tagged_values, ctx, errors);
@@ -2028,7 +2055,8 @@ fn lower_parameters(
             let type_ref = p.type_ref.as_ref()?;
             let mult = p.multiplicity.as_ref()?;
             let type_expr = resolve::resolve_type_ref(type_ref, ctx, errors)?;
-            let multiplicity = resolve::lower_multiplicity(mult);
+            let multiplicity =
+                resolve::resolve_multiplicity_with_validation(mult, &p.source_info, ctx, errors);
 
             Some(crate::types::Parameter {
                 name: p.name.clone(),
@@ -2055,7 +2083,12 @@ fn lower_type_variable_parameters(
             Some(crate::types::Parameter {
                 name: p.name.clone(),
                 type_expr,
-                multiplicity: resolve::lower_multiplicity(&p.multiplicity),
+                multiplicity: resolve::resolve_multiplicity_with_validation(
+                    &p.multiplicity,
+                    &p.source_info,
+                    ctx,
+                    errors,
+                ),
                 source_info: p.source_info.clone(),
             })
         })
@@ -2151,6 +2184,21 @@ fn ast_type_parameters(element: &ast::Element) -> Vec<SmolStr> {
         ast::Element::Class(c) => c.type_parameters.clone(),
         ast::Element::Function(f) => f.type_parameters.clone(),
         ast::Element::NativeFunction(f) => f.type_parameters.clone(),
+        _ => vec![],
+    }
+}
+
+/// Extracts multiplicity parameter names from an AST element. Sibling
+/// to [`ast_type_parameters`] — names declared in the `<…|m, n>`
+/// clause that are in scope for the element's signature lowering.
+/// Used by `ResolutionContext::multiplicity_parameters` to validate
+/// signature-position multiplicity-variable references via
+/// [`crate::resolve::resolve_multiplicity_with_validation`].
+fn ast_multiplicity_parameters(element: &ast::Element) -> Vec<SmolStr> {
+    match element {
+        ast::Element::Class(c) => c.multiplicity_parameters.clone(),
+        ast::Element::Function(f) => f.multiplicity_parameters.clone(),
+        ast::Element::NativeFunction(f) => f.multiplicity_parameters.clone(),
         _ => vec![],
     }
 }
