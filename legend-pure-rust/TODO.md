@@ -139,6 +139,77 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260511-02 — `^Class(...)` constructor doesn't check required properties are set
+
+- **Type:** parity-gap
+- **Area:** compiler
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-11
+
+**Summary**
+A `^Class(...)` instance-construction expression doesn't verify that
+every required property (multiplicity lower bound `>= 1` with no
+default value) is supplied via a `KeyExpression`. Constructing a class
+with required slots left empty is silently accepted. Java Pure rejects
+this.
+
+**Repro / Context**
+
+```pure
+Class abc::Class1
+{
+  propA : Integer[1];
+}
+
+// Expected: compile error — required property `propA` not supplied
+// and has no default value.
+^abc::Class1();
+```
+
+- Expected: compile error along the lines of `"Missing required property
+  'propA' on class 'abc::Class1' in constructor"` (confirm against Java's
+  shape — likely emitted from the same validator that checks property
+  arity at constructor sites).
+- Actual: compiles clean.
+
+**Notes**
+- Required = `multiplicity.lower_bound >= 1` AND no `default_value` on
+  the `Property` shell. A `[0..1]` / `[*]` / `[0..*]` property is
+  optional; `[1]` / `[1..*]` with no default is required.
+- Default-value satisfies the check: `propA : Integer[1] = 0;` should
+  make the empty-args constructor compile cleanly. (Once
+  T-20260511-01 lands, the default itself is type-checked — same
+  property shell, two adjacent validators.)
+- Sweep adjacent cases — all should produce a compile error:
+  (a) `^Class()` with required prop missing entirely,
+  (b) `^Class(otherProp = 1)` where the missing prop is required,
+  (c) inherited required props from a supertype that the constructor
+      doesn't supply (walk `super_types` chain, union the required
+      sets).
+- Constructor expression lowering happens in
+  `crates/pure/src/lowering/` (or wherever `^Class(...)` →
+  `ExprKind::*` happens — verify, don't trust). The check belongs
+  right after the keys are bound: at that point we know
+  (i) the receiver `Class`, (ii) the slice of supplied `KeyExpression`
+  names, (iii) the class's resolved properties (already on the
+  shell from Pass 1, with supertypes joinable via `super_types`).
+- Inherited-property walk should follow the same trail as the
+  `KeyExpression` resolver — wherever short-name keys are looked up
+  against the class's full property list, that's the list to diff
+  against required-set.
+- Error shape: parity with Java's diagnostic. The Java validator is
+  somewhere under `m3.compiler.validation.validator.*` — likely
+  `ClassValidator` or a `NewInstance` checker. Cite path + class
+  name in the audit block at fix time.
+- Same family as T-20260511-01 (property default value type check):
+  both add property-binding-site validators. Could share a small
+  helper for "what does this property require?".
+
+<!-- agent-audit:start id=T-20260511-02 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
 ### T-20260511-01 — Property default value not type-checked against declared property type
 
 - **Type:** parity-gap
