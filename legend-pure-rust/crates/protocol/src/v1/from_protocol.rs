@@ -748,12 +748,20 @@ fn convert_applied_property(
 
     let target = convert_value_spec_to_expression(&p.parameters[0])?;
 
+    // Protocol JSON doesn't carry the member identifier's own
+    // span — it only has the outer `sourceInformation` of the
+    // function-call wrapper. Fall back to the same `si` for
+    // `member_source_info`: navigation precision drops to
+    // whole-expression for JSON-loaded models, but the
+    // parser-driven path (which fills it precisely) is what
+    // drives the IDE goto-def index.
     if p.parameters.len() == 1 {
         // Simple member access: $x.name
         Ok(Expression::MemberAccess(MemberAccess::Simple(
             SimpleMemberAccess {
                 target: Box::new(target),
                 member: SmolStr::new(&p.property),
+                member_source_info: si.clone(),
                 source_info: si,
             },
         )))
@@ -767,6 +775,7 @@ fn convert_applied_property(
             QualifiedMemberAccess {
                 target: Box::new(target),
                 member: SmolStr::new(&p.property),
+                member_source_info: si.clone(),
                 arguments: arguments?,
                 source_info: si,
             },

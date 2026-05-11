@@ -234,7 +234,7 @@ impl Parser {
             } else if self.cursor.check(TokenKind::Dot) {
                 let si = self.cursor.current_source_info();
                 self.cursor.advance();
-                let (member, _) = self.cursor.expect_identifier_or_keyword()?;
+                let (member, member_si) = self.cursor.expect_identifier_or_keyword()?;
                 if self.cursor.check(TokenKind::LParen) {
                     // Qualified member access: expr.member(args)
                     self.cursor.advance();
@@ -248,6 +248,7 @@ impl Parser {
                         Expression::MemberAccess(MemberAccess::Qualified(QualifiedMemberAccess {
                             target: Box::new(expr),
                             member,
+                            member_source_info: member_si,
                             arguments: args,
                             source_info: si,
                         }));
@@ -255,6 +256,7 @@ impl Parser {
                     expr = Expression::MemberAccess(MemberAccess::Simple(SimpleMemberAccess {
                         target: Box::new(expr),
                         member,
+                        member_source_info: member_si,
                         source_info: si,
                     }));
                 }

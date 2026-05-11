@@ -92,6 +92,13 @@ SourceFile {
                                                         },
                                                     ),
                                                     member: "name",
+                                                    member_source_info: SourceInfo {
+                                                        source: "test.pure",
+                                                        start_line: 19,
+                                                        start_column: 11,
+                                                        end_line: 19,
+                                                        end_column: 14,
+                                                    },
                                                     source_info: SourceInfo {
                                                         source: "test.pure",
                                                         start_line: 19,
@@ -158,6 +165,13 @@ SourceFile {
                                                                 },
                                                             ),
                                                             member: "name",
+                                                            member_source_info: SourceInfo {
+                                                                source: "test.pure",
+                                                                start_line: 20,
+                                                                start_column: 18,
+                                                                end_line: 20,
+                                                                end_column: 21,
+                                                            },
                                                             source_info: SourceInfo {
                                                                 source: "test.pure",
                                                                 start_line: 20,
@@ -246,6 +260,13 @@ SourceFile {
                                                         },
                                                     ),
                                                     member: "name",
+                                                    member_source_info: SourceInfo {
+                                                        source: "test.pure",
+                                                        start_line: 23,
+                                                        start_column: 26,
+                                                        end_line: 23,
+                                                        end_column: 29,
+                                                    },
                                                     source_info: SourceInfo {
                                                         source: "test.pure",
                                                         start_line: 23,

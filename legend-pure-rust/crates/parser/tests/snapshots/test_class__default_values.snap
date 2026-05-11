@@ -293,6 +293,13 @@ SourceFile {
                                                     },
                                                 ),
                                                 member: "RED",
+                                                member_source_info: SourceInfo {
+                                                    source: "test.pure",
+                                                    start_line: 23,
+                                                    start_column: 40,
+                                                    end_line: 23,
+                                                    end_column: 42,
+                                                },
                                                 source_info: SourceInfo {
                                                     source: "test.pure",
                                                     start_line: 23,
