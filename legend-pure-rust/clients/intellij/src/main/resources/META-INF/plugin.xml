@@ -87,5 +87,28 @@
                 instance="org.finos.legend.pure.intellij.settings.LegendPureConfigurable"
                 id="org.finos.legend.pure.intellij.settings"
                 displayName="Legend Pure"/>
+
+        <!-- Notification group for run / test results.
+             `PureRunCommandsSupport` looks up this group by id when
+             surfacing subprocess output as a balloon. Type BALLOON
+             so the user sees a transient pop-up; the full log
+             remains in the Notifications tool-window. -->
+        <notificationGroup
+                id="Legend Pure"
+                displayType="BALLOON"/>
+
+        <!-- ▶ Run gutter icon for runnable Pure functions.
+             IntelliJ's stock LSP integration (still in 2025.3)
+             doesn't have a code-lens consumer, so the server's
+             `legend.run` / `legend.runTest` / `legend.runPCT`
+             lenses go unrendered by the platform. This
+             contributor fetches the same lenses via
+             `textDocument/codeLens` (cached per buffer-version
+             in `LegendRunnableCache`) and renders them through
+             the `runLineMarkerContributor` EP — same surface
+             Kotlin / Java's `fun main()` ▶ icon plugs into. -->
+        <runLineMarkerContributor
+                language="Pure"
+                implementationClass="org.finos.legend.pure.intellij.run.PureRunLineMarkerContributor"/>
     </extensions>
 </idea-plugin>

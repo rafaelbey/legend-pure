@@ -21,6 +21,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
 import com.intellij.platform.lsp.api.customization.LspCustomization
+import org.finos.legend.pure.intellij.run.PureLspCustomization
 import org.finos.legend.pure.intellij.settings.LegendPureSettings
 import java.nio.charset.StandardCharsets
 
@@ -100,6 +101,14 @@ class PureLspServerDescriptor(project: Project) :
         // Constructing in a static init avoids any subclass-vs-parent
         // constructor-ordering surprise where the override might be
         // queried before the field is initialized.
-        private val INSTANCE: LspCustomization = LspCustomization()
+        //
+        // `PureLspCustomization` extends the stock `LspCustomization`
+        // by overriding the `commandsCustomizer` slot. ▶ lens clicks
+        // (`legend.run` / `legend.runTest` / `legend.runPCT`) route
+        // through `workspace/executeCommand` to the LSP server,
+        // which evaluates against the workspace's compiled model
+        // (open buffers + classpath cascade) — same compile state
+        // the editor sees for goto-def / diagnostics.
+        private val INSTANCE: LspCustomization = PureLspCustomization()
     }
 }
