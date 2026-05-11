@@ -22,8 +22,43 @@
 #   cargo audit       — full quality check (lint + copyright + build)
 #   cargo dist        — build --release and stage CLI + .purem snapshots into
 #                       target/dist/legend-pure-<version>-<triple>/ for zipping
+#
+# The `cargo lint` alias enables `clippy::pedantic` but allows a curated
+# set of style preferences the project has consciously decided not to
+# adopt — see https://rust-lang.github.io/rust-clippy/ for each lint:
+#
+#   doc_markdown                  — backticking every technical term
+#                                   (JNI, M3, Pure, …) is noise here
+#   cast_*_truncation, _sign_loss,
+#   _precision_loss, _possible_wrap — deliberate `as` casts in arithmetic
+#   needless_pass_by_value        — many helpers prefer by-value for
+#                                   call-site clarity
+#   too_many_lines                — function size is a judgement call
+#   must_use_candidate            — opt-in; not gating
+#   missing_errors_doc            — encouraged via review, not lint
+#   module_name_repetitions       — common with re-exports
+#   unused_self                   — methods sometimes kept for API
+#                                   parity with sibling impls
+#   implicit_hasher               — rarely a real bug for our HashMaps
+#   trivially_copy_pass_by_ref    — micro-opt; readability wins
+#
+# Anything else under pedantic stays a warning. Real bugs should fall
+# under `clippy::all` (warn) or the strict `lint-lib` gate (deny).
 [alias]
 lint-lib = "clippy --lib --all -- -D clippy::unwrap_used -D clippy::expect_used"
-lint     = "clippy --all-targets -- -W clippy::all -W clippy::pedantic"
+lint     = """clippy --all-targets -- -W clippy::all -W clippy::pedantic \
+              -A clippy::doc_markdown \
+              -A clippy::cast_possible_truncation \
+              -A clippy::cast_sign_loss \
+              -A clippy::cast_precision_loss \
+              -A clippy::cast_possible_wrap \
+              -A clippy::needless_pass_by_value \
+              -A clippy::too_many_lines \
+              -A clippy::must_use_candidate \
+              -A clippy::missing_errors_doc \
+              -A clippy::module_name_repetitions \
+              -A clippy::unused_self \
+              -A clippy::implicit_hasher \
+              -A clippy::trivially_copy_pass_by_ref"""
 audit    = ["lint-lib", "lint", "test --all"]
 dist     = "run --package xtask --quiet -- dist"
