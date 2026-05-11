@@ -1,0 +1,91 @@
+<!--
+  ~ Copyright 2026 Goldman Sachs
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~      http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+<idea-plugin>
+    <id>org.finos.legend.pure.intellij</id>
+    <name>Legend Pure</name>
+    <vendor email="legend@finos.org" url="https://legend.finos.org">FINOS</vendor>
+
+    <description><![CDATA[
+        IntelliJ support for the
+        <a href="https://github.com/finos/legend-pure">Legend Pure</a>
+        modeling language, backed by the <code>legend lsp</code>
+        language server (Rust implementation).<br/>
+        <br/>
+        Tier-1 features: diagnostics, hover, goto definition, document
+        outline, and <code>legend.runTest</code> code lenses.<br/>
+        <br/>
+        Requires <b>IntelliJ IDEA 2025.2.1 or later</b> (build 252.25557+).
+        From that build forward the LSP API ships in the unified IDEA
+        distribution and is available to both Ultimate subscribers and
+        free-tier users.
+    ]]></description>
+
+    <change-notes><![CDATA[
+        <h3>0.1.0 — initial MVP</h3>
+        <ul>
+            <li>Spawns <code>legend lsp</code> over stdio.</li>
+            <li>Configurable executable path (default: PATH lookup).</li>
+            <li>Optional classpath TOML override (default: server cascade).</li>
+        </ul>
+    ]]></change-notes>
+
+    <!-- Required platform module. -->
+    <depends>com.intellij.modules.platform</depends>
+
+    <!-- LSP module is declared optional so the plugin can load on IDEs
+         that lack the LSP runtime; the LSP-specific extension points
+         live in lsp.xml and are only loaded when the module is present.
+         JetBrains' recommended shape since the 2025.2.1 LSP-for-all
+         announcement. -->
+    <depends optional="true" config-file="lsp.xml">com.intellij.modules.lsp</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- File-type registration -->
+        <fileType
+                name="Pure"
+                language="Pure"
+                extensions="pure"
+                fileNames=""
+                implementationClass="org.finos.legend.pure.intellij.PureFileType"
+                fieldName="INSTANCE"/>
+
+        <!-- Syntax highlighting (lexer-based, no LSP roundtrip) -->
+        <lang.syntaxHighlighterFactory
+                language="Pure"
+                implementationClass="org.finos.legend.pure.intellij.highlighting.PureSyntaxHighlighterFactory"/>
+
+        <!-- Minimal PSI layer. Required for ⌘-hover navigation hints
+             and ⌘-click goto: IntelliJ's GoTo Declaration pipeline
+             needs a PSI tree to know the cursor is on a token before
+             it routes the request to the LSP server. The parser
+             produces a flat tree (no grammar structure) — semantics
+             stay with `legend lsp`. -->
+        <lang.parserDefinition
+                language="Pure"
+                implementationClass="org.finos.legend.pure.intellij.PureParserDefinition"/>
+
+        <!-- Project-level settings -->
+        <projectService
+                serviceImplementation="org.finos.legend.pure.intellij.settings.LegendPureSettings"/>
+
+        <!-- Settings UI -->
+        <projectConfigurable
+                parentId="language"
+                instance="org.finos.legend.pure.intellij.settings.LegendPureConfigurable"
+                id="org.finos.legend.pure.intellij.settings"
+                displayName="Legend Pure"/>
+    </extensions>
+</idea-plugin>
