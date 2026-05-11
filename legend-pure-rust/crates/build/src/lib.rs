@@ -493,6 +493,10 @@ impl Embedder {
             name = descriptor.name
         )
         .ok();
+        // Patterns are emitted as `r#"..."#` so regexes containing `"`
+        // survive verbatim; clippy flags the unnecessary hashes for the
+        // common case where they don't. Allow once per const.
+        writeln!(out, "#[allow(clippy::needless_raw_string_hashes)]").ok();
         writeln!(
             out,
             "pub const REPO_{const_suffix}_META: {cp}::repo::RepoMeta = {cp}::repo::RepoMeta {{",
@@ -967,6 +971,8 @@ impl Embedder {
             name = descriptor.name
         )
         .ok();
+        // See note in `emit_repo` re: clippy allow on raw-string hashes.
+        writeln!(out, "#[allow(clippy::needless_raw_string_hashes)]").ok();
         writeln!(
             out,
             "pub const REPO_{const_suffix}_META: {cp}::repo::RepoMeta = {cp}::repo::RepoMeta {{",
@@ -1000,6 +1006,8 @@ impl Embedder {
             name = descriptor.name
         )
         .ok();
+        // See note in `emit_repo` re: clippy allow on raw-string hashes.
+        writeln!(out, "#[allow(clippy::needless_raw_string_hashes)]").ok();
         writeln!(
             out,
             "pub const REPO_{const_suffix}_TESTS_META: {cp}::repo::RepoMeta = \
