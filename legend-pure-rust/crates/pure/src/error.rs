@@ -312,4 +312,49 @@ pub enum CompilationErrorKind {
         /// Name of the offending multiplicity parameter.
         parameter: SmolStr,
     },
+    /// A typed expression's inferred type does not match the shape
+    /// the validation context required (e.g. mapping filter return,
+    /// property-transform compatibility, enumeration source-value
+    /// kind consistency). Distinct from
+    /// [`Self::UnsupportedExpression`] which signals "shape we
+    /// haven't implemented yet"; this variant fires when the
+    /// expression *is* supported but its inferred type contradicts
+    /// the slot's declared shape. Java parity: dedicated
+    /// `TypeMismatch` diagnostic family on the engine side. IDE /
+    /// LSP / surveyor reports route on this kind without parsing
+    /// message strings.
+    TypeMismatch {
+        /// Validation-position label. Examples:
+        /// `"filter"`, `"transform"`, `"enumeration mapping"`,
+        /// `"aggregation mapFn"`, `"xstore crossExpression"`,
+        /// `"enumeration source-value kind"`.
+        context: SmolStr,
+        /// Element being validated — typically a class FQN,
+        /// `Class.prop` pair, or mapping/association FQN. Free-form;
+        /// used for grouping by what the user sees in the source.
+        target: SmolStr,
+        /// Rendered expected type / shape (e.g. `"Boolean[1]"`,
+        /// enum FQN, the property's declared type).
+        expected: SmolStr,
+        /// Rendered actual type / shape.
+        actual: SmolStr,
+    },
+    /// A typed expression's inferred multiplicity is not assignable
+    /// to the multiplicity bound declared by its validation context
+    /// (e.g. a transform whose multiplicity is `[*]` bound to a
+    /// property declared `[1]`). Sibling of [`Self::TypeMismatch`]
+    /// — separated so consumers can route type vs. multiplicity
+    /// diagnostics independently. Java parity: dedicated
+    /// `MultiplicityMismatch` diagnostic family on the engine side.
+    MultiplicityMismatch {
+        /// Validation-position label (same vocabulary as
+        /// [`Self::TypeMismatch::context`]).
+        context: SmolStr,
+        /// Element being validated.
+        target: SmolStr,
+        /// Rendered expected multiplicity.
+        expected: SmolStr,
+        /// Rendered actual multiplicity.
+        actual: SmolStr,
+    },
 }

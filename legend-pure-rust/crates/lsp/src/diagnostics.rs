@@ -87,5 +87,7 @@ pub fn error_code(kind: &CompilationErrorKind) -> &'static str {
         CompilationErrorKind::UndeclaredMultiplicityParameter { .. } => {
             "undeclaredMultiplicityParameter"
         }
+        CompilationErrorKind::TypeMismatch { .. } => "typeMismatch",
+        CompilationErrorKind::MultiplicityMismatch { .. } => "multiplicityMismatch",
     }
 }
