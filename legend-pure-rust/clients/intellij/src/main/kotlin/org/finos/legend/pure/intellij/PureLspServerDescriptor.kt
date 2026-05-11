@@ -84,6 +84,16 @@ class PureLspServerDescriptor(project: Project) :
         val cmd = GeneralCommandLine(exe.toString())
             .withCharset(StandardCharsets.UTF_8)
             .apply {
+                // `-vv` raises the global tracing subscriber to
+                // `info` level. The CLI defaults to `error` for
+                // verbosity 0 (see `crates/cli/src/main.rs:206`)
+                // which silences every `tracing::info!` call the
+                // LSP handlers emit — including the
+                // `workspace/executeCommand` dispatch trace and
+                // the per-row `TestReport row read` diagnostic.
+                // Without this flag the IDE log shows nothing
+                // when a click on the gutter ▶ misbehaves.
+                addParameter("-vv")
                 addParameter("lsp")
                 val classpath = settings.classpathTomlPath.trim()
                 if (classpath.isNotEmpty()) {

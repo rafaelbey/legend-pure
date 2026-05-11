@@ -97,6 +97,19 @@
                 id="Legend Pure"
                 displayType="BALLOON"/>
 
+        <!-- Persistent tool window for ▶ Run / Run Test / Run PCT
+             output. Each invocation appends a new tab carrying a
+             `ConsoleView` so stack frames render as native
+             clickable hyperlinks (the same affordance Java /
+             Kotlin run-configurations use). The balloon
+             notification stays as a transient 1-line summary. -->
+        <toolWindow
+                id="Legend Pure Run"
+                anchor="bottom"
+                icon="AllIcons.RunConfigurations.TestState.Run"
+                canCloseContents="true"
+                factoryClass="org.finos.legend.pure.intellij.run.PureRunToolWindowFactory"/>
+
         <!-- ▶ Run gutter icon for runnable Pure functions.
              IntelliJ's stock LSP integration (still in 2025.3)
              doesn't have a code-lens consumer, so the server's
