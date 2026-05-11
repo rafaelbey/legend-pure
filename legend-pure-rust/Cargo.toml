@@ -36,6 +36,7 @@ members = [
     "crates/dsl-store",
     "crates/dsl-tds",
     "crates/lsp",
+    "crates/dap",
     "crates/stress",
     "crates/xtask",
 ]

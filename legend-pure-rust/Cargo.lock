@@ -1060,6 +1060,7 @@ dependencies = [
  "clap_complete",
  "lcov",
  "legend-pure-core-platform",
+ "legend-pure-dap",
  "legend-pure-dsl-graph",
  "legend-pure-java-codegen",
  "legend-pure-lsp",
@@ -1117,6 +1118,26 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "walkdir",
+]
+
+[[package]]
+name = "legend-pure-dap"
+version = "0.1.0"
+dependencies = [
+ "legend-pure-core-platform",
+ "legend-pure-dsl-mapping",
+ "legend-pure-dsl-relational",
+ "legend-pure-dsl-store",
+ "legend-pure-parser-ast",
+ "legend-pure-parser-parser",
+ "legend-pure-parser-pure",
+ "legend-pure-runtime",
+ "serde",
+ "serde_json",
+ "smol_str",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

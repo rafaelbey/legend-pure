@@ -189,6 +189,18 @@ impl VariableContext {
     pub fn iter_values(&self) -> impl Iterator<Item = &Value> + '_ {
         self.vars.values()
     }
+
+    /// Iterate every currently visible binding as a `(name, value)` pair.
+    ///
+    /// Used by the DAP debugger to populate the Variables panel at a
+    /// paused frame. Order is unspecified (the underlying storage is a
+    /// `HashMap`); callers that need a stable ordering should sort by
+    /// name on the consumer side. The iterator borrows immutably from
+    /// the context, so callers must finish iterating before any
+    /// subsequent `set`/`push_scope`/`pop_scope`.
+    pub fn iter_bindings(&self) -> impl Iterator<Item = (&SmolStr, &Value)> + '_ {
+        self.vars.iter()
+    }
 }
 
 impl Default for VariableContext {
@@ -357,5 +369,46 @@ mod tests {
     fn empty_context_get_returns_none() {
         let ctx = VariableContext::new();
         assert_eq!(ctx.get("anything"), None);
+    }
+
+    #[test]
+    fn iter_bindings_reflects_shadowing() {
+        // DAP `variables` response builds on this surface. When an
+        // inner scope shadows an outer binding, the iterator must
+        // yield the inner value — the outer is restored only after
+        // `pop_scope`, matching what `get` reports.
+        let mut ctx = VariableContext::new();
+        ctx.push_scope();
+        ctx.set("x", Value::Integer(1));
+        ctx.set("y", Value::Integer(2));
+        ctx.push_scope();
+        ctx.set("x", Value::Integer(100));
+
+        let mut visible: Vec<(SmolStr, Value)> = ctx
+            .iter_bindings()
+            .map(|(n, v)| (n.clone(), v.clone()))
+            .collect();
+        visible.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            visible,
+            vec![
+                (SmolStr::new("x"), Value::Integer(100)),
+                (SmolStr::new("y"), Value::Integer(2)),
+            ],
+        );
+
+        ctx.pop_scope();
+        let mut after_pop: Vec<(SmolStr, Value)> = ctx
+            .iter_bindings()
+            .map(|(n, v)| (n.clone(), v.clone()))
+            .collect();
+        after_pop.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            after_pop,
+            vec![
+                (SmolStr::new("x"), Value::Integer(1)),
+                (SmolStr::new("y"), Value::Integer(2)),
+            ],
+        );
     }
 }
