@@ -150,7 +150,15 @@ pub struct Parameter {
 ///
 /// Used in profile definitions where stereotype names and tag names
 /// are plain strings that need source tracking.
-#[derive(Debug, Clone, PartialEq, Eq, Spanned)]
+///
+/// Carries `Serialize`/`Deserialize` so compiled-model nodes that
+/// embed it (e.g. `legend_pure_parser_pure::nodes::profile::Profile`)
+/// can round-trip through `.purem` binary snapshots. The rule "no
+/// serde on the AST" is about Protocol JSON responsibilities (which
+/// still live exclusively in the `protocol` crate); binary
+/// round-trip via postcard is a distinct concern, and `SourceInfo`
+/// already has the same derives for the same reason.
+#[derive(Debug, Clone, PartialEq, Eq, Spanned, serde::Serialize, serde::Deserialize)]
 pub struct SpannedString {
     /// The string value.
     pub value: Identifier,

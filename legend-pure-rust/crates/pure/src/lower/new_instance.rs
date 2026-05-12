@@ -50,9 +50,16 @@ pub(super) fn lower_new_instance(
     let class_id = resolve::resolve_element_ptr(&e.class, &e.source_info, ctx, errors)?;
 
     let mut arguments = Vec::with_capacity(4 + e.assignments.len() * 3);
+    // Use the CLASS reference's span (the `abc::Class1` part of
+    // `^abc::Class1()`), not the whole NewInstanceExpr's span (which
+    // covers only the `^` token by parser convention). The reference
+    // index walks this argument as a `PackageableElementRef` and uses
+    // its `source_info` as the clickable region. Without this fix
+    // Cmd-click anywhere inside `^abc::Class1()` lands outside the
+    // recorded ref and goto-def silently no-ops.
     arguments.push(build_packageable_element_ref(
         class_id,
-        e.source_info.clone(),
+        legend_pure_parser_ast::source_info::Spanned::source_info(&e.class).clone(),
         ctx.model,
     ));
     arguments.push(untyped(
@@ -151,6 +158,7 @@ pub(super) fn lower_new_instance(
             type_arguments: resolved_type_args,
             multiplicity_arguments: Vec::new(),
             value_arguments: vec![],
+            source_info: None,
         },
         multiplicity: crate::types::Multiplicity::PureOne,
     }));

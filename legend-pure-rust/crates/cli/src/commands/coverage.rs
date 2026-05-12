@@ -569,7 +569,11 @@ impl CoverageHooks {
 }
 
 impl EvalHooks for CoverageHooks {
-    fn before_eval(&mut self, source: &SourceInfo) {
+    fn before_eval(
+        &mut self,
+        source: &SourceInfo,
+        _context: &legend_pure_runtime::context::VariableContext,
+    ) {
         // Fast prefix check — skip non-matching files.
         if !self.passes_filter(&source.source) {
             return;
@@ -709,23 +713,25 @@ mod tests {
     #[test]
     fn coverage_hooks_prefix_filter() {
         let mut hooks = CoverageHooks::new("my/model/");
+        let ctx = legend_pure_runtime::context::VariableContext::new();
 
         // Should be tracked.
         let src_match = SourceInfo::new("my/model/Person.pure", 1, 1, 1, 10);
-        hooks.before_eval(&src_match);
+        hooks.before_eval(&src_match, &ctx);
         assert!(hooks.map.files.contains_key("my/model/Person.pure"));
 
         // Should be filtered out.
         let src_skip = SourceInfo::new("platform/collection.pure", 1, 1, 1, 10);
-        hooks.before_eval(&src_skip);
+        hooks.before_eval(&src_skip, &ctx);
         assert!(!hooks.map.files.contains_key("platform/collection.pure"));
     }
 
     #[test]
     fn coverage_hooks_multiline_span() {
         let mut hooks = CoverageHooks::new("");
+        let ctx = legend_pure_runtime::context::VariableContext::new();
         let src = SourceInfo::new("test.pure", 5, 1, 8, 10);
-        hooks.before_eval(&src);
+        hooks.before_eval(&src, &ctx);
 
         let fc = hooks.map.file_coverage("test.pure").unwrap();
         // Should have recorded hits for lines 5, 6, 7, 8.
@@ -738,8 +744,9 @@ mod tests {
     #[test]
     fn coverage_hooks_empty_filter_tracks_all() {
         let mut hooks = CoverageHooks::new("");
+        let ctx = legend_pure_runtime::context::VariableContext::new();
         let src = SourceInfo::new("anything.pure", 1, 1, 1, 10);
-        hooks.before_eval(&src);
+        hooks.before_eval(&src, &ctx);
         assert!(hooks.map.files.contains_key("anything.pure"));
     }
 }

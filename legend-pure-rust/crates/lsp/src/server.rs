@@ -24,16 +24,17 @@
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use tower_lsp::jsonrpc::Result as JsonResult;
-use tower_lsp::lsp_types::{
+use tower_lsp_server::jsonrpc::Result as JsonResult;
+use tower_lsp_server::ls_types::{
     CodeLens, CodeLensOptions, CodeLensParams, DidChangeTextDocumentParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
-    GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability, InitializeParams,
-    InitializeResult, InitializedParams, MessageType, OneOf, ServerCapabilities, ServerInfo,
-    TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, ExecuteCommandOptions,
+    ExecuteCommandParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, LSPAny,
+    MessageType, OneOf, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Uri, WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
-use tower_lsp::{Client, LanguageServer};
+use tower_lsp_server::{Client, LanguageServer};
 
 use crate::config::LspConfig;
 use crate::handlers;
@@ -68,10 +69,10 @@ impl Backend {
             .iter()
             .map(|(path, errs)| (path.clone(), errs.clone()))
             .collect();
-        let open_uris: Vec<Url> = ws.open_buffers.keys().cloned().collect();
+        let open_uris: Vec<Uri> = ws.open_buffers.keys().cloned().collect();
         // Build a lookup from canonical path → URL so we can publish
         // diagnostics for files the user has open.
-        let mut canonical_to_uri: std::collections::HashMap<String, Url> =
+        let mut canonical_to_uri: std::collections::HashMap<String, Uri> =
             std::collections::HashMap::new();
         for uri in &open_uris {
             if let Some(path) = ws.canonical_path_for(uri) {
@@ -91,7 +92,7 @@ impl Backend {
         for (canonical, errors) in diags_by_source {
             let uri = canonical_to_uri.get(&canonical).cloned().or_else(|| {
                 // Best-effort URL from canonical: file:///<canonical>
-                Url::parse(&format!("file://{canonical}")).ok()
+                format!("file://{canonical}").parse::<Uri>().ok()
             });
             if let Some(uri) = uri {
                 let diagnostics = handlers::diagnostics_for(&errors);
@@ -118,7 +119,6 @@ impl Backend {
     }
 }
 
-#[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, _params: InitializeParams) -> JsonResult<InitializeResult> {
         Ok(InitializeResult {
@@ -129,8 +129,35 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
                 code_lens_provider: Some(CodeLensOptions {
                     resolve_provider: Some(false),
+                }),
+                // `▶ Run` / `▶ Run test` gutter clicks dispatch
+                // through `workspace/executeCommand`. The IDE-side
+                // gutter contributor (`PureRunLineMarkerContributor`
+                // in the IntelliJ plugin) sends one of these two
+                // command names with the function FQN as
+                // `arguments[0]`; the server evaluates the function
+                // against its in-memory `PureModel` and returns the
+                // rendered value. Goes through the LSP instead of a
+                // separate CLI subprocess so we hit the workspace's
+                // classpath + open buffers, not just the embedded
+                // platform.
+                execute_command_provider: Some(ExecuteCommandOptions {
+                    commands: vec![
+                        "legend.run".into(),
+                        "legend.runTest".into(),
+                        // `<<PCT.test>>` execution — takes `[fqn,
+                        // adapterFqn]` so the IDE-side popup can
+                        // pre-resolve which adapter to use.
+                        "legend.runPCT".into(),
+                        // Adapter discovery — returns `[{name,
+                        // fqn}]` from the compiled model. Backs
+                        // the PCT-adapter popup.
+                        "legend.listPctAdapters".into(),
+                    ],
+                    work_done_progress_options: Default::default(),
                 }),
                 ..ServerCapabilities::default()
             },
@@ -138,6 +165,12 @@ impl LanguageServer for Backend {
                 name: "legend-pure-lsp".to_string(),
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
             }),
+            // Negotiated text-encoding for `Position` columns. `Utf16`
+            // matches the LSP spec default — the only encoding the
+            // current handlers compute against. Required by the
+            // tower-lsp-server fork as an explicit field; the
+            // upstream `tower-lsp` 0.20 defaulted it implicitly.
+            offset_encoding: None,
         })
     }
 
@@ -203,7 +236,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        tracing::info!(uri = %params.text_document.uri, "did_open received");
+        tracing::info!(uri = params.text_document.uri.as_str(), "did_open received");
         let uri = params.text_document.uri;
         let content = params.text_document.text;
         {
@@ -268,9 +301,17 @@ impl LanguageServer for Backend {
         let Some(canonical) = ws.canonical_path_for(&uri) else {
             return Ok(None);
         };
+        let resolver = |c: &str| ws.file_uri_for_canonical(c);
+        let references = ws.references.as_deref();
+        // `Link` (LocationLink[]) instead of `Scalar` (Location):
+        // origin_selection_range tells IntelliJ which source range to
+        // underline on ⌘-hover. Without it the request flows but the
+        // visual affordance never renders.
         Ok(
-            handlers::definition_for_position(model, &canonical, position, &uri)
-                .map(GotoDefinitionResponse::Scalar),
+            handlers::definition_for_position(
+                model, references, &canonical, position, &uri, &resolver,
+            )
+            .map(|link| GotoDefinitionResponse::Link(vec![link])),
         )
     }
 
@@ -290,6 +331,26 @@ impl LanguageServer for Backend {
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
 
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> JsonResult<Option<WorkspaceSymbolResponse>> {
+        let query = params.query;
+        let ws = self.workspace.lock().await;
+        let Some(model) = ws.model.as_ref() else {
+            tracing::debug!(query = %query, "workspace/symbol: no model yet");
+            return Ok(None);
+        };
+        let resolver = |c: &str| ws.file_uri_for_canonical(c);
+        let syms = handlers::workspace_symbols_for(model, &query, &resolver);
+        tracing::debug!(query = %query, count = syms.len(), "workspace/symbol");
+        // `Nested` is the modern `WorkspaceSymbol[]` shape — the
+        // `Flat` variant returns the deprecated `SymbolInformation[]`.
+        // Always use Nested so consumers (IDE clients) only need to
+        // handle the non-deprecated path.
+        Ok(Some(WorkspaceSymbolResponse::Nested(syms)))
+    }
+
     async fn code_lens(&self, params: CodeLensParams) -> JsonResult<Option<Vec<CodeLens>>> {
         let uri = params.text_document.uri;
         let ws = self.workspace.lock().await;
@@ -300,6 +361,40 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         Ok(Some(handlers::code_lenses_for(model, &canonical)))
+    }
+
+    async fn execute_command(
+        &self,
+        params: ExecuteCommandParams,
+    ) -> JsonResult<Option<LSPAny>> {
+        let command = params.command;
+        tracing::info!(
+            command = %command,
+            arg_count = params.arguments.len(),
+            "workspace/executeCommand",
+        );
+        // Run in the LSP's own runtime, against the workspace's
+        // compiled `PureModel`. This is what lets the gutter ▶
+        // icon see user-defined functions in the configured
+        // classpath — shelling out to `legend run` only ever
+        // loads the embedded platform.
+        let result = handlers::execute_legend_command(
+            self.workspace.clone(),
+            command.as_str(),
+            &params.arguments,
+        )
+        .await;
+        self.client
+            .log_message(
+                if result.error.is_some() {
+                    MessageType::WARNING
+                } else {
+                    MessageType::INFO
+                },
+                result.summary(),
+            )
+            .await;
+        Ok(Some(serde_json::to_value(&result).unwrap_or(serde_json::Value::Null)))
     }
 }
 

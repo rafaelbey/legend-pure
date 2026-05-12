@@ -39,6 +39,7 @@ members = [
     "crates/store-relational-runtime",
     "crates/dsl-tds",
     "crates/lsp",
+    "crates/dap",
     "crates/stress",
     "crates/xtask",
 ]
@@ -108,8 +109,14 @@ rustyline = "18"
 notify = "8.0.0"
 notify-debouncer-mini = "0.7.0"
 
-# LSP server
-tower-lsp = "0.20"
+# LSP server. tower-lsp-server is the maintained community fork of the
+# original (now-unmaintained) tower-lsp 0.20. Migration notes vs. 0.20:
+#   - re-exports LSP types under `ls_types` (was `lsp_types`)
+#   - trait drops `#[async_trait]` — `async fn` directly in `impl`
+#   - `workspace/symbol` returns `WorkspaceSymbolResponse` so we can
+#     emit the modern `WorkspaceSymbol[]` shape (the old shape emits
+#     the now-deprecated `SymbolInformation[]`)
+tower-lsp-server = "0.23"
 tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros", "sync"] }
 dashmap = "6"
 

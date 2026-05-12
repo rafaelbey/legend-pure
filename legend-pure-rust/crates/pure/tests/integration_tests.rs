@@ -657,9 +657,9 @@ fn profile_with_stereotypes_and_tags() {
     match model.get_element(profile_id) {
         Element::Profile(p) => {
             assert_eq!(p.stereotypes.len(), 1);
-            assert_eq!(p.stereotypes[0].as_str(), "deprecated");
+            assert_eq!(p.stereotypes[0].value.as_str(), "deprecated");
             assert_eq!(p.tags.len(), 1);
-            assert_eq!(p.tags[0].as_str(), "description");
+            assert_eq!(p.tags[0].value.as_str(), "description");
         }
         _ => panic!("expected Profile"),
     }
@@ -2920,7 +2920,12 @@ fn m3_property_parametric_types_preserved() {
                             node.name,
                             p.name,
                             name,
-                            target.type_parameters.join(", ")
+                            target
+                                .type_parameters
+                                .iter()
+                                .map(|tp| tp.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
                         ));
                     }
                 }

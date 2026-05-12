@@ -503,7 +503,14 @@ pub struct SimpleMemberAccess {
     pub target: Box<Expression>,
     /// The member name (right of the dot).
     pub member: Identifier,
-    /// Source location.
+    /// Source span covering the member identifier itself — the
+    /// clickable region for goto-def on the member name (e.g. `A`
+    /// in `MyEnum.A`, `name` in `$person.name`). The outer
+    /// `source_info` below is the dot token's span. Splitting them
+    /// lets the IDE narrow navigation to the member name without
+    /// re-computing it from the receiver's span at every consumer.
+    pub member_source_info: SourceInfo,
+    /// Source location (the `.` token).
     pub source_info: SourceInfo,
 }
 
@@ -516,9 +523,12 @@ pub struct QualifiedMemberAccess {
     pub target: Box<Expression>,
     /// The member name (right of the dot).
     pub member: Identifier,
+    /// Source span covering the member identifier itself — see
+    /// [`SimpleMemberAccess::member_source_info`].
+    pub member_source_info: SourceInfo,
     /// Arguments.
     pub arguments: Vec<Expression>,
-    /// Source location.
+    /// Source location (the `.` token).
     pub source_info: SourceInfo,
 }
 
@@ -958,6 +968,7 @@ mod tests {
                 source_info: src(),
             })),
             member: SmolStr::new("name"),
+            member_source_info: src(),
             source_info: src(),
         }));
         if let Expression::MemberAccess(MemberAccess::Simple(ma)) = &expr {
@@ -974,6 +985,7 @@ mod tests {
                 source_info: src(),
             })),
             member: SmolStr::new("derivedProp"),
+            member_source_info: src(),
             arguments: vec![Expression::Literal(Literal::String(StringLiteral {
                 value: smol_str::SmolStr::new("arg"),
                 source_info: src(),

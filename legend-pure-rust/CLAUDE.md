@@ -35,6 +35,14 @@ lives only in the `protocol` crate.
 The `legend` CLI (`crates/cli`) is the primary developer tool: `legend parse`,
 `legend check`, `legend init`. Install with `cargo install --path crates/cli`.
 
+### Editor clients
+
+Sibling to `crates/`, **outside the Cargo workspace**:
+
+- `clients/intellij/` — native IntelliJ plugin (Kotlin / Gradle) that
+  spawns `legend lsp` via the IntelliJ Platform LSP API. Ultimate-tier
+  IDEs only. See `clients/intellij/README.md`.
+
 ## Current State (May 2026)
 
 | Component | Status | Tests | Key Milestone |

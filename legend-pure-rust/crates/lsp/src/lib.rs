@@ -53,7 +53,7 @@ pub mod workspace;
 pub use config::LspConfig;
 pub use server::Backend;
 
-use tower_lsp::{LspService, Server};
+use tower_lsp_server::{LspService, Server};
 
 /// Run the LSP over stdio with the given configuration.
 ///

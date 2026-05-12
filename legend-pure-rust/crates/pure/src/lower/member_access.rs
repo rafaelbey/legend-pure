@@ -59,13 +59,18 @@ pub(super) fn lower_member_access(
     match e {
         ast_expr::MemberAccess::Simple(s) => {
             let target = lower_expression(&s.target, ctx, errors)?;
+            // Use the member identifier's own span as the PropertyCall
+            // ValueSpec's `source_info` — that's the clickable region
+            // the goto-def index emits for the property/enum-value
+            // name. The dot's span (`s.source_info`) and the
+            // receiver's span are recoverable separately when needed.
             Some(untyped(
                 ExprKind::PropertyCall(FunctionCallData {
                     function: None,
                     function_name: SmolStr::new(s.member.as_str()),
                     arguments: vec![target],
                 }),
-                s.source_info.clone(),
+                s.member_source_info.clone(),
             ))
         }
         ast_expr::MemberAccess::Qualified(q) => {
@@ -81,13 +86,15 @@ pub(super) fn lower_member_access(
             // the type-hole guard.
             let arguments =
                 lower_qp_call_args(&target, q.member.as_str(), &q.arguments, ctx, errors);
+            // QP call: use the member identifier's span — same
+            // rationale as the `Simple` arm above.
             Some(untyped(
                 ExprKind::QualifiedPropertyCall(FunctionCallData {
                     function: None,
                     function_name: SmolStr::new(q.member.as_str()),
                     arguments,
                 }),
-                q.source_info.clone(),
+                q.member_source_info.clone(),
             ))
         }
     }

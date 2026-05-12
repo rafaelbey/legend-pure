@@ -373,6 +373,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                 type_arguments: Vec::new(),
                 multiplicity_arguments: Vec::new(),
                 value_arguments: Vec::new(),
+                source_info: None,
             },
             multiplicity: Multiplicity::PureOne,
         }),
@@ -406,6 +407,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                         type_arguments: Vec::new(),
                         multiplicity_arguments: Vec::new(),
                         value_arguments: Vec::new(),
+                        source_info: None,
                     },
                     Multiplicity::ZeroOrMany,
                 )
@@ -480,6 +482,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                                 type_arguments: Vec::new(),
                                 multiplicity_arguments: Vec::new(),
                                 value_arguments: Vec::new(),
+                                source_info: None,
                             }
                         }
                     }
@@ -490,6 +493,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                     type_arguments: Vec::new(),
                     multiplicity_arguments: Vec::new(),
                     value_arguments: Vec::new(),
+                    source_info: None,
                 });
 
             Some(ResolvedType {
@@ -532,6 +536,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                     type_arguments: Vec::new(),
                     multiplicity_arguments: Vec::new(),
                     value_arguments: Vec::new(),
+                    source_info: None,
                 },
                 multiplicity: Multiplicity::PureOne,
             })
@@ -559,6 +564,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                     type_arguments: Vec::new(),
                     multiplicity_arguments: Vec::new(),
                     value_arguments: Vec::new(),
+                    source_info: None,
                 },
                 multiplicity: Multiplicity::PureOne,
             }),
@@ -582,6 +588,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                         type_arguments: Vec::new(),
                         multiplicity_arguments: Vec::new(),
                         value_arguments: Vec::new(),
+                        source_info: None,
                     },
                     multiplicity: Multiplicity::PureOne,
                 })
@@ -606,6 +613,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                         type_arguments: Vec::new(),
                         multiplicity_arguments: Vec::new(),
                         value_arguments: Vec::new(),
+                        source_info: None,
                     },
                     multiplicity: Multiplicity::PureOne,
                 })
@@ -634,6 +642,7 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
                     type_arguments: Vec::new(),
                     multiplicity_arguments: Vec::new(),
                     value_arguments: Vec::new(),
+                    source_info: None,
                 },
                 multiplicity: Multiplicity::PureOne,
             }),
@@ -805,6 +814,7 @@ fn process_let_function_call(
             type_arguments: Vec::new(),
             multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
+            source_info: None,
         },
         multiplicity: Multiplicity::Range {
             lower: 0,
@@ -1500,6 +1510,7 @@ fn infer_property_access(
                     type_arguments: vec![],
                     multiplicity_arguments: Vec::new(),
                     value_arguments: vec![],
+                    source_info: None,
                 },
                 multiplicity: Multiplicity::ZeroOrMany,
             });
@@ -1574,6 +1585,7 @@ fn infer_property_access(
                 type_arguments: vec![],
                 multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
+                source_info: None,
             },
             multiplicity: Multiplicity::PureOne,
         });
@@ -1607,6 +1619,7 @@ fn infer_property_access(
                 type_arguments: vec![],
                 multiplicity_arguments: Vec::new(),
                 value_arguments: vec![],
+                source_info: None,
             },
             multiplicity: Multiplicity::ZeroOrMany,
         });
@@ -1667,8 +1680,8 @@ fn compute_type_arg_bindings(
 ) -> crate::resolve::GenericBindings {
     let mut out = crate::resolve::GenericBindings::default();
     if let Some(Element::Class(class)) = model.try_get_element(class_id) {
-        for (param_name, arg) in class.type_parameters.iter().zip(type_arguments.iter()) {
-            out.ty.insert(param_name.clone(), arg.clone());
+        for (param, arg) in class.type_parameters.iter().zip(type_arguments.iter()) {
+            out.ty.insert(param.name.clone(), arg.clone());
         }
         for (param_name, arg) in class
             .multiplicity_parameters
@@ -1989,6 +2002,7 @@ fn primitive(element_id: crate::ids::ElementId) -> ResolvedType {
             type_arguments: Vec::new(),
             multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
+            source_info: None,
         },
         multiplicity: Multiplicity::PureOne,
     }
@@ -2184,6 +2198,7 @@ mod tests {
             type_arguments: Vec::new(),
             multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
+            source_info: None,
         }
     }
 
@@ -2931,7 +2946,6 @@ mod tests {
             },
             ModelElement::Class(Class {
                 type_parameters: Vec::new(),
-                type_parameter_variances: Vec::new(),
                 multiplicity_parameters: Vec::new(),
                 type_variable_parameters: Vec::new(),
                 super_types: Vec::new(),
@@ -3037,7 +3051,6 @@ mod tests {
             },
             ModelElement::Class(Class {
                 type_parameters: Vec::new(),
-                type_parameter_variances: Vec::new(),
                 multiplicity_parameters: Vec::new(),
                 type_variable_parameters: Vec::new(),
                 super_types: Vec::new(),

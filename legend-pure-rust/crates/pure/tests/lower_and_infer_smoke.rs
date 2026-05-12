@@ -61,6 +61,7 @@ fn boolean_literal_infers_to_boolean_one() {
             type_arguments: Vec::new(),
             multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
+            source_info: None,
         }
     );
     assert_eq!(ty.multiplicity, Multiplicity::PureOne);
@@ -85,6 +86,7 @@ fn variable_binding_resolves_to_supplied_type() {
             type_arguments: Vec::new(),
             multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
+            source_info: None,
         },
         Multiplicity::PureOne,
     )];
@@ -98,6 +100,7 @@ fn variable_binding_resolves_to_supplied_type() {
             type_arguments: Vec::new(),
             multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
+            source_info: None,
         }
     );
     assert_eq!(ty.multiplicity, Multiplicity::PureOne);

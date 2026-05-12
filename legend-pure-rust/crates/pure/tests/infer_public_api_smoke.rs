@@ -72,6 +72,7 @@ fn infer_function_body_is_callable_from_external_crate() {
             type_arguments: Vec::new(),
             multiplicity_arguments: Vec::new(),
             value_arguments: Vec::new(),
+            source_info: None,
         }
     );
     assert_eq!(ti.multiplicity, Multiplicity::PureOne);

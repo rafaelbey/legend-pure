@@ -508,10 +508,10 @@ impl<'a> M3Parser<'a> {
     // -----------------------------------------------------------------------
 
     fn parse_class_body(&mut self, name: &SmolStr, package_segments: &[SmolStr]) {
+        use crate::nodes::class::TypeParameter;
         let mut properties = Vec::new();
         let mut super_types = Vec::new();
-        let mut type_parameters: Vec<SmolStr> = Vec::new();
-        let mut type_parameter_variances: Vec<crate::nodes::class::Variance> = Vec::new();
+        let mut type_parameters: Vec<TypeParameter> = Vec::new();
         let mut multiplicity_parameters: Vec<SmolStr> = Vec::new();
 
         if !self.at(&Token::LBrace) {
@@ -521,7 +521,6 @@ impl<'a> M3Parser<'a> {
                 package_segments,
                 Element::Class(Class {
                     type_parameters: vec![],
-                    type_parameter_variances: vec![],
                     multiplicity_parameters: Vec::new(),
                     type_variable_parameters: vec![],
                     super_types: vec![],
@@ -579,8 +578,11 @@ impl<'a> M3Parser<'a> {
                             // contravariant via this metamodel-level
                             // form.
                             let (params, variances) = self.parse_type_parameters();
-                            type_parameters = params;
-                            type_parameter_variances = variances;
+                            type_parameters = params
+                                .into_iter()
+                                .zip(variances)
+                                .map(|(name, variance)| TypeParameter::new(name, variance))
+                                .collect();
                         }
                         "multiplicityParameters" => {
                             // Class.properties[multiplicityParameters] :
@@ -616,7 +618,6 @@ impl<'a> M3Parser<'a> {
             package_segments,
             Element::Class(Class {
                 type_parameters,
-                type_parameter_variances,
                 multiplicity_parameters,
                 type_variable_parameters: vec![],
                 super_types,
@@ -1462,6 +1463,7 @@ impl<'a> M3Parser<'a> {
                 type_arguments,
                 multiplicity_arguments,
                 value_arguments: vec![crate::types::ConstValue::String(raw.to_string())],
+                source_info: None,
             }
         }
     }
@@ -1640,10 +1642,20 @@ impl<'a> M3Parser<'a> {
 
         self.eat(&Token::RBrace);
 
+        // m3 bootstrap parser doesn't carry per-name source info — the
+        // IDE can't navigate to declarations inside m3-bootstrapped
+        // Profiles (e.g. `meta::pure::profiles::test`) without these.
+        // Wrap each name with the bootstrap-source sentinel so the
+        // shape matches parser-loaded profiles; the reference index
+        // recognises the sentinel and skips emitting entries for it.
+        use crate::nodes::profile::bootstrap_spanned_name;
         self.alloc_element(
             name,
             package_segments,
-            Element::Profile(Profile { stereotypes, tags }),
+            Element::Profile(Profile {
+                stereotypes: stereotypes.into_iter().map(bootstrap_spanned_name).collect(),
+                tags: tags.into_iter().map(bootstrap_spanned_name).collect(),
+            }),
         );
     }
 
@@ -1900,10 +1912,8 @@ mod tests {
         assert_eq!(nodes.get(0).name, "ProtocolInfo");
 
         if let Element::Profile(p) = elements.get(0) {
-            assert_eq!(
-                p.stereotypes,
-                vec![SmolStr::new("inferred"), SmolStr::new("excluded")]
-            );
+            let names: Vec<&str> = p.stereotypes.iter().map(|s| s.value.as_str()).collect();
+            assert_eq!(names, vec!["inferred", "excluded"]);
             assert!(p.tags.is_empty());
         } else {
             panic!("Expected Profile, got {:?}", elements.get(0));
@@ -1983,9 +1993,10 @@ mod tests {
             .find(|&i| nodes.get(i).name == "ProtocolInfo")
             .expect("ProtocolInfo should exist");
         if let Element::Profile(p) = elements.get(protocol_idx) {
+            let names: Vec<&str> = p.stereotypes.iter().map(|s| s.value.as_str()).collect();
             assert_eq!(
-                p.stereotypes,
-                vec![SmolStr::new("inferred"), SmolStr::new("excluded")],
+                names,
+                vec!["inferred", "excluded"],
                 "ProtocolInfo should have stereotypes inferred and excluded"
             );
         } else {

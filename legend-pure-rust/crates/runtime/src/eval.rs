@@ -374,7 +374,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     /// variable not found, function not found, etc.).
     #[allow(clippy::result_large_err)] // PureException is intentionally rich
     pub fn eval(&mut self, expr: &ValueSpec) -> Result<Value, PureException> {
-        self.hooks.before_eval(&expr.source_info);
+        self.hooks.before_eval(&expr.source_info, &self.context);
 
         let result = match &*expr.kind {
             // -- Literals -------------------------------------------------

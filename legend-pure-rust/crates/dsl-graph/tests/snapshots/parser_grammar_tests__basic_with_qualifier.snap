@@ -82,7 +82,7 @@ SourceFile {
                                                                 start_line: 4,
                                                                 start_column: 5,
                                                                 end_line: 4,
-                                                                end_column: 6,
+                                                                end_column: 14,
                                                             },
                                                         },
                                                         source_info: SourceInfo {
@@ -90,11 +90,18 @@ SourceFile {
                                                             start_line: 4,
                                                             start_column: 5,
                                                             end_line: 4,
-                                                            end_column: 6,
+                                                            end_column: 14,
                                                         },
                                                     },
                                                 ),
                                                 member: "all",
+                                                member_source_info: SourceInfo {
+                                                    source: "test.pure",
+                                                    start_line: 4,
+                                                    start_column: 16,
+                                                    end_line: 4,
+                                                    end_column: 18,
+                                                },
                                                 arguments: [],
                                                 source_info: SourceInfo {
                                                     source: "test.pure",
@@ -112,9 +119,9 @@ SourceFile {
                                         source_info: SourceInfo {
                                             source: "test.pure",
                                             start_line: 4,
-                                            start_column: 21,
+                                            start_column: 23,
                                             end_line: 4,
-                                            end_column: 22,
+                                            end_column: 32,
                                         },
                                     },
                                     arguments: [
@@ -274,9 +281,9 @@ SourceFile {
                                     source_info: SourceInfo {
                                         source: "test.pure",
                                         start_line: 4,
-                                        start_column: 21,
-                                        end_line: 4,
-                                        end_column: 22,
+                                        start_column: 15,
+                                        end_line: 15,
+                                        end_column: 5,
                                     },
                                 },
                             ),

@@ -134,6 +134,27 @@ pub trait CompilerExtension {
 
     /// Pass 3 — validate. Default no-op.
     fn validate(&self, _ctx: &mut ValidateCtx<'_>) {}
+
+    /// Contribute references to the IDE's reference index.
+    ///
+    /// Called by [`crate::refs::build_reference_index`] (and any
+    /// other [`crate::refs::walk_references`] caller) after all
+    /// compile passes complete. The extension walks its own
+    /// resolved data — typically `Element::DSLInstance` payloads
+    /// written during `declare` — and pushes one
+    /// [`crate::refs::Reference`] per source-level reference site.
+    ///
+    /// Default no-op so existing extensions that don't yet
+    /// participate in IDE navigation keep compiling. The Mapping,
+    /// Relational, and Store DSLs override to surface their own
+    /// references (class refs in `: Pure { … }`, table refs in
+    /// `Join` clauses, etc.).
+    fn walk_references(
+        &self,
+        _model: &crate::model::PureModel,
+        _visit: &mut dyn FnMut(crate::refs::Reference),
+    ) {
+    }
 }
 
 // ---------------------------------------------------------------------------
