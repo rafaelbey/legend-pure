@@ -139,6 +139,123 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260512-06 — DAP debugger renders variables with Rust-internal `Debug` shape; needs Pure-syntax view + navigable structure
+
+- **Type:** feature
+- **Area:** dap | clients-intellij
+- **Priority:** P2
+- **Reporter:** Rafael
+- **Filed:** 2026-05-12
+
+**Summary**
+When the debugger stops on a breakpoint, the IDE's Variables panel
+shows raw Rust `Debug` formatting for every non-primitive `Value`
+variant — `RefCell`, `RuntimeObject`, `InstanceId`, `PureDate`, etc.
+leak straight through. The renderer should produce something close
+to Pure surface syntax, and structured values (objects, collections)
+should expand to individually-navigable children rather than
+collapsing to a giant one-line string.
+
+**Repro / Context**
+
+```pure
+let f = ^abc::Class2(prop = ^abc::Class1(propA = 12), prop3 = 123);
+```
+
+Today renders (in the Variables panel):
+
+```
+Object(RefCell { value: Dynamic(RuntimeObject { classifier: "abc::Class2",
+properties: {"prop": [Object(RefCell { value: Dynamic(RuntimeObject {
+classifier: "abc::Class1", properties: {"propA": [Integer(12)]},
+bootstrap_element: None }) })], "prop3": [Integer(123)], "prop2":
+[EnumValue { enum_id: InstanceId { chunk_id: 1, local_idx: 456 }, member: "A" }]},
+bootstrap_element: None }) })
+```
+
+Wanted (sketch, refine at triage):
+
+```
+f : abc::Class2 = ^abc::Class2(...)
+  ├─ prop  : abc::Class1[1] = ^abc::Class1(propA = 12)
+  │    └─ propA : Integer[1] = 12
+  ├─ prop2 : abc::Abc[1] = abc::Abc.A
+  └─ prop3 : Integer[1] = 123
+```
+
+Second example:
+
+```pure
+let c = %2020;
+```
+
+Today: `Date(PureDate { inner: 2020-01-01T00:00:00, precision: Year })`
+
+Wanted: `c : Date[1] = %2020`  (i.e. the literal that *produced* it,
+or as close as the precision allows — `%2020-03`, `%2020-03-14`,
+`%2020-03-14T09:30:00Z`).
+
+Acceptance criteria:
+- No `RefCell`, `Rc`, `Dynamic`, `RuntimeObject`, `InstanceId`,
+  `PureDate`, `Arc`, `SmolStr` tokens appear in any DAP `Variable`
+  payload sent to the client.
+- Primitives serialise as their Pure literal form: `12`, `1.5`,
+  `true`, `'hello'` (single-quoted), `%2020-03-14`, `%9:30:00`,
+  `[1, 2, 3]`.
+- Objects expose a top-line summary
+  (`^Class2(...)` or `abc::Class2`) plus child `Variable`s — one
+  per property — each with its own `variablesReference` for further
+  drill-down. Children carry type + multiplicity in the type field
+  so the IDE shows them in the Type column.
+- Enum values render as `abc::Abc.A`, not as
+  `EnumValue { enum_id: InstanceId { ... }, member: "A" }`.
+- Collections (`[*]`) expose a length and indexable children
+  (`[0]`, `[1]`, …) rather than a flat joined string.
+- Cycles (objects reachable from themselves via a property chain)
+  don't blow the stack — depth cap or visited-set.
+
+**Notes**
+- Two render seams today, both `Debug`-based fallthrough:
+  - `crates/dap/src/server.rs:550` — `render_value`, primitives
+    only; all non-primitives fall to `format!("{other:?}")`.
+  - `crates/dap/src/hooks.rs:306` — duplicated copy noted in its
+    doc comment as "Mirrors `server::render_value` byte-for-byte".
+  De-dupe as part of this work — one renderer, two call sites.
+- DAP protocol seam: `handle_variables`
+  (`crates/dap/src/server.rs:317`) is currently a stub. This is
+  where the structured-children path needs to be implemented:
+  each parent `Value` mints a `variablesReference`, and follow-up
+  `variables` requests resolve it to the property list. Existing
+  precedent in rust-analyzer / metals: keep a per-frame map from
+  reference id → `Value` snapshot, expire when the frame pops.
+- Reuse the `compose` crate where possible for literal forms —
+  string escaping, date precision, `^Class(...)` construction
+  syntax already round-trip through it.
+- Object rendering should read property *names* from the model
+  (`PureModel` carries `Class.properties` with declared names),
+  not from the runtime `RuntimeObject.properties` keys directly,
+  to preserve declared order and surface unset properties as
+  `[]` instead of hiding them.
+- Cycle handling: visited set keyed by `Rc::as_ptr` on
+  `ObjectHandle` (the heap identity per the
+  "Heap design (Rc-managed)" memory note). Skip already-visited
+  with `^Class2(... <cycle>)`.
+- IntelliJ side: once the server sends structured children, the
+  Platform Debugger UI handles tree expansion natively — no
+  client-side code change expected. Verify in `clients/intellij`.
+- Tests: snapshot tests for the rendering of each `Value` variant
+  + a small integration test that drives a real
+  `breakpoint → stack → variables → variables` sequence over the
+  DAP protocol and asserts no Rust-internal tokens leak.
+- Adjacent: hover / inlay-hint rendering in `crates/lsp/` likely
+  has similar leaks — once the policy lands here, factor the
+  renderer into a small `legend-pure-runtime::display` module
+  (or similar) that both DAP and LSP can call.
+
+<!-- agent-audit:start id=T-20260512-06 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
 ### T-20260512-05 — `toMultiplicity` doesn't compile + missing test coverage
 
 - **Type:** parity-gap
