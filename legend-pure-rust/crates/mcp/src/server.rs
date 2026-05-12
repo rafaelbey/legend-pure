@@ -14,13 +14,17 @@
 
 //! `LegendMcpServer` — the rmcp `ServerHandler` that backs `legend mcp`.
 //!
-//! Holds a [`WorkspaceSnapshot`] in an `Arc` (cheap clone). All 9
-//! MVP tools live on this struct; new tools land here as additional
-//! `#[tool]` methods until volume justifies splitting into
-//! sub-routers.
+//! Holds the current [`WorkspaceSnapshot`] through
+//! `Mutex<Arc<WorkspaceSnapshot>>`. Tool reads clone the inner `Arc`
+//! and drop the lock immediately so reads run lock-free. The
+//! `reload_workspace` tool is the only writer — it recompiles and
+//! swaps the slot under the same Mutex. All 11 MVP tools live on
+//! this struct; new tools land here as additional `#[tool]` methods
+//! until volume justifies splitting into sub-routers.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use legend_pure_core_platform::repo::Repo;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
 use rmcp::{
@@ -30,6 +34,7 @@ use rmcp::{
     schemars, tool, tool_handler, tool_router,
 };
 use serde::{Deserialize, Serialize};
+use smol_str::SmolStr;
 
 use crate::state::WorkspaceSnapshot;
 
@@ -166,15 +171,45 @@ pub struct TestEntry {
     pub tags: Vec<String>,
 }
 
+/// Status of the current workspace snapshot. Returned by
+/// [`LegendMcpServer::workspace_status`] and (after recompilation)
+/// by [`LegendMcpServer::reload_workspace`].
+#[derive(Debug, Serialize)]
+pub struct WorkspaceStatus {
+    /// Wall-clock time the current snapshot was compiled, formatted
+    /// as RFC 3339 (e.g. `2026-05-12T01:23:45Z`). Agents can compare
+    /// against external mtimes on `.pure` sources to decide whether
+    /// they need to call `reload_workspace`.
+    pub compiled_at: String,
+    /// Number of compile errors in the current snapshot.
+    pub error_count: usize,
+    /// Number of compiled chunks (bootstrap chunk + one per loaded
+    /// source file).
+    pub chunk_count: usize,
+    /// Number of repos in the configured classpath. Stable across
+    /// reloads (reload uses the same input set as startup).
+    pub repo_count: usize,
+}
+
 // ---------------------------------------------------------------------------
 // LegendMcpServer
 // ---------------------------------------------------------------------------
 
 /// rmcp `ServerHandler` that exposes the Legend Pure workspace as
 /// MCP tools.
+///
+/// Holds the current [`WorkspaceSnapshot`] through `Mutex<Arc<…>>`
+/// so the `reload_workspace` tool can swap it without touching any
+/// in-flight read. Read tools clone the inner `Arc` and drop the
+/// lock immediately — no lock is ever held across an `await`.
+///
+/// `repos` + `auto_imports` are kept outside the snapshot so reload
+/// can recompile against the same input set as startup.
 #[derive(Clone)]
 pub struct LegendMcpServer {
-    snapshot: Arc<WorkspaceSnapshot>,
+    current: Arc<Mutex<Arc<WorkspaceSnapshot>>>,
+    repos: Arc<Vec<Repo>>,
+    auto_imports: Arc<Vec<SmolStr>>,
     // Stored on the struct because rmcp's `#[tool_handler]` macro
     // expects a `tool_router` field on `Self`. Rust's dead-code
     // analysis doesn't see through proc-macro expansions; suppress
@@ -184,14 +219,32 @@ pub struct LegendMcpServer {
 }
 
 impl LegendMcpServer {
-    /// Construct a server backed by the given compiled-workspace
-    /// snapshot.
+    /// Construct a server with the given initial snapshot and the
+    /// repos / auto-imports that produced it (needed for
+    /// `reload_workspace`).
     #[must_use]
-    pub fn new(snapshot: Arc<WorkspaceSnapshot>) -> Self {
+    pub fn new(
+        initial: Arc<WorkspaceSnapshot>,
+        repos: Arc<Vec<Repo>>,
+        auto_imports: Arc<Vec<SmolStr>>,
+    ) -> Self {
         Self {
-            snapshot,
+            current: Arc::new(Mutex::new(initial)),
+            repos,
+            auto_imports,
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Clone out the current snapshot under the lock, then drop the
+    /// lock. Subsequent reads run on the cloned `Arc` without
+    /// contention.
+    fn snapshot(&self) -> Arc<WorkspaceSnapshot> {
+        let guard = self
+            .current
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        guard.clone()
     }
 }
 
@@ -208,7 +261,7 @@ impl LegendMcpServer {
         &self,
         Parameters(args): Parameters<SearchSymbolsArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let snapshot = self.snapshot.clone();
+        let snapshot = self.snapshot();
         let result = tokio::task::spawn_blocking(move || {
             search_symbols_impl(&snapshot.model, &args)
         })
@@ -225,7 +278,7 @@ impl LegendMcpServer {
         &self,
         Parameters(args): Parameters<GetDiagnosticsArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let snapshot = self.snapshot.clone();
+        let snapshot = self.snapshot();
         let rows: Vec<DiagnosticRow> = match args.file {
             Some(file) => snapshot
                 .diagnostics
@@ -252,7 +305,7 @@ impl LegendMcpServer {
         &self,
         Parameters(args): Parameters<FqnArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let snapshot = self.snapshot.clone();
+        let snapshot = self.snapshot();
         let result = tokio::task::spawn_blocking(move || {
             let registry = legend_pure_runtime::native::NativeRegistry::standard();
             legend_pure_runtime::runner::run_function(&snapshot.model, &registry, &args.fqn)
@@ -272,7 +325,7 @@ impl LegendMcpServer {
         &self,
         Parameters(args): Parameters<FqnArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let snapshot = self.snapshot.clone();
+        let snapshot = self.snapshot();
         let result = tokio::task::spawn_blocking(move || {
             let registry = legend_pure_runtime::native::NativeRegistry::standard();
             legend_pure_runtime::runner::run_test(&snapshot.model, &registry, &args.fqn)
@@ -293,7 +346,7 @@ impl LegendMcpServer {
         &self,
         Parameters(args): Parameters<RunPctArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let snapshot = self.snapshot.clone();
+        let snapshot = self.snapshot();
         let result = tokio::task::spawn_blocking(move || {
             let registry = legend_pure_runtime::native::NativeRegistry::standard();
             legend_pure_runtime::runner::run_pct(
@@ -316,7 +369,7 @@ impl LegendMcpServer {
         description = "List every <<PCT.adapter>>-tagged function in the workspace. Returns each adapter's FQN plus its human-readable name (from the PCT.adapterName tagged value)."
     )]
     async fn list_pct_adapters(&self) -> Result<CallToolResult, McpError> {
-        let snapshot = self.snapshot.clone();
+        let snapshot = self.snapshot();
         let result = tokio::task::spawn_blocking(move || {
             legend_pure_runtime::runner::list_pct_adapters(&snapshot.model)
         })
@@ -338,7 +391,7 @@ impl LegendMcpServer {
         &self,
         Parameters(args): Parameters<FqnArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let snapshot = self.snapshot.clone();
+        let snapshot = self.snapshot();
         let fqn = args.fqn.clone();
         let result = tokio::task::spawn_blocking(move || {
             read_element_impl(&snapshot.model, &args.fqn)
@@ -362,7 +415,7 @@ impl LegendMcpServer {
         &self,
         Parameters(args): Parameters<ListPackagesArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let snapshot = self.snapshot.clone();
+        let snapshot = self.snapshot();
         let result = tokio::task::spawn_blocking(move || {
             list_packages_impl(&snapshot.model, args.prefix.as_deref())
         })
@@ -379,13 +432,60 @@ impl LegendMcpServer {
         &self,
         Parameters(args): Parameters<ListTestsArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let snapshot = self.snapshot.clone();
+        let snapshot = self.snapshot();
         let result = tokio::task::spawn_blocking(move || {
             list_tests_impl(&snapshot.model, args.package_prefix.as_deref())
         })
         .await
         .map_err(|e| McpError::internal_error(format!("join error: {e}"), None))?;
         json_result(&result)
+    }
+
+    // ----- Lifecycle tools -----------------------------------------------
+
+    /// Return the timestamp + counters of the current workspace
+    /// snapshot. Agents call this to decide whether to invoke
+    /// `reload_workspace`.
+    #[tool(
+        description = "Return the current workspace snapshot's compiled-at timestamp (RFC 3339), error count, chunk count, and repo count. Agents can compare `compiled_at` against external file mtimes to decide whether to call reload_workspace."
+    )]
+    async fn workspace_status(&self) -> Result<CallToolResult, McpError> {
+        let snapshot = self.snapshot();
+        let repo_count = self.repos.len();
+        json_result(&status_from(&snapshot, repo_count))
+    }
+
+    /// Recompile the workspace using the same repos and auto-imports
+    /// the server was started with, then swap the in-memory snapshot.
+    #[tool(
+        description = "Recompile the workspace from disk and swap the in-memory snapshot. Uses the same classpath / auto-imports the server was started with. Returns the new workspace_status. Call this after editing .pure files so subsequent tool calls see the updated model."
+    )]
+    async fn reload_workspace(&self) -> Result<CallToolResult, McpError> {
+        let repos = self.repos.clone();
+        let auto_imports = self.auto_imports.clone();
+        let new_snapshot: Arc<WorkspaceSnapshot> = tokio::task::spawn_blocking(move || {
+            Arc::new(WorkspaceSnapshot::compile(&repos, &auto_imports))
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("join error: {e}"), None))?;
+        // Swap under the mutex. The `lock`/`unwrap_or_else(into_inner)`
+        // pattern matches `snapshot()` — a poisoned mutex still
+        // returns the inner value rather than panicking.
+        {
+            let mut guard = self
+                .current
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            *guard = new_snapshot.clone();
+        }
+        tracing::info!(
+            error_count = new_snapshot.error_count,
+            chunks = new_snapshot.model.chunks.len(),
+            compiled_at = %new_snapshot.compiled_at,
+            "workspace reloaded",
+        );
+        let repo_count = self.repos.len();
+        json_result(&status_from(&new_snapshot, repo_count))
     }
 }
 
@@ -401,7 +501,8 @@ impl ServerHandler for LegendMcpServer {
              - search_symbols / read_element / list_packages / list_tests — discover elements in the compiled workspace\n\
              - get_diagnostics — surface compile errors\n\
              - run_function / run_test / run_pct / list_pct_adapters — execute Pure code\n\
-             \nThe workspace is compiled once at startup. Restart the server to pick up source changes."
+             - workspace_status / reload_workspace — inspect or refresh the in-memory snapshot\n\
+             \nThe workspace is compiled once at startup. Call reload_workspace after editing .pure files so subsequent tool calls see the updated model; use workspace_status to check the current snapshot's compiled_at timestamp."
                 .to_string(),
         );
         info
@@ -417,6 +518,15 @@ fn json_result<T: Serialize>(value: &T) -> Result<CallToolResult, McpError> {
     let json = serde_json::to_string_pretty(value)
         .map_err(|e| McpError::internal_error(format!("serde error: {e}"), None))?;
     Ok(CallToolResult::success(vec![Content::text(json)]))
+}
+
+fn status_from(snapshot: &WorkspaceSnapshot, repo_count: usize) -> WorkspaceStatus {
+    WorkspaceStatus {
+        compiled_at: snapshot.compiled_at.to_string(),
+        error_count: snapshot.error_count,
+        chunk_count: snapshot.model.chunks.len(),
+        repo_count,
+    }
 }
 
 fn diagnostic_row(err: &legend_pure_parser_pure::error::CompilationError) -> DiagnosticRow {

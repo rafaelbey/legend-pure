@@ -53,3 +53,6 @@ serde_json = { workspace = true }
 smol_str = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# RFC 3339 timestamps for `workspace_status` / `reload_workspace`.
+# Already a workspace dep via `legend-pure-runtime`.
+jiff = { workspace = true }

@@ -2187,6 +2187,7 @@ dependencies = [
 name = "legend-pure-mcp"
 version = "0.1.0"
 dependencies = [
+ "jiff",
  "legend-pure-core-platform",
  "legend-pure-dsl-mapping",
  "legend-pure-dsl-relational",
