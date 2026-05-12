@@ -139,6 +139,242 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260512-05 — `toMultiplicity` doesn't compile + missing test coverage
+
+- **Type:** parity-gap
+- **Area:** compiler | runtime
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-12
+
+**Summary**
+`meta::pure::functions::lang::toMultiplicity<T|z>(source:T[*],
+object:Any[z]):T[z]` (declared in
+`platform/pure/essential/lang/cast/toMultiplicity.pure:17`) doesn't
+compile end-to-end today, and the Rust workspace has no direct test
+of it — existing references in `crates/pure/tests/integration_tests.rs`
+(2783, 2811) only exercise it as a *vehicle* for testing
+`UndeclaredMultiplicityParameter` diagnostics, not the function's
+own behaviour. Need both: get it compiling and add positive +
+negative test coverage.
+
+**Repro / Context**
+- Native signature (PCT):
+  ```pure
+  native function <<PCT.function>>
+  meta::pure::functions::lang::toMultiplicity<T|z>(
+      source:T[*], object:Any[z]
+  ):T[z];
+  ```
+- Java-parity reference: `toMultiplicity` is the multiplicity
+  analogue of `cast` — narrows a `T[*]` to whatever multiplicity
+  the second argument carries (`z`). At runtime it validates the
+  source's actual cardinality against `z` and either returns the
+  narrowed collection or throws.
+- Acceptance criteria:
+  - User code like:
+    ```pure
+    function test::demo(xs: String[*]): String[1] {
+      $xs->toMultiplicity(@String[1])
+    }
+    ```
+    compiles cleanly (no dispatch error, no
+    `UndeclaredMultiplicityParameter`, no return-type mismatch).
+  - Runtime native body validates cardinality:
+    - `xs` has exactly `z` values → return them at multiplicity `z`.
+    - Cardinality mismatch → throw a Pure exception with the same
+      shape as Java Pure's (`"Multiplicity Many doesn't match
+      [1]"` etc — copy the wording from upstream).
+  - Test coverage in both seams:
+    - **Compiler** (`crates/pure/tests/`): positive cases for `[1]`,
+      `[0..1]`, `[2..*]`; negative cases for arity / type mismatch
+      and undeclared mult parameter.
+    - **Runtime** (`crates/runtime/tests/` or `eval_tests.rs`):
+      cardinality-validates-and-returns, cardinality-fails-with-
+      exception, identity on `T[*] → T[*]`.
+
+**Notes**
+- Declaration lives in upstream Java platform sources at
+  `legend-pure-core/legend-pure-m3-core/src/main/resources/platform/
+  pure/essential/lang/cast/toMultiplicity.pure:17` — shared between
+  Java and Rust stacks.
+- The compile-failure root cause is unconfirmed — possibilities:
+  - Dispatch failing to resolve the parametric multiplicity `z`
+    from `object:Any[z]` argument position (consumer of `z` is
+    the *return* type, which means `z` has to flow from the
+    second arg's mult into the result, not from the first arg).
+  - No native registered in `crates/runtime/src/natives/` — but
+    that would only show up at runtime, not compile time.
+  - Pass 2b body lowering failing on `@T[z]` second-arg shape
+    (multiplicity-annotated cast literal).
+  Diagnose before writing the fix.
+- Adjacent natives (same multiplicity-coercion family): `toOne`,
+  `toOneMany`, `cast` (type coercion sibling). Use their dispatch
+  + native registration pattern as the template.
+- Two integration tests already lean on `toMultiplicity`
+  (`undeclared_mult_inside_function_type_errors`,
+  `declared_mult_function_signature_clean`) — they should keep
+  passing after the fix; if they currently rely on the function
+  *not* compiling, rewrite them around a different placeholder.
+- See MEMORY note "Split natives by call shape" — one native per
+  declared signature, no `pos2_is_*` probing inside a single
+  native body.
+
+<!-- agent-audit:start id=T-20260512-05 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
+### T-20260512-04 — Property default values not applied at `^Class(...)` instantiation (multiplicity violation)
+
+- **Type:** parity-gap
+- **Area:** runtime | compiler
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-12
+
+**Summary**
+A property with a default value should be auto-populated when the
+caller omits it in a `^Class(...)` constructor. Today the multiplicity
+validator fires instead, treating the property as unset.
+
+**Repro / Context**
+
+```pure
+Class abc::Class2 {
+    prop: abc::Class1[1];
+    prop2: abc::Abc[1] = abc::Abc.A;
+    prop3: Integer[1];
+}
+
+^abc::Class2(prop = ^abc::Class1(propA = 12), prop3 = 123);
+```
+
+Actual error:
+
+```
+Error instantiating class 'Class2'.  The following properties have
+multiplicity violations: 'prop2' requires 1 value, got 0
+```
+
+Expected: `prop2` is populated from its declared default
+(`abc::Abc.A`); no multiplicity violation; instance constructed
+successfully.
+
+Java-parity reference: upstream Java Pure applies property defaults
+during `new`/`^Class(...)` construction. Pattern matches the same
+defaulting that already works for top-level `function` parameter
+defaults (existing tests cover that path).
+
+**Notes**
+- Likely seams:
+  - Constructor lowering — wherever `ExprKind::NewInstance` lowers
+    to runtime instantiation, the per-property default expression
+    should be inserted for any unsupplied property *before* the
+    multiplicity check fires.
+  - Or the property-defaults pass — if defaults are stored on
+    `Property` but ignored at runtime construction, the runtime
+    side is what needs the fix.
+- Validation order is load-bearing: defaults must be substituted
+  *before* multiplicity validation, otherwise the validator sees
+  zero values and (correctly) rejects.
+- Related TODOs (same family — `^Class(...)` semantics):
+  - T-20260511-02 — required properties not checked
+    (zero-value violation in the *intended* direction).
+  - T-20260511-03 — supplied value not type/multiplicity-checked.
+  - T-20260511-04 — unknown property names not rejected.
+  This one is the inverse of T-20260511-02: same code path, opposite
+  symptom (defaults should pre-empt the "missing" verdict).
+- Test seed: add to `crates/runtime/tests/` (or the closest
+  existing `^Class(...)` integration test) — fixture with three
+  classes (`Class1`, `Abc` enum-or-class, `Class2`), omit the
+  default-bearing property, assert it materialises to the default
+  value at runtime.
+
+<!-- agent-audit:start id=T-20260512-04 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
+### T-20260512-03 — Virtual filesystem surfacing "decompiled" elements from `.purem` binaries
+
+- **Type:** feature
+- **Area:** lsp | clients-intellij | runtime | compose
+- **Priority:** P2
+- **Reporter:** Rafael
+- **Filed:** 2026-05-12
+
+**Summary**
+Goto-definition / find-usages / hover currently work for elements that
+live in user `.pure` files, but break the moment the target lives
+inside an embedded `.purem` binary (platform M3, DSL metamodels,
+generated tests slice). The user lands on "no source" because the
+canonical-path → URI resolver only knows about on-disk files. Want a
+read-only **virtual filesystem** that re-synthesises Pure source for
+the in-memory model and serves it under a `pure:` URI scheme so the
+editor can open, scroll, fold, and (importantly) goto-def *within*
+the decompiled view — matching IntelliJ's "Decompiled class file"
+experience for `.class` files.
+
+**Repro / Context**
+- Today: goto-def on `String` / `meta::pure::metamodel::type::Class`
+  / a Mapping-DSL symbol returns a location with a canonical path
+  like `/platform/pure/grammar/m3.pure` that the resolver can't map
+  to a real file URI (it's a build-script-extracted snapshot path
+  embedded in the binary). The editor opens nothing.
+- Acceptance criteria:
+  - LSP server advertises a `pure:` URI scheme (or
+    `legend-pure-decompiled:` to be explicit) and answers
+    `legend/virtualDocument` (or equivalent custom request) with the
+    re-emitted source for any `(repo, canonical_path)` pair backed
+    by an embedded `.purem`.
+  - `textDocument/definition`, `references`, `hover`, `documentSymbol`
+    on a virtual URI all work — i.e. the model is fully addressable
+    from the synthetic source.
+  - Re-emitted source is **structurally faithful** (same elements,
+    same names, same supertypes, same property types) but does not
+    need to be byte-identical to the upstream `.pure` (no comment
+    preservation, no trivia round-trip).
+  - IntelliJ side: register a `FileType` + read-only
+    `VirtualFileSystem` for the `pure:` scheme so the platform-LSP
+    integration's "open at location" path resolves cleanly.
+- Out of scope (V1):
+  - Editing virtual buffers — read-only is fine.
+  - Preserving original whitespace / comments — the source `.purem`
+    drops trivia, so there's nothing to preserve.
+  - Cross-repo navigation into `.purem` blobs that aren't in the
+    current classpath — defer to a follow-up.
+
+**Notes**
+- Compose seam: `legend_pure_compose` already round-trips AST →
+  grammar text for every element kind we ship. Re-emission is
+  "model → AST → compose" — the AST→compose step exists; the
+  model→AST step is the missing piece, but `crates/protocol` does
+  almost exactly this for JSON serialisation and can be a template.
+- Canonical-path → repo lookup already exists in
+  `Workspace::file_uri_for_canonical` (`crates/lsp/src/workspace.rs:218`);
+  extend it to fall back to a virtual `pure:` URI when the canonical
+  path doesn't map to a filesystem file but *does* exist in a loaded
+  repo's element table.
+- Server-side: a custom `legend/virtualDocument` request keyed by
+  `(canonical_path)` returning `{ uri, languageId: "pure", text }`
+  matches how rust-analyzer / metals serve decompiled / generated
+  sources today.
+- IntelliJ side: see `clients/intellij/src/main/kotlin/...` —
+  needs a `VirtualFileSystem` impl + `FileType` registration; the
+  Platform LSP API will route opens to it once the scheme is
+  registered.
+- Useful for **Find Usages** too — landing on a use-site in a
+  `.purem`-embedded file becomes navigable instead of a dead end.
+- Related: T-20260511-07 (Find Usages, just shipped) surfaces hits
+  whose `canonical_path` lives in `.purem` and currently get dropped
+  by `file_uri_for_canonical` (returning `None`). A virtual FS
+  would un-drop them.
+- Not a parity gap with Java — Java's IDE story for `.par` binaries
+  is the upstream `legend-engine` plugin, not this repo.
+
+<!-- agent-audit:start id=T-20260512-03 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
 ### T-20260512-02 — IntelliJ status-bar widget for LSP health / troubleshooting
 
 - **Type:** feature
