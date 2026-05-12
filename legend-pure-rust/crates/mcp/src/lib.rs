@@ -86,13 +86,16 @@ pub fn run(config: McpConfig) -> Result<(), McpError> {
         .enable_all()
         .build()?;
     runtime.block_on(async move {
-        let snapshot = Arc::new(WorkspaceSnapshot::compile(config.repos, &config.auto_imports));
+        let repos = Arc::new(config.repos);
+        let auto_imports = Arc::new(config.auto_imports);
+        let snapshot = Arc::new(WorkspaceSnapshot::compile(&repos, &auto_imports));
         tracing::info!(
             error_count = snapshot.error_count,
             chunks = snapshot.model.chunks.len(),
+            compiled_at = %snapshot.compiled_at,
             "legend mcp server starting",
         );
-        let server = LegendMcpServer::new(snapshot);
+        let server = LegendMcpServer::new(snapshot, repos, auto_imports);
         let service = server
             .serve(stdio())
             .await

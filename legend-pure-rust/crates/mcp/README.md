@@ -45,7 +45,7 @@ Then start a Claude Code session in any directory — the agent can now reach fo
 
 ## Tools
 
-The MVP exposes nine tools across three categories.
+The MVP exposes eleven tools across four categories.
 
 ### Read
 
@@ -71,6 +71,13 @@ The MVP exposes nine tools across three categories.
 | `list_packages` | `{ prefix?: string }` | `[fqn]` — every package FQN, sorted. With `prefix`, returns only packages whose FQN starts with it. |
 | `list_tests` | `{ package_prefix?: string }` | `[{ fqn, source, line, tags }]` — every function tagged with `test::Test`, `test::AlloyOnly`, or `PCT.test`. |
 
+### Lifecycle
+
+| Tool | Inputs | Returns |
+|---|---|---|
+| `workspace_status` | — | `{ compiled_at, error_count, chunk_count, repo_count }` — `compiled_at` is the RFC 3339 timestamp of the current snapshot. Use this to decide whether to call `reload_workspace`. |
+| `reload_workspace` | — | The new `workspace_status` after recompiling against the same classpath / auto-imports the server was started with. Call after editing `.pure` files so subsequent tool calls see the updated model. |
+
 ## Example agent prompts
 
 Once wired into Claude Code, prompts like these route through the MCP tools:
@@ -86,11 +93,20 @@ The agent gets typed JSON responses for each call — no scraping, no parsing of
 
 ## Workspace lifetime
 
-The workspace is compiled **once** at server startup. Agents shouldn't typically mutate sources through the MCP, so a single up-front compile keeps the implementation simple and fast.
+The workspace is compiled **once** at server startup. Subsequent edits to `.pure` files don't automatically refresh the in-memory model.
 
-If you edit `.pure` files and want the server to pick up changes, restart it (i.e. close + reopen the Claude Code session, or restart the MCP host).
+Two tools handle the refresh cycle:
 
-A `reload_workspace` tool is on the roadmap for when concurrent agent-write workflows arise.
+- **`workspace_status`** — returns the snapshot's `compiled_at` timestamp plus error/chunk/repo counts. Agents can compare this against external `.pure` mtimes (or just call it after any write) to decide whether the in-memory model is stale.
+- **`reload_workspace`** — recompiles using the same classpath the server was started with, swaps the in-memory snapshot, and returns the new status. Subsequent tool calls see the fresh model.
+
+Under the hood the snapshot lives in `Arc<Mutex<Arc<WorkspaceSnapshot>>>`: read tools clone the inner `Arc` under the lock and drop it immediately so reads are lock-free, while `reload_workspace` swaps the slot under the same Mutex. The Mutex is never held across an `await`.
+
+Typical agent workflow for an edit-then-test loop:
+
+1. Edit `.pure` files (write tool or external editor).
+2. `reload_workspace` — confirms the new `compiled_at` and any new errors.
+3. `run_test { fqn: "..." }` — runs against the fresh model.
 
 ## Smoke test by hand
 
@@ -139,7 +155,6 @@ Deferred from the MVP and tracked for future iterations:
 - **`find_definition` / `hover_info`** keyed by file + line + column. Agents rarely have precise positions today; `read_element` covers the common by-FQN case.
 - **MCP `Resource` surface** (`pure://element/{fqn}`) — cleaner UX for "give me the source of this element", but the tool form is sufficient for MVP.
 - **Mutating tools** — `format`, `apply_edit`, `rename_symbol`. Hooks into the LSP-side surface once `workspace/rename` lands.
-- **`reload_workspace`** — currently the agent must restart the server to pick up source changes.
 - **Streaming `progress` notifications** for long PCT runs.
 - **Debug-via-MCP** — agent-driven breakpoint + step, layered on the existing DAP server.
 
