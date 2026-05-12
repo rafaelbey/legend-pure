@@ -139,58 +139,6 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
-### T-20260511-07 — LSP: Find Usages (workspace-wide references to an element)
-
-- **Type:** feature
-- **Area:** lsp
-- **Priority:** P2
-- **Reporter:** Rafael
-- **Filed:** 2026-05-11
-
-**Summary**
-The LSP doesn't expose a "Find All References" / "Find Usages" command
-for Pure elements. Right-clicking a class, function, or property and
-asking "who references this?" returns nothing or only the definition.
-Expected: every site across the workspace that refers to the symbol
-under the cursor, navigable from the editor.
-
-**Repro / Context**
-- Put cursor on `abc::Class1` (declaration or any reference site) →
-  invoke editor's "Find All References" → expect a list of every
-  `.pure` location that:
-  - references it by FQN (`abc::Class1`),
-  - references it by short name under an `import abc::*;`,
-  - extends it, implements it, or constructs it via `^abc::Class1(...)`,
-  - uses it as a type argument (`List<abc::Class1>`),
-  - uses it inside `cast(@abc::Class1)`,
-  - references one of its properties / qualified properties (separate
-    cursor target).
-- Same query shape for functions (call sites + lambda captures) and
-  properties (`.propA` access + `^Foo(propA = …)` binding sites).
-- Acceptance criteria:
-  - LSP `textDocument/references` returns the workspace-wide set.
-  - Editor "go to references" / "find usages" surfaces every site.
-  - Performance: indexed (subsecond for warm workspace), not a
-    per-request whole-model scan.
-
-**Notes**
-- Index seam: `PureModel` already holds every chunk's `ExprKind`
-  tree and every element's resolved `ElementId`. A side-index keyed
-  by `ElementId → Vec<(chunk_id, source_info)>` populated during
-  Pass 2b body-lowering covers function calls, property access,
-  type refs, constructor receivers, generic args, cast targets,
-  association ends, stereotype/profile refs.
-- Adjacent to T-20260511-06 (global diagnostics): they share a
-  dependency / reverse-reference index. Land the index once, expose
-  it through two LSP commands.
-- Distinct from `textDocument/definition` (already wired via
-  `crates/lsp/src/handlers/*`) — that's forward; this is reverse.
-- Not a parity gap with Java — Java has no LSP in this repo.
-
-<!-- agent-audit:start id=T-20260511-07 -->
-<!-- Agents: append entries below. Do not rewrite the developer block above. -->
-<!-- agent-audit:end -->
-
 ### T-20260511-06 — Global diagnostics: surface every site impacted by a single change
 
 - **Type:** feature
@@ -253,6 +201,125 @@ Today diagnostics surface only for files the editor has opened — the
 
 <!-- Resolved / migrated / wontfix items, newest first. Keep the full block
      including the final audit-block status for posterity. -->
+
+### T-20260511-07 — LSP: Find Usages (workspace-wide references to an element)
+
+- **Type:** feature
+- **Area:** lsp
+- **Priority:** P2
+- **Reporter:** Rafael
+- **Filed:** 2026-05-11
+
+**Summary**
+The LSP doesn't expose a "Find All References" / "Find Usages" command
+for Pure elements. Right-clicking a class, function, or property and
+asking "who references this?" returns nothing or only the definition.
+Expected: every site across the workspace that refers to the symbol
+under the cursor, navigable from the editor.
+
+**Repro / Context**
+- Put cursor on `abc::Class1` (declaration or any reference site) →
+  invoke editor's "Find All References" → expect a list of every
+  `.pure` location that:
+  - references it by FQN (`abc::Class1`),
+  - references it by short name under an `import abc::*;`,
+  - extends it, implements it, or constructs it via `^abc::Class1(...)`,
+  - uses it as a type argument (`List<abc::Class1>`),
+  - uses it inside `cast(@abc::Class1)`,
+  - references one of its properties / qualified properties (separate
+    cursor target).
+- Same query shape for functions (call sites + lambda captures) and
+  properties (`.propA` access + `^Foo(propA = …)` binding sites).
+- Acceptance criteria:
+  - LSP `textDocument/references` returns the workspace-wide set.
+  - Editor "go to references" / "find usages" surfaces every site.
+  - Performance: indexed (subsecond for warm workspace), not a
+    per-request whole-model scan.
+
+**Notes**
+- Index seam: `PureModel` already holds every chunk's `ExprKind`
+  tree and every element's resolved `ElementId`. A side-index keyed
+  by `ElementId → Vec<(chunk_id, source_info)>` populated during
+  Pass 2b body-lowering covers function calls, property access,
+  type refs, constructor receivers, generic args, cast targets,
+  association ends, stereotype/profile refs.
+- Adjacent to T-20260511-06 (global diagnostics): they share a
+  dependency / reverse-reference index. Land the index once, expose
+  it through two LSP commands.
+- Distinct from `textDocument/definition` (already wired via
+  `crates/lsp/src/handlers/*`) — that's forward; this is reverse.
+- Not a parity gap with Java — Java has no LSP in this repo.
+
+<!-- agent-audit:start id=T-20260511-07 -->
+- 2026-05-12 — claimed by claude-opus-4-7[1m] — element-level V1
+  scope agreed with reporter; implementation on worktree
+  `feat/T-20260511-07-find-usages`.
+- 2026-05-12 — discovery: reverse-reference index already existed
+  (`crates/pure/src/refs.rs::ReferenceIndex::usages_of`,
+  `crates/pure/src/refs.rs:170`), built per-compile in
+  `Workspace::references` at `crates/lsp/src/workspace.rs:173`.
+  Only the LSP plumbing was missing — capability advertisement,
+  request dispatch, cursor → ElementId resolver. No
+  `crates/pure/` changes needed.
+- 2026-05-12 — implementation:
+  * `crates/lsp/src/server.rs`: add `references_provider:
+    Some(OneOf::Left(true))` capability + dispatch
+    `textDocument/references` to `handlers::references_for_position`.
+    Returns `Ok(None)` for empty results (LSP 3.17 shape; matches
+    "no references found" UX in IntelliJ).
+  * `crates/lsp/src/handlers.rs`: new `references_for_position`.
+    Two-tier cursor resolution — reference-site click via
+    `ReferenceIndex::find_at`, declaration-site click via
+    `model.locate` + inclusive-end span check (new helper
+    `cursor_in_source_info_inclusive`). The existing
+    `cursor_in_source_info` is LSP-style exclusive-end, which
+    rejects clicks on single-char names like `Class abc::A`
+    (`name_source_info` is the degenerate `c13-c13`); the new
+    helper matches `refs::contains`'s inclusive-end semantics.
+  * `clients/intellij/README.md`: Find Usages added to supported
+    features. No Kotlin change — IntelliJ's LSP runtime
+    auto-binds `textDocument/references` to ⌥F7 once the
+    capability is advertised.
+- 2026-05-12 — V1 scope (`target_element: None` cases): cursor on
+  `PropertyCall` / `QualifiedPropertyCall` / `Variable` returns
+  empty `Vec`. Pinned by `references_empty_on_property_call_v1_limitation`
+  test so a future richer-target index doesn't silently flip
+  behavior.
+- 2026-05-12 — tests: 7 new in `handlers.rs::tests`:
+  use-site click, declaration-site click, include_declaration
+  toggle, whitespace cursor, property V1 limitation, cross-file
+  URI resolution via the resolver, missing-index degraded path.
+- 2026-05-12 — verification:
+  * `cargo build --workspace`, `cargo nextest run --workspace`:
+    2074/2074 tests pass.
+  * `cargo lint-lib`, `cargo lint`, `cargo fmt --check`,
+    `./scripts/check-copyright.sh`: clean (pre-existing dead-code
+    warnings on `resolve_value_spec_target` in handlers.rs:213
+    and minor pedantic warnings in `runtime/src/native/string.rs`
+    tests are unrelated).
+  * Platform purem round-trip
+    (`legend-pure-snapshot-builder::smoke build_is_byte_deterministic`)
+    green.
+  Status: Fix landed (commit f08d3ad24bb).
+- 2026-05-12 — follow-ups (audit notes, not separate TODOs cut yet):
+  * **Property / qualified-property granularity.**
+    `Reference.target_element` is `None` for `PropertyCall`,
+    `QualifiedPropertyCall`, `Variable` in `crates/pure/src/refs.rs`
+    (lines 490, 507, 522). Exposing property-level Find Usages
+    requires either a richer target type (e.g. `ReferenceTarget`
+    enum) or a sibling reverse-index keyed by `(ElementId,
+    SmolStr)`. Triage candidate.
+  * **`cursor_in_source_info` exclusive-end legacy.** The
+    existing helper at `crates/lsp/src/handlers.rs:233` uses
+    LSP-style exclusive-end semantics against compiler-emitted
+    inclusive-end `SourceInfo` spans — a latent bug for clicks
+    on the last character of any name. `definition_for_position`
+    uses it; consider migrating to the new inclusive variant or
+    aligning the two semantics workspace-wide.
+  * **Rename refactoring (`textDocument/rename`).** Natural next
+    feature on top of the same index; needs workspace-edit
+    protocol shape. Out of scope here.
+<!-- agent-audit:end -->
 
 ### T-20260511-05 — `format(...)` doesn't compile-time-check `%`-specifiers against arg types
 

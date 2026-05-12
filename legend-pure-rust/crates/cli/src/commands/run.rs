@@ -77,8 +77,7 @@ pub fn run(args: RunArgs, classpath: Option<&std::path::Path>) -> Result<(), Cli
     );
 
     let model = if args.live {
-        let descriptor =
-            crate::live::resolve_platform_descriptor(args.platform_dir.as_deref())?;
+        let descriptor = crate::live::resolve_platform_descriptor(args.platform_dir.as_deref())?;
         let repos = crate::live::live_repos(&descriptor)?;
         let auto_imports: Vec<smol_str::SmolStr> =
             legend_pure_core_platform::platform::PLATFORM_AUTO_IMPORTS

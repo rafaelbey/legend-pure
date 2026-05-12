@@ -1653,7 +1653,10 @@ impl<'a> M3Parser<'a> {
             name,
             package_segments,
             Element::Profile(Profile {
-                stereotypes: stereotypes.into_iter().map(bootstrap_spanned_name).collect(),
+                stereotypes: stereotypes
+                    .into_iter()
+                    .map(bootstrap_spanned_name)
+                    .collect(),
                 tags: tags.into_iter().map(bootstrap_spanned_name).collect(),
             }),
         );

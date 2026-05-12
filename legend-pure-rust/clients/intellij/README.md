@@ -21,6 +21,7 @@ unmodified:
 | Diagnostics | `textDocument/publishDiagnostics` | Gutter + squiggles |
 | Hover | `textDocument/hover` | Tooltip |
 | Goto definition | `textDocument/definition` | ⌘B / Ctrl+B |
+| Find Usages | `textDocument/references` | ⌥F7 / Alt+F7 — element-level (classes, functions, enums, profiles, associations). Property/qualified-property granularity deferred. |
 | Document outline | `textDocument/documentSymbol` | Structure tool window |
 | Test code lens | `textDocument/codeLens` (`legend.runTest`) | Inline lens (no-op stub for MVP) |
 

@@ -296,10 +296,7 @@ mod tests {
         // strings — that's the on-wire form clients see anyway.
         let url_str = uri.as_str();
         assert!(url_str.starts_with("file://"), "got: {url_str}");
-        assert!(
-            url_str.ends_with("/tmp/proj/lib.pure"),
-            "got: {url_str}"
-        );
+        assert!(url_str.ends_with("/tmp/proj/lib.pure"), "got: {url_str}");
 
         let nested = ws
             .file_uri_for_canonical("/proj/sub/foo.pure")
@@ -325,11 +322,7 @@ mod tests {
 
     #[test]
     fn file_uri_for_canonical_returns_none_for_unknown_canonical() {
-        let repo = fs_repo_with_root(
-            "/proj",
-            PathBuf::from("/tmp/proj"),
-            vec!["/proj/lib.pure"],
-        );
+        let repo = fs_repo_with_root("/proj", PathBuf::from("/tmp/proj"), vec!["/proj/lib.pure"]);
         let ws = Workspace::new(vec![repo], Vec::new());
         // Canonical's prefix doesn't match any repo.
         assert!(ws.file_uri_for_canonical("/other/lib.pure").is_none());
@@ -339,11 +332,7 @@ mod tests {
     fn file_uri_for_canonical_prefers_open_buffer_url() {
         // When a buffer is open for the matching canonical, that URL
         // is returned in preference to the synthesised disk URL.
-        let repo = fs_repo_with_root(
-            "/proj",
-            PathBuf::from("/tmp/proj"),
-            vec!["/proj/lib.pure"],
-        );
+        let repo = fs_repo_with_root("/proj", PathBuf::from("/tmp/proj"), vec!["/proj/lib.pure"]);
         let mut ws = Workspace::new(vec![repo], Vec::new());
         let buffer_uri = "file:///tmp/proj/lib.pure".parse::<Uri>().unwrap();
         ws.set_open_buffer(buffer_uri.clone(), "...".into());
