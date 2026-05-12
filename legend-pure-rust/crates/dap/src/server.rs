@@ -27,7 +27,7 @@ use crate::protocol::{
     Breakpoint, Capabilities, ClientMessage, ContinueResponse, Event,
     InitializeArguments, LaunchArguments, Request, Response, ScopesArguments,
     Scope, ScopesResponse, ServerMessage, SetBreakpointsArguments, SetBreakpointsResponse,
-    Source, StackFrame, StackTraceArguments, StackTraceResponse, TerminatedEventBody, Thread,
+    Source, StackFrame, StackTraceArguments, StackTraceResponse, Thread,
     ThreadsResponse, Variable, VariablesArguments, VariablesResponse,
 };
 use crate::session::{
@@ -121,7 +121,7 @@ pub fn run(config: DapConfig) -> Result<(), DapError> {
 fn dispatch(
     req: &Request,
     model: &Arc<PureModel>,
-    config: &DapConfig,
+    _config: &DapConfig,
     state: &Arc<Mutex<SessionState>>,
     outbound: &Outbound,
     commands_tx: &mut Option<Sender<DapCommand>>,
@@ -194,7 +194,7 @@ fn handle_initialize(req: &Request) -> Result<serde_json::Value, String> {
     let _args: InitializeArguments = serde_json::from_value(req.arguments.clone())
         .map_err(|e| format!("initialize args: {e}"))?;
     let caps = Capabilities::mvp();
-    Ok(serde_json::to_value(&caps).map_err(|e| e.to_string())?)
+    serde_json::to_value(&caps).map_err(|e| e.to_string())
 }
 
 fn handle_set_breakpoints(
