@@ -695,6 +695,14 @@ fn finish_construction(
             .mutate_set(&obj, "__typeVariableValues", type_var_values)?;
     }
     apply_property_triples(ctx, obj.clone(), triples)?;
+    // Back-fill any unsupplied property from its declared `default_value`
+    // expression — must run before deferred multiplicity validation so
+    // the validator sees the populated values. Caller-supplied triples
+    // already won the prior `apply_property_triples` write, so the
+    // `supplied_keys` filter below skips them. T-20260512-04.
+    let supplied_keys: std::collections::HashSet<SmolStr> =
+        triples.iter().map(|(k, _, _)| k.clone()).collect();
+    apply_property_defaults(ctx, &obj, class_id, &supplied_keys)?;
     // Re-flatten triples back to the kv-stream shape that
     // `populate_association_inverses` consumes — the helper drives
     // its inverse walk off `(key, value, augmented)` triples already,
@@ -917,6 +925,62 @@ fn apply_property_triples(
         } else {
             ctx.heap_mut().mutate_set(&obj, key.as_str(), values)?;
         }
+    }
+    Ok(())
+}
+
+/// Evaluate `default_value` expressions for every property the caller
+/// did not supply and write the results to the heap object. Walks the
+/// supertype chain child-first so a redeclared property on a subclass
+/// wins over the parent's default (Java-parity MRO).
+///
+/// Shared by `^Class(...)` / `new(class, id, [keyExpr])` (via
+/// `finish_construction`) and the reflective `dynamicNew` overload —
+/// the two paths previously inlined this logic separately, and drift
+/// between them caused T-20260512-04 (defaults ignored on `^Class(...)`).
+#[allow(clippy::result_large_err)]
+fn apply_property_defaults(
+    ctx: &mut dyn EvalContextTrait,
+    obj: &ObjectHandle,
+    class_id: ElementId,
+    supplied_keys: &std::collections::HashSet<SmolStr>,
+) -> Result<(), PureException> {
+    let default_specs: Vec<(SmolStr, ValueSpec)> = {
+        let mut acc: Vec<(SmolStr, ValueSpec)> = Vec::new();
+        let mut seen: std::collections::HashSet<SmolStr> = supplied_keys.clone();
+        let mut visited: std::collections::HashSet<ElementId> = std::collections::HashSet::new();
+        let mut stack: Vec<ElementId> = vec![class_id];
+        while let Some(id) = stack.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            let Element::Class(c) = ctx.model().get_element(id) else {
+                continue;
+            };
+            for p in &c.properties {
+                if !seen.insert(p.name.clone()) {
+                    continue;
+                }
+                if let Some(expr) = &p.default_value {
+                    acc.push((p.name.clone(), expr.clone()));
+                }
+            }
+            for st in &c.super_types {
+                if let TypeExpr::Named { element, .. } = st {
+                    stack.push(*element);
+                }
+            }
+        }
+        acc
+    };
+    for (name, spec) in default_specs {
+        let v = ctx.evaluate(&spec)?.into_value();
+        let flat: Vec<Value> = match v {
+            Value::Collection(coll) => coll.iter().cloned().collect(),
+            Value::Unit => Vec::new(),
+            other => vec![other],
+        };
+        ctx.heap_mut().mutate_set(obj, name.as_str(), &flat)?;
     }
     Ok(())
 }
@@ -1234,49 +1298,10 @@ impl NativeFunction for DynamicNew {
         }
 
         // Apply per-property defaults for any property the caller didn't
-        // override. Walk the supertype chain child-first so that a
-        // redeclared property on a subclass wins over the parent's
-        // default (Pure MRO: most-specific class owns the effective
-        // default). Evaluate each `default_value` expression in the
-        // current context — it's a regular ValueSpec.
-        let default_specs: Vec<(SmolStr, legend_pure_parser_pure::types::ValueSpec)> = {
-            let mut acc: Vec<(SmolStr, legend_pure_parser_pure::types::ValueSpec)> = Vec::new();
-            let mut seen: std::collections::HashSet<SmolStr> = supplied_keys.clone();
-            let mut visited: std::collections::HashSet<ElementId> =
-                std::collections::HashSet::new();
-            let mut stack: Vec<ElementId> = vec![class_id];
-            while let Some(id) = stack.pop() {
-                if !visited.insert(id) {
-                    continue;
-                }
-                let Element::Class(c) = ctx.model().get_element(id) else {
-                    continue;
-                };
-                for p in &c.properties {
-                    if !seen.insert(p.name.clone()) {
-                        continue;
-                    }
-                    if let Some(expr) = &p.default_value {
-                        acc.push((p.name.clone(), expr.clone()));
-                    }
-                }
-                for st in &c.super_types {
-                    if let legend_pure_parser_pure::types::TypeExpr::Named { element, .. } = st {
-                        stack.push(*element);
-                    }
-                }
-            }
-            acc
-        };
-        for (name, spec) in default_specs {
-            let v = ctx.evaluate(&spec)?.into_value();
-            let flat: Vec<Value> = match v {
-                Value::Collection(coll) => coll.iter().cloned().collect(),
-                Value::Unit => Vec::new(),
-                other => vec![other],
-            };
-            ctx.heap_mut().mutate_set(&obj, name.as_str(), &flat)?;
-        }
+        // override. Shared with `finish_construction` so the
+        // reflective and compiler-emitted construction paths stay in
+        // lockstep on default semantics — see `apply_property_defaults`.
+        apply_property_defaults(ctx, &obj, class_id, &supplied_keys)?;
 
         // Overlay caller-supplied bindings. Build a flat
         // `[k, v, augmented=false, …]` triple slice so we can reuse
