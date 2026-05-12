@@ -49,11 +49,13 @@
 // `legend-pure-runtime`.
 #![allow(clippy::result_large_err)]
 
+pub mod config;
 pub mod connection;
 pub mod dispatch;
 pub mod extension;
 pub mod natives;
 pub mod resultset;
 
+pub use config::{H2Config, H2ConfigError};
 pub use connection::DuckDBState;
 pub use extension::RelationalStoreExtension;

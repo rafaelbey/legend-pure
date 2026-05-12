@@ -326,10 +326,8 @@ fn run_once(
     // Pure tests can navigate them reflectively. Without this wiring,
     // `let tbl = mydb.schemas->at(0).tables->at(0)` returns empty.
     let mapping_pop = legend_pure_dsl_mapping_runtime::MappingDSLPopulator;
-    let database_pop =
-        legend_pure_dsl_relational_runtime::RelationalDatabaseDSLPopulator;
-    let class_mapping_pop =
-        legend_pure_dsl_relational_runtime::RelationalClassMappingDSLPopulator;
+    let database_pop = legend_pure_dsl_relational_runtime::RelationalDatabaseDSLPopulator;
+    let class_mapping_pop = legend_pure_dsl_relational_runtime::RelationalClassMappingDSLPopulator;
     let populators: &[&dyn legend_pure_runtime::dsl::DSLPopulator] =
         &[&mapping_pop, &database_pop, &class_mapping_pop];
 

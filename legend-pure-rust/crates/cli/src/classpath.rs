@@ -40,8 +40,20 @@
 //! descriptor = "my_app.definition.json"
 //!
 //! # Reserved for v2: kind = "maven", coordinates = "...".
+//!
+//! # Engine configs for runtime extensions. Top-level table is
+//! # `extension`; next-level key is the extension domain
+//! # (`relational`, `lake`, …); then the engine name (`h2`, `duckdb`,
+//! # …). Each engine's value is held opaquely as `toml::Value` here and
+//! # re-deserialized by the owning extension crate when it's needed.
+//! [extension.relational.h2]
+//! jar_path = "~/.m2/repository/com/h2database/h2/2.1.214/h2-2.1.214.jar"
+//! version  = "2.1.214"
+//! pg_port  = 5435
+//! java     = "java"
 //! ```
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use legend_pure_core_platform::repo::{Repo, RepoError, RepoMeta};
@@ -61,6 +73,13 @@ pub struct Classpath {
     /// Resolved repos, in the order declared in the TOML. Topo-sort is
     /// applied later by [`legend_pure_core_platform::repo::load`].
     pub repos: Vec<Repo>,
+    /// Engine configs harvested from `[extension.<domain>.<engine>]`
+    /// tables. The outer key is the extension domain
+    /// (e.g. `"relational"`), the inner key is the engine name
+    /// (e.g. `"h2"`), and the value is the raw TOML table — the owning
+    /// extension crate re-deserializes its slice into a typed struct
+    /// on demand.
+    pub extension_configs: HashMap<String, HashMap<String, toml::Value>>,
 }
 
 /// Errors raised by [`load_classpath`].
@@ -125,6 +144,10 @@ struct ClasspathToml {
     auto_imports: Vec<String>,
     #[serde(default, rename = "repo")]
     repos: Vec<RepoEntryToml>,
+    /// `[extension.<domain>.<engine>]` tables. Held opaquely; owning
+    /// extensions re-deserialize their own slice on demand.
+    #[serde(default)]
+    extension: HashMap<String, HashMap<String, toml::Value>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -190,6 +213,7 @@ pub fn load_classpath(toml_path: &Path) -> Result<Classpath, ClasspathError> {
         root,
         extra_auto_imports: parsed.auto_imports.into_iter().map(SmolStr::new).collect(),
         repos,
+        extension_configs: parsed.extension,
     })
 }
 
@@ -418,6 +442,7 @@ pub fn synthetic_from_snapshots_dir(dir: &Path) -> Result<Classpath, ClasspathEr
         root: dir.to_path_buf(),
         extra_auto_imports: Vec::new(),
         repos,
+        extension_configs: HashMap::new(),
     })
 }
 
@@ -436,6 +461,9 @@ pub struct ResolvedClasspath {
     /// Extra auto-imports declared in the classpath TOML, on top of
     /// the platform defaults.
     pub extra_auto_imports: Vec<SmolStr>,
+    /// `[extension.<domain>.<engine>]` tables for runtime extensions.
+    /// Empty when the resolver falls back to embedded.
+    pub extension_configs: HashMap<String, HashMap<String, toml::Value>>,
 }
 
 /// Resolution cascade for a CLI invocation:
@@ -512,6 +540,7 @@ pub fn resolve_classpath(
         source: None,
         repos: Repo::default_embedded(),
         extra_auto_imports: Vec::new(),
+        extension_configs: HashMap::new(),
     })
 }
 
@@ -537,6 +566,7 @@ fn merge_with_embedded(cp: Classpath, source: Option<PathBuf>) -> ResolvedClassp
         source,
         repos,
         extra_auto_imports: cp.extra_auto_imports,
+        extension_configs: cp.extension_configs,
     }
 }
 
@@ -710,6 +740,46 @@ path = "platform.purem"
             platform_count, 1,
             "shadow-by-name: classpath platform replaces embedded one"
         );
+    }
+
+    #[test]
+    fn load_classpath_parses_extension_configs() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let toml_path = tmp.path().join("legend-pure-classpath.toml");
+        write_file(
+            &toml_path,
+            br#"
+[extension.relational.h2]
+jar_path = "~/.m2/repository/com/h2database/h2/2.1.214/h2-2.1.214.jar"
+version  = "2.1.214"
+pg_port  = 5435
+java     = "java"
+
+[extension.lake.snowflake]
+account = "test-acct"
+"#,
+        );
+        let cp = load_classpath(&toml_path).expect("load");
+        let relational = cp
+            .extension_configs
+            .get("relational")
+            .expect("relational domain present");
+        let h2 = relational.get("h2").expect("h2 engine present");
+        let table = h2.as_table().expect("h2 is a table");
+        assert_eq!(
+            table.get("version").and_then(|v| v.as_str()),
+            Some("2.1.214")
+        );
+        assert_eq!(
+            table.get("pg_port").and_then(|v| v.as_integer()),
+            Some(5435)
+        );
+        // Sibling domains coexist.
+        let lake = cp
+            .extension_configs
+            .get("lake")
+            .expect("lake domain present");
+        assert!(lake.contains_key("snowflake"));
     }
 
     #[test]
