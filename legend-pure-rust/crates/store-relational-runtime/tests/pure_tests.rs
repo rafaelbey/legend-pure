@@ -113,12 +113,8 @@ fn execute_in_db_varchar_roundtrip_passes() {
     assert_eq!(v, Value::Boolean(true));
 }
 
-#[test]
-fn execute_in_db_rejects_non_duckdb_type_passes() {
-    let model = build_model();
-    let v = run_test_fn(&model, "testExecuteInDbRejectsNonDuckDBType__Boolean_1_").expect("ran");
-    assert_eq!(v, Value::Boolean(true));
-}
+// The DuckDB-only routing assertion lives in `duckdb_smoke.rs` (it's a
+// Rust-port-specific contract, not a behaviour both stacks share).
 
 #[test]
 fn create_temp_table_lifecycle_passes() {
@@ -137,7 +133,6 @@ fn create_temp_table_with_rely_on_finally_passes() {
 #[test]
 fn load_values_to_db_table_inserts_rows_passes() {
     let model = build_model();
-    let v =
-        run_test_fn(&model, "testLoadValuesToDbTableInsertsRows__Boolean_1_").expect("ran");
+    let v = run_test_fn(&model, "testLoadValuesToDbTableInsertsRows__Boolean_1_").expect("ran");
     assert_eq!(v, Value::Boolean(true));
 }
