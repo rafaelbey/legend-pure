@@ -52,8 +52,17 @@ pub trait EvalHooks {
     /// Called before evaluating an expression.
     ///
     /// Debug implementations check breakpoints here and may suspend
-    /// execution until the DAP client resumes.
-    fn before_eval(&mut self, source: &SourceInfo);
+    /// execution until the DAP client resumes. `context` is the
+    /// live variable scope at the entry of this expression — DAP
+    /// hooks snapshot it to populate the `variables` response when
+    /// pausing. For `NoOpHooks` the parameter monomorphizes away
+    /// (the function body is empty), so there is no overhead for
+    /// production builds.
+    fn before_eval(
+        &mut self,
+        source: &SourceInfo,
+        context: &crate::context::VariableContext,
+    );
 
     /// Called after evaluating an expression, with the result.
     ///
@@ -107,7 +116,12 @@ pub struct NoOpHooks;
 
 impl EvalHooks for NoOpHooks {
     #[inline(always)]
-    fn before_eval(&mut self, _source: &SourceInfo) {}
+    fn before_eval(
+        &mut self,
+        _source: &SourceInfo,
+        _context: &crate::context::VariableContext,
+    ) {
+    }
 
     #[inline(always)]
     fn after_eval(&mut self, _source: &SourceInfo, _result: &Value) {}
@@ -145,7 +159,8 @@ mod tests {
     fn no_op_hooks_methods_are_callable() {
         let mut hooks = NoOpHooks;
         let src = SourceInfo::new("test.pure", 1, 1, 1, 10);
-        hooks.before_eval(&src);
+        let ctx = crate::context::VariableContext::new();
+        hooks.before_eval(&src, &ctx);
         hooks.after_eval(&src, &Value::Integer(42));
         hooks.enter_function("test::func", &src);
         hooks.leave_function("test::func");
@@ -160,7 +175,12 @@ mod tests {
     }
 
     impl EvalHooks for CapturingHooks {
-        fn before_eval(&mut self, _source: &SourceInfo) {}
+        fn before_eval(
+            &mut self,
+            _source: &SourceInfo,
+            _context: &crate::context::VariableContext,
+        ) {
+        }
         fn after_eval(&mut self, _source: &SourceInfo, _result: &Value) {}
         fn enter_function(&mut self, _name: &str, _source: &SourceInfo) {}
         fn leave_function(&mut self, _name: &str) {}
@@ -187,7 +207,11 @@ mod tests {
     }
 
     impl EvalHooks for CountingHooks {
-        fn before_eval(&mut self, _source: &SourceInfo) {
+        fn before_eval(
+            &mut self,
+            _source: &SourceInfo,
+            _context: &crate::context::VariableContext,
+        ) {
             self.before += 1;
         }
         fn after_eval(&mut self, _source: &SourceInfo, _result: &Value) {
@@ -205,9 +229,10 @@ mod tests {
     fn counting_hooks_tracks_calls() {
         let mut hooks = CountingHooks::default();
         let src = SourceInfo::new("test.pure", 1, 1, 1, 10);
+        let ctx = crate::context::VariableContext::new();
 
-        hooks.before_eval(&src);
-        hooks.before_eval(&src);
+        hooks.before_eval(&src, &ctx);
+        hooks.before_eval(&src, &ctx);
         hooks.after_eval(&src, &Value::Integer(1));
         hooks.enter_function("f", &src);
         hooks.leave_function("f");
