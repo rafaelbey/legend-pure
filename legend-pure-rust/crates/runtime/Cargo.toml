@@ -38,6 +38,13 @@ serde_json = { workspace = true }
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-core-platform = { path = "../core-platform-pure" }
 legend-pure-dsl-graph = { path = "../dsl-graph" }
+# Wire the relational extension + DSL populators into the root
+# surveyor test: the platform now ships `<<test.Test>>` functions
+# under `meta::relational::tests::*` that exercise the DuckDB-backed
+# natives. Dev-deps only — no production runtime dependency cycle.
+legend-pure-store-relational-runtime = { path = "../store-relational-runtime" }
+legend-pure-dsl-mapping-runtime = { path = "../dsl-mapping-runtime" }
+legend-pure-dsl-relational-runtime = { path = "../dsl-relational-runtime" }
 criterion = { version = "0.5", features = ["html_reports"] }
 tracing-subscriber = { workspace = true }
 
