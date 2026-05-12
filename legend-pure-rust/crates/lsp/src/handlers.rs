@@ -16,8 +16,6 @@
 //! `Backend` impl so they can be exercised in unit tests without a
 //! tokio runtime or `tower_lsp_server::Client`.
 
-use std::collections::{HashMap, HashSet};
-
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_pure::error::CompilationError;
 use legend_pure_parser_pure::ids::ElementId;
@@ -38,76 +36,6 @@ use crate::workspace::Workspace;
 #[must_use]
 pub fn diagnostics_for(errors: &[CompilationError]) -> Vec<Diagnostic> {
     errors.iter().map(diagnostics::to_diagnostic).collect()
-}
-
-/// One cycle of `textDocument/publishDiagnostics` calls, prepared from
-/// the current workspace state.
-///
-/// `entries` is what to publish this cycle: one `(uri, diagnostics)`
-/// pair per URI, with `diagnostics` possibly empty for stale-clearing
-/// or for open buffers with no errors. `next_previously_published`
-/// captures the URIs that received non-empty diagnostics, to be fed
-/// back in as `previously_published` on the next call so any URI that
-/// drops out gets an empty publish next time.
-#[derive(Debug, Clone, Default)]
-pub struct PublishPlan {
-    /// `(uri, diagnostics)` pairs to feed `Client::publish_diagnostics`.
-    pub entries: Vec<(Uri, Vec<Diagnostic>)>,
-    /// URIs that received non-empty diagnostics this cycle. Track this
-    /// across cycles so the next cycle can clear any URI that drops
-    /// out of the set.
-    pub next_previously_published: HashSet<Uri>,
-}
-
-/// Plan one round of diagnostic publishing for a workspace.
-///
-/// Three sources contribute URIs to the publish set:
-///
-/// 1. Every canonical source in [`Workspace::diagnostics`] gets
-///    resolved to a `file://` URI via
-///    [`Workspace::file_uri_for_canonical`]. Canonicals that don't
-///    resolve (embedded `.purem`, bootstrap chunk 0, fixtures without
-///    a `source_root`) are filtered out — there's no on-disk file the
-///    client can navigate to.
-/// 2. Every open buffer gets at least an empty publish, so a clean
-///    open file visibly shows "no errors" right after didOpen.
-/// 3. Every URI in `previously_published` that isn't in the
-///    diagnostic set this cycle gets an empty publish — the
-///    stale-clear path that makes workspace-wide publishing safe.
-///
-/// Resolved diagnostics for an open buffer override its empty entry;
-/// resolved diagnostics for a stale URI also override its empty entry
-/// (the stale-clear only fires if the canonical truly dropped out).
-pub fn plan_diagnostics_publish(
-    workspace: &Workspace,
-    previously_published: &HashSet<Uri>,
-) -> PublishPlan {
-    let mut publishes: HashMap<Uri, Vec<Diagnostic>> = HashMap::new();
-
-    for (canonical, errors) in &workspace.diagnostics {
-        if let Some(uri) = workspace.file_uri_for_canonical(canonical) {
-            publishes.insert(uri, diagnostics_for(errors));
-        }
-    }
-
-    for uri in workspace.open_buffers.keys() {
-        publishes.entry(uri.clone()).or_default();
-    }
-
-    for uri in previously_published {
-        publishes.entry(uri.clone()).or_default();
-    }
-
-    let next_previously_published = publishes
-        .iter()
-        .filter(|(_, diags)| !diags.is_empty())
-        .map(|(uri, _)| uri.clone())
-        .collect();
-
-    PublishPlan {
-        entries: publishes.into_iter().collect(),
-        next_previously_published,
-    }
 }
 
 /// Compute hover content for a position. Returns `None` when nothing
@@ -278,137 +206,24 @@ pub fn definition_for_position(
     })
 }
 
-/// Resolve every workspace reference to whatever symbol sits under
-/// the cursor, returning LSP-shaped [`Location`]s.
-///
-/// Two-tier cursor resolution:
-///   1. **Reference-site hit** — the cursor is on an existing
-///      reference (e.g. `extends Foo`, `String[1]` in a parameter
-///      type). The reference's `target_element` is the symbol the
-///      user is asking about.
-///   2. **Definition-site hit** — the cursor sits on an element's
-///      own name span (the user clicked the declaration). Use that
-///      element's `ElementId`.
-///
-/// V1 limitation: cursor on a property identifier (`$x.propA`),
-/// qualified-property call, or local variable returns an empty
-/// `Vec` — those reference kinds carry `target_element: None` in
-/// today's index, so the reverse-index has no entry to return. A
-/// future change to richer reference targets (property +
-/// qualified-property granularity) will populate the V1
-/// no-op cases.
-///
-/// `include_declaration` honours the LSP `ReferenceContext` flag:
-/// when `true`, the declaration's own `name_source_info` is
-/// appended to the result. Per LSP 3.17, the declaration is
-/// considered one of the references.
-///
-/// `uri_for_canonical` resolves canonical compiler paths to
-/// on-disk URLs. Reference sites whose canonical path doesn't
-/// resolve are silently skipped — they may live in repos with no
-/// on-disk source (embedded / `.purem`), and an LSP client can't
-/// navigate to a file that doesn't exist.
-#[must_use]
-pub fn references_for_position(
-    model: &PureModel,
-    references: Option<&ReferenceIndex>,
-    canonical_path: &str,
-    position: Position,
-    include_declaration: bool,
-    file_uri: &Uri,
-    uri_for_canonical: &dyn Fn(&str) -> Option<Uri>,
-) -> Vec<Location> {
-    let (line, column) = convert::position_to_1indexed(position);
-
-    // Resolve cursor → target ElementId.
-    let target_id = references
-        .and_then(|idx| idx.find_at(canonical_path, line, column))
-        .and_then(|r| r.target_element)
-        .or_else(|| {
-            let located = model.locate(canonical_path, line, column)?;
-            if !matches!(located.kind, LocatedKind::Element) {
-                return None;
-            }
-            let node = model.get_node(located.element);
-            // Inclusive-end semantics — `name_source_info` from the
-            // compiler is **inclusive** at end_column (matches
-            // `refs::contains`), unlike the LSP `Range` convention.
-            // For a 1-char element name like `Class abc::A`, the
-            // span is `c13-c13`; an exclusive-end check would reject
-            // every cursor.
-            if !cursor_in_source_info_inclusive(&node.name_source_info, line, column) {
-                return None;
-            }
-            Some(located.element)
-        });
-    let Some(target_id) = target_id else {
-        return Vec::new();
-    };
-
-    // Lookup reverse-index entries; map each to an LSP Location.
-    // Skip entries whose canonical path doesn't resolve to a URI —
-    // happens for embedded/.purem-backed repos that have no on-disk
-    // source. Dropping is correct: the LSP client can't navigate
-    // there anyway.
-    let mut out: Vec<Location> = references
-        .and_then(|idx| idx.usages_of(target_id))
-        .map(|locs| {
-            locs.iter()
-                .filter_map(|loc| {
-                    Some(Location {
-                        uri: uri_for_canonical_or_click(
-                            loc.canonical_path.as_str(),
-                            file_uri,
-                            uri_for_canonical,
-                        )?,
-                        range: range_from_source_info(&loc.range),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    if include_declaration
-        && let Some(decl_loc) = element_location(model, target_id, file_uri, uri_for_canonical)
-    {
-        out.push(decl_loc);
+/// If a [`ValueSpec`] kind directly references a resolved element,
+/// return that element's `ElementId`. None for variables (need
+/// scope tracking), literals, lambdas, etc.
+#[allow(clippy::match_same_arms)] // patterns intentionally distinct — each variant carries a different field binding even when the result shape coincides
+fn resolve_value_spec_target(vs: &legend_pure_parser_pure::types::ValueSpec) -> Option<ElementId> {
+    use legend_pure_parser_pure::types::ExprKind;
+    match &*vs.kind {
+        ExprKind::FunctionCall(d) | ExprKind::QualifiedPropertyCall(d) => d.function,
+        // PropertyCall's `function_name` is the property name, not a
+        // resolved element — finding the declaring class needs more
+        // context, deferred.
+        ExprKind::PackageableElementRef { element } => Some(*element),
+        ExprKind::EnumValue { enum_element, .. } => Some(*enum_element),
+        ExprKind::TypeReference {
+            type_expr: legend_pure_parser_pure::types::TypeExpr::Named { element, .. },
+        } => Some(*element),
+        _ => None,
     }
-    out
-}
-
-/// Choose the click URI when the target lives in the same file as
-/// the click, otherwise delegate to the cross-file resolver. Same
-/// rule as [`location_at_source_info`] but takes a canonical path
-/// directly (without a wrapping [`SourceInfo`]).
-fn uri_for_canonical_or_click(
-    canonical: &str,
-    file_uri: &Uri,
-    uri_for_canonical: &dyn Fn(&str) -> Option<Uri>,
-) -> Option<Uri> {
-    if let Some(click_path) = file_uri.to_file_path()
-        && click_path.ends_with(canonical.trim_start_matches('/'))
-    {
-        return Some(file_uri.clone());
-    }
-    uri_for_canonical(canonical)
-}
-
-/// Variant of [`cursor_in_source_info`] with **inclusive** end —
-/// matches the compiler's [`SourceInfo`] convention (used by
-/// `refs::contains`). Necessary when checking cursor presence
-/// against compiler-emitted spans like `name_source_info`, which
-/// can be a degenerate 1-character span (`c13-c13`).
-fn cursor_in_source_info_inclusive(si: &SourceInfo, line: u32, column: u32) -> bool {
-    if line < si.start_line || line > si.end_line {
-        return false;
-    }
-    if line == si.start_line && column < si.start_column {
-        return false;
-    }
-    if line == si.end_line && column > si.end_column {
-        return false;
-    }
-    true
 }
 
 /// Inclusive (line, column) test: is `(line, column)` (1-indexed)
@@ -426,6 +241,7 @@ fn cursor_in_source_info(si: &SourceInfo, line: u32, column: u32) -> bool {
     }
     true
 }
+
 
 /// Build a [`Location`] for a target span, choosing the click URI
 /// when same-file, the resolver URI when cross-file. Shared helper
@@ -613,9 +429,7 @@ pub fn workspace_symbols_for(
                         if !matches(p.name.as_str(), &format!("{fqn}.{}", p.name)) {
                             continue;
                         }
-                        let Some(uri) = make_uri(&p.source_info) else {
-                            continue;
-                        };
+                        let Some(uri) = make_uri(&p.source_info) else { continue };
                         push_symbol(
                             &mut out,
                             p.name.to_string(),
@@ -632,9 +446,7 @@ pub fn workspace_symbols_for(
                         if !matches(q.name.as_str(), &format!("{fqn}.{}", q.name)) {
                             continue;
                         }
-                        let Some(uri) = make_uri(&q.source_info) else {
-                            continue;
-                        };
+                        let Some(uri) = make_uri(&q.source_info) else { continue };
                         push_symbol(
                             &mut out,
                             q.name.to_string(),
@@ -652,9 +464,7 @@ pub fn workspace_symbols_for(
                         if !matches(constraint_name, &format!("{fqn}.{constraint_name}")) {
                             continue;
                         }
-                        let Some(uri) = make_uri(&k.source_info) else {
-                            continue;
-                        };
+                        let Some(uri) = make_uri(&k.source_info) else { continue };
                         push_symbol(
                             &mut out,
                             constraint_name.to_string(),
@@ -673,9 +483,7 @@ pub fn workspace_symbols_for(
                         if !matches(p.name.as_str(), &format!("{fqn}.{}", p.name)) {
                             continue;
                         }
-                        let Some(uri) = make_uri(&p.source_info) else {
-                            continue;
-                        };
+                        let Some(uri) = make_uri(&p.source_info) else { continue };
                         push_symbol(
                             &mut out,
                             p.name.to_string(),
@@ -692,9 +500,7 @@ pub fn workspace_symbols_for(
                         if !matches(q.name.as_str(), &format!("{fqn}.{}", q.name)) {
                             continue;
                         }
-                        let Some(uri) = make_uri(&q.source_info) else {
-                            continue;
-                        };
+                        let Some(uri) = make_uri(&q.source_info) else { continue };
                         push_symbol(
                             &mut out,
                             q.name.to_string(),
@@ -713,9 +519,7 @@ pub fn workspace_symbols_for(
                         if !matches(v.name.as_str(), &format!("{fqn}.{}", v.name)) {
                             continue;
                         }
-                        let Some(uri) = make_uri(&v.source_info) else {
-                            continue;
-                        };
+                        let Some(uri) = make_uri(&v.source_info) else { continue };
                         push_symbol(
                             &mut out,
                             v.name.to_string(),
@@ -870,7 +674,9 @@ fn is_test_stereotyped(func: &legend_pure_parser_pure::nodes::function::Function
 /// stereotypes never collide). A stricter check would verify
 /// `profile == meta::pure::test::pct::PCT`'s ElementId; the
 /// IntelliJ runner can post-filter if we ever see collisions.
-fn is_pct_test_stereotyped(func: &legend_pure_parser_pure::nodes::function::Function) -> bool {
+fn is_pct_test_stereotyped(
+    func: &legend_pure_parser_pure::nodes::function::Function,
+) -> bool {
     func.stereotypes.iter().any(|st| st.value == "test")
 }
 
@@ -985,11 +791,10 @@ pub async fn execute_legend_command(
     command: &str,
     arguments: &[serde_json::Value],
 ) -> ExecuteCommandResult {
-    // Snapshot the model + native registry under the workspace
-    // lock. The evaluation itself runs OUTSIDE the lock so a
-    // long-running function doesn't block diagnostics /
-    // hover / etc. The model is cloneable via Arc; copying the
-    // handle is cheap.
+    // Snapshot the model under the workspace lock. The evaluation
+    // itself runs OUTSIDE the lock so a long-running function
+    // doesn't block diagnostics / hover / etc. The model is
+    // cloneable via Arc; copying the handle is cheap.
     let model_arc = {
         let ws = workspace.lock().await;
         ws.model.clone()
@@ -1006,59 +811,37 @@ pub async fn execute_legend_command(
 
     // Run the eval on a blocking task — the tree-walking interpreter
     // is synchronous and can hold the thread for the function's
-    // entire runtime. Tokio's blocking pool is the right home.
+    // entire runtime. Tokio's blocking pool is the right home. The
+    // actual evaluation logic lives in
+    // [`legend_pure_runtime::runner`] so the LSP and the MCP server
+    // share one implementation; this fn is the LSP-side adapter
+    // (typed runner results → `ExecuteCommandResult` JSON shape).
     let command = command.to_string();
     let arg0 = arg_str(arguments, 0).unwrap_or_default();
     let arg1 = arg_str(arguments, 1).unwrap_or_default();
     tokio::task::spawn_blocking(move || {
         let registry = legend_pure_runtime::native::NativeRegistry::standard();
-        // `CapturingHooks` intercepts the runtime's
-        // `console_output` (every Pure-level `print` / `println`
-        // routes through it via `EvalHooks::console_output`)
-        // into a per-run String buffer shared via Arc. We hold a
-        // second handle to the buffer outside the evaluator so we
-        // can drain it after the call returns and attach it to
-        // `extras.stdout`. Without this hook stdout would go to
-        // the IDE-spawned LSP's actual stdout, which the IDE
-        // doesn't surface anywhere visible.
-        //
-        // `Arc<Mutex<…>>` (not `Rc<RefCell<…>>`) because the
-        // closure must be `Send` for `tokio::task::spawn_blocking`.
-        let capture = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-        let hooks = CapturingHooks {
-            buffer: capture.clone(),
-        };
-        let mut evaluator =
-            legend_pure_runtime::eval::Evaluator::with_hooks(model_arc.as_ref(), &registry, hooks);
-        let mut result = match command.as_str() {
-            // `<<test::Test>>`-tagged functions must run through the
-            // platform surveyor — that path navigates upstream
-            // packages to discover `BeforePackage`/`AfterPackage`
-            // hooks, builds an execution group, and only then
-            // invokes each test under the right setup/teardown
-            // bracket. Calling the function directly bypasses all
-            // of that.
-            "legend.runTest" => run_test_via_surveyor(&mut evaluator, &arg0),
-            // `<<PCT.test>>` execution. The plugin shows a popup of
-            // available adapters (from `legend.listPctAdapters`)
-            // then dispatches here with the chosen adapter's FQN.
-            "legend.runPCT" => run_pct_test(&mut evaluator, &arg0, &arg1),
-            // Discovery — returns the list of PCT adapters in the
-            // compiled model. Backs the IDE-side popup chooser.
-            "legend.listPctAdapters" => list_pct_adapters(model_arc.as_ref()),
-            // Default: plain function call.
-            _ => run_function_directly(&mut evaluator, &arg0, &command),
-        };
-        // Drain the captured stdout and attach to extras. Drop
-        // the evaluator first so the hook's Rc gets released and
-        // the buffer is the sole owner — that lets us `take` the
-        // String without cloning.
-        drop(evaluator);
-        let captured = std::mem::take(&mut *capture.lock().unwrap_or_else(|p| p.into_inner()));
-        if !captured.is_empty() {
-            merge_stdout_into_extras(&mut result, captured);
+        let model = model_arc.as_ref();
+        match command.as_str() {
+            "legend.runTest" => translate_test_result(
+                "legend.runTest",
+                &arg0,
+                legend_pure_runtime::runner::run_test(model, &registry, &arg0),
+            ),
+            "legend.runPCT" => translate_test_result(
+                "legend.runPCT",
+                &arg0,
+                legend_pure_runtime::runner::run_pct(model, &registry, &arg0, &arg1),
+            ),
+            "legend.listPctAdapters" => {
+                translate_adapters_result(legend_pure_runtime::runner::list_pct_adapters(model))
+            }
+            _ => translate_run_result(
+                &command,
+                &arg0,
+                legend_pure_runtime::runner::run_function(model, &registry, &arg0),
+            ),
         }
-        result
     })
     .await
     .unwrap_or_else(|join_err| ExecuteCommandResult {
@@ -1077,295 +860,78 @@ fn arg_str(arguments: &[serde_json::Value], i: usize) -> Option<String> {
     arguments.get(i).and_then(|v| v.as_str().map(String::from))
 }
 
-/// Custom [`EvalHooks`](legend_pure_runtime::hooks::EvalHooks)
-/// that captures Pure-level `print` / `println` output into an
-/// in-memory buffer.
+// ---------------------------------------------------------------------------
+// Translators: typed `runtime::runner` results → `ExecuteCommandResult`
+// JSON. The plugin's parsers depend on these exact shapes — keep them
+// in lock-step with `clients/intellij/.../run/PureRunToolWindowService.kt`.
+// ---------------------------------------------------------------------------
+
+/// Translate a `legend.run` (or other plain function-call) outcome.
 ///
-/// The default `EvalHooks::console_output` writes to the LSP
-/// process's actual `stdout`, which the IDE doesn't surface
-/// anywhere visible. We need every chunk routed through the same
-/// `ExecuteCommandResult` round-trip as the rest of the eval
-/// outcome so the plugin can pipe it into the Pure Run tool
-/// window's `ConsoleView`. `Rc<RefCell<String>>` is fine here —
-/// the evaluator and its hooks run on a single `spawn_blocking`
-/// thread, so there's no cross-thread access on the buffer.
-struct CapturingHooks {
-    buffer: std::sync::Arc<std::sync::Mutex<String>>,
-}
-
-impl legend_pure_runtime::hooks::EvalHooks for CapturingHooks {
-    fn before_eval(
-        &mut self,
-        _source: &legend_pure_parser_ast::SourceInfo,
-        _context: &legend_pure_runtime::context::VariableContext,
-    ) -> bool {
-        false
-    }
-    fn after_eval(
-        &mut self,
-        _source: &legend_pure_parser_ast::SourceInfo,
-        _result: &legend_pure_runtime::value::Value,
-    ) {
-    }
-    fn enter_function(&mut self, _name: &str, _source: &legend_pure_parser_ast::SourceInfo) {}
-    fn leave_function(&mut self, _name: &str) {}
-    fn console_output(&mut self, msg: &str) {
-        if let Ok(mut guard) = self.buffer.lock() {
-            guard.push_str(msg);
-        }
-    }
-}
-
-/// Merge a captured stdout buffer into an [`ExecuteCommandResult`]'s
-/// `extras` field under a `stdout` key.
-///
-/// Preserves any existing extras (e.g. `failures`) by promoting
-/// them onto the same JSON object. When `extras` was previously
-/// `None` we construct a single-key object; when it was something
-/// other than an object (shouldn't happen with current handlers
-/// but the type allows it) we wrap it under a `prior` key rather
-/// than silently dropping it.
-fn merge_stdout_into_extras(result: &mut ExecuteCommandResult, stdout: String) {
-    let stdout_value = serde_json::Value::String(stdout);
-    let merged = match result.extras.take() {
-        None => serde_json::json!({ "stdout": stdout_value }),
-        Some(serde_json::Value::Object(mut map)) => {
-            map.insert("stdout".into(), stdout_value);
-            serde_json::Value::Object(map)
-        }
-        Some(other) => serde_json::json!({ "stdout": stdout_value, "prior": other }),
-    };
-    result.extras = Some(merged);
-}
-
-/// `legend.run` path — call the function directly with no arguments.
-fn run_function_directly<H>(
-    evaluator: &mut legend_pure_runtime::eval::Evaluator<'_, H>,
-    fqn: &str,
+/// On success: `value` carries the rendered return value, `extras`
+/// contains `stdout` if any was captured. On failure: `error`
+/// carries the raw `PureException` text (preserving the original
+/// `[command] message` prefix the IDE shows in the notification),
+/// `extras.failures` carries a one-element list with the parsed
+/// stack so the plugin renders clickable links the same way it does
+/// for test failures.
+fn translate_run_result(
     command: &str,
-) -> ExecuteCommandResult
-where
-    H: legend_pure_runtime::hooks::EvalHooks,
-{
-    match evaluator.call(fqn, &[]) {
-        Ok(value) => ExecuteCommandResult {
+    fqn: &str,
+    result: legend_pure_runtime::runner::RunResult,
+) -> ExecuteCommandResult {
+    if result.ok {
+        ExecuteCommandResult {
             ok: true,
             fqn: fqn.to_string(),
-            value: Some(render_runtime_value(&value)),
+            value: result.value,
             error: None,
-            extras: None,
-        },
-        Err(e) => {
-            // Synthesize a one-element `FailureDetail` so the
-            // IDE-side renderer treats a plain `legend.run`
-            // failure the same way it does a test failure —
-            // structured message + clickable stack frames. Drop
-            // the command name into the error text so the user
-            // can tell whether it was `legend.run` vs.
-            // `legend.runTest` that failed.
-            let raw = e.to_string();
-            let (message, stack) = parse_failure_components(&raw);
-            let detail = FailureDetail {
-                fqn: fqn.to_string(),
-                message,
-                stack,
-            };
-            let extras = Some(serde_json::json!({ "failures": [detail] }));
-            ExecuteCommandResult {
-                ok: false,
-                fqn: fqn.to_string(),
-                value: None,
-                error: Some(format!("[{command}] {raw}")),
-                extras,
-            }
+            extras: build_extras(&result.stdout, None),
         }
-    }
-}
-
-/// `legend.runTest` path — drive the platform test surveyor instead
-/// of calling the test function directly.
-///
-/// The surveyor (`meta::pure::test::surveyor::runTestsFromPath`)
-/// walks the package tree, collects every `<<test::Test>>`-tagged
-/// function under the package, navigates upstream to discover any
-/// `<<test::BeforePackage>>` / `<<test::AfterPackage>>` hooks, and
-/// builds an execution plan that brackets each test with the right
-/// setup/teardown. The result is a populated
-/// `meta::pure::test::surveyor::TestReport` object — we read its
-/// counts off the heap and format a one-line summary suitable for
-/// the IDE notification balloon.
-///
-/// Strategy: pass the test function's full FQN as `path`. The
-/// surveyor's `pathToElement` resolves that to the
-/// `ConcreteFunctionDefinition` itself; `getTestFunctions` then
-/// pattern-matches on it (`surveyor.pure:180`) and returns the
-/// singleton if it carries the `<<test::Test>>` stereotype.
-/// `runTests` still walks upstream from `$test.package` to
-/// discover `<<test::BeforePackage>>` / `<<test::AfterPackage>>`
-/// hooks — the lifecycle works the same way for a single-test
-/// click as for a whole-package run.
-///
-/// `filter` stays `""` because it filters by *source path
-/// prefix*, not test name (`$f->sourceInformation()->filter(s |
-/// $s.source->startsWith($filter))` at `surveyor.pure:181`). We
-/// already narrowed to one test via the `path` argument, so no
-/// further source filtering is needed.
-fn run_test_via_surveyor<H>(
-    evaluator: &mut legend_pure_runtime::eval::Evaluator<'_, H>,
-    fqn: &str,
-) -> ExecuteCommandResult
-where
-    H: legend_pure_runtime::hooks::EvalHooks,
-{
-    use legend_pure_runtime::value::Value;
-    let result = evaluator.call(
-        "meta::pure::test::surveyor::runTestsFromPath",
-        &[
-            Value::String(fqn.to_string().into()),
-            Value::String(String::new().into()),
-        ],
-    );
-    interpret_test_report(result, fqn, "legend.runTest", evaluator.heap())
-}
-
-/// `legend.runPCT` path — drive `runPCTTests` with the chosen
-/// adapter.
-///
-/// Argument shape: `[test_fqn, adapter_fqn]`. The plugin presents
-/// the user with a popup of adapters (from
-/// `legend.listPctAdapters`) and pre-resolves the FQN before
-/// dispatch, so by the time we land here both pieces are known.
-///
-/// Why we don't use the manifest-driven `runPCTTestsFromPath`:
-/// that path needs a `.json` manifest with adapter + exclusions
-/// on disk. For interactive IDE clicks we want zero file system
-/// dependence — adapter is picked live, exclusions default to the
-/// runtime-managed `rust_native_exclusions()` (same 9-test list
-/// the CLI uses by default). Users can still load custom
-/// exclusions via the CLI `--manifest` path; the IDE flow is
-/// optimized for ergonomics.
-fn run_pct_test<H>(
-    evaluator: &mut legend_pure_runtime::eval::Evaluator<'_, H>,
-    test_fqn: &str,
-    adapter_fqn: &str,
-) -> ExecuteCommandResult
-where
-    H: legend_pure_runtime::hooks::EvalHooks,
-{
-    use legend_pure_runtime::value::Value;
-    if adapter_fqn.is_empty() {
-        return ExecuteCommandResult {
-            ok: false,
-            fqn: test_fqn.to_string(),
-            value: None,
-            error: Some(
-                "[legend.runPCT] missing adapter FQN — \
-                 expected arguments: [testFqn, adapterFqn]"
-                    .into(),
-            ),
-            extras: None,
-        };
-    }
-    let model = evaluator.model();
-    let Some(adapter_id) = model.resolve_fqn_str(adapter_fqn) else {
-        return ExecuteCommandResult {
-            ok: false,
-            fqn: test_fqn.to_string(),
-            value: None,
-            error: Some(format!(
-                "[legend.runPCT] adapter not found in model: {adapter_fqn}"
-            )),
-            extras: None,
-        };
-    };
-    // Resolve the test FQN to a PackageableElement via the
-    // platform's `pathToElement`. Same trick as `runTestsFromPath`
-    // — the surveyor's `getPCTTestFunctions` has a
-    // `ConcreteFunctionDefinition` match-arm that returns the
-    // singleton when the input is a function and the stereotype
-    // checks out.
-    let pkg = match evaluator.call(
-        "meta::pure::functions::meta::pathToElement",
-        &[
-            Value::String(test_fqn.to_string().into()),
-            Value::String("::".into()),
-        ],
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            return ExecuteCommandResult {
-                ok: false,
-                fqn: test_fqn.to_string(),
-                value: None,
-                error: Some(format!("[legend.runPCT] pathToElement failed: {e}")),
-                extras: None,
-            };
-        }
-    };
-    let result = evaluator.call(
-        "meta::pure::test::surveyor::runPCTTests",
-        &[
-            pkg,
-            Value::String(String::new().into()),
-            Value::Element(adapter_id),
-            legend_pure_runtime::pct::rust_native_exclusions(),
-        ],
-    );
-    interpret_test_report(result, test_fqn, "legend.runPCT", evaluator.heap())
-}
-
-/// Map the surveyor's `TestReport`-returning call result into the
-/// IDE-facing [`ExecuteCommandResult`]. Shared by `runTest` and
-/// `runPCT` since both end at the same `TestReport` shape.
-fn interpret_test_report(
-    result: Result<legend_pure_runtime::value::Value, legend_pure_runtime::error::PureException>,
-    fqn: &str,
-    command: &str,
-    heap: &legend_pure_runtime::heap::RuntimeHeap,
-) -> ExecuteCommandResult {
-    use legend_pure_runtime::value::Value;
-    match result {
-        Ok(Value::Object(ref report_id)) => match read_test_report_summary(heap, report_id) {
-            Ok(summary) => {
-                let ok = summary.fail_count == 0 && summary.error_count == 0;
-                let rendered = summary.render();
-                let extras = summary.extras();
-                tracing::info!(
-                    fqn = %fqn,
-                    failures = summary.failures.len(),
-                    rendered_len = rendered.len(),
-                    has_extras = extras.is_some(),
-                    rendered = %rendered,
-                    "test report dispatch",
-                );
-                ExecuteCommandResult {
-                    ok,
-                    fqn: fqn.to_string(),
-                    value: Some(rendered.clone()),
-                    error: if ok { None } else { Some(rendered) },
-                    // Structured failure list — the plugin renders
-                    // each entry as a clickable HTML anchor that
-                    // navigates to the failure's source position.
-                    extras,
-                }
-            }
-            Err(e) => ExecuteCommandResult {
-                ok: false,
-                fqn: fqn.to_string(),
-                value: None,
-                error: Some(format!("[{command}] failed to read TestReport: {e}")),
-                extras: None,
-            },
-        },
-        Ok(other) => ExecuteCommandResult {
+    } else {
+        let err = result
+            .error
+            .expect("RunResult { ok: false } must carry an error");
+        let detail = serde_json::json!({
+            "fqn": fqn,
+            "message": err.message,
+            "stack": err.stack,
+        });
+        ExecuteCommandResult {
             ok: false,
             fqn: fqn.to_string(),
             value: None,
-            error: Some(format!(
-                "[{command}] surveyor returned non-Object: {other:?}",
-            )),
-            extras: None,
-        },
+            error: Some(format!("[{command}] {}", err.raw)),
+            extras: build_extras(&result.stdout, Some(serde_json::json!([detail]))),
+        }
+    }
+}
+
+/// Translate a `legend.runTest` / `legend.runPCT` outcome (surveyor-
+/// driven runs that produce a `TestRunResult` on success).
+fn translate_test_result(
+    command: &str,
+    fqn: &str,
+    result: Result<
+        legend_pure_runtime::runner::TestRunResult,
+        legend_pure_runtime::runner::RunnerError,
+    >,
+) -> ExecuteCommandResult {
+    match result {
+        Ok(r) => {
+            let failures = if r.failures.is_empty() {
+                None
+            } else {
+                Some(serde_json::to_value(&r.failures).unwrap_or(serde_json::Value::Null))
+            };
+            ExecuteCommandResult {
+                ok: r.ok,
+                fqn: fqn.to_string(),
+                value: Some(r.rendered.clone()),
+                error: if r.ok { None } else { Some(r.rendered) },
+                extras: build_extras(&r.stdout, failures),
+            }
+        }
         Err(e) => ExecuteCommandResult {
             ok: false,
             fqn: fqn.to_string(),
@@ -1376,488 +942,58 @@ fn interpret_test_report(
     }
 }
 
-/// `legend.listPctAdapters` — return every Function in the model
-/// that carries `<<PCT.adapter>>` together with its
-/// `PCT.adapterName` tag. Backs the IDE-side popup that lets the
-/// user pick which adapter to run a PCT test against.
+/// Translate a `legend.listPctAdapters` outcome.
 ///
-/// Returns `extras = [{"fqn": "...", "name": "..."}]`. The plugin
-/// reads this directly; `value` carries a count summary for the
-/// log.
-fn list_pct_adapters(model: &legend_pure_parser_pure::model::PureModel) -> ExecuteCommandResult {
-    use legend_pure_parser_pure::ids::ElementId;
-    use legend_pure_parser_pure::model::Element;
-
-    let Some(pct_profile) =
-        legend_pure_runtime::m3_paths::resolve(model, "meta::pure::test::pct::PCT")
-    else {
-        return ExecuteCommandResult {
+/// `extras` is a JSON array (not a wrapped object) for backwards
+/// compatibility with the IntelliJ plugin's chooser parser, which
+/// reads `extras` directly as `JsonArray`.
+fn translate_adapters_result(
+    result: Result<
+        Vec<legend_pure_runtime::runner::PctAdapterInfo>,
+        legend_pure_runtime::runner::RunnerError,
+    >,
+) -> ExecuteCommandResult {
+    match result {
+        Ok(adapters) => {
+            let count = adapters.len();
+            let json = serde_json::to_value(&adapters).unwrap_or(serde_json::Value::Null);
+            ExecuteCommandResult {
+                ok: true,
+                fqn: String::new(),
+                value: Some(format!("{count} adapter(s)")),
+                error: None,
+                extras: Some(json),
+            }
+        }
+        Err(e) => ExecuteCommandResult {
             ok: false,
             fqn: String::new(),
             value: None,
-            error: Some(
-                "[legend.listPctAdapters] PCT profile (meta::pure::test::pct::PCT) \
-                 not resolvable in workspace model — is the platform loaded?"
-                    .into(),
-            ),
+            error: Some(format!("[legend.listPctAdapters] {e}")),
             extras: None,
-        };
-    };
-    let mut adapters: Vec<serde_json::Value> = Vec::new();
-    for chunk in &model.chunks {
-        for (local_idx, element) in chunk.elements.iter() {
-            let Element::Function(func) = element else {
-                continue;
-            };
-            let has_adapter_stereotype = func
-                .stereotypes
-                .iter()
-                .any(|s| s.profile == pct_profile && s.value == "adapter");
-            if !has_adapter_stereotype {
-                continue;
-            }
-            let adapter_name = func
-                .tagged_values
-                .iter()
-                .find(|t| t.profile == pct_profile && t.tag == "adapterName")
-                .map(|t| t.value.to_string());
-            let id = ElementId::InstanceId {
-                chunk_id: chunk.chunk_id,
-                local_idx,
-            };
-            let fqn = render_fqn(model, id);
-            adapters.push(serde_json::json!({
-                "fqn": fqn,
-                "name": adapter_name.unwrap_or_else(|| "<unnamed>".to_string()),
-            }));
-        }
-    }
-    ExecuteCommandResult {
-        ok: true,
-        fqn: String::new(),
-        value: Some(format!("{} adapter(s)", adapters.len())),
-        error: None,
-        extras: Some(serde_json::Value::Array(adapters)),
+        },
     }
 }
 
-/// Minimal decoded view of `meta::pure::test::surveyor::TestReport`.
-///
-/// Just the integer counters plus enough info to surface failing
-/// tests' messages in a notification. Doesn't try to be a full
-/// stand-in for the CLI's `TestReport` (which also resolves source
-/// locations for the IDE jump-to-test integration) — that's the
-/// next step once the gutter has its own dedicated test tool
-/// window.
-struct TestReportSummary {
-    pass_count: i64,
-    fail_count: i64,
-    error_count: i64,
-    skip_count: i64,
-    total_elapsed_ms: i64,
-    failures: Vec<FailureDetail>,
-}
-
-/// Structured view of one failing test, ready for the IDE to
-/// render as a clickable link.
-///
-/// `stack` carries the whole `Full Stack:` section of the
-/// PureException — the innermost frame is where the exception
-/// actually fired (`toOne` raising "multiplicity violation",
-/// `assertEq` raising "expected != actual", etc.), and the
-/// outermost is the test entry point. The IDE renders each as a
-/// clickable link so the developer can pin the failure or walk
-/// up the call chain.
-#[derive(Debug, Clone, serde::Serialize)]
-struct FailureDetail {
-    fqn: String,
-    /// One-line human-readable message — the quoted body of the
-    /// PureException, stripped of surrounding quotes when present.
-    message: String,
-    /// Parsed call-stack frames, innermost first. Empty when the
-    /// PureException carried no stack (older / hand-rolled errors).
-    stack: Vec<StackFrame>,
-}
-
-/// One frame of a [`PureException`]'s call stack — the substring
-/// the runtime emits on each `\n    <name>     <-     resource:X
-/// line:Y column:Z` line.
-#[derive(Debug, Clone, serde::Serialize)]
-struct StackFrame {
-    /// Function name as printed by `printPureStackTrace`.
-    name: String,
-    /// Canonical source path of the call site (`/platform/.../X.pure`).
-    source: String,
-    /// 1-based line, matching `SourceInformation`.
-    line: u32,
-    /// 1-based column, matching `SourceInformation`.
-    column: u32,
-}
-
-impl TestReportSummary {
-    fn render(&self) -> String {
-        let header = format!(
-            "passed={} failed={} errored={} skipped={} ({}ms)",
-            self.pass_count,
-            self.fail_count,
-            self.error_count,
-            self.skip_count,
-            self.total_elapsed_ms,
+/// Build an `extras` object combining `stdout` (if non-empty) and a
+/// pre-built JSON value to merge under `failures`. Returns `None`
+/// when neither is present so the wire payload stays small for the
+/// green-no-output case.
+fn build_extras(stdout: &str, failures: Option<serde_json::Value>) -> Option<serde_json::Value> {
+    if stdout.is_empty() && failures.is_none() {
+        return None;
+    }
+    let mut map = serde_json::Map::new();
+    if !stdout.is_empty() {
+        map.insert(
+            "stdout".into(),
+            serde_json::Value::String(stdout.to_string()),
         );
-        if self.failures.is_empty() {
-            return header;
-        }
-        // Cap at the first few failures so the notification stays
-        // readable; the rest are still in the full report (which a
-        // future test-result tool-window would render in full).
-        let mut out = String::with_capacity(256);
-        out.push_str(&header);
-        for f in self.failures.iter().take(5) {
-            out.push_str("\n  ✗ ");
-            out.push_str(&f.fqn);
-            if let Some(frame) = f.stack.first() {
-                out.push_str(&format!(" @ {}:{}", frame.source, frame.line));
-            }
-            if !f.message.is_empty() {
-                out.push_str("\n      ");
-                out.push_str(&f.message);
-            }
-            for frame in f.stack.iter().take(8) {
-                out.push_str(&format!(
-                    "\n      at {} ({}:{}:{})",
-                    frame.name, frame.source, frame.line, frame.column,
-                ));
-            }
-        }
-        if self.failures.len() > 5 {
-            out.push_str(&format!("\n  … and {} more", self.failures.len() - 5));
-        }
-        out
     }
-
-    /// Convert the structured failure list to JSON for the
-    /// `extras` slot. The plugin reads this to build clickable
-    /// HTML links per failure (`fqn`, `message`, `source`, `line`,
-    /// `column`). `extras` is `None` when there are no failures —
-    /// keeps the response payload small for the (much more
-    /// common) green-test path.
-    fn extras(&self) -> Option<serde_json::Value> {
-        if self.failures.is_empty() {
-            return None;
-        }
-        Some(serde_json::json!({
-            "failures": self.failures,
-        }))
+    if let Some(f) = failures {
+        map.insert("failures".into(), f);
     }
-}
-
-/// Decompose a [`PureException`] string into the user-facing
-/// message plus its source location.
-///
-/// `PureException`'s `Display` (see `error.rs:276`) emits one of
-/// two shapes depending on whether the exception carried a
-/// `SourceInformation`. With source info:
-/// ```text
-/// Assert failure (resource:foo.pure line:5 column:3)
-/// "actual assertion message — may span multiple lines"
-/// Full Stack:
-///     frame1 <- ...
-/// ```
-/// Without source info (common for asserts raised through the
-/// `assert` native — the exception is constructed without a
-/// `SourceInformation`):
-/// ```text
-/// Assert failure
-/// "
-/// expected: 9.1
-/// actual:   9.0"
-/// Full Stack:
-///     testNumberPow_Function_1__Boolean_1_     <-     resource:/platform/.../pow.pure line:34 column:1
-///     assertEq     <-
-/// ```
-/// Both shapes are handled:
-///   * **Body** = everything between the first `"` and the last
-///     `"` that appears before `Full Stack:` (or end-of-string).
-///     Internal newlines become `" | "` so the notification
-///     stays readable on one line.
-///   * **Source** = parsed first from the parens after the kind
-///     name; if missing, falls back to the first `resource:X
-///     line:Y column:Z` triple found in the call stack — that's
-///     the innermost frame, which is where the user wants to
-///     navigate.
-fn parse_failure_components(msg: &str) -> (String, Vec<StackFrame>) {
-    let header = msg.lines().next().unwrap_or("");
-    let body = extract_quoted_body(msg);
-    let mut stack = parse_full_stack(msg);
-    // If the header had inline source info, treat that as a
-    // synthesized innermost frame so the user can click straight
-    // to the location even on exceptions with no proper call
-    // stack (older or hand-rolled errors).
-    if stack.is_empty()
-        && let (Some(s), Some(l), Some(c)) = parse_source_info(header)
-    {
-        stack.push(StackFrame {
-            name: header_kind(header).to_string(),
-            source: s,
-            line: l,
-            column: c,
-        });
-    }
-    let message = if body.is_empty() {
-        header.to_string()
-    } else {
-        body
-    };
-    (message, stack)
-}
-
-/// Pull the text between the first `"` and the last `"` that
-/// appears before the `Full Stack:` marker (or end-of-string).
-/// Compresses internal newlines into ` | ` separators so the body
-/// fits on one notification line.
-fn extract_quoted_body(msg: &str) -> String {
-    let first_quote = match msg.find('"') {
-        Some(i) => i,
-        None => return String::new(),
-    };
-    let stack_at = msg.find("\nFull Stack:").unwrap_or(msg.len());
-    let search_region = &msg[first_quote + 1..stack_at];
-    let last_quote_rel = match search_region.rfind('"') {
-        Some(i) => i,
-        None => search_region.len(),
-    };
-    let raw = &search_region[..last_quote_rel];
-    raw.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" | ")
-}
-
-/// Parse every `Full Stack:` frame line into a [`StackFrame`].
-///
-/// Each line of the form
-/// `    <name>     <-     resource:<src> line:<n> column:<n>`
-/// becomes one entry. Order is preserved — exactly what
-/// PureException's `Display` emits, which is innermost-first (the
-/// frame nearest the actual error is at index 0). Frames that
-/// don't contain a complete `resource:/line:/column:` triple are
-/// skipped silently.
-fn parse_full_stack(msg: &str) -> Vec<StackFrame> {
-    let Some(start) = msg.find("\nFull Stack:") else {
-        return Vec::new();
-    };
-    let stack_section = &msg[start..];
-    let mut out = Vec::new();
-    for line in stack_section.lines().skip(1) {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        // Split off the function name at `<-` so we don't pick up
-        // the arrow itself as part of the name.
-        let (name_part, location_part) = match trimmed.split_once("<-") {
-            Some((n, l)) => (n.trim().to_string(), l),
-            None => continue,
-        };
-        let mut source: Option<String> = None;
-        let mut line_num: Option<u32> = None;
-        let mut column: Option<u32> = None;
-        for part in location_part.split_whitespace() {
-            if let Some(v) = part.strip_prefix("resource:") {
-                source = Some(v.to_string());
-            } else if let Some(v) = part.strip_prefix("line:") {
-                line_num = v.parse().ok();
-            } else if let Some(v) = part.strip_prefix("column:") {
-                column = v.parse().ok();
-            }
-        }
-        if let (Some(s), Some(l), Some(c)) = (source, line_num, column) {
-            out.push(StackFrame {
-                name: name_part,
-                source: s,
-                line: l,
-                column: c,
-            });
-        }
-    }
-    out
-}
-
-/// Strip the location parens off a header so the synthesized frame
-/// is named after the kind (`Assert failure`, `Execution error`,
-/// …) without trailing noise.
-fn header_kind(header: &str) -> &str {
-    match header.find(" (") {
-        Some(i) => &header[..i],
-        None => header.trim(),
-    }
-}
-
-/// Pull `(source, line, column)` out of the location segment of a
-/// `PureException` header (`... (resource:X line:Y column:Z)`).
-///
-/// Returns `(None, None, None)` when the parens aren't present
-/// (no source info was attached to the exception). Robust against
-/// whitespace inside the parens and tolerates either of the
-/// integer parses failing.
-fn parse_source_info(header: &str) -> (Option<String>, Option<u32>, Option<u32>) {
-    let Some(open) = header.rfind('(') else {
-        return (None, None, None);
-    };
-    let Some(close_off) = header[open + 1..].rfind(')') else {
-        return (None, None, None);
-    };
-    let inner = &header[open + 1..open + 1 + close_off];
-    let mut source: Option<String> = None;
-    let mut line: Option<u32> = None;
-    let mut column: Option<u32> = None;
-    for part in inner.split_whitespace() {
-        if let Some(v) = part.strip_prefix("resource:") {
-            source = Some(v.to_string());
-        } else if let Some(v) = part.strip_prefix("line:") {
-            line = v.parse().ok();
-        } else if let Some(v) = part.strip_prefix("column:") {
-            column = v.parse().ok();
-        }
-    }
-    (source, line, column)
-}
-
-fn read_test_report_summary(
-    heap: &legend_pure_runtime::heap::RuntimeHeap,
-    report: &legend_pure_runtime::heap::ObjectHandle,
-) -> Result<TestReportSummary, String> {
-    let pass_count = read_int_property(heap, report, "passCount")?;
-    let fail_count = read_int_property(heap, report, "failCount")?;
-    let error_count = read_int_property(heap, report, "errorCount")?;
-    let skip_count = read_int_property(heap, report, "skipCount")?;
-    let total_elapsed_ms = read_int_property(heap, report, "totalElapsed").unwrap_or(0);
-    let mut failures = Vec::new();
-    let results = heap
-        .get_property_values(report, "results")
-        .map_err(|e| format!("results: {e}"))?;
-    for v in results.iter() {
-        let legend_pure_runtime::value::Value::Object(rid) = v else {
-            continue;
-        };
-        let status = read_status_property(heap, rid).unwrap_or_default();
-        let is_failure = matches!(status.as_str(), "FAIL" | "ERROR");
-        if !is_failure {
-            continue;
-        }
-        let fqn = read_string_property(heap, rid, "fqn").unwrap_or_else(|_| "<unknown>".into());
-        let raw = read_string_property(heap, rid, "message").ok();
-        // Debug aid: log what we got off the heap so a stuck IDE
-        // can be diagnosed from `Help → Show Log in Finder`. Two
-        // common failure modes:
-        //   - raw=None → `TestResult.message` slot was never
-        //     populated. Surveyor / executePCTTest didn't classify
-        //     the result as FAIL/ERROR, or the populate path
-        //     dropped the message somewhere.
-        //   - raw=Some(s) but parse yields empty body → the
-        //     PureException Display ended up as just the kind
-        //     header (no quoted message body). Caller likely
-        //     raised a runtime error without setting the message.
-        tracing::info!(
-            test_fqn = %fqn,
-            status = %status,
-            raw_message_len = raw.as_deref().map(str::len).unwrap_or(0),
-            raw_head = %raw.as_deref().map(|s| s.chars().take(200).collect::<String>()).unwrap_or_default(),
-            "TestReport row read",
-        );
-        let (message, stack) = match raw.as_deref() {
-            Some(s) => parse_failure_components(s),
-            None => (String::new(), Vec::new()),
-        };
-        tracing::info!(
-            test_fqn = %fqn,
-            parsed_msg_len = message.len(),
-            frames = stack.len(),
-            "parsed failure components",
-        );
-        failures.push(FailureDetail {
-            fqn,
-            message,
-            stack,
-        });
-    }
-    Ok(TestReportSummary {
-        pass_count,
-        fail_count,
-        error_count,
-        skip_count,
-        total_elapsed_ms,
-        failures,
-    })
-}
-
-fn read_int_property(
-    heap: &legend_pure_runtime::heap::RuntimeHeap,
-    obj: &legend_pure_runtime::heap::ObjectHandle,
-    name: &str,
-) -> Result<i64, String> {
-    let vs = heap
-        .get_property_values(obj, name)
-        .map_err(|e| format!("{name}: {e}"))?;
-    match vs.iter().next() {
-        Some(legend_pure_runtime::value::Value::Integer(n)) => Ok(*n),
-        Some(other) => Err(format!("{name}: expected Integer, got {other:?}")),
-        None => Err(format!("{name}: empty")),
-    }
-}
-
-fn read_string_property(
-    heap: &legend_pure_runtime::heap::RuntimeHeap,
-    obj: &legend_pure_runtime::heap::ObjectHandle,
-    name: &str,
-) -> Result<String, String> {
-    let vs = heap
-        .get_property_values(obj, name)
-        .map_err(|e| format!("{name}: {e}"))?;
-    match vs.iter().next() {
-        Some(legend_pure_runtime::value::Value::String(s)) => Ok(s.to_string()),
-        Some(other) => Err(format!("{name}: expected String, got {other:?}")),
-        None => Err(format!("{name}: empty")),
-    }
-}
-
-/// The `status` slot on a `TestResult` is an Enum value — we just
-/// want its name (`PASS` / `FAIL` / `ERROR` / `SKIP`) so we can
-/// pull out the failing tests for the summary.
-fn read_status_property(
-    heap: &legend_pure_runtime::heap::RuntimeHeap,
-    obj: &legend_pure_runtime::heap::ObjectHandle,
-) -> Result<String, String> {
-    use legend_pure_runtime::value::Value;
-    let vs = heap
-        .get_property_values(obj, "status")
-        .map_err(|e| format!("status: {e}"))?;
-    match vs.iter().next() {
-        Some(Value::EnumValue { member, .. }) => Ok(member.to_string()),
-        Some(Value::String(s)) => Ok(s.to_string()),
-        Some(other) => Err(format!("status: unexpected shape {other:?}")),
-        None => Err("status: empty".into()),
-    }
-}
-
-/// Best-effort rendering of a runtime [`Value`] for one-line
-/// display in the IDE notification. Refining to a Pure-level
-/// `toString` (i.e. dispatching back through the runtime to format
-/// objects via the `toOne`/`toString` natives) is deferred.
-fn render_runtime_value(value: &legend_pure_runtime::value::Value) -> String {
-    use legend_pure_runtime::value::Value;
-    match value {
-        Value::Integer(i) => i.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::String(s) => format!("{s:?}"),
-        Value::Boolean(b) => b.to_string(),
-        Value::Collection(items) => {
-            let rendered: Vec<String> = items.iter().map(render_runtime_value).collect();
-            format!("[{}]", rendered.join(", "))
-        }
-        other => format!("{other:?}"),
-    }
+    Some(serde_json::Value::Object(map))
 }
 
 #[cfg(test)]
@@ -1989,8 +1125,7 @@ function test::nameOf(p: test::Person[1]): String[1]
         // The body line is line 8 (1-indexed). `$p.name` starts at
         // col 3; `name` itself is at col 6. LSP positions are 0-indexed
         // → (line 7, col 5+).
-        let loc =
-            definition_for_position(&model, None, "fixture.pure", pos(7, 6), &uri, no_cross_file);
+        let loc = definition_for_position(&model, None, "fixture.pure", pos(7, 6), &uri, no_cross_file);
         // Property goto requires `type_info` populated on the
         // receiver, which only happens after a full Pass-2.5 compile.
         // `compile_fixture` produces a partial model without bodies
@@ -2023,8 +1158,7 @@ function test::nameOf(p: test::Person[1]): String[1]
         let model = compile_fixture("fixture.pure", src);
         let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
         let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
-        let loc =
-            definition_for_position(&model, None, "fixture.pure", pos(2, 4), &uri, no_cross_file);
+        let loc = definition_for_position(&model, None, "fixture.pure", pos(2, 4), &uri, no_cross_file);
         assert!(
             loc.is_none(),
             "click on a literal must not navigate to the enclosing function: got {loc:?}",
@@ -2042,15 +1176,8 @@ function test::nameOf(p: test::Person[1]): String[1]
         let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
         let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
         // `msg` starts at line 1 col 16 (1-indexed) → 0-indexed col 15.
-        let loc = definition_for_position(
-            &model,
-            None,
-            "fixture.pure",
-            pos(0, 16),
-            &uri,
-            no_cross_file,
-        )
-        .expect("definition-site click should still produce a location");
+        let loc = definition_for_position(&model, None, "fixture.pure", pos(0, 16), &uri, no_cross_file)
+            .expect("definition-site click should still produce a location");
         assert_eq!(loc.target_range.start.line, 0);
         assert_eq!(loc.target_range.start.character, 15);
     }
@@ -2167,11 +1294,7 @@ Class test::Person
             "function test::ordinary(): Integer[1]\n{\n  1\n}\n",
         );
         let lenses = code_lenses_for(&plain, "plain.pure");
-        assert_eq!(
-            lenses.len(),
-            1,
-            "expected exactly one ▶ Run lens; got {lenses:?}"
-        );
+        assert_eq!(lenses.len(), 1, "expected exactly one ▶ Run lens; got {lenses:?}");
         let cmd = lenses[0]
             .command
             .as_ref()
@@ -2339,13 +1462,11 @@ Class test::Person
         let model = compile_fixture("fixture.pure", "Class test::Person {}");
         let resolver = fixture_uri_resolver();
         let syms = workspace_symbols_for(&model, "", &resolver);
-        let persons: Vec<&WorkspaceSymbol> =
-            syms.iter().filter(|s| s.name == "test::Person").collect();
-        assert_eq!(
-            persons.len(),
-            1,
-            "expected exactly one Person entry; got: {syms:?}"
-        );
+        let persons: Vec<&WorkspaceSymbol> = syms
+            .iter()
+            .filter(|s| s.name == "test::Person")
+            .collect();
+        assert_eq!(persons.len(), 1, "expected exactly one Person entry; got: {syms:?}");
         assert_eq!(persons[0].kind, SymbolKind::CLASS);
         assert_eq!(persons[0].container_name.as_deref(), Some("test"));
     }
@@ -2376,7 +1497,9 @@ Class test::Person
         let field = syms
             .iter()
             .find(|s| s.kind == SymbolKind::FIELD && s.name == "name")
-            .unwrap_or_else(|| panic!("expected a FIELD symbol named 'name'; got: {syms:?}"));
+            .unwrap_or_else(|| {
+                panic!("expected a FIELD symbol named 'name'; got: {syms:?}")
+            });
         assert_eq!(
             field.container_name.as_deref(),
             Some("test::Person"),
@@ -2395,591 +1518,6 @@ Class test::Person
                     || s.name.ends_with(&format!("::{bootstrap_name}"))),
                 "bootstrap symbol {bootstrap_name:?} must not appear in workspace results"
             );
-        }
-    }
-
-    // ---------------------------------------------------------------
-    // textDocument/references — T-20260511-07
-    // ---------------------------------------------------------------
-
-    /// Build the reverse-index for a one-file fixture. Same helper
-    /// pattern as the existing `definition_resolves_variable_…` test.
-    fn refs_for(model: &PureModel) -> ReferenceIndex {
-        legend_pure_parser_pure::refs::build_reference_index(model)
-    }
-
-    #[test]
-    fn references_class_used_in_extends_returns_use_site() {
-        let src = "\
-Class test::A {}
-
-Class test::B extends test::A {}
-";
-        let model = compile_fixture("fixture.pure", src);
-        let index = refs_for(&model);
-        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
-        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
-        // Cursor on `A` declaration. `Class test::A {}` — `A` starts
-        // at col 13 (1-indexed) → 0-indexed col 12.
-        let locs = references_for_position(
-            &model,
-            Some(&index),
-            "fixture.pure",
-            pos(0, 12),
-            false,
-            &uri,
-            no_cross_file,
-        );
-        assert_eq!(
-            locs.len(),
-            1,
-            "expected exactly one usage (the extends site); got: {locs:?}"
-        );
-        // The use site is on line 3 (`Class test::B extends test::A {}`),
-        // 1-indexed; LSP is 0-indexed → line 2.
-        assert_eq!(
-            locs[0].range.start.line, 2,
-            "use site must be on the extends line"
-        );
-    }
-
-    #[test]
-    fn references_click_on_use_site_returns_same_target() {
-        let src = "\
-Class test::A {}
-
-Class test::B extends test::A {}
-";
-        let model = compile_fixture("fixture.pure", src);
-        let index = refs_for(&model);
-        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
-        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
-        // Cursor on the `A` in `extends test::A` (use site).
-        // Line 3 col 29 (1-indexed) → line 2, char 28 (0-indexed).
-        let from_use_site = references_for_position(
-            &model,
-            Some(&index),
-            "fixture.pure",
-            pos(2, 28),
-            false,
-            &uri,
-            no_cross_file,
-        );
-        // Cursor on `A` declaration (col 12 0-indexed).
-        let from_decl = references_for_position(
-            &model,
-            Some(&index),
-            "fixture.pure",
-            pos(0, 12),
-            false,
-            &uri,
-            no_cross_file,
-        );
-        assert_eq!(
-            from_use_site, from_decl,
-            "clicking a use site must resolve to the same target as clicking the declaration"
-        );
-    }
-
-    #[test]
-    fn references_include_declaration_appends_decl() {
-        let src = "\
-Class test::A {}
-
-Class test::B extends test::A {}
-";
-        let model = compile_fixture("fixture.pure", src);
-        let index = refs_for(&model);
-        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
-        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
-        // Without include_declaration — exactly the use sites.
-        let without = references_for_position(
-            &model,
-            Some(&index),
-            "fixture.pure",
-            pos(0, 12),
-            false,
-            &uri,
-            no_cross_file,
-        );
-        // With include_declaration — adds the declaration span at the end.
-        let with = references_for_position(
-            &model,
-            Some(&index),
-            "fixture.pure",
-            pos(0, 12),
-            true,
-            &uri,
-            no_cross_file,
-        );
-        assert_eq!(
-            with.len(),
-            without.len() + 1,
-            "include_declaration=true must add exactly one Location (the decl); got: {with:?}"
-        );
-        let decl_range = with.last().expect("decl location present").range;
-        // The declaration's `name_source_info` covers just `A` on line 1.
-        assert_eq!(decl_range.start.line, 0);
-    }
-
-    #[test]
-    fn references_empty_on_whitespace_cursor() {
-        let src = "\
-Class test::A {}
-
-Class test::B extends test::A {}
-";
-        let model = compile_fixture("fixture.pure", src);
-        let index = refs_for(&model);
-        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
-        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
-        // Cursor on the blank line 2 (0-indexed line 1, char 0).
-        let locs = references_for_position(
-            &model,
-            Some(&index),
-            "fixture.pure",
-            pos(1, 0),
-            false,
-            &uri,
-            no_cross_file,
-        );
-        assert!(
-            locs.is_empty(),
-            "cursor on whitespace must return no usages; got: {locs:?}"
-        );
-    }
-
-    #[test]
-    fn references_empty_on_property_call_v1_limitation() {
-        // V1 scope: PropertyCall references carry target_element=None
-        // and are NOT exposed via `usages_of`. Pin this so a future
-        // change to richer reference targets doesn't silently flip
-        // the result and surprise callers.
-        let src = "\
-Class test::Person
-{
-  name: String[1];
-}
-
-function test::nameOf(p: test::Person[1]): String[1]
-{
-  $p.name
-}
-";
-        let model = compile_fixture("fixture.pure", src);
-        let index = refs_for(&model);
-        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
-        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
-        // Cursor inside `$p.name` — `name` is at line 8 col 6
-        // (1-indexed) → 0-indexed (7, 5).
-        let locs = references_for_position(
-            &model,
-            Some(&index),
-            "fixture.pure",
-            pos(7, 5),
-            false,
-            &uri,
-            no_cross_file,
-        );
-        assert!(
-            locs.is_empty(),
-            "V1 scope: property cursors must return empty; got: {locs:?}"
-        );
-    }
-
-    /// Cross-file branch: hand-built model with two chunks — chunk 0
-    /// has a class declared in `lib.pure`, chunk 1 has another class
-    /// extending it from `app.pure`. Verifies that the resolver is
-    /// consulted for cross-file targets (use-site URI = `app.pure`,
-    /// not the click's `lib.pure`).
-    ///
-    /// Manual construction (instead of compile_fixture spanning two
-    /// files) because `pipeline::compile`'s import resolution across
-    /// hand-rolled chunks is fragile in test fixtures and the unit
-    /// here is the URI-resolution branch, not the compile pipeline.
-    #[test]
-    fn references_cross_file_uri_resolves_via_resolver() {
-        use legend_pure_parser_ast::SourceInfo as SI;
-        use legend_pure_parser_pure::ids::ElementId;
-        use legend_pure_parser_pure::model::{
-            Element as ModelElement, ElementNode, ModelChunk, PureModel,
-        };
-        use legend_pure_parser_pure::nodes::class::Class;
-        use legend_pure_parser_pure::refs::{RefKind, Reference, ReferenceIndex};
-
-        let mut model = PureModel::new();
-        let test_pkg = model.get_or_create_package(&[smol_str::SmolStr::new("test")]);
-
-        let chunk_id: u16 = 0;
-        let mut chunk = ModelChunk::new(chunk_id);
-        // Class A declared in /proj/lib.pure.
-        let class_body_si = SI::new("/proj/lib.pure", 1, 1, 1, 17);
-        let class_name_si = SI::new("/proj/lib.pure", 1, 7, 1, 14);
-        let class_idx = chunk.alloc_element(
-            ElementNode {
-                name: smol_str::SmolStr::new("A"),
-                source_info: class_body_si.clone(),
-                name_source_info: class_name_si.clone(),
-                parent_package: test_pkg,
-            },
-            ModelElement::Class(Class {
-                type_parameters: Vec::new(),
-                multiplicity_parameters: Vec::new(),
-                type_variable_parameters: Vec::new(),
-                super_types: Vec::new(),
-                properties: Vec::new(),
-                qualified_properties: Vec::new(),
-                constraints: Vec::new(),
-                stereotypes: Vec::new(),
-                tagged_values: Vec::new(),
-            }),
-        );
-        let class_id = ElementId::InstanceId {
-            chunk_id,
-            local_idx: class_idx,
-        };
-        model.chunks.push(chunk);
-        model.register_element(test_pkg, class_id);
-
-        // Build a synthetic reference index: one use site in app.pure
-        // pointing at lib.pure's class A.
-        let mut index = ReferenceIndex::default();
-        let use_site_si = SI::new("/proj/app.pure", 3, 23, 3, 30);
-        index.push(Reference {
-            range: use_site_si.clone(),
-            kind: RefKind::TypeRef,
-            target_element: Some(class_id),
-            target: class_name_si.clone(),
-        });
-        index.finalize();
-
-        // The click happens at the class declaration (in lib.pure).
-        let lib_uri = "file:///abs/proj/lib.pure".parse::<Uri>().unwrap();
-        let app_disk_uri = "file:///abs/proj/app.pure".parse::<Uri>().unwrap();
-        let app_disk_uri_clone = app_disk_uri.clone();
-        let resolver: &dyn Fn(&str) -> Option<Uri> = &move |canonical: &str| match canonical {
-            "/proj/app.pure" => Some(app_disk_uri_clone.clone()),
-            _ => None,
-        };
-
-        // Cursor on `A` in the class declaration (line 1 col 7 1-indexed
-        // → line 0 char 6 0-indexed).
-        let locs = references_for_position(
-            &model,
-            Some(&index),
-            "/proj/lib.pure",
-            pos(0, 6),
-            false,
-            &lib_uri,
-            resolver,
-        );
-        assert_eq!(locs.len(), 1);
-        assert_eq!(
-            locs[0].uri, app_disk_uri,
-            "cross-file URI must be resolved through the resolver",
-        );
-    }
-
-    #[test]
-    fn references_returns_empty_when_index_missing() {
-        let src = "Class test::A {}\n";
-        let model = compile_fixture("fixture.pure", src);
-        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
-        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
-        // No ReferenceIndex passed — handler must still find the
-        // declaration (via locate) and report zero use sites (the
-        // index is what holds usages; without it, no usages
-        // available). Pinning this so future changes don't
-        // accidentally start panicking on a missing index.
-        let locs = references_for_position(
-            &model,
-            None,
-            "fixture.pure",
-            pos(0, 12),
-            false,
-            &uri,
-            no_cross_file,
-        );
-        assert!(
-            locs.is_empty(),
-            "without an index, references must return empty (not panic); got: {locs:?}"
-        );
-    }
-
-    mod publish_plan {
-        use super::*;
-        use legend_pure_core_platform::repo::{OwnedSourceFile, Repo};
-        use std::path::PathBuf;
-
-        fn fs_repo(prefix: &str, root: PathBuf, files: &[&str]) -> Repo {
-            Repo::Filesystem {
-                prefix: prefix.to_string(),
-                files: files
-                    .iter()
-                    .map(|p| OwnedSourceFile {
-                        path: (*p).to_string(),
-                        content: String::new(),
-                    })
-                    .collect(),
-                meta: None,
-                source_root: Some(root),
-            }
-        }
-
-        fn err(source: &str, message: &str) -> CompilationError {
-            CompilationError {
-                message: message.to_string(),
-                source_info: SourceInfo::new(source, 1, 1, 1, 1),
-                kind: legend_pure_parser_pure::error::CompilationErrorKind::UnresolvedElement {
-                    path: smol_str::SmolStr::new("Foo"),
-                },
-            }
-        }
-
-        fn uri_of(s: &str) -> Uri {
-            s.parse::<Uri>().expect("test URI must parse")
-        }
-
-        #[test]
-        fn empty_workspace_yields_empty_plan() {
-            let ws = Workspace::new(Vec::new(), Vec::new());
-            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
-            assert!(plan.entries.is_empty());
-            assert!(plan.next_previously_published.is_empty());
-        }
-
-        #[test]
-        fn open_buffer_with_no_errors_gets_empty_publish() {
-            // Even when no compile has run, an open file must receive
-            // a single empty publish so the IDE shows "no errors" on
-            // didOpen. Preserves the current LSP behaviour at server.rs
-            // lines 88-92 in the old implementation.
-            let mut ws = Workspace::new(Vec::new(), Vec::new());
-            let uri = uri_of("file:///proj/a.pure");
-            ws.set_open_buffer(uri.clone(), String::new());
-
-            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
-            assert_eq!(plan.entries.len(), 1);
-            assert_eq!(plan.entries[0].0, uri);
-            assert!(plan.entries[0].1.is_empty());
-            // Empty publish must NOT be tracked as previously-published
-            // — there's nothing to clear next time.
-            assert!(plan.next_previously_published.is_empty());
-        }
-
-        #[test]
-        fn diagnostics_for_unopened_file_resolve_through_source_root() {
-            // Workspace has a filesystem repo with on-disk root
-            // /tmp/proj. A canonical /proj/lib.pure should resolve to
-            // file:///tmp/proj/lib.pure even though the file is NOT in
-            // open_buffers. This is the core "global diagnostics"
-            // behaviour T-20260511-06 asks for.
-            let mut ws = Workspace::new(
-                vec![fs_repo("/proj", PathBuf::from("/tmp/proj"), &["/proj/lib.pure"])],
-                Vec::new(),
-            );
-            ws.diagnostics
-                .insert("/proj/lib.pure".to_string(), vec![err("/proj/lib.pure", "boom")]);
-
-            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
-            assert_eq!(plan.entries.len(), 1);
-            let (uri, diags) = &plan.entries[0];
-            assert!(
-                uri.as_str().contains("/tmp/proj/lib.pure"),
-                "expected on-disk path in URI; got {uri:?}",
-            );
-            assert_eq!(diags.len(), 1);
-            assert_eq!(diags[0].message, "boom");
-            // Non-empty publish for this URI — track it so the next
-            // cycle can clear it if the user fixes the error.
-            assert!(plan.next_previously_published.contains(uri));
-        }
-
-        #[test]
-        fn synthetic_source_is_filtered_out() {
-            // Canonical /platform/pure/... or anything not covered by
-            // a Filesystem repo with source_root returns None from
-            // file_uri_for_canonical. Those diagnostics must NOT be
-            // published — there's no on-disk file the client can
-            // navigate to.
-            let mut ws = Workspace::new(Vec::new(), Vec::new());
-            ws.diagnostics.insert(
-                "/platform/pure/grammar/m3.pure".to_string(),
-                vec![err("/platform/pure/grammar/m3.pure", "boom")],
-            );
-
-            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
-            assert!(plan.entries.is_empty());
-            assert!(plan.next_previously_published.is_empty());
-        }
-
-        #[test]
-        fn stale_uri_gets_empty_publish_when_dropped() {
-            // Previously published a non-empty diag for B.pure; this
-            // cycle B.pure no longer appears in ws.diagnostics. The
-            // plan must emit an empty publish for B's URI so the
-            // client clears its stale entry.
-            let ws = Workspace::new(
-                vec![fs_repo("/proj", PathBuf::from("/tmp/proj"), &["/proj/b.pure"])],
-                Vec::new(),
-            );
-            let b_uri = uri_of("file:///tmp/proj/b.pure");
-            let mut prev = HashSet::new();
-            prev.insert(b_uri.clone());
-
-            let plan = plan_diagnostics_publish(&ws, &prev);
-            assert_eq!(plan.entries.len(), 1);
-            assert_eq!(plan.entries[0].0, b_uri);
-            assert!(plan.entries[0].1.is_empty(), "stale entry must be cleared");
-            assert!(plan.next_previously_published.is_empty());
-        }
-
-        #[test]
-        fn open_buffer_with_errors_publishes_diagnostics_once() {
-            // An open buffer that ALSO has compile errors should get a
-            // single non-empty publish (the resolved diagnostics
-            // override the empty open-buffer placeholder).
-            let mut ws = Workspace::new(
-                vec![fs_repo("/proj", PathBuf::from("/tmp/proj"), &["/proj/a.pure"])],
-                Vec::new(),
-            );
-            let a_uri = uri_of("file:///tmp/proj/a.pure");
-            ws.set_open_buffer(a_uri.clone(), String::new());
-            ws.diagnostics
-                .insert("/proj/a.pure".to_string(), vec![err("/proj/a.pure", "boom")]);
-
-            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
-            assert_eq!(plan.entries.len(), 1, "must not double-publish");
-            assert_eq!(plan.entries[0].0, a_uri);
-            assert_eq!(plan.entries[0].1.len(), 1);
-            assert!(plan.next_previously_published.contains(&a_uri));
-        }
-
-        /// End-to-end integration of `Workspace::compile()` and
-        /// `plan_diagnostics_publish`: a real two-file workspace where
-        /// editing A produces a compile error in B, and the planner
-        /// surfaces B's URI even though B is not in `open_buffers`.
-        /// This is the actual "global diagnostics" UX win T-20260511-06
-        /// asks for; the rest of `publish_plan` tests cover planner
-        /// correctness in isolation with hand-injected diagnostics.
-        #[test]
-        fn cross_file_error_surfaces_on_unopened_file() {
-            use legend_pure_core_platform::repo::Repo;
-            use std::fs;
-
-            // The Filesystem canonical-tail match in `snapshot_repos`
-            // requires the on-disk leaf directory to be named after the
-            // repo. Build a descriptor-shaped layout:
-            //   <tmp>/userproj.json    — declares dep on `platform`
-            //   <tmp>/userproj/a.pure
-            //   <tmp>/userproj/b.pure
-            // → canonicals /userproj/a.pure, /userproj/b.pure.
-            // Using a descriptor (rather than `Repo::from_filesystem`)
-            // populates `RepoMeta`, which the topo-sorter needs for
-            // multi-repo workspaces — `from_filesystem` produces a
-            // `meta: None` repo that fails topo sort against the
-            // embedded platform.
-            let tmp = tempfile::tempdir().expect("tempdir");
-            let descriptor = tmp.path().join("userproj.json");
-            fs::write(
-                &descriptor,
-                r#"{"name":"userproj","pattern":".*","dependencies":["platform"]}"#,
-            )
-            .expect("write descriptor");
-            let proj = tmp.path().join("userproj");
-            fs::create_dir(&proj).expect("mkdir userproj");
-            let a_disk = proj.join("a.pure");
-            let b_disk = proj.join("b.pure");
-
-            // Clean baseline: A defines `Foo` with a `name` property;
-            // B references it. Both compile clean against the platform.
-            let a_clean = "Class abc::Foo { name: String[1]; }\n";
-            let b_src = "function abc::greet(f: abc::Foo[1]): String[1] { $f.name }\n";
-            fs::write(&a_disk, a_clean).expect("write a.pure");
-            fs::write(&b_disk, b_src).expect("write b.pure");
-
-            // Embedded platform = M3 bootstrap; user project = the two
-            // files above. Same shape as a real `legend lsp` workspace
-            // with no DSL artifacts and one local project repo.
-            let user_repo =
-                Repo::from_descriptor(&descriptor).expect("descriptor repo loads");
-            let mut repos = Repo::default_embedded();
-            repos.push(user_repo);
-            let mut ws = Workspace::new(repos, Vec::new());
-
-            // Sanity: the clean baseline compiles without user-source
-            // errors. (We can't assert exactly zero errors because the
-            // embedded platform itself may emit informational warnings
-            // through the same channel; what we care about is that
-            // there are no errors attributed to b.pure.)
-            ws.compile();
-            assert!(
-                !ws.diagnostics.contains_key("/userproj/b.pure"),
-                "baseline must have no errors on b.pure; got {:?}",
-                ws.diagnostics.get("/userproj/b.pure"),
-            );
-
-            // Break A by renaming the `name` property — B's `$f.name`
-            // becomes unresolved. Use `set_open_buffer` so the next
-            // compile sees the broken content via the snapshot overlay,
-            // without touching the disk file (which `Repo::Filesystem`
-            // slurped eagerly at construction and won't re-read).
-            let a_broken = "Class abc::Foo { nickname: String[1]; }\n";
-            let a_uri = Uri::from_file_path(&a_disk).expect("a uri");
-            ws.set_open_buffer(a_uri.clone(), a_broken.to_string());
-            ws.compile();
-
-            // The error must now be attributed to b.pure — that's the
-            // whole point of T-20260511-06. If validators ever start
-            // attributing cross-file errors to the *defining* element
-            // (a.pure) instead of the *use site* (b.pure), this fails
-            // loudly.
-            assert!(
-                ws.diagnostics.contains_key("/userproj/b.pure"),
-                "expected error attributed to b.pure; diagnostic keys: {:?}",
-                ws.diagnostics.keys().collect::<Vec<_>>(),
-            );
-
-            // The planner must surface that error to b.pure's `file://`
-            // URI even though b.pure is NOT open. Without
-            // `file_uri_for_canonical` resolving through the
-            // Filesystem repo's `source_root`, this entry would either
-            // not appear or appear under a broken `file://userproj/...`
-            // URI (the pre-fix behaviour).
-            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
-            let b_uri = Uri::from_file_path(&b_disk).expect("b uri");
-            let b_entry = plan.entries.iter().find(|(uri, _)| *uri == b_uri);
-            let (_, b_diags) = b_entry.unwrap_or_else(|| {
-                panic!(
-                    "expected planner to publish for b.pure URI {b_uri:?}; got {:?}",
-                    plan.entries.iter().map(|(u, _)| u).collect::<Vec<_>>(),
-                )
-            });
-            assert!(
-                !b_diags.is_empty(),
-                "expected non-empty diagnostics for b.pure",
-            );
-            assert!(plan.next_previously_published.contains(&b_uri));
-
-            // Stale-clear path: fix A back to the clean content. The
-            // next compile clears b.pure's diagnostics, and the planner
-            // must emit an empty publish for b.pure to clear it on the
-            // client.
-            ws.set_open_buffer(a_uri, a_clean.to_string());
-            ws.compile();
-            let prev = plan.next_previously_published.clone();
-            let plan2 = plan_diagnostics_publish(&ws, &prev);
-            let b_entry2 = plan2
-                .entries
-                .iter()
-                .find(|(uri, _)| *uri == b_uri)
-                .expect("stale-clear must emit entry for b.pure");
-            assert!(
-                b_entry2.1.is_empty(),
-                "stale-clear must be an empty publish; got {:?}",
-                b_entry2.1,
-            );
-            assert!(!plan2.next_previously_published.contains(&b_uri));
         }
     }
 }
