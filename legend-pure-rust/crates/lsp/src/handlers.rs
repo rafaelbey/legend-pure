@@ -791,11 +791,10 @@ pub async fn execute_legend_command(
     command: &str,
     arguments: &[serde_json::Value],
 ) -> ExecuteCommandResult {
-    // Snapshot the model + native registry under the workspace
-    // lock. The evaluation itself runs OUTSIDE the lock so a
-    // long-running function doesn't block diagnostics /
-    // hover / etc. The model is cloneable via Arc; copying the
-    // handle is cheap.
+    // Snapshot the model under the workspace lock. The evaluation
+    // itself runs OUTSIDE the lock so a long-running function
+    // doesn't block diagnostics / hover / etc. The model is
+    // cloneable via Arc; copying the handle is cheap.
     let model_arc = {
         let ws = workspace.lock().await;
         ws.model.clone()
@@ -812,64 +811,37 @@ pub async fn execute_legend_command(
 
     // Run the eval on a blocking task — the tree-walking interpreter
     // is synchronous and can hold the thread for the function's
-    // entire runtime. Tokio's blocking pool is the right home.
+    // entire runtime. Tokio's blocking pool is the right home. The
+    // actual evaluation logic lives in
+    // [`legend_pure_runtime::runner`] so the LSP and the MCP server
+    // share one implementation; this fn is the LSP-side adapter
+    // (typed runner results → `ExecuteCommandResult` JSON shape).
     let command = command.to_string();
     let arg0 = arg_str(arguments, 0).unwrap_or_default();
     let arg1 = arg_str(arguments, 1).unwrap_or_default();
     tokio::task::spawn_blocking(move || {
         let registry = legend_pure_runtime::native::NativeRegistry::standard();
-        // `CapturingHooks` intercepts the runtime's
-        // `console_output` (every Pure-level `print` / `println`
-        // routes through it via `EvalHooks::console_output`)
-        // into a per-run String buffer shared via Arc. We hold a
-        // second handle to the buffer outside the evaluator so we
-        // can drain it after the call returns and attach it to
-        // `extras.stdout`. Without this hook stdout would go to
-        // the IDE-spawned LSP's actual stdout, which the IDE
-        // doesn't surface anywhere visible.
-        //
-        // `Arc<Mutex<…>>` (not `Rc<RefCell<…>>`) because the
-        // closure must be `Send` for `tokio::task::spawn_blocking`.
-        let capture = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-        let hooks = CapturingHooks { buffer: capture.clone() };
-        let mut evaluator = legend_pure_runtime::eval::Evaluator::with_hooks(
-            model_arc.as_ref(),
-            &registry,
-            hooks,
-        );
-        let mut result = match command.as_str() {
-            // `<<test::Test>>`-tagged functions must run through the
-            // platform surveyor — that path navigates upstream
-            // packages to discover `BeforePackage`/`AfterPackage`
-            // hooks, builds an execution group, and only then
-            // invokes each test under the right setup/teardown
-            // bracket. Calling the function directly bypasses all
-            // of that.
-            "legend.runTest" => run_test_via_surveyor(&mut evaluator, &arg0),
-            // `<<PCT.test>>` execution. The plugin shows a popup of
-            // available adapters (from `legend.listPctAdapters`)
-            // then dispatches here with the chosen adapter's FQN.
-            "legend.runPCT" => run_pct_test(&mut evaluator, &arg0, &arg1),
-            // Discovery — returns the list of PCT adapters in the
-            // compiled model. Backs the IDE-side popup chooser.
-            "legend.listPctAdapters" => list_pct_adapters(model_arc.as_ref()),
-            // Default: plain function call.
-            _ => run_function_directly(&mut evaluator, &arg0, &command),
-        };
-        // Drain the captured stdout and attach to extras. Drop
-        // the evaluator first so the hook's Rc gets released and
-        // the buffer is the sole owner — that lets us `take` the
-        // String without cloning.
-        drop(evaluator);
-        let captured = std::mem::take(
-            &mut *capture
-                .lock()
-                .unwrap_or_else(|p| p.into_inner()),
-        );
-        if !captured.is_empty() {
-            merge_stdout_into_extras(&mut result, captured);
+        let model = model_arc.as_ref();
+        match command.as_str() {
+            "legend.runTest" => translate_test_result(
+                "legend.runTest",
+                &arg0,
+                legend_pure_runtime::runner::run_test(model, &registry, &arg0),
+            ),
+            "legend.runPCT" => translate_test_result(
+                "legend.runPCT",
+                &arg0,
+                legend_pure_runtime::runner::run_pct(model, &registry, &arg0, &arg1),
+            ),
+            "legend.listPctAdapters" => {
+                translate_adapters_result(legend_pure_runtime::runner::list_pct_adapters(model))
+            }
+            _ => translate_run_result(
+                &command,
+                &arg0,
+                legend_pure_runtime::runner::run_function(model, &registry, &arg0),
+            ),
         }
-        result
     })
     .await
     .unwrap_or_else(|join_err| ExecuteCommandResult {
@@ -888,302 +860,78 @@ fn arg_str(arguments: &[serde_json::Value], i: usize) -> Option<String> {
     arguments.get(i).and_then(|v| v.as_str().map(String::from))
 }
 
-/// Custom [`EvalHooks`](legend_pure_runtime::hooks::EvalHooks)
-/// that captures Pure-level `print` / `println` output into an
-/// in-memory buffer.
+// ---------------------------------------------------------------------------
+// Translators: typed `runtime::runner` results → `ExecuteCommandResult`
+// JSON. The plugin's parsers depend on these exact shapes — keep them
+// in lock-step with `clients/intellij/.../run/PureRunToolWindowService.kt`.
+// ---------------------------------------------------------------------------
+
+/// Translate a `legend.run` (or other plain function-call) outcome.
 ///
-/// The default `EvalHooks::console_output` writes to the LSP
-/// process's actual `stdout`, which the IDE doesn't surface
-/// anywhere visible. We need every chunk routed through the same
-/// `ExecuteCommandResult` round-trip as the rest of the eval
-/// outcome so the plugin can pipe it into the Pure Run tool
-/// window's `ConsoleView`. `Rc<RefCell<String>>` is fine here —
-/// the evaluator and its hooks run on a single `spawn_blocking`
-/// thread, so there's no cross-thread access on the buffer.
-struct CapturingHooks {
-    buffer: std::sync::Arc<std::sync::Mutex<String>>,
-}
-
-impl legend_pure_runtime::hooks::EvalHooks for CapturingHooks {
-    fn before_eval(
-        &mut self,
-        _source: &legend_pure_parser_ast::SourceInfo,
-        _context: &legend_pure_runtime::context::VariableContext,
-    ) {
-    }
-    fn after_eval(
-        &mut self,
-        _source: &legend_pure_parser_ast::SourceInfo,
-        _result: &legend_pure_runtime::value::Value,
-    ) {
-    }
-    fn enter_function(
-        &mut self,
-        _name: &str,
-        _source: &legend_pure_parser_ast::SourceInfo,
-    ) {
-    }
-    fn leave_function(&mut self, _name: &str) {}
-    fn console_output(&mut self, msg: &str) {
-        if let Ok(mut guard) = self.buffer.lock() {
-            guard.push_str(msg);
-        }
-    }
-}
-
-/// Merge a captured stdout buffer into an [`ExecuteCommandResult`]'s
-/// `extras` field under a `stdout` key.
-///
-/// Preserves any existing extras (e.g. `failures`) by promoting
-/// them onto the same JSON object. When `extras` was previously
-/// `None` we construct a single-key object; when it was something
-/// other than an object (shouldn't happen with current handlers
-/// but the type allows it) we wrap it under a `prior` key rather
-/// than silently dropping it.
-fn merge_stdout_into_extras(result: &mut ExecuteCommandResult, stdout: String) {
-    let stdout_value = serde_json::Value::String(stdout);
-    let merged = match result.extras.take() {
-        None => serde_json::json!({ "stdout": stdout_value }),
-        Some(serde_json::Value::Object(mut map)) => {
-            map.insert("stdout".into(), stdout_value);
-            serde_json::Value::Object(map)
-        }
-        Some(other) => serde_json::json!({ "stdout": stdout_value, "prior": other }),
-    };
-    result.extras = Some(merged);
-}
-
-/// `legend.run` path — call the function directly with no arguments.
-fn run_function_directly<H>(
-    evaluator: &mut legend_pure_runtime::eval::Evaluator<'_, H>,
-    fqn: &str,
+/// On success: `value` carries the rendered return value, `extras`
+/// contains `stdout` if any was captured. On failure: `error`
+/// carries the raw `PureException` text (preserving the original
+/// `[command] message` prefix the IDE shows in the notification),
+/// `extras.failures` carries a one-element list with the parsed
+/// stack so the plugin renders clickable links the same way it does
+/// for test failures.
+fn translate_run_result(
     command: &str,
-) -> ExecuteCommandResult
-where
-    H: legend_pure_runtime::hooks::EvalHooks,
-{
-    match evaluator.call(fqn, &[]) {
-        Ok(value) => ExecuteCommandResult {
+    fqn: &str,
+    result: legend_pure_runtime::runner::RunResult,
+) -> ExecuteCommandResult {
+    if result.ok {
+        ExecuteCommandResult {
             ok: true,
             fqn: fqn.to_string(),
-            value: Some(render_runtime_value(&value)),
+            value: result.value,
             error: None,
-            extras: None,
-        },
-        Err(e) => {
-            // Synthesize a one-element `FailureDetail` so the
-            // IDE-side renderer treats a plain `legend.run`
-            // failure the same way it does a test failure —
-            // structured message + clickable stack frames. Drop
-            // the command name into the error text so the user
-            // can tell whether it was `legend.run` vs.
-            // `legend.runTest` that failed.
-            let raw = e.to_string();
-            let (message, stack) = parse_failure_components(&raw);
-            let detail = FailureDetail {
-                fqn: fqn.to_string(),
-                message,
-                stack,
-            };
-            let extras = Some(serde_json::json!({ "failures": [detail] }));
-            ExecuteCommandResult {
-                ok: false,
-                fqn: fqn.to_string(),
-                value: None,
-                error: Some(format!("[{command}] {raw}")),
-                extras,
-            }
+            extras: build_extras(&result.stdout, None),
         }
-    }
-}
-
-/// `legend.runTest` path — drive the platform test surveyor instead
-/// of calling the test function directly.
-///
-/// The surveyor (`meta::pure::test::surveyor::runTestsFromPath`)
-/// walks the package tree, collects every `<<test::Test>>`-tagged
-/// function under the package, navigates upstream to discover any
-/// `<<test::BeforePackage>>` / `<<test::AfterPackage>>` hooks, and
-/// builds an execution plan that brackets each test with the right
-/// setup/teardown. The result is a populated
-/// `meta::pure::test::surveyor::TestReport` object — we read its
-/// counts off the heap and format a one-line summary suitable for
-/// the IDE notification balloon.
-///
-/// Strategy: pass the test function's full FQN as `path`. The
-/// surveyor's `pathToElement` resolves that to the
-/// `ConcreteFunctionDefinition` itself; `getTestFunctions` then
-/// pattern-matches on it (`surveyor.pure:180`) and returns the
-/// singleton if it carries the `<<test::Test>>` stereotype.
-/// `runTests` still walks upstream from `$test.package` to
-/// discover `<<test::BeforePackage>>` / `<<test::AfterPackage>>`
-/// hooks — the lifecycle works the same way for a single-test
-/// click as for a whole-package run.
-///
-/// `filter` stays `""` because it filters by *source path
-/// prefix*, not test name (`$f->sourceInformation()->filter(s |
-/// $s.source->startsWith($filter))` at `surveyor.pure:181`). We
-/// already narrowed to one test via the `path` argument, so no
-/// further source filtering is needed.
-fn run_test_via_surveyor<H>(
-    evaluator: &mut legend_pure_runtime::eval::Evaluator<'_, H>,
-    fqn: &str,
-) -> ExecuteCommandResult
-where
-    H: legend_pure_runtime::hooks::EvalHooks,
-{
-    use legend_pure_runtime::value::Value;
-    let result = evaluator.call(
-        "meta::pure::test::surveyor::runTestsFromPath",
-        &[
-            Value::String(fqn.to_string().into()),
-            Value::String(String::new().into()),
-        ],
-    );
-    interpret_test_report(result, fqn, "legend.runTest", evaluator.heap())
-}
-
-/// `legend.runPCT` path — drive `runPCTTests` with the chosen
-/// adapter.
-///
-/// Argument shape: `[test_fqn, adapter_fqn]`. The plugin presents
-/// the user with a popup of adapters (from
-/// `legend.listPctAdapters`) and pre-resolves the FQN before
-/// dispatch, so by the time we land here both pieces are known.
-///
-/// Why we don't use the manifest-driven `runPCTTestsFromPath`:
-/// that path needs a `.json` manifest with adapter + exclusions
-/// on disk. For interactive IDE clicks we want zero file system
-/// dependence — adapter is picked live, exclusions default to the
-/// runtime-managed `rust_native_exclusions()` (same 9-test list
-/// the CLI uses by default). Users can still load custom
-/// exclusions via the CLI `--manifest` path; the IDE flow is
-/// optimized for ergonomics.
-fn run_pct_test<H>(
-    evaluator: &mut legend_pure_runtime::eval::Evaluator<'_, H>,
-    test_fqn: &str,
-    adapter_fqn: &str,
-) -> ExecuteCommandResult
-where
-    H: legend_pure_runtime::hooks::EvalHooks,
-{
-    use legend_pure_runtime::value::Value;
-    if adapter_fqn.is_empty() {
-        return ExecuteCommandResult {
-            ok: false,
-            fqn: test_fqn.to_string(),
-            value: None,
-            error: Some(
-                "[legend.runPCT] missing adapter FQN — \
-                 expected arguments: [testFqn, adapterFqn]"
-                    .into(),
-            ),
-            extras: None,
-        };
-    }
-    let model = evaluator.model();
-    let Some(adapter_id) = model.resolve_fqn_str(adapter_fqn) else {
-        return ExecuteCommandResult {
-            ok: false,
-            fqn: test_fqn.to_string(),
-            value: None,
-            error: Some(format!(
-                "[legend.runPCT] adapter not found in model: {adapter_fqn}"
-            )),
-            extras: None,
-        };
-    };
-    // Resolve the test FQN to a PackageableElement via the
-    // platform's `pathToElement`. Same trick as `runTestsFromPath`
-    // — the surveyor's `getPCTTestFunctions` has a
-    // `ConcreteFunctionDefinition` match-arm that returns the
-    // singleton when the input is a function and the stereotype
-    // checks out.
-    let pkg = match evaluator.call(
-        "meta::pure::functions::meta::pathToElement",
-        &[
-            Value::String(test_fqn.to_string().into()),
-            Value::String("::".into()),
-        ],
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            return ExecuteCommandResult {
-                ok: false,
-                fqn: test_fqn.to_string(),
-                value: None,
-                error: Some(format!("[legend.runPCT] pathToElement failed: {e}")),
-                extras: None,
-            };
-        }
-    };
-    let result = evaluator.call(
-        "meta::pure::test::surveyor::runPCTTests",
-        &[
-            pkg,
-            Value::String(String::new().into()),
-            Value::Element(adapter_id),
-            legend_pure_runtime::pct::rust_native_exclusions(),
-        ],
-    );
-    interpret_test_report(result, test_fqn, "legend.runPCT", evaluator.heap())
-}
-
-/// Map the surveyor's `TestReport`-returning call result into the
-/// IDE-facing [`ExecuteCommandResult`]. Shared by `runTest` and
-/// `runPCT` since both end at the same `TestReport` shape.
-fn interpret_test_report(
-    result: Result<
-        legend_pure_runtime::value::Value,
-        legend_pure_runtime::error::PureException,
-    >,
-    fqn: &str,
-    command: &str,
-    heap: &legend_pure_runtime::heap::RuntimeHeap,
-) -> ExecuteCommandResult {
-    use legend_pure_runtime::value::Value;
-    match result {
-        Ok(Value::Object(ref report_id)) => match read_test_report_summary(heap, report_id) {
-            Ok(summary) => {
-                let ok = summary.fail_count == 0 && summary.error_count == 0;
-                let rendered = summary.render();
-                let extras = summary.extras();
-                tracing::info!(
-                    fqn = %fqn,
-                    failures = summary.failures.len(),
-                    rendered_len = rendered.len(),
-                    has_extras = extras.is_some(),
-                    rendered = %rendered,
-                    "test report dispatch",
-                );
-                ExecuteCommandResult {
-                    ok,
-                    fqn: fqn.to_string(),
-                    value: Some(rendered.clone()),
-                    error: if ok { None } else { Some(rendered) },
-                    // Structured failure list — the plugin renders
-                    // each entry as a clickable HTML anchor that
-                    // navigates to the failure's source position.
-                    extras,
-                }
-            }
-            Err(e) => ExecuteCommandResult {
-                ok: false,
-                fqn: fqn.to_string(),
-                value: None,
-                error: Some(format!("[{command}] failed to read TestReport: {e}")),
-                extras: None,
-            },
-        },
-        Ok(other) => ExecuteCommandResult {
+    } else {
+        let err = result
+            .error
+            .expect("RunResult { ok: false } must carry an error");
+        let detail = serde_json::json!({
+            "fqn": fqn,
+            "message": err.message,
+            "stack": err.stack,
+        });
+        ExecuteCommandResult {
             ok: false,
             fqn: fqn.to_string(),
             value: None,
-            error: Some(format!(
-                "[{command}] surveyor returned non-Object: {other:?}",
-            )),
-            extras: None,
-        },
+            error: Some(format!("[{command}] {}", err.raw)),
+            extras: build_extras(&result.stdout, Some(serde_json::json!([detail]))),
+        }
+    }
+}
+
+/// Translate a `legend.runTest` / `legend.runPCT` outcome (surveyor-
+/// driven runs that produce a `TestRunResult` on success).
+fn translate_test_result(
+    command: &str,
+    fqn: &str,
+    result: Result<
+        legend_pure_runtime::runner::TestRunResult,
+        legend_pure_runtime::runner::RunnerError,
+    >,
+) -> ExecuteCommandResult {
+    match result {
+        Ok(r) => {
+            let failures = if r.failures.is_empty() {
+                None
+            } else {
+                Some(serde_json::to_value(&r.failures).unwrap_or(serde_json::Value::Null))
+            };
+            ExecuteCommandResult {
+                ok: r.ok,
+                fqn: fqn.to_string(),
+                value: Some(r.rendered.clone()),
+                error: if r.ok { None } else { Some(r.rendered) },
+                extras: build_extras(&r.stdout, failures),
+            }
+        }
         Err(e) => ExecuteCommandResult {
             ok: false,
             fqn: fqn.to_string(),
@@ -1194,485 +942,58 @@ fn interpret_test_report(
     }
 }
 
-/// `legend.listPctAdapters` — return every Function in the model
-/// that carries `<<PCT.adapter>>` together with its
-/// `PCT.adapterName` tag. Backs the IDE-side popup that lets the
-/// user pick which adapter to run a PCT test against.
+/// Translate a `legend.listPctAdapters` outcome.
 ///
-/// Returns `extras = [{"fqn": "...", "name": "..."}]`. The plugin
-/// reads this directly; `value` carries a count summary for the
-/// log.
-fn list_pct_adapters(model: &legend_pure_parser_pure::model::PureModel) -> ExecuteCommandResult {
-    use legend_pure_parser_pure::ids::ElementId;
-    use legend_pure_parser_pure::model::Element;
-
-    let Some(pct_profile) = legend_pure_runtime::m3_paths::resolve(model, "meta::pure::test::pct::PCT") else {
-        return ExecuteCommandResult {
+/// `extras` is a JSON array (not a wrapped object) for backwards
+/// compatibility with the IntelliJ plugin's chooser parser, which
+/// reads `extras` directly as `JsonArray`.
+fn translate_adapters_result(
+    result: Result<
+        Vec<legend_pure_runtime::runner::PctAdapterInfo>,
+        legend_pure_runtime::runner::RunnerError,
+    >,
+) -> ExecuteCommandResult {
+    match result {
+        Ok(adapters) => {
+            let count = adapters.len();
+            let json = serde_json::to_value(&adapters).unwrap_or(serde_json::Value::Null);
+            ExecuteCommandResult {
+                ok: true,
+                fqn: String::new(),
+                value: Some(format!("{count} adapter(s)")),
+                error: None,
+                extras: Some(json),
+            }
+        }
+        Err(e) => ExecuteCommandResult {
             ok: false,
             fqn: String::new(),
             value: None,
-            error: Some(
-                "[legend.listPctAdapters] PCT profile (meta::pure::test::pct::PCT) \
-                 not resolvable in workspace model — is the platform loaded?"
-                    .into(),
-            ),
+            error: Some(format!("[legend.listPctAdapters] {e}")),
             extras: None,
-        };
-    };
-    let mut adapters: Vec<serde_json::Value> = Vec::new();
-    for chunk in &model.chunks {
-        for (local_idx, element) in chunk.elements.iter() {
-            let Element::Function(func) = element else {
-                continue;
-            };
-            let has_adapter_stereotype = func
-                .stereotypes
-                .iter()
-                .any(|s| s.profile == pct_profile && s.value == "adapter");
-            if !has_adapter_stereotype {
-                continue;
-            }
-            let adapter_name = func
-                .tagged_values
-                .iter()
-                .find(|t| t.profile == pct_profile && t.tag == "adapterName")
-                .map(|t| t.value.to_string());
-            let id = ElementId::InstanceId {
-                chunk_id: chunk.chunk_id,
-                local_idx,
-            };
-            let fqn = render_fqn(model, id);
-            adapters.push(serde_json::json!({
-                "fqn": fqn,
-                "name": adapter_name.unwrap_or_else(|| "<unnamed>".to_string()),
-            }));
-        }
-    }
-    ExecuteCommandResult {
-        ok: true,
-        fqn: String::new(),
-        value: Some(format!("{} adapter(s)", adapters.len())),
-        error: None,
-        extras: Some(serde_json::Value::Array(adapters)),
+        },
     }
 }
 
-/// Minimal decoded view of `meta::pure::test::surveyor::TestReport`.
-///
-/// Just the integer counters plus enough info to surface failing
-/// tests' messages in a notification. Doesn't try to be a full
-/// stand-in for the CLI's `TestReport` (which also resolves source
-/// locations for the IDE jump-to-test integration) — that's the
-/// next step once the gutter has its own dedicated test tool
-/// window.
-struct TestReportSummary {
-    pass_count: i64,
-    fail_count: i64,
-    error_count: i64,
-    skip_count: i64,
-    total_elapsed_ms: i64,
-    failures: Vec<FailureDetail>,
-}
-
-/// Structured view of one failing test, ready for the IDE to
-/// render as a clickable link.
-///
-/// `stack` carries the whole `Full Stack:` section of the
-/// PureException — the innermost frame is where the exception
-/// actually fired (`toOne` raising "multiplicity violation",
-/// `assertEq` raising "expected != actual", etc.), and the
-/// outermost is the test entry point. The IDE renders each as a
-/// clickable link so the developer can pin the failure or walk
-/// up the call chain.
-#[derive(Debug, Clone, serde::Serialize)]
-struct FailureDetail {
-    fqn: String,
-    /// One-line human-readable message — the quoted body of the
-    /// PureException, stripped of surrounding quotes when present.
-    message: String,
-    /// Parsed call-stack frames, innermost first. Empty when the
-    /// PureException carried no stack (older / hand-rolled errors).
-    stack: Vec<StackFrame>,
-}
-
-/// One frame of a [`PureException`]'s call stack — the substring
-/// the runtime emits on each `\n    <name>     <-     resource:X
-/// line:Y column:Z` line.
-#[derive(Debug, Clone, serde::Serialize)]
-struct StackFrame {
-    /// Function name as printed by `printPureStackTrace`.
-    name: String,
-    /// Canonical source path of the call site (`/platform/.../X.pure`).
-    source: String,
-    /// 1-based line, matching `SourceInformation`.
-    line: u32,
-    /// 1-based column, matching `SourceInformation`.
-    column: u32,
-}
-
-impl TestReportSummary {
-    fn render(&self) -> String {
-        let header = format!(
-            "passed={} failed={} errored={} skipped={} ({}ms)",
-            self.pass_count,
-            self.fail_count,
-            self.error_count,
-            self.skip_count,
-            self.total_elapsed_ms,
+/// Build an `extras` object combining `stdout` (if non-empty) and a
+/// pre-built JSON value to merge under `failures`. Returns `None`
+/// when neither is present so the wire payload stays small for the
+/// green-no-output case.
+fn build_extras(stdout: &str, failures: Option<serde_json::Value>) -> Option<serde_json::Value> {
+    if stdout.is_empty() && failures.is_none() {
+        return None;
+    }
+    let mut map = serde_json::Map::new();
+    if !stdout.is_empty() {
+        map.insert(
+            "stdout".into(),
+            serde_json::Value::String(stdout.to_string()),
         );
-        if self.failures.is_empty() {
-            return header;
-        }
-        // Cap at the first few failures so the notification stays
-        // readable; the rest are still in the full report (which a
-        // future test-result tool-window would render in full).
-        let mut out = String::with_capacity(256);
-        out.push_str(&header);
-        for f in self.failures.iter().take(5) {
-            out.push_str("\n  ✗ ");
-            out.push_str(&f.fqn);
-            if let Some(frame) = f.stack.first() {
-                out.push_str(&format!(" @ {}:{}", frame.source, frame.line));
-            }
-            if !f.message.is_empty() {
-                out.push_str("\n      ");
-                out.push_str(&f.message);
-            }
-            for frame in f.stack.iter().take(8) {
-                out.push_str(&format!(
-                    "\n      at {} ({}:{}:{})",
-                    frame.name, frame.source, frame.line, frame.column,
-                ));
-            }
-        }
-        if self.failures.len() > 5 {
-            out.push_str(&format!("\n  … and {} more", self.failures.len() - 5));
-        }
-        out
     }
-
-    /// Convert the structured failure list to JSON for the
-    /// `extras` slot. The plugin reads this to build clickable
-    /// HTML links per failure (`fqn`, `message`, `source`, `line`,
-    /// `column`). `extras` is `None` when there are no failures —
-    /// keeps the response payload small for the (much more
-    /// common) green-test path.
-    fn extras(&self) -> Option<serde_json::Value> {
-        if self.failures.is_empty() {
-            return None;
-        }
-        Some(serde_json::json!({
-            "failures": self.failures,
-        }))
+    if let Some(f) = failures {
+        map.insert("failures".into(), f);
     }
-}
-
-/// Decompose a [`PureException`] string into the user-facing
-/// message plus its source location.
-///
-/// `PureException`'s `Display` (see `error.rs:276`) emits one of
-/// two shapes depending on whether the exception carried a
-/// `SourceInformation`. With source info:
-/// ```text
-/// Assert failure (resource:foo.pure line:5 column:3)
-/// "actual assertion message — may span multiple lines"
-/// Full Stack:
-///     frame1 <- ...
-/// ```
-/// Without source info (common for asserts raised through the
-/// `assert` native — the exception is constructed without a
-/// `SourceInformation`):
-/// ```text
-/// Assert failure
-/// "
-/// expected: 9.1
-/// actual:   9.0"
-/// Full Stack:
-///     testNumberPow_Function_1__Boolean_1_     <-     resource:/platform/.../pow.pure line:34 column:1
-///     assertEq     <-
-/// ```
-/// Both shapes are handled:
-///   * **Body** = everything between the first `"` and the last
-///     `"` that appears before `Full Stack:` (or end-of-string).
-///     Internal newlines become `" | "` so the notification
-///     stays readable on one line.
-///   * **Source** = parsed first from the parens after the kind
-///     name; if missing, falls back to the first `resource:X
-///     line:Y column:Z` triple found in the call stack — that's
-///     the innermost frame, which is where the user wants to
-///     navigate.
-fn parse_failure_components(msg: &str) -> (String, Vec<StackFrame>) {
-    let header = msg.lines().next().unwrap_or("");
-    let body = extract_quoted_body(msg);
-    let mut stack = parse_full_stack(msg);
-    // If the header had inline source info, treat that as a
-    // synthesized innermost frame so the user can click straight
-    // to the location even on exceptions with no proper call
-    // stack (older or hand-rolled errors).
-    if stack.is_empty()
-        && let (Some(s), Some(l), Some(c)) = parse_source_info(header) {
-            stack.push(StackFrame {
-                name: header_kind(header).to_string(),
-                source: s,
-                line: l,
-                column: c,
-            });
-        }
-    let message = if body.is_empty() {
-        header.to_string()
-    } else {
-        body
-    };
-    (message, stack)
-}
-
-/// Pull the text between the first `"` and the last `"` that
-/// appears before the `Full Stack:` marker (or end-of-string).
-/// Compresses internal newlines into ` | ` separators so the body
-/// fits on one notification line.
-fn extract_quoted_body(msg: &str) -> String {
-    let first_quote = match msg.find('"') {
-        Some(i) => i,
-        None => return String::new(),
-    };
-    let stack_at = msg.find("\nFull Stack:").unwrap_or(msg.len());
-    let search_region = &msg[first_quote + 1..stack_at];
-    let last_quote_rel = match search_region.rfind('"') {
-        Some(i) => i,
-        None => search_region.len(),
-    };
-    let raw = &search_region[..last_quote_rel];
-    raw.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" | ")
-}
-
-/// Parse every `Full Stack:` frame line into a [`StackFrame`].
-///
-/// Each line of the form
-/// `    <name>     <-     resource:<src> line:<n> column:<n>`
-/// becomes one entry. Order is preserved — exactly what
-/// PureException's `Display` emits, which is innermost-first (the
-/// frame nearest the actual error is at index 0). Frames that
-/// don't contain a complete `resource:/line:/column:` triple are
-/// skipped silently.
-fn parse_full_stack(msg: &str) -> Vec<StackFrame> {
-    let Some(start) = msg.find("\nFull Stack:") else {
-        return Vec::new();
-    };
-    let stack_section = &msg[start..];
-    let mut out = Vec::new();
-    for line in stack_section.lines().skip(1) {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        // Split off the function name at `<-` so we don't pick up
-        // the arrow itself as part of the name.
-        let (name_part, location_part) = match trimmed.split_once("<-") {
-            Some((n, l)) => (n.trim().to_string(), l),
-            None => continue,
-        };
-        let mut source: Option<String> = None;
-        let mut line_num: Option<u32> = None;
-        let mut column: Option<u32> = None;
-        for part in location_part.split_whitespace() {
-            if let Some(v) = part.strip_prefix("resource:") {
-                source = Some(v.to_string());
-            } else if let Some(v) = part.strip_prefix("line:") {
-                line_num = v.parse().ok();
-            } else if let Some(v) = part.strip_prefix("column:") {
-                column = v.parse().ok();
-            }
-        }
-        if let (Some(s), Some(l), Some(c)) = (source, line_num, column) {
-            out.push(StackFrame {
-                name: name_part,
-                source: s,
-                line: l,
-                column: c,
-            });
-        }
-    }
-    out
-}
-
-/// Strip the location parens off a header so the synthesized frame
-/// is named after the kind (`Assert failure`, `Execution error`,
-/// …) without trailing noise.
-fn header_kind(header: &str) -> &str {
-    match header.find(" (") {
-        Some(i) => &header[..i],
-        None => header.trim(),
-    }
-}
-
-/// Pull `(source, line, column)` out of the location segment of a
-/// `PureException` header (`... (resource:X line:Y column:Z)`).
-///
-/// Returns `(None, None, None)` when the parens aren't present
-/// (no source info was attached to the exception). Robust against
-/// whitespace inside the parens and tolerates either of the
-/// integer parses failing.
-fn parse_source_info(header: &str) -> (Option<String>, Option<u32>, Option<u32>) {
-    let Some(open) = header.rfind('(') else {
-        return (None, None, None);
-    };
-    let Some(close_off) = header[open + 1..].rfind(')') else {
-        return (None, None, None);
-    };
-    let inner = &header[open + 1..open + 1 + close_off];
-    let mut source: Option<String> = None;
-    let mut line: Option<u32> = None;
-    let mut column: Option<u32> = None;
-    for part in inner.split_whitespace() {
-        if let Some(v) = part.strip_prefix("resource:") {
-            source = Some(v.to_string());
-        } else if let Some(v) = part.strip_prefix("line:") {
-            line = v.parse().ok();
-        } else if let Some(v) = part.strip_prefix("column:") {
-            column = v.parse().ok();
-        }
-    }
-    (source, line, column)
-}
-
-fn read_test_report_summary(
-    heap: &legend_pure_runtime::heap::RuntimeHeap,
-    report: &legend_pure_runtime::heap::ObjectHandle,
-) -> Result<TestReportSummary, String> {
-    let pass_count = read_int_property(heap, report, "passCount")?;
-    let fail_count = read_int_property(heap, report, "failCount")?;
-    let error_count = read_int_property(heap, report, "errorCount")?;
-    let skip_count = read_int_property(heap, report, "skipCount")?;
-    let total_elapsed_ms = read_int_property(heap, report, "totalElapsed").unwrap_or(0);
-    let mut failures = Vec::new();
-    let results = heap
-        .get_property_values(report, "results")
-        .map_err(|e| format!("results: {e}"))?;
-    for v in results.iter() {
-        let legend_pure_runtime::value::Value::Object(rid) = v else {
-            continue;
-        };
-        let status = read_status_property(heap, rid).unwrap_or_default();
-        let is_failure = matches!(status.as_str(), "FAIL" | "ERROR");
-        if !is_failure {
-            continue;
-        }
-        let fqn = read_string_property(heap, rid, "fqn").unwrap_or_else(|_| "<unknown>".into());
-        let raw = read_string_property(heap, rid, "message").ok();
-        // Debug aid: log what we got off the heap so a stuck IDE
-        // can be diagnosed from `Help → Show Log in Finder`. Two
-        // common failure modes:
-        //   - raw=None → `TestResult.message` slot was never
-        //     populated. Surveyor / executePCTTest didn't classify
-        //     the result as FAIL/ERROR, or the populate path
-        //     dropped the message somewhere.
-        //   - raw=Some(s) but parse yields empty body → the
-        //     PureException Display ended up as just the kind
-        //     header (no quoted message body). Caller likely
-        //     raised a runtime error without setting the message.
-        tracing::info!(
-            test_fqn = %fqn,
-            status = %status,
-            raw_message_len = raw.as_deref().map(str::len).unwrap_or(0),
-            raw_head = %raw.as_deref().map(|s| s.chars().take(200).collect::<String>()).unwrap_or_default(),
-            "TestReport row read",
-        );
-        let (message, stack) = match raw.as_deref() {
-            Some(s) => parse_failure_components(s),
-            None => (String::new(), Vec::new()),
-        };
-        tracing::info!(
-            test_fqn = %fqn,
-            parsed_msg_len = message.len(),
-            frames = stack.len(),
-            "parsed failure components",
-        );
-        failures.push(FailureDetail {
-            fqn,
-            message,
-            stack,
-        });
-    }
-    Ok(TestReportSummary {
-        pass_count,
-        fail_count,
-        error_count,
-        skip_count,
-        total_elapsed_ms,
-        failures,
-    })
-}
-
-fn read_int_property(
-    heap: &legend_pure_runtime::heap::RuntimeHeap,
-    obj: &legend_pure_runtime::heap::ObjectHandle,
-    name: &str,
-) -> Result<i64, String> {
-    let vs = heap
-        .get_property_values(obj, name)
-        .map_err(|e| format!("{name}: {e}"))?;
-    match vs.iter().next() {
-        Some(legend_pure_runtime::value::Value::Integer(n)) => Ok(*n),
-        Some(other) => Err(format!("{name}: expected Integer, got {other:?}")),
-        None => Err(format!("{name}: empty")),
-    }
-}
-
-fn read_string_property(
-    heap: &legend_pure_runtime::heap::RuntimeHeap,
-    obj: &legend_pure_runtime::heap::ObjectHandle,
-    name: &str,
-) -> Result<String, String> {
-    let vs = heap
-        .get_property_values(obj, name)
-        .map_err(|e| format!("{name}: {e}"))?;
-    match vs.iter().next() {
-        Some(legend_pure_runtime::value::Value::String(s)) => Ok(s.to_string()),
-        Some(other) => Err(format!("{name}: expected String, got {other:?}")),
-        None => Err(format!("{name}: empty")),
-    }
-}
-
-/// The `status` slot on a `TestResult` is an Enum value — we just
-/// want its name (`PASS` / `FAIL` / `ERROR` / `SKIP`) so we can
-/// pull out the failing tests for the summary.
-fn read_status_property(
-    heap: &legend_pure_runtime::heap::RuntimeHeap,
-    obj: &legend_pure_runtime::heap::ObjectHandle,
-) -> Result<String, String> {
-    use legend_pure_runtime::value::Value;
-    let vs = heap
-        .get_property_values(obj, "status")
-        .map_err(|e| format!("status: {e}"))?;
-    match vs.iter().next() {
-        Some(Value::EnumValue { member, .. }) => Ok(member.to_string()),
-        Some(Value::String(s)) => Ok(s.to_string()),
-        Some(other) => Err(format!("status: unexpected shape {other:?}")),
-        None => Err("status: empty".into()),
-    }
-}
-
-/// Best-effort rendering of a runtime [`Value`] for one-line
-/// display in the IDE notification. Refining to a Pure-level
-/// `toString` (i.e. dispatching back through the runtime to format
-/// objects via the `toOne`/`toString` natives) is deferred.
-fn render_runtime_value(value: &legend_pure_runtime::value::Value) -> String {
-    use legend_pure_runtime::value::Value;
-    match value {
-        Value::Integer(i) => i.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::String(s) => format!("{s:?}"),
-        Value::Boolean(b) => b.to_string(),
-        Value::Collection(items) => {
-            let rendered: Vec<String> = items.iter().map(render_runtime_value).collect();
-            format!("[{}]", rendered.join(", "))
-        }
-        other => format!("{other:?}"),
-    }
+    Some(serde_json::Value::Object(map))
 }
 
 #[cfg(test)]
