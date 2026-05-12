@@ -82,6 +82,15 @@ pub enum Expression {
     /// Type reference expression: `@MyType`.
     TypeReferenceExpr(TypeReferenceExpr),
 
+    /// Bare multiplicity literal: `@[1]`, `@[0..1]`, `@[1..*]`, `@[*]`,
+    /// `@[m]` (where `m` is a declared multiplicity parameter).
+    ///
+    /// Sibling to `TypeReferenceExpr` — Java grammar
+    /// `M3CoreParser.g4:311 AT (type | multiplicity)`. Used primarily as
+    /// the second argument to `toMultiplicity<T|z>(...,Any[z])` where the
+    /// literal's multiplicity binds `z` at the call site.
+    MultiplicityReferenceExpr(MultiplicityReferenceExpr),
+
     // -- Complex expressions --
     /// Lambda: `{x: String[1] | $x + 'hello'}` or `x | $x + 1`.
     Lambda(Lambda),
@@ -142,6 +151,7 @@ impl Spanned for Expression {
             Self::MemberAccess(e) => e.source_info(),
             Self::PackageableElementRef(e) => &e.source_info,
             Self::TypeReferenceExpr(e) => &e.source_info,
+            Self::MultiplicityReferenceExpr(e) => &e.source_info,
             Self::Lambda(e) => &e.source_info,
             Self::Let(e) => &e.source_info,
             Self::Collection(e) => &e.source_info,
@@ -548,6 +558,25 @@ pub struct TypeReferenceExpr {
     pub source_info: SourceInfo,
 }
 
+/// A bare multiplicity literal: `@[1]`, `@[0..1]`, `@[1..*]`, `@[*]`,
+/// or `@[m]` referencing a declared multiplicity parameter.
+///
+/// Primary use: the second argument of
+/// `meta::pure::functions::lang::toMultiplicity<T|z>(source:T[*], object:Any[z]):T[z]`,
+/// where the literal's multiplicity binds the parametric `z` at the call
+/// site. Java grammar:
+/// `M3CoreParser.g4:311 AT (type | multiplicity)` — the multiplicity
+/// branch of the same production that produces `TypeReferenceExpr`.
+#[derive(Debug, Clone, PartialEq, crate::Spanned)]
+pub struct MultiplicityReferenceExpr {
+    /// The multiplicity carried by the literal. `Concrete(...)` for
+    /// fixed forms (`@[1]`, `@[*]`, …); `Identifier(name, ...)` for
+    /// references to a declared `<T|name>` multiplicity parameter.
+    pub multiplicity: crate::type_ref::MultiplicityArgument,
+    /// Source location (the `@` token through the closing `]`).
+    pub source_info: SourceInfo,
+}
+
 // ---------------------------------------------------------------------------
 // Complex expressions
 // ---------------------------------------------------------------------------
@@ -796,6 +825,7 @@ pub trait ExpressionVisitor {
             Expression::ArrowFunction(e) => self.visit_arrow_function(e),
             Expression::MemberAccess(e) => self.visit_member_access(e),
             Expression::TypeReferenceExpr(e) => self.visit_type_reference(e),
+            Expression::MultiplicityReferenceExpr(e) => self.visit_multiplicity_reference(e),
             Expression::Lambda(e) => self.visit_lambda(e),
             Expression::Let(e) => self.visit_let(e),
             Expression::Collection(e) => self.visit_collection(e),
@@ -837,6 +867,8 @@ pub trait ExpressionVisitor {
     fn visit_member_access(&mut self, expr: &MemberAccess) {}
     /// Visit a type reference expression.
     fn visit_type_reference(&mut self, expr: &TypeReferenceExpr) {}
+    /// Visit a bare multiplicity literal expression: `@[m]`.
+    fn visit_multiplicity_reference(&mut self, expr: &MultiplicityReferenceExpr) {}
     /// Visit a lambda.
     fn visit_lambda(&mut self, expr: &Lambda) {}
     /// Visit a let expression.

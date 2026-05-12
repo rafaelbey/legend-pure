@@ -80,6 +80,25 @@ function my::test(x: Any[1]): Float[1]
     insta::assert_debug_snapshot!(file);
 }
 
+/// Bare multiplicity literal `@[m]` — sibling to `@T` per
+/// `M3CoreParser.g4:311 AT (type | multiplicity)`. Exercises every
+/// concrete shape (`@[1]`, `@[0..1]`, `@[1..*]`, `@[*]`) plus the
+/// named-parameter shape (`@[o]`). Parses to
+/// `Expression::MultiplicityReferenceExpr(MultiplicityReferenceExpr {
+/// multiplicity, .. })`. Regression guard against future parser drift.
+#[test]
+fn multiplicity_literal_concrete_and_named() {
+    let file = parse_ok(
+        r"###Pure
+function my::a(xs: String[*]): String[1]    { $xs->toMultiplicity(@[1]) }
+function my::b(xs: String[*]): String[0..1] { $xs->toMultiplicity(@[0..1]) }
+function my::c(xs: String[*]): String[1..*] { $xs->toMultiplicity(@[1..*]) }
+function my::d(xs: String[*]): String[*]    { $xs->toMultiplicity(@[*]) }
+function my::e<|o>(xs: String[*]): String[o] { $xs->toMultiplicity(@[o]) }",
+    );
+    insta::assert_debug_snapshot!(file);
+}
+
 #[test]
 fn collection_with_function() {
     let file = parse_ok(

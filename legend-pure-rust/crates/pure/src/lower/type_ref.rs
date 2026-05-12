@@ -74,6 +74,53 @@ pub(super) fn lower_type_reference(
     ))
 }
 
+/// Lowers a bare multiplicity literal `@[m]` to
+/// [`ExprKind::MultiplicityReference`]. Sibling of [`lower_type_reference`].
+///
+/// `type_info` is pre-set to `Any[m]` so dispatch binds the literal's
+/// multiplicity into a parametric arg slot directly (canonical use:
+/// `toMultiplicity<T|z>(source:T[*], object:Any[z])` — the literal's `m`
+/// supplies `z`). Named multiplicities pass through
+/// [`resolve::resolve_multiplicity_with_validation`] so unresolved
+/// parameters surface as `UndeclaredMultiplicityParameter` at lowering
+/// time, matching the Java parser's behaviour.
+#[allow(clippy::unnecessary_wraps)] // sibling-shape parity with `lower_type_reference`
+pub(super) fn lower_multiplicity_reference(
+    e: &ast_expr::MultiplicityReferenceExpr,
+    ctx: &mut ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) -> Option<ValueSpec> {
+    use legend_pure_parser_ast::type_ref::MultiplicityArgument;
+    let multiplicity = match &e.multiplicity {
+        MultiplicityArgument::Concrete(m, _) => resolve::lower_multiplicity(m),
+        MultiplicityArgument::Identifier(name, span) => {
+            resolve::resolve_multiplicity_with_validation(
+                &legend_pure_parser_ast::type_ref::Multiplicity::Variable(name.clone()),
+                span,
+                ctx,
+                errors,
+            )
+        }
+    };
+    let any_type = TypeExpr::Named {
+        element: crate::bootstrap::ANY_ID,
+        type_arguments: vec![],
+        multiplicity_arguments: vec![],
+        value_arguments: vec![],
+        source_info: None,
+    };
+    Some(super::typed(
+        ExprKind::MultiplicityReference {
+            multiplicity: multiplicity.clone(),
+        },
+        e.source_info.clone(),
+        ResolvedType {
+            type_expr: any_type,
+            multiplicity,
+        },
+    ))
+}
+
 /// Lowers a bare element reference: `String`, `my::Enum` → `PackageableElementRef`.
 ///
 /// Pre-sets `type_info` via [`build_packageable_element_ref`]. The AST

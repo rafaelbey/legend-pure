@@ -475,6 +475,19 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 }
                 _ => Ok(Value::Unit),
             },
+
+            // -- Multiplicity reference -----------------------------------
+            // `@[m]` materialises a `meta::pure::metamodel::multiplicity::Multiplicity`
+            // heap wrapper carrying `lowerBound`/`upperBound`. Consumers
+            // (reflection like `->lowerBound`, the `toMultiplicity` native
+            // via `args[1].type_info.multiplicity`) read the static
+            // multiplicity off the lowered AST's `type_info`; the runtime
+            // value is the heap object so Pure-land reflection works.
+            ExprKind::MultiplicityReference { multiplicity } => {
+                let handle =
+                    crate::native::meta::build_multiplicity_wrapper(&mut self.heap, multiplicity)?;
+                Ok(Value::Object(handle))
+            }
             ExprKind::Column => Ok(Value::Unit),
 
             // -- Relation literals -------------------------------------
@@ -2722,6 +2735,7 @@ fn walk_free_variables(
         | ExprKind::DateLiteral(_)
         | ExprKind::EnumValue { .. }
         | ExprKind::TypeReference { .. }
+        | ExprKind::MultiplicityReference { .. }
         | ExprKind::PackageableElementRef { .. }
         | ExprKind::Column
         | ExprKind::RelationLiteral { .. }

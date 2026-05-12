@@ -1006,7 +1006,8 @@ fn walk_expr_kind_refs(
         | ExprKind::BooleanLiteral(_)
         | ExprKind::DateLiteral(_)
         | ExprKind::Variable { .. }
-        | ExprKind::Column => {}
+        | ExprKind::Column
+        | ExprKind::MultiplicityReference { .. } => {}
         ExprKind::FunctionCall(d)
         | ExprKind::PropertyCall(d)
         | ExprKind::QualifiedPropertyCall(d) => {
@@ -1031,6 +1032,8 @@ fn walk_expr_kind_refs(
         ExprKind::TypeReference { type_expr } => {
             walk_type_refs(type_expr, si, emit);
         }
+        // No element references inside a bare multiplicity literal —
+        // shares the no-op shape with `Column`.
         ExprKind::PackageableElementRef { element } => {
             emit(*element, si);
         }

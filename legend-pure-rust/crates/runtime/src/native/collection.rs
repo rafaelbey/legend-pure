@@ -855,6 +855,113 @@ impl NativeFunction for ToOneMany {
 }
 
 // ---------------------------------------------------------------------------
+// toMultiplicity
+// ---------------------------------------------------------------------------
+
+/// Pure `toMultiplicity<T|z>(source:T[*], object:Any[z]):T[z]`
+///
+/// Narrows a `T[*]` collection to whatever static multiplicity `z` the
+/// second argument carries at the call site. The second arg is a sentinel
+/// — its value is unused; only its compile-time multiplicity drives the
+/// narrowing. The runtime validates that `source.size()` falls within the
+/// inferred bounds and returns the same values at the narrowed multiplicity,
+/// or raises a Pure exception on cardinality mismatch.
+///
+/// Error text matches Java parity verbatim:
+/// `"Cannot cast a collection of size N to multiplicity [BOUNDS]"` —
+/// see `AbstractTestToMultiplicity.java` in the upstream test tree.
+#[derive(Debug)]
+pub struct ToMultiplicity;
+
+impl NativeFunction for ToMultiplicity {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        expect_args_spec("toMultiplicity", args, 2)?;
+        let target_mult = args[1]
+            .type_info
+            .as_deref()
+            .map(|ti| ti.multiplicity.clone())
+            .ok_or_else(|| {
+                PureException::from(PureRuntimeError::EvaluationError(
+                    "toMultiplicity: second argument is missing static type info".into(),
+                ))
+            })?;
+        let (lower, upper) = multiplicity_bounds(&target_mult);
+        let values = force_all(args, ctx)?;
+        let coll = values[0].to_collection();
+        let size = coll.len();
+        let in_lower = (size as u32) >= lower;
+        let in_upper = upper.is_none_or(|u| (size as u32) <= u);
+        if !(in_lower && in_upper) {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "Cannot cast a collection of size {size} to multiplicity {}",
+                format_multiplicity_bounds(&target_mult),
+            ))
+            .into());
+        }
+        Ok(Evaluated::new(values[0].clone()))
+    }
+
+    fn signature(&self) -> &'static str {
+        "toMultiplicity<T|z>(source:T[*], object:Any[z]):T[z]"
+    }
+}
+
+/// Variant-by-variant `(lower, upper)` extraction for [`pure::Multiplicity`].
+/// `upper = None` means unbounded (`*`). `Variable(_)` treated as `[*]`
+/// (unbound) — at runtime a parametric mult should have been substituted to
+/// a concrete variant by dispatch, but keep the fallback non-panicking.
+fn multiplicity_bounds(m: &legend_pure_parser_pure::types::Multiplicity) -> (u32, Option<u32>) {
+    use legend_pure_parser_pure::types::Multiplicity as M;
+    match m {
+        M::PureOne => (1, Some(1)),
+        M::ZeroOrOne => (0, Some(1)),
+        M::ZeroOrMany | M::Variable(_) => (0, None),
+        M::OneOrMany => (1, None),
+        M::Range { lower, upper } => (*lower, *upper),
+    }
+}
+
+/// Java-parity rendering of a multiplicity for the `toMultiplicity` error
+/// message. Matches `org.finos.legend.pure.m3.tests.function.base.multiplicity.AbstractTestToMultiplicity`
+/// expectations exactly: `[1]`, `[0..1]`, `[1..*]`, `[*]`, `[N]`, `[N..M]`,
+/// `[N..*]`.
+fn format_multiplicity_bounds(m: &legend_pure_parser_pure::types::Multiplicity) -> String {
+    use legend_pure_parser_pure::types::Multiplicity as M;
+    match m {
+        M::PureOne => "[1]".into(),
+        M::ZeroOrOne => "[0..1]".into(),
+        M::ZeroOrMany => "[*]".into(),
+        M::OneOrMany => "[1..*]".into(),
+        M::Variable(name) => format!("[{name}]"),
+        M::Range { lower, upper } => match upper {
+            Some(u) if u == lower => format!("[{lower}]"),
+            Some(u) => format!("[{lower}..{u}]"),
+            None => format!("[{lower}..*]"),
+        },
+    }
+}
+
+/// `expect_args` analogue that runs on the raw `&[ValueSpec]` rather than
+/// post-`force_all` values. Needed when the native reads `type_info` off the
+/// spec before forcing — `force_all` clones values out and discards the
+/// surrounding `ValueSpec` headers.
+fn expect_args_spec(name: &str, args: &[ValueSpec], expected: usize) -> Result<(), PureException> {
+    if args.len() == expected {
+        Ok(())
+    } else {
+        Err(PureRuntimeError::EvaluationError(format!(
+            "{name}: expected {expected} argument(s), got {}",
+            args.len()
+        ))
+        .into())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // isNotEmpty
 // ---------------------------------------------------------------------------
 
@@ -1933,6 +2040,10 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("toOne_T_MANY__String_1__T_1_", ToOne);
     registry.register("toOneMany_T_MANY__T_$1_MANY$_", ToOneMany);
     registry.register("toOneMany_T_MANY__String_1__T_$1_MANY$_", ToOneMany);
+    // toMultiplicity uses the generic mangled name with `z` preserved —
+    // the second arg's static multiplicity (read off `args[1].type_info`)
+    // drives the narrowing decision, not a specialised dispatch.
+    registry.register("toMultiplicity_T_MANY__Any_z__T_z_", ToMultiplicity);
     registry.register("removeDuplicates_T_MANY__T_MANY_", RemoveDuplicates);
     registry.register(
         "removeDuplicates_T_MANY__Function_$0_1$__Function_$0_1$__T_MANY_",

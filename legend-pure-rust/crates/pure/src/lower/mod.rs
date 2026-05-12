@@ -128,6 +128,9 @@ pub(crate) fn lower_expression(
         ast_expr::Expression::TypeReferenceExpr(e) => {
             type_ref::lower_type_reference(e, ctx, errors)
         }
+        ast_expr::Expression::MultiplicityReferenceExpr(e) => {
+            type_ref::lower_multiplicity_reference(e, ctx, errors)
+        }
         ast_expr::Expression::PackageableElementRef(e) => {
             type_ref::lower_packageable_element_ref(e, ctx, errors)
         }

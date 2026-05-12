@@ -256,91 +256,6 @@ Acceptance criteria:
 <!-- Agents: append entries below. Do not rewrite the developer block above. -->
 <!-- agent-audit:end -->
 
-### T-20260512-05 — `toMultiplicity` doesn't compile + missing test coverage
-
-- **Type:** parity-gap
-- **Area:** compiler | runtime
-- **Priority:** P1
-- **Reporter:** Rafael
-- **Filed:** 2026-05-12
-
-**Summary**
-`meta::pure::functions::lang::toMultiplicity<T|z>(source:T[*],
-object:Any[z]):T[z]` (declared in
-`platform/pure/essential/lang/cast/toMultiplicity.pure:17`) doesn't
-compile end-to-end today, and the Rust workspace has no direct test
-of it — existing references in `crates/pure/tests/integration_tests.rs`
-(2783, 2811) only exercise it as a *vehicle* for testing
-`UndeclaredMultiplicityParameter` diagnostics, not the function's
-own behaviour. Need both: get it compiling and add positive +
-negative test coverage.
-
-**Repro / Context**
-- Native signature (PCT):
-  ```pure
-  native function <<PCT.function>>
-  meta::pure::functions::lang::toMultiplicity<T|z>(
-      source:T[*], object:Any[z]
-  ):T[z];
-  ```
-- Java-parity reference: `toMultiplicity` is the multiplicity
-  analogue of `cast` — narrows a `T[*]` to whatever multiplicity
-  the second argument carries (`z`). At runtime it validates the
-  source's actual cardinality against `z` and either returns the
-  narrowed collection or throws.
-- Acceptance criteria:
-  - User code like:
-    ```pure
-    function test::demo(xs: String[*]): String[1] {
-      $xs->toMultiplicity(@String[1])
-    }
-    ```
-    compiles cleanly (no dispatch error, no
-    `UndeclaredMultiplicityParameter`, no return-type mismatch).
-  - Runtime native body validates cardinality:
-    - `xs` has exactly `z` values → return them at multiplicity `z`.
-    - Cardinality mismatch → throw a Pure exception with the same
-      shape as Java Pure's (`"Multiplicity Many doesn't match
-      [1]"` etc — copy the wording from upstream).
-  - Test coverage in both seams:
-    - **Compiler** (`crates/pure/tests/`): positive cases for `[1]`,
-      `[0..1]`, `[2..*]`; negative cases for arity / type mismatch
-      and undeclared mult parameter.
-    - **Runtime** (`crates/runtime/tests/` or `eval_tests.rs`):
-      cardinality-validates-and-returns, cardinality-fails-with-
-      exception, identity on `T[*] → T[*]`.
-
-**Notes**
-- Declaration lives in upstream Java platform sources at
-  `legend-pure-core/legend-pure-m3-core/src/main/resources/platform/
-  pure/essential/lang/cast/toMultiplicity.pure:17` — shared between
-  Java and Rust stacks.
-- The compile-failure root cause is unconfirmed — possibilities:
-  - Dispatch failing to resolve the parametric multiplicity `z`
-    from `object:Any[z]` argument position (consumer of `z` is
-    the *return* type, which means `z` has to flow from the
-    second arg's mult into the result, not from the first arg).
-  - No native registered in `crates/runtime/src/natives/` — but
-    that would only show up at runtime, not compile time.
-  - Pass 2b body lowering failing on `@T[z]` second-arg shape
-    (multiplicity-annotated cast literal).
-  Diagnose before writing the fix.
-- Adjacent natives (same multiplicity-coercion family): `toOne`,
-  `toOneMany`, `cast` (type coercion sibling). Use their dispatch
-  + native registration pattern as the template.
-- Two integration tests already lean on `toMultiplicity`
-  (`undeclared_mult_inside_function_type_errors`,
-  `declared_mult_function_signature_clean`) — they should keep
-  passing after the fix; if they currently rely on the function
-  *not* compiling, rewrite them around a different placeholder.
-- See MEMORY note "Split natives by call shape" — one native per
-  declared signature, no `pos2_is_*` probing inside a single
-  native body.
-
-<!-- agent-audit:start id=T-20260512-05 -->
-<!-- Agents: append entries below. Do not rewrite the developer block above. -->
-<!-- agent-audit:end -->
-
 ### T-20260512-04 — Property default values not applied at `^Class(...)` instantiation (multiplicity violation)
 
 - **Type:** parity-gap
@@ -725,6 +640,215 @@ Today diagnostics surface only for files the editor has opened — the
 
 <!-- Resolved / migrated / wontfix items, newest first. Keep the full block
      including the final audit-block status for posterity. -->
+
+### T-20260512-05 — `toMultiplicity` doesn't compile + missing test coverage
+
+- **Type:** parity-gap
+- **Area:** compiler | runtime
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-12
+
+**Summary**
+`meta::pure::functions::lang::toMultiplicity<T|z>(source:T[*],
+object:Any[z]):T[z]` (declared in
+`platform/pure/essential/lang/cast/toMultiplicity.pure:17`) doesn't
+compile end-to-end today, and the Rust workspace has no direct test
+of it — existing references in `crates/pure/tests/integration_tests.rs`
+(2783, 2811) only exercise it as a *vehicle* for testing
+`UndeclaredMultiplicityParameter` diagnostics, not the function's
+own behaviour. Need both: get it compiling and add positive +
+negative test coverage.
+
+**Repro / Context**
+- Native signature (PCT):
+  ```pure
+  native function <<PCT.function>>
+  meta::pure::functions::lang::toMultiplicity<T|z>(
+      source:T[*], object:Any[z]
+  ):T[z];
+  ```
+- Java-parity reference: `toMultiplicity` is the multiplicity
+  analogue of `cast` — narrows a `T[*]` to whatever multiplicity
+  the second argument carries (`z`). At runtime it validates the
+  source's actual cardinality against `z` and either returns the
+  narrowed collection or throws.
+- Acceptance criteria:
+  - User code like:
+    ```pure
+    function test::demo(xs: String[*]): String[1] {
+      $xs->toMultiplicity(@String[1])
+    }
+    ```
+    compiles cleanly (no dispatch error, no
+    `UndeclaredMultiplicityParameter`, no return-type mismatch).
+  - Runtime native body validates cardinality:
+    - `xs` has exactly `z` values → return them at multiplicity `z`.
+    - Cardinality mismatch → throw a Pure exception with the same
+      shape as Java Pure's (`"Multiplicity Many doesn't match
+      [1]"` etc — copy the wording from upstream).
+  - Test coverage in both seams:
+    - **Compiler** (`crates/pure/tests/`): positive cases for `[1]`,
+      `[0..1]`, `[2..*]`; negative cases for arity / type mismatch
+      and undeclared mult parameter.
+    - **Runtime** (`crates/runtime/tests/` or `eval_tests.rs`):
+      cardinality-validates-and-returns, cardinality-fails-with-
+      exception, identity on `T[*] → T[*]`.
+
+**Notes**
+- Declaration lives in upstream Java platform sources at
+  `legend-pure-core/legend-pure-m3-core/src/main/resources/platform/
+  pure/essential/lang/cast/toMultiplicity.pure:17` — shared between
+  Java and Rust stacks.
+- The compile-failure root cause is unconfirmed — possibilities:
+  - Dispatch failing to resolve the parametric multiplicity `z`
+    from `object:Any[z]` argument position (consumer of `z` is
+    the *return* type, which means `z` has to flow from the
+    second arg's mult into the result, not from the first arg).
+  - No native registered in `crates/runtime/src/natives/` — but
+    that would only show up at runtime, not compile time.
+  - Pass 2b body lowering failing on `@T[z]` second-arg shape
+    (multiplicity-annotated cast literal).
+  Diagnose before writing the fix.
+- Adjacent natives (same multiplicity-coercion family): `toOne`,
+  `toOneMany`, `cast` (type coercion sibling). Use their dispatch
+  + native registration pattern as the template.
+- Two integration tests already lean on `toMultiplicity`
+  (`undeclared_mult_inside_function_type_errors`,
+  `declared_mult_function_signature_clean`) — they should keep
+  passing after the fix; if they currently rely on the function
+  *not* compiling, rewrite them around a different placeholder.
+- See MEMORY note "Split natives by call shape" — one native per
+  declared signature, no `pos2_is_*` probing inside a single
+  native body.
+
+<!-- agent-audit:start id=T-20260512-05 -->
+- 2026-05-12 — claimed by claude-opus-4-7[1m] — plan approved as
+  `splendid-bubbling-fairy.md`; option B (value-at-mult calling
+  form) chosen over parser work for `@[m]` bare-mult literal.
+- 2026-05-12 — diagnosis: three independent issues, only one of
+  which is actually in scope here.
+  * The TODO repro `xs->toMultiplicity(@String[1])` is **not
+    valid Pure** — the Java grammar (`M3CoreParser.g4:311`)
+    permits `AT (type | multiplicity)` only, never the combined
+    `@T[m]`. The Rust parser currently *accepts* `@T[m]` but
+    splits it into 2 args (`@T` + `[m]` as a collection literal),
+    which is what made the existing 2783/2811 integration tests
+    "work" — they only check the `UndeclaredMultiplicityParameter`
+    diagnostic, not dispatch resolution.
+  * Java parity calls toMultiplicity as `xs->toMultiplicity(@[m])`
+    (bare multiplicity literal — `AbstractTestToMultiplicity.java`).
+    The Rust parser does not yet accept `@[m]`. Filed as a
+    follow-up (separate scope) — not blocking behavioural parity.
+  * The native body was never registered, so even the working
+    "value-at-mult" form (`$xs->toMultiplicity($hint)` where the
+    hint's static type carries the desired multiplicity) failed
+    runtime dispatch with `Function not found:
+    toMultiplicity_T_MANY__Any_z__T_z_`.
+- 2026-05-12 — implementation:
+  * `crates/runtime/src/native/collection.rs`: new `ToMultiplicity`
+    struct + `NativeFunction` impl. Reads `args[1].type_info.multiplicity`
+    (statically inferred `z`), counts the source collection size,
+    validates against the bounds, and either returns the source
+    unchanged or raises `EvaluationError` with the verbatim
+    Java-parity message `"Cannot cast a collection of size N to
+    multiplicity [BOUNDS]"`. Helper functions `multiplicity_bounds`
+    + `format_multiplicity_bounds` handle every `Multiplicity`
+    variant. Registered as
+    `toMultiplicity_T_MANY__Any_z__T_z_` — the dispatcher emits
+    the generic name (no per-`z` specialisation), so a single
+    registration covers all call sites.
+  * `platform/pure/essential/lang/cast/toMultiplicity.pure`:
+    upgraded native stereotypes from `<<PCT.function>>` to
+    `<<PCT.function, PCT.platformOnly>>` matching upstream parity
+    (matches `assertError`, `replaceAll`, `keyValues`, …). Added
+    8 `<<test.Test>>` functions: 5 positive (`testToMultiplicityToOne`,
+    `…ToZeroOne`, `…ToOneMany`, `…IdentityZeroMany`, `…ToExactN`)
+    + 3 negative (`…FailsFromEmptyToOne`, `…FailsFromManyToOne`,
+    `…FailsFromEmptyToOneMany`). Negative tests use `assertError`
+    with the exact Java-parity error text.
+  * Tests use the "value-at-mult" calling form: pass any value
+    whose static multiplicity supplies `z`. e.g. `'hint'` → `[1]`,
+    `[1,2,3]->first()` → `[0..1]`, `[1,2]->toOneMany()` → `[1..*]`,
+    `[1,2]->concatenate([3])` → `[*]`. Documented in the file's
+    header comment along with the pointer to the bare-mult-literal
+    parser follow-up.
+- 2026-05-12 — Rust integration tests in
+  `crates/runtime/tests/eval_tests.rs`: 7 new tests pinning the
+  native at the runtime seam (4 positive multiplicities + 3
+  negative cardinality-mismatch error texts) + 1 surveyor proof
+  (`surveyor_to_multiplicity_tests_all_pass`) that runs the
+  `meta::pure::test::surveyor::runTestsFromPath` entry against
+  `meta::pure::functions::lang::tests::toMultiplicity` and asserts
+  `error=0, fail=0, pass>=8`. The two existing diagnostic tests at
+  `integration_tests.rs:2783` / `:2801` still pass — they remain
+  vehicles for `UndeclaredMultiplicityParameter` and never relied
+  on `toMultiplicity` actually dispatching.
+- 2026-05-12 — Java tests retired (3 files removed):
+  * `legend-pure-core/.../AbstractTestToMultiplicity.java`
+  * `legend-pure-runtime/legend-pure-runtime-java-engine-compiled/.../TestToMultiplicity.java`
+  * `legend-pure-runtime/legend-pure-runtime-java-engine-interpreted/.../TestToMultiplicity.java`
+  All 5 `@Test` methods (`testErrorFromToOne`, `testErrorFromToOneMany`,
+  `testMatchExact`, `testBigger`, `testError`) are covered by the
+  new Pure `<<test.Test>>` functions and the Rust integration
+  tests. No other Java code referenced these classes (`grep -r
+  AbstractTestToMultiplicity` clean).
+- 2026-05-12 — verification:
+  * `cargo test -p legend-pure-runtime --test eval_tests
+    to_multiplicity`: 7/7 PASS.
+  * `cargo test -p legend-pure-runtime --test eval_tests
+    surveyor_to_multiplicity_tests_all_pass`: PASS (8/8 surveyor).
+  * `cargo test -p legend-pure-parser-pure --test integration_tests
+    -- undeclared_mult_inside_function_type_errors
+    declared_mult_function_signature_clean`: 2/2 PASS (regression
+    guard for the integration tests at 2783/2801).
+- 2026-05-12 — follow-ups (audit notes, not separate TODOs filed):
+  * ~~**Parser support for bare-multiplicity literal `@[m]`.**~~
+    ✅ **Landed 2026-05-12 (same day).** Sibling track to `@T`
+    added across the full pipeline: AST variant
+    `MultiplicityReferenceExpr` (`crates/ast/src/expression.rs`),
+    parser peek-after-`@` (`crates/parser/src/parser/expression.rs:614`),
+    semantic `ExprKind::MultiplicityReference`
+    (`crates/pure/src/types.rs`), lowering with eager
+    `type_info = Any[m]`
+    (`crates/pure/src/lower/type_ref.rs::lower_multiplicity_reference`),
+    runtime eval arm materialising the
+    `meta::pure::metamodel::multiplicity::Multiplicity` heap wrapper
+    (`crates/runtime/src/eval.rs`; reuses
+    `native/meta.rs::build_multiplicity_wrapper` after refactor to
+    take `&mut RuntimeHeap`), composer
+    (`crates/compose/src/expression.rs`), and a protocol-v1 stub
+    emitting `Var { name: "@[<mult>]" }` with a
+    `TODO(protocol-multiplicity-literal)` marker. Platform tests in
+    `toMultiplicity.pure` now carry 11 `<<test.Test>>` functions:
+    4 positive `@[m]` + 3 negative `@[m]` + 1 parametric `@[o]` +
+    3 value-at-mult equivalence (all forms are canonical Pure
+    semantics — `Any[z]` accepts any value of any type whose static
+    multiplicity is `m`, so platform-level coverage runs on every
+    stack's surveyor, not just Rust). No per-test Rust integration
+    seams or scoped surveyor proof were added: the existing
+    `eval_surveyor_root_strict_pass` test already enforces
+    `fail == 0 && error == 0` across every `<<test.Test>>` in the
+    model, which includes the 11 new ones. Parser snapshot test
+    `multiplicity_literal_concrete_and_named` locks the AST shape
+    (unique signal — covers a layer the surveyor doesn't).
+  * **`legend compile` vs runtime auto-imports divergence.** The
+    CLI's `crates/cli/src/commands/compile.rs:61` and the runtime
+    test fixture's `crates/core-platform-pure/src/platform.rs:38`
+    use *different* auto-import lists — `legend compile`
+    misses `meta::pure::functions::lang` etc., which made the
+    canonical TODO repro fail at the CLI but succeed inside the
+    runtime tests. Surfaced during diagnosis; out of scope for
+    this TODO.
+  * **Protocol JSON shape for `@[m]`.** Current stub emits
+    `Var { name: "@[<mult>]" }` — structurally valid but lossy.
+    Upstream Java protocol-v1 doesn't define a dedicated value-spec
+    shape (the Java parser elaborates to a `Multiplicity`
+    instance); future work: settle on a faithful shape and update
+    `crates/protocol/src/v1/convert.rs` accordingly. Tagged with
+    `TODO(protocol-multiplicity-literal)` at the call site.
+  Status: Fix landed.
+<!-- agent-audit:end -->
 
 ### T-20260511-07 — LSP: Find Usages (workspace-wide references to an element)
 
