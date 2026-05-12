@@ -292,6 +292,38 @@ defaults (existing tests cover that path).
 
 <!-- agent-audit:start id=T-20260512-04 -->
 <!-- Agents: append entries below. Do not rewrite the developer block above. -->
+- 2026-05-12 — root cause: `^Class(...)` and Pure-source
+  `new(class, id, [keyExpr])` share `finish_construction`
+  (`crates/runtime/src/native/lang.rs:662`), which applied caller-
+  supplied triples but never walked the class hierarchy for
+  unspecified properties' `default_value` expressions. The third
+  constructor overload, `DynamicNew` (same file), already did this
+  correctly at lines 1236–1279 — the two paths had drifted, and the
+  compile-time check `ConstructorMissingRequiredProperty` correctly
+  short-circuits on defaulted properties so the divergence only showed
+  at runtime.
+- Fix: extracted `apply_property_defaults(ctx, obj, class_id,
+  supplied_keys)` as a shared private helper in
+  `crates/runtime/src/native/lang.rs`. `finish_construction` now
+  back-fills unsupplied properties from their `default_value` between
+  `apply_property_triples` and the deferred multiplicity validation.
+  `DynamicNew::execute` was refactored to call the same helper —
+  structural fix that eliminates the drift point per the
+  `feedback_no_tactical_hacks` memory.
+- Canonical tests: added five `<<test.Test>>` functions to
+  `legend-pure-core/.../platform/pure/grammar/functions/lang/creation/new.pure`
+  under `meta::pure::functions::lang::tests::newAtRuntime`:
+  primitive default, primitive default overridden, enum default,
+  enum default overridden, inherited default. They run on every
+  stack's surveyor (Java + Rust). Rust surveyor: 385/0/0 (was 380),
+  including the five new ones. Full `cargo test -p
+  legend-pure-runtime`: green. `cargo test -p legend-pure-parser-pure`:
+  green. `cargo fmt --check`, copyright check: clean.
+- Pre-existing limitation preserved (mirrors `DynamicNew`):
+  `populate_association_inverses` runs over caller triples only, not
+  over defaults. Out of scope for this TODO; file a follow-up only if
+  default-valued association ends become a real use case.
+  Status: Fix landed.
 <!-- agent-audit:end -->
 
 ### T-20260512-03 — Virtual filesystem surfacing "decompiled" elements from `.purem` binaries
