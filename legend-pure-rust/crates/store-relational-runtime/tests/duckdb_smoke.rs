@@ -219,6 +219,34 @@ function user_test::create_leak(): Integer[1]
     );
 }
 
+const REJECTS_NON_DUCKDB: &str = r"
+import meta::external::store::relational::runtime::*;
+import meta::relational::runtime::*;
+import meta::relational::metamodel::execute::*;
+
+function user_test::execute_in_h2(): Boolean[1]
+{
+    let db = ^TestDatabaseConnection(type = DatabaseType.H2);
+    assertError(
+        | executeInDb('select 1', $db, 0, 1000),
+        'executeInDb: DatabaseType.H2 is not supported yet (only DuckDB is implemented; H2/Postgres/etc. coming later)'
+    );
+}
+";
+
+// The Rust port routes only DatabaseType.DuckDB to a real backend; any
+// other enum member must surface a deterministic not-implemented error
+// (so failures explain themselves at the call site instead of producing
+// engine-specific SQL errors). This contract is Rust-port-specific —
+// the Java stack supports H2 et al. — so the assertion lives here as a
+// Rust integration test rather than as a Pure `<<test.Test>>` function
+// that both surveyors would discover.
+#[test]
+fn execute_in_db_rejects_non_duckdb_type() {
+    let v = run_pure_function(REJECTS_NON_DUCKDB, "execute_in_h2__Boolean_1_");
+    assert_eq!(v, Value::Boolean(true));
+}
+
 const CREATE_TEMP_TABLE: &str = r"
 import meta::external::store::relational::runtime::*;
 import meta::relational::runtime::*;
