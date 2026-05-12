@@ -313,7 +313,13 @@ fn run_once(
         }
     };
 
-    let registry = NativeRegistry::standard();
+    // Pull in the relational-store extension so platform tests that
+    // exercise `executeInDb` / `loadCsv*` / fetch* metadata natives can
+    // route through the DuckDB-backed bodies. Each Evaluator built below
+    // gets its own DuckDB connection through `ExtensionStateStore`; no
+    // process-wide state.
+    let relational_ext = legend_pure_store_relational_runtime::RelationalStoreExtension;
+    let registry = NativeRegistry::with_extensions(&[&relational_ext]);
 
     if args.coverage {
         // Coverage path — use CoverageHooks.
