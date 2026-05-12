@@ -61,10 +61,18 @@ impl MappingOperation {
     #[must_use]
     pub fn from_function_fqn(fqn: &str) -> Option<Self> {
         match fqn {
-            "meta::pure::router::operations::union_OperationSetImplementation_1__SetImplementation_MANY_" => Some(Self::StoreUnion),
-            "meta::pure::router::operations::special_union_OperationSetImplementation_1__SetImplementation_MANY_" => Some(Self::RouterUnion),
-            "meta::pure::router::operations::inheritance_OperationSetImplementation_1__SetImplementation_MANY_" => Some(Self::Inheritance),
-            "meta::pure::router::operations::merge_OperationSetImplementation_1__SetImplementation_MANY_" => Some(Self::Merge),
+            "meta::pure::router::operations::union_OperationSetImplementation_1__SetImplementation_MANY_" => {
+                Some(Self::StoreUnion)
+            }
+            "meta::pure::router::operations::special_union_OperationSetImplementation_1__SetImplementation_MANY_" => {
+                Some(Self::RouterUnion)
+            }
+            "meta::pure::router::operations::inheritance_OperationSetImplementation_1__SetImplementation_MANY_" => {
+                Some(Self::Inheritance)
+            }
+            "meta::pure::router::operations::merge_OperationSetImplementation_1__SetImplementation_MANY_" => {
+                Some(Self::Merge)
+            }
             _ => None,
         }
     }

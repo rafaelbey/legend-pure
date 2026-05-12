@@ -71,7 +71,10 @@ fn round_trip(mapping: &MappingDef) -> (serde_json::Value, ProtocolMapping) {
     let json = serde_json::to_value(&proto).expect("serialization must succeed");
     let back: ProtocolMapping =
         serde_json::from_value(json.clone()).expect("deserialization must succeed");
-    assert_eq!(proto, back, "AST → JSON → AST must be structurally identical");
+    assert_eq!(
+        proto, back,
+        "AST → JSON → AST must be structurally identical"
+    );
     (json, proto)
 }
 
@@ -246,14 +249,8 @@ fn pure_body_with_local_property_serializes_local_mapping_property_info() {
         "localMappingProperty.type must reflect declared type; got: {pm}"
     );
     let mult = &local["multiplicity"];
-    assert_eq!(
-        mult["lowerBound"], 1,
-        "PureOne lower bound; got: {pm}"
-    );
-    assert_eq!(
-        mult["upperBound"], 1,
-        "PureOne upper bound; got: {pm}"
-    );
+    assert_eq!(mult["lowerBound"], 1, "PureOne lower bound; got: {pm}");
+    assert_eq!(mult["upperBound"], 1, "PureOne upper bound; got: {pm}");
 }
 
 // ---------------------------------------------------------------------------
@@ -487,7 +484,9 @@ fn aggregation_aware_body_serializes_main_set_implementation_recursively() {
     );
     assert_eq!(main["srcClass"], "my::test::SalesRaw");
 
-    let aggs = cm["aggregateSetImplementations"].as_array().expect("aggregates list");
+    let aggs = cm["aggregateSetImplementations"]
+        .as_array()
+        .expect("aggregates list");
     assert_eq!(aggs.len(), 1);
     let agg0 = &aggs[0];
     assert_eq!(agg0["index"], 0);
@@ -501,7 +500,9 @@ fn aggregation_aware_body_serializes_main_set_implementation_recursively() {
         gbf[0]["groupByFn"]["body"].is_array(),
         "each groupByFunction must wrap as LambdaFunction; got: {gbf:#?}"
     );
-    let aggvals = spec["aggregateValues"].as_array().expect("aggregateValues list");
+    let aggvals = spec["aggregateValues"]
+        .as_array()
+        .expect("aggregateValues list");
     assert_eq!(aggvals.len(), 1);
     assert!(aggvals[0]["mapFn"]["body"].is_array());
     assert!(aggvals[0]["aggregateFn"]["body"].is_array());
@@ -698,7 +699,9 @@ fn xstore_body_routes_into_association_mappings_sibling_list() {
         2,
         "two Pure-bodied class mappings expected; got: {json}"
     );
-    let assocs = json["associationMappings"].as_array().expect("associations");
+    let assocs = json["associationMappings"]
+        .as_array()
+        .expect("associations");
     assert_eq!(assocs.len(), 1);
     let assoc = &assocs[0];
     assert_eq!(assoc["_type"], "xStore");

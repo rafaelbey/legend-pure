@@ -153,10 +153,8 @@ fn main_table_alias_wires_into_table_row_under_schema() {
     let mapping_pop = MappingDSLPopulator;
     let db_pop = RelationalDatabaseDSLPopulator;
     let cm_pop = RelationalClassMappingDSLPopulator;
-    let evaluator = Evaluator::new_default_with_dsl_populators(
-        &model,
-        &[&mapping_pop, &db_pop, &cm_pop],
-    );
+    let evaluator =
+        Evaluator::new_default_with_dsl_populators(&model, &[&mapping_pop, &db_pop, &cm_pop]);
 
     let mapping_handle = find_mapping_handle(&model, &evaluator).expect("Mapping heap row");
 
@@ -222,10 +220,8 @@ fn main_table_alias_resolves_top_level_table_via_default_schema() {
     let mapping_pop = MappingDSLPopulator;
     let db_pop = RelationalDatabaseDSLPopulator;
     let cm_pop = RelationalClassMappingDSLPopulator;
-    let evaluator = Evaluator::new_default_with_dsl_populators(
-        &model,
-        &[&mapping_pop, &db_pop, &cm_pop],
-    );
+    let evaluator =
+        Evaluator::new_default_with_dsl_populators(&model, &[&mapping_pop, &db_pop, &cm_pop]);
 
     let mapping_handle = find_mapping_handle(&model, &evaluator).expect("Mapping heap row");
     let cm = first_object(&mapping_handle, "classMappings").expect("class mapping");
@@ -261,10 +257,8 @@ fn missing_database_leaves_main_table_alias_empty() {
     let mapping_pop = MappingDSLPopulator;
     let db_pop = RelationalDatabaseDSLPopulator;
     let cm_pop = RelationalClassMappingDSLPopulator;
-    let evaluator = Evaluator::new_default_with_dsl_populators(
-        &model,
-        &[&mapping_pop, &db_pop, &cm_pop],
-    );
+    let evaluator =
+        Evaluator::new_default_with_dsl_populators(&model, &[&mapping_pop, &db_pop, &cm_pop]);
 
     let mapping_handle = find_mapping_handle(&model, &evaluator).expect("Mapping heap row");
     let cm = first_object(&mapping_handle, "classMappings").expect("class mapping");

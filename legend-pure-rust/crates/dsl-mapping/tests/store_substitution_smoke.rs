@@ -560,11 +560,7 @@ fn multi_substitution_round_trips_through_composer() {
     );
 
     let composed = compose_mapping_section(&[mapping]);
-    for pair in [
-        ("DbA", "DbX"),
-        ("DbB", "DbY"),
-        ("DbC", "DbZ"),
-    ] {
+    for pair in [("DbA", "DbX"), ("DbB", "DbY"), ("DbC", "DbZ")] {
         let (src, tgt) = pair;
         assert!(
             composed.contains(src) && composed.contains(tgt),

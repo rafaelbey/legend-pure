@@ -28,9 +28,7 @@
 use serde::{Deserialize, Serialize};
 
 use legend_pure_parser_protocol::v1::source_info::SourceInformation;
-use legend_pure_parser_protocol::v1::value_spec::{
-    LambdaFunction, ProtocolPackageableElementPtr,
-};
+use legend_pure_parser_protocol::v1::value_spec::{LambdaFunction, ProtocolPackageableElementPtr};
 
 use crate::protocol::pure::ProtocolPropertyPointer;
 

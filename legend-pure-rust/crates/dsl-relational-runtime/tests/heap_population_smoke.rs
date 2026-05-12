@@ -69,7 +69,9 @@ fn find_database_handle<'m, H: legend_pure_runtime::hooks::EvalHooks>(
     use legend_pure_parser_pure::model::Element;
     for chunk in &model.chunks {
         for (local_idx, element) in chunk.elements.iter() {
-            let Element::DSLInstance(d) = element else { continue };
+            let Element::DSLInstance(d) = element else {
+                continue;
+            };
             if d.dsl_name.as_str() != "RelationalDatabase" {
                 continue;
             }
@@ -227,10 +229,7 @@ fn database_with_default_schema_gathers_top_level_tables() {
         .collect();
     let mut tnames: Vec<String> = tables.iter().filter_map(name_of).collect();
     tnames.sort();
-    assert_eq!(
-        tnames,
-        vec!["products".to_string(), "trades".to_string()]
-    );
+    assert_eq!(tnames, vec!["products".to_string(), "trades".to_string()]);
 
     let joins: Vec<Value> = db_handle
         .borrow()

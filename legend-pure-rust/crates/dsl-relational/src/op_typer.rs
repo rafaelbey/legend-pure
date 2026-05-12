@@ -421,7 +421,10 @@ mod tests {
     fn target_column_types_against_pinned_subject_numeric_column() {
         let t = subject(
             "tradeTable",
-            vec![col("qty", PureColumnType::Integer), col("name", PureColumnType::Varchar)],
+            vec![
+                col("qty", PureColumnType::Integer),
+                col("name", PureColumnType::Varchar),
+            ],
         );
         let scope = OpTypeScope::empty().with_target_subject(&t);
         assert_eq!(infer_op_type(&target_col("qty"), scope), OpType::Numeric);
