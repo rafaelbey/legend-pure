@@ -139,6 +139,84 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260512-07 — Audit `eval_tests.rs` for coverage already gated by surveyor `<<test.Test>>` runs
+
+- **Type:** refactor
+- **Area:** runtime | tests
+- **Priority:** P2
+- **Reporter:** Rafael
+- **Filed:** 2026-05-12
+
+**Summary**
+`crates/runtime/tests/eval_tests.rs` (~4053 lines, ~161 `#[test]`s) has
+accumulated many Rust-seam tests that re-prove behaviour already covered
+by platform `<<test.Test>>` functions under
+`legend-pure-core/legend-pure-m3-core/src/main/resources/platform/`. The
+stack-agnostic `eval_surveyor_root_strict_pass` test (and the PCT
+strict-pass tests beside it) already gate `fail == 0 && error == 0`
+across every platform `<<test.Test>>` and `<<PCT.test>>` in the model,
+so duplicated Rust seams add cost (build + run time, maintenance) without
+adding signal. Audit `eval_tests.rs` and remove tests whose behaviour is
+fully specified by a platform test that the surveyor already runs, so
+`cargo test --workspace` (and especially `-p legend-pure-runtime --test
+eval_tests`) is as lean as possible.
+
+**Repro / Context**
+- File: `crates/runtime/tests/eval_tests.rs`
+- The exemplar is already in the file at lines 4047–4053: the
+  `toMultiplicity` (T-20260512-05) note removes the dedicated Rust seam
+  on the explicit grounds that the 11 platform `<<test.Test>>` functions
+  in `platform/pure/essential/lang/cast/toMultiplicity.pure` are already
+  driven by `eval_surveyor_root_strict_pass`. Apply that same reasoning
+  systematically to the rest of the file.
+- Acceptance criteria:
+  - A documented per-test audit (in the PR or a short scratch doc) of
+    every `#[test]` in `eval_tests.rs`, classified as:
+    (a) duplicated — fully gated by an existing surveyor / PCT strict
+    test → delete; (b) partially duplicated — keep only the Rust-seam
+    bit that isn't covered by a `<<test.Test>>` (e.g. asserting on an
+    error *message* that Pure-side `->meta::pure::functions::asserts::*`
+    can't introspect); (c) unique — keep, with a one-line comment
+    pointing at what makes it Rust-specific.
+  - Net reduction in `eval_tests.rs` line count + `#[test]` count, with
+    `eval_surveyor_root_strict_pass`, `eval_pct_essential_strict_pass`,
+    and `eval_pct_grammar_functions_strict_pass` still green.
+  - No drop in surveyor pass count (current baseline per CLAUDE.md:
+    surveyor 246/0/0, PCT 465/465). Any test moved out must have a
+    corresponding `<<test.Test>>` proving its assertion — file new
+    platform tests under the appropriate `platform/pure/.../*.pure`
+    location if the Rust-side test was covering a gap.
+  - Tests that genuinely need the Rust seam (e.g. inspecting heap
+    shape, `Rc::ptr_eq` identity, `ObjectHandle` reachability,
+    native-error string formatting that isn't observable from Pure)
+    stay, but each survivor carries a one-line `// rust-seam: <reason>`
+    comment so future audits can skip them quickly.
+
+**Notes**
+- Watch for false positives: a test may *look* duplicated but actually
+  assert on something the surveyor can't see — error messages, panic
+  vs. `PureException`, heap-internal invariants, native dispatch
+  resolution path. Per memory `feedback_stack_specific_tests.md`,
+  stack-specific assertions belong in this file; only redundant
+  behaviour-only checks should leave.
+- The relational/DSL populator wiring in
+  `eval_surveyor_root_strict_pass` is what makes it possible to drop
+  per-DSL Rust seams — verify each candidate-for-deletion is in fact
+  reached by that run (a `<<test.Test>>` in an un-loaded repo would
+  be silently skipped).
+- Adjacent files to consider in the same sweep:
+  `crates/runtime/tests/path_eval_smoke.rs`,
+  `string_to_tds_smoke.rs`, `platform_invariants.rs` — same question
+  applies, but smaller surface.
+- Memory: see `project_surveyor.md` and
+  `reference_surveyor_diagnostics.md` for the surveyor architecture
+  and the histogram / missing-natives diagnostics already in
+  `eval_tests.rs`.
+
+<!-- agent-audit:start id=T-20260512-07 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
 ### T-20260512-06 — DAP debugger renders variables with Rust-internal `Debug` shape; needs Pure-syntax view + navigable structure
 
 - **Type:** feature
