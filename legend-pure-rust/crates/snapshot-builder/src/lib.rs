@@ -209,6 +209,15 @@ pub fn compile_to_purem(req: CompileRequest<'_>) -> Result<(), BuildError> {
     populate_repo_visibility(&mut model, &descriptors);
     populate_repo_patterns(&mut model, &descriptors);
 
+    // Compiler extensions matched to the section parsers
+    // `parse_repo_sources` wires up. Built once and reused across every
+    // repo's slice compile so Database / Mapping AST nodes resolve at
+    // both declare and define time.
+    let mapping_ext = legend_pure_dsl_mapping::compiler::MappingExtension::new();
+    let relational_ext = legend_pure_dsl_relational::compiler::RelationalExtension::new();
+    let extensions: &[&dyn legend_pure_parser_pure::extension::CompilerExtension] =
+        &[&mapping_ext, &relational_ext];
+
     let mut target_range: Option<Range<u16>> = None;
     let mut errors: Vec<CompilationError> = Vec::new();
 
@@ -217,7 +226,7 @@ pub fn compile_to_purem(req: CompileRequest<'_>) -> Result<(), BuildError> {
         let source_files = parse_repo_sources(desc)?;
         let chunks_before = model.chunks.len();
         let (_range, slice_errs) =
-            compile_repo_slice(&mut model, &source_files, &auto_imports, &[]);
+            compile_repo_slice(&mut model, &source_files, &auto_imports, extensions);
         errors.extend(slice_errs);
         if desc.name == req.target {
             #[allow(clippy::cast_possible_truncation)]
@@ -228,7 +237,7 @@ pub fn compile_to_purem(req: CompileRequest<'_>) -> Result<(), BuildError> {
         }
     }
 
-    errors.extend(finalize_model(&mut model, &auto_imports, &[]));
+    errors.extend(finalize_model(&mut model, &auto_imports, extensions));
 
     if !errors.is_empty() {
         return Err(BuildError::Compile {
@@ -479,10 +488,18 @@ fn parse_repo_sources(desc: &LoadedDescriptor) -> Result<Vec<SourceFile>, BuildE
             source,
         })?;
         let canonical_smol = SmolStr::new(&canonical);
-        match legend_pure_parser_parser::parse_with_islands(
+        match legend_pure_parser_parser::parse_with_sections(
             &content,
             canonical_smol.as_str(),
             legend_pure_dsl_graph::parser::default_island_parsers(),
+            // Platform-shipped Pure tests can use `###Relational` and
+            // `###Mapping` headers; everything else falls through to
+            // the default `###Pure` section. Add new DSL section
+            // parsers here as they land in platform repos.
+            vec![
+                Box::new(legend_pure_dsl_mapping::parser::MappingSectionParser::new()),
+                Box::new(legend_pure_dsl_relational::parser::RelationalSectionParser),
+            ],
         ) {
             Ok(sf) => parsed.push(sf),
             Err(partial) => {
