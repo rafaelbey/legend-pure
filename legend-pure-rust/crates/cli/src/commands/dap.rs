@@ -58,8 +58,7 @@ pub fn run(args: DapArgs, classpath_override: Option<&std::path::Path>) -> Resul
         resolved
             .extra_auto_imports
             .iter()
-            .cloned()
-            .map(SmolStr::from),
+            .cloned(),
     );
     config.log_level = args.log_level;
 
