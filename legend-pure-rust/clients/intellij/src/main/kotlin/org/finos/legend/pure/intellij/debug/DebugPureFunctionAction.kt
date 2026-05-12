@@ -17,6 +17,7 @@ package org.finos.legend.pure.intellij.debug
 
 import com.intellij.execution.executors.DefaultDebugExecutor
 import com.intellij.execution.runners.ExecutionEnvironmentBuilder
+import com.intellij.execution.runners.ProgramRunner
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -53,8 +54,28 @@ class DebugPureFunctionAction(
     AllIcons.Actions.StartDebugger,
 ), DumbAware {
     override fun actionPerformed(e: AnActionEvent) {
+        LOG.info("Debug action invoked for $fqn")
         val profile = PureDebugRunProfile(fqn)
         val executor = DefaultDebugExecutor.getDebugExecutorInstance()
+        // Probe the program-runner registry: if no runner claims
+        // (executorId, profile), `buildAndExecute` is a silent
+        // no-op. Logging the lookup result here pins where the
+        // chain breaks when the gutter Debug click looks
+        // unresponsive. Should resolve to
+        // `com.intellij.platform.dap.impl.DapProgramRunner` once
+        // the experimental DAP module is loaded.
+        val runner = ProgramRunner.getRunner(executor.id, profile)
+        if (runner == null) {
+            LOG.warn(
+                "No ProgramRunner accepts (executor=${executor.id}, profile=${profile.javaClass.name}). " +
+                    "Likely cause: the `intellij.platform.dap` bundled module isn't loaded at runtime, " +
+                    "so `DapProgramRunner` and the `launchArgumentsProvider` EP aren't available. " +
+                    "Check `bundledModule(\"intellij.platform.dap\")` in build.gradle.kts and the plugin's " +
+                    "`<depends>` declarations.",
+            )
+        } else {
+            LOG.info("Resolved runner: ${runner.javaClass.name}")
+        }
         try {
             ExecutionEnvironmentBuilder
                 .create(project, executor, profile)

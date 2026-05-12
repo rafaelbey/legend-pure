@@ -52,6 +52,19 @@
          announcement. -->
     <depends optional="true" config-file="lsp.xml">com.intellij.modules.lsp</depends>
 
+    <!-- DAP module dependency.
+         The `intellij.platform.dap` module is a v2 content module —
+         it has no `<module value="...">` virtual marker, so the
+         v1-style `<depends>` directive can't resolve it. The v2
+         `<dependencies>` block below is the supported way to pull
+         a bundled content module onto the plugin classloader. The
+         debugger EPs are registered directly in this file's
+         `<extensions>` section; they only fire when the module is
+         loaded, which the v2 dependency ensures. -->
+    <dependencies>
+        <module name="intellij.platform.dap"/>
+    </dependencies>
+
     <extensions defaultExtensionNs="com.intellij">
         <!-- File-type registration -->
         <fileType
@@ -124,24 +137,27 @@
                 language="Pure"
                 implementationClass="org.finos.legend.pure.intellij.run.PureRunLineMarkerContributor"/>
 
-        <!-- DAP debugger surface.
-             Three EPs to wire:
-               1. `xdebugger.breakpointType` — lets users click the
-                  `.pure` gutter to toggle breakpoints. The line
-                  type matches every `.pure` file/line; the runtime
-                  filters at pause time.
-               2. `platform.dap.debugAdapterSupportProvider` — the
-                  experimental DAP entry point. Returns our adapter
-                  id + descriptor; the platform's `DapProgramRunner`
-                  uses it to spawn `legend dap` on Debug clicks.
-               3. `platform.dap.launchArgumentsProvider` — maps our
-                  `PureDebugRunProfile` to the DAP `launch` body
-                  (`{program, stopOnEntry, noDebug}`) that our Rust
-                  server expects. -->
+        <!-- Line-breakpoint type for `.pure`. Lives under the
+             core `com.intellij` namespace (the xdebugger module
+             is always loaded), even though it's only useful when
+             the DAP module is also present. -->
         <xdebugger.breakpointType
                 implementation="org.finos.legend.pure.intellij.debug.PureLineBreakpointType"/>
+
+        <!-- Console-output linkifier. Scans Run/Debug console
+             text for the runtime's stack-frame pattern
+             (`resource:PATH line:N column:M`) and turns it into
+             a clickable jump-to-source link. Mirrors the
+             post-failure link rendering in the Pure Run tool
+             window for streaming output during a debug session. -->
+        <consoleFilterProvider
+                implementation="org.finos.legend.pure.intellij.debug.PureDebugConsoleFilterProvider"/>
     </extensions>
 
+    <!-- DAP-specific EPs. Only register when the
+         `intellij.platform.dap` module is on the classloader,
+         which the v2 `<dependencies>` block at the top of this
+         file guarantees. -->
     <extensions defaultExtensionNs="com.intellij.platform.dap">
         <debugAdapterSupportProvider
                 implementation="org.finos.legend.pure.intellij.debug.PureDebugAdapterSupportProvider"/>
