@@ -14,17 +14,18 @@
 
 //! `meta::relational::metamodel::execute::{createTempTable, dropTempTable}`.
 //!
-//! `createTempTable` accepts a user-supplied lambda that builds the
-//! `CREATE TABLE` DDL given (`tableName`, `columns`, `DatabaseType.DuckDB`).
-//! We invoke the lambda via [`legend_pure_runtime::native::EvalContextTrait::call_function`]
-//! and run the resulting DDL against the per-Evaluator DuckDB connection.
+//! `createTempTable` invokes a user-supplied lambda that returns the
+//! DDL string, given (`tableName`, `columns`, `DatabaseType`). The
+//! resolved backend's `database_type_member()` feeds the third
+//! argument so lambdas can branch on engine-specific syntax (e.g.
+//! DuckDB's `CREATE TABLE` vs H2's `CREATE LOCAL TEMPORARY TABLE`).
 //!
 //! Two overloads share one body via [`do_create_temp_table`]:
 //!  * `(name, cols, sql, dbConn)`            — 4 args
-//!  * `(name, cols, sql, relyOnFinally, dbConn)` — 5 args; the boolean is
-//!    accepted for signature parity but not yet acted on (auto-drop on
-//!    function exit needs a teardown hook that doesn't exist yet —
-//!    deferred follow-up).
+//!  * `(name, cols, sql, relyOnFinally, dbConn)` — 5 args; the boolean
+//!    is accepted for signature parity but not yet acted on (auto-
+//!    drop on function exit needs a teardown hook the evaluator
+//!    doesn't expose yet — tracked in BACKLOG).
 
 use legend_pure_parser_pure::types::ValueSpec;
 use legend_pure_runtime::error::{PureException, PureRuntimeError};
@@ -33,8 +34,7 @@ use legend_pure_runtime::native::{EvalContextTrait, Evaluated, NativeFunction, e
 use legend_pure_runtime::value::Value;
 use smol_str::SmolStr;
 
-use crate::connection::DuckDBState;
-use crate::dispatch::{SUPPORTED_BACKEND, require_duckdb};
+use crate::dispatch::{quote_ident, resolve_backend};
 
 /// `createTempTable(name, cols, sqlBuilder, dbConn) -> Nil`.
 #[derive(Debug)]
@@ -68,8 +68,7 @@ impl NativeFunction for CreateTempTable {
 ///
 /// Same body as [`CreateTempTable`]. The `relyOnFinally` boolean is
 /// accepted for signature parity but ignored — auto-drop on function
-/// exit requires a teardown hook the evaluator does not yet expose,
-/// flagged as a follow-up.
+/// exit requires a teardown hook the evaluator does not yet expose.
 #[derive(Debug)]
 pub struct CreateTempTableWithFinally;
 
@@ -120,13 +119,9 @@ impl NativeFunction for DropTempTable {
             .map_err(PureException::from)?
             .to_string();
         let db_conn = ctx.evaluate(&args[1])?.into_value();
-        require_duckdb("dropTempTable", &db_conn, ctx)?;
-
-        let state = ctx
-            .extensions()
-            .get_or_init::<DuckDBState, _>(DuckDBState::new)?;
+        let backend = resolve_backend("dropTempTable", &db_conn, ctx)?;
         let sql = format!("DROP TABLE {}", quote_ident(&name));
-        state.with_conn(|c| c.execute_batch(&sql))?;
+        backend.execute_batch(ctx, &sql)?;
         Ok(Evaluated::new(Value::Unit))
     }
 
@@ -136,6 +131,11 @@ impl NativeFunction for DropTempTable {
 }
 
 /// Shared body for both `createTempTable` overloads.
+///
+/// Invokes the user's DDL-builder lambda with the table name, columns,
+/// and the `DatabaseType` enum value matching the resolved backend
+/// — so user code can branch on engine-specific DDL syntax. Then runs
+/// the returned DDL through the trait's `execute_batch`.
 fn do_create_temp_table(
     name: String,
     cols: Value,
@@ -144,10 +144,9 @@ fn do_create_temp_table(
     _rely_on_finally: bool,
     ctx: &mut dyn EvalContextTrait,
 ) -> Result<Evaluated, PureException> {
-    require_duckdb("createTempTable", &db_conn, ctx)?;
+    let backend = resolve_backend("createTempTable", &db_conn, ctx)?;
+    let member = backend.database_type_member();
 
-    // Materialise the `DatabaseType.DuckDB` enum literal the lambda
-    // expects as its third argument.
     let db_type_id = m3_paths::resolve(ctx.model(), m3_paths::DATABASE_TYPE).ok_or_else(|| {
         PureException::from(PureRuntimeError::EvaluationError(
             "createTempTable: meta::relational::runtime::DatabaseType not resolvable".into(),
@@ -155,7 +154,7 @@ fn do_create_temp_table(
     })?;
     let db_type_arg = Value::EnumValue {
         enum_id: db_type_id,
-        member: SmolStr::new(SUPPORTED_BACKEND),
+        member: SmolStr::new(member),
     };
 
     let ddl = ctx
@@ -167,43 +166,6 @@ fn do_create_temp_table(
         .map_err(PureException::from)?
         .to_string();
 
-    let state = ctx
-        .extensions()
-        .get_or_init::<DuckDBState, _>(DuckDBState::new)?;
-    state.with_conn(|c| c.execute_batch(&ddl))?;
+    backend.execute_batch(ctx, &ddl)?;
     Ok(Evaluated::new(Value::Unit))
-}
-
-/// DuckDB-safe identifier quoting: double-quotes embedded double-quotes,
-/// wraps in double-quotes. Defensive against names with hyphens or
-/// embedded quotes; cheap enough to run unconditionally.
-fn quote_ident(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        if c == '"' {
-            out.push('"');
-            out.push('"');
-        } else {
-            out.push(c);
-        }
-    }
-    out.push('"');
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn quote_ident_simple() {
-        assert_eq!(quote_ident("foo"), r#""foo""#);
-    }
-
-    #[test]
-    fn quote_ident_embedded_quote_is_doubled() {
-        // 'fo"o' → "fo""o"
-        assert_eq!(quote_ident(r#"fo"o"#), r#""fo""o""#);
-    }
 }

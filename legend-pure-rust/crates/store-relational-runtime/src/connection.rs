@@ -142,6 +142,21 @@ impl H2State {
         })
     }
 
+    /// Construct an `H2State` using the process-wide config cache
+    /// ([`crate::extension_configs`]) overlaid with env-var overrides.
+    /// This is the entry point natives use when dispatching the H2
+    /// backend — no per-call config plumbing required.
+    ///
+    /// # Errors
+    /// Returns the underlying [`crate::H2ConfigError`] surfaced as a
+    /// [`PureException`] when no jar is configured anywhere, or
+    /// propagates spawn / connect failures.
+    pub fn from_global_config() -> Result<Self, PureException> {
+        let cfg = crate::H2Config::resolve(crate::extension_configs())
+            .map_err(|e| PureRuntimeError::EvaluationError(e.to_string()))?;
+        Self::new(&cfg)
+    }
+
     /// Run a closure against the inner [`postgres::Client`].
     ///
     /// Borrows mutably under the hood (the `postgres` API needs

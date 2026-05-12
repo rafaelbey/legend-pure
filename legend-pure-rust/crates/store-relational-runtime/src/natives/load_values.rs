@@ -24,8 +24,7 @@ use legend_pure_runtime::error::{PureException, PureRuntimeError};
 use legend_pure_runtime::native::{EvalContextTrait, Evaluated, NativeFunction, expect_args};
 use legend_pure_runtime::value::Value;
 
-use crate::connection::DuckDBState;
-use crate::dispatch::require_duckdb;
+use crate::dispatch::{quote_ident, resolve_backend};
 
 /// `loadValuesToDbTable(tableData:List<List<Any>>[*|1], table, dbConn) -> Nil`.
 ///
@@ -44,7 +43,7 @@ impl NativeFunction for LoadValuesToDbTable {
         let table_value = ctx.evaluate(&args[1])?.into_value();
         let db_conn = ctx.evaluate(&args[2])?.into_value();
 
-        require_duckdb("loadValuesToDbTable", &db_conn, ctx)?;
+        let backend = resolve_backend("loadValuesToDbTable", &db_conn, ctx)?;
         let table_name = read_table_name("loadValuesToDbTable", &table_value, ctx)?;
 
         // Walk: tableData → outer List heap object(s) → row List heap objects → cells.
@@ -75,10 +74,7 @@ impl NativeFunction for LoadValuesToDbTable {
             sql.push(')');
         }
 
-        let state = ctx
-            .extensions()
-            .get_or_init::<DuckDBState, _>(DuckDBState::new)?;
-        state.with_conn(|c| c.execute_batch(&sql))?;
+        backend.execute_batch(ctx, &sql)?;
         Ok(Evaluated::new(Value::Unit))
     }
 
@@ -187,22 +183,6 @@ fn value_to_sql_literal(v: &Value) -> String {
         Value::Date(d) => format!("'{d}'"),
         other => format!("'{}'", format!("{other}").replace('\'', "''")),
     }
-}
-
-/// DuckDB-safe identifier quoting (double-quotes embedded double-quotes).
-fn quote_ident(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        if c == '"' {
-            out.push('"');
-            out.push('"');
-        } else {
-            out.push(c);
-        }
-    }
-    out.push('"');
-    out
 }
 
 #[cfg(test)]

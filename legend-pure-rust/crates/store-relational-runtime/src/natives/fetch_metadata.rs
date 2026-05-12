@@ -31,8 +31,7 @@ use legend_pure_runtime::value::Value;
 
 use std::fmt::Write;
 
-use crate::dispatch::require_duckdb;
-use crate::resultset;
+use crate::dispatch::resolve_backend;
 
 // ---------------------------------------------------------------------
 // fetchDbTablesMetaData
@@ -53,8 +52,6 @@ impl NativeFunction for FetchDbTablesMetaData {
         let schema_pattern = optional_string(ctx.evaluate(&args[1])?.into_value())?;
         let table_pattern = optional_string(ctx.evaluate(&args[2])?.into_value())?;
 
-        require_duckdb("fetchDbTablesMetaData", &db_conn, ctx)?;
-
         let mut sql = String::from(
             "SELECT table_catalog AS TABLE_CAT, \
                     table_schema  AS TABLE_SCHEM, \
@@ -74,7 +71,8 @@ impl NativeFunction for FetchDbTablesMetaData {
             sql.push_str(&wheres.join(" AND "));
         }
         sql.push_str(" ORDER BY table_schema, table_name");
-        let rs = resultset::run_sql_to_result_set(ctx, &sql)?;
+        let backend = resolve_backend("fetchDbTablesMetaData", &db_conn, ctx)?;
+        let rs = backend.run_sql_to_result_set(ctx, &sql)?;
         Ok(Evaluated::new(rs))
     }
 
@@ -103,8 +101,6 @@ impl NativeFunction for FetchDbColumnsMetaData {
         let table_pattern = optional_string(ctx.evaluate(&args[2])?.into_value())?;
         let column_pattern = optional_string(ctx.evaluate(&args[3])?.into_value())?;
 
-        require_duckdb("fetchDbColumnsMetaData", &db_conn, ctx)?;
-
         let mut sql = String::from(
             "SELECT table_catalog          AS TABLE_CAT, \
                     table_schema           AS TABLE_SCHEM, \
@@ -131,7 +127,8 @@ impl NativeFunction for FetchDbColumnsMetaData {
             sql.push_str(&wheres.join(" AND "));
         }
         sql.push_str(" ORDER BY table_schema, table_name, ordinal_position");
-        let rs = resultset::run_sql_to_result_set(ctx, &sql)?;
+        let backend = resolve_backend("fetchDbColumnsMetaData", &db_conn, ctx)?;
+        let rs = backend.run_sql_to_result_set(ctx, &sql)?;
         Ok(Evaluated::new(rs))
     }
 
@@ -158,8 +155,6 @@ impl NativeFunction for FetchDbSchemasMetaData {
         let db_conn = ctx.evaluate(&args[0])?.into_value();
         let schema_pattern = optional_string(ctx.evaluate(&args[1])?.into_value())?;
 
-        require_duckdb("fetchDbSchemasMetaData", &db_conn, ctx)?;
-
         let mut sql = String::from(
             "SELECT schema_name  AS TABLE_SCHEM, \
                     catalog_name AS TABLE_CATALOG \
@@ -173,7 +168,8 @@ impl NativeFunction for FetchDbSchemasMetaData {
             );
         }
         sql.push_str(" ORDER BY schema_name");
-        let rs = resultset::run_sql_to_result_set(ctx, &sql)?;
+        let backend = resolve_backend("fetchDbSchemasMetaData", &db_conn, ctx)?;
+        let rs = backend.run_sql_to_result_set(ctx, &sql)?;
         Ok(Evaluated::new(rs))
     }
 
@@ -206,8 +202,6 @@ impl NativeFunction for FetchDbPrimaryKeysMetaData {
             .map_err(PureException::from)?
             .to_string();
 
-        require_duckdb("fetchDbPrimaryKeysMetaData", &db_conn, ctx)?;
-
         // Primary-key columns: join table_constraints (constraint_type =
         // 'PRIMARY KEY') with key_column_usage to get per-column positions.
         let mut sql = format!(
@@ -234,7 +228,8 @@ impl NativeFunction for FetchDbPrimaryKeysMetaData {
             );
         }
         sql.push_str(" ORDER BY kcu.ordinal_position");
-        let rs = resultset::run_sql_to_result_set(ctx, &sql)?;
+        let backend = resolve_backend("fetchDbPrimaryKeysMetaData", &db_conn, ctx)?;
+        let rs = backend.run_sql_to_result_set(ctx, &sql)?;
         Ok(Evaluated::new(rs))
     }
 
@@ -273,8 +268,6 @@ impl NativeFunction for FetchDbImportedKeysMetaData {
             .map_err(PureException::from)?
             .to_string();
 
-        require_duckdb("fetchDbImportedKeysMetaData", &db_conn, ctx)?;
-
         let mut sql = format!(
             "SELECT kcu.table_catalog       AS FKTABLE_CAT, \
                     kcu.table_schema        AS FKTABLE_SCHEM, \
@@ -301,7 +294,8 @@ impl NativeFunction for FetchDbImportedKeysMetaData {
             );
         }
         sql.push_str(" ORDER BY kcu.ordinal_position");
-        let rs = resultset::run_sql_to_result_set(ctx, &sql)?;
+        let backend = resolve_backend("fetchDbImportedKeysMetaData", &db_conn, ctx)?;
+        let rs = backend.run_sql_to_result_set(ctx, &sql)?;
         Ok(Evaluated::new(rs))
     }
 

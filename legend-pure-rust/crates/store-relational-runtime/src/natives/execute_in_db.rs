@@ -13,26 +13,19 @@
 // limitations under the License.
 
 //! `meta::relational::metamodel::execute::executeInDb`.
-//!
-//! Runs a SQL statement against the per-Evaluator DuckDB connection and
-//! returns a populated [`ResultSet`] heap object. Mirrors the result-set
-//! shape of Java Pure's `ExecuteInDb.execute` (interpreted variant).
-//!
-//! [`ResultSet`]: `legend_pure_runtime::m3_paths::RELATIONAL_RESULT_SET`
 
 use legend_pure_parser_pure::types::ValueSpec;
 use legend_pure_runtime::error::PureException;
 use legend_pure_runtime::native::{EvalContextTrait, Evaluated, NativeFunction, expect_args};
 
-use crate::dispatch::require_duckdb;
-use crate::resultset;
+use crate::dispatch::resolve_backend;
 
 /// `executeInDb(sql, dbConn, timeoutSec, fetchSize) -> ResultSet`.
 ///
 /// `timeoutSec` and `fetchSize` are accepted for signature parity with
-/// the upstream native; DuckDB ignores both (single-process, eager
-/// fetch). The fields land on the result-set timing slots so they
-/// remain observable to Pure callers.
+/// the upstream native; both backends ignore them today. The fields
+/// land on the result-set timing slots so they remain observable to
+/// Pure callers.
 #[derive(Debug)]
 pub struct ExecuteInDb;
 
@@ -53,8 +46,8 @@ impl NativeFunction for ExecuteInDb {
         let _ = ctx.evaluate(&args[2])?;
         let _ = ctx.evaluate(&args[3])?;
 
-        require_duckdb("executeInDb", &db_conn, ctx)?;
-        let rs = resultset::run_sql_to_result_set(ctx, &sql)?;
+        let backend = resolve_backend("executeInDb", &db_conn, ctx)?;
+        let rs = backend.run_sql_to_result_set(ctx, &sql)?;
         Ok(Evaluated::new(rs))
     }
 
