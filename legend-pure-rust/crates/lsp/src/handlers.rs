@@ -267,9 +267,7 @@ fn element_location(
     file_uri: &Uri,
     uri_for_canonical: &dyn Fn(&str) -> Option<Uri>,
 ) -> Option<Location> {
-    if model.try_get_element(id).is_none() {
-        return None;
-    }
+    model.try_get_element(id)?;
     if matches!(id, ElementId::Package(_)) {
         return None;
     }
@@ -1391,8 +1389,8 @@ fn parse_failure_components(msg: &str) -> (String, Vec<StackFrame>) {
     // synthesized innermost frame so the user can click straight
     // to the location even on exceptions with no proper call
     // stack (older or hand-rolled errors).
-    if stack.is_empty() {
-        if let (Some(s), Some(l), Some(c)) = parse_source_info(header) {
+    if stack.is_empty()
+        && let (Some(s), Some(l), Some(c)) = parse_source_info(header) {
             stack.push(StackFrame {
                 name: header_kind(header).to_string(),
                 source: s,
@@ -1400,7 +1398,6 @@ fn parse_failure_components(msg: &str) -> (String, Vec<StackFrame>) {
                 column: c,
             });
         }
-    }
     let message = if body.is_empty() {
         header.to_string()
     } else {

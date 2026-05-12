@@ -108,11 +108,10 @@ impl DapHooks {
         {
             return false;
         }
-        if let Some(target) = self.step_target {
-            if self.depth <= target {
+        if let Some(target) = self.step_target
+            && self.depth <= target {
                 return true;
             }
-        }
         let runtime_src = source.source.as_str();
         let state = match self.wiring.state.lock() {
             Ok(g) => g,
@@ -207,13 +206,12 @@ impl EvalHooks for DapHooks {
         // reaches a different `(source, line)` pair — after that
         // any future breakpoint match on the original line should
         // fire again (e.g. a loop body re-entering the line).
-        if let Some((prev_src, prev_line)) = self.last_paused_at.as_ref() {
-            if *prev_line != source.start_line
-                || !path_match(prev_src, source.source.as_str())
+        if let Some((prev_src, prev_line)) = self.last_paused_at.as_ref()
+            && (*prev_line != source.start_line
+                || !path_match(prev_src, source.source.as_str()))
             {
                 self.last_paused_at = None;
             }
-        }
         if !self.should_pause(source) {
             return;
         }

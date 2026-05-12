@@ -497,8 +497,8 @@ fn walk_value_spec_in_scope(
             }
         }
         ExprKind::QualifiedPropertyCall(d) => {
-            if let Some(receiver) = d.arguments.first() {
-                if let Some(qp_target) =
+            if let Some(receiver) = d.arguments.first()
+                && let Some(qp_target) =
                     property_decl_span(model, receiver, &d.function_name, /*qualified*/ true)
                 {
                     visit(Reference {
@@ -508,7 +508,6 @@ fn walk_value_spec_in_scope(
                         target: qp_target,
                     });
                 }
-            }
             for arg in &d.arguments {
                 walk_value_spec_in_scope(model, arg, scope, visit);
             }
@@ -565,7 +564,7 @@ fn walk_value_spec_in_scope(
         ExprKind::Lambda { parameters, body } => {
             // Push the lambda's parameters onto the scope stack for
             // the body walk; pop on return.
-            let mut nested: Vec<&[Parameter]> = scope.iter().copied().collect();
+            let mut nested: Vec<&[Parameter]> = scope.to_vec();
             nested.push(parameters);
             for expr in body {
                 walk_value_spec_in_scope(model, expr, &nested, visit);
@@ -587,9 +586,7 @@ fn element_target_span(model: &PureModel, target: ElementId) -> Option<SourceInf
     if matches!(target, ElementId::Package(_)) {
         return None;
     }
-    if model.try_get_element(target).is_none() {
-        return None;
-    }
+    model.try_get_element(target)?;
     Some(model.get_node(target).name_source_info.clone())
 }
 
