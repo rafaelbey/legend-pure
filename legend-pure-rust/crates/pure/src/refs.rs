@@ -416,11 +416,7 @@ fn walk_tagged_values(
 
 /// Convenience entry-point used by call sites that don't have a
 /// scope stack handy (default-value expressions, constraints).
-fn walk_value_spec_references(
-    model: &PureModel,
-    vs: &ValueSpec,
-    visit: &mut dyn FnMut(Reference),
-) {
+fn walk_value_spec_references(model: &PureModel, vs: &ValueSpec, visit: &mut dyn FnMut(Reference)) {
     walk_value_spec_in_scope(model, vs, &[], visit);
 }
 
@@ -500,14 +496,14 @@ fn walk_value_spec_in_scope(
             if let Some(receiver) = d.arguments.first()
                 && let Some(qp_target) =
                     property_decl_span(model, receiver, &d.function_name, /*qualified*/ true)
-                {
-                    visit(Reference {
-                        range: vs.source_info.clone(),
-                        kind: RefKind::QualifiedPropertyCall,
-                        target_element: None,
-                        target: qp_target,
-                    });
-                }
+            {
+                visit(Reference {
+                    range: vs.source_info.clone(),
+                    kind: RefKind::QualifiedPropertyCall,
+                    target_element: None,
+                    target: qp_target,
+                });
+            }
             for arg in &d.arguments {
                 walk_value_spec_in_scope(model, arg, scope, visit);
             }
@@ -676,24 +672,16 @@ fn property_decl_span(
     };
     let mut visited = std::collections::HashSet::new();
     walk_class_chain(model, *element, &mut visited, &mut |class| {
-        if !qualified
-            && let Some(p) = class.properties.iter().find(|p| &p.name == name)
-        {
+        if !qualified && let Some(p) = class.properties.iter().find(|p| &p.name == name) {
             return Some(p.source_info.clone());
         }
-        if let Some(qp) = class
-            .qualified_properties
-            .iter()
-            .find(|q| &q.name == name)
-        {
+        if let Some(qp) = class.qualified_properties.iter().find(|q| &q.name == name) {
             return Some(qp.source_info.clone());
         }
         // Fallback: try the OTHER list — the parser sometimes
         // produces PropertyCall when the resolved member is a QP and
         // vice versa, depending on disambiguation order.
-        if qualified
-            && let Some(p) = class.properties.iter().find(|p| &p.name == name)
-        {
+        if qualified && let Some(p) = class.properties.iter().find(|p| &p.name == name) {
             return Some(p.source_info.clone());
         }
         None

@@ -669,7 +669,9 @@ pub fn load_with_extensions(
     repos: &[Repo],
     auto_imports: &[SmolStr],
     extensions: &[&dyn legend_pure_parser_pure::extension::CompilerExtension],
-    section_parsers_factory: &mut dyn FnMut() -> Vec<Box<dyn legend_pure_parser_parser::SectionParser>>,
+    section_parsers_factory: &mut dyn FnMut() -> Vec<
+        Box<dyn legend_pure_parser_parser::SectionParser>,
+    >,
 ) -> Result<PureModel, PartialPureModel> {
     let sorted = match crate::topo::topo_sort_repos(repos) {
         Ok(s) => s,
@@ -722,7 +724,11 @@ pub fn load_with_extensions(
         }
     }
 
-    errors.extend(pipeline::finalize_model(&mut model, auto_imports, extensions));
+    errors.extend(pipeline::finalize_model(
+        &mut model,
+        auto_imports,
+        extensions,
+    ));
 
     if errors.is_empty() {
         Ok(model)

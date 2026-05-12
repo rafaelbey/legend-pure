@@ -24,15 +24,12 @@ use crate::config::DapConfig;
 use crate::error::DapError;
 use crate::hooks::DapHooks;
 use crate::protocol::{
-    Breakpoint, Capabilities, ClientMessage, ContinueResponse, Event,
-    InitializeArguments, LaunchArguments, Request, Response, ScopesArguments,
-    Scope, ScopesResponse, ServerMessage, SetBreakpointsArguments, SetBreakpointsResponse,
-    Source, StackFrame, StackTraceArguments, StackTraceResponse, Thread,
-    ThreadsResponse, Variable, VariablesArguments, VariablesResponse,
+    Breakpoint, Capabilities, ClientMessage, ContinueResponse, Event, InitializeArguments,
+    LaunchArguments, Request, Response, Scope, ScopesArguments, ScopesResponse, ServerMessage,
+    SetBreakpointsArguments, SetBreakpointsResponse, Source, StackFrame, StackTraceArguments,
+    StackTraceResponse, Thread, ThreadsResponse, Variable, VariablesArguments, VariablesResponse,
 };
-use crate::session::{
-    DapCommand, HookWiring, Outbound, SessionState, MAIN_THREAD_ID,
-};
+use crate::session::{DapCommand, HookWiring, MAIN_THREAD_ID, Outbound, SessionState};
 use crate::transport::{read_frame, write_frame};
 use legend_pure_parser_pure::error::CompilationError;
 use legend_pure_parser_pure::extension::CompilerExtension;
@@ -42,7 +39,7 @@ use legend_pure_runtime::native::NativeRegistry;
 use legend_pure_runtime::value::Value;
 use std::collections::HashSet;
 use std::io::BufReader;
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
 
 /// Run the DAP server over stdio until the client disconnects or
@@ -92,7 +89,10 @@ pub fn run(config: DapConfig) -> Result<(), DapError> {
             ClientMessage::Other => {
                 tracing::debug!(
                     "ignored non-request client message: {}",
-                    String::from_utf8_lossy(&body).chars().take(120).collect::<String>(),
+                    String::from_utf8_lossy(&body)
+                        .chars()
+                        .take(120)
+                        .collect::<String>(),
                 );
                 continue;
             }
@@ -137,10 +137,9 @@ fn dispatch(
         // `setBreakpoints` in parallel with `launch` and we don't
         // wait. `configurationDone` is still accepted as a no-op
         // for clients that send it anyway.
-        "launch" => handle_launch(
-            req, model, state, outbound, commands_tx, pending_launch,
-        )
-        .map(|_| None),
+        "launch" => {
+            handle_launch(req, model, state, outbound, commands_tx, pending_launch).map(|_| None)
+        }
         "configurationDone" => Ok(None),
         "setBreakpoints" => handle_set_breakpoints(req, state).map(Some),
         // Setting exception breakpoints is a no-op for now — the
@@ -224,7 +223,9 @@ fn handle_set_breakpoints(
             });
         }
     }
-    let body = SetBreakpointsResponse { breakpoints: returned };
+    let body = SetBreakpointsResponse {
+        breakpoints: returned,
+    };
     serde_json::to_value(&body).map_err(|e| e.to_string())
 }
 
@@ -300,8 +301,8 @@ fn handle_stack_trace(
 }
 
 fn handle_scopes(req: &Request) -> Result<serde_json::Value, String> {
-    let args: ScopesArguments = serde_json::from_value(req.arguments.clone())
-        .map_err(|e| format!("scopes args: {e}"))?;
+    let args: ScopesArguments =
+        serde_json::from_value(req.arguments.clone()).map_err(|e| format!("scopes args: {e}"))?;
     // Single Locals scope per frame. The `variablesReference` is
     // synthesised from the frame_id; the variables handler decodes
     // it the same way.
@@ -381,8 +382,8 @@ fn handle_launch(
     commands_tx: &mut Option<Sender<DapCommand>>,
     pending_launch: &mut Option<LaunchArguments>,
 ) -> Result<(), String> {
-    let args: LaunchArguments = serde_json::from_value(req.arguments.clone())
-        .map_err(|e| format!("launch args: {e}"))?;
+    let args: LaunchArguments =
+        serde_json::from_value(req.arguments.clone()).map_err(|e| format!("launch args: {e}"))?;
     tracing::info!(fqn = %args.program, "launch — starting eval thread");
     *pending_launch = None;
     let (tx, rx) = channel::<DapCommand>();
@@ -410,11 +411,7 @@ fn handle_launch(
 
             let registry = NativeRegistry::standard();
             let hooks = DapHooks::new(wiring);
-            let mut evaluator = Evaluator::with_hooks(
-                model_arc.as_ref(),
-                &registry,
-                hooks,
-            );
+            let mut evaluator = Evaluator::with_hooks(model_arc.as_ref(), &registry, hooks);
             let outcome = evaluator.call(&args.program, &[]);
             match &outcome {
                 Ok(_) => {
@@ -450,9 +447,7 @@ fn handle_launch(
                 let msg = ServerMessage::Event(Event {
                     seq,
                     event: "output".to_string(),
-                    body: Some(
-                        serde_json::to_value(&body).unwrap_or(serde_json::Value::Null),
-                    ),
+                    body: Some(serde_json::to_value(&body).unwrap_or(serde_json::Value::Null)),
                 });
                 if let Ok(payload) = serde_json::to_vec(&msg) {
                     let mut out = outbound_term.lock().unwrap_or_else(|p| p.into_inner());
@@ -634,4 +629,3 @@ fn compile_workspace(config: &DapConfig) -> Arc<PureModel> {
     );
     Arc::new(model)
 }
-

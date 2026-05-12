@@ -54,9 +54,8 @@ pub fn read_frame<R: Read>(reader: &mut BufReader<R>) -> Result<Vec<u8>, DapErro
         // Silently ignore other headers — `Content-Type` is
         // sometimes sent and DAP doesn't act on it.
     }
-    let len = content_length.ok_or_else(|| {
-        DapError::BadHeader("missing Content-Length".to_string())
-    })?;
+    let len =
+        content_length.ok_or_else(|| DapError::BadHeader("missing Content-Length".to_string()))?;
     let mut body = vec![0u8; len];
     reader.read_exact(&mut body)?;
     Ok(body)

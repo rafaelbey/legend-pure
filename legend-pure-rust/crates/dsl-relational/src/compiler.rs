@@ -765,7 +765,10 @@ impl CompilerExtension for RelationalExtension {
                     model.resolve_by_path(std::slice::from_ref(include.included.name()))
                 };
                 let Some(target_id) = target_id else { continue };
-                if matches!(target_id, legend_pure_parser_pure::ids::ElementId::Package(_)) {
+                if matches!(
+                    target_id,
+                    legend_pure_parser_pure::ids::ElementId::Package(_)
+                ) {
                     continue;
                 }
                 let target = model.get_node(target_id).name_source_info.clone();
