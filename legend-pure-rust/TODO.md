@@ -139,6 +139,145 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260512-02 — IntelliJ status-bar widget for LSP health / troubleshooting
+
+- **Type:** feature
+- **Area:** clients-intellij | lsp
+- **Priority:** P2
+- **Reporter:** Rafael
+- **Filed:** 2026-05-12
+
+**Summary**
+When the LSP is silent (no diagnostics, no hover, no goto-def), the
+user has no fast way to tell whether the server is alive, what state
+it's in, or what went wrong. Today the answers live in the IntelliJ
+"Logs" tab + `log_message` notifications, which is fine for a
+support engineer but not for the first-line "is the plugin broken?"
+question. Want a status-bar widget that surfaces LSP health at a
+glance.
+
+**Repro / Context**
+- First-run failure modes already encountered:
+  - No `legend` on `$PATH` → plugin starts, no LSP features, no
+    obvious signal.
+  - No filesystem repo in classpath → `initialized` logs a warning
+    (`server.rs:217-229`) but the user only sees it if they
+    happen to open the Logs view.
+  - Compile produces N errors → `recompile_and_publish` logs
+    `"recompile complete: N error(s)"` via `log_message` at
+    `server.rs:113-118`, but again only visible in Logs.
+- Widget surface area (sketch — refine at triage):
+  - **State icon** (green / yellow / red): server running &
+    compile clean / running but compile has errors / server not
+    reachable.
+  - **One-line summary**: `"Legend Pure: 0 errors, 9 repos, 244
+    files"` or `"Legend Pure: 12 errors in 3 files"` or
+    `"Legend Pure: server not started"`.
+  - **Click-through**: opens a panel showing the resolved
+    classpath path, the repo summary built at
+    `server.rs:182-213`, last compile timestamp, last log lines,
+    and a "Restart server" action.
+- Acceptance criteria:
+  - Widget renders on the IntelliJ status bar whenever a `.pure`
+    file is open.
+  - Updates on every `recompile_and_publish` cycle (the same
+    seam that fires `log_message` today).
+  - The "Restart server" action drops + re-spawns the
+    `legend lsp` subprocess.
+
+**Notes**
+- Implementation seam: `clients/intellij/src/main/kotlin/...` —
+  add a `StatusBarWidgetFactory` + `StatusBarWidget` impl, wire
+  it through `plugin.xml`. Subscribes to LSP notifications
+  (`window/logMessage`, `window/showMessage`,
+  `textDocument/publishDiagnostics`) — the server already emits
+  these.
+- Server-side: consider adding a small `legend/lspStatus`
+  custom notification carrying the per-compile summary
+  (error count, repo count, files count) so the widget doesn't
+  have to scrape free-form `log_message` strings. Symmetric with
+  the existing `legend.run` / `legend.runTest` /
+  `legend.runPCT` / `legend.listPctAdapters` workspace commands
+  (`server.rs:147-161`).
+- Adjacent: the "No filesystem repos in classpath" warning at
+  `server.rs:217-229` is *the* canonical first-run failure
+  signal. The widget should foreground it (red badge + tooltip)
+  rather than rely on the modal `showMessage` popup that's easy
+  to dismiss.
+- Not a parity gap with Java — Java has no LSP / IDE story in
+  this repo.
+
+<!-- agent-audit:start id=T-20260512-02 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
+### T-20260512-01 — Wire H2 environment into GitHub CI so Rust tests pass
+
+- **Type:** devops
+- **Area:** ci | store-relational-runtime
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-12
+
+**Summary**
+The new H2 relational backend (commits `539163e5c27`, `3c0310a3409`,
+`567d4461e05`) reads runtime config from
+`crates/store-relational-runtime/src/config.rs` — a jar path
+(`LEGEND_PURE_H2_JAR`), version, PG-protocol port, and a `java`
+binary — sourced from env vars or a `[extension.relational.h2]`
+classpath block. The local dev defaults are checked into
+`.cargo/config.toml:65-68`, but the GitHub Actions runner has none
+of these, so `legend-pure-store-relational-runtime`'s integration
+tests either skip silently or fail when CI runs the workspace gates.
+
+**Repro / Context**
+- Local: `cargo nextest run -p legend-pure-store-relational-runtime`
+  is green; CI green-or-red status for the same package is unknown
+  (and may be silently passing because the tests skip when the jar
+  isn't on disk).
+- Expected: CI runs the H2 integration tests against a real H2 jar
+  + a `java` runtime that can launch the embedded PG server.
+- Need to verify whether GitHub Actions' default Ubuntu image
+  ships a JDK on `$PATH` (recent `actions/runner-images` includes
+  Temurin 17 / 21, but version may need pinning) and whether the
+  H2 jar needs to be downloaded per-job or cached.
+
+**Notes**
+- CI workflow lives at `.github/workflows/rust.yml`. Today the
+  pipeline is format-check → lint-lib → lint → llvm-cov nextest →
+  doctests → bench. The H2 setup step has to land **before**
+  nextest, and ideally guard so the rest of the workspace still
+  runs when H2 isn't reachable (matrix or feature flag).
+- Two shapes worth weighing at triage:
+  1. **Download H2 jar + use system JDK.** `setup-java@v4` for
+     JDK pinning + a `curl` to fetch the jar, cached via
+     `actions/cache@v4` keyed on the H2 version. Cheap, no
+     container.
+  2. **Service container.** Run H2 as a Docker service alongside
+     the job. Heavier-weight; only worth it if we need a long-
+     running shared instance across jobs.
+  Approach 1 is the natural first cut — matches the local-dev
+  shape (jar-on-disk + spawned `java` subprocess) and reuses
+  the existing env-var contract.
+- Env vars to set in the CI step:
+  - `LEGEND_PURE_H2_JAR=/path/to/cached/h2-2.1.214.jar`
+  - `LEGEND_PURE_H2_VERSION=2.1.214`
+  - `LEGEND_PURE_H2_PG_PORT=` (pick a free port, or 0 for OS-assigned)
+  - `LEGEND_PURE_H2_JAVA=java`
+- Risk: port collision on shared runners. The current default
+  `1975` was picked locally; CI should either let the engine pick
+  a free port (preferred) or use an env-substituted random port
+  per job.
+- Sweep: when this lands, also audit whether the embedded-jar
+  classpath cascade (`extension.relational.h2` in
+  `legend-pure-classpath.toml`) needs a sibling CI sample so
+  workspace integration tests that read it (not just env vars)
+  don't go untested.
+
+<!-- agent-audit:start id=T-20260512-01 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
 ### T-20260511-06 — Global diagnostics: surface every site impacted by a single change
 
 - **Type:** feature
