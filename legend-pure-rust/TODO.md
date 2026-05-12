@@ -139,7 +139,113 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
-_(empty — all known parity gaps closed as of 2026-05-11)_
+### T-20260511-07 — LSP: Find Usages (workspace-wide references to an element)
+
+- **Type:** feature
+- **Area:** lsp
+- **Priority:** P2
+- **Reporter:** Rafael
+- **Filed:** 2026-05-11
+
+**Summary**
+The LSP doesn't expose a "Find All References" / "Find Usages" command
+for Pure elements. Right-clicking a class, function, or property and
+asking "who references this?" returns nothing or only the definition.
+Expected: every site across the workspace that refers to the symbol
+under the cursor, navigable from the editor.
+
+**Repro / Context**
+- Put cursor on `abc::Class1` (declaration or any reference site) →
+  invoke editor's "Find All References" → expect a list of every
+  `.pure` location that:
+  - references it by FQN (`abc::Class1`),
+  - references it by short name under an `import abc::*;`,
+  - extends it, implements it, or constructs it via `^abc::Class1(...)`,
+  - uses it as a type argument (`List<abc::Class1>`),
+  - uses it inside `cast(@abc::Class1)`,
+  - references one of its properties / qualified properties (separate
+    cursor target).
+- Same query shape for functions (call sites + lambda captures) and
+  properties (`.propA` access + `^Foo(propA = …)` binding sites).
+- Acceptance criteria:
+  - LSP `textDocument/references` returns the workspace-wide set.
+  - Editor "go to references" / "find usages" surfaces every site.
+  - Performance: indexed (subsecond for warm workspace), not a
+    per-request whole-model scan.
+
+**Notes**
+- Index seam: `PureModel` already holds every chunk's `ExprKind`
+  tree and every element's resolved `ElementId`. A side-index keyed
+  by `ElementId → Vec<(chunk_id, source_info)>` populated during
+  Pass 2b body-lowering covers function calls, property access,
+  type refs, constructor receivers, generic args, cast targets,
+  association ends, stereotype/profile refs.
+- Adjacent to T-20260511-06 (global diagnostics): they share a
+  dependency / reverse-reference index. Land the index once, expose
+  it through two LSP commands.
+- Distinct from `textDocument/definition` (already wired via
+  `crates/lsp/src/handlers/*`) — that's forward; this is reverse.
+- Not a parity gap with Java — Java has no LSP in this repo.
+
+<!-- agent-audit:start id=T-20260511-07 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
+### T-20260511-06 — Global diagnostics: surface every site impacted by a single change
+
+- **Type:** feature
+- **Area:** lsp | compiler
+- **Priority:** P2
+- **Reporter:** Rafael
+- **Filed:** 2026-05-11
+
+**Summary**
+When a user edits one element (rename, signature change, property
+type/multiplicity change, supertype change, etc.), there's no global
+view of the downstream call/reference sites that the edit invalidates.
+Today diagnostics surface only for files the editor has opened — the
+"what else just broke?" answer requires a full workspace rebuild.
+
+**Repro / Context**
+- Use case: rename `abc::Class1` → `abc::Foo`, or flip a property's
+  multiplicity from `[1]` to `[0..1]`, or narrow a function's return
+  type. Expect: a single panel listing every `.pure` source location
+  in the workspace whose compile now fails because of that edit.
+- Acceptance criteria (sketch — refine at triage):
+  - LSP publishes diagnostics for every chunk that imports or
+    transitively depends on the changed element, not just the edited
+    file.
+  - Cross-chunk validators (`validate_repo_visibility`,
+    `validate_constructor_bindings`, `validate_format_specifiers` if
+    re-added, etc.) already run model-wide; the missing piece is
+    surfacing their per-file output as a workspace-level panel.
+  - Performance: incremental — re-validate only chunks whose
+    dependency set touches the edited element's ElementId; don't
+    redo the whole workspace on every keystroke.
+
+**Notes**
+- Adjacent existing infra to lean on:
+  - `crates/lsp/src/diagnostics.rs` — diagnostic conversion already
+    in place; this is about *publishing scope*, not message shape.
+  - `crates/pure/src/validate.rs::validate(model)` — already walks
+    every chunk and produces `CompilationError`s with `source_info`
+    pointing at the offending site. The data is there; the LSP just
+    needs to publish across files.
+  - `crates/pure/src/model.rs` — ElementId → chunk mapping; suitable
+    for "which chunks reference this id?" dependency index.
+- Open design questions for triage:
+  - Where the dependency index lives (in `PureModel`, in a separate
+    crate, lazy vs. eager build).
+  - What invalidation granularity is right (per-ElementId, per-chunk,
+    per-section).
+  - Whether to expose a CLI sibling (`legend check --impacted-by
+    abc::Class1`) so non-LSP users get the same answer.
+- Not a parity gap with Java — Java's IDE story is similarly
+  per-file. This is a UX win specific to the Rust port.
+
+<!-- agent-audit:start id=T-20260511-06 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
 
 ---
 
