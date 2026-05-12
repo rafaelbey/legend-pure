@@ -32,21 +32,19 @@ use legend_pure_runtime::value::Value;
 use rust_decimal::Decimal;
 use smol_str::SmolStr;
 
-use crate::connection::DuckDBState;
+use crate::connection::{DuckDBState, H2State};
 
-/// Run a SQL statement against the per-Evaluator DuckDB connection and
-/// build a populated [`meta::relational::metamodel::execute::ResultSet`]
-/// heap object.
+/// Run a read-only SQL statement against the per-Evaluator DuckDB
+/// connection and build a populated `ResultSet` heap object.
 ///
-/// Shared backend for [`executeInDb`](crate::natives::execute_in_db) and
-/// every `fetchDb*MetaData` native. Both flows have the same shape
-/// (read-only SQL → ResultSet) — keeping them on one code path keeps
-/// the DuckDB→Pure marshalling decisions in one place.
+/// Shared backend for the DuckDB arm of every native that returns a
+/// `ResultSet` (`executeInDb`, `fetchDb*MetaData`). Keeping it on one
+/// code path keeps the DuckDB→Pure marshalling decisions in one place.
 ///
 /// # Errors
 /// Propagates DuckDB errors (mapped to [`PureException`] via
 /// [`crate::connection::map_duckdb_err`]) and heap-mutation errors.
-pub fn run_sql_to_result_set(
+pub fn run_sql_to_result_set_duckdb(
     ctx: &mut dyn EvalContextTrait,
     sql: &str,
 ) -> Result<Value, PureException> {
@@ -79,6 +77,110 @@ pub fn run_sql_to_result_set(
     };
     let elapsed_ns = i64::try_from(start.elapsed().as_nanos()).unwrap_or(i64::MAX);
     build(ctx, &column_names, rows, elapsed_ns)
+}
+
+/// Run a read-only SQL statement against the per-Evaluator H2 client
+/// and build a populated `ResultSet` heap object. The H2 counterpart
+/// of [`run_sql_to_result_set_duckdb`]; same shape, different engine.
+///
+/// # Errors
+/// Propagates H2 (PG-wire) errors mapped to [`PureException`] via
+/// [`crate::connection::map_postgres_err`].
+pub fn run_sql_to_result_set_h2(
+    ctx: &mut dyn EvalContextTrait,
+    sql: &str,
+) -> Result<Value, PureException> {
+    let sql_null_handle = ctx.heap_mut().alloc_dynamic(m3_paths::RELATIONAL_SQL_NULL);
+    let null_cell = Value::Object(sql_null_handle);
+
+    let start = std::time::Instant::now();
+    let (column_names, rows) = {
+        let state = ctx
+            .extensions()
+            .get_or_init::<H2State, _>(H2State::from_global_config)?;
+        state.with_client(|c| {
+            // For an empty query (e.g. DDL surfacing through this path
+            // by accident), `query` is still well-defined and returns
+            // zero rows + the projection's column metadata.
+            let pg_rows = c.query(sql, &[])?;
+            let column_names: Vec<String> = pg_rows
+                .first()
+                .map(|r| r.columns().iter().map(|c| c.name().to_string()).collect())
+                .unwrap_or_default();
+            let col_count = column_names.len();
+            let mut all_rows: Vec<Vec<Value>> = Vec::with_capacity(pg_rows.len());
+            for row in &pg_rows {
+                let mut row_values: Vec<Value> = Vec::with_capacity(col_count);
+                for i in 0..col_count {
+                    row_values.push(cell_to_value_pg(row, i, &null_cell));
+                }
+                all_rows.push(row_values);
+            }
+            Ok((column_names, all_rows))
+        })?
+    };
+    let elapsed_ns = i64::try_from(start.elapsed().as_nanos()).unwrap_or(i64::MAX);
+    build(ctx, &column_names, rows, elapsed_ns)
+}
+
+/// Read one cell from a PG-wire row.
+///
+/// Covers the primitive types H2 surfaces by default through PG-wire
+/// (bool, ints, floats, text, bytea). NUMERIC and date/time types
+/// fall through to a string representation in v1 — the `postgres`
+/// crate's typed-decoding for those requires extra feature flags
+/// (`with-time-0_3` / a decimal feature) we haven't pulled in. The
+/// fallback path is documented; growing the table is a follow-up.
+fn cell_to_value_pg(row: &postgres::Row, idx: usize, null_cell: &Value) -> Value {
+    use postgres::types::Type;
+    let col = &row.columns()[idx];
+    let pg_type = col.type_();
+    match *pg_type {
+        Type::BOOL => match row.try_get::<_, Option<bool>>(idx) {
+            Ok(Some(b)) => Value::Boolean(b),
+            _ => null_cell.clone(),
+        },
+        Type::INT2 => match row.try_get::<_, Option<i16>>(idx) {
+            Ok(Some(i)) => Value::Integer(i64::from(i)),
+            _ => null_cell.clone(),
+        },
+        Type::INT4 => match row.try_get::<_, Option<i32>>(idx) {
+            Ok(Some(i)) => Value::Integer(i64::from(i)),
+            _ => null_cell.clone(),
+        },
+        Type::INT8 => match row.try_get::<_, Option<i64>>(idx) {
+            Ok(Some(i)) => Value::Integer(i),
+            _ => null_cell.clone(),
+        },
+        Type::FLOAT4 => match row.try_get::<_, Option<f32>>(idx) {
+            Ok(Some(f)) => Value::Float(f64::from(f)),
+            _ => null_cell.clone(),
+        },
+        Type::FLOAT8 => match row.try_get::<_, Option<f64>>(idx) {
+            Ok(Some(f)) => Value::Float(f),
+            _ => null_cell.clone(),
+        },
+        Type::VARCHAR | Type::TEXT | Type::BPCHAR | Type::NAME => {
+            match row.try_get::<_, Option<&str>>(idx) {
+                Ok(Some(s)) => Value::String(SmolStr::new(s)),
+                _ => null_cell.clone(),
+            }
+        }
+        Type::BYTEA => match row.try_get::<_, Option<&[u8]>>(idx) {
+            Ok(Some(b)) => {
+                use std::fmt::Write;
+                let mut s = String::with_capacity(b.len() * 2);
+                for byte in b {
+                    let _ = write!(&mut s, "{byte:02x}");
+                }
+                Value::String(SmolStr::new(s))
+            }
+            _ => null_cell.clone(),
+        },
+        // Composite / not-yet-typed: stringify the PG type name. Same
+        // permissive treatment as the DuckDB cell_to_value's catchall.
+        _ => Value::String(SmolStr::new(format!("<{pg_type}>"))),
+    }
 }
 
 /// Build a `ResultSet` heap row populated from a freshly-fetched

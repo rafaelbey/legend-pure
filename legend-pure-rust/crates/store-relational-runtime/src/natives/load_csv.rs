@@ -14,19 +14,19 @@
 
 //! `meta::relational::metamodel::execute::loadCsvToDbTable`.
 //!
-//! Loads a CSV file's rows into an *existing* DuckDB table via DuckDB's
-//! native `read_csv_auto`. The Table heap-object passed in is metadata
-//! — the row schema is read from the live DuckDB table (the caller is
-//! responsible for having created it, typically via `executeInDb` with
-//! a `CREATE TABLE` statement or via `createTempTable`).
+//! Loads a CSV file's rows into an *existing* relational table. The
+//! engine-specific SQL (DuckDB's `read_csv_auto` vs H2's `CSVREAD`) is
+//! owned by the [`RelationalBackend::load_csv_sql`] trait method, so
+//! this native just resolves the backend and asks it for the SQL.
+//!
+//! [`RelationalBackend::load_csv_sql`]: crate::dispatch::RelationalBackend::load_csv_sql
 
 use legend_pure_parser_pure::types::ValueSpec;
 use legend_pure_runtime::error::{PureException, PureRuntimeError};
 use legend_pure_runtime::native::{EvalContextTrait, Evaluated, NativeFunction, expect_args};
 use legend_pure_runtime::value::Value;
 
-use crate::connection::DuckDBState;
-use crate::dispatch::require_duckdb;
+use crate::dispatch::resolve_backend;
 
 /// `loadCsvToDbTable(filePath, table, dbConn, numberOfRows[0..1]) -> Nil`.
 #[derive(Debug)]
@@ -49,28 +49,11 @@ impl NativeFunction for LoadCsvToDbTable {
         let db_conn = ctx.evaluate(&args[2])?.into_value();
         let row_limit_value = ctx.evaluate(&args[3])?.into_value();
 
-        require_duckdb("loadCsvToDbTable", &db_conn, ctx)?;
-
+        let backend = resolve_backend("loadCsvToDbTable", &db_conn, ctx)?;
         let table_name = read_table_name(&table_value, ctx)?;
         let row_limit = first_integer_or_none(&row_limit_value);
-
-        // `read_csv_auto` infers column types and (when HEADER true) maps
-        // CSV columns to the target table by name when used inside an
-        // INSERT. For a row-limit we wrap in a SELECT … LIMIT N.
-        let mut sql = format!(
-            "INSERT INTO {target} SELECT * FROM read_csv_auto('{path}', header=true)",
-            target = quote_ident(&table_name),
-            path = escape_sql_string(&path),
-        );
-        if let Some(n) = row_limit {
-            use std::fmt::Write;
-            let _ = write!(&mut sql, " LIMIT {n}");
-        }
-
-        let state = ctx
-            .extensions()
-            .get_or_init::<DuckDBState, _>(DuckDBState::new)?;
-        state.with_conn(|c| c.execute_batch(&sql))?;
+        let sql = backend.load_csv_sql(&table_name, &path, row_limit);
+        backend.execute_batch(ctx, &sql)?;
         Ok(Evaluated::new(Value::Unit))
     }
 
@@ -120,25 +103,4 @@ fn first_integer_or_none(v: &Value) -> Option<i64> {
         }),
         _ => None,
     }
-}
-
-/// DuckDB-safe identifier quoting (double-quotes, escape inner quotes).
-fn quote_ident(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        if c == '"' {
-            out.push('"');
-            out.push('"');
-        } else {
-            out.push(c);
-        }
-    }
-    out.push('"');
-    out
-}
-
-/// Single-quote escape for an embedded SQL string literal.
-fn escape_sql_string(s: &str) -> String {
-    s.replace('\'', "''")
 }

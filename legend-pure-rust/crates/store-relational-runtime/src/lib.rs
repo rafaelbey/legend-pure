@@ -60,3 +60,33 @@ pub mod resultset;
 pub use config::{H2Config, H2ConfigError, H2EnvOverrides};
 pub use connection::{DuckDBState, H2State};
 pub use extension::RelationalStoreExtension;
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+/// Process-wide cache of the `extension` table from
+/// `legend-pure-classpath.toml`. The CLI calls
+/// [`set_extension_configs`] once at startup; H2-routed natives
+/// retrieve it (alongside their own env-var overrides) via
+/// [`H2Config::resolve`].
+///
+/// Stored process-wide because the H2 sub-process itself is
+/// process-wide; coupling the config to the server lifecycle this
+/// way avoids threading it through every native and every Evaluator.
+static EXTENSION_CONFIGS: OnceLock<HashMap<String, HashMap<String, toml::Value>>> = OnceLock::new();
+
+/// Install the classpath's `extension` configs into the process-wide
+/// cache. Idempotent: only the first call wins (subsequent calls are
+/// no-ops). Safe to call before or after the relational extension
+/// registers natives.
+pub fn set_extension_configs(cfgs: HashMap<String, HashMap<String, toml::Value>>) {
+    let _ = EXTENSION_CONFIGS.set(cfgs);
+}
+
+/// Read the cached `extension` configs. Returns an empty map when
+/// [`set_extension_configs`] hasn't been called — natives still work
+/// in that case, they just fall back to env-var-only configuration.
+#[must_use]
+pub fn extension_configs() -> &'static HashMap<String, HashMap<String, toml::Value>> {
+    EXTENSION_CONFIGS.get_or_init(HashMap::new)
+}
