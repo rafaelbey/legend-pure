@@ -60,6 +60,7 @@ use smol_str::SmolStr;
 use crate::context::VariableContext;
 use crate::date::PureDate;
 use crate::error::{PureException, PureExceptionKind, PureRuntimeError, StackFrame};
+use crate::extensions::ExtensionStateStore;
 use crate::heap::{ObjectHandle, RuntimeHeap};
 use crate::hooks::{EvalHooks, NoOpHooks};
 use crate::native::{Evaluated, NativeFunction, NativeRegistry, RuntimeExtension};
@@ -113,6 +114,21 @@ pub struct Evaluator<'model, H: EvalHooks = NoOpHooks> {
     /// inner `im_rc::Vector` is structurally shared.
     member_wrapper_cache: HashMap<(ElementId, &'static str), Value>,
 
+    /// Per-evaluator typed extension state.
+    ///
+    /// Companion to [`NativeRegistry`]. The registry holds *natives*
+    /// (immutable, shared across evaluators via the leaked per-thread
+    /// cache); this store holds *state* (per-evaluator, dropped with the
+    /// evaluator). Extensions register natives via `RuntimeExtension`;
+    /// those natives stash per-evaluator state here on first use via
+    /// [`ExtensionStateStore::get_or_init`].
+    ///
+    /// Why a per-evaluator field instead of a process singleton: connection
+    /// handles, JIT caches, and similar resources should die with the
+    /// evaluator so concurrent evaluations (different threads, sequential
+    /// tests) stay isolated.
+    extensions: ExtensionStateStore,
+
     /// Instrumentation hooks (zero-cost for `NoOpHooks`).
     hooks: H,
 }
@@ -158,6 +174,7 @@ impl<'model> Evaluator<'model, NoOpHooks> {
             context: VariableContext::new(),
             natives,
             member_wrapper_cache: HashMap::new(),
+            extensions: ExtensionStateStore::new(),
             hooks: NoOpHooks,
         }
     }
@@ -224,6 +241,7 @@ impl<'model> Evaluator<'model, NoOpHooks> {
             context: VariableContext::new(),
             natives: leaked_default_registry(),
             member_wrapper_cache: HashMap::new(),
+            extensions: ExtensionStateStore::new(),
             hooks: NoOpHooks,
         }
     }
@@ -244,6 +262,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             context: VariableContext::new(),
             natives,
             member_wrapper_cache: HashMap::new(),
+            extensions: ExtensionStateStore::new(),
             hooks,
         }
     }
@@ -280,6 +299,17 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     #[must_use]
     pub fn natives(&self) -> &NativeRegistry {
         self.natives
+    }
+
+    /// Access the per-evaluator extension state store.
+    ///
+    /// Used by [`RuntimeExtension`]-contributed natives to stash and
+    /// retrieve per-evaluator state (DB connections, JIT caches, etc.).
+    /// State is keyed by `TypeId`; see
+    /// [`ExtensionStateStore::get_or_init`].
+    #[must_use]
+    pub fn extensions(&self) -> &ExtensionStateStore {
+        &self.extensions
     }
 
     /// Consume the evaluator and return the hooks instance.
@@ -2382,6 +2412,10 @@ impl<H: EvalHooks> crate::native::EvalContextTrait for EvalContext<'_, '_, H> {
 
     fn console_output(&mut self, msg: &str) {
         self.evaluator.hooks.console_output(msg);
+    }
+
+    fn extensions(&self) -> &crate::extensions::ExtensionStateStore {
+        &self.evaluator.extensions
     }
 
     fn invoke_qualified_property(

@@ -225,6 +225,22 @@ pub trait EvalContextTrait {
     /// stdout directly, so embedders (CLI, LSP, DAP, tests) can capture
     /// or redirect output.
     fn console_output(&mut self, msg: &str);
+
+    /// Access the per-evaluator extension state store.
+    ///
+    /// Companion to [`RuntimeExtension`]. The registry holds *natives*
+    /// (immutable, shared); this store holds *state* (per-evaluator,
+    /// dropped with the evaluator). Extensions stash per-evaluator
+    /// state here on first use via
+    /// [`crate::extensions::ExtensionStateStore::get_or_init`]:
+    ///
+    /// ```ignore
+    /// let state = ctx
+    ///     .extensions()
+    ///     .get_or_init::<MyExtensionState, _>(MyExtensionState::new)?;
+    /// state.do_something();
+    /// ```
+    fn extensions(&self) -> &crate::extensions::ExtensionStateStore;
 }
 
 // ---------------------------------------------------------------------------
@@ -704,6 +720,12 @@ impl EvalContextTrait for MockCtx {
     fn console_output(&mut self, _msg: &str) {
         // Silent sink — unit tests for side-effect-free natives don't observe
         // console output, and routing to stdout would pollute cargo-test output.
+    }
+    fn extensions(&self) -> &crate::extensions::ExtensionStateStore {
+        unreachable!(
+            "MockCtx::extensions should never be called in simple native tests; \
+             move this test to eval_tests.rs"
+        )
     }
 }
 
