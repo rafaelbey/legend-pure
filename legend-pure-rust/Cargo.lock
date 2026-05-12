@@ -2190,7 +2190,10 @@ dependencies = [
  "legend-pure-parser-pure",
  "legend-pure-runtime",
  "rust_decimal",
+ "serde",
  "smol_str",
+ "thiserror 2.0.18",
+ "toml",
  "tracing",
 ]
 
