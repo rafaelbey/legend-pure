@@ -1,0 +1,39 @@
+# Copyright 2026 Goldman Sachs
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[package]
+name = "legend-pure-store-relational-runtime"
+description = "Runtime extension wiring DuckDB-backed native function bodies for `meta::relational::metamodel::execute::*` (executeInDb, loadCsv/Values, fetch*Metadata, createTempTable, dropTempTable). Per-Evaluator connection lifecycle; concurrent evaluators each get an independent in-memory DuckDB."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+legend-pure-runtime = { path = "../runtime" }
+legend-pure-parser-pure = { path = "../pure" }
+legend-pure-parser-ast = { path = "../ast" }
+smol_str = { workspace = true }
+tracing = { workspace = true }
+jiff = { workspace = true }
+rust_decimal = { workspace = true }
+
+# DuckDB Rust driver. `bundled` builds libduckdb from source so no
+# system install is needed; adds 30-60s to cold builds, then cached.
+duckdb = { version = "1.4", features = ["bundled"] }
+
+[dev-dependencies]
+# End-to-end smoke tests compile synthetic user Pure source against
+# the full platform model (including `platform_store_relational`).
+legend-pure-core-platform = { path = "../core-platform-pure" }

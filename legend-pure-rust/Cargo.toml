@@ -36,6 +36,7 @@ members = [
     "crates/dsl-relational",
     "crates/dsl-relational-runtime",
     "crates/dsl-store",
+    "crates/store-relational-runtime",
     "crates/dsl-tds",
     "crates/lsp",
     "crates/stress",

@@ -238,6 +238,40 @@ pub const SORT_INFO: &Classifier = "meta::pure::functions::relation::SortInfo";
 /// `ASC` and `DESC`. Used as the `direction` slot value on a `SortInfo`.
 pub const SORT_TYPE: &Classifier = "meta::pure::functions::relation::SortType";
 
+/// `meta::relational::metamodel::execute::ResultSet` — heap shape returned
+/// by `executeInDb` / `fetchDb*MetaData` natives. Carries
+/// `columnNames: String[*]`, `rows: Row[*]`,
+/// `executionTimeInNanoSecond: Integer[1]`,
+/// `connectionAcquisitionTimeInNanoSecond: Integer[1]`,
+/// optional `executionPlanInformation: String[0..1]`, and an optional
+/// `dataSource: DataSource[0..1]`.
+pub const RELATIONAL_RESULT_SET: &Classifier = "meta::relational::metamodel::execute::ResultSet";
+
+/// `meta::relational::metamodel::execute::Row` — heap shape for a single
+/// fetched row inside a `ResultSet`. Carries `values: Any[*]` and a
+/// `parent: ResultSet[1]` back-pointer (required for the `Row.value(name)`
+/// qualified property to resolve the column index).
+pub const RELATIONAL_ROW: &Classifier = "meta::relational::metamodel::execute::Row";
+
+/// `meta::relational::metamodel::SQLNull` — sentinel singleton value for
+/// SQL NULL cells inside a `Row`. One handle is allocated per ResultSet
+/// and shared across all NULL slots.
+pub const RELATIONAL_SQL_NULL: &Classifier = "meta::relational::metamodel::SQLNull";
+
+/// `meta::relational::metamodel::Column` — heap shape for a Database
+/// column declaration. Carries `name: String[1]`, `type: DataType[1]`,
+/// `nullable: Boolean[1]`. **Distinct from** [`COLUMN`] which is the
+/// relation-DSL `meta::pure::metamodel::relation::Column`.
+pub const RELATIONAL_COLUMN: &Classifier = "meta::relational::metamodel::Column";
+
+/// `meta::relational::runtime::DatabaseType` — enumeration discriminating
+/// the backend engine (DuckDB, H2, Postgres, Snowflake, …). Used by the
+/// relational-store extension to route `executeInDb`-class natives to the
+/// appropriate driver. Resolved once per native call from
+/// `databaseConnection.type` and compared by enum member name (not
+/// classifier string).
+pub const DATABASE_TYPE: &Classifier = "meta::relational::runtime::DatabaseType";
+
 /// `meta::pure::profiles::equality` — Profile whose `Key` stereotype
 /// marks class properties as structural-equality keys. A `<<equality.Key>>`
 /// stereotype ref matches iff `profile` resolves to this FQN and
