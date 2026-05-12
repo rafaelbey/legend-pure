@@ -887,7 +887,12 @@ struct CapturingHooks {
 }
 
 impl legend_pure_runtime::hooks::EvalHooks for CapturingHooks {
-    fn before_eval(&mut self, _source: &legend_pure_parser_ast::SourceInfo) {}
+    fn before_eval(
+        &mut self,
+        _source: &legend_pure_parser_ast::SourceInfo,
+        _context: &legend_pure_runtime::context::VariableContext,
+    ) {
+    }
     fn after_eval(
         &mut self,
         _source: &legend_pure_parser_ast::SourceInfo,

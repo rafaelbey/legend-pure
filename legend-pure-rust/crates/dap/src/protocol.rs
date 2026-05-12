@@ -43,17 +43,23 @@ use serde_json::Value;
 // Envelope
 // ---------------------------------------------------------------------------
 
-/// Generic protocol envelope dispatched by `type`. We only ever
-/// receive `request` from the client; `response` and `event` are
-/// emitted from the server side.
+/// Generic protocol envelope dispatched by `type`. Requests are
+/// the only shape we act on — DAP defines reverse-direction
+/// messages (`runInTerminal`, `startDebugging`) where the client
+/// can also send responses or events; we accept those into the
+/// enum and the server just drops them to keep the read loop
+/// resilient against an over-talkative client.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ClientMessage {
     Request(Request),
+    /// Client-emitted response (reverse-request reply). Currently
+    /// discarded — we don't issue reverse requests yet.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Request {
     pub seq: i64,
     pub command: String,
@@ -69,10 +75,15 @@ pub enum ServerMessage {
     Event(Event),
 }
 
+/// `request_seq` is the one outlier in DAP — the spec defines it
+/// as snake_case (historical from JSON-RPC) while every other
+/// multi-word field uses camelCase. Marked explicitly so the
+/// global `rename_all = "camelCase"` on neighbouring structs
+/// doesn't accidentally rebrand it as `requestSeq`.
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Response {
     pub seq: i64,
+    #[serde(rename = "request_seq")]
     pub request_seq: i64,
     pub success: bool,
     pub command: String,
@@ -83,7 +94,6 @@ pub struct Response {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Event {
     pub seq: i64,
     pub event: String,
@@ -95,11 +105,22 @@ pub struct Event {
 // Request bodies
 // ---------------------------------------------------------------------------
 
+/// DAP request/response/event bodies use camelCase on the wire
+/// for every multi-word field except `Response.request_seq` (see
+/// the explicit override on `Response`). The `rename_all` attribute
+/// flips serde's default Rust-snake-case → JSON-camelCase mapping
+/// without forcing per-field `#[serde(rename)]` annotations
+/// everywhere. `clientID` / `adapterID` on `InitializeArguments`
+/// are the only fields where the DAP spec uses caps-style
+/// (`clientID` rather than `clientId`); some clients accept both
+/// — we add explicit `serde(alias)` for tolerance.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeArguments {
+    #[serde(alias = "clientID")]
     pub client_id: Option<String>,
     pub client_name: Option<String>,
+    #[serde(alias = "adapterID")]
     pub adapter_id: Option<String>,
     pub locale: Option<String>,
     pub lines_start_at_1: Option<bool>,
@@ -195,13 +216,31 @@ pub struct Capabilities {
 
 impl Capabilities {
     /// MVP capability set — see `crates/dap/src/lib.rs` rustdoc.
-    /// Step-in / step-out / conditional / function breakpoints stay
-    /// off so clients don't surface those buttons as enabled until
-    /// the runtime supports them.
+    ///
+    /// `supports_configuration_done_request` is intentionally
+    /// `false`: in the modern DAP handshake the client sends
+    /// `setBreakpoints` after `launch` and waits for the server's
+    /// breakpoint-verification responses before sending
+    /// `configurationDone` to release execution. IntelliJ's lsp4j-
+    /// debug client tracks the verification state internally and
+    /// can stall here in ways that aren't visible from the
+    /// outside. Saying we don't support the request flips the
+    /// client into the legacy flow: it sends `setBreakpoints` in
+    /// parallel with `launch`, the server starts running
+    /// immediately, and the breakpoint set is consulted on each
+    /// expression visit. The race window — eval running before
+    /// the first `setBreakpoints` arrives — is a few ms on a fresh
+    /// `legend dap` process; the function setup phase itself
+    /// takes longer than the message ping, so the breakpoint set
+    /// is populated well before user code executes.
+    ///
+    /// Step-in / step-out / conditional / function breakpoints
+    /// stay off so clients don't surface those buttons as enabled
+    /// until the runtime supports them.
     #[must_use]
     pub fn mvp() -> Self {
         Self {
-            supports_configuration_done_request: true,
+            supports_configuration_done_request: false,
             supports_step_in: false,
             supports_step_out: false,
             supports_terminate_request: true,
@@ -212,13 +251,11 @@ impl Capabilities {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SetBreakpointsResponse {
     pub breakpoints: Vec<Breakpoint>,
 }
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Breakpoint {
     /// `true` once the server has resolved the file+line to an
     /// actual expression node. We currently mark every requested
@@ -232,13 +269,11 @@ pub struct Breakpoint {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ThreadsResponse {
     pub threads: Vec<Thread>,
 }
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Thread {
     pub id: i64,
     pub name: String,
@@ -315,14 +350,12 @@ pub struct StoppedEventBody {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct OutputEventBody {
     pub category: String,
     pub output: String,
 }
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct TerminatedEventBody {
     /// `true` if the client should restart the launch automatically.
     /// We never set this; the user re-clicks Debug to retry.

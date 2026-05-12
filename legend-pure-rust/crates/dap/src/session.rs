@@ -31,6 +31,7 @@ use legend_pure_parser_ast::SourceInfo;
 use legend_pure_runtime::debug::StepMode;
 use smol_str::SmolStr;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 /// Synthetic single-thread id used in `threads` / `stackTrace`
@@ -50,6 +51,14 @@ pub struct SessionState {
     /// Outbound message sequence number — both responses and events
     /// share the same numbering per the DAP spec.
     pub seq: i64,
+    /// `(canonical URL prefix, absolute source root)` for every
+    /// filesystem-loaded repo. Used to map runtime
+    /// `SourceInfo.source` values (which are canonical paths like
+    /// `/myproj/abc.pure`) to absolute filesystem paths the IDE
+    /// can scroll to. Built once at session boot from the
+    /// `DapConfig`'s repos and shared read-only across the
+    /// message loop + eval thread.
+    pub path_resolver: Vec<(String, PathBuf)>,
 }
 
 impl SessionState {
@@ -57,6 +66,22 @@ impl SessionState {
     pub fn next_seq(&mut self) -> i64 {
         self.seq += 1;
         self.seq
+    }
+
+    /// Map a runtime canonical source path (`/myproj/abc.pure`) to
+    /// an absolute filesystem path the IDE can navigate to
+    /// (`/Users/.../myproj/abc.pure`). Returns the input unchanged
+    /// when no repo matches the prefix — that path is then "best
+    /// effort" for the IDE, which may or may not resolve it via
+    /// its own roots.
+    pub fn resolve_source_path(&self, canonical: &str) -> String {
+        for (prefix, root) in &self.path_resolver {
+            if let Some(rel) = canonical.strip_prefix(prefix.as_str()) {
+                let trimmed = rel.trim_start_matches('/');
+                return root.join(trimmed).to_string_lossy().into_owned();
+            }
+        }
+        canonical.to_string()
     }
 }
 

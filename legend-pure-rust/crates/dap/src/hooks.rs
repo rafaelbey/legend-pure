@@ -29,6 +29,7 @@
 use crate::protocol::{Event, OutputEventBody, ServerMessage, StoppedEventBody};
 use crate::session::{DapCommand, FrameInfo, HookWiring, PauseSnapshot, MAIN_THREAD_ID};
 use legend_pure_parser_ast::SourceInfo;
+use legend_pure_runtime::context::VariableContext;
 use legend_pure_runtime::debug::StepMode;
 use legend_pure_runtime::hooks::EvalHooks;
 use legend_pure_runtime::value::Value;
@@ -57,6 +58,15 @@ pub struct DapHooks {
     /// the end of the current expression chain before the launch
     /// task exits.
     terminating: bool,
+    /// `(source, line)` of the most recent pause site. While the
+    /// next `before_eval` matches this same location, skip the
+    /// pause check — one Pure source line lowers to many `eval`
+    /// entries (function call + each arg + literals etc.), so a
+    /// naive breakpoint match would re-fire on every sub-expression
+    /// and force the user to click Continue many times to advance
+    /// one line. Cleared the moment execution reaches a different
+    /// `(source, line)` pair.
+    last_paused_at: Option<(String, u32)>,
 }
 
 impl DapHooks {
@@ -68,12 +78,34 @@ impl DapHooks {
             depth: 0,
             step_target: None,
             terminating: false,
+            last_paused_at: None,
         }
     }
 
     /// Have we matched a breakpoint or stepped into our target depth?
+    ///
+    /// Breakpoint paths come from two sources that disagree on
+    /// shape: IntelliJ's `XSourcePositionDto` is an absolute
+    /// filesystem path (`/Users/…/proj/abc.pure`); the runtime's
+    /// `SourceInfo::source` is the canonical workspace-relative
+    /// path the compiler uses (`/myproj/abc.pure` or just
+    /// `/abc.pure`). Suffix-match either way so a breakpoint set
+    /// on the IDE side fires regardless of how the runtime ends
+    /// up addressing the same physical file.
     fn should_pause(&self, source: &SourceInfo) -> bool {
         if self.terminating {
+            return false;
+        }
+        // Same-line re-fire suppression: many sub-expressions
+        // share the parent statement's start_line, so a single
+        // breakpoint would otherwise trigger N pauses per click.
+        // Once we've paused on `(src, line)`, ignore further
+        // matches until execution reaches a different location.
+        if self
+            .last_paused_at
+            .as_ref()
+            .is_some_and(|(s, l)| *l == source.start_line && path_match(s, source.source.as_str()))
+        {
             return false;
         }
         if let Some(target) = self.step_target {
@@ -81,19 +113,27 @@ impl DapHooks {
                 return true;
             }
         }
+        let runtime_src = source.source.as_str();
         let state = match self.wiring.state.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
-        state
-            .breakpoints
-            .contains(&(source.source.to_string(), source.start_line))
+        for (bp_path, bp_line) in &state.breakpoints {
+            if *bp_line != source.start_line {
+                continue;
+            }
+            if path_match(bp_path, runtime_src) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Build the pause snapshot, store it on shared state, emit a
     /// `Stopped` event, and block waiting for the next step
     /// command from the DAP server.
     fn pause(&mut self, source: &SourceInfo, locals: Vec<(SmolStr, String)>) {
+        self.last_paused_at = Some((source.source.to_string(), source.start_line));
         let snapshot = PauseSnapshot {
             frames: self.frames.clone(),
             locals,
@@ -162,20 +202,36 @@ impl DapHooks {
 }
 
 impl EvalHooks for DapHooks {
-    fn before_eval(&mut self, source: &SourceInfo) {
+    fn before_eval(&mut self, source: &SourceInfo, context: &VariableContext) {
+        // Clear the same-line suppression as soon as execution
+        // reaches a different `(source, line)` pair — after that
+        // any future breakpoint match on the original line should
+        // fire again (e.g. a loop body re-entering the line).
+        if let Some((prev_src, prev_line)) = self.last_paused_at.as_ref() {
+            if *prev_line != source.start_line
+                || !path_match(prev_src, source.source.as_str())
+            {
+                self.last_paused_at = None;
+            }
+        }
         if !self.should_pause(source) {
             return;
         }
-        // Locals snapshot: the hook can't reach into
-        // `VariableContext` directly (we don't have a reference
-        // here), so for MVP we leave the locals list empty. The
-        // server's `variables` response will return an empty
-        // collection — sufficient for the gutter-breakpoint UX,
-        // and the "expose locals" follow-up is small and isolated
-        // (extending `EvalHooks::before_eval` to take a
-        // `&VariableContext` parameter, which monomorphizes away
-        // for `NoOpHooks`).
-        let locals: Vec<(SmolStr, String)> = Vec::new();
+        // Snapshot live bindings now, on the eval thread, before
+        // the pause. `Value` is non-`Send`, so we render to
+        // display strings here and store the owned text on
+        // `PauseSnapshot.locals`. The variables handler reads
+        // that snapshot when the IDE fetches the Variables panel
+        // contents.
+        let mut locals: Vec<(SmolStr, String)> = context
+            .iter_bindings()
+            .map(|(name, value)| (name.clone(), render_value(value)))
+            .collect();
+        // Stable ordering — the underlying storage is a
+        // `HashMap`, but the IDE displays the list in the order
+        // we send it. Alphabetical name order matches what most
+        // debug UIs default to.
+        locals.sort_by(|a, b| a.0.cmp(&b.0));
         self.pause(source, locals);
     }
 
@@ -212,5 +268,41 @@ impl EvalHooks for DapHooks {
             category: "stdout".to_string(),
             output: msg.to_string(),
         });
+    }
+}
+
+/// Loose path matcher for breakpoint vs. runtime SourceInfo.
+///
+/// Accept the match if either path is a suffix of the other (or
+/// both — equal paths trivially match). Handles the workspace-
+/// relative vs. absolute filesystem-path mismatch between the
+/// IDE-supplied breakpoint location and the runtime's compiler-
+/// internal canonical path.
+fn path_match(a: &str, b: &str) -> bool {
+    let na = normalize(a);
+    let nb = normalize(b);
+    na.ends_with(&nb) || nb.ends_with(&na)
+}
+
+fn normalize(p: &str) -> String {
+    let s = p.trim_start_matches('/');
+    s.to_string()
+}
+
+/// Render a runtime [`Value`] for display in the IDE Variables
+/// panel. Mirrors `server::render_value` byte-for-byte; kept inline
+/// in the hooks module so the snapshot path doesn't need a
+/// cross-module call on a hot path.
+fn render_value(v: &Value) -> String {
+    match v {
+        Value::Integer(n) => n.to_string(),
+        Value::Float(f) => f.to_string(),
+        Value::Boolean(b) => b.to_string(),
+        Value::String(s) => format!("{s:?}"),
+        Value::Collection(items) => {
+            let rendered: Vec<String> = items.iter().map(render_value).collect();
+            format!("[{}]", rendered.join(", "))
+        }
+        other => format!("{other:?}"),
     }
 }

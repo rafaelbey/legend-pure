@@ -569,7 +569,11 @@ impl CoverageHooks {
 }
 
 impl EvalHooks for CoverageHooks {
-    fn before_eval(&mut self, source: &SourceInfo) {
+    fn before_eval(
+        &mut self,
+        source: &SourceInfo,
+        _context: &legend_pure_runtime::context::VariableContext,
+    ) {
         // Fast prefix check — skip non-matching files.
         if !self.passes_filter(&source.source) {
             return;
