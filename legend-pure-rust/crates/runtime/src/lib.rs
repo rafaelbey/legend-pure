@@ -63,6 +63,7 @@ pub mod date;
 pub mod dsl;
 pub mod error;
 pub mod eval;
+pub mod extensions;
 pub mod heap;
 pub mod hooks;
 pub mod m3_paths;
