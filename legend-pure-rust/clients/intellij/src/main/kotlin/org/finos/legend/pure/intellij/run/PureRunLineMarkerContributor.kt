@@ -22,6 +22,7 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
+import org.finos.legend.pure.intellij.debug.DebugPureFunctionAction
 import org.finos.legend.pure.intellij.highlighting.PureTokenTypes
 
 /**
@@ -91,6 +92,15 @@ class PureRunLineMarkerContributor : RunLineMarkerContributor(), DumbAware {
             AllIcons.RunConfigurations.TestState.Run,
             { _ -> title },
             RunPureFunctionAction(project, chosen.fqn, chosen.command),
+            // Sibling Debug action — right-click the gutter ▶ to
+            // reveal it. Routes through the DAP server
+            // (`legend dap`) regardless of which run command would
+            // have fired on a plain click, since the debugger
+            // operates on the function FQN identically to
+            // `legend.run`. Test / PCT variants gain their full
+            // surveyor lifecycle once the runtime exposes
+            // surveyor-aware debug entry points (Phase 4).
+            DebugPureFunctionAction(project, chosen.fqn),
         )
     }
 }

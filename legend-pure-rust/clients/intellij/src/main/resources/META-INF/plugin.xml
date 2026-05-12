@@ -123,5 +123,29 @@
         <runLineMarkerContributor
                 language="Pure"
                 implementationClass="org.finos.legend.pure.intellij.run.PureRunLineMarkerContributor"/>
+
+        <!-- DAP debugger surface.
+             Three EPs to wire:
+               1. `xdebugger.breakpointType` — lets users click the
+                  `.pure` gutter to toggle breakpoints. The line
+                  type matches every `.pure` file/line; the runtime
+                  filters at pause time.
+               2. `platform.dap.debugAdapterSupportProvider` — the
+                  experimental DAP entry point. Returns our adapter
+                  id + descriptor; the platform's `DapProgramRunner`
+                  uses it to spawn `legend dap` on Debug clicks.
+               3. `platform.dap.launchArgumentsProvider` — maps our
+                  `PureDebugRunProfile` to the DAP `launch` body
+                  (`{program, stopOnEntry, noDebug}`) that our Rust
+                  server expects. -->
+        <xdebugger.breakpointType
+                implementation="org.finos.legend.pure.intellij.debug.PureLineBreakpointType"/>
+    </extensions>
+
+    <extensions defaultExtensionNs="com.intellij.platform.dap">
+        <debugAdapterSupportProvider
+                implementation="org.finos.legend.pure.intellij.debug.PureDebugAdapterSupportProvider"/>
+        <launchArgumentsProvider
+                implementation="org.finos.legend.pure.intellij.debug.PureDapLaunchArgumentsProvider"/>
     </extensions>
 </idea-plugin>
