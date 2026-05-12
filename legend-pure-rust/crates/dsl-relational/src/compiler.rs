@@ -339,7 +339,10 @@ fn extract_main_table_ref(body: &RelationalClassMappingBody) -> Option<MainTable
     let (schema_name, table_name) = if mt.scope.scope.is_empty() {
         (SmolStr::new("default"), mt.scope.table.value.clone())
     } else {
-        (mt.scope.table.value.clone(), mt.scope.scope[0].value.clone())
+        (
+            mt.scope.table.value.clone(),
+            mt.scope.scope[0].value.clone(),
+        )
     };
     Some(MainTableRef {
         database_fqn,
@@ -596,8 +599,7 @@ impl CompilerExtension for RelationalExtension {
                                         continue;
                                     }
                                 };
-                                let Some(chunk) =
-                                    ctx.model.chunks.get_mut(chunk_id as usize)
+                                let Some(chunk) = ctx.model.chunks.get_mut(chunk_id as usize)
                                 else {
                                     continue;
                                 };
@@ -611,9 +613,7 @@ impl CompilerExtension for RelationalExtension {
                                         parent_package: ctx.model.root_package,
                                     },
                                     ModelElement::DSLInstance(DSLInstance {
-                                        dsl_name: SmolStr::new(
-                                            RELATIONAL_CLASS_MAPPING_DSL_NAME,
-                                        ),
+                                        dsl_name: SmolStr::new(RELATIONAL_CLASS_MAPPING_DSL_NAME),
                                         classifier_fqn: SmolStr::new(
                                             RELATIONAL_CLASS_MAPPING_CLASSIFIER_FQN,
                                         ),

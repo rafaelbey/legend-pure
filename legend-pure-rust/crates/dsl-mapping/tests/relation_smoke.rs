@@ -92,8 +92,7 @@ fn relation_with_known_function_validates_clean() {
         .iter()
         .filter(|e| {
             e.message.contains("RelationFunction")
-                || (e.message.contains("Class")
-                    && e.message.contains("has no property"))
+                || (e.message.contains("Class") && e.message.contains("has no property"))
         })
         .collect();
     assert!(
@@ -128,8 +127,10 @@ fn relation_with_unresolved_function_errors() {
     let file = parse("relation_missing_fn.pure", source);
     let errors = compile(vec![file]);
     assert!(
-        errors.iter().any(|e| e.message.contains("RelationFunction `~func`")
-            && e.message.contains("missing__doesNotExist")),
+        errors
+            .iter()
+            .any(|e| e.message.contains("RelationFunction `~func`")
+                && e.message.contains("missing__doesNotExist")),
         "expected unresolved-function error; got: {:#?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
@@ -167,8 +168,7 @@ fn relation_with_unknown_property_errors() {
     let errors = compile(vec![file]);
     assert!(
         errors.iter().any(|e| {
-            e.message.contains("Class 'my::test::Firm'")
-                && e.message.contains("notAProperty")
+            e.message.contains("Class 'my::test::Firm'") && e.message.contains("notAProperty")
         }),
         "expected unknown-property error citing notAProperty; got: {:#?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
@@ -286,8 +286,7 @@ fn relation_with_unresolved_binding_errors() {
     let errors = compile(vec![file]);
     assert!(
         errors.iter().any(|e| {
-            e.message.contains("Binding transformer target")
-                && e.message.contains("missingBinding")
+            e.message.contains("Binding transformer target") && e.message.contains("missingBinding")
         }),
         "expected unresolved-binding error; got: {:#?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()

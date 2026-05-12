@@ -299,11 +299,9 @@ impl DSLPopulator for RelationalClassMappingDSLPopulator {
         // Pure-side navigation `m.classMappings->first().mainTableAlias`
         // works whether the user starts from the parent Mapping or
         // (in a future revision) directly from the sidecar.
-        let _ = ctx.heap.mutate_set(
-            &cm_handle,
-            "mainTableAlias",
-            &[Value::Object(alias)],
-        );
+        let _ = ctx
+            .heap
+            .mutate_set(&cm_handle, "mainTableAlias", &[Value::Object(alias)]);
     }
 }
 
@@ -315,9 +313,7 @@ fn find_class_mapping_row(
 ) -> Option<ObjectHandle> {
     let mapping_id = resolve_fqn(model, mapping_fqn)?;
     let mapping_handle = heap.object_for_element(mapping_id)?;
-    let cms = mapping_handle
-        .borrow()
-        .get_property_values("classMappings");
+    let cms = mapping_handle.borrow().get_property_values("classMappings");
     for v in cms.iter() {
         let Value::Object(h) = v else {
             continue;

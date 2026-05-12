@@ -38,10 +38,10 @@ use crate::ast::{
     RelationFunctionPropertyMapping, StoreSubstitution, XStoreClassMappingBody,
     XStorePropertyMapping,
 };
+use crate::protocol::ProtocolMapping;
 use crate::protocol::aggregation_aware::{
     ProtocolAggregateFunction, ProtocolAggregateSetImplementationContainer,
-    ProtocolAggregateSpecification, ProtocolAggregationAwareClassMapping,
-    ProtocolGroupByFunction,
+    ProtocolAggregateSpecification, ProtocolAggregationAwareClassMapping, ProtocolGroupByFunction,
 };
 use crate::protocol::class_mapping::{ProtocolClassMapping, ProtocolClassMappingHeader};
 use crate::protocol::enumeration::{
@@ -64,7 +64,6 @@ use crate::protocol::relation_function::{
 use crate::protocol::xstore::{
     ProtocolAssociationMapping, ProtocolXStoreAssociationMapping, ProtocolXStorePropertyMapping,
 };
-use crate::protocol::ProtocolMapping;
 use legend_pure_parser_protocol::v1::value_spec::ProtocolPackageableElementPtr;
 
 /// Convert an AST `MappingDef` to its protocol JSON representation.
@@ -103,7 +102,11 @@ impl From<&MappingDef> for ProtocolMapping {
             class_mappings,
             enumeration_mappings,
             association_mappings,
-            included_mappings: m.includes.iter().map(ProtocolMappingInclude::from).collect(),
+            included_mappings: m
+                .includes
+                .iter()
+                .map(ProtocolMappingInclude::from)
+                .collect(),
             source_information: Some(source_info_from(&m.source_info)),
         }
     }
@@ -155,11 +158,9 @@ impl From<&ClassMapping> for ProtocolClassMapping {
                     ProtocolClassMapping::Operation(operation_from_body(body, header))
                 }
             }
-            ClassMappingBody::AggregationAware(body) => {
-                ProtocolClassMapping::AggregationAware(Box::new(
-                    aggregation_aware_from_body(body, header, cm),
-                ))
-            }
+            ClassMappingBody::AggregationAware(body) => ProtocolClassMapping::AggregationAware(
+                Box::new(aggregation_aware_from_body(body, header, cm)),
+            ),
             ClassMappingBody::RelationFunction(body) => ProtocolClassMapping::Relation(
                 relation_function_from_body(body, header, ptr_to_fqn(&cm.class)),
             ),
@@ -171,15 +172,15 @@ impl From<&ClassMapping> for ProtocolClassMapping {
             // split them out properly.
             ClassMappingBody::Enumeration(_)
             | ClassMappingBody::XStore(_)
-            | ClassMappingBody::Foreign(_) => ProtocolClassMapping::PureInstance(
-                ProtocolPureInstanceClassMapping {
+            | ClassMappingBody::Foreign(_) => {
+                ProtocolClassMapping::PureInstance(ProtocolPureInstanceClassMapping {
                     header,
                     src_class: None,
                     source_class_source_information: None,
                     property_mappings: Vec::new(),
                     filter: None,
-                },
-            ),
+                })
+            }
         }
     }
 }
@@ -223,10 +224,7 @@ fn pure_property_mapping_from_ast(
         property: pm.property_name.to_string(),
         source_information: Some(source_info_from(&pm.source_info)),
     };
-    let local_mapping_property = pm
-        .local_property
-        .as_ref()
-        .map(local_mapping_property_from);
+    let local_mapping_property = pm.local_property.as_ref().map(local_mapping_property_from);
     let enum_mapping_id = pm.transformer.as_ref().map(ToString::to_string);
     let transform = lambda_wrap(&pm.transform);
     // Java's `explodeProperty` is `Boolean` (nullable). Emit `Some(true)`
@@ -517,7 +515,10 @@ fn aggregate_function_from(spec: &AggregationFunctionSpec) -> ProtocolAggregateF
 /// through a synthetic `ClassMapping` so the nested body's conversion
 /// path lands on the right Java discriminator with the right `class`
 /// field.
-fn nested_to_class_mapping(nested: &NestedClassMapping, outer_cm: &ClassMapping) -> ProtocolClassMapping {
+fn nested_to_class_mapping(
+    nested: &NestedClassMapping,
+    outer_cm: &ClassMapping,
+) -> ProtocolClassMapping {
     // Build a synthetic ClassMapping that inherits the outer's class
     // + spans the nested body. `id`/`extends`/`is_root` reset to
     // defaults — nested mappings carry none of those per the AST.
@@ -579,11 +580,11 @@ fn enum_value_mapping_from(vm: &EnumValueMapping) -> ProtocolEnumValueMapping {
 
 fn enum_source_value_from(sv: &EnumSourceValue) -> ProtocolEnumValueMappingSourceValue {
     match sv {
-        EnumSourceValue::String { value, .. } => ProtocolEnumValueMappingSourceValue::String(
-            ProtocolEnumValueMappingStringSourceValue {
+        EnumSourceValue::String { value, .. } => {
+            ProtocolEnumValueMappingSourceValue::String(ProtocolEnumValueMappingStringSourceValue {
                 value: value.to_string(),
-            },
-        ),
+            })
+        }
         EnumSourceValue::Integer { value, .. } => ProtocolEnumValueMappingSourceValue::Integer(
             ProtocolEnumValueMappingIntegerSourceValue {
                 // Java's source-value is `Integer` (32-bit). Truncate
@@ -597,12 +598,10 @@ fn enum_source_value_from(sv: &EnumSourceValue) -> ProtocolEnumValueMappingSourc
             enumeration,
             value_name,
             ..
-        } => ProtocolEnumValueMappingSourceValue::Enum(
-            ProtocolEnumValueMappingEnumSourceValue {
-                enumeration: ptr_to_fqn(enumeration),
-                value: value_name.to_string(),
-            },
-        ),
+        } => ProtocolEnumValueMappingSourceValue::Enum(ProtocolEnumValueMappingEnumSourceValue {
+            enumeration: ptr_to_fqn(enumeration),
+            value: value_name.to_string(),
+        }),
     }
 }
 

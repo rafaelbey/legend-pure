@@ -1006,9 +1006,7 @@ fn parse_relation_function_body(
 /// The suffix starts at `(` and runs through the closing `]` of the
 /// return-type multiplicity (or until the next property mapping token
 /// — a `+`, a property identifier followed by `:`, or `}`).
-fn capture_function_signature_suffix(
-    ctx: &mut ParserContext<'_>,
-) -> Result<SmolStr, ParseError> {
+fn capture_function_signature_suffix(ctx: &mut ParserContext<'_>) -> Result<SmolStr, ParseError> {
     let mut buf = String::new();
 
     // Consume `(...)`.
@@ -1128,21 +1126,20 @@ fn parse_relation_function_property_mapping(
     ctx.cursor().expect(TokenKind::Colon)?;
 
     // Optional `Binding pkg::SomeBinding :` transformer.
-    let binding_transformer = if ctx.cursor().check(TokenKind::Identifier)
-        && ctx.cursor().peek().text == "Binding"
-    {
-        let kw = ctx.cursor().peek().clone();
-        ctx.cursor().advance();
-        let binding = parse_packageable_ptr(ctx)?;
-        let end = ctx.cursor().current_source_info();
-        ctx.cursor().expect(TokenKind::Colon)?;
-        Some(BindingTransformer {
-            binding,
-            source_info: merge_si(&kw.source_info, &end),
-        })
-    } else {
-        None
-    };
+    let binding_transformer =
+        if ctx.cursor().check(TokenKind::Identifier) && ctx.cursor().peek().text == "Binding" {
+            let kw = ctx.cursor().peek().clone();
+            ctx.cursor().advance();
+            let binding = parse_packageable_ptr(ctx)?;
+            let end = ctx.cursor().current_source_info();
+            ctx.cursor().expect(TokenKind::Colon)?;
+            Some(BindingTransformer {
+                binding,
+                source_info: merge_si(&kw.source_info, &end),
+            })
+        } else {
+            None
+        };
 
     // Column name (single identifier).
     let col_tok = ctx.cursor().expect(TokenKind::Identifier)?;
