@@ -31,8 +31,9 @@ use tower_lsp_server::ls_types::{
     DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, ExecuteCommandOptions,
     ExecuteCommandParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
     HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, LSPAny,
-    MessageType, OneOf, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
-    TextDocumentSyncKind, Uri, WorkspaceSymbolParams, WorkspaceSymbolResponse,
+    Location, MessageType, OneOf, ReferenceParams, ServerCapabilities, ServerInfo,
+    TextDocumentSyncCapability, TextDocumentSyncKind, Uri, WorkspaceSymbolParams,
+    WorkspaceSymbolResponse,
 };
 use tower_lsp_server::{Client, LanguageServer};
 
@@ -128,6 +129,7 @@ impl LanguageServer for Backend {
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 code_lens_provider: Some(CodeLensOptions {
@@ -307,12 +309,44 @@ impl LanguageServer for Backend {
         // origin_selection_range tells IntelliJ which source range to
         // underline on ⌘-hover. Without it the request flows but the
         // visual affordance never renders.
-        Ok(
-            handlers::definition_for_position(
-                model, references, &canonical, position, &uri, &resolver,
-            )
-            .map(|link| GotoDefinitionResponse::Link(vec![link])),
+        Ok(handlers::definition_for_position(
+            model, references, &canonical, position, &uri, &resolver,
         )
+        .map(|link| GotoDefinitionResponse::Link(vec![link])))
+    }
+
+    async fn references(&self, params: ReferenceParams) -> JsonResult<Option<Vec<Location>>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let include_declaration = params.context.include_declaration;
+        let ws = self.workspace.lock().await;
+        let Some(model) = ws.model.as_ref() else {
+            return Ok(None);
+        };
+        let Some(canonical) = ws.canonical_path_for(&uri) else {
+            return Ok(None);
+        };
+        let resolver = |c: &str| ws.file_uri_for_canonical(c);
+        let references = ws.references.as_deref();
+        let locations = handlers::references_for_position(
+            model,
+            references,
+            &canonical,
+            position,
+            include_declaration,
+            &uri,
+            &resolver,
+        );
+        // Per LSP 3.17: return `null` (encoded as `Ok(None)`) when no
+        // references are found. Returning an empty `Vec<Location>`
+        // works too, but `None` matches the response shape clients
+        // see from other LSP servers and avoids confusing
+        // "0 results" panels in some IDEs.
+        if locations.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(locations))
+        }
     }
 
     async fn document_symbol(
@@ -363,10 +397,7 @@ impl LanguageServer for Backend {
         Ok(Some(handlers::code_lenses_for(model, &canonical)))
     }
 
-    async fn execute_command(
-        &self,
-        params: ExecuteCommandParams,
-    ) -> JsonResult<Option<LSPAny>> {
+    async fn execute_command(&self, params: ExecuteCommandParams) -> JsonResult<Option<LSPAny>> {
         let command = params.command;
         tracing::info!(
             command = %command,
@@ -394,7 +425,9 @@ impl LanguageServer for Backend {
                 result.summary(),
             )
             .await;
-        Ok(Some(serde_json::to_value(&result).unwrap_or(serde_json::Value::Null)))
+        Ok(Some(
+            serde_json::to_value(&result).unwrap_or(serde_json::Value::Null),
+        ))
     }
 }
 
