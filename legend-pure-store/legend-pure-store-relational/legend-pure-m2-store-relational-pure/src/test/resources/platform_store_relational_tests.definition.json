@@ -1,0 +1,8 @@
+{
+  "name": "platform_store_relational_tests",
+  "pattern": "meta::relational::tests::.*",
+  "dependencies": [
+    "platform",
+    "platform_store_relational"
+  ]
+}
