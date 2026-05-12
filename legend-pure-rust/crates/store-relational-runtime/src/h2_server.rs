@@ -34,7 +34,7 @@
 //! Tracked in `BACKLOG.md` for a later JNI-bridge revisit.
 
 use std::io::{BufRead, BufReader};
-use std::net::TcpStream;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
@@ -211,12 +211,8 @@ fn wait_for_pg_ready(child: &mut Child, port: u16) -> Result<(), H2SpawnError> {
                 first_line: first_line.trim().to_string(),
             });
         }
-        if TcpStream::connect_timeout(
-            &format!("127.0.0.1:{port}").parse().expect("static addr"),
-            Duration::from_millis(100),
-        )
-        .is_ok()
-        {
+        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port));
+        if TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_ok() {
             return Ok(());
         }
         if Instant::now() >= deadline {
