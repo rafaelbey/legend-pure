@@ -36,6 +36,11 @@ thiserror = { workspace = true }
 # system install is needed; adds 30-60s to cold builds, then cached.
 duckdb = { version = "1.4", features = ["bundled"] }
 
+# H2 backend: spawn the H2 Java sub-process in PG-wire mode and talk to
+# it over the sync `postgres` client. No tokio runtime introduced.
+postgres = "0.19"
+uuid = { version = "1", features = ["v4"] }
+
 [dev-dependencies]
 # End-to-end smoke tests compile synthetic user Pure source against
 # the full platform model (including `platform_store_relational`).
