@@ -177,8 +177,21 @@ impl H2State {
 
 /// Lift a [`postgres::Error`] into a [`PureException`] with a stable
 /// prefix, mirroring [`map_duckdb_err`].
+///
+/// `postgres::Error`'s `Display` impl is unhelpfully terse ("db
+/// error" / "communication error") — the server-side message lives
+/// on the wrapped `DbError`. Walk the error chain so the surfaced
+/// `PureException` carries the SQL state + message instead of a
+/// generic placeholder.
 pub fn map_postgres_err(e: postgres::Error) -> PureException {
-    PureRuntimeError::EvaluationError(format!("H2 (PG-wire) error: {e}")).into()
+    use std::error::Error;
+    let mut detail = e.to_string();
+    if let Some(db) = e.as_db_error() {
+        detail = format!("{}: {}", db.severity(), db.message());
+    } else if let Some(src) = e.source() {
+        detail = format!("{e}: {src}");
+    }
+    PureRuntimeError::EvaluationError(format!("H2 (PG-wire) error: {detail}")).into()
 }
 
 #[cfg(test)]
