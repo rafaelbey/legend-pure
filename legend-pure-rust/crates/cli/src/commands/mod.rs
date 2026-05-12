@@ -29,6 +29,7 @@ pub mod emit;
 pub mod init;
 pub mod java_bindings;
 pub mod lsp;
+pub mod mcp;
 pub mod package;
 pub mod parse;
 pub mod plan;

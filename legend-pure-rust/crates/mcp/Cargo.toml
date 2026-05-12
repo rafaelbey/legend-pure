@@ -1,0 +1,55 @@
+# Copyright 2026 Goldman Sachs
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[package]
+name = "legend-pure-mcp"
+description = "Model Context Protocol server for Legend Pure — exposes the compiled workspace as MCP tools so AI coding agents can search symbols, run functions, and query diagnostics."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+legend-pure-parser-ast = { path = "../ast" }
+legend-pure-parser-parser = { path = "../parser" }
+legend-pure-parser-pure = { path = "../pure" }
+legend-pure-core-platform = { path = "../core-platform-pure" }
+# Runtime: the runner module — `run_function`, `run_test`, `run_pct`,
+# `list_pct_adapters` — is shared with `legend-pure-lsp`'s
+# `workspace/executeCommand` so both protocols stay in lock-step on
+# the evaluation path.
+legend-pure-runtime = { path = "../runtime" }
+# DSL extensions — same rationale as `legend-pure-lsp` /
+# `legend-pure-dap`: the integration crate owns DSL knowledge so the
+# `core-platform-pure` crate can stay below them in the dep graph.
+legend-pure-dsl-mapping = { path = "../dsl-mapping" }
+legend-pure-dsl-relational = { path = "../dsl-relational" }
+legend-pure-dsl-store = { path = "../dsl-store" }
+
+# Official Anthropic MCP SDK.
+#   server         — server-side surface (default-on, listed
+#                    explicitly so the dep graph documents intent).
+#   macros         — `#[tool]` / `#[tool_router]` / `#[tool_handler]`
+#                    attribute macros that generate the JSON-Schema
+#                    routing.
+#   transport-io   — stdio transport implementation.
+rmcp = { version = "1", features = ["server", "macros", "transport-io"] }
+schemars = "0.8"
+
+tokio = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+smol_str = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
