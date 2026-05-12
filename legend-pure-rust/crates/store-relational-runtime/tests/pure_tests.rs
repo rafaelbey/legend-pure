@@ -46,9 +46,9 @@ fn auto_imports() -> Vec<SmolStr> {
 fn build_model() -> PureModel {
     let repos = repo::Repo::default_with_build_snapshots();
     assert!(
-        repos
-            .iter()
-            .any(|r| r.meta().is_some_and(|m| m.name == "platform_store_relational")),
+        repos.iter().any(|r| r
+            .meta()
+            .is_some_and(|m| m.name == "platform_store_relational")),
         "platform_store_relational repo missing — relational tests need the build snapshots dir set",
     );
     match repo::load(&repos, &auto_imports()) {
@@ -131,5 +131,13 @@ fn create_temp_table_lifecycle_passes() {
 fn create_temp_table_with_rely_on_finally_passes() {
     let model = build_model();
     let v = run_test_fn(&model, "testCreateTempTableWithRelyOnFinally__Boolean_1_").expect("ran");
+    assert_eq!(v, Value::Boolean(true));
+}
+
+#[test]
+fn load_values_to_db_table_inserts_rows_passes() {
+    let model = build_model();
+    let v =
+        run_test_fn(&model, "testLoadValuesToDbTableInsertsRows__Boolean_1_").expect("ran");
     assert_eq!(v, Value::Boolean(true));
 }

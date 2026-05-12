@@ -31,6 +31,12 @@ legend-pure-parser-ast = { path = "../ast" }
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-pure = { path = "../pure" }
 legend-pure-dsl-graph = { path = "../dsl-graph" }
+# Platform-shipped Pure tests are allowed to declare DSL elements
+# (`###Relational Database (…)`, `###Mapping (…)`) — wire both the
+# parser-side SectionParsers and the compiler-side CompilerExtensions
+# so those tests parse and compile here at snapshot-build time.
+legend-pure-dsl-mapping = { path = "../dsl-mapping" }
+legend-pure-dsl-relational = { path = "../dsl-relational" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smol_str = { workspace = true }

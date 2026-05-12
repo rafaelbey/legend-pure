@@ -2163,6 +2163,8 @@ name = "legend-pure-snapshot-builder"
 version = "0.1.0"
 dependencies = [
  "legend-pure-dsl-graph",
+ "legend-pure-dsl-mapping",
+ "legend-pure-dsl-relational",
  "legend-pure-parser-ast",
  "legend-pure-parser-parser",
  "legend-pure-parser-pure",
