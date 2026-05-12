@@ -19,7 +19,7 @@
 
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_pure::error::Severity;
-use tower_lsp::lsp_types::{DiagnosticSeverity, Position, Range};
+use tower_lsp_server::ls_types::{DiagnosticSeverity, Position, Range};
 
 /// Convert a 1-indexed compiler position to a 0-indexed LSP position.
 #[must_use]

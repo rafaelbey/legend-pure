@@ -84,8 +84,14 @@ enum Commands {
     /// Run the Pure Language Server Protocol server over stdio
     Lsp(commands::lsp::LspArgs),
 
+    /// Run the Pure Debug Adapter Protocol server over stdio
+    Dap(commands::dap::DapArgs),
+
     /// Run Pure tests on testable elements
     Test(commands::test::TestArgs),
+
+    /// Run a parameterless Pure function and print its return value
+    Run(commands::run::RunArgs),
 
     /// Merge and report on Pure code coverage
     Coverage(commands::coverage_cmd::CoverageArgs),
@@ -129,7 +135,9 @@ fn main() {
         Commands::Compile(args) => commands::compile::run(args),
         Commands::Check(args) => commands::check::run(args),
         Commands::Lsp(args) => commands::lsp::run(args, classpath),
+        Commands::Dap(args) => commands::dap::run(args, classpath),
         Commands::Test(args) => commands::test::run(args, classpath),
+        Commands::Run(args) => commands::run::run(args, classpath),
         Commands::Coverage(args) => commands::coverage_cmd::run(args),
         Commands::Plan(args) => commands::plan::run(args),
         Commands::Package(args) => commands::package::run(args),

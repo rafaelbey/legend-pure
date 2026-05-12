@@ -29,10 +29,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use legend_pure_core_platform::repo::{self, Repo};
+use legend_pure_dsl_mapping::compiler::MappingExtension;
+use legend_pure_dsl_mapping::parser::MappingSectionParser;
+use legend_pure_dsl_relational::compiler::RelationalExtension;
+use legend_pure_dsl_relational::parser::RelationalSectionParser;
+use legend_pure_dsl_store::compiler::RelationStoreExtension;
+use legend_pure_parser_parser::SectionParser;
 use legend_pure_parser_pure::error::CompilationError;
+use legend_pure_parser_pure::extension::CompilerExtension;
 use legend_pure_parser_pure::model::PureModel;
+use legend_pure_parser_pure::refs::{ReferenceIndex, build_reference_index_with_extensions};
 use smol_str::SmolStr;
-use tower_lsp::lsp_types::Url;
+use tower_lsp_server::ls_types::Uri;
 
 /// Tracked state for an LSP workspace.
 pub struct Workspace {
@@ -40,11 +48,17 @@ pub struct Workspace {
     /// open-buffer overlays; this baseline is preserved for re-runs.
     pub base_repos: Vec<Repo>,
     /// Open buffers keyed by client URL.
-    pub open_buffers: HashMap<Url, String>,
+    pub open_buffers: HashMap<Uri, String>,
     /// Last compiled model, retained between requests so that hover /
     /// goto / outline can serve answers without recompiling on every
     /// keypress.
     pub model: Option<Arc<PureModel>>,
+    /// Reference index built alongside `model` after each compile.
+    /// Carries every clickable source span and its target — drives
+    /// goto-def, find-references, hover, and the future
+    /// semanticTokens response. Rebuilt per compile because source
+    /// spans move when the user edits.
+    pub references: Option<Arc<ReferenceIndex>>,
     /// Diagnostics from the most recent compile, keyed by canonical
     /// source path (as the compiler sees it). The handler turns these
     /// into per-URL `publishDiagnostics`.
@@ -61,20 +75,21 @@ impl Workspace {
             base_repos,
             open_buffers: HashMap::new(),
             model: None,
+            references: None,
             diagnostics: HashMap::new(),
             auto_imports,
         }
     }
 
     /// Record an open or modified buffer.
-    pub fn set_open_buffer(&mut self, uri: Url, content: String) {
+    pub fn set_open_buffer(&mut self, uri: Uri, content: String) {
         self.open_buffers.insert(uri, content);
     }
 
     /// Drop a closed buffer. After this, the next compile reads the
     /// file from disk again (Filesystem repo) or from the embedded
     /// blob (Purem repo).
-    pub fn close_buffer(&mut self, uri: &Url) {
+    pub fn close_buffer(&mut self, uri: &Uri) {
         self.open_buffers.remove(uri);
     }
 
@@ -94,7 +109,7 @@ impl Workspace {
             return out;
         }
         for (uri, content) in &self.open_buffers {
-            let Ok(disk_path) = uri.to_file_path() else {
+            let Some(disk_path) = uri.to_file_path() else {
                 continue;
             };
             for repo in &mut out {
@@ -117,7 +132,28 @@ impl Workspace {
     /// per-source diagnostic index on `self`.
     pub fn compile(&mut self) -> CompileOutcome {
         let snapshot = self.snapshot_repos();
-        let result = repo::load(&snapshot, &self.auto_imports);
+        // Fresh DSL extensions per compile — each carries `RefCell`
+        // state populated during `declare`/`define_*` and walked by
+        // `walk_references`. Reusing across compiles would accumulate
+        // stale entries unless every extension's `declare` started
+        // with a clear, which today's implementations don't do.
+        let mapping = MappingExtension::new();
+        let relational = RelationalExtension::new();
+        let store = RelationStoreExtension::new();
+        let extensions: [&dyn CompilerExtension; 3] = [&mapping, &relational, &store];
+        let result = repo::load_with_extensions(
+            &snapshot,
+            &self.auto_imports,
+            &extensions,
+            // Each repo gets fresh section parsers. `SectionParser`
+            // is not `Clone`, so we instantiate inside the closure.
+            &mut || -> Vec<Box<dyn SectionParser>> {
+                vec![
+                    Box::new(MappingSectionParser::new()),
+                    Box::new(RelationalSectionParser),
+                ]
+            },
+        );
         let (model, errors) = match result {
             Ok(m) => (m, Vec::<CompilationError>::new()),
             Err(partial) => (partial.model, partial.errors),
@@ -130,7 +166,15 @@ impl Workspace {
                 .push(err.clone());
         }
         self.diagnostics = by_source;
-        self.model = Some(Arc::new(model));
+        let model_arc = Arc::new(model);
+        // Build the reference index from the freshly-compiled model,
+        // including DSL extension contributions. Cheap (single linear
+        // walk over chunks + each extension's RefCell).
+        self.references = Some(Arc::new(build_reference_index_with_extensions(
+            &model_arc,
+            &extensions,
+        )));
+        self.model = Some(model_arc);
         CompileOutcome {
             error_count: errors.len(),
         }
@@ -140,8 +184,8 @@ impl Workspace {
     /// compiler uses for it. Returns `None` if the URL doesn't
     /// resolve to any known source path.
     #[must_use]
-    pub fn canonical_path_for(&self, uri: &Url) -> Option<String> {
-        let disk_path = uri.to_file_path().ok()?;
+    pub fn canonical_path_for(&self, uri: &Uri) -> Option<String> {
+        let disk_path = uri.to_file_path()?;
         for repo in &self.base_repos {
             if let Repo::Filesystem { files, .. } = repo {
                 for f in files {
@@ -154,6 +198,52 @@ impl Workspace {
         }
         None
     }
+
+    /// Inverse of [`Self::canonical_path_for`]: given a canonical
+    /// source path the compiler emits (e.g. `/user_proj/foo/bar.pure`),
+    /// produce a `file://` URL the IDE can navigate to.
+    ///
+    /// Resolution order:
+    /// 1. If an open buffer's URL maps to this canonical (via
+    ///    [`Self::canonical_path_for`]), reuse its URL.
+    /// 2. Walk [`Self::base_repos`] for a [`Repo::Filesystem`] whose
+    ///    `prefix` matches the canonical's leading segment AND whose
+    ///    `source_root` was populated. Reconstruct the on-disk path
+    ///    as `source_root.join(canonical[prefix.len()..])`.
+    ///
+    /// Returns `None` for canonicals served from [`Repo::Embedded`] /
+    /// [`Repo::Purem`] (no on-disk source) or filesystem repos built
+    /// without a `source_root` (synthetic test fixtures).
+    #[must_use]
+    pub fn file_uri_for_canonical(&self, canonical: &str) -> Option<Uri> {
+        for uri in self.open_buffers.keys() {
+            if self.canonical_path_for(uri).as_deref() == Some(canonical) {
+                return Some(uri.clone());
+            }
+        }
+        for repo in &self.base_repos {
+            let Repo::Filesystem {
+                prefix,
+                source_root,
+                ..
+            } = repo
+            else {
+                continue;
+            };
+            let Some(root) = source_root else { continue };
+            let Some(rel) = canonical.strip_prefix(prefix.as_str()) else {
+                continue;
+            };
+            // Strip the leading '/' so `join` treats `rel` as relative
+            // — otherwise `join("/abs")` discards the root.
+            let rel = rel.trim_start_matches('/');
+            let disk = root.join(rel);
+            if let Some(uri) = Uri::from_file_path(&disk) {
+                return Some(uri);
+            }
+        }
+        None
+    }
 }
 
 /// Summary of a compile pass; full per-source diagnostics live on
@@ -162,4 +252,102 @@ impl Workspace {
 pub struct CompileOutcome {
     /// Total number of errors produced.
     pub error_count: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use legend_pure_core_platform::repo::OwnedSourceFile;
+    use std::path::PathBuf;
+
+    fn fs_repo_with_root(prefix: &str, source_root: PathBuf, files: Vec<&str>) -> Repo {
+        let owned = files
+            .into_iter()
+            .map(|p| OwnedSourceFile {
+                path: p.to_string(),
+                content: String::new(),
+            })
+            .collect();
+        Repo::Filesystem {
+            prefix: prefix.to_string(),
+            files: owned,
+            meta: None,
+            source_root: Some(source_root),
+        }
+    }
+
+    #[test]
+    fn file_uri_for_canonical_resolves_via_source_root() {
+        // /tmp/proj/lib.pure is the on-disk file; canonical is /proj/lib.pure
+        let repo = fs_repo_with_root(
+            "/proj",
+            PathBuf::from("/tmp/proj"),
+            vec!["/proj/lib.pure", "/proj/sub/foo.pure"],
+        );
+        let ws = Workspace::new(vec![repo], Vec::new());
+
+        let uri = ws
+            .file_uri_for_canonical("/proj/lib.pure")
+            .expect("filesystem repo with source_root must resolve");
+        // The ls-types `Uri` type wraps `fluent_uri::Uri` whose
+        // `scheme()` returns a typed `Scheme` (not a `&str`) and
+        // whose `path()` returns a percent-encoded `EStr<Path>`.
+        // Round-trip through `as_str()` to test against plain
+        // strings — that's the on-wire form clients see anyway.
+        let url_str = uri.as_str();
+        assert!(url_str.starts_with("file://"), "got: {url_str}");
+        assert!(
+            url_str.ends_with("/tmp/proj/lib.pure"),
+            "got: {url_str}"
+        );
+
+        let nested = ws
+            .file_uri_for_canonical("/proj/sub/foo.pure")
+            .expect("nested canonical must resolve");
+        assert!(nested.as_str().ends_with("/tmp/proj/sub/foo.pure"));
+    }
+
+    #[test]
+    fn file_uri_for_canonical_returns_none_without_source_root() {
+        // Synthetic test fixture: source_root is None.
+        let repo = Repo::Filesystem {
+            prefix: "/proj".to_string(),
+            files: vec![OwnedSourceFile {
+                path: "/proj/x.pure".into(),
+                content: String::new(),
+            }],
+            meta: None,
+            source_root: None,
+        };
+        let ws = Workspace::new(vec![repo], Vec::new());
+        assert!(ws.file_uri_for_canonical("/proj/x.pure").is_none());
+    }
+
+    #[test]
+    fn file_uri_for_canonical_returns_none_for_unknown_canonical() {
+        let repo = fs_repo_with_root(
+            "/proj",
+            PathBuf::from("/tmp/proj"),
+            vec!["/proj/lib.pure"],
+        );
+        let ws = Workspace::new(vec![repo], Vec::new());
+        // Canonical's prefix doesn't match any repo.
+        assert!(ws.file_uri_for_canonical("/other/lib.pure").is_none());
+    }
+
+    #[test]
+    fn file_uri_for_canonical_prefers_open_buffer_url() {
+        // When a buffer is open for the matching canonical, that URL
+        // is returned in preference to the synthesised disk URL.
+        let repo = fs_repo_with_root(
+            "/proj",
+            PathBuf::from("/tmp/proj"),
+            vec!["/proj/lib.pure"],
+        );
+        let mut ws = Workspace::new(vec![repo], Vec::new());
+        let buffer_uri = "file:///tmp/proj/lib.pure".parse::<Uri>().unwrap();
+        ws.set_open_buffer(buffer_uri.clone(), "...".into());
+        let resolved = ws.file_uri_for_canonical("/proj/lib.pure").unwrap();
+        assert_eq!(resolved, buffer_uri);
+    }
 }

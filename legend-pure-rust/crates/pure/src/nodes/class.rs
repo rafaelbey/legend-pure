@@ -61,6 +61,57 @@ pub enum Variance {
 }
 
 // ---------------------------------------------------------------------------
+// TypeParameter
+// ---------------------------------------------------------------------------
+
+/// A single type-parameter slot on a parametric class.
+///
+/// Replaces the older parallel `type_parameters: Vec<SmolStr>` +
+/// `type_parameter_variances: Vec<Variance>` shape — the encapsulation
+/// principle is "every element that needs related data carries it"; a
+/// position-aligned sibling Vec violates that and breaks every time a
+/// consumer forgets the alignment.
+///
+/// Source-info isn't on this struct yet because the AST
+/// (`ClassDef.type_parameters: Vec<Identifier>`) discards the parser
+/// span — the parser captures it but throws it away at
+/// `parse_type_and_multiplicity_parameters`. Adding it requires a
+/// parser-level change that's tracked separately; once done, this
+/// struct is the right place to land it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypeParameter {
+    /// Declared name (e.g., `T`, `U`).
+    pub name: SmolStr,
+    /// Variance flag. Defaults to `Invariant`. Populated from m3's
+    /// `^TypeParameter{contravariant: true}` instance form (used by
+    /// `Property`, `Column`,
+    /// `NewPropertyRouteNodeFunctionDefinition`) and from the surface
+    /// `<-T>` / `<+T>` prefix syntax (`Path<-U,V|m>` in path.pure).
+    #[serde(default)]
+    pub variance: Variance,
+}
+
+impl TypeParameter {
+    /// Build an invariant type parameter from a name. Convenience for
+    /// the common case where no variance flag was declared.
+    #[must_use]
+    pub fn invariant(name: SmolStr) -> Self {
+        Self {
+            name,
+            variance: Variance::Invariant,
+        }
+    }
+
+    /// Build a type parameter from an explicit `(name, variance)`
+    /// pair — used by the m3 parser when it sees
+    /// `^TypeParameter{contravariant: true}`.
+    #[must_use]
+    pub fn new(name: SmolStr, variance: Variance) -> Self {
+        Self { name, variance }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Class
 // ---------------------------------------------------------------------------
 
@@ -71,18 +122,9 @@ pub enum Variance {
 /// no association-injected properties.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Class {
-    /// Type parameters (e.g., `["T", "U"]`).
-    pub type_parameters: Vec<SmolStr>,
-    /// Variance of each type parameter, position-aligned with
-    /// `type_parameters`. Default `Invariant` for empty / pre-existing
-    /// serialized blobs that don't carry this field
-    /// (`#[serde(default)]`). Populated from m3's
-    /// `^TypeParameter{contravariant: true}` instance form (Property /
-    /// Column / NewPropertyRouteNodeFunctionDefinition) and from the
-    /// surface `<-T>` / `<+T>` prefix syntax (path.pure's
-    /// `Path<-U,V|m>`).
-    #[serde(default)]
-    pub type_parameter_variances: Vec<Variance>,
+    /// Type parameters (e.g., `[T, U]`). Each carries its own
+    /// variance flag — see [`TypeParameter`].
+    pub type_parameters: Vec<TypeParameter>,
     /// Multiplicity parameters declared on a parametric class —
     /// `Class Holder<T|m>` carries one parameter named `m`. Position-
     /// aligned with use-site `TypeExpr::Named.multiplicity_arguments`
@@ -109,6 +151,18 @@ pub struct Class {
     pub stereotypes: Vec<StereotypeRef>,
     /// Tagged values.
     pub tagged_values: Vec<TaggedValueRef>,
+}
+
+impl Class {
+    /// Materialize the type-parameter declared names. The resolver
+    /// context (`ResolutionContext::type_parameters: &[SmolStr]`) is
+    /// the main consumer — it looks names up to bind type references
+    /// like `T` to `TypeExpr::Generic(T)` and doesn't care about
+    /// variance.
+    #[must_use]
+    pub fn type_parameter_names(&self) -> Vec<SmolStr> {
+        self.type_parameters.iter().map(|tp| tp.name.clone()).collect()
+    }
 }
 
 // ---------------------------------------------------------------------------

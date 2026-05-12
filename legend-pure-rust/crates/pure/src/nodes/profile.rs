@@ -14,6 +14,8 @@
 
 //! Compiled Profile node.
 
+use legend_pure_parser_ast::SourceInfo;
+use legend_pure_parser_ast::annotation::SpannedString;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
@@ -22,10 +24,33 @@ use smol_str::SmolStr;
 /// A profile declares stereotypes and tags that can be applied to
 /// elements, properties, and enum values via `<<profile.stereo>>`
 /// and `{profile.tag = 'value'}`.
+///
+/// Each declared name carries its own [`SpannedString::source_info`]
+/// so IDE goto-def can navigate from a use-site (`<<P.stereo>>`) to
+/// the declaration line. m3-bootstrap and snapshot-loaded profiles
+/// use a synthetic source — see [`BOOTSTRAP_SOURCE`] / the
+/// [`bootstrap_spanned_name`] constructor. The reference index
+/// recognises that sentinel and skips emitting entries for it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Profile {
-    /// Stereotype names declared by this profile.
-    pub stereotypes: Vec<SmolStr>,
-    /// Tag names declared by this profile.
-    pub tags: Vec<SmolStr>,
+    /// Stereotype declarations, each carrying its name + source span.
+    pub stereotypes: Vec<SpannedString>,
+    /// Tag declarations, each carrying its name + source span.
+    pub tags: Vec<SpannedString>,
+}
+
+/// Sentinel source name used by [`bootstrap_spanned_name`] for
+/// declarations whose span isn't tracked (m3 bootstrap, `.purem`
+/// snapshots without span data).
+pub const BOOTSTRAP_SOURCE: &str = "<bootstrap>";
+
+/// Build a [`SpannedString`] with the bootstrap sentinel source.
+/// Callers constructing Profiles outside the parser path use this
+/// to fill the `stereotypes` / `tags` lists with name-only entries.
+#[must_use]
+pub fn bootstrap_spanned_name(name: SmolStr) -> SpannedString {
+    SpannedString {
+        value: name,
+        source_info: SourceInfo::new(BOOTSTRAP_SOURCE, 0, 0, 0, 0),
+    }
 }

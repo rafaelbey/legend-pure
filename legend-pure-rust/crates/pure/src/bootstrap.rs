@@ -229,7 +229,6 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
     let any_node = alloc_node("Any");
     let any_elem = elements.alloc(Element::Class(Class {
         type_parameters: vec![],
-        type_parameter_variances: vec![],
         multiplicity_parameters: Vec::new(),
         type_variable_parameters: vec![],
         super_types: vec![], // Any has no supertype
@@ -246,7 +245,6 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
     let nil_node = alloc_node("Nil");
     let nil_elem = elements.alloc(Element::Class(Class {
         type_parameters: vec![],
-        type_parameter_variances: vec![],
         multiplicity_parameters: Vec::new(),
         type_variable_parameters: vec![],
         super_types: vec![], // Nil's subtype-of-all is handled by type checker

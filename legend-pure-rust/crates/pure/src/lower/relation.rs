@@ -97,6 +97,7 @@ pub(super) fn lower_column(
         type_arguments: vec![],
         multiplicity_arguments: Vec::new(),
         value_arguments: vec![],
+        source_info: None,
     };
     if e.is_array {
         return Some(typed(
