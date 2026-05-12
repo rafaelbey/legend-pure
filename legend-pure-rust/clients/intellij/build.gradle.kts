@@ -52,6 +52,15 @@ dependencies {
                 .map { it.split(",").map(String::trim).filter(String::isNotEmpty) },
         )
 
+        // Bundled IDE modules that aren't auto-resolved by
+        // `create(...)`. The DAP module ships inside the unified
+        // IDE distribution (`lib/modules/intellij.platform.dap.jar`)
+        // but its classes (`com.intellij.platform.dap.*`) aren't on
+        // the default plugin classpath — `bundledModule` adds them
+        // explicitly. `@ApiStatus.Experimental` in 2025.3; expect
+        // signature drift on upgrades.
+        bundledModule("intellij.platform.dap")
+
         // instrumentationTools() removed: bundled by default in IntelliJ
         // Platform Gradle Plugin 2.6+.
         pluginVerifier()
