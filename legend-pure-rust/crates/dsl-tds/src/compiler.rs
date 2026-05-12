@@ -184,6 +184,7 @@ fn walk_expression(expr: &Expression, model: &PureModel, errors: &mut Vec<Compil
         | Expression::Column(_)
         | Expression::PackageableElementRef(_)
         | Expression::TypeReferenceExpr(_)
+        | Expression::MultiplicityReferenceExpr(_)
         | Expression::UnitInstance(_)
         | Expression::Variable(_)
         | Expression::Literal(_) => {}

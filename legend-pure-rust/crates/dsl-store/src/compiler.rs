@@ -229,6 +229,7 @@ fn walk_expression(
         | Expression::Column(_)
         | Expression::PackageableElementRef(_)
         | Expression::TypeReferenceExpr(_)
+        | Expression::MultiplicityReferenceExpr(_)
         | Expression::UnitInstance(_)
         | Expression::Variable(_)
         | Expression::Literal(_) => {}

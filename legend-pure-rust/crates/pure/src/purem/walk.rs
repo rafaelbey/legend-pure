@@ -325,6 +325,9 @@ fn walk_expr_kind(kind: &mut ExprKind, visit: &mut dyn FnMut(&mut ElementId)) {
         ExprKind::TypeReference { type_expr } => {
             walk_type(type_expr, visit);
         }
+        ExprKind::MultiplicityReference { multiplicity } => {
+            walk_multiplicity(multiplicity, visit);
+        }
         ExprKind::PackageableElementRef { element } => {
             visit(element);
         }

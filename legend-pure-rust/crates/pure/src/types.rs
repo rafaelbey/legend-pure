@@ -474,6 +474,21 @@ pub enum ExprKind {
         type_expr: TypeExpr,
     },
 
+    /// Bare multiplicity literal expression: `@[1]`, `@[0..1]`, `@[1..*]`,
+    /// `@[*]`, or `@[m]` referencing a declared multiplicity parameter.
+    ///
+    /// Sibling to [`ExprKind::TypeReference`]. The lowered form carries
+    /// the resolved [`Multiplicity`] and the lowering sets
+    /// `type_info.multiplicity` to the same value (with `type_expr = Any`)
+    /// so dispatch can bind a parametric arg's multiplicity directly.
+    /// At runtime it materialises a
+    /// `meta::pure::metamodel::multiplicity::Multiplicity` heap object via
+    /// `build_multiplicity_wrapper`.
+    MultiplicityReference {
+        /// The resolved multiplicity (concrete or `Variable("name")`).
+        multiplicity: Multiplicity,
+    },
+
     // -- Element reference (bare) ------------------------------------------
     /// Bare element reference: `String`, `my::Enum`, `MyClass`.
     PackageableElementRef {

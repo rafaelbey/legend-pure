@@ -868,7 +868,7 @@ pub(crate) fn build_function_type_wrapper(
             ctx.heap_mut()
                 .mutate_add(&var_expr_obj, "genericType", &[Value::Object(p_gt)])?;
         }
-        let mult_obj = build_multiplicity_wrapper(ctx, &p.multiplicity)?;
+        let mult_obj = build_multiplicity_wrapper(ctx.heap_mut(), &p.multiplicity)?;
         ctx.heap_mut()
             .mutate_add(&var_expr_obj, "multiplicity", &[Value::Object(mult_obj)])?;
         param_objs.push(Value::Object(var_expr_obj));
@@ -888,7 +888,7 @@ pub(crate) fn build_function_type_wrapper(
             .mutate_add(&func_type_obj, "returnType", &[Value::Object(rt_gt)])?;
     }
     if let Some(rm) = return_mult {
-        let rm_obj = build_multiplicity_wrapper(ctx, &rm)?;
+        let rm_obj = build_multiplicity_wrapper(ctx.heap_mut(), &rm)?;
         ctx.heap_mut().mutate_add(
             &func_type_obj,
             "returnMultiplicity",
@@ -914,8 +914,8 @@ fn type_expr_to_element(ty: &legend_pure_parser_pure::types::TypeExpr) -> Option
 /// reads off lambda parameter / return signatures; richer fields
 /// (`name` for variable multiplicities, etc.) are not yet exposed.
 #[allow(clippy::result_large_err)]
-fn build_multiplicity_wrapper(
-    ctx: &mut dyn EvalContextTrait,
+pub(crate) fn build_multiplicity_wrapper(
+    heap: &mut crate::heap::RuntimeHeap,
     m: &legend_pure_parser_pure::types::Multiplicity,
 ) -> Result<crate::heap::ObjectHandle, PureException> {
     use legend_pure_parser_pure::types::Multiplicity as M;
@@ -927,22 +927,14 @@ fn build_multiplicity_wrapper(
         // ZeroOrMany and unbound variables: unbounded, zero or more
         M::ZeroOrMany | M::Variable(_) => (0, None),
     };
-    let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::MULTIPLICITY);
-    let lower_value = ctx
-        .heap_mut()
-        .alloc_dynamic(crate::m3_paths::MULTIPLICITY_VALUE);
-    ctx.heap_mut()
-        .mutate_add(&lower_value, "value", &[Value::Integer(lower)])?;
-    ctx.heap_mut()
-        .mutate_add(&obj, "lowerBound", &[Value::Object(lower_value)])?;
+    let obj = heap.alloc_dynamic(crate::m3_paths::MULTIPLICITY);
+    let lower_value = heap.alloc_dynamic(crate::m3_paths::MULTIPLICITY_VALUE);
+    heap.mutate_add(&lower_value, "value", &[Value::Integer(lower)])?;
+    heap.mutate_add(&obj, "lowerBound", &[Value::Object(lower_value)])?;
     if let Some(u) = upper {
-        let upper_value = ctx
-            .heap_mut()
-            .alloc_dynamic(crate::m3_paths::MULTIPLICITY_VALUE);
-        ctx.heap_mut()
-            .mutate_add(&upper_value, "value", &[Value::Integer(u)])?;
-        ctx.heap_mut()
-            .mutate_add(&obj, "upperBound", &[Value::Object(upper_value)])?;
+        let upper_value = heap.alloc_dynamic(crate::m3_paths::MULTIPLICITY_VALUE);
+        heap.mutate_add(&upper_value, "value", &[Value::Integer(u)])?;
+        heap.mutate_add(&obj, "upperBound", &[Value::Object(upper_value)])?;
     }
     Ok(obj)
 }

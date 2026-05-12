@@ -161,7 +161,10 @@ impl Class {
     /// variance.
     #[must_use]
     pub fn type_parameter_names(&self) -> Vec<SmolStr> {
-        self.type_parameters.iter().map(|tp| tp.name.clone()).collect()
+        self.type_parameters
+            .iter()
+            .map(|tp| tp.name.clone())
+            .collect()
     }
 }
 

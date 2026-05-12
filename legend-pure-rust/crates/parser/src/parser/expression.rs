@@ -22,10 +22,10 @@ use legend_pure_parser_ast::expression::{
     ArithmeticExpr, ArithmeticOp, ArrowFunction, BooleanLiteral, CollectionExpr, ComparisonExpr,
     ComparisonOp, CopyExpr, DateTimeLiteral, DecimalLiteral, Expression, FloatLiteral,
     FunctionApplication, IntegerLiteral, KeyValuePair, Lambda, LetExpr, Literal, LogicalExpr,
-    LogicalOp, MemberAccess, NavigationPath, NewInstanceExpr, NotExpr, PackageableElementRef,
-    PropertyPathElement, QualifiedMemberAccess, SimpleMemberAccess, SliceExpr, StrictDateLiteral,
-    StrictTimeLiteral, StringLiteral, TypeReferenceExpr, UnaryMinusExpr, UnitInstanceExpr,
-    Variable,
+    LogicalOp, MemberAccess, MultiplicityReferenceExpr, NavigationPath, NewInstanceExpr, NotExpr,
+    PackageableElementRef, PropertyPathElement, QualifiedMemberAccess, SimpleMemberAccess,
+    SliceExpr, StrictDateLiteral, StrictTimeLiteral, StringLiteral, TypeReferenceExpr,
+    UnaryMinusExpr, UnitInstanceExpr, Variable,
 };
 use legend_pure_parser_ast::island::IslandExpression;
 use legend_pure_parser_ast::source_info::Spanned;
@@ -610,9 +610,22 @@ impl Parser {
                     source_info: si,
                 }))
             }
-            // Cast: @Type
+            // Cast: `@Type` OR bare multiplicity literal: `@[m]`.
+            // Java grammar `M3CoreParser.g4:311 AT (type | multiplicity)`
+            // — peek the token after `@` to disambiguate.
             TokenKind::At => {
                 self.cursor.advance();
+                if self.cursor.check(TokenKind::LBracket) {
+                    self.cursor.advance();
+                    let multiplicity = self.parse_multiplicity_argument()?;
+                    self.cursor.expect(TokenKind::RBracket)?;
+                    return Ok(Expression::MultiplicityReferenceExpr(
+                        MultiplicityReferenceExpr {
+                            multiplicity,
+                            source_info: si,
+                        },
+                    ));
+                }
                 let type_ref = self.parse_type_spec()?;
                 Ok(Expression::TypeReferenceExpr(TypeReferenceExpr {
                     type_ref,

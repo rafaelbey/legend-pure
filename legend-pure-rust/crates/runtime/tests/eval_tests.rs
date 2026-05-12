@@ -4043,3 +4043,11 @@ fn precise_primitives_cast_numeric_exceeds_precision_violates_constraint() {
         "expected a constraint-violation error, got: {err}"
     );
 }
+
+// toMultiplicity (T-20260512-05) behaviour is fully specified by the
+// 11 `<<test.Test>>` functions in
+// `platform/pure/essential/lang/cast/toMultiplicity.pure`. The
+// stack-agnostic `eval_surveyor_root_strict_pass` test above already
+// gates `fail == 0 && error == 0` across every `<<test.Test>>` in the
+// model, which includes those. A dedicated Rust seam here would only
+// duplicate that signal.

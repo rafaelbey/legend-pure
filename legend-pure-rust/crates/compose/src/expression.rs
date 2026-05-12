@@ -24,9 +24,11 @@ use legend_pure_parser_ast::expression::{
     ArithmeticExpr, ArithmeticOp, ArrowFunction, BitwiseExpr, BitwiseNotExpr, BitwiseOp,
     CollectionExpr, ColumnBuilderExpr, ComparisonExpr, ComparisonOp, CopyExpr, Expression,
     FunctionApplication, Lambda, LetExpr, Literal, LogicalExpr, LogicalOp, MemberAccess,
-    NavigationPath, NewInstanceExpr, NotExpr, PackageableElementRef, SliceExpr, TypeReferenceExpr,
-    UnaryMinusExpr, Variable,
+    MultiplicityReferenceExpr, NavigationPath, NewInstanceExpr, NotExpr, PackageableElementRef,
+    SliceExpr, TypeReferenceExpr, UnaryMinusExpr, Variable,
 };
+
+use legend_pure_parser_ast::type_ref::MultiplicityArgument;
 
 use legend_pure_parser_ast::type_ref::{RELATION_TYPE_SENTINEL, TypeReference};
 
@@ -157,6 +159,7 @@ fn compose_expression_prec(
         Expression::MemberAccess(e) => compose_member_access(w, e),
         Expression::PackageableElementRef(e) => compose_element_ref(w, e),
         Expression::TypeReferenceExpr(e) => compose_type_reference_expr(w, e),
+        Expression::MultiplicityReferenceExpr(e) => compose_multiplicity_reference_expr(w, e),
         Expression::Lambda(e) => compose_lambda(w, e),
         Expression::Let(e) => compose_let(w, e),
         Expression::Collection(e) => compose_collection(w, e),
@@ -369,6 +372,36 @@ fn compose_member_access(w: &mut IndentWriter, e: &MemberAccess) {
 fn compose_type_reference_expr(w: &mut IndentWriter, e: &TypeReferenceExpr) {
     w.write("@");
     crate::type_ref::compose_type_spec(w, &e.type_ref);
+}
+
+/// Renders a bare multiplicity literal: `@[1]`, `@[0..1]`, `@[1..*]`,
+/// `@[*]`, or `@[name]`. Mirrors `compose_type_reference_expr` for the
+/// `AT (type | multiplicity)` grammar alternation.
+fn compose_multiplicity_reference_expr(w: &mut IndentWriter, e: &MultiplicityReferenceExpr) {
+    w.write("@[");
+    match &e.multiplicity {
+        MultiplicityArgument::Identifier(name, _) => w.write(name.as_str()),
+        MultiplicityArgument::Concrete(m, _) => {
+            use legend_pure_parser_ast::type_ref::Multiplicity as M;
+            match m {
+                M::PureOne => w.write("1"),
+                M::ZeroOrOne => w.write("0..1"),
+                M::ZeroOrMany => w.write("*"),
+                M::OneOrMany => w.write("1..*"),
+                M::Range {
+                    lower,
+                    upper: Some(u),
+                } if lower == u => w.write(&format!("{lower}")),
+                M::Range {
+                    lower,
+                    upper: Some(u),
+                } => w.write(&format!("{lower}..{u}")),
+                M::Range { lower, upper: None } => w.write(&format!("{lower}..*")),
+                M::Variable(name) => w.write(name.as_str()),
+            }
+        }
+    }
+    w.write("]");
 }
 
 // ---------------------------------------------------------------------------

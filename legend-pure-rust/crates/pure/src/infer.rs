@@ -508,6 +508,21 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
             multiplicity: Multiplicity::PureOne,
         }),
 
+        // -- Multiplicity reference -----------------------------------------
+        // `@[m]` already has eager `type_info = Any[m]` set at lowering
+        // time (`lower_multiplicity_reference`); pass through whatever
+        // the lowering pinned. Fallback for safety only.
+        ExprKind::MultiplicityReference { multiplicity } => Some(ResolvedType {
+            type_expr: TypeExpr::Named {
+                element: bootstrap::ANY_ID,
+                type_arguments: vec![],
+                multiplicity_arguments: vec![],
+                value_arguments: vec![],
+                source_info: None,
+            },
+            multiplicity: multiplicity.clone(),
+        }),
+
         // -- Element reference ----------------------------------------------
         //
         // A bare element reference's *type* is its M3 metatype, not

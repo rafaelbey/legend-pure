@@ -278,6 +278,7 @@ fn refine_in_expr_kind<'a>(best: &mut Located<'a>, cursor: Cursor, kind: &'a Exp
         | ExprKind::Variable { .. }
         | ExprKind::EnumValue { .. }
         | ExprKind::TypeReference { .. }
+        | ExprKind::MultiplicityReference { .. }
         | ExprKind::PackageableElementRef { .. }
         | ExprKind::Column
         | ExprKind::RelationLiteral { .. }

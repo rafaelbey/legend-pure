@@ -448,6 +448,31 @@ pub fn convert_expression_typed(
             })
         }
 
+        // -- Multiplicity reference: `@[m]` → placeholder shape ---------
+        //
+        // TODO(protocol-multiplicity-literal): upstream Java protocol-v1
+        // doesn't define a dedicated value-spec shape for bare-multiplicity
+        // literals (the Java parser elaborates `@[m]` to a `Multiplicity`
+        // instance via `MultiplicityInstance.createPersistent`, then the
+        // serializer encodes it depending on context). Until we settle on
+        // a faithful shape, emit a `Var` named `@[<m>]` so the JSON is
+        // structurally valid and protocol→AST round-tripping (if attempted)
+        // fails loudly rather than silently corrupting. Compose-side
+        // round-trip (Pure → AST → Pure) is unaffected — it doesn't go
+        // through this conversion.
+        Expression::MultiplicityReferenceExpr(e) => {
+            // `MultiplicityArgument`'s Display emits "1", "0..1", "*", or
+            // the parameter name — no surrounding brackets, so we wrap
+            // them here.
+            ValueSpecification::Var(Variable {
+                name: format!("@[{}]", e.multiplicity),
+                generic_type: None,
+                multiplicity: None,
+                supports_stream: None,
+                source_information: source_information(&e.source_info),
+            })
+        }
+
         // -- Lambda --
         Expression::Lambda(e) => ValueSpecification::Lambda(LambdaFunction {
             body: e.body.iter().map(convert_expression_typed).collect(),
