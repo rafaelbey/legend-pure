@@ -3640,9 +3640,24 @@ fn eval_surveyor_root_strict_pass() {
     // counts are not asserted: pass count drifts naturally as new tests
     // land, and skips are intentional (manifest exclusions or
     // representational gaps). If this turns red, fix the underlying tests.
+    //
+    // The relational-store extension and its DSL populators are wired
+    // here because the platform now ships `<<test.Test>>` functions
+    // under `meta::relational::tests::*` that exercise `executeInDb`
+    // and friends; without the extension these would error at native
+    // dispatch.
     let model = compile_with_platform("");
-    let registry = NativeRegistry::standard();
+    let relational_ext = legend_pure_store_relational_runtime::RelationalStoreExtension;
+    let registry = NativeRegistry::with_extensions(&[&relational_ext]);
     let mut evaluator = Evaluator::new(&model, &registry);
+    let mapping_pop = legend_pure_dsl_mapping_runtime::MappingDSLPopulator;
+    let db_pop = legend_pure_dsl_relational_runtime::RelationalDatabaseDSLPopulator;
+    let cm_pop = legend_pure_dsl_relational_runtime::RelationalClassMappingDSLPopulator;
+    legend_pure_runtime::dsl::run_populators(
+        &model,
+        evaluator.heap_mut(),
+        &[&mapping_pop, &db_pop, &cm_pop],
+    );
 
     let report = evaluator
         .call(

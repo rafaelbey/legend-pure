@@ -214,6 +214,44 @@ impl<'model> Evaluator<'model, NoOpHooks> {
         Self::new(model, registry)
     }
 
+    /// Build an evaluator with both `RuntimeExtension`-contributed
+    /// natives *and* DSL-instance populators.
+    ///
+    /// Combines [`new_default_with_extensions`] (custom native registry)
+    /// and [`new_default_with_dsl_populators`] (populated DSL heap rows).
+    /// Use this when test sources mix `###Relational` Database
+    /// declarations with native calls into a store extension — the
+    /// natives need their registry, the Database needs its populator.
+    ///
+    /// Each call allocates and leaks a fresh `NativeRegistry`. Use only
+    /// at startup or in tests; for production paths with a stable
+    /// extension set, prefer pre-building the registry and reusing it
+    /// via [`Evaluator::new`] + a follow-up `run_populators` call.
+    ///
+    /// [`new_default_with_extensions`]: Evaluator::new_default_with_extensions
+    /// [`new_default_with_dsl_populators`]: Evaluator::new_default_with_dsl_populators
+    #[must_use]
+    pub fn new_default_with_extensions_and_populators(
+        model: &'model PureModel,
+        extensions: &[&dyn RuntimeExtension],
+        populators: &[&dyn crate::dsl::DSLPopulator],
+    ) -> Self {
+        let registry: &'static NativeRegistry =
+            Box::leak(Box::new(NativeRegistry::with_extensions(extensions)));
+        let mut heap = RuntimeHeap::new();
+        heap.bootstrap_metamodel(model);
+        crate::dsl::run_populators(model, &mut heap, populators);
+        Self {
+            model,
+            heap,
+            context: VariableContext::new(),
+            natives: registry,
+            member_wrapper_cache: HashMap::new(),
+            extensions: ExtensionStateStore::new(),
+            hooks: NoOpHooks,
+        }
+    }
+
     /// Build an evaluator that also runs DSL-instance populators
     /// after the standard metamodel bootstrap.
     ///

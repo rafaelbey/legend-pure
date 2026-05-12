@@ -37,3 +37,8 @@ duckdb = { version = "1.4", features = ["bundled"] }
 # End-to-end smoke tests compile synthetic user Pure source against
 # the full platform model (including `platform_store_relational`).
 legend-pure-core-platform = { path = "../core-platform-pure" }
+# DSL populators — `pure_tests.rs` runs `<<test.Test>>` functions that
+# use `###Relational` Database declarations, which need their heap rows
+# hydrated for reflective navigation to work.
+legend-pure-dsl-mapping-runtime = { path = "../dsl-mapping-runtime" }
+legend-pure-dsl-relational-runtime = { path = "../dsl-relational-runtime" }

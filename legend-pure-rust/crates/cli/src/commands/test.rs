@@ -321,11 +321,24 @@ fn run_once(
     let relational_ext = legend_pure_store_relational_runtime::RelationalStoreExtension;
     let registry = NativeRegistry::with_extensions(&[&relational_ext]);
 
+    // DSL populators hydrate `Element::DSLInstance` heap rows (e.g. the
+    // Database/Schema/Table chain a `###Relational` block produces) so
+    // Pure tests can navigate them reflectively. Without this wiring,
+    // `let tbl = mydb.schemas->at(0).tables->at(0)` returns empty.
+    let mapping_pop = legend_pure_dsl_mapping_runtime::MappingDSLPopulator;
+    let database_pop =
+        legend_pure_dsl_relational_runtime::RelationalDatabaseDSLPopulator;
+    let class_mapping_pop =
+        legend_pure_dsl_relational_runtime::RelationalClassMappingDSLPopulator;
+    let populators: &[&dyn legend_pure_runtime::dsl::DSLPopulator] =
+        &[&mapping_pop, &database_pop, &class_mapping_pop];
+
     if args.coverage {
         // Coverage path — use CoverageHooks.
         let mut hooks = CoverageHooks::new(args.coverage_filter.clone());
         hooks.map_mut().populate_coverable(&model);
         let mut evaluator = Evaluator::with_hooks(&model, &registry, hooks);
+        legend_pure_runtime::dsl::run_populators(&model, evaluator.heap_mut(), populators);
 
         let (report, fail) = run_tests(&model, &mut evaluator, args)?;
         match args.format {
@@ -367,6 +380,7 @@ fn run_once(
     } else {
         // Production path — zero-overhead NoOpHooks.
         let mut evaluator = Evaluator::new(&model, &registry);
+        legend_pure_runtime::dsl::run_populators(&model, evaluator.heap_mut(), populators);
         let (report, fail) = run_tests(&model, &mut evaluator, args)?;
         match args.format {
             TestFormat::Pretty => report.render(&model, args.show_detail),
