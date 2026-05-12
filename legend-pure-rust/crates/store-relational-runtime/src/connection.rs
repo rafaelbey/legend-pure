@@ -92,6 +92,80 @@ pub fn map_duckdb_err(e: duckdb::Error) -> PureException {
     PureRuntimeError::EvaluationError(format!("DuckDB error: {e}")).into()
 }
 
+// ---------------------------------------------------------------------------
+// H2 — PostgreSQL-wire over a Java sub-process
+// ---------------------------------------------------------------------------
+
+/// Lazily-initialised per-Evaluator H2 state.
+///
+/// Mirrors [`DuckDBState`] in shape — a `RefCell<…>` around the
+/// engine-specific client because the underlying handle isn't `Sync`.
+/// Unlike DuckDB, the heavy lifting (spawning the JVM that hosts H2)
+/// happens process-wide in [`crate::h2_server::ensure_started`]; what
+/// this per-Evaluator state owns is just a `postgres::Client` against
+/// that shared server with a unique `mem:<uuid>` database name.
+///
+/// Two evaluators on the same process get logically independent
+/// databases via different UUIDs; closing the client drops the H2
+/// in-memory DB once H2 garbage-collects unreferenced mem DBs.
+pub struct H2State {
+    client: RefCell<postgres::Client>,
+    /// Logical H2 database name (`"mem:eval_<uuid>"`). Public for
+    /// diagnostics — drop it into error messages so cross-evaluator
+    /// confusion is impossible.
+    pub db_name: String,
+}
+
+impl H2State {
+    /// Open a fresh PG-wire client against the shared H2 server,
+    /// targeting a unique `mem:eval_<uuid>` logical database.
+    ///
+    /// Spawns the H2 sub-process if it's not already running (see
+    /// [`crate::h2_server::ensure_started`]).
+    ///
+    /// # Errors
+    /// Returns a [`PureException`] when the H2 server fails to start
+    /// or the PG client cannot connect.
+    pub fn new(cfg: &crate::config::H2Config) -> Result<Self, PureException> {
+        let server = crate::h2_server::ensure_started(cfg)?;
+        let db_name = format!("mem:eval_{}", uuid::Uuid::new_v4().simple());
+        // URL form, not libpq key=value: H2's PG-wire server treats
+        // colons in `dbname=...` poorly through the libpq path, but
+        // accepts them fine in a postgresql:// URL. Empty password
+        // between `:` and `@` matches H2's SA user (no password).
+        let conn_str = format!("postgresql://sa:@127.0.0.1:{}/{}", server.pg_port, db_name);
+        let client =
+            postgres::Client::connect(&conn_str, postgres::NoTls).map_err(map_postgres_err)?;
+        Ok(Self {
+            client: RefCell::new(client),
+            db_name,
+        })
+    }
+
+    /// Run a closure against the inner [`postgres::Client`].
+    ///
+    /// Borrows mutably under the hood (the `postgres` API needs
+    /// `&mut Client` for `query`/`execute`). Concurrent calls on the
+    /// same `H2State` aren't possible — evaluator dispatch is
+    /// single-threaded.
+    ///
+    /// # Errors
+    /// Propagates whatever the closure returns, mapped to
+    /// [`PureException`] via [`map_postgres_err`].
+    pub fn with_client<R, F>(&self, f: F) -> Result<R, PureException>
+    where
+        F: FnOnce(&mut postgres::Client) -> Result<R, postgres::Error>,
+    {
+        f(&mut self.client.borrow_mut()).map_err(map_postgres_err)
+    }
+}
+
+/// Lift a [`postgres::Error`] into a [`PureException`] with a stable
+/// prefix, mirroring [`map_duckdb_err`].
+pub fn map_postgres_err(e: postgres::Error) -> PureException {
+    PureRuntimeError::EvaluationError(format!("H2 (PG-wire) error: {e}")).into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

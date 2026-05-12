@@ -53,9 +53,10 @@ pub mod config;
 pub mod connection;
 pub mod dispatch;
 pub mod extension;
+pub mod h2_server;
 pub mod natives;
 pub mod resultset;
 
-pub use config::{H2Config, H2ConfigError};
-pub use connection::DuckDBState;
+pub use config::{H2Config, H2ConfigError, H2EnvOverrides};
+pub use connection::{DuckDBState, H2State};
 pub use extension::RelationalStoreExtension;
