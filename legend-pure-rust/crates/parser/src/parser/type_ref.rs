@@ -45,7 +45,9 @@ impl Parser {
         // outside the recorded span and goto silently no-ops.
         let start = self.cursor.current_source_info();
         let path = self.parse_package_path()?;
-        let fqn_span = start.merge(legend_pure_parser_ast::source_info::Spanned::source_info(&path));
+        let fqn_span = start.merge(legend_pure_parser_ast::source_info::Spanned::source_info(
+            &path,
+        ));
         let (pkg, name) = split_package_name(&path);
         self.finish_type_reference(fqn_span, pkg, name)
     }
@@ -294,7 +296,9 @@ impl Parser {
         // property type (`prop: abc::Class1[1]`) silently no-ops
         // because the recorded ref span only covers `abc`. Mirrors
         // the same fix in `parse_type_reference` (commit 96a690e4edf).
-        let fqn_span = start.merge(legend_pure_parser_ast::source_info::Spanned::source_info(&path));
+        let fqn_span = start.merge(legend_pure_parser_ast::source_info::Spanned::source_info(
+            &path,
+        ));
         let (pkg, name) = split_package_name(&path);
         let type_ref = self.finish_type_reference(fqn_span, pkg, name)?;
 

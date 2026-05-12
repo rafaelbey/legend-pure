@@ -53,12 +53,9 @@ pub fn run(args: DapArgs, classpath_override: Option<&std::path::Path>) -> Resul
         .map_err(|e| CliError::Custom(format!("failed to resolve classpath: {e}")))?;
 
     let mut config = DapConfig::from_repos(resolved.repos);
-    config.auto_imports.extend(
-        resolved
-            .extra_auto_imports
-            .iter()
-            .cloned(),
-    );
+    config
+        .auto_imports
+        .extend(resolved.extra_auto_imports.iter().cloned());
     config.log_level = args.log_level;
 
     legend_pure_dap::run(config).map_err(|e| CliError::Custom(format!("dap server error: {e}")))

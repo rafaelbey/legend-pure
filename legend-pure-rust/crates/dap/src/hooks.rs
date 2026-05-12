@@ -27,7 +27,7 @@
 //!      the user's code wrote.
 
 use crate::protocol::{Event, OutputEventBody, ServerMessage, StoppedEventBody};
-use crate::session::{DapCommand, FrameInfo, HookWiring, PauseSnapshot, MAIN_THREAD_ID};
+use crate::session::{DapCommand, FrameInfo, HookWiring, MAIN_THREAD_ID, PauseSnapshot};
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_runtime::context::VariableContext;
 use legend_pure_runtime::debug::StepMode;
@@ -109,9 +109,10 @@ impl DapHooks {
             return false;
         }
         if let Some(target) = self.step_target
-            && self.depth <= target {
-                return true;
-            }
+            && self.depth <= target
+        {
+            return true;
+        }
         let runtime_src = source.source.as_str();
         let state = match self.wiring.state.lock() {
             Ok(g) => g,
@@ -154,15 +155,23 @@ impl DapHooks {
         } else {
             "breakpoint".to_string()
         };
-        self.write_event(seq, "stopped", StoppedEventBody {
-            reason,
-            thread_id: Some(MAIN_THREAD_ID),
-            all_threads_stopped: true,
-            text: None,
-        });
+        self.write_event(
+            seq,
+            "stopped",
+            StoppedEventBody {
+                reason,
+                thread_id: Some(MAIN_THREAD_ID),
+                all_threads_stopped: true,
+                text: None,
+            },
+        );
         // Block until told to resume.
         self.step_target = None;
-        let command = self.wiring.commands_rx.recv().unwrap_or(DapCommand::Terminate);
+        let command = self
+            .wiring
+            .commands_rx
+            .recv()
+            .unwrap_or(DapCommand::Terminate);
         if matches!(command, DapCommand::Terminate) {
             self.terminating = true;
         }
@@ -207,11 +216,10 @@ impl EvalHooks for DapHooks {
         // any future breakpoint match on the original line should
         // fire again (e.g. a loop body re-entering the line).
         if let Some((prev_src, prev_line)) = self.last_paused_at.as_ref()
-            && (*prev_line != source.start_line
-                || !path_match(prev_src, source.source.as_str()))
-            {
-                self.last_paused_at = None;
-            }
+            && (*prev_line != source.start_line || !path_match(prev_src, source.source.as_str()))
+        {
+            self.last_paused_at = None;
+        }
         if !self.should_pause(source) {
             return;
         }
@@ -262,10 +270,14 @@ impl EvalHooks for DapHooks {
             };
             state.next_seq()
         };
-        self.write_event(seq, "output", OutputEventBody {
-            category: "stdout".to_string(),
-            output: msg.to_string(),
-        });
+        self.write_event(
+            seq,
+            "output",
+            OutputEventBody {
+                category: "stdout".to_string(),
+                output: msg.to_string(),
+            },
+        );
     }
 }
 

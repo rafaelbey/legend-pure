@@ -58,11 +58,7 @@ pub trait EvalHooks {
     /// pausing. For `NoOpHooks` the parameter monomorphizes away
     /// (the function body is empty), so there is no overhead for
     /// production builds.
-    fn before_eval(
-        &mut self,
-        source: &SourceInfo,
-        context: &crate::context::VariableContext,
-    );
+    fn before_eval(&mut self, source: &SourceInfo, context: &crate::context::VariableContext);
 
     /// Called after evaluating an expression, with the result.
     ///
@@ -116,12 +112,7 @@ pub struct NoOpHooks;
 
 impl EvalHooks for NoOpHooks {
     #[inline(always)]
-    fn before_eval(
-        &mut self,
-        _source: &SourceInfo,
-        _context: &crate::context::VariableContext,
-    ) {
-    }
+    fn before_eval(&mut self, _source: &SourceInfo, _context: &crate::context::VariableContext) {}
 
     #[inline(always)]
     fn after_eval(&mut self, _source: &SourceInfo, _result: &Value) {}

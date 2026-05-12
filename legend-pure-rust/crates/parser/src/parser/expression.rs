@@ -17,7 +17,6 @@ use super::R;
 use super::{ParserContext, split_package_name, unquote_string};
 use crate::error::ParseError;
 use legend_pure_parser_ast::SourceInfo;
-use legend_pure_parser_ast::source_info::Spanned;
 use legend_pure_parser_ast::annotation::{PackageableElementPtr, Parameter};
 use legend_pure_parser_ast::expression::{
     ArithmeticExpr, ArithmeticOp, ArrowFunction, BooleanLiteral, CollectionExpr, ComparisonExpr,
@@ -29,6 +28,7 @@ use legend_pure_parser_ast::expression::{
     Variable,
 };
 use legend_pure_parser_ast::island::IslandExpression;
+use legend_pure_parser_ast::source_info::Spanned;
 use legend_pure_parser_ast::type_ref::Package;
 use legend_pure_parser_lexer::TokenKind;
 use smol_str::SmolStr;
@@ -545,7 +545,9 @@ impl Parser {
                 // `PackageableElementRef` carries a near-zero-width span
                 // and Cmd-click on `Class1` inside `^abc::Class1()` falls
                 // outside the index's recorded region.
-                let class_span = si.merge(legend_pure_parser_ast::source_info::Spanned::source_info(&path));
+                let class_span = si.merge(
+                    legend_pure_parser_ast::source_info::Spanned::source_info(&path),
+                );
                 let class_ref = PackageableElementPtr {
                     package: pkg,
                     name,
@@ -754,7 +756,9 @@ impl Parser {
                 // every segment. Without this, the `si` we'd inherit
                 // is just the position before the path — a single-
                 // token span. Mirrors the merge done for type refs.
-                let fqn_span = si.merge(legend_pure_parser_ast::source_info::Spanned::source_info(&path));
+                let fqn_span = si.merge(legend_pure_parser_ast::source_info::Spanned::source_info(
+                    &path,
+                ));
                 if self.cursor.check(TokenKind::LParen) {
                     // Function call: name(args)
                     self.cursor.advance();
