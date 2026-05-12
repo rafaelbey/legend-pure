@@ -136,3 +136,30 @@ fn load_values_to_db_table_inserts_rows_passes() {
     let v = run_test_fn(&model, "testLoadValuesToDbTableInsertsRows__Boolean_1_").expect("ran");
     assert_eq!(v, Value::Boolean(true));
 }
+
+// H2-targeted Pure tests. These require `LEGEND_PURE_H2_JAR` (or
+// `[extension.relational.h2]` in legend-pure-classpath.toml) at run
+// time. There is intentionally no skip-on-missing-jar guard here —
+// the platform root surveyor also runs these and demands strict
+// pass, so the configuration is mandatory for this repo.
+
+#[test]
+fn execute_in_h2_passes() {
+    let model = build_model();
+    let v = run_test_fn(&model, "testExecuteInH2__Boolean_1_").expect("ran");
+    assert_eq!(v, Value::Boolean(true));
+}
+
+#[test]
+fn execute_in_h2_varchar_roundtrip_passes() {
+    let model = build_model();
+    let v = run_test_fn(&model, "testExecuteInH2VarcharRoundtrip__Boolean_1_").expect("ran");
+    assert_eq!(v, Value::Boolean(true));
+}
+
+#[test]
+fn create_temp_table_in_h2_passes() {
+    let model = build_model();
+    let v = run_test_fn(&model, "testCreateTempTableInH2__Boolean_1_").expect("ran");
+    assert_eq!(v, Value::Boolean(true));
+}

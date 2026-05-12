@@ -83,6 +83,15 @@ pub fn run_sql_to_result_set_duckdb(
 /// and build a populated `ResultSet` heap object. The H2 counterpart
 /// of [`run_sql_to_result_set_duckdb`]; same shape, different engine.
 ///
+/// Uses `Client::simple_query` (PG **simple** protocol, text-only
+/// values) instead of `query` (extended protocol, binary). H2's
+/// PG-wire implementation supports binary encoding only for a
+/// limited subset of types (INT, FLOAT, NUMERIC, TIMESTAMP) — a
+/// VARCHAR/CHAR/TEXT result through binary mode errors out with
+/// `"output binary format is undefined"`. Simple-protocol text mode
+/// works for every type H2 produces; we parse the text representation
+/// per column type in [`cell_to_value_pg_text`].
+///
 /// # Errors
 /// Propagates H2 (PG-wire) errors mapped to [`PureException`] via
 /// [`crate::connection::map_postgres_err`].
@@ -90,6 +99,8 @@ pub fn run_sql_to_result_set_h2(
     ctx: &mut dyn EvalContextTrait,
     sql: &str,
 ) -> Result<Value, PureException> {
+    use postgres::SimpleQueryMessage;
+
     let sql_null_handle = ctx.heap_mut().alloc_dynamic(m3_paths::RELATIONAL_SQL_NULL);
     let null_cell = Value::Object(sql_null_handle);
 
@@ -99,20 +110,29 @@ pub fn run_sql_to_result_set_h2(
             .extensions()
             .get_or_init::<H2State, _>(H2State::from_global_config)?;
         state.with_client(|c| {
-            // For an empty query (e.g. DDL surfacing through this path
-            // by accident), `query` is still well-defined and returns
-            // zero rows + the projection's column metadata.
-            let pg_rows = c.query(sql, &[])?;
-            let column_names: Vec<String> = pg_rows
-                .first()
-                .map(|r| r.columns().iter().map(|c| c.name().to_string()).collect())
+            let messages = c.simple_query(sql)?;
+            // Find the RowDescription via the first SimpleQueryRow's
+            // columns; CommandComplete messages don't carry column
+            // metadata. Empty result-sets leave column_names empty
+            // (the surveyor doesn't read them anyway in that case).
+            let column_names: Vec<String> = messages
+                .iter()
+                .find_map(|m| match m {
+                    SimpleQueryMessage::Row(r) => {
+                        Some(r.columns().iter().map(|c| c.name().to_string()).collect())
+                    }
+                    _ => None,
+                })
                 .unwrap_or_default();
             let col_count = column_names.len();
-            let mut all_rows: Vec<Vec<Value>> = Vec::with_capacity(pg_rows.len());
-            for row in &pg_rows {
+            let mut all_rows: Vec<Vec<Value>> = Vec::new();
+            for msg in &messages {
+                let SimpleQueryMessage::Row(row) = msg else {
+                    continue;
+                };
                 let mut row_values: Vec<Value> = Vec::with_capacity(col_count);
                 for i in 0..col_count {
-                    row_values.push(cell_to_value_pg(row, i, &null_cell));
+                    row_values.push(cell_to_value_pg_text(row.get(i), &null_cell));
                 }
                 all_rows.push(row_values);
             }
@@ -123,64 +143,51 @@ pub fn run_sql_to_result_set_h2(
     build(ctx, &column_names, rows, elapsed_ns)
 }
 
-/// Read one cell from a PG-wire row.
+/// Decode a PG simple-query cell from text representation.
 ///
-/// Covers the primitive types H2 surfaces by default through PG-wire
-/// (bool, ints, floats, text, bytea). NUMERIC and date/time types
-/// fall through to a string representation in v1 — the `postgres`
-/// crate's typed-decoding for those requires extra feature flags
-/// (`with-time-0_3` / a decimal feature) we haven't pulled in. The
-/// fallback path is documented; growing the table is a follow-up.
-fn cell_to_value_pg(row: &postgres::Row, idx: usize, null_cell: &Value) -> Value {
-    use postgres::types::Type;
-    let col = &row.columns()[idx];
-    let pg_type = col.type_();
-    match *pg_type {
-        Type::BOOL => match row.try_get::<_, Option<bool>>(idx) {
-            Ok(Some(b)) => Value::Boolean(b),
-            _ => null_cell.clone(),
-        },
-        Type::INT2 => match row.try_get::<_, Option<i16>>(idx) {
-            Ok(Some(i)) => Value::Integer(i64::from(i)),
-            _ => null_cell.clone(),
-        },
-        Type::INT4 => match row.try_get::<_, Option<i32>>(idx) {
-            Ok(Some(i)) => Value::Integer(i64::from(i)),
-            _ => null_cell.clone(),
-        },
-        Type::INT8 => match row.try_get::<_, Option<i64>>(idx) {
-            Ok(Some(i)) => Value::Integer(i),
-            _ => null_cell.clone(),
-        },
-        Type::FLOAT4 => match row.try_get::<_, Option<f32>>(idx) {
-            Ok(Some(f)) => Value::Float(f64::from(f)),
-            _ => null_cell.clone(),
-        },
-        Type::FLOAT8 => match row.try_get::<_, Option<f64>>(idx) {
-            Ok(Some(f)) => Value::Float(f),
-            _ => null_cell.clone(),
-        },
-        Type::VARCHAR | Type::TEXT | Type::BPCHAR | Type::NAME => {
-            match row.try_get::<_, Option<&str>>(idx) {
-                Ok(Some(s)) => Value::String(SmolStr::new(s)),
-                _ => null_cell.clone(),
-            }
-        }
-        Type::BYTEA => match row.try_get::<_, Option<&[u8]>>(idx) {
-            Ok(Some(b)) => {
-                use std::fmt::Write;
-                let mut s = String::with_capacity(b.len() * 2);
-                for byte in b {
-                    let _ = write!(&mut s, "{byte:02x}");
-                }
-                Value::String(SmolStr::new(s))
-            }
-            _ => null_cell.clone(),
-        },
-        // Composite / not-yet-typed: stringify the PG type name. Same
-        // permissive treatment as the DuckDB cell_to_value's catchall.
-        _ => Value::String(SmolStr::new(format!("<{pg_type}>"))),
+/// The simple-query protocol doesn't expose per-column type OIDs
+/// through the `postgres` crate (`SimpleColumn` only carries the
+/// name), so we heuristic-parse:
+/// 1. `None` → `null_cell` (SQL NULL).
+/// 2. Parses cleanly as `i64` → `Value::Integer`.
+/// 3. Parses cleanly as `f64` (and isn't already int) → `Value::Float`.
+/// 4. Matches a bool literal (`true`/`false`/`t`/`f`/`TRUE`/`FALSE`)
+///    → `Value::Boolean`.
+/// 5. Otherwise → `Value::String`.
+///
+/// This gives Pure callers the same value types they'd see from
+/// DuckDB for the common scalar shapes — `assertEquals(2, ...)`
+/// against a `count(*)` result matches; a `'hello'` VARCHAR column
+/// surfaces as `Value::String("hello")`.
+///
+/// Trade-off: a user inserting the literal text `"123"` into a
+/// VARCHAR column reads it back as `Value::Integer(123)` here, while
+/// DuckDB (binary protocol with type info) returns `Value::String`.
+/// Worth the trade for now; tighter typing (e.g. via a prepared-
+/// statement column-type peek) is tracked in BACKLOG.
+fn cell_to_value_pg_text(cell_text: Option<&str>, null_cell: &Value) -> Value {
+    let Some(text) = cell_text else {
+        return null_cell.clone();
+    };
+    // Try integer first — `"123"` is unambiguous.
+    if let Ok(i) = text.parse::<i64>() {
+        return Value::Integer(i);
     }
+    // Then float — `"1.5"` and `"1e3"` parse via this branch but not
+    // by `i64::parse`. Reject NaN/Inf to keep semantics tight.
+    if let Ok(f) = text.parse::<f64>()
+        && f.is_finite()
+    {
+        return Value::Float(f);
+    }
+    // Bool literal recognition.
+    match text {
+        "true" | "TRUE" | "t" => return Value::Boolean(true),
+        "false" | "FALSE" | "f" => return Value::Boolean(false),
+        _ => {}
+    }
+    // Fallback: raw text.
+    Value::String(SmolStr::new(text))
 }
 
 /// Build a `ResultSet` heap row populated from a freshly-fetched
