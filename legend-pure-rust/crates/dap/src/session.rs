@@ -29,7 +29,7 @@
 
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_runtime::debug::StepMode;
-use smol_str::SmolStr;
+use legend_pure_runtime::display::DisplayTree;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -91,19 +91,21 @@ impl SessionState {
 /// `Value` is intentionally not stored here — the runtime's
 /// `Value` carries `Rc<RefCell<…>>` heap handles and is therefore
 /// not `Send`, which would prevent us from sharing the snapshot
-/// across the eval thread / server thread boundary. The hook
-/// renders values to display strings on the eval thread at pause
-/// time and stores the rendered text only.
+/// across the eval thread / server thread boundary. The hook drives
+/// the `legend_pure_runtime::display` renderer to materialize a
+/// fully-owned [`DisplayTree`] on the eval thread at pause time; the
+/// server thread serves `variables(reference)` lookups against that
+/// tree.
 #[derive(Debug, Clone)]
 pub struct PauseSnapshot {
     /// Captured call stack as `(function_name, source_path, line,
     /// column)` rows. Innermost-last; the DAP `stackTrace` handler
     /// reverses on render.
     pub frames: Vec<FrameInfo>,
-    /// Flat snapshot of locals rendered to display strings at pause
-    /// time. The same list serves every `variables`-on-Locals
-    /// request until the eval thread resumes.
-    pub locals: Vec<(SmolStr, String)>,
+    /// Rendered JSON-shaped variable tree. `tree.root` is the locals
+    /// scope's `variablesReference`; container nodes carry their own
+    /// child refs for lazy expansion.
+    pub tree: DisplayTree,
     /// Source position the eval loop was about to evaluate when it
     /// hit the breakpoint.
     pub source: SourceInfo,

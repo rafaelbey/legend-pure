@@ -321,10 +321,23 @@ pub struct VariablesResponse {
 pub struct Variable {
     pub name: String,
     pub value: String,
-    /// `0` if the variable doesn't have nested structure visible to
-    /// the debugger. Nested expansion of `Value::Object` is a
-    /// Phase 4 item.
+    /// Pure type + multiplicity label (`Integer[1]`,
+    /// `abc::Class1[1]`). Populates the IDE's Type column. Omitted
+    /// from the wire when the renderer could not recover a stable
+    /// label (rare).
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub r#type: Option<String>,
+    /// `0` if the variable is a leaf with no expandable children;
+    /// otherwise the DAP child reference for the `variables(ref)`
+    /// follow-up request.
     pub variables_reference: i64,
+    /// Named child count for objects / maps. Surfaced to the IDE so
+    /// it can show a hover count before the user expands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub named_variables: Option<i64>,
+    /// Indexed child count for collections.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexed_variables: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]

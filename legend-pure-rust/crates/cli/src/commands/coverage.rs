@@ -573,10 +573,10 @@ impl EvalHooks for CoverageHooks {
         &mut self,
         source: &SourceInfo,
         _context: &legend_pure_runtime::context::VariableContext,
-    ) {
+    ) -> bool {
         // Fast prefix check — skip non-matching files.
         if !self.passes_filter(&source.source) {
-            return;
+            return false;
         }
 
         // 1. Record line hits for every line this expression spans.
@@ -597,6 +597,7 @@ impl EvalHooks for CoverageHooks {
         if let Some(&(point_idx, arm_idx)) = self.map.branches.lambda_to_branch.get(source) {
             self.map.branches.points[point_idx].arms[arm_idx].hit_count += 1;
         }
+        false
     }
 
     fn after_eval(&mut self, _source: &SourceInfo, _result: &Value) {}
