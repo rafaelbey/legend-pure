@@ -139,6 +139,100 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260513-05 — MCP `workspace_status` and LSP server status should include CLI version + server start time
+
+- **Type:** feature
+- **Area:** mcp | lsp | clients-intellij
+- **Priority:** P3
+- **Reporter:** Rafael
+- **Filed:** 2026-05-13
+
+**Summary**
+There's no single place a user or an LLM agent can ask "which `legend`
+binary is this, and how long has it been running?". The MCP
+`workspace_status` tool returns `compiled_at` + counts but no
+identity / uptime for the serving process; the LSP advertises
+`server_info { name, version }` once at `initialize` but offers no
+live status command that includes start time. Make both surfaces
+expose CLI version (`CARGO_PKG_VERSION` plus git commit if
+available) and server start time so:
+- MCP clients (Claude Code, etc.) can detect a server upgrade
+  mid-session by diffing `cli_version` across calls.
+- IDE users and ops can answer "is my LSP fresh?" without grepping
+  process tables.
+- Bug reports include enough provenance to reproduce.
+
+**Repro / Context**
+- MCP today: `workspace_status` returns
+  `{ compiled_at, error_count, chunk_count, repo_count }`
+  (`crates/mcp/src/server.rs:452`, struct at
+  `crates/mcp/src/server.rs:178` `WorkspaceStatus`).
+- LSP today: `initialize` returns `ServerInfo { name:
+  "legend-pure-lsp", version: env!("CARGO_PKG_VERSION") }`
+  (`crates/lsp/src/server.rs:152`). No subsequent endpoint exposes
+  start time.
+- Acceptance criteria:
+  - **MCP**: `WorkspaceStatus` (and its serialized JSON) gains:
+    - `cli_version: String` — `env!("CARGO_PKG_VERSION")` plus a
+      short git SHA if a build-time `GIT_COMMIT_SHORT` env var is
+      set (build.rs can stamp it via `git rev-parse --short HEAD`,
+      no-op outside a git checkout).
+    - `server_started_at: String` — RFC 3339 timestamp captured at
+      `LegendMcpServer::new` (or wherever the server-level state
+      is constructed), held in `state.rs` alongside the snapshot.
+    - Distinct from `compiled_at` — that's the workspace's compile
+      timestamp; `server_started_at` is the process's wall-clock
+      start. Both are useful and shouldn't be conflated.
+  - **LSP**: add a `legend/serverStatus` custom request that
+    returns `{ cli_version, server_started_at, workspace_compiled_at,
+    error_count, chunk_count, repo_count }`. Same shape as MCP
+    where it overlaps so docs / client code can be shared.
+  - The CLI's own `legend version` subcommand prints the same
+    `cli_version` string for cross-checking.
+  - JSON keys are stable (documented), since MCP clients will
+    template on them.
+  - Tests:
+    - MCP: snapshot test on `WorkspaceStatus` JSON shape covering
+      the new fields.
+    - LSP: integration test that drives `legend/serverStatus` over
+      stdio and asserts the response shape.
+
+**Notes**
+- Build-time SHA stamping: add a small `build.rs` to `crates/cli`
+  (or wherever the `legend` binary lives) that runs `git rev-parse
+  --short HEAD` and emits `cargo:rustc-env=GIT_COMMIT_SHORT=...`.
+  Fall back to `unknown` outside a git checkout (release tarballs).
+  Avoid pulling in a heavy crate — a 10-line `Command::new("git")`
+  is enough.
+- Common helper: extract a tiny `legend-pure-build-info` module
+  (or just a `const fn` in an existing utility crate) that returns
+  a `BuildInfo { version: &'static str, commit: &'static str }`.
+  Both `crates/mcp` and `crates/lsp` consume it so the strings stay
+  in sync. Don't duplicate the `env!` calls inline at three sites.
+- IntelliJ side: the upcoming status-bar widget (T-20260512-02)
+  is the natural consumer of `legend/serverStatus` — wire it once
+  this lands. Tooltip can show "legend v0.x.y (sha abc1234), up
+  since 12:34:56".
+- MCP `WorkspaceSnapshot.compiled_at` is already `chrono::DateTime`
+  (per `state.rs`); reuse the same type for `server_started_at` so
+  the JSON shape is uniform.
+- LSP custom request naming: `legend/` namespace (prefix matches
+  T-20260512-03's proposed `legend/virtualDocument` and the
+  existing private extensions). Don't reuse a standard LSP method
+  name — `workspace/configuration` etc. are reserved.
+- Out of scope: detailed health/metrics (memory, pending requests,
+  request latency). That belongs in the status-bar widget's
+  richer view (T-20260512-02) or a separate diagnostics endpoint.
+  This TODO is just version + start time.
+- Distinct from T-20260513-02 (restart on classpath change): that
+  one *causes* a new start time; this one *exposes* it. They are
+  complementary — once both land, users can see the IDE-triggered
+  restart land via a refreshed `server_started_at`.
+
+<!-- agent-audit:start id=T-20260513-05 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
 ### T-20260513-01 — MCP / LSP: render_fqn returns mangled function names, blocking run_pct/run_test
 
 - **Type:** bug
