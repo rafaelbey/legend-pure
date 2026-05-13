@@ -332,6 +332,45 @@ Acceptance criteria:
 
 <!-- agent-audit:start id=T-20260512-06 -->
 <!-- Agents: append entries below. Do not rewrite the developer block above. -->
+- 2026-05-13 — landed in commit `a71696071`. New `runtime::display`
+  module materialises a `DisplayTree` of owned strings on the eval
+  thread during pause; the DAP server thread serves
+  `variables(reference)` lookups against that tree. `Value` stays
+  `!Send` and never crosses the thread boundary.
+- Architecture: `EvalHooks::before_eval` now returns `bool` (snapshot
+  request) and a new `pause_with_snapshot(&mut self, src, tree)`
+  delivers the rendered tree. The evaluator drives the renderer via
+  its existing `EvalContext`; a `rendering_depth: u32` guard on the
+  evaluator silences the hook during render-driven `call_function`
+  callbacks so `toRepresentation` / `properties` calls never trigger
+  a nested pause. Same heap, same context, same model — no second
+  evaluator needed.
+- Renderer: leaves go through
+  `meta::pure::functions::string::toRepresentation` (single source of
+  truth for `12`, `'hello'`, `%2020-03-14`, `abc::Abc.A`, etc.).
+  Objects enumerate properties via a reflective call to
+  `meta::pure::functions::meta::properties($obj->genericType())` so
+  the property walk (declared + association + inherited) lives only
+  in platform Pure source — no Rust duplicate. Collections expose
+  indexed `[i]` children; maps expose entry children. Cycles caught
+  via `Rc::as_ptr` visit set; depth cap 64, breadth cap 200.
+- DAP wire: `Variable` gained `type`, `namedVariables`,
+  `indexedVariables`; `PauseSnapshot.locals` is now
+  `tree: DisplayTree`; `handle_scopes` reads `tree.root` per pause,
+  `handle_variables` is a flat lookup on `tree.nodes`. The two
+  duplicated `render_value` stubs at `server.rs:550` and
+  `hooks.rs:306` are deleted.
+- Verification: five `runtime::display` unit tests, five
+  `runtime/tests/display_integration` tests (primitives, objects,
+  inheritance, cycles, re-entry guard with no infinite recursion,
+  banned-token sweep on every node). Full workspace `2085/2085`
+  passes. `cargo fmt --check`, `cargo lint`, `cargo lint-lib`,
+  `scripts/check-copyright.sh` all clean for the new code.
+- Not run: IntelliJ manual smoke (Variables panel walkthrough on an
+  actual breakpoint). Integration tests cover the tree the renderer
+  emits, but the live DAP round-trip into the IDE is unverified
+  end-to-end. CLAUDE.md UI policy: flag this if it matters.
+  Status: Fix landed.
 <!-- agent-audit:end -->
 
 ### T-20260512-04 — Property default values not applied at `^Class(...)` instantiation (multiplicity violation)
