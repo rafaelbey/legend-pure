@@ -87,6 +87,9 @@ enum Commands {
     /// Run the Pure Debug Adapter Protocol server over stdio
     Dap(commands::dap::DapArgs),
 
+    /// Run the Pure Model Context Protocol server over stdio (for AI agents)
+    Mcp(commands::mcp::McpArgs),
+
     /// Run Pure tests on testable elements
     Test(commands::test::TestArgs),
 
@@ -136,6 +139,7 @@ fn main() {
         Commands::Check(args) => commands::check::run(args),
         Commands::Lsp(args) => commands::lsp::run(args, classpath),
         Commands::Dap(args) => commands::dap::run(args, classpath),
+        Commands::Mcp(args) => commands::mcp::run(args, classpath),
         Commands::Test(args) => commands::test::run(args, classpath),
         Commands::Run(args) => commands::run::run(args, classpath),
         Commands::Coverage(args) => commands::coverage_cmd::run(args),

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "legend": {
+      "type": "stdio",
+      "command": "legend",
+      "args": [
+        "mcp"
+      ],
+      "env": {}
+    }
+  }
+}
