@@ -232,7 +232,6 @@ mod tests {
     fn jar_missing_surfaces_clean_error() {
         let cfg = H2Config {
             jar_path: PathBuf::from("/nonexistent/path/to/h2.jar"),
-            version: "0".into(),
             pg_port: 1,
             java: PathBuf::from("java"),
         };
@@ -254,7 +253,6 @@ mod tests {
         assert!(jar.is_file(), "test setup: {jar:?} should exist");
         let cfg = H2Config {
             jar_path: jar,
-            version: "0".into(),
             pg_port: 1,
             java: PathBuf::from("/definitely/not/a/real/java"),
         };
