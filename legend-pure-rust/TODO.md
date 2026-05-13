@@ -139,6 +139,103 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260513-02 — IntelliJ plugin should restart the LSP subprocess on classpath / library config change
+
+- **Type:** feature
+- **Area:** clients-intellij
+- **Priority:** P2
+- **Reporter:** Rafael
+- **Filed:** 2026-05-13
+
+**Summary**
+The `legend lsp` server reads its classpath / library configuration
+(canonically `legend-pure-classpath.toml`) once at startup and never
+re-reads it. When the user edits the classpath descriptor — adding a
+filesystem repo, swapping a `.purem` artifact, changing a library
+version — the server keeps serving against the stale model until the
+user manually triggers "Restart Language Server" in the IDE. The
+**IntelliJ plugin** already owns the server's process lifecycle via
+the Platform LSP API, so the right place to react to a config change
+is the client, not the Rust server. Watch the relevant file(s) from
+the plugin and call the restart hook on the Legend Pure
+`LspServerDescriptor` when they change.
+
+**Repro / Context**
+- Open an IntelliJ project that resolves `legend-pure-classpath.toml`
+  (either via the configured setting in
+  `clients/intellij/.../LegendPureConfigurable.kt:62` or the
+  server-side ancestor walk).
+- With the editor open, edit the descriptor to add a new filesystem
+  repo or change an existing `kind`/path.
+- Observe: diagnostics, hover, completion, and go-to-def all continue
+  to reflect the pre-edit classpath. The new repo's elements are
+  invisible until the user manually invokes "Restart Language Server".
+- Acceptance criteria:
+  - The plugin watches the resolved classpath descriptor (the path
+    set in `LegendPureSettings`, falling back to ancestor-walking
+    `legend-pure-classpath.toml` from the project root) for
+    `modify`/`replace`/`delete` events.
+  - On a detected change: the plugin invokes the IntelliJ Platform
+    LSP API's restart entry point for the Legend Pure server, which
+    tears down the subprocess and respawns it. IntelliJ re-issues
+    `didOpen` for every editor that was open, so buffer state is
+    preserved by the platform.
+  - Debounce: rapid successive writes (editor autosave, atomic
+    rename, `mv`) coalesce into a single restart (~500 ms window).
+  - User-visible signal: a status-bar notification or balloon
+    explaining the restart so the user understands why diagnostics
+    blinked. Coordinate with T-20260512-02 (status-bar widget) if
+    that lands first.
+  - A regression test (or at minimum a documented manual test plan)
+    under `clients/intellij/src/test/` drives: open project →
+    edit descriptor → assert the restart hook was called within the
+    debounce window.
+
+**Notes**
+- This sits **only** on the client side. The Rust server
+  (`crates/lsp`) stays untouched — cycling the subprocess is the
+  cleanest reload semantics and avoids in-server cache-invalidation
+  races. Server-side hot-reload of `PureModel` is the long-term play
+  but requires the incremental-compilation work in T-20260513-01 to
+  land first, and even then the trigger should still come from the
+  client (via `workspace/didChangeConfiguration` or equivalent).
+- IntelliJ LSP API surface to lean on:
+  - `com.intellij.platform.lsp.api.LspServerManager` — exposes a
+    `stopAndRestartIfNeeded(LspServerDescriptor)`-style entry point
+    for Ultimate-tier LSP integrations. Confirm exact method name
+    against the API version pinned in `clients/intellij/build.gradle*`.
+  - `com.intellij.openapi.vfs.AsyncFileListener` or
+    `BulkFileListener` (project-scoped, subscribed via
+    `MessageBusConnection`) — listen for VFS events on the descriptor
+    path; cheaper than a raw filesystem watcher and integrates with
+    the IDE's "external change" detection.
+- Files to watch (priority order):
+  1. The path stored in `LegendPureSettings.classpathToml` if
+     non-blank (user-configured override).
+  2. Otherwise: the ancestor-walk result starting from the project
+     root for `legend-pure-classpath.toml`.
+  3. Optionally: the snapshots directory the descriptor points at,
+     for `.purem` rebuilds — but a `.purem` swap on its own is the
+     harder case and probably better deferred until T-20260513-01
+     enables chunk-scoped invalidation. First cut: descriptor-only.
+- Embedded-fallback case: if the cascade resolved to the embedded
+  platform (no on-disk descriptor), there's nothing to watch and
+  this feature is a no-op. The plugin should detect that case at
+  startup and skip registering the watcher.
+- Settings UX: consider a "Restart server on classpath change"
+  toggle in `LegendPureConfigurable` (default: on). Power users who
+  are mid-edit on the descriptor and don't want the churn can opt
+  out and fall back to manual restart.
+- Adjacent: T-20260513-01 (incremental compilation) — once the
+  server can invalidate per repo/chunk, the plugin's reload story
+  can shift from "kill the subprocess" to "send a notification and
+  let the server re-read the descriptor in place". Out of scope here;
+  this TODO is the bridge until that lands.
+
+<!-- agent-audit:start id=T-20260513-02 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
 ### T-20260513-01 — LSP recompiles the whole workspace on every change; needs incremental (chunk-scoped → element-scoped) compilation
 
 - **Type:** perf
@@ -727,6 +824,49 @@ Today diagnostics surface only for files the editor has opened — the
 
 <!-- agent-audit:start id=T-20260511-06 -->
 <!-- Agents: append entries below. Do not rewrite the developer block above. -->
+- 2026-05-13 — claimed by claude-opus-4-7[1m] — plan approved as
+  `plan-to-solve-todo-jaunty-church.md`. Scope narrowed: the
+  cross-chunk validators (`validate_repo_visibility`,
+  `validate_access_levels`, …) already produce per-file errors with
+  use-site `source_info`, so no compiler-side work is needed. The
+  actual gap is publish-side: `recompile_and_publish` ignored
+  `Workspace::file_uri_for_canonical` and had no stale-clearing for
+  non-open URIs. Incremental re-validation + CLI sibling +
+  virtual-scheme for synthetic sources deferred as separate
+  follow-ups (see plan §"Out of scope").
+- 2026-05-13 — diagnosis:
+  * The old publish path at `server.rs:88-104` had a `format!("file://{canonical}")`
+    fallback that produced malformed URIs (`file://myproj/foo.pure`
+    treats `myproj` as host, not path) — so the code that *looked* like
+    cross-file publishing didn't actually work.
+  * There was no `previously_published` tracker, so any non-open file
+    that had errors cleared by an edit would keep its stale red
+    squiggles on the client forever.
+  * `Workspace::file_uri_for_canonical` (`workspace.rs:218`) already
+    knew how to resolve every Filesystem-repo canonical to a real
+    on-disk URI, and returned `None` for synthetic/embedded sources —
+    so we already had a correct synthetic-source filter; we just
+    weren't calling it.
+- 2026-05-13 — implementation:
+  * `crates/lsp/src/handlers.rs`: new pure function
+    `plan_diagnostics_publish(workspace, previously_published) ->
+    PublishPlan { entries, next_previously_published }`. Computes the
+    per-cycle publish set as (resolved diagnostics ∪ open buffers ∪
+    stale URIs from prev cycle), with resolved diagnostics overriding
+    empty placeholders. Synthetic sources are filtered by
+    `file_uri_for_canonical` returning `None`. 6 unit tests in
+    `mod publish_plan` cover empty workspace, open-buffer-no-errors,
+    unopened-file-resolution, synthetic-source filter,
+    stale-clearing, and open-buffer-with-errors-publishes-once.
+  * `crates/lsp/src/server.rs`: `Backend` gains
+    `previously_published: Arc<Mutex<HashSet<Uri>>>`.
+    `recompile_and_publish` rewritten to (a) hold workspace + prev
+    locks together for compile + plan, (b) update prev tracker
+    in-line, (c) drop both locks before the `publish_diagnostics`
+    awaits. `did_close`'s explicit clear left as-is (next recompile
+    re-establishes correct state via the global publish path).
+  * `cargo test -p legend-pure-lsp`: 36/36 pass.
+    `cargo lint-lib` + `cargo lint` zero new warnings.
 <!-- agent-audit:end -->
 
 ---
