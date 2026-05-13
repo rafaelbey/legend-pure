@@ -152,11 +152,7 @@ pub(super) fn read_test_report_summary(
     })
 }
 
-fn read_int_property(
-    heap: &RuntimeHeap,
-    obj: &ObjectHandle,
-    name: &str,
-) -> Result<i64, String> {
+fn read_int_property(heap: &RuntimeHeap, obj: &ObjectHandle, name: &str) -> Result<i64, String> {
     let vs = heap
         .get_property_values(obj, name)
         .map_err(|e| format!("{name}: {e}"))?;
@@ -185,10 +181,7 @@ fn read_string_property(
 /// The `status` slot on a `TestResult` is an Enum value — we just
 /// want its name (`PASS` / `FAIL` / `ERROR` / `SKIP`) so we can pull
 /// out the failing tests for the summary.
-fn read_status_property(
-    heap: &RuntimeHeap,
-    obj: &ObjectHandle,
-) -> Result<String, String> {
+fn read_status_property(heap: &RuntimeHeap, obj: &ObjectHandle) -> Result<String, String> {
     let vs = heap
         .get_property_values(obj, "status")
         .map_err(|e| format!("status: {e}"))?;

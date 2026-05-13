@@ -146,9 +146,7 @@ pub struct PctAdapterInfo {
 #[serde(tag = "kind", content = "detail")]
 pub enum RunnerError {
     /// `legend.runPCT` was invoked without an adapter FQN.
-    #[error(
-        "missing adapter FQN — expected arguments: [testFqn, adapterFqn]"
-    )]
+    #[error("missing adapter FQN — expected arguments: [testFqn, adapterFqn]")]
     MissingAdapterFqn,
     /// `legend.runPCT` was given an adapter FQN that doesn't resolve
     /// against the current `PureModel`.

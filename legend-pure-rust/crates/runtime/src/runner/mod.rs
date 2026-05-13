@@ -61,7 +61,7 @@ use crate::native::NativeRegistry;
 use crate::value::Value;
 
 use exception::parse_failure_components;
-use report::{read_test_report_summary, TestReportSummary};
+use report::{TestReportSummary, read_test_report_summary};
 
 // ---------------------------------------------------------------------------
 // Hooks — captures `print` / `println` output into an in-memory

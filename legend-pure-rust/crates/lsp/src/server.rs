@@ -88,7 +88,9 @@ impl Backend {
         };
 
         for (uri, diagnostics) in entries {
-            self.client.publish_diagnostics(uri, diagnostics, None).await;
+            self.client
+                .publish_diagnostics(uri, diagnostics, None)
+                .await;
         }
 
         tracing::info!(error_count, "recompile complete");

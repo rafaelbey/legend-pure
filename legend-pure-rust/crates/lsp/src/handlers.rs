@@ -16,6 +16,8 @@
 //! `Backend` impl so they can be exercised in unit tests without a
 //! tokio runtime or `tower_lsp_server::Client`.
 
+use std::collections::{HashMap, HashSet};
+
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_pure::error::CompilationError;
 use legend_pure_parser_pure::ids::ElementId;
@@ -36,6 +38,76 @@ use crate::workspace::Workspace;
 #[must_use]
 pub fn diagnostics_for(errors: &[CompilationError]) -> Vec<Diagnostic> {
     errors.iter().map(diagnostics::to_diagnostic).collect()
+}
+
+/// One cycle of `textDocument/publishDiagnostics` calls, prepared from
+/// the current workspace state.
+///
+/// `entries` is what to publish this cycle: one `(uri, diagnostics)`
+/// pair per URI, with `diagnostics` possibly empty for stale-clearing
+/// or for open buffers with no errors. `next_previously_published`
+/// captures the URIs that received non-empty diagnostics, to be fed
+/// back in as `previously_published` on the next call so any URI that
+/// drops out gets an empty publish next time.
+#[derive(Debug, Clone, Default)]
+pub struct PublishPlan {
+    /// `(uri, diagnostics)` pairs to feed `Client::publish_diagnostics`.
+    pub entries: Vec<(Uri, Vec<Diagnostic>)>,
+    /// URIs that received non-empty diagnostics this cycle. Track this
+    /// across cycles so the next cycle can clear any URI that drops
+    /// out of the set.
+    pub next_previously_published: HashSet<Uri>,
+}
+
+/// Plan one round of diagnostic publishing for a workspace.
+///
+/// Three sources contribute URIs to the publish set:
+///
+/// 1. Every canonical source in [`Workspace::diagnostics`] gets
+///    resolved to a `file://` URI via
+///    [`Workspace::file_uri_for_canonical`]. Canonicals that don't
+///    resolve (embedded `.purem`, bootstrap chunk 0, fixtures without
+///    a `source_root`) are filtered out — there's no on-disk file the
+///    client can navigate to.
+/// 2. Every open buffer gets at least an empty publish, so a clean
+///    open file visibly shows "no errors" right after didOpen.
+/// 3. Every URI in `previously_published` that isn't in the
+///    diagnostic set this cycle gets an empty publish — the
+///    stale-clear path that makes workspace-wide publishing safe.
+///
+/// Resolved diagnostics for an open buffer override its empty entry;
+/// resolved diagnostics for a stale URI also override its empty entry
+/// (the stale-clear only fires if the canonical truly dropped out).
+pub fn plan_diagnostics_publish(
+    workspace: &Workspace,
+    previously_published: &HashSet<Uri>,
+) -> PublishPlan {
+    let mut publishes: HashMap<Uri, Vec<Diagnostic>> = HashMap::new();
+
+    for (canonical, errors) in &workspace.diagnostics {
+        if let Some(uri) = workspace.file_uri_for_canonical(canonical) {
+            publishes.insert(uri, diagnostics_for(errors));
+        }
+    }
+
+    for uri in workspace.open_buffers.keys() {
+        publishes.entry(uri.clone()).or_default();
+    }
+
+    for uri in previously_published {
+        publishes.entry(uri.clone()).or_default();
+    }
+
+    let next_previously_published = publishes
+        .iter()
+        .filter(|(_, diags)| !diags.is_empty())
+        .map(|(uri, _)| uri.clone())
+        .collect();
+
+    PublishPlan {
+        entries: publishes.into_iter().collect(),
+        next_previously_published,
+    }
 }
 
 /// Compute hover content for a position. Returns `None` when nothing
@@ -226,6 +298,139 @@ fn resolve_value_spec_target(vs: &legend_pure_parser_pure::types::ValueSpec) -> 
     }
 }
 
+/// Resolve every workspace reference to whatever symbol sits under
+/// the cursor, returning LSP-shaped [`Location`]s.
+///
+/// Two-tier cursor resolution:
+///   1. **Reference-site hit** — the cursor is on an existing
+///      reference (e.g. `extends Foo`, `String[1]` in a parameter
+///      type). The reference's `target_element` is the symbol the
+///      user is asking about.
+///   2. **Definition-site hit** — the cursor sits on an element's
+///      own name span (the user clicked the declaration). Use that
+///      element's `ElementId`.
+///
+/// V1 limitation: cursor on a property identifier (`$x.propA`),
+/// qualified-property call, or local variable returns an empty
+/// `Vec` — those reference kinds carry `target_element: None` in
+/// today's index, so the reverse-index has no entry to return. A
+/// future change to richer reference targets (property +
+/// qualified-property granularity) will populate the V1
+/// no-op cases.
+///
+/// `include_declaration` honours the LSP `ReferenceContext` flag:
+/// when `true`, the declaration's own `name_source_info` is
+/// appended to the result. Per LSP 3.17, the declaration is
+/// considered one of the references.
+///
+/// `uri_for_canonical` resolves canonical compiler paths to
+/// on-disk URLs. Reference sites whose canonical path doesn't
+/// resolve are silently skipped — they may live in repos with no
+/// on-disk source (embedded / `.purem`), and an LSP client can't
+/// navigate to a file that doesn't exist.
+#[must_use]
+pub fn references_for_position(
+    model: &PureModel,
+    references: Option<&ReferenceIndex>,
+    canonical_path: &str,
+    position: Position,
+    include_declaration: bool,
+    file_uri: &Uri,
+    uri_for_canonical: &dyn Fn(&str) -> Option<Uri>,
+) -> Vec<Location> {
+    let (line, column) = convert::position_to_1indexed(position);
+
+    // Resolve cursor → target ElementId.
+    let target_id = references
+        .and_then(|idx| idx.find_at(canonical_path, line, column))
+        .and_then(|r| r.target_element)
+        .or_else(|| {
+            let located = model.locate(canonical_path, line, column)?;
+            if !matches!(located.kind, LocatedKind::Element) {
+                return None;
+            }
+            let node = model.get_node(located.element);
+            // Inclusive-end semantics — `name_source_info` from the
+            // compiler is **inclusive** at end_column (matches
+            // `refs::contains`), unlike the LSP `Range` convention.
+            // For a 1-char element name like `Class abc::A`, the
+            // span is `c13-c13`; an exclusive-end check would reject
+            // every cursor.
+            if !cursor_in_source_info_inclusive(&node.name_source_info, line, column) {
+                return None;
+            }
+            Some(located.element)
+        });
+    let Some(target_id) = target_id else {
+        return Vec::new();
+    };
+
+    // Lookup reverse-index entries; map each to an LSP Location.
+    // Skip entries whose canonical path doesn't resolve to a URI —
+    // happens for embedded/.purem-backed repos that have no on-disk
+    // source. Dropping is correct: the LSP client can't navigate
+    // there anyway.
+    let mut out: Vec<Location> = references
+        .and_then(|idx| idx.usages_of(target_id))
+        .map(|locs| {
+            locs.iter()
+                .filter_map(|loc| {
+                    Some(Location {
+                        uri: uri_for_canonical_or_click(
+                            loc.canonical_path.as_str(),
+                            file_uri,
+                            uri_for_canonical,
+                        )?,
+                        range: range_from_source_info(&loc.range),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if include_declaration
+        && let Some(decl_loc) = element_location(model, target_id, file_uri, uri_for_canonical)
+    {
+        out.push(decl_loc);
+    }
+    out
+}
+
+/// Choose the click URI when the target lives in the same file as
+/// the click, otherwise delegate to the cross-file resolver. Same
+/// rule as [`location_at_source_info`] but takes a canonical path
+/// directly (without a wrapping [`SourceInfo`]).
+fn uri_for_canonical_or_click(
+    canonical: &str,
+    file_uri: &Uri,
+    uri_for_canonical: &dyn Fn(&str) -> Option<Uri>,
+) -> Option<Uri> {
+    if let Some(click_path) = file_uri.to_file_path()
+        && click_path.ends_with(canonical.trim_start_matches('/'))
+    {
+        return Some(file_uri.clone());
+    }
+    uri_for_canonical(canonical)
+}
+
+/// Variant of [`cursor_in_source_info`] with **inclusive** end —
+/// matches the compiler's [`SourceInfo`] convention (used by
+/// `refs::contains`). Necessary when checking cursor presence
+/// against compiler-emitted spans like `name_source_info`, which
+/// can be a degenerate 1-character span (`c13-c13`).
+fn cursor_in_source_info_inclusive(si: &SourceInfo, line: u32, column: u32) -> bool {
+    if line < si.start_line || line > si.end_line {
+        return false;
+    }
+    if line == si.start_line && column < si.start_column {
+        return false;
+    }
+    if line == si.end_line && column > si.end_column {
+        return false;
+    }
+    true
+}
+
 /// Inclusive (line, column) test: is `(line, column)` (1-indexed)
 /// inside `si`'s span? End boundary is exclusive — clicking exactly
 /// at `end_column` is past the last character.
@@ -241,7 +446,6 @@ fn cursor_in_source_info(si: &SourceInfo, line: u32, column: u32) -> bool {
     }
     true
 }
-
 
 /// Build a [`Location`] for a target span, choosing the click URI
 /// when same-file, the resolver URI when cross-file. Shared helper
@@ -429,7 +633,9 @@ pub fn workspace_symbols_for(
                         if !matches(p.name.as_str(), &format!("{fqn}.{}", p.name)) {
                             continue;
                         }
-                        let Some(uri) = make_uri(&p.source_info) else { continue };
+                        let Some(uri) = make_uri(&p.source_info) else {
+                            continue;
+                        };
                         push_symbol(
                             &mut out,
                             p.name.to_string(),
@@ -446,7 +652,9 @@ pub fn workspace_symbols_for(
                         if !matches(q.name.as_str(), &format!("{fqn}.{}", q.name)) {
                             continue;
                         }
-                        let Some(uri) = make_uri(&q.source_info) else { continue };
+                        let Some(uri) = make_uri(&q.source_info) else {
+                            continue;
+                        };
                         push_symbol(
                             &mut out,
                             q.name.to_string(),
@@ -464,7 +672,9 @@ pub fn workspace_symbols_for(
                         if !matches(constraint_name, &format!("{fqn}.{constraint_name}")) {
                             continue;
                         }
-                        let Some(uri) = make_uri(&k.source_info) else { continue };
+                        let Some(uri) = make_uri(&k.source_info) else {
+                            continue;
+                        };
                         push_symbol(
                             &mut out,
                             constraint_name.to_string(),
@@ -483,7 +693,9 @@ pub fn workspace_symbols_for(
                         if !matches(p.name.as_str(), &format!("{fqn}.{}", p.name)) {
                             continue;
                         }
-                        let Some(uri) = make_uri(&p.source_info) else { continue };
+                        let Some(uri) = make_uri(&p.source_info) else {
+                            continue;
+                        };
                         push_symbol(
                             &mut out,
                             p.name.to_string(),
@@ -500,7 +712,9 @@ pub fn workspace_symbols_for(
                         if !matches(q.name.as_str(), &format!("{fqn}.{}", q.name)) {
                             continue;
                         }
-                        let Some(uri) = make_uri(&q.source_info) else { continue };
+                        let Some(uri) = make_uri(&q.source_info) else {
+                            continue;
+                        };
                         push_symbol(
                             &mut out,
                             q.name.to_string(),
@@ -519,7 +733,9 @@ pub fn workspace_symbols_for(
                         if !matches(v.name.as_str(), &format!("{fqn}.{}", v.name)) {
                             continue;
                         }
-                        let Some(uri) = make_uri(&v.source_info) else { continue };
+                        let Some(uri) = make_uri(&v.source_info) else {
+                            continue;
+                        };
                         push_symbol(
                             &mut out,
                             v.name.to_string(),
@@ -674,9 +890,7 @@ fn is_test_stereotyped(func: &legend_pure_parser_pure::nodes::function::Function
 /// stereotypes never collide). A stricter check would verify
 /// `profile == meta::pure::test::pct::PCT`'s ElementId; the
 /// IntelliJ runner can post-filter if we ever see collisions.
-fn is_pct_test_stereotyped(
-    func: &legend_pure_parser_pure::nodes::function::Function,
-) -> bool {
+fn is_pct_test_stereotyped(func: &legend_pure_parser_pure::nodes::function::Function) -> bool {
     func.stereotypes.iter().any(|st| st.value == "test")
 }
 
@@ -843,13 +1057,7 @@ pub async fn execute_legend_command(
             "legend.runPCT" => translate_test_result(
                 "legend.runPCT",
                 &arg0,
-                legend_pure_runtime::runner::run_pct(
-                    model,
-                    &registry,
-                    populators,
-                    &arg0,
-                    &arg1,
-                ),
+                legend_pure_runtime::runner::run_pct(model, &registry, populators, &arg0, &arg1),
             ),
             "legend.listPctAdapters" => {
                 translate_adapters_result(legend_pure_runtime::runner::list_pct_adapters(model))
@@ -1008,6 +1216,7 @@ fn build_extras(stdout: &str, failures: Option<serde_json::Value>) -> Option<ser
             serde_json::Value::String(stdout.to_string()),
         );
     }
+
     if let Some(f) = failures {
         map.insert("failures".into(), f);
     }
@@ -1143,7 +1352,8 @@ function test::nameOf(p: test::Person[1]): String[1]
         // The body line is line 8 (1-indexed). `$p.name` starts at
         // col 3; `name` itself is at col 6. LSP positions are 0-indexed
         // → (line 7, col 5+).
-        let loc = definition_for_position(&model, None, "fixture.pure", pos(7, 6), &uri, no_cross_file);
+        let loc =
+            definition_for_position(&model, None, "fixture.pure", pos(7, 6), &uri, no_cross_file);
         // Property goto requires `type_info` populated on the
         // receiver, which only happens after a full Pass-2.5 compile.
         // `compile_fixture` produces a partial model without bodies
@@ -1176,7 +1386,8 @@ function test::nameOf(p: test::Person[1]): String[1]
         let model = compile_fixture("fixture.pure", src);
         let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
         let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
-        let loc = definition_for_position(&model, None, "fixture.pure", pos(2, 4), &uri, no_cross_file);
+        let loc =
+            definition_for_position(&model, None, "fixture.pure", pos(2, 4), &uri, no_cross_file);
         assert!(
             loc.is_none(),
             "click on a literal must not navigate to the enclosing function: got {loc:?}",
@@ -1194,8 +1405,15 @@ function test::nameOf(p: test::Person[1]): String[1]
         let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
         let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
         // `msg` starts at line 1 col 16 (1-indexed) → 0-indexed col 15.
-        let loc = definition_for_position(&model, None, "fixture.pure", pos(0, 16), &uri, no_cross_file)
-            .expect("definition-site click should still produce a location");
+        let loc = definition_for_position(
+            &model,
+            None,
+            "fixture.pure",
+            pos(0, 16),
+            &uri,
+            no_cross_file,
+        )
+        .expect("definition-site click should still produce a location");
         assert_eq!(loc.target_range.start.line, 0);
         assert_eq!(loc.target_range.start.character, 15);
     }
@@ -1312,7 +1530,11 @@ Class test::Person
             "function test::ordinary(): Integer[1]\n{\n  1\n}\n",
         );
         let lenses = code_lenses_for(&plain, "plain.pure");
-        assert_eq!(lenses.len(), 1, "expected exactly one ▶ Run lens; got {lenses:?}");
+        assert_eq!(
+            lenses.len(),
+            1,
+            "expected exactly one ▶ Run lens; got {lenses:?}"
+        );
         let cmd = lenses[0]
             .command
             .as_ref()
@@ -1480,11 +1702,13 @@ Class test::Person
         let model = compile_fixture("fixture.pure", "Class test::Person {}");
         let resolver = fixture_uri_resolver();
         let syms = workspace_symbols_for(&model, "", &resolver);
-        let persons: Vec<&WorkspaceSymbol> = syms
-            .iter()
-            .filter(|s| s.name == "test::Person")
-            .collect();
-        assert_eq!(persons.len(), 1, "expected exactly one Person entry; got: {syms:?}");
+        let persons: Vec<&WorkspaceSymbol> =
+            syms.iter().filter(|s| s.name == "test::Person").collect();
+        assert_eq!(
+            persons.len(),
+            1,
+            "expected exactly one Person entry; got: {syms:?}"
+        );
         assert_eq!(persons[0].kind, SymbolKind::CLASS);
         assert_eq!(persons[0].container_name.as_deref(), Some("test"));
     }
@@ -1515,9 +1739,7 @@ Class test::Person
         let field = syms
             .iter()
             .find(|s| s.kind == SymbolKind::FIELD && s.name == "name")
-            .unwrap_or_else(|| {
-                panic!("expected a FIELD symbol named 'name'; got: {syms:?}")
-            });
+            .unwrap_or_else(|| panic!("expected a FIELD symbol named 'name'; got: {syms:?}"));
         assert_eq!(
             field.container_name.as_deref(),
             Some("test::Person"),
@@ -1536,6 +1758,606 @@ Class test::Person
                     || s.name.ends_with(&format!("::{bootstrap_name}"))),
                 "bootstrap symbol {bootstrap_name:?} must not appear in workspace results"
             );
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // textDocument/references — T-20260511-07
+    // ---------------------------------------------------------------
+
+    /// Build the reverse-index for a one-file fixture. Same helper
+    /// pattern as the existing `definition_resolves_variable_…` test.
+    fn refs_for(model: &PureModel) -> ReferenceIndex {
+        legend_pure_parser_pure::refs::build_reference_index(model)
+    }
+
+    #[test]
+    fn references_class_used_in_extends_returns_use_site() {
+        let src = "\
+Class test::A {}
+
+Class test::B extends test::A {}
+";
+        let model = compile_fixture("fixture.pure", src);
+        let index = refs_for(&model);
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
+        // Cursor on `A` declaration. `Class test::A {}` — `A` starts
+        // at col 13 (1-indexed) → 0-indexed col 12.
+        let locs = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(0, 12),
+            false,
+            &uri,
+            no_cross_file,
+        );
+        assert_eq!(
+            locs.len(),
+            1,
+            "expected exactly one usage (the extends site); got: {locs:?}"
+        );
+        // The use site is on line 3 (`Class test::B extends test::A {}`),
+        // 1-indexed; LSP is 0-indexed → line 2.
+        assert_eq!(
+            locs[0].range.start.line, 2,
+            "use site must be on the extends line"
+        );
+    }
+
+    #[test]
+    fn references_click_on_use_site_returns_same_target() {
+        let src = "\
+Class test::A {}
+
+Class test::B extends test::A {}
+";
+        let model = compile_fixture("fixture.pure", src);
+        let index = refs_for(&model);
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
+        // Cursor on the `A` in `extends test::A` (use site).
+        // Line 3 col 29 (1-indexed) → line 2, char 28 (0-indexed).
+        let from_use_site = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(2, 28),
+            false,
+            &uri,
+            no_cross_file,
+        );
+        // Cursor on `A` declaration (col 12 0-indexed).
+        let from_decl = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(0, 12),
+            false,
+            &uri,
+            no_cross_file,
+        );
+        assert_eq!(
+            from_use_site, from_decl,
+            "clicking a use site must resolve to the same target as clicking the declaration"
+        );
+    }
+
+    #[test]
+    fn references_include_declaration_appends_decl() {
+        let src = "\
+Class test::A {}
+
+Class test::B extends test::A {}
+";
+        let model = compile_fixture("fixture.pure", src);
+        let index = refs_for(&model);
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
+        // Without include_declaration — exactly the use sites.
+        let without = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(0, 12),
+            false,
+            &uri,
+            no_cross_file,
+        );
+        // With include_declaration — adds the declaration span at the end.
+        let with = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(0, 12),
+            true,
+            &uri,
+            no_cross_file,
+        );
+        assert_eq!(
+            with.len(),
+            without.len() + 1,
+            "include_declaration=true must add exactly one Location (the decl); got: {with:?}"
+        );
+        let decl_range = with.last().expect("decl location present").range;
+        // The declaration's `name_source_info` covers just `A` on line 1.
+        assert_eq!(decl_range.start.line, 0);
+    }
+
+    #[test]
+    fn references_empty_on_whitespace_cursor() {
+        let src = "\
+Class test::A {}
+
+Class test::B extends test::A {}
+";
+        let model = compile_fixture("fixture.pure", src);
+        let index = refs_for(&model);
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
+        // Cursor on the blank line 2 (0-indexed line 1, char 0).
+        let locs = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(1, 0),
+            false,
+            &uri,
+            no_cross_file,
+        );
+        assert!(
+            locs.is_empty(),
+            "cursor on whitespace must return no usages; got: {locs:?}"
+        );
+    }
+
+    #[test]
+    fn references_empty_on_property_call_v1_limitation() {
+        // V1 scope: PropertyCall references carry target_element=None
+        // and are NOT exposed via `usages_of`. Pin this so a future
+        // change to richer reference targets doesn't silently flip
+        // the result and surprise callers.
+        let src = "\
+Class test::Person
+{
+  name: String[1];
+}
+
+function test::nameOf(p: test::Person[1]): String[1]
+{
+  $p.name
+}
+";
+        let model = compile_fixture("fixture.pure", src);
+        let index = refs_for(&model);
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
+        // Cursor inside `$p.name` — `name` is at line 8 col 6
+        // (1-indexed) → 0-indexed (7, 5).
+        let locs = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(7, 5),
+            false,
+            &uri,
+            no_cross_file,
+        );
+        assert!(
+            locs.is_empty(),
+            "V1 scope: property cursors must return empty; got: {locs:?}"
+        );
+    }
+
+    /// Cross-file branch: hand-built model with two chunks — chunk 0
+    /// has a class declared in `lib.pure`, chunk 1 has another class
+    /// extending it from `app.pure`. Verifies that the resolver is
+    /// consulted for cross-file targets (use-site URI = `app.pure`,
+    /// not the click's `lib.pure`).
+    ///
+    /// Manual construction (instead of compile_fixture spanning two
+    /// files) because `pipeline::compile`'s import resolution across
+    /// hand-rolled chunks is fragile in test fixtures and the unit
+    /// here is the URI-resolution branch, not the compile pipeline.
+    #[test]
+    fn references_cross_file_uri_resolves_via_resolver() {
+        use legend_pure_parser_ast::SourceInfo as SI;
+        use legend_pure_parser_pure::ids::ElementId;
+        use legend_pure_parser_pure::model::{
+            Element as ModelElement, ElementNode, ModelChunk, PureModel,
+        };
+        use legend_pure_parser_pure::nodes::class::Class;
+        use legend_pure_parser_pure::refs::{RefKind, Reference, ReferenceIndex};
+
+        let mut model = PureModel::new();
+        let test_pkg = model.get_or_create_package(&[smol_str::SmolStr::new("test")]);
+
+        let chunk_id: u16 = 0;
+        let mut chunk = ModelChunk::new(chunk_id);
+        // Class A declared in /proj/lib.pure.
+        let class_body_si = SI::new("/proj/lib.pure", 1, 1, 1, 17);
+        let class_name_si = SI::new("/proj/lib.pure", 1, 7, 1, 14);
+        let class_idx = chunk.alloc_element(
+            ElementNode {
+                name: smol_str::SmolStr::new("A"),
+                source_info: class_body_si.clone(),
+                name_source_info: class_name_si.clone(),
+                parent_package: test_pkg,
+            },
+            ModelElement::Class(Class {
+                type_parameters: Vec::new(),
+                multiplicity_parameters: Vec::new(),
+                type_variable_parameters: Vec::new(),
+                super_types: Vec::new(),
+                properties: Vec::new(),
+                qualified_properties: Vec::new(),
+                constraints: Vec::new(),
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+            }),
+        );
+        let class_id = ElementId::InstanceId {
+            chunk_id,
+            local_idx: class_idx,
+        };
+        model.chunks.push(chunk);
+        model.register_element(test_pkg, class_id);
+
+        // Build a synthetic reference index: one use site in app.pure
+        // pointing at lib.pure's class A.
+        let mut index = ReferenceIndex::default();
+        let use_site_si = SI::new("/proj/app.pure", 3, 23, 3, 30);
+        index.push(Reference {
+            range: use_site_si.clone(),
+            kind: RefKind::TypeRef,
+            target_element: Some(class_id),
+            target: class_name_si.clone(),
+        });
+        index.finalize();
+
+        // The click happens at the class declaration (in lib.pure).
+        let lib_uri = "file:///abs/proj/lib.pure".parse::<Uri>().unwrap();
+        let app_disk_uri = "file:///abs/proj/app.pure".parse::<Uri>().unwrap();
+        let app_disk_uri_clone = app_disk_uri.clone();
+        let resolver: &dyn Fn(&str) -> Option<Uri> = &move |canonical: &str| match canonical {
+            "/proj/app.pure" => Some(app_disk_uri_clone.clone()),
+            _ => None,
+        };
+
+        // Cursor on `A` in the class declaration (line 1 col 7 1-indexed
+        // → line 0 char 6 0-indexed).
+        let locs = references_for_position(
+            &model,
+            Some(&index),
+            "/proj/lib.pure",
+            pos(0, 6),
+            false,
+            &lib_uri,
+            resolver,
+        );
+        assert_eq!(locs.len(), 1);
+        assert_eq!(
+            locs[0].uri, app_disk_uri,
+            "cross-file URI must be resolved through the resolver",
+        );
+    }
+
+    #[test]
+    fn references_returns_empty_when_index_missing() {
+        let src = "Class test::A {}\n";
+        let model = compile_fixture("fixture.pure", src);
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
+        // No ReferenceIndex passed — handler must still find the
+        // declaration (via locate) and report zero use sites (the
+        // index is what holds usages; without it, no usages
+        // available). Pinning this so future changes don't
+        // accidentally start panicking on a missing index.
+        let locs = references_for_position(
+            &model,
+            None,
+            "fixture.pure",
+            pos(0, 12),
+            false,
+            &uri,
+            no_cross_file,
+        );
+        assert!(
+            locs.is_empty(),
+            "without an index, references must return empty (not panic); got: {locs:?}"
+        );
+    }
+
+    mod publish_plan {
+        use super::*;
+        use legend_pure_core_platform::repo::{OwnedSourceFile, Repo};
+        use std::path::PathBuf;
+
+        fn fs_repo(prefix: &str, root: PathBuf, files: &[&str]) -> Repo {
+            Repo::Filesystem {
+                prefix: prefix.to_string(),
+                files: files
+                    .iter()
+                    .map(|p| OwnedSourceFile {
+                        path: (*p).to_string(),
+                        content: String::new(),
+                    })
+                    .collect(),
+                meta: None,
+                source_root: Some(root),
+            }
+        }
+
+        fn err(source: &str, message: &str) -> CompilationError {
+            CompilationError {
+                message: message.to_string(),
+                source_info: SourceInfo::new(source, 1, 1, 1, 1),
+                kind: legend_pure_parser_pure::error::CompilationErrorKind::UnresolvedElement {
+                    path: smol_str::SmolStr::new("Foo"),
+                },
+            }
+        }
+
+        fn uri_of(s: &str) -> Uri {
+            s.parse::<Uri>().expect("test URI must parse")
+        }
+
+        #[test]
+        fn empty_workspace_yields_empty_plan() {
+            let ws = Workspace::new(Vec::new(), Vec::new());
+            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
+            assert!(plan.entries.is_empty());
+            assert!(plan.next_previously_published.is_empty());
+        }
+
+        #[test]
+        fn open_buffer_with_no_errors_gets_empty_publish() {
+            // Even when no compile has run, an open file must receive
+            // a single empty publish so the IDE shows "no errors" on
+            // didOpen. Preserves the current LSP behaviour at server.rs
+            // lines 88-92 in the old implementation.
+            let mut ws = Workspace::new(Vec::new(), Vec::new());
+            let uri = uri_of("file:///proj/a.pure");
+            ws.set_open_buffer(uri.clone(), String::new());
+
+            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
+            assert_eq!(plan.entries.len(), 1);
+            assert_eq!(plan.entries[0].0, uri);
+            assert!(plan.entries[0].1.is_empty());
+            // Empty publish must NOT be tracked as previously-published
+            // — there's nothing to clear next time.
+            assert!(plan.next_previously_published.is_empty());
+        }
+
+        #[test]
+        fn diagnostics_for_unopened_file_resolve_through_source_root() {
+            // Workspace has a filesystem repo with on-disk root
+            // /tmp/proj. A canonical /proj/lib.pure should resolve to
+            // file:///tmp/proj/lib.pure even though the file is NOT in
+            // open_buffers. This is the core "global diagnostics"
+            // behaviour T-20260511-06 asks for.
+            let mut ws = Workspace::new(
+                vec![fs_repo(
+                    "/proj",
+                    PathBuf::from("/tmp/proj"),
+                    &["/proj/lib.pure"],
+                )],
+                Vec::new(),
+            );
+            ws.diagnostics.insert(
+                "/proj/lib.pure".to_string(),
+                vec![err("/proj/lib.pure", "boom")],
+            );
+
+            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
+            assert_eq!(plan.entries.len(), 1);
+            let (uri, diags) = &plan.entries[0];
+            assert!(
+                uri.as_str().contains("/tmp/proj/lib.pure"),
+                "expected on-disk path in URI; got {uri:?}",
+            );
+            assert_eq!(diags.len(), 1);
+            assert_eq!(diags[0].message, "boom");
+            // Non-empty publish for this URI — track it so the next
+            // cycle can clear it if the user fixes the error.
+            assert!(plan.next_previously_published.contains(uri));
+        }
+
+        #[test]
+        fn synthetic_source_is_filtered_out() {
+            // Canonical /platform/pure/... or anything not covered by
+            // a Filesystem repo with source_root returns None from
+            // file_uri_for_canonical. Those diagnostics must NOT be
+            // published — there's no on-disk file the client can
+            // navigate to.
+            let mut ws = Workspace::new(Vec::new(), Vec::new());
+            ws.diagnostics.insert(
+                "/platform/pure/grammar/m3.pure".to_string(),
+                vec![err("/platform/pure/grammar/m3.pure", "boom")],
+            );
+
+            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
+            assert!(plan.entries.is_empty());
+            assert!(plan.next_previously_published.is_empty());
+        }
+
+        #[test]
+        fn stale_uri_gets_empty_publish_when_dropped() {
+            // Previously published a non-empty diag for B.pure; this
+            // cycle B.pure no longer appears in ws.diagnostics. The
+            // plan must emit an empty publish for B's URI so the
+            // client clears its stale entry.
+            let ws = Workspace::new(
+                vec![fs_repo(
+                    "/proj",
+                    PathBuf::from("/tmp/proj"),
+                    &["/proj/b.pure"],
+                )],
+                Vec::new(),
+            );
+            let b_uri = uri_of("file:///tmp/proj/b.pure");
+            let mut prev = HashSet::new();
+            prev.insert(b_uri.clone());
+
+            let plan = plan_diagnostics_publish(&ws, &prev);
+            assert_eq!(plan.entries.len(), 1);
+            assert_eq!(plan.entries[0].0, b_uri);
+            assert!(plan.entries[0].1.is_empty(), "stale entry must be cleared");
+            assert!(plan.next_previously_published.is_empty());
+        }
+
+        #[test]
+        fn open_buffer_with_errors_publishes_diagnostics_once() {
+            // An open buffer that ALSO has compile errors should get a
+            // single non-empty publish (the resolved diagnostics
+            // override the empty open-buffer placeholder).
+            let mut ws = Workspace::new(
+                vec![fs_repo(
+                    "/proj",
+                    PathBuf::from("/tmp/proj"),
+                    &["/proj/a.pure"],
+                )],
+                Vec::new(),
+            );
+            let a_uri = uri_of("file:///tmp/proj/a.pure");
+            ws.set_open_buffer(a_uri.clone(), String::new());
+            ws.diagnostics.insert(
+                "/proj/a.pure".to_string(),
+                vec![err("/proj/a.pure", "boom")],
+            );
+
+            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
+            assert_eq!(plan.entries.len(), 1, "must not double-publish");
+            assert_eq!(plan.entries[0].0, a_uri);
+            assert_eq!(plan.entries[0].1.len(), 1);
+            assert!(plan.next_previously_published.contains(&a_uri));
+        }
+
+        /// End-to-end integration of `Workspace::compile()` and
+        /// `plan_diagnostics_publish`: a real two-file workspace where
+        /// editing A produces a compile error in B, and the planner
+        /// surfaces B's URI even though B is not in `open_buffers`.
+        /// This is the actual "global diagnostics" UX win T-20260511-06
+        /// asks for; the rest of `publish_plan` tests cover planner
+        /// correctness in isolation with hand-injected diagnostics.
+        #[test]
+        fn cross_file_error_surfaces_on_unopened_file() {
+            use legend_pure_core_platform::repo::Repo;
+            use std::fs;
+
+            // The Filesystem canonical-tail match in `snapshot_repos`
+            // requires the on-disk leaf directory to be named after the
+            // repo. Build a descriptor-shaped layout:
+            //   <tmp>/userproj.json    — declares dep on `platform`
+            //   <tmp>/userproj/a.pure
+            //   <tmp>/userproj/b.pure
+            // → canonicals /userproj/a.pure, /userproj/b.pure.
+            // Using a descriptor (rather than `Repo::from_filesystem`)
+            // populates `RepoMeta`, which the topo-sorter needs for
+            // multi-repo workspaces — `from_filesystem` produces a
+            // `meta: None` repo that fails topo sort against the
+            // embedded platform.
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let descriptor = tmp.path().join("userproj.json");
+            fs::write(
+                &descriptor,
+                r#"{"name":"userproj","pattern":".*","dependencies":["platform"]}"#,
+            )
+            .expect("write descriptor");
+            let proj = tmp.path().join("userproj");
+            fs::create_dir(&proj).expect("mkdir userproj");
+            let a_disk = proj.join("a.pure");
+            let b_disk = proj.join("b.pure");
+
+            // Clean baseline: A defines `Foo` with a `name` property;
+            // B references it. Both compile clean against the platform.
+            let a_clean = "Class abc::Foo { name: String[1]; }\n";
+            let b_src = "function abc::greet(f: abc::Foo[1]): String[1] { $f.name }\n";
+            fs::write(&a_disk, a_clean).expect("write a.pure");
+            fs::write(&b_disk, b_src).expect("write b.pure");
+
+            // Embedded platform = M3 bootstrap; user project = the two
+            // files above. Same shape as a real `legend lsp` workspace
+            // with no DSL artifacts and one local project repo.
+            let user_repo = Repo::from_descriptor(&descriptor).expect("descriptor repo loads");
+            let mut repos = Repo::default_embedded();
+            repos.push(user_repo);
+            let mut ws = Workspace::new(repos, Vec::new());
+
+            // Sanity: the clean baseline compiles without user-source
+            // errors. (We can't assert exactly zero errors because the
+            // embedded platform itself may emit informational warnings
+            // through the same channel; what we care about is that
+            // there are no errors attributed to b.pure.)
+            ws.compile();
+            assert!(
+                !ws.diagnostics.contains_key("/userproj/b.pure"),
+                "baseline must have no errors on b.pure; got {:?}",
+                ws.diagnostics.get("/userproj/b.pure"),
+            );
+
+            // Break A by renaming the `name` property — B's `$f.name`
+            // becomes unresolved. Use `set_open_buffer` so the next
+            // compile sees the broken content via the snapshot overlay,
+            // without touching the disk file (which `Repo::Filesystem`
+            // slurped eagerly at construction and won't re-read).
+            let a_broken = "Class abc::Foo { nickname: String[1]; }\n";
+            let a_uri = Uri::from_file_path(&a_disk).expect("a uri");
+            ws.set_open_buffer(a_uri.clone(), a_broken.to_string());
+            ws.compile();
+
+            // The error must now be attributed to b.pure — that's the
+            // whole point of T-20260511-06. If validators ever start
+            // attributing cross-file errors to the *defining* element
+            // (a.pure) instead of the *use site* (b.pure), this fails
+            // loudly.
+            assert!(
+                ws.diagnostics.contains_key("/userproj/b.pure"),
+                "expected error attributed to b.pure; diagnostic keys: {:?}",
+                ws.diagnostics.keys().collect::<Vec<_>>(),
+            );
+
+            // The planner must surface that error to b.pure's `file://`
+            // URI even though b.pure is NOT open. Without
+            // `file_uri_for_canonical` resolving through the
+            // Filesystem repo's `source_root`, this entry would either
+            // not appear or appear under a broken `file://userproj/...`
+            // URI (the pre-fix behaviour).
+            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
+            let b_uri = Uri::from_file_path(&b_disk).expect("b uri");
+            let b_entry = plan.entries.iter().find(|(uri, _)| *uri == b_uri);
+            let (_, b_diags) = b_entry.unwrap_or_else(|| {
+                panic!(
+                    "expected planner to publish for b.pure URI {b_uri:?}; got {:?}",
+                    plan.entries.iter().map(|(u, _)| u).collect::<Vec<_>>(),
+                )
+            });
+            assert!(
+                !b_diags.is_empty(),
+                "expected non-empty diagnostics for b.pure",
+            );
+            assert!(plan.next_previously_published.contains(&b_uri));
+
+            // Stale-clear path: fix A back to the clean content. The
+            // next compile clears b.pure's diagnostics, and the planner
+            // must emit an empty publish for b.pure to clear it on the
+            // client.
+            ws.set_open_buffer(a_uri, a_clean.to_string());
+            ws.compile();
+            let prev = plan.next_previously_published.clone();
+            let plan2 = plan_diagnostics_publish(&ws, &prev);
+            let b_entry2 = plan2
+                .entries
+                .iter()
+                .find(|(uri, _)| *uri == b_uri)
+                .expect("stale-clear must emit entry for b.pure");
+            assert!(
+                b_entry2.1.is_empty(),
+                "stale-clear must be an empty publish; got {:?}",
+                b_entry2.1,
+            );
+            assert!(!plan2.next_previously_published.contains(&b_uri));
         }
     }
 }
