@@ -152,6 +152,17 @@
              window for streaming output during a debug session. -->
         <consoleFilterProvider
                 implementation="org.finos.legend.pure.intellij.debug.PureDebugConsoleFilterProvider"/>
+
+        <!-- Tells `WolfTheProblemSolver` that `.pure` files are
+             highlightable. Without this, `reportProblems` calls
+             from the LSP cross-file diagnostics path
+             (`WorkspaceAwareLspNotificationsHandler`) are
+             silently dropped by Wolf's `isToBeHighlighted`
+             filter — files would never appear in the Problems
+             tool window or get the red-filename badge in
+             Project view. T-20260511-06 / global diagnostics. -->
+        <problemFileHighlightFilter
+                implementation="org.finos.legend.pure.intellij.PureProblemFileHighlightFilter"/>
     </extensions>
 
     <!-- DAP-specific EPs. Only register when the

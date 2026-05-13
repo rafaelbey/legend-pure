@@ -16,6 +16,8 @@
 //! `Backend` impl so they can be exercised in unit tests without a
 //! tokio runtime or `tower_lsp_server::Client`.
 
+use std::collections::{HashMap, HashSet};
+
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_pure::error::CompilationError;
 use legend_pure_parser_pure::ids::ElementId;
@@ -36,6 +38,76 @@ use crate::workspace::Workspace;
 #[must_use]
 pub fn diagnostics_for(errors: &[CompilationError]) -> Vec<Diagnostic> {
     errors.iter().map(diagnostics::to_diagnostic).collect()
+}
+
+/// One cycle of `textDocument/publishDiagnostics` calls, prepared from
+/// the current workspace state.
+///
+/// `entries` is what to publish this cycle: one `(uri, diagnostics)`
+/// pair per URI, with `diagnostics` possibly empty for stale-clearing
+/// or for open buffers with no errors. `next_previously_published`
+/// captures the URIs that received non-empty diagnostics, to be fed
+/// back in as `previously_published` on the next call so any URI that
+/// drops out gets an empty publish next time.
+#[derive(Debug, Clone, Default)]
+pub struct PublishPlan {
+    /// `(uri, diagnostics)` pairs to feed `Client::publish_diagnostics`.
+    pub entries: Vec<(Uri, Vec<Diagnostic>)>,
+    /// URIs that received non-empty diagnostics this cycle. Track this
+    /// across cycles so the next cycle can clear any URI that drops
+    /// out of the set.
+    pub next_previously_published: HashSet<Uri>,
+}
+
+/// Plan one round of diagnostic publishing for a workspace.
+///
+/// Three sources contribute URIs to the publish set:
+///
+/// 1. Every canonical source in [`Workspace::diagnostics`] gets
+///    resolved to a `file://` URI via
+///    [`Workspace::file_uri_for_canonical`]. Canonicals that don't
+///    resolve (embedded `.purem`, bootstrap chunk 0, fixtures without
+///    a `source_root`) are filtered out — there's no on-disk file the
+///    client can navigate to.
+/// 2. Every open buffer gets at least an empty publish, so a clean
+///    open file visibly shows "no errors" right after didOpen.
+/// 3. Every URI in `previously_published` that isn't in the
+///    diagnostic set this cycle gets an empty publish — the
+///    stale-clear path that makes workspace-wide publishing safe.
+///
+/// Resolved diagnostics for an open buffer override its empty entry;
+/// resolved diagnostics for a stale URI also override its empty entry
+/// (the stale-clear only fires if the canonical truly dropped out).
+pub fn plan_diagnostics_publish(
+    workspace: &Workspace,
+    previously_published: &HashSet<Uri>,
+) -> PublishPlan {
+    let mut publishes: HashMap<Uri, Vec<Diagnostic>> = HashMap::new();
+
+    for (canonical, errors) in &workspace.diagnostics {
+        if let Some(uri) = workspace.file_uri_for_canonical(canonical) {
+            publishes.insert(uri, diagnostics_for(errors));
+        }
+    }
+
+    for uri in workspace.open_buffers.keys() {
+        publishes.entry(uri.clone()).or_default();
+    }
+
+    for uri in previously_published {
+        publishes.entry(uri.clone()).or_default();
+    }
+
+    let next_previously_published = publishes
+        .iter()
+        .filter(|(_, diags)| !diags.is_empty())
+        .map(|(uri, _)| uri.clone())
+        .collect();
+
+    PublishPlan {
+        entries: publishes.into_iter().collect(),
+        next_previously_published,
+    }
 }
 
 /// Compute hover content for a position. Returns `None` when nothing
@@ -2652,5 +2724,282 @@ function test::nameOf(p: test::Person[1]): String[1]
             locs.is_empty(),
             "without an index, references must return empty (not panic); got: {locs:?}"
         );
+    }
+
+    mod publish_plan {
+        use super::*;
+        use legend_pure_core_platform::repo::{OwnedSourceFile, Repo};
+        use std::path::PathBuf;
+
+        fn fs_repo(prefix: &str, root: PathBuf, files: &[&str]) -> Repo {
+            Repo::Filesystem {
+                prefix: prefix.to_string(),
+                files: files
+                    .iter()
+                    .map(|p| OwnedSourceFile {
+                        path: (*p).to_string(),
+                        content: String::new(),
+                    })
+                    .collect(),
+                meta: None,
+                source_root: Some(root),
+            }
+        }
+
+        fn err(source: &str, message: &str) -> CompilationError {
+            CompilationError {
+                message: message.to_string(),
+                source_info: SourceInfo::new(source, 1, 1, 1, 1),
+                kind: legend_pure_parser_pure::error::CompilationErrorKind::UnresolvedElement {
+                    path: smol_str::SmolStr::new("Foo"),
+                },
+            }
+        }
+
+        fn uri_of(s: &str) -> Uri {
+            s.parse::<Uri>().expect("test URI must parse")
+        }
+
+        #[test]
+        fn empty_workspace_yields_empty_plan() {
+            let ws = Workspace::new(Vec::new(), Vec::new());
+            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
+            assert!(plan.entries.is_empty());
+            assert!(plan.next_previously_published.is_empty());
+        }
+
+        #[test]
+        fn open_buffer_with_no_errors_gets_empty_publish() {
+            // Even when no compile has run, an open file must receive
+            // a single empty publish so the IDE shows "no errors" on
+            // didOpen. Preserves the current LSP behaviour at server.rs
+            // lines 88-92 in the old implementation.
+            let mut ws = Workspace::new(Vec::new(), Vec::new());
+            let uri = uri_of("file:///proj/a.pure");
+            ws.set_open_buffer(uri.clone(), String::new());
+
+            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
+            assert_eq!(plan.entries.len(), 1);
+            assert_eq!(plan.entries[0].0, uri);
+            assert!(plan.entries[0].1.is_empty());
+            // Empty publish must NOT be tracked as previously-published
+            // — there's nothing to clear next time.
+            assert!(plan.next_previously_published.is_empty());
+        }
+
+        #[test]
+        fn diagnostics_for_unopened_file_resolve_through_source_root() {
+            // Workspace has a filesystem repo with on-disk root
+            // /tmp/proj. A canonical /proj/lib.pure should resolve to
+            // file:///tmp/proj/lib.pure even though the file is NOT in
+            // open_buffers. This is the core "global diagnostics"
+            // behaviour T-20260511-06 asks for.
+            let mut ws = Workspace::new(
+                vec![fs_repo("/proj", PathBuf::from("/tmp/proj"), &["/proj/lib.pure"])],
+                Vec::new(),
+            );
+            ws.diagnostics
+                .insert("/proj/lib.pure".to_string(), vec![err("/proj/lib.pure", "boom")]);
+
+            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
+            assert_eq!(plan.entries.len(), 1);
+            let (uri, diags) = &plan.entries[0];
+            assert!(
+                uri.as_str().contains("/tmp/proj/lib.pure"),
+                "expected on-disk path in URI; got {uri:?}",
+            );
+            assert_eq!(diags.len(), 1);
+            assert_eq!(diags[0].message, "boom");
+            // Non-empty publish for this URI — track it so the next
+            // cycle can clear it if the user fixes the error.
+            assert!(plan.next_previously_published.contains(uri));
+        }
+
+        #[test]
+        fn synthetic_source_is_filtered_out() {
+            // Canonical /platform/pure/... or anything not covered by
+            // a Filesystem repo with source_root returns None from
+            // file_uri_for_canonical. Those diagnostics must NOT be
+            // published — there's no on-disk file the client can
+            // navigate to.
+            let mut ws = Workspace::new(Vec::new(), Vec::new());
+            ws.diagnostics.insert(
+                "/platform/pure/grammar/m3.pure".to_string(),
+                vec![err("/platform/pure/grammar/m3.pure", "boom")],
+            );
+
+            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
+            assert!(plan.entries.is_empty());
+            assert!(plan.next_previously_published.is_empty());
+        }
+
+        #[test]
+        fn stale_uri_gets_empty_publish_when_dropped() {
+            // Previously published a non-empty diag for B.pure; this
+            // cycle B.pure no longer appears in ws.diagnostics. The
+            // plan must emit an empty publish for B's URI so the
+            // client clears its stale entry.
+            let ws = Workspace::new(
+                vec![fs_repo("/proj", PathBuf::from("/tmp/proj"), &["/proj/b.pure"])],
+                Vec::new(),
+            );
+            let b_uri = uri_of("file:///tmp/proj/b.pure");
+            let mut prev = HashSet::new();
+            prev.insert(b_uri.clone());
+
+            let plan = plan_diagnostics_publish(&ws, &prev);
+            assert_eq!(plan.entries.len(), 1);
+            assert_eq!(plan.entries[0].0, b_uri);
+            assert!(plan.entries[0].1.is_empty(), "stale entry must be cleared");
+            assert!(plan.next_previously_published.is_empty());
+        }
+
+        #[test]
+        fn open_buffer_with_errors_publishes_diagnostics_once() {
+            // An open buffer that ALSO has compile errors should get a
+            // single non-empty publish (the resolved diagnostics
+            // override the empty open-buffer placeholder).
+            let mut ws = Workspace::new(
+                vec![fs_repo("/proj", PathBuf::from("/tmp/proj"), &["/proj/a.pure"])],
+                Vec::new(),
+            );
+            let a_uri = uri_of("file:///tmp/proj/a.pure");
+            ws.set_open_buffer(a_uri.clone(), String::new());
+            ws.diagnostics
+                .insert("/proj/a.pure".to_string(), vec![err("/proj/a.pure", "boom")]);
+
+            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
+            assert_eq!(plan.entries.len(), 1, "must not double-publish");
+            assert_eq!(plan.entries[0].0, a_uri);
+            assert_eq!(plan.entries[0].1.len(), 1);
+            assert!(plan.next_previously_published.contains(&a_uri));
+        }
+
+        /// End-to-end integration of `Workspace::compile()` and
+        /// `plan_diagnostics_publish`: a real two-file workspace where
+        /// editing A produces a compile error in B, and the planner
+        /// surfaces B's URI even though B is not in `open_buffers`.
+        /// This is the actual "global diagnostics" UX win T-20260511-06
+        /// asks for; the rest of `publish_plan` tests cover planner
+        /// correctness in isolation with hand-injected diagnostics.
+        #[test]
+        fn cross_file_error_surfaces_on_unopened_file() {
+            use legend_pure_core_platform::repo::Repo;
+            use std::fs;
+
+            // The Filesystem canonical-tail match in `snapshot_repos`
+            // requires the on-disk leaf directory to be named after the
+            // repo. Build a descriptor-shaped layout:
+            //   <tmp>/userproj.json    — declares dep on `platform`
+            //   <tmp>/userproj/a.pure
+            //   <tmp>/userproj/b.pure
+            // → canonicals /userproj/a.pure, /userproj/b.pure.
+            // Using a descriptor (rather than `Repo::from_filesystem`)
+            // populates `RepoMeta`, which the topo-sorter needs for
+            // multi-repo workspaces — `from_filesystem` produces a
+            // `meta: None` repo that fails topo sort against the
+            // embedded platform.
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let descriptor = tmp.path().join("userproj.json");
+            fs::write(
+                &descriptor,
+                r#"{"name":"userproj","pattern":".*","dependencies":["platform"]}"#,
+            )
+            .expect("write descriptor");
+            let proj = tmp.path().join("userproj");
+            fs::create_dir(&proj).expect("mkdir userproj");
+            let a_disk = proj.join("a.pure");
+            let b_disk = proj.join("b.pure");
+
+            // Clean baseline: A defines `Foo` with a `name` property;
+            // B references it. Both compile clean against the platform.
+            let a_clean = "Class abc::Foo { name: String[1]; }\n";
+            let b_src = "function abc::greet(f: abc::Foo[1]): String[1] { $f.name }\n";
+            fs::write(&a_disk, a_clean).expect("write a.pure");
+            fs::write(&b_disk, b_src).expect("write b.pure");
+
+            // Embedded platform = M3 bootstrap; user project = the two
+            // files above. Same shape as a real `legend lsp` workspace
+            // with no DSL artifacts and one local project repo.
+            let user_repo =
+                Repo::from_descriptor(&descriptor).expect("descriptor repo loads");
+            let mut repos = Repo::default_embedded();
+            repos.push(user_repo);
+            let mut ws = Workspace::new(repos, Vec::new());
+
+            // Sanity: the clean baseline compiles without user-source
+            // errors. (We can't assert exactly zero errors because the
+            // embedded platform itself may emit informational warnings
+            // through the same channel; what we care about is that
+            // there are no errors attributed to b.pure.)
+            ws.compile();
+            assert!(
+                !ws.diagnostics.contains_key("/userproj/b.pure"),
+                "baseline must have no errors on b.pure; got {:?}",
+                ws.diagnostics.get("/userproj/b.pure"),
+            );
+
+            // Break A by renaming the `name` property — B's `$f.name`
+            // becomes unresolved. Use `set_open_buffer` so the next
+            // compile sees the broken content via the snapshot overlay,
+            // without touching the disk file (which `Repo::Filesystem`
+            // slurped eagerly at construction and won't re-read).
+            let a_broken = "Class abc::Foo { nickname: String[1]; }\n";
+            let a_uri = Uri::from_file_path(&a_disk).expect("a uri");
+            ws.set_open_buffer(a_uri.clone(), a_broken.to_string());
+            ws.compile();
+
+            // The error must now be attributed to b.pure — that's the
+            // whole point of T-20260511-06. If validators ever start
+            // attributing cross-file errors to the *defining* element
+            // (a.pure) instead of the *use site* (b.pure), this fails
+            // loudly.
+            assert!(
+                ws.diagnostics.contains_key("/userproj/b.pure"),
+                "expected error attributed to b.pure; diagnostic keys: {:?}",
+                ws.diagnostics.keys().collect::<Vec<_>>(),
+            );
+
+            // The planner must surface that error to b.pure's `file://`
+            // URI even though b.pure is NOT open. Without
+            // `file_uri_for_canonical` resolving through the
+            // Filesystem repo's `source_root`, this entry would either
+            // not appear or appear under a broken `file://userproj/...`
+            // URI (the pre-fix behaviour).
+            let plan = plan_diagnostics_publish(&ws, &HashSet::new());
+            let b_uri = Uri::from_file_path(&b_disk).expect("b uri");
+            let b_entry = plan.entries.iter().find(|(uri, _)| *uri == b_uri);
+            let (_, b_diags) = b_entry.unwrap_or_else(|| {
+                panic!(
+                    "expected planner to publish for b.pure URI {b_uri:?}; got {:?}",
+                    plan.entries.iter().map(|(u, _)| u).collect::<Vec<_>>(),
+                )
+            });
+            assert!(
+                !b_diags.is_empty(),
+                "expected non-empty diagnostics for b.pure",
+            );
+            assert!(plan.next_previously_published.contains(&b_uri));
+
+            // Stale-clear path: fix A back to the clean content. The
+            // next compile clears b.pure's diagnostics, and the planner
+            // must emit an empty publish for b.pure to clear it on the
+            // client.
+            ws.set_open_buffer(a_uri, a_clean.to_string());
+            ws.compile();
+            let prev = plan.next_previously_published.clone();
+            let plan2 = plan_diagnostics_publish(&ws, &prev);
+            let b_entry2 = plan2
+                .entries
+                .iter()
+                .find(|(uri, _)| *uri == b_uri)
+                .expect("stale-clear must emit entry for b.pure");
+            assert!(
+                b_entry2.1.is_empty(),
+                "stale-clear must be an empty publish; got {:?}",
+                b_entry2.1,
+            );
+            assert!(!plan2.next_previously_published.contains(&b_uri));
+        }
     }
 }

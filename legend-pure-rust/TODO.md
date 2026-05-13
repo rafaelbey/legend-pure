@@ -770,6 +770,13 @@ tests either skip silently or fail when CI runs the workspace gates.
 <!-- Agents: append entries below. Do not rewrite the developer block above. -->
 <!-- agent-audit:end -->
 
+---
+
+## Closed
+
+<!-- Resolved / migrated / wontfix items, newest first. Keep the full block
+     including the final audit-block status for posterity. -->
+
 ### T-20260511-06 — Global diagnostics: surface every site impacted by a single change
 
 - **Type:** feature
@@ -857,24 +864,84 @@ Today diagnostics surface only for files the editor has opened — the
     `file_uri_for_canonical` returning `None`. 6 unit tests in
     `mod publish_plan` cover empty workspace, open-buffer-no-errors,
     unopened-file-resolution, synthetic-source filter,
-    stale-clearing, and open-buffer-with-errors-publishes-once.
+    stale-clearing, and open-buffer-with-errors-publishes-once. One
+    end-to-end integration test
+    (`cross_file_error_surfaces_on_unopened_file`) drives a real
+    `Workspace::compile()` against a 2-file descriptor-rooted user
+    project alongside the embedded platform: breaks A via open-buffer
+    overlay, asserts B's URI surfaces with a non-empty diagnostic
+    even though B is not open, then fixes A and asserts the
+    stale-clear empty publish for B. Pins the structural assumption
+    that compile-emitted `source_info.source` is attributed to the
+    *use-site* file (B), not the *defining* file (A).
   * `crates/lsp/src/server.rs`: `Backend` gains
     `previously_published: Arc<Mutex<HashSet<Uri>>>`.
     `recompile_and_publish` rewritten to (a) hold workspace + prev
     locks together for compile + plan, (b) update prev tracker
     in-line, (c) drop both locks before the `publish_diagnostics`
     awaits. `did_close`'s explicit clear left as-is (next recompile
-    re-establishes correct state via the global publish path).
-  * `cargo test -p legend-pure-lsp`: 36/36 pass.
-    `cargo lint-lib` + `cargo lint` zero new warnings.
+    re-establishes correct state via the global publish path) — see
+    plan §"smaller concern" note for a follow-up to revisit
+    close-semantics under workspace-wide intent.
+  * `cargo test -p legend-pure-lsp`: 37/37 pass.
+    `cargo lint-lib` + `cargo lint` zero new warnings. Manual
+    IntelliJ end-to-end verification per plan §Verification
+    deferred to the user.
+- 2026-05-13 — IntelliJ end-to-end revealed the server-side fix
+  was necessary but not sufficient: JetBrains' native LSP
+  integration (`com.intellij.platform.lsp`) renders
+  `publishDiagnostics` only into per-editor `MarkupModel`s via
+  `LspDiagnosticsSupport`, so notifications for unopened files
+  were cached but never displayed. Three independent gates had
+  to be cleared on the plugin side:
+  * **`Lsp4jClient` wrapper** — new
+    `clients/intellij/.../WorkspaceAwareLspNotificationsHandler.kt`
+    decorates the platform's `LspServerNotificationsHandler`
+    (installed via `PureLspServerDescriptor.createLsp4jClient`
+    override, Kotlin `by` delegation), forwarding every
+    `publishDiagnostics` to the platform delegate **and** to the
+    two surfaces below.
+  * **`ProblemsCollector` direct call** — new
+    `LegendPureFileProblem.kt` implements
+    `com.intellij.analysis.problemsView.FileProblem`;
+    `ProblemsCollector.getInstance(project)
+    .problemAppeared(p)` / `.problemDisappeared(p)` is called
+    directly. Critically, `ProblemsListener.TOPIC` was tried
+    first and had no effect — the topic has no platform-
+    registered subscribers for this purpose. The stock
+    `ProblemsViewHighlightingWatcher` also calls its stored
+    listener instance directly, not via the topic. Identity-
+    tracked per URI in a `ConcurrentHashMap` so each
+    `problemDisappeared` carries the same instance the earlier
+    `problemAppeared` published.
+  * **`WolfTheProblemSolver` filter gate** — new
+    `PureProblemFileHighlightFilter.kt` registered as
+    `<problemFileHighlightFilter>` in `plugin.xml`. Without
+    this, `WolfTheProblemSolverImpl.reportProblems` silently
+    returns at its internal `isToBeHighlighted(file)` gate and
+    the file never enters Wolf's problem set
+    (`isProblemFile=false` after a successful-looking call —
+    the diagnostic signal that pointed at this missing EP).
+- 2026-05-13 — docs + memory:
+  * `clients/intellij/README.md` — new *Workspace-wide
+    diagnostics* section + Problems tool window step in the
+    smoke test + updated Layout listing.
+  * `crates/lsp/src/lib.rs` — module-level doc for
+    `publishDiagnostics` now notes workspace-wide publish +
+    plugin wrapper.
+  * Auto-memory: `reference_intellij_lsp_diagnostics.md`
+    captures the three-gates pattern; `reference_lsp_publish_scope.md`
+    captures the server-side publish-plan shape. Future
+    sessions debugging "diagnostics not showing" should find
+    the answer in minutes.
+- 2026-05-13 — verified working end-to-end in the IntelliJ
+  sandbox against `legend-pure2`: a single user edit that
+  breaks 469 cross-file references surfaces every affected
+  file in the Problems tool window's *Project Errors* tab and
+  paints red filename badges in Project view.
+- 2026-05-13 — moved to Closed.
+  Status: Feature shipped.
 <!-- agent-audit:end -->
-
----
-
-## Closed
-
-<!-- Resolved / migrated / wontfix items, newest first. Keep the full block
-     including the final audit-block status for posterity. -->
 
 ### T-20260512-04 — Property default values not applied at `^Class(...)` instantiation (multiplicity violation)
 

@@ -20,7 +20,14 @@
 //! # Capabilities (tier-1)
 //!
 //! - `textDocument/publishDiagnostics` — driven by
-//!   [`legend_pure_core_platform::repo::load`] error output.
+//!   [`legend_pure_core_platform::repo::load`] error output. Publishes
+//!   workspace-wide: an edit that breaks references across files emits
+//!   diagnostics for every affected file, not just the one being
+//!   edited. See [`handlers::plan_diagnostics_publish`] for the
+//!   publish-set computation and stale-clear bookkeeping. The
+//!   IntelliJ plugin pairs this with a custom
+//!   `LspServerNotificationsHandler` decorator so unopened files
+//!   surface in the Problems tool window's *Project Errors* tab.
 //! - `textDocument/hover` — renders inferred type from
 //!   `ValueSpec::type_info` via [`legend_pure_parser_pure::locate`].
 //! - `textDocument/definition` — resolves identifier under cursor to

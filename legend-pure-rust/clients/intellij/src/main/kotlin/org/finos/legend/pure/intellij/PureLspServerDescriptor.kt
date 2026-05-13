@@ -19,6 +19,8 @@ import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.platform.lsp.api.Lsp4jClient
+import com.intellij.platform.lsp.api.LspServerNotificationsHandler
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
 import com.intellij.platform.lsp.api.customization.LspCustomization
 import org.finos.legend.pure.intellij.run.PureLspCustomization
@@ -77,6 +79,23 @@ class PureLspServerDescriptor(project: Project) :
 
     override fun isSupportedFile(file: VirtualFile): Boolean =
         file.fileType is PureFileType
+
+    /**
+     * Wrap the platform's notifications handler so
+     * `textDocument/publishDiagnostics` notifications for unopened
+     * files surface in the project-wide Problems tool window.
+     *
+     * The stock JetBrains LSP integration only renders diagnostics
+     * into the per-editor `MarkupModel`, so files that aren't open
+     * in a tab stay invisible even when the server reports errors
+     * for them. T-20260511-06 needs the workspace-wide view: edit
+     * one element, see every fan-out site. See
+     * [`WorkspaceAwareLspNotificationsHandler`] for the routing
+     * details — the wrapper delegates everything else to the
+     * platform's default behaviour.
+     */
+    override fun createLsp4jClient(handler: LspServerNotificationsHandler): Lsp4jClient =
+        Lsp4jClient(WorkspaceAwareLspNotificationsHandler(handler, this))
 
     override fun createCommandLine(): GeneralCommandLine {
         val settings = LegendPureSettings.getInstance(project)
