@@ -139,6 +139,66 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260513-01 — MCP / LSP: render_fqn returns mangled function names, blocking run_pct/run_test
+
+- **Type:** bug
+- **Area:** mcp | lsp | runtime
+- **Priority:** P2
+- **Reporter:** Rafael
+- **Filed:** 2026-05-13
+
+**Summary**
+`list_tests` (MCP) and `code_lenses_for` (LSP) surface function FQNs in
+their **mangled** form (e.g. `testPlus_Function_1__Boolean_1_`), but the
+runner's `run_pct` / `run_test` pipe the FQN through Pure's
+`pathToElement` native — which only accepts the **un-mangled** form
+(`testPlus`). Result: an agent that calls `list_tests` and then `run_pct`
+with the FQN it just got back hits `"pathToElement: path not found"`.
+
+**Repro / Context**
+- From the MCP smoke test on `legend-pure-rust` HEAD:
+  ```
+  list_tests prefix=meta::pure::functions::math::tests::plus
+    → "fqn": "meta::pure::functions::math::tests::plus::testPlus_Function_1__Boolean_1_"
+  run_pct test_fqn=…testPlus_Function_1__Boolean_1_  adapter_fqn=…InMemoryExecution_Function_1__X_o_
+    → TOOL ERROR: "pathToElement failed: path not found: '…testPlus_Function_1__Boolean_1_'"
+  ```
+- Same shape in the IntelliJ ▶ Run gutter — when the lens dispatches
+  `legend.runTest { args: ["<mangled>"] }`, the LSP-side
+  `run_test_via_surveyor` calls `runTestsFromPath(<mangled>, "")` which
+  internally uses `pathToElement`. The IDE flow happens to work today
+  only because the gutter contributor strips the mangle suffix before
+  emitting the command — that strip logic doesn't exist on the MCP
+  side.
+
+**Expected**
+Either:
+- (a) `render_fqn` (used by both `code_lenses_for` and MCP
+  `list_tests` / `search_symbols`) returns the un-mangled form by
+  default, with a separate `render_mangled_fqn` for the few places
+  that need uniqueness across overloads, **or**
+- (b) The runner accepts either form: try `pathToElement` with the
+  input as-is, and if that errors with `path not found`, retry after
+  stripping the `_Function_…__…_` suffix.
+
+(a) is the structural fix and matches Java Pure's behaviour where
+public FQNs never carry the dispatch mangle. (b) is a tactical
+workaround acceptable as a stop-gap.
+
+**Notes**
+- `crates/runtime/src/runner/mod.rs` — `render_fqn` (private) used by
+  `list_pct_adapters`.
+- `crates/mcp/src/server.rs` — `render_fqn` (duplicate copy used by
+  `search_symbols`, `read_element`, `list_tests`, `list_packages`).
+- `crates/lsp/src/handlers.rs:692` — `render_fqn` (original copy).
+  Three sites of the same logic — fixing once likely requires lifting
+  to `legend_pure_runtime::query::render_fqn` or similar.
+- IntelliJ run-gutter contributor: how it strips the mangle suffix
+  is what we need to mirror in `runner::run_test` / `run_pct`. See
+  `clients/intellij/src/main/kotlin/.../run/PureRunLineMarkerContributor.kt`.
+
+---
+
 ### T-20260511-07 — LSP: Find Usages (workspace-wide references to an element)
 
 - **Type:** feature
