@@ -139,6 +139,133 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260513-06 — "Ambiguous function call" error should list candidate FQNs and inferred arg types/multiplicities
+
+- **Type:** feature
+- **Area:** pure
+- **Priority:** P2
+- **Reporter:** Rafael
+- **Filed:** 2026-05-13
+
+**Summary**
+Today's ambiguous-overload diagnostic is opaque:
+
+```
+Ambiguous function call 'loadValuesToDbTable': found 2 overloads with 3 args
+(narrowed from 2 candidates)
+```
+
+It tells the user *that* dispatch failed but neither *which*
+candidates survived narrowing nor *what types* the compiler inferred
+for the call-site arguments. The user then has to grep the codebase
+for the function name, hand-compute each overload's signature, and
+re-derive arg types from the receiver chain. The data needed to
+answer all of that is already in scope at the error site — surface
+it.
+
+**Repro / Context**
+- Error origin: `crates/pure/src/resolve.rs:1254-1267`. The
+  `format!` builds today's message from
+  `narrowed.len()`, `arg_count`, `all_candidates.len()`. The
+  surrounding scope already holds:
+  - `narrowed: Vec<ElementId>` — the candidates that survived
+    type-narrowing (the ones still in contention).
+  - `all_candidates: Vec<ElementId>` — every overload found by
+    simple-name lookup (pre-narrowing).
+  - `lowered_args: &[ValueSpec]` — each one carries its
+    inferred `TypeExpr` + `Multiplicity` via `ctx.variable_types`
+    / `vs.type_info` (see `narrow_candidates_by_type` for how it
+    already reads them).
+  - `ctx.model` — fully resolves `ElementId` → declared FQN + each
+    parameter's declared `(type, multiplicity)`.
+- Acceptance criteria (rough shape — refine at triage):
+  ```
+  Ambiguous function call 'loadValuesToDbTable' at <file:line>:
+    Inferred arg types from call site:
+      arg[0]: Database[1]
+      arg[1]: String[1]
+      arg[2]: meta::pure::metamodel::relation::Relation<(name:String, age:Integer)>[1]
+    2 overloads survived narrowing (from 2 candidates):
+      [1] meta::relational::functions::database::loadValuesToDbTable(
+            db: Database[1],
+            tableName: String[1],
+            csv: String[1]
+          ) : Boolean[1]
+      [2] meta::relational::functions::database::loadValuesToDbTable(
+            db: Database[1],
+            tableName: String[1],
+            rel: meta::pure::metamodel::relation::Relation<Any>[1]
+          ) : Boolean[1]
+    Hint: arg[2] is concrete `Relation<(name:..., age:...)>`; overload
+          [2] takes `Relation<Any>` and overload [1] takes `String` —
+          if you want overload [2], coerce explicitly with
+          `->cast(@Relation<Any>)`.
+  ```
+  - Diagnostic includes every narrowed FQN with full parameter
+    list (type + multiplicity) and declared return type.
+  - Diagnostic includes the inferred `(type, multiplicity)` for
+    every call-site argument, in order, using the same source-of-
+    truth printer the rest of the compiler uses for type display
+    (don't reinvent it — see `crates/pure/src/types.rs` /
+    `crates/compose` and reuse).
+  - Argument indices are zero-based and match the call-site order.
+  - When the candidate list pre- and post-narrowing is the same
+    set (i.e. narrowing didn't drop anything), say so explicitly
+    — that's a different debugging story (no overload's parameter
+    types matched any caller-arg in a way that excluded its
+    siblings).
+  - Hint line is nice-to-have, not required for V1. Skip it if
+    the heuristic is non-trivial. Focus on the FQN + type dump.
+  - Existing tests asserting the literal string format need to be
+    updated: at minimum `"Ambiguous function call"` substring
+    checks survive verbatim, but anything that pins the *exact*
+    message will break. Grep
+    `crates/pure/tests/`, `crates/runtime/tests/eval_tests.rs:1923,
+    2022, 2077` — those reference the format in comments/asserts
+    and will need rebaselining.
+
+**Notes**
+- This is a pure improvement; the existing format strings and the
+  `AmbiguousImport` error kind (with its `candidates: Vec<SmolStr>`
+  payload of package names) stay — the *message* and the rendered
+  diagnostic just get richer. Tools that key on
+  `CompilationErrorKind::AmbiguousImport` continue to work.
+- Don't print mangled names — print declared Pure-syntax FQNs.
+  Per the `feedback_no_classifier_string_compare` memory:
+  resolve via `ElementId` → `PureModel::declared_fqn(eid)`
+  (or whatever the current helper is named); never reconstruct
+  from the mangled symbol.
+- Type / multiplicity rendering: reuse `legend_pure_compose` or
+  the `Display` impl on `TypeExpr` / `Multiplicity`. There's
+  already a single source of truth — don't grow a sibling
+  pretty-printer in `resolve.rs`. (See memory
+  `feedback_no_tactical_hacks` / "Fix at the source of truth".)
+- Avoid leaking inferred call-site types when one of them is
+  `TypeExpr::Unresolved` — that's already suppressed at
+  `crates/pure/src/resolve.rs:1247-1253` by the
+  `any_arg_reads_unresolved` guard, so the richer message only
+  fires on the cases that get past it. Re-verify after the new
+  format lands that we still don't leak `Unresolved` into the
+  rendered output.
+- Don't truncate. Even when the diff between candidates is
+  subtle (e.g. `T[*]` vs `T[1..*]`), the user needs to see it.
+  A 40-line diagnostic is fine for an ambiguity error — these are
+  rare and the user will read every line of them.
+- Adjacent: `CompilationErrorKind::AmbiguousImport` already
+  carries `candidates: Vec<SmolStr>` — consider extending the
+  payload with structured `narrowed: Vec<ElementId>` and
+  `inferred_arg_types: Vec<(TypeExpr, Multiplicity)>` so LSP
+  clients can render their own UI instead of having to parse the
+  free-form message. Out of scope for V1 if cost is high; file
+  separately.
+- Companion to T-20260511-06 (global diagnostics): once the
+  payload is structured, the global-diagnostics index can also
+  surface every ambiguity site impacted by an overload addition.
+
+<!-- agent-audit:start id=T-20260513-06 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
 ### T-20260513-05 — MCP `workspace_status` and LSP server status should include CLI version + server start time
 
 - **Type:** feature
