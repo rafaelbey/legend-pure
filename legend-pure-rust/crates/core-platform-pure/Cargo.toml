@@ -84,6 +84,10 @@ walkdir = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Needed by repo.rs's section-parser-dispatch regression test, which
+# defines a tiny in-test `SectionParser` and consumes tokens via the
+# lexer's `TokenKind`.
+legend-pure-parser-lexer = { path = "../lexer" }
 
 [build-dependencies]
 legend-pure-build = { path = "../build" }

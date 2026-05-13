@@ -691,9 +691,8 @@ pub fn load_with_extensions(
     for repo in sorted {
         match repo {
             Repo::Embedded { .. } | Repo::Filesystem { .. } => {
-                let section_parsers = section_parsers_factory();
                 let (parsed_files, parse_errs) =
-                    parse_repo_sources_with_sections(repo, section_parsers);
+                    parse_repo_sources_with_sections(repo, section_parsers_factory);
                 errors.extend(parse_errs);
                 let lowerers = default_island_lowerers();
                 let (_range, slice_errs) = pipeline::compile_repo_slice_with_islands(
@@ -748,34 +747,37 @@ fn parse_repo_sources(
     Vec<legend_pure_parser_ast::section::SourceFile>,
     Vec<CompilationError>,
 ) {
-    parse_repo_sources_with_sections(repo, Vec::new())
+    parse_repo_sources_with_sections(repo, &mut Vec::new)
 }
 
 /// Same as [`parse_repo_sources`] but routes `###Section` declarations
-/// through the supplied DSL section parsers (Mapping, Relational,
-/// Store, …). Sections whose `kind` doesn't match any registered
-/// parser fall through to the default behaviour and end up as
+/// through DSL section parsers minted from `section_parsers_factory`.
+/// Sections whose `kind` doesn't match any registered parser fall
+/// through to the default behaviour and end up as
 /// [`legend_pure_parser_ast::section::Section`] entries with an
 /// unparsed body.
+///
+/// The factory is invoked **once per source file** because
+/// `parse_with_sections` consumes the parser `Vec<Box<...>>` and
+/// `Box<dyn SectionParser>` can't be cloned. Doing it any other way
+/// (e.g. `std::mem::take`-ing a shared vec) would silently skip
+/// section dispatch on every file after the first — which matters
+/// for repos that mix DSL and non-DSL files (e.g. the relational
+/// store's `tests/load_values.pure` sits next to plain
+/// `functions.pure`).
 fn parse_repo_sources_with_sections(
     repo: &Repo,
-    section_parsers: Vec<Box<dyn legend_pure_parser_parser::SectionParser>>,
+    section_parsers_factory: &mut dyn FnMut() -> Vec<
+        Box<dyn legend_pure_parser_parser::SectionParser>,
+    >,
 ) -> (
     Vec<legend_pure_parser_ast::section::SourceFile>,
     Vec<CompilationError>,
 ) {
     let mut parsed_files = Vec::new();
     let mut errors = Vec::new();
-    let mut section_parsers = section_parsers;
     for (content, name) in repo.sources() {
-        // `parse_with_sections` consumes `Vec<Box<...>>`; refill from
-        // the caller's factory between files. Using `take` lets us
-        // pass the same vec on the LAST file without an extra clone
-        // — earlier iterations get an empty vec since DSL parsers
-        // can't be cloned. This is fine for repos that don't mix
-        // DSL and non-DSL files; if they do, callers should re-call
-        // `load_with_extensions` per-repo.
-        let parsers = std::mem::take(&mut section_parsers);
+        let parsers = section_parsers_factory();
         match legend_pure_parser_parser::parse_with_sections(
             content,
             name,
@@ -987,5 +989,84 @@ mod tests {
                     .map_or_else(|| "Ok(_)".into(), |e| format!("{e:?}"))
             ),
         }
+    }
+
+    /// Regression: `parse_repo_sources_with_sections` must mint a
+    /// fresh `Vec<Box<dyn SectionParser>>` for **every** source file,
+    /// not drain a single shared vec on the first iteration. The bug
+    /// surfaced as `Unexpected token Database` on
+    /// `/platform_store_relational/tests/load_values.pure` because
+    /// that file's `###Relational` section header arrived *after*
+    /// `functions.pure` had already consumed the parser vec.
+    #[test]
+    fn section_parsers_dispatch_on_every_file_not_just_first() {
+        use std::fs;
+
+        use legend_pure_parser_ast::dsl::DSLElement;
+        use legend_pure_parser_lexer::TokenKind;
+        use legend_pure_parser_parser::{ParserContext, SectionParser};
+
+        #[derive(Debug)]
+        struct CountingTestDslParser {
+            calls: Arc<std::sync::Mutex<usize>>,
+        }
+        impl SectionParser for CountingTestDslParser {
+            fn kind(&self) -> &str {
+                "TestDsl"
+            }
+            fn parse_body(
+                &self,
+                ctx: &mut ParserContext<'_>,
+                _errors: &mut Vec<legend_pure_parser_parser::error::ParseError>,
+            ) -> Vec<Box<dyn DSLElement>> {
+                *self.calls.lock().unwrap() += 1;
+                while !ctx.cursor().check(TokenKind::SectionHeader)
+                    && !ctx.cursor().check(TokenKind::Eof)
+                {
+                    ctx.cursor().advance();
+                }
+                Vec::new()
+            }
+        }
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // Two files in a single repo, listed in walk (sort_by_file_name)
+        // order. The first uses `###Pure` only; the second uses our
+        // fake `###TestDsl`. Before the fix, file `b_` would receive an
+        // empty section_parsers vec because file `a_` already consumed
+        // it via `std::mem::take`.
+        fs::write(
+            tmp.path().join("a_first.pure"),
+            "###Pure\n// no elements; just exercises the first iteration\n",
+        )
+        .expect("write a");
+        fs::write(
+            tmp.path().join("b_second.pure"),
+            "###TestDsl\nsome body content that the test parser consumes\n",
+        )
+        .expect("write b");
+
+        let repo = Repo::from_filesystem(tmp.path(), "/testrepo").expect("repo");
+        let calls = Arc::new(std::sync::Mutex::new(0_usize));
+        let calls_factory = Arc::clone(&calls);
+        let mut factory = move || -> Vec<Box<dyn SectionParser>> {
+            vec![Box::new(CountingTestDslParser {
+                calls: Arc::clone(&calls_factory),
+            })]
+        };
+
+        let (parsed, errors) = parse_repo_sources_with_sections(&repo, &mut factory);
+
+        assert!(
+            errors.is_empty(),
+            "expected zero parse errors after the fix, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+        assert_eq!(parsed.len(), 2, "both files should be parsed");
+        assert_eq!(
+            *calls.lock().unwrap(),
+            1,
+            "TestDsl parser should be invoked exactly once — on b_second.pure",
+        );
     }
 }
