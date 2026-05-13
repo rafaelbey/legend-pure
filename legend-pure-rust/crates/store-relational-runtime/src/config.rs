@@ -23,7 +23,6 @@
 //!
 //! 1. Environment variables (highest precedence):
 //!    - `LEGEND_PURE_H2_JAR` — absolute path to `h2-X.Y.Z.jar`
-//!    - `LEGEND_PURE_H2_VERSION`
 //!    - `LEGEND_PURE_H2_PG_PORT`
 //!    - `LEGEND_PURE_H2_JAVA` — path to the `java` binary
 //! 2. The `[extension.relational.h2]` table in the active
@@ -48,11 +47,6 @@ pub struct H2Config {
     /// `$HOME` when read from TOML; env-var values are used verbatim
     /// (callers can pre-expand or pass an absolute path).
     pub jar_path: PathBuf,
-    /// H2 version string, e.g. `"2.1.214"`. Carried for diagnostics
-    /// and future per-version branching; not consumed by the sub-process
-    /// spawn directly.
-    #[serde(default = "default_version")]
-    pub version: String,
     /// TCP port the spawned H2 server listens on for PG-wire clients.
     #[serde(default = "default_pg_port")]
     pub pg_port: u16,
@@ -62,9 +56,6 @@ pub struct H2Config {
     pub java: PathBuf,
 }
 
-fn default_version() -> String {
-    "2.1.214".into()
-}
 fn default_pg_port() -> u16 {
     5435
 }
@@ -82,8 +73,6 @@ fn default_java() -> PathBuf {
 pub struct H2EnvOverrides {
     /// Override for `jar_path`. Used verbatim (no `~` expansion).
     pub jar_path: Option<PathBuf>,
-    /// Override for `version`.
-    pub version: Option<String>,
     /// Override for `pg_port`. Raw string so [`H2Config::resolve`] can
     /// surface a parse error with the offending value attached.
     pub pg_port: Option<String>,
@@ -102,7 +91,6 @@ impl H2EnvOverrides {
     pub fn from_process_env() -> Self {
         Self {
             jar_path: std::env::var_os("LEGEND_PURE_H2_JAR").map(PathBuf::from),
-            version: std::env::var("LEGEND_PURE_H2_VERSION").ok(),
             pg_port: std::env::var("LEGEND_PURE_H2_PG_PORT").ok(),
             java: std::env::var_os("LEGEND_PURE_H2_JAVA").map(PathBuf::from),
             home: std::env::var_os("HOME").map(PathBuf::from),
@@ -178,7 +166,6 @@ impl H2Config {
                 .map_err(|e| H2ConfigError::InvalidToml(e.to_string()))?,
             None => Self {
                 jar_path: PathBuf::new(),
-                version: default_version(),
                 pg_port: default_pg_port(),
                 java: default_java(),
             },
@@ -196,9 +183,6 @@ impl H2Config {
         // Apply env overrides.
         if let Some(jar) = &env.jar_path {
             cfg.jar_path.clone_from(jar);
-        }
-        if let Some(v) = &env.version {
-            cfg.version.clone_from(v);
         }
         if let Some(port_str) = &env.pg_port {
             cfg.pg_port = port_str.parse().map_err(|e: std::num::ParseIntError| {
@@ -266,7 +250,6 @@ jar_path = "/opt/h2/h2.jar"
         );
         let cfg = H2Config::resolve_with_env(&cfgs, &H2EnvOverrides::default()).expect("resolve");
         assert_eq!(cfg.jar_path, PathBuf::from("/opt/h2/h2.jar"));
-        assert_eq!(cfg.version, "2.1.214");
         assert_eq!(cfg.pg_port, 5435);
         assert_eq!(cfg.java, PathBuf::from("java"));
     }
