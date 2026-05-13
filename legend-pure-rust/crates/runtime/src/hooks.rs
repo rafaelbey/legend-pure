@@ -32,6 +32,7 @@
 
 use legend_pure_parser_ast::SourceInfo;
 
+use crate::display::DisplayTree;
 use crate::value::Value;
 
 /// Hooks into the evaluation loop for debugging and instrumentation.
@@ -53,12 +54,40 @@ pub trait EvalHooks {
     ///
     /// Debug implementations check breakpoints here and may suspend
     /// execution until the DAP client resumes. `context` is the
-    /// live variable scope at the entry of this expression — DAP
-    /// hooks snapshot it to populate the `variables` response when
-    /// pausing. For `NoOpHooks` the parameter monomorphizes away
-    /// (the function body is empty), so there is no overhead for
-    /// production builds.
-    fn before_eval(&mut self, source: &SourceInfo, context: &crate::context::VariableContext);
+    /// live variable scope at the entry of this expression.
+    ///
+    /// The return value is the hook's request for a variable
+    /// snapshot:
+    ///
+    /// - `false` — no snapshot needed, the evaluator continues
+    ///   immediately. Production hooks (`NoOpHooks`) always return
+    ///   `false` and the `before_eval` body monomorphizes away.
+    /// - `true` — the evaluator will materialize a [`DisplayTree`]
+    ///   of the current locals (via `meta::pure::functions::string::
+    ///   toRepresentation` and `meta::pure::functions::meta::properties`)
+    ///   and pass it to [`pause_with_snapshot`](EvalHooks::pause_with_snapshot).
+    ///   The hook then parks the eval thread there as needed.
+    ///
+    /// The two-phase pattern keeps `Value` (which is `!Send`) on the
+    /// eval thread: the renderer runs in the evaluator, the resulting
+    /// owned-string tree is what crosses the thread boundary into
+    /// `Arc<Mutex<SessionState>>`.
+    fn before_eval(
+        &mut self,
+        source: &SourceInfo,
+        context: &crate::context::VariableContext,
+    ) -> bool;
+
+    /// Called by the evaluator after [`before_eval`] returned `true`,
+    /// with a fully-rendered variable snapshot.
+    ///
+    /// Debug implementations store the tree (so the DAP `variables`
+    /// handler can serve `variablesReference` lookups) and park the
+    /// eval thread until the client resumes. The default
+    /// implementation is a no-op so existing hooks that never request
+    /// snapshots (i.e. those returning `false` from
+    /// [`before_eval`]) don't need to override.
+    fn pause_with_snapshot(&mut self, _source: &SourceInfo, _tree: DisplayTree) {}
 
     /// Called after evaluating an expression, with the result.
     ///
@@ -111,8 +140,20 @@ pub trait EvalHooks {
 pub struct NoOpHooks;
 
 impl EvalHooks for NoOpHooks {
+    // `inline(always)` is the load-bearing piece of the zero-cost
+    // contract documented at the top of this module: every hook
+    // method must inline into the evaluator's hot path so production
+    // builds see no overhead. Returning a `bool` constant is still
+    // the trivial body clippy would otherwise inline by default.
     #[inline(always)]
-    fn before_eval(&mut self, _source: &SourceInfo, _context: &crate::context::VariableContext) {}
+    #[allow(clippy::inline_always)]
+    fn before_eval(
+        &mut self,
+        _source: &SourceInfo,
+        _context: &crate::context::VariableContext,
+    ) -> bool {
+        false
+    }
 
     #[inline(always)]
     fn after_eval(&mut self, _source: &SourceInfo, _result: &Value) {}
@@ -151,7 +192,7 @@ mod tests {
         let mut hooks = NoOpHooks;
         let src = SourceInfo::new("test.pure", 1, 1, 1, 10);
         let ctx = crate::context::VariableContext::new();
-        hooks.before_eval(&src, &ctx);
+        assert!(!hooks.before_eval(&src, &ctx));
         hooks.after_eval(&src, &Value::Integer(42));
         hooks.enter_function("test::func", &src);
         hooks.leave_function("test::func");
@@ -170,7 +211,8 @@ mod tests {
             &mut self,
             _source: &SourceInfo,
             _context: &crate::context::VariableContext,
-        ) {
+        ) -> bool {
+            false
         }
         fn after_eval(&mut self, _source: &SourceInfo, _result: &Value) {}
         fn enter_function(&mut self, _name: &str, _source: &SourceInfo) {}
@@ -202,8 +244,9 @@ mod tests {
             &mut self,
             _source: &SourceInfo,
             _context: &crate::context::VariableContext,
-        ) {
+        ) -> bool {
             self.before += 1;
+            false
         }
         fn after_eval(&mut self, _source: &SourceInfo, _result: &Value) {
             self.after += 1;
@@ -222,8 +265,8 @@ mod tests {
         let src = SourceInfo::new("test.pure", 1, 1, 1, 10);
         let ctx = crate::context::VariableContext::new();
 
-        hooks.before_eval(&src, &ctx);
-        hooks.before_eval(&src, &ctx);
+        let _ = hooks.before_eval(&src, &ctx);
+        let _ = hooks.before_eval(&src, &ctx);
         hooks.after_eval(&src, &Value::Integer(1));
         hooks.enter_function("f", &src);
         hooks.leave_function("f");

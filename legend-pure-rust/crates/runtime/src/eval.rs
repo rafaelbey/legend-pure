@@ -52,6 +52,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use im_rc::Vector as PVector;
+use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
 use legend_pure_parser_pure::types::{DateValue, ExprKind, FunctionCallData, TypeExpr, ValueSpec};
@@ -131,6 +132,14 @@ pub struct Evaluator<'model, H: EvalHooks = NoOpHooks> {
 
     /// Instrumentation hooks (zero-cost for `NoOpHooks`).
     hooks: H,
+
+    /// Re-entry guard for the variable-snapshot renderer. While this
+    /// is non-zero (the renderer is calling back into the evaluator
+    /// to invoke `toRepresentation` and friends), `before_eval` is
+    /// skipped so the renderer's own evaluations don't trigger a
+    /// nested pause. Plain `u32` because the renderer is single-
+    /// threaded — same as the rest of the evaluator state.
+    rendering_depth: u32,
 }
 
 /// Returns a `&'static NativeRegistry` pointing at a per-thread
@@ -176,6 +185,7 @@ impl<'model> Evaluator<'model, NoOpHooks> {
             member_wrapper_cache: HashMap::new(),
             extensions: ExtensionStateStore::new(),
             hooks: NoOpHooks,
+            rendering_depth: 0,
         }
     }
 
@@ -249,6 +259,7 @@ impl<'model> Evaluator<'model, NoOpHooks> {
             member_wrapper_cache: HashMap::new(),
             extensions: ExtensionStateStore::new(),
             hooks: NoOpHooks,
+            rendering_depth: 0,
         }
     }
 
@@ -281,6 +292,7 @@ impl<'model> Evaluator<'model, NoOpHooks> {
             member_wrapper_cache: HashMap::new(),
             extensions: ExtensionStateStore::new(),
             hooks: NoOpHooks,
+            rendering_depth: 0,
         }
     }
 }
@@ -302,6 +314,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             member_wrapper_cache: HashMap::new(),
             extensions: ExtensionStateStore::new(),
             hooks,
+            rendering_depth: 0,
         }
     }
 
@@ -374,7 +387,17 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     /// variable not found, function not found, etc.).
     #[allow(clippy::result_large_err)] // PureException is intentionally rich
     pub fn eval(&mut self, expr: &ValueSpec) -> Result<Value, PureException> {
-        self.hooks.before_eval(&expr.source_info, &self.context);
+        // Skip the pause hook entirely while the variable-snapshot
+        // renderer is calling back through us — otherwise its own
+        // `toRepresentation` / `properties` evaluations would
+        // re-pause at the same source line and recurse forever.
+        if self.rendering_depth == 0 {
+            let want_snapshot = self.hooks.before_eval(&expr.source_info, &self.context);
+            if want_snapshot {
+                let source = expr.source_info.clone();
+                self.dispatch_snapshot_pause(&source);
+            }
+        }
 
         let result = match &*expr.kind {
             // -- Literals -------------------------------------------------
@@ -559,6 +582,42 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
 
         self.hooks.after_eval(&expr.source_info, &result);
         Ok(result)
+    }
+
+    /// Build a [`DisplayTree`](crate::display::DisplayTree) snapshot of
+    /// the current locals and hand it to
+    /// [`EvalHooks::pause_with_snapshot`]. Called from `eval` when the
+    /// hook signaled a snapshot request.
+    ///
+    /// The renderer re-enters this evaluator via `EvalContext` to call
+    /// `toRepresentation`; `rendering_depth` is bumped to suppress
+    /// `before_eval` during that callback so the renderer's own
+    /// evaluations don't re-pause.
+    fn dispatch_snapshot_pause(&mut self, source: &SourceInfo) {
+        // Snapshot the bindings up front. Cloning is cheap — most
+        // `Value` variants are `Copy` or have O(1) `Rc` clone. Doing
+        // this before the `EvalContext` borrow keeps the snapshot
+        // independent of the live context.
+        let bindings: Vec<(SmolStr, Value)> = self
+            .context
+            .iter_bindings()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+
+        self.rendering_depth = self.rendering_depth.saturating_add(1);
+        let tree = {
+            let mut ctx = EvalContext { evaluator: self };
+            crate::display::render_locals(
+                &mut ctx,
+                // `bindings.iter()` yields `&(SmolStr, Value)`;
+                // destructure into the `(&SmolStr, &Value)` shape
+                // `render_locals` expects.
+                bindings.iter().map(|tup| (&tup.0, &tup.1)),
+                crate::display::DisplayConfig::default(),
+            )
+        };
+        self.rendering_depth = self.rendering_depth.saturating_sub(1);
+        self.hooks.pause_with_snapshot(source, tree);
     }
 
     /// Evaluate a sequence of expressions, returning the last value.

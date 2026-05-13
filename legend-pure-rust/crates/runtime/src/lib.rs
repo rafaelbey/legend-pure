@@ -61,6 +61,7 @@
 pub mod context;
 pub mod date;
 pub mod debug;
+pub mod display;
 pub mod dsl;
 pub mod error;
 pub mod eval;

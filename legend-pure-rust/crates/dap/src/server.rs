@@ -150,7 +150,7 @@ fn dispatch(
         "setExceptionBreakpoints" => Ok(Some(serde_json::json!({ "breakpoints": [] }))),
         "threads" => Ok(Some(threads_response())),
         "stackTrace" => handle_stack_trace(req, state).map(Some),
-        "scopes" => handle_scopes(req).map(Some),
+        "scopes" => handle_scopes(req, state).map(Some),
         "variables" => handle_variables(req, state).map(Some),
         "continue" => handle_continue(req, commands_tx),
         "next" => handle_next(req, commands_tx),
@@ -300,15 +300,26 @@ fn handle_stack_trace(
     .map_err(|e| e.to_string())
 }
 
-fn handle_scopes(req: &Request) -> Result<serde_json::Value, String> {
-    let args: ScopesArguments =
+fn handle_scopes(
+    req: &Request,
+    state: &Arc<Mutex<SessionState>>,
+) -> Result<serde_json::Value, String> {
+    let _args: ScopesArguments =
         serde_json::from_value(req.arguments.clone()).map_err(|e| format!("scopes args: {e}"))?;
-    // Single Locals scope per frame. The `variablesReference` is
-    // synthesised from the frame_id; the variables handler decodes
-    // it the same way.
+    // Single Locals scope per pause. The renderer allocates
+    // `tree.root` at snapshot-build time; that's the
+    // `variablesReference` the IDE hands back on its first
+    // `variables(...)` request. Subsequent refs (object children,
+    // collection elements) come from inside the tree itself.
+    // Frames don't carry separate variable scopes today — single-
+    // thread interpreter, all locals live on the active pause's
+    // tree.
+    let s = state.lock().unwrap_or_else(|p| p.into_inner());
+    let locals_ref = s.paused.as_ref().map(|p| p.tree.root).unwrap_or(0);
+    drop(s);
     let scopes = vec![Scope {
         name: "Locals".to_string(),
-        variables_reference: args.frame_id + 1,
+        variables_reference: locals_ref,
         expensive: false,
     }];
     serde_json::to_value(&ScopesResponse { scopes }).map_err(|e| e.to_string())
@@ -318,19 +329,23 @@ fn handle_variables(
     req: &Request,
     state: &Arc<Mutex<SessionState>>,
 ) -> Result<serde_json::Value, String> {
-    let _args: VariablesArguments = serde_json::from_value(req.arguments.clone())
+    let args: VariablesArguments = serde_json::from_value(req.arguments.clone())
         .map_err(|e| format!("variables args: {e}"))?;
     let s = state.lock().unwrap_or_else(|p| p.into_inner());
     let vars: Vec<Variable> = s
         .paused
         .as_ref()
-        .map(|p| {
-            p.locals
+        .and_then(|p| p.tree.nodes.get(&args.variables_reference))
+        .map(|nodes| {
+            nodes
                 .iter()
-                .map(|(name, rendered)| Variable {
-                    name: name.to_string(),
-                    value: rendered.clone(),
-                    variables_reference: 0,
+                .map(|n| Variable {
+                    name: n.name.clone(),
+                    value: n.value.clone(),
+                    r#type: n.r#type.clone(),
+                    variables_reference: n.child_ref,
+                    named_variables: n.named_count,
+                    indexed_variables: n.indexed_count,
                 })
                 .collect()
         })
@@ -536,28 +551,6 @@ fn send_response(
     if let Ok(payload) = serde_json::to_vec(&resp) {
         let mut out = outbound.lock().unwrap_or_else(|p| p.into_inner());
         let _ = write_frame(&mut *out, &payload);
-    }
-}
-
-/// Render a [`Value`] for a `Variable.value` field. Reserved for
-/// future use when `before_eval` is extended to take a
-/// `&VariableContext` parameter — at that point the hook can call
-/// this on the eval thread (where `Value`'s non-`Send`-ness is
-/// fine) before storing rendered strings in the snapshot. Kept here
-/// rather than inline in `hooks.rs` so the rendering policy stays
-/// adjacent to the consumer that reads it back.
-#[allow(dead_code)]
-pub(crate) fn render_value(v: &Value) -> String {
-    match v {
-        Value::Integer(n) => n.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::Boolean(b) => b.to_string(),
-        Value::String(s) => format!("{s:?}"),
-        Value::Collection(items) => {
-            let rendered: Vec<String> = items.iter().map(render_value).collect();
-            format!("[{}]", rendered.join(", "))
-        }
-        other => format!("{other:?}"),
     }
 }
 

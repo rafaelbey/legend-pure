@@ -31,9 +31,9 @@ use crate::session::{DapCommand, FrameInfo, HookWiring, MAIN_THREAD_ID, PauseSna
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_runtime::context::VariableContext;
 use legend_pure_runtime::debug::StepMode;
+use legend_pure_runtime::display::DisplayTree;
 use legend_pure_runtime::hooks::EvalHooks;
 use legend_pure_runtime::value::Value;
-use smol_str::SmolStr;
 
 /// EvalHooks impl that intercepts every expression entry for
 /// breakpoint matching + step-over arming.
@@ -132,11 +132,11 @@ impl DapHooks {
     /// Build the pause snapshot, store it on shared state, emit a
     /// `Stopped` event, and block waiting for the next step
     /// command from the DAP server.
-    fn pause(&mut self, source: &SourceInfo, locals: Vec<(SmolStr, String)>) {
+    fn pause(&mut self, source: &SourceInfo, tree: DisplayTree) {
         self.last_paused_at = Some((source.source.to_string(), source.start_line));
         let snapshot = PauseSnapshot {
             frames: self.frames.clone(),
-            locals,
+            tree,
             source: source.clone(),
         };
         let seq;
@@ -210,7 +210,7 @@ impl DapHooks {
 }
 
 impl EvalHooks for DapHooks {
-    fn before_eval(&mut self, source: &SourceInfo, context: &VariableContext) {
+    fn before_eval(&mut self, source: &SourceInfo, _context: &VariableContext) -> bool {
         // Clear the same-line suppression as soon as execution
         // reaches a different `(source, line)` pair — after that
         // any future breakpoint match on the original line should
@@ -220,25 +220,18 @@ impl EvalHooks for DapHooks {
         {
             self.last_paused_at = None;
         }
-        if !self.should_pause(source) {
-            return;
-        }
-        // Snapshot live bindings now, on the eval thread, before
-        // the pause. `Value` is non-`Send`, so we render to
-        // display strings here and store the owned text on
-        // `PauseSnapshot.locals`. The variables handler reads
-        // that snapshot when the IDE fetches the Variables panel
-        // contents.
-        let mut locals: Vec<(SmolStr, String)> = context
-            .iter_bindings()
-            .map(|(name, value)| (name.clone(), render_value(value)))
-            .collect();
-        // Stable ordering — the underlying storage is a
-        // `HashMap`, but the IDE displays the list in the order
-        // we send it. Alphabetical name order matches what most
-        // debug UIs default to.
-        locals.sort_by(|a, b| a.0.cmp(&b.0));
-        self.pause(source, locals);
+        // Signal the evaluator: build a snapshot tree if we want to
+        // pause here. The evaluator's renderer drives
+        // `toRepresentation` / `properties` reflection via
+        // re-entrant `call_function`s, and hands us the resulting
+        // `DisplayTree` via [`pause_with_snapshot`] below. The
+        // re-entry guard on the evaluator ensures the renderer's own
+        // evaluations don't trigger another pause.
+        self.should_pause(source)
+    }
+
+    fn pause_with_snapshot(&mut self, source: &SourceInfo, tree: DisplayTree) {
+        self.pause(source, tree);
     }
 
     fn after_eval(&mut self, _source: &SourceInfo, _result: &Value) {}
@@ -297,22 +290,4 @@ fn path_match(a: &str, b: &str) -> bool {
 fn normalize(p: &str) -> String {
     let s = p.trim_start_matches('/');
     s.to_string()
-}
-
-/// Render a runtime [`Value`] for display in the IDE Variables
-/// panel. Mirrors `server::render_value` byte-for-byte; kept inline
-/// in the hooks module so the snapshot path doesn't need a
-/// cross-module call on a hot path.
-fn render_value(v: &Value) -> String {
-    match v {
-        Value::Integer(n) => n.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::Boolean(b) => b.to_string(),
-        Value::String(s) => format!("{s:?}"),
-        Value::Collection(items) => {
-            let rendered: Vec<String> = items.iter().map(render_value).collect();
-            format!("[{}]", rendered.join(", "))
-        }
-        other => format!("{other:?}"),
-    }
 }

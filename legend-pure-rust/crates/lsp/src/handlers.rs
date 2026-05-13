@@ -1026,7 +1026,8 @@ impl legend_pure_runtime::hooks::EvalHooks for CapturingHooks {
         &mut self,
         _source: &legend_pure_parser_ast::SourceInfo,
         _context: &legend_pure_runtime::context::VariableContext,
-    ) {
+    ) -> bool {
+        false
     }
     fn after_eval(
         &mut self,
