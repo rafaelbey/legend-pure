@@ -36,7 +36,6 @@ use legend_pure_parser_pure::extension::CompilerExtension;
 use legend_pure_parser_pure::model::PureModel;
 use legend_pure_runtime::eval::Evaluator;
 use legend_pure_runtime::native::NativeRegistry;
-use legend_pure_runtime::value::Value;
 use std::collections::HashSet;
 use std::io::BufReader;
 use std::sync::mpsc::{Sender, channel};

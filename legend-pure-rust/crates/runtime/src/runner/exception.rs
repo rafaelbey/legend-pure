@@ -59,15 +59,15 @@ pub fn parse_failure_components(msg: &str) -> (String, Vec<StackFrame>) {
     // synthesized innermost frame so the user can click straight
     // to the location even on exceptions with no proper call stack
     // (older or hand-rolled errors).
-    if stack.is_empty() {
-        if let (Some(s), Some(l), Some(c)) = parse_source_info(header) {
-            stack.push(StackFrame {
-                function: header_kind(header).to_string(),
-                source: s,
-                line: l,
-                column: c,
-            });
-        }
+    if stack.is_empty()
+        && let (Some(s), Some(l), Some(c)) = parse_source_info(header)
+    {
+        stack.push(StackFrame {
+            function: header_kind(header).to_string(),
+            source: s,
+            line: l,
+            column: c,
+        });
     }
     let message = if body.is_empty() {
         header.to_string()

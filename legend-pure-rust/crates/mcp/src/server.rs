@@ -30,7 +30,9 @@ use legend_pure_parser_pure::model::{Element, PureModel};
 use rmcp::{
     ErrorData as McpError, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, Content, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
+    model::{
+        CallToolResult, Content, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo,
+    },
     schemars, tool, tool_handler, tool_router,
 };
 use serde::{Deserialize, Serialize};
@@ -240,10 +242,7 @@ impl LegendMcpServer {
     /// lock. Subsequent reads run on the cloned `Arc` without
     /// contention.
     fn snapshot(&self) -> Arc<WorkspaceSnapshot> {
-        let guard = self
-            .current
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let guard = self.current.lock().unwrap_or_else(|p| p.into_inner());
         guard.clone()
     }
 }
@@ -262,11 +261,10 @@ impl LegendMcpServer {
         Parameters(args): Parameters<SearchSymbolsArgs>,
     ) -> Result<CallToolResult, McpError> {
         let snapshot = self.snapshot();
-        let result = tokio::task::spawn_blocking(move || {
-            search_symbols_impl(&snapshot.model, &args)
-        })
-        .await
-        .map_err(|e| McpError::internal_error(format!("join error: {e}"), None))?;
+        let result =
+            tokio::task::spawn_blocking(move || search_symbols_impl(&snapshot.model, &args))
+                .await
+                .map_err(|e| McpError::internal_error(format!("join error: {e}"), None))?;
         json_result(&result)
     }
 
@@ -353,12 +351,7 @@ impl LegendMcpServer {
                 legend_pure_dsl_relational_runtime::RelationalClassMappingDSLPopulator;
             let populators: &[&dyn legend_pure_runtime::dsl::DSLPopulator] =
                 &[&mapping_pop, &database_pop, &class_mapping_pop];
-            legend_pure_runtime::runner::run_test(
-                &snapshot.model,
-                &registry,
-                populators,
-                &args.fqn,
-            )
+            legend_pure_runtime::runner::run_test(&snapshot.model, &registry, populators, &args.fqn)
         })
         .await
         .map_err(|e| McpError::internal_error(format!("join error: {e}"), None))?;
@@ -432,11 +425,10 @@ impl LegendMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let snapshot = self.snapshot();
         let fqn = args.fqn.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            read_element_impl(&snapshot.model, &args.fqn)
-        })
-        .await
-        .map_err(|e| McpError::internal_error(format!("join error: {e}"), None))?;
+        let result =
+            tokio::task::spawn_blocking(move || read_element_impl(&snapshot.model, &args.fqn))
+                .await
+                .map_err(|e| McpError::internal_error(format!("join error: {e}"), None))?;
         match result {
             Some(info) => json_result(&info),
             None => Err(McpError::invalid_params(
@@ -511,10 +503,7 @@ impl LegendMcpServer {
         // pattern matches `snapshot()` — a poisoned mutex still
         // returns the inner value rather than panicking.
         {
-            let mut guard = self
-                .current
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
+            let mut guard = self.current.lock().unwrap_or_else(|p| p.into_inner());
             *guard = new_snapshot.clone();
         }
         tracing::info!(
@@ -634,10 +623,10 @@ fn list_packages_impl(model: &PureModel, prefix: Option<&str>) -> Vec<String> {
         if fqn.is_empty() {
             continue; // root package — not a useful tool output
         }
-        if let Some(p) = prefix {
-            if !fqn.starts_with(p) {
-                continue;
-            }
+        if let Some(p) = prefix
+            && !fqn.starts_with(p)
+        {
+            continue;
         }
         out.push(fqn);
     }
@@ -657,9 +646,10 @@ fn list_tests_impl(model: &PureModel, package_prefix: Option<&str>) -> Vec<TestE
             };
             let mut tags = Vec::new();
             for s in &func.stereotypes {
-                let Some(profile_name) = model.try_get_element(s.profile).map(|_| {
-                    render_fqn(model, s.profile)
-                }) else {
+                let Some(profile_name) = model
+                    .try_get_element(s.profile)
+                    .map(|_| render_fqn(model, s.profile))
+                else {
                     continue;
                 };
                 let stereotype_fqn = format!("{profile_name}.{}", s.value);
@@ -687,10 +677,10 @@ fn list_tests_impl(model: &PureModel, package_prefix: Option<&str>) -> Vec<TestE
                 local_idx,
             };
             let fqn = render_fqn(model, id);
-            if let Some(p) = package_prefix {
-                if !fqn.starts_with(p) {
-                    continue;
-                }
+            if let Some(p) = package_prefix
+                && !fqn.starts_with(p)
+            {
+                continue;
             }
             let node = model.get_node(id);
             out.push(TestEntry {
@@ -743,7 +733,10 @@ fn render_fqn(model: &PureModel, id: ElementId) -> String {
     parts.join("::")
 }
 
-fn render_package_fqn(model: &PureModel, pkg_id: legend_pure_parser_pure::ids::PackageId) -> String {
+fn render_package_fqn(
+    model: &PureModel,
+    pkg_id: legend_pure_parser_pure::ids::PackageId,
+) -> String {
     let mut parts: Vec<String> = Vec::new();
     let mut current = pkg_id;
     loop {

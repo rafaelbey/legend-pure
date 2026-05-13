@@ -1057,13 +1057,7 @@ pub async fn execute_legend_command(
             "legend.runPCT" => translate_test_result(
                 "legend.runPCT",
                 &arg0,
-                legend_pure_runtime::runner::run_pct(
-                    model,
-                    &registry,
-                    populators,
-                    &arg0,
-                    &arg1,
-                ),
+                legend_pure_runtime::runner::run_pct(model, &registry, populators, &arg0, &arg1),
             ),
             "legend.listPctAdapters" => {
                 translate_adapters_result(legend_pure_runtime::runner::list_pct_adapters(model))
@@ -2144,11 +2138,17 @@ function test::nameOf(p: test::Person[1]): String[1]
             // open_buffers. This is the core "global diagnostics"
             // behaviour T-20260511-06 asks for.
             let mut ws = Workspace::new(
-                vec![fs_repo("/proj", PathBuf::from("/tmp/proj"), &["/proj/lib.pure"])],
+                vec![fs_repo(
+                    "/proj",
+                    PathBuf::from("/tmp/proj"),
+                    &["/proj/lib.pure"],
+                )],
                 Vec::new(),
             );
-            ws.diagnostics
-                .insert("/proj/lib.pure".to_string(), vec![err("/proj/lib.pure", "boom")]);
+            ws.diagnostics.insert(
+                "/proj/lib.pure".to_string(),
+                vec![err("/proj/lib.pure", "boom")],
+            );
 
             let plan = plan_diagnostics_publish(&ws, &HashSet::new());
             assert_eq!(plan.entries.len(), 1);
@@ -2189,7 +2189,11 @@ function test::nameOf(p: test::Person[1]): String[1]
             // plan must emit an empty publish for B's URI so the
             // client clears its stale entry.
             let ws = Workspace::new(
-                vec![fs_repo("/proj", PathBuf::from("/tmp/proj"), &["/proj/b.pure"])],
+                vec![fs_repo(
+                    "/proj",
+                    PathBuf::from("/tmp/proj"),
+                    &["/proj/b.pure"],
+                )],
                 Vec::new(),
             );
             let b_uri = uri_of("file:///tmp/proj/b.pure");
@@ -2209,13 +2213,19 @@ function test::nameOf(p: test::Person[1]): String[1]
             // single non-empty publish (the resolved diagnostics
             // override the empty open-buffer placeholder).
             let mut ws = Workspace::new(
-                vec![fs_repo("/proj", PathBuf::from("/tmp/proj"), &["/proj/a.pure"])],
+                vec![fs_repo(
+                    "/proj",
+                    PathBuf::from("/tmp/proj"),
+                    &["/proj/a.pure"],
+                )],
                 Vec::new(),
             );
             let a_uri = uri_of("file:///tmp/proj/a.pure");
             ws.set_open_buffer(a_uri.clone(), String::new());
-            ws.diagnostics
-                .insert("/proj/a.pure".to_string(), vec![err("/proj/a.pure", "boom")]);
+            ws.diagnostics.insert(
+                "/proj/a.pure".to_string(),
+                vec![err("/proj/a.pure", "boom")],
+            );
 
             let plan = plan_diagnostics_publish(&ws, &HashSet::new());
             assert_eq!(plan.entries.len(), 1, "must not double-publish");
@@ -2270,8 +2280,7 @@ function test::nameOf(p: test::Person[1]): String[1]
             // Embedded platform = M3 bootstrap; user project = the two
             // files above. Same shape as a real `legend lsp` workspace
             // with no DSL artifacts and one local project repo.
-            let user_repo =
-                Repo::from_descriptor(&descriptor).expect("descriptor repo loads");
+            let user_repo = Repo::from_descriptor(&descriptor).expect("descriptor repo loads");
             let mut repos = Repo::default_embedded();
             repos.push(user_repo);
             let mut ws = Workspace::new(repos, Vec::new());
