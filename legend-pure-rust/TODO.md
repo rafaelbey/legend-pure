@@ -139,6 +139,86 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260513-01 — LSP recompiles the whole workspace on every change; needs incremental (chunk-scoped → element-scoped) compilation
+
+- **Type:** perf
+- **Area:** lsp | pure | runtime
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-13
+
+**Summary**
+Today the LSP server reruns the full compilation pipeline against the
+entire workspace on every text-document change. As the platform model
+grows (244 files / ~1660 elements compile-clean today per
+`legend-pure-rust/CLAUDE.md`) latency on typing in the IDE compounds
+linearly with workspace size. Two-stage improvement:
+1. **Chunk-scoped recompile** — only re-hydrate the edited chunk and
+   the transitively-dependent downstream chunks. Upstream chunks are
+   reused as-is.
+2. **Element-scoped recompile (long term)** — push dependency tracking
+   down to the `ElementId` level so a body edit on one function only
+   reruns the validators/lowerers that observed that element. This
+   is the right shape for a Salsa-style demand-driven query engine;
+   evaluate adopting Salsa (or a hand-rolled equivalent) as the
+   compilation cache layer.
+
+**Repro / Context**
+- Edit any `.pure` file in an IntelliJ session with `legend lsp`
+  attached. Observe the diagnostic/hover/completion latency grows
+  with workspace size, not with the size of the local edit.
+- Acceptance criteria:
+  - **Phase 1 (chunk-scoped)**: on a single-file edit, only the
+    edited chunk + chunks that import/depend on it are rerun.
+    Measured by instrumenting the pipeline and asserting
+    `len(rerun_chunks) ≤ 1 + len(downstream(edited_chunk))` in a
+    targeted integration test.
+  - **Phase 2 (element-scoped, Salsa or equivalent)**: a body-only
+    edit on a function `f` whose signature is unchanged reruns only
+    Pass-2b lowering for `f` and its dependents; Pass-1 shells,
+    Pass-2a signatures, and validators on unrelated elements are
+    cache-hit. Demonstrated by an LSP integration test that snapshots
+    the recompiled-element set across a typing burst.
+  - No regression in `cargo test --workspace`, `cargo lint-lib`,
+    `cargo lint`, or in the existing LSP test suite. Surveyor
+    (`eval_surveyor_root_strict_pass`) and PCT strict-pass tests
+    remain green.
+
+**Notes**
+- Today's seam: `legend lsp` (`crates/cli`) → `crates/lsp` → calls into
+  `crates/pure` end-to-end compile each tick. Identify the per-change
+  entry point and route it through a cached `PureModel` that tracks
+  per-chunk staleness.
+- Pass-1 shell creation already populates every syntactic AST field
+  (per the "Validators next to the data" memory note), which is the
+  precondition for chunk-scoped invalidation — a downstream chunk
+  whose imports' shells haven't changed can be considered up-to-date
+  without rebuilding its dependencies.
+- Salsa evaluation criteria (Phase 2): query granularity (per
+  `ElementId`? per pass + `ElementId`?), interaction with the existing
+  `Arc<PureModel>` snapshot model, cost of plumbing through the
+  recursive-descent parser + pass-1/2a/2b pipeline, behaviour on
+  hot reload during DAP sessions. Decide *before* implementing —
+  a wholesale Salsa migration is large enough to be a BACKLOG item,
+  not a TODO.
+- Adjacent: the `cargo build` cold-path already feels this — DSL
+  `.purem` rebuilds drive 5–15 min link times (`CLAUDE.md` build-time
+  opt-ins section), and the `LEGEND_PURE_SKIP_DSL_SNAPSHOTS=1`
+  escape hatch is a tell that the build graph isn't fine-grained
+  enough. Phase 2 likely benefits both the LSP and the build script.
+- Don't conflate parse caching with semantic caching. The parser is
+  already fast; the wins are in Pass-2a (signature hydration), Pass-2b
+  (body lowering), and the validator suite — those are the heavy
+  passes that touch every chunk on a full recompile today.
+- Test infrastructure: existing LSP integration tests under
+  `crates/lsp/tests/` are the right home for chunk-scoped assertions.
+  Phase 2 will likely need a new harness that records the set of
+  recompiled query nodes per edit.
+
+<!-- agent-audit:start id=T-20260513-01 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
 ### T-20260512-07 — Audit `eval_tests.rs` for coverage already gated by surveyor `<<test.Test>>` runs
 
 - **Type:** refactor
