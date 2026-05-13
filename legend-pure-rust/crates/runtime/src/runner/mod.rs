@@ -54,6 +54,7 @@ use std::sync::{Arc, Mutex};
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
 
+use crate::dsl::{DSLPopulator, run_populators};
 use crate::eval::Evaluator;
 use crate::hooks::EvalHooks;
 use crate::native::NativeRegistry;
@@ -130,9 +131,23 @@ impl EvalHooks for CapturingHooks {
 ///
 /// Backs the IDE's ▶ Run gutter, `legend run <fqn>`, the MCP
 /// `run_function` tool, and the LSP's `legend.run` executeCommand.
-pub fn run_function(model: &PureModel, registry: &NativeRegistry, fqn: &str) -> RunResult {
+///
+/// `populators` are DSL populators (e.g.
+/// `RelationalDatabaseDSLPopulator`) that hydrate `Element::DSLInstance`
+/// heap rows for sources whose semantics aren't reachable from the
+/// metamodel alone (the Database/Schema/Table chain a `###Relational`
+/// block produces). Pass `&[]` if the call doesn't touch DSL
+/// instances; without the matching populator, reflective navigation
+/// (`mydb.schemas->at(0).tables->at(0)`) returns empty.
+pub fn run_function(
+    model: &PureModel,
+    registry: &NativeRegistry,
+    populators: &[&dyn DSLPopulator],
+    fqn: &str,
+) -> RunResult {
     let (hooks, capture) = CapturingHooks::new();
     let mut evaluator = Evaluator::with_hooks(model, registry, hooks);
+    run_populators(model, evaluator.heap_mut(), populators);
     let outcome = run_function_inner(&mut evaluator, fqn);
     drop(evaluator);
     let stdout = drain_capture(&capture);
@@ -152,10 +167,12 @@ pub fn run_function(model: &PureModel, registry: &NativeRegistry, fqn: &str) -> 
 pub fn run_test(
     model: &PureModel,
     registry: &NativeRegistry,
+    populators: &[&dyn DSLPopulator],
     fqn: &str,
 ) -> Result<TestRunResult, RunnerError> {
     let (hooks, capture) = CapturingHooks::new();
     let mut evaluator = Evaluator::with_hooks(model, registry, hooks);
+    run_populators(model, evaluator.heap_mut(), populators);
     let result = evaluator.call(
         "meta::pure::test::surveyor::runTestsFromPath",
         &[
@@ -183,6 +200,7 @@ pub fn run_test(
 pub fn run_pct(
     model: &PureModel,
     registry: &NativeRegistry,
+    populators: &[&dyn DSLPopulator],
     test_fqn: &str,
     adapter_fqn: &str,
 ) -> Result<TestRunResult, RunnerError> {
@@ -194,6 +212,7 @@ pub fn run_pct(
     };
     let (hooks, capture) = CapturingHooks::new();
     let mut evaluator = Evaluator::with_hooks(model, registry, hooks);
+    run_populators(model, evaluator.heap_mut(), populators);
     // Resolve the test FQN to a PackageableElement via the
     // platform's `pathToElement`. The surveyor's
     // `getPCTTestFunctions` has a `ConcreteFunctionDefinition`
