@@ -78,9 +78,28 @@ The MVP exposes eleven tools across four categories.
 | `workspace_status` | — | `{ compiled_at, error_count, chunk_count, repo_count }` — `compiled_at` is the RFC 3339 timestamp of the current snapshot. Use this to decide whether to call `reload_workspace`. |
 | `reload_workspace` | — | The new `workspace_status` after recompiling against the same classpath / auto-imports the server was started with. Call after editing `.pure` files so subsequent tool calls see the updated model. |
 
-## Example agent prompts
+## Workflow
 
-Once wired into Claude Code, prompts like these route through the MCP tools:
+The server is bound to a single compiled `Arc<PureModel>` for its lifetime. Once the binary is stable, the only state that changes between tool calls is the `.pure` source on disk and the snapshot's `compiled_at` timestamp. Two consequences shape how downstream agents should use it:
+
+1. **No engine restart in the loop.** Source edits + `reload_workspace` are the only state mutations an authoring agent needs.
+2. **Failures point at the model, not the engine.** When `get_diagnostics` lights up or `run_test` fails, chase the Pure source — the same binary just compiled the upstream platform without errors.
+
+### The author–debug–verify loop
+
+**Author.** Edit `.pure` → `reload_workspace` → `get_diagnostics { file: "<path>" }` (scoped is cheaper than the workspace-wide form). Iterate until clean.
+
+**Explore the existing model before adding to it.** `list_packages { prefix }` → `search_symbols { query }` → `read_element { fqn }`. This replaces grepping the filesystem: the agent gets resolved FQNs, classifier kinds, and source locations from the live compile rather than guessing from text.
+
+**Verify behaviour.**
+
+- `run_function { fqn }` — interactive eval for parameterless functions; the developer's REPL.
+- `run_test { fqn }` — works on a single test *or* on any package FQN, in which case every `<<test::Test>>` underneath runs. The latter form is the cheapest broad regression net after a non-trivial edit.
+- `run_pct { test_fqn, adapter_fqn }` — required when extending platform-style functions; it's the cross-engine parity contract.
+
+### Example agent prompts
+
+Once wired into Claude Code, prompts like these route through the MCP tools without the agent needing to be told which tool to pick:
 
 - *"What tests exist under `meta::pure::functions::math`?"* → `list_tests { package_prefix: "meta::pure::functions::math" }`.
 - *"Find every class with `Person` in its name."* → `search_symbols { query: "Person" }`.
@@ -90,6 +109,25 @@ Once wired into Claude Code, prompts like these route through the MCP tools:
 - *"Which PCT adapters are available?"* → `list_pct_adapters`.
 
 The agent gets typed JSON responses for each call — no scraping, no parsing of human-formatted output.
+
+### What this unlocks for AI-assisted authoring
+
+The agent can verify each hypothesis against the *actual compiled model* rather than from the source text:
+
+- *"Is `getAll<Person>()` valid here?"* — `read_element` confirms `Person` exists and lets the agent walk its supertype chain.
+- *"Will this test pass after I add property `email: String[1]`?"* — edit, `reload_workspace`, `run_test`.
+- *"Does the parametric overload exist?"* — `search_symbols` matches mangled names like `toMultiplicity_T_MANY__Any_z__T_z_`.
+- *"Did my mapping break anyone?"* — `run_test` on the consumer's root package for a broad sweep.
+
+This is the differentiator over plain CLI tooling: the agent gets to *prove* a claim about the model before suggesting a code change, instead of writing plausible-looking Pure and hoping the compiler agrees.
+
+### Guardrails
+
+- **Stale snapshots silently mislead.** `workspace_status.compiled_at` is the source of truth; reload after every `.pure` edit, then verify the timestamp advanced.
+- **`get_diagnostics { file }` over the unscoped form** when iterating on a single file. The workspace-wide form is for sweeps.
+- **`search_symbols` is capped at 500 results.** For broad queries, narrow with `list_packages { prefix }` first, then iterate per subpackage.
+- **"`run_test` passes" ≠ "behaviour is correct."** PCT is still the parity contract for platform-touching code — don't substitute a green local check for a missing PCT adapter run.
+- **Mutation is out of scope.** The MCP doesn't write source. The agent edits files through its own filesystem tools, then calls `reload_workspace`.
 
 ## Workspace lifetime
 

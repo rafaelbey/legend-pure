@@ -39,19 +39,46 @@
 //! - `list_packages { prefix? }`
 //! - `list_tests { package_prefix? }`
 //!
+//! Lifecycle:
+//! - `workspace_status`
+//! - `reload_workspace`
+//!
 //! Behind the scenes every execute tool routes through
 //! [`legend_pure_runtime::runner`], the same module the LSP's
 //! `workspace/executeCommand` flow uses — so the IDE ▶ Run button
 //! and the MCP `run_function` tool produce byte-identical typed
 //! results.
 //!
+//! # Intended workflow
+//!
+//! The server is bound to a single compiled [`WorkspaceSnapshot`]
+//! for its lifetime; the only state that changes between tool calls
+//! is the `.pure` source on disk and the snapshot's `compiled_at`
+//! timestamp. Downstream agents combine the tools as an
+//! author–debug–verify loop:
+//!
+//! 1. **Author** — edit `.pure`, call `reload_workspace`, then
+//!    `get_diagnostics { file }` for a scoped error read.
+//! 2. **Explore** — `list_packages` → `search_symbols` →
+//!    `read_element` to inspect the live compiled model rather than
+//!    grep the filesystem.
+//! 3. **Verify** — `run_function` for a parameterless eval,
+//!    `run_test` on a leaf or package FQN for regression, `run_pct`
+//!    for cross-engine parity on platform-style functions.
+//!
+//! See `README.md` for the longer-form workflow guide and
+//! guardrails. `reload_workspace` is required after every `.pure`
+//! edit; `workspace_status.compiled_at` is the source of truth for
+//! snapshot freshness.
+//!
 //! # Workspace lifetime
 //!
-//! The workspace is compiled **once** at server startup. Agents
-//! shouldn't typically mutate sources through the MCP, so a single
-//! up-front compile keeps the implementation simple. A future
-//! `reload_workspace` tool can be added when concurrent agent-write
-//! workflows arise.
+//! Compiled once at server startup; subsequent edits don't
+//! auto-refresh. The snapshot lives in `Arc<Mutex<Arc<…>>>`: read
+//! tools clone the inner `Arc` under the lock and drop it
+//! immediately, while `reload_workspace` swaps the slot under the
+//! same `Mutex`. The `Mutex` is never held across an `await`, so
+//! tool calls never block one another beyond the swap itself.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
