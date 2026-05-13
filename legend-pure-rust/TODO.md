@@ -139,6 +139,89 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260513-07 — MCP `reload_workspace` should compute file deltas and reuse the chunk-scoped incremental path (mirror of T-20260513-01)
+
+- **Type:** perf
+- **Area:** mcp | pure | runtime
+- **Priority:** P2
+- **Reporter:** Rafael
+- **Filed:** 2026-05-13
+
+**Summary**
+The MCP server's `reload_workspace` tool
+(`crates/mcp/src/server.rs:463`) today rebuilds the whole project on
+every call — it clones the configured repos + auto-imports and calls
+`WorkspaceSnapshot::compile(&repos, &auto_imports)`, swapping the
+entire `Arc<WorkspaceSnapshot>` under a mutex. Once
+**T-20260513-01** lands the LSP-side incremental machinery (per-file
+AST cache, `chunk_dependents`, `pipeline::compile_chunks_incremental`,
+chunk-set-aware validators), the MCP reload path should adopt the
+same delta strategy: compute the set of files that changed on disk
+since the prior snapshot, reparse only those, recompile only their
+chunks plus the transitive dependent chunks, and swap the resulting
+snapshot. The whole-project recompile becomes the cold-path fallback
+for first compile / classpath change / new-file discovery (same matrix
+as T-20260513-01).
+
+**Repro / Context**
+- Today: edit one `.pure` file → call `reload_workspace` → latency is
+  proportional to the **entire** workspace, not the local edit.
+- Acceptance criteria:
+  - `reload_workspace` accepts an optional `dirty_paths: Vec<String>`
+    argument; when omitted, the server computes the dirty set itself
+    by comparing on-disk mtimes against the snapshot's
+    `compiled_at` (mirrors how agents already use
+    `workspace_status` per the tool description at
+    `crates/mcp/src/server.rs:450`).
+  - On a single-file edit, only that file is re-parsed; only its
+    chunk + chunks listed in the snapshot's `chunk_dependents` are
+    rerun. Asserted by an integration test under `crates/mcp/tests/`
+    that snapshots `last_rerun_chunks` and parse-count counters,
+    using the same instrumentation T-20260513-01 introduces on
+    `Workspace`.
+  - First call after server start, after a classpath/auto-imports
+    change, after a new file appears in a known repo, or when any
+    dirty path doesn't map to a known chunk → falls back to full
+    recompile. Matches the LSP cold-path matrix.
+  - No regression in `cargo test --workspace`, `cargo lint-lib`,
+    `cargo lint`, or the surveyor/PCT strict-pass gates.
+
+**Notes**
+- **Hard dependency on T-20260513-01.** This TODO must not start
+  until the LSP-side incremental machinery is in place — it reuses
+  the same `pipeline::compile_chunks_incremental` entry, the same
+  `chunk_dependents` index, the same chunk-set parameter on
+  cross-chunk validators, and the same parse-error policy. Filing
+  this now so the second consumer is queued and we don't redesign
+  the seam to fit a single caller.
+- Most of the LSP-side state lives on `lsp::Workspace`; the MCP
+  server holds a different `WorkspaceSnapshot` shape
+  (`crates/mcp/src/state.rs`). The incremental state
+  (`parsed_files`, `path_to_chunk`, `chunk_files`,
+  `chunk_dependents`, `last_rerun_chunks`) wants to live on
+  whichever side owns the model — propose extracting the incremental
+  cache into a shared type (e.g. `IncrementalCompileCache` in
+  `crates/pure/` or `crates/core-platform-pure/`) that both
+  `lsp::Workspace` and `mcp::WorkspaceSnapshot` embed. Decide before
+  implementing — if the duplication is small the second copy is
+  cheaper than the abstraction.
+- The MCP server doesn't have IDE `didChange` events — the LSP
+  marks files dirty proactively as the user types. MCP's analogue
+  is **mtime polling** at reload time (compare on-disk mtimes to the
+  snapshot's `compiled_at`). Agents writing to disk and then calling
+  `reload_workspace` already match this assumption per the server's
+  instructions string (`server.rs:499-507`).
+- Adjacent: T-20260513-05 (workspace_status / server start time) —
+  the dirty-detection mtime comparison reuses `compiled_at` from
+  that response; coordinate field shapes if both ship in the same
+  release.
+- Reporter origin: filed during plan-mode review of T-20260513-01
+  as a follow-up to mirror the same pattern in the MCP reload path.
+
+<!-- agent-audit:start id=T-20260513-07 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
 ### T-20260513-06 — "Ambiguous function call" error should list candidate FQNs and inferred arg types/multiplicities
 
 - **Type:** feature
