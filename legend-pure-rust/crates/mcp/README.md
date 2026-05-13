@@ -124,6 +124,97 @@ legend mcp < /tmp/mcp-test.jsonl
 
 You should see three JSON-RPC responses on stdout: the server info, the tool list, and the search results.
 
+### Convenience shell helper
+
+Save this in your shell profile so you can drive any single tool call from one line:
+
+```bash
+mcp_call() {
+  local name="$1"
+  local args="$2"
+  # Plain `[ -z … ]` rather than `${2:-{}}` — the latter's nested `{}` confuses
+  # bash's parameter expansion parser and concatenates the default onto your input.
+  [ -z "$args" ] && args='{}'
+  (
+    echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'
+    echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+    echo "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"$name\",\"arguments\":$args}}"
+  ) | legend mcp 2>/dev/null | python3 -c '
+import sys, json
+# Read all stdout at once and split — line-buffered iteration over sys.stdin
+# can miss the final response when the server closes the pipe mid-flush.
+for line in sys.stdin.read().splitlines():
+    if not line.strip(): continue
+    r = json.loads(line)
+    if r.get("id") == 2:
+        # Tool errors (e.g. invalid FQN, missing element) come back as a
+        # top-level `error` field — no `result` to unwrap.
+        if "error" in r:
+            print("TOOL ERROR:", json.dumps(r["error"], indent=2))
+        else:
+            text = r["result"]["content"][0]["text"]
+            try: print(json.dumps(json.loads(text), indent=2))
+            except Exception: print(text)
+        break
+'
+}
+```
+
+Then:
+
+```bash
+mcp_call workspace_status
+mcp_call search_symbols '{"query":"Person","limit":3}'
+mcp_call list_packages   '{"prefix":"meta::pure::functions::math"}'
+mcp_call list_pct_adapters
+mcp_call read_element    '{"fqn":"meta::pure::functions::collection::tests::fold::FO_Person"}'
+mcp_call reload_workspace
+```
+
+### Verifying the reload swap persists
+
+Send `workspace_status → reload_workspace → workspace_status` with explicit delays so the recompile lands before the next read. The two `workspace_status` reads should bracket the reload's timestamp:
+
+```bash
+(
+  echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'
+  echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+  sleep 1
+  echo '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"workspace_status","arguments":{}}}'
+  sleep 2
+  echo '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"reload_workspace","arguments":{}}}'
+  sleep 5
+  echo '{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"workspace_status","arguments":{}}}'
+  sleep 1
+) | legend mcp 2>/dev/null | python3 -c '
+import sys, json
+labels = {10: "before reload  ", 20: "reload returned", 30: "after reload   "}
+results = {}
+for line in sys.stdin.read().splitlines():
+    if not line.strip(): continue
+    r = json.loads(line)
+    if r.get("id") in labels:
+        text = r["result"]["content"][0]["text"]
+        results[r["id"]] = json.loads(text)["compiled_at"]
+for k in sorted(results):
+    print("  id=" + str(k) + " " + labels[k] + " -> compiled_at=" + results[k])
+ok = results.get(20) and results[20] == results.get(30) and results.get(10) != results.get(20)
+print("\nVERDICT:", "PASS - swap persisted" if ok else "FAIL")
+'
+```
+
+Expected output:
+
+```
+  id=10 before reload   -> compiled_at=2026-…A
+  id=20 reload returned -> compiled_at=2026-…B
+  id=30 after reload    -> compiled_at=2026-…B
+
+VERDICT: PASS - swap persisted
+```
+
+Where `A ≠ B` (recompile produced a fresh timestamp) and `id=20 == id=30` (subsequent reads see the swapped snapshot).
+
 ## Architecture
 
 ```
