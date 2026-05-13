@@ -21,6 +21,7 @@
 //! the lock before publishing diagnostics so the client doesn't see a
 //! stale model.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
@@ -46,6 +47,17 @@ use crate::workspace::Workspace;
 pub struct Backend {
     client: Client,
     workspace: Arc<Mutex<Workspace>>,
+    /// URIs that received non-empty diagnostics on the previous
+    /// recompile. Each cycle's plan reads this so URIs that drop out
+    /// of the diagnostic set this time get an empty publish (stale
+    /// clear) — without it, fixed errors in unopened files would
+    /// linger on the client forever.
+    ///
+    /// Lives on `Backend` rather than `Workspace` because it is
+    /// publication-layer state, not part of the compiled model — and
+    /// because `publish_diagnostics` awaits would otherwise extend the
+    /// workspace lock across notification round-trips.
+    previously_published: Arc<Mutex<HashSet<Uri>>>,
 }
 
 impl Backend {
@@ -56,66 +68,40 @@ impl Backend {
         Self {
             client,
             workspace: Arc::new(Mutex::new(workspace)),
+            previously_published: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
     async fn recompile_and_publish(&self) {
-        let mut ws = self.workspace.lock().await;
-        let outcome = ws.compile();
-        // Snapshot the per-source diagnostics + any open URLs so we
-        // can drop the lock before doing the (potentially many)
-        // notification round-trips.
-        let diags_by_source: Vec<(String, Vec<_>)> = ws
-            .diagnostics
-            .iter()
-            .map(|(path, errs)| (path.clone(), errs.clone()))
-            .collect();
-        let open_uris: Vec<Uri> = ws.open_buffers.keys().cloned().collect();
-        // Build a lookup from canonical path → URL so we can publish
-        // diagnostics for files the user has open.
-        let mut canonical_to_uri: std::collections::HashMap<String, Uri> =
-            std::collections::HashMap::new();
-        for uri in &open_uris {
-            if let Some(path) = ws.canonical_path_for(uri) {
-                canonical_to_uri.insert(path, uri.clone());
-            }
-        }
-        drop(ws);
+        // Hold both locks during compile + plan so the snapshot is
+        // consistent, then drop both before the notification
+        // round-trips. Lock order is always (workspace, previously_published)
+        // — see Backend::did_close for the only other site that takes
+        // these locks together.
+        let (entries, error_count) = {
+            let mut ws = self.workspace.lock().await;
+            let outcome = ws.compile();
+            let mut prev = self.previously_published.lock().await;
+            let plan = handlers::plan_diagnostics_publish(&ws, &prev);
+            *prev = plan.next_previously_published;
+            (plan.entries, outcome.error_count)
+        };
 
-        // Always publish empty diagnostic lists for currently-open
-        // files that have no errors — otherwise stale diagnostics
-        // would linger after a fix.
-        for uri in &open_uris {
-            self.client
-                .publish_diagnostics(uri.clone(), Vec::new(), None)
-                .await;
+        for (uri, diagnostics) in entries {
+            self.client.publish_diagnostics(uri, diagnostics, None).await;
         }
-        for (canonical, errors) in diags_by_source {
-            let uri = canonical_to_uri.get(&canonical).cloned().or_else(|| {
-                // Best-effort URL from canonical: file:///<canonical>
-                format!("file://{canonical}").parse::<Uri>().ok()
-            });
-            if let Some(uri) = uri {
-                let diagnostics = handlers::diagnostics_for(&errors);
-                self.client
-                    .publish_diagnostics(uri, diagnostics, None)
-                    .await;
-            }
-        }
-        tracing::info!(error_count = outcome.error_count, "recompile complete");
+
+        tracing::info!(error_count, "recompile complete");
         // Echo into the client's log so the LSP4IJ "Logs" tab shows
         // activity each time the workspace recompiles. Helps users
         // tell whether the LSP is alive and producing output.
-        let level = if outcome.error_count == 0 {
+        let level = if error_count == 0 {
             MessageType::INFO
         } else {
             MessageType::WARNING
         };
         self.client
-            .log_message(
-                level,
-                format!("recompile complete: {} error(s)", outcome.error_count),
-            )
+            .log_message(level, format!("recompile complete: {error_count} error(s)"))
             .await;
     }
 }

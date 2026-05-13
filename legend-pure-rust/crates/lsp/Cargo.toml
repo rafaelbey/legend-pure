@@ -50,3 +50,4 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 legend-pure-parser-parser = { path = "../parser" }
+tempfile = { workspace = true }
