@@ -38,6 +38,15 @@ legend-pure-runtime = { path = "../runtime" }
 legend-pure-dsl-mapping = { path = "../dsl-mapping" }
 legend-pure-dsl-relational = { path = "../dsl-relational" }
 legend-pure-dsl-store = { path = "../dsl-store" }
+# Runtime-side extensions wired into `workspace/executeCommand` so the
+# IDE ▶ Run gutter matches the `legend test` CLI exactly: relational
+# natives (`executeInDb`, `createTempTable*`, …) plus the Mapping +
+# Relational DSL populators that hydrate `Element::DSLInstance` heap
+# rows. Inlined for now; the distributed-slice backlog item will
+# collapse this into a single auto-registered setup.
+legend-pure-dsl-mapping-runtime = { path = "../dsl-mapping-runtime" }
+legend-pure-dsl-relational-runtime = { path = "../dsl-relational-runtime" }
+legend-pure-store-relational-runtime = { path = "../store-relational-runtime" }
 
 tower-lsp-server = { workspace = true }
 tokio = { workspace = true }

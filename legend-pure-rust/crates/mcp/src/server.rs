@@ -307,8 +307,25 @@ impl LegendMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let snapshot = self.snapshot();
         let result = tokio::task::spawn_blocking(move || {
-            let registry = legend_pure_runtime::native::NativeRegistry::standard();
-            legend_pure_runtime::runner::run_function(&snapshot.model, &registry, &args.fqn)
+            // Wiring mirrors `legend test` (crates/cli/src/commands/test.rs):
+            // relational natives + Mapping/Relational DSL populators. The
+            // duplication is intentional pending the distributed-slice
+            // backlog item that will auto-register both.
+            let relational_ext = legend_pure_store_relational_runtime::RelationalStoreExtension;
+            let registry =
+                legend_pure_runtime::native::NativeRegistry::with_extensions(&[&relational_ext]);
+            let mapping_pop = legend_pure_dsl_mapping_runtime::MappingDSLPopulator;
+            let database_pop = legend_pure_dsl_relational_runtime::RelationalDatabaseDSLPopulator;
+            let class_mapping_pop =
+                legend_pure_dsl_relational_runtime::RelationalClassMappingDSLPopulator;
+            let populators: &[&dyn legend_pure_runtime::dsl::DSLPopulator] =
+                &[&mapping_pop, &database_pop, &class_mapping_pop];
+            legend_pure_runtime::runner::run_function(
+                &snapshot.model,
+                &registry,
+                populators,
+                &args.fqn,
+            )
         })
         .await
         .map_err(|e| McpError::internal_error(format!("join error: {e}"), None))?;
@@ -327,8 +344,21 @@ impl LegendMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let snapshot = self.snapshot();
         let result = tokio::task::spawn_blocking(move || {
-            let registry = legend_pure_runtime::native::NativeRegistry::standard();
-            legend_pure_runtime::runner::run_test(&snapshot.model, &registry, &args.fqn)
+            let relational_ext = legend_pure_store_relational_runtime::RelationalStoreExtension;
+            let registry =
+                legend_pure_runtime::native::NativeRegistry::with_extensions(&[&relational_ext]);
+            let mapping_pop = legend_pure_dsl_mapping_runtime::MappingDSLPopulator;
+            let database_pop = legend_pure_dsl_relational_runtime::RelationalDatabaseDSLPopulator;
+            let class_mapping_pop =
+                legend_pure_dsl_relational_runtime::RelationalClassMappingDSLPopulator;
+            let populators: &[&dyn legend_pure_runtime::dsl::DSLPopulator] =
+                &[&mapping_pop, &database_pop, &class_mapping_pop];
+            legend_pure_runtime::runner::run_test(
+                &snapshot.model,
+                &registry,
+                populators,
+                &args.fqn,
+            )
         })
         .await
         .map_err(|e| McpError::internal_error(format!("join error: {e}"), None))?;
@@ -348,10 +378,19 @@ impl LegendMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let snapshot = self.snapshot();
         let result = tokio::task::spawn_blocking(move || {
-            let registry = legend_pure_runtime::native::NativeRegistry::standard();
+            let relational_ext = legend_pure_store_relational_runtime::RelationalStoreExtension;
+            let registry =
+                legend_pure_runtime::native::NativeRegistry::with_extensions(&[&relational_ext]);
+            let mapping_pop = legend_pure_dsl_mapping_runtime::MappingDSLPopulator;
+            let database_pop = legend_pure_dsl_relational_runtime::RelationalDatabaseDSLPopulator;
+            let class_mapping_pop =
+                legend_pure_dsl_relational_runtime::RelationalClassMappingDSLPopulator;
+            let populators: &[&dyn legend_pure_runtime::dsl::DSLPopulator] =
+                &[&mapping_pop, &database_pop, &class_mapping_pop];
             legend_pure_runtime::runner::run_pct(
                 &snapshot.model,
                 &registry,
+                populators,
                 &args.test_fqn,
                 &args.adapter_fqn,
             )

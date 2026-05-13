@@ -36,6 +36,16 @@ legend-pure-runtime = { path = "../runtime" }
 legend-pure-dsl-mapping = { path = "../dsl-mapping" }
 legend-pure-dsl-relational = { path = "../dsl-relational" }
 legend-pure-dsl-store = { path = "../dsl-store" }
+# Runtime-side extensions wired into every `run_function` / `run_test`
+# / `run_pct` call so the MCP's executors match the `legend test` CLI
+# exactly: relational natives (`executeInDb`, `createTempTable*`, …)
+# plus the Mapping + Relational DSL populators that hydrate
+# `Element::DSLInstance` heap rows. Inlined at all 3 call sites for
+# now; the distributed-slice backlog item will collapse this into a
+# single auto-registered setup.
+legend-pure-dsl-mapping-runtime = { path = "../dsl-mapping-runtime" }
+legend-pure-dsl-relational-runtime = { path = "../dsl-relational-runtime" }
+legend-pure-store-relational-runtime = { path = "../store-relational-runtime" }
 
 # Official Anthropic MCP SDK.
 #   server         — server-side surface (default-on, listed

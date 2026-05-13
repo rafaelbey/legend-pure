@@ -820,18 +820,36 @@ pub async fn execute_legend_command(
     let arg0 = arg_str(arguments, 0).unwrap_or_default();
     let arg1 = arg_str(arguments, 1).unwrap_or_default();
     tokio::task::spawn_blocking(move || {
-        let registry = legend_pure_runtime::native::NativeRegistry::standard();
+        // Wiring mirrors `legend test` (crates/cli/src/commands/test.rs):
+        // relational natives + Mapping/Relational DSL populators. The
+        // duplication is intentional pending the distributed-slice
+        // backlog item that will auto-register both.
+        let relational_ext = legend_pure_store_relational_runtime::RelationalStoreExtension;
+        let registry =
+            legend_pure_runtime::native::NativeRegistry::with_extensions(&[&relational_ext]);
+        let mapping_pop = legend_pure_dsl_mapping_runtime::MappingDSLPopulator;
+        let database_pop = legend_pure_dsl_relational_runtime::RelationalDatabaseDSLPopulator;
+        let class_mapping_pop =
+            legend_pure_dsl_relational_runtime::RelationalClassMappingDSLPopulator;
+        let populators: &[&dyn legend_pure_runtime::dsl::DSLPopulator] =
+            &[&mapping_pop, &database_pop, &class_mapping_pop];
         let model = model_arc.as_ref();
         match command.as_str() {
             "legend.runTest" => translate_test_result(
                 "legend.runTest",
                 &arg0,
-                legend_pure_runtime::runner::run_test(model, &registry, &arg0),
+                legend_pure_runtime::runner::run_test(model, &registry, populators, &arg0),
             ),
             "legend.runPCT" => translate_test_result(
                 "legend.runPCT",
                 &arg0,
-                legend_pure_runtime::runner::run_pct(model, &registry, &arg0, &arg1),
+                legend_pure_runtime::runner::run_pct(
+                    model,
+                    &registry,
+                    populators,
+                    &arg0,
+                    &arg1,
+                ),
             ),
             "legend.listPctAdapters" => {
                 translate_adapters_result(legend_pure_runtime::runner::list_pct_adapters(model))
@@ -839,7 +857,7 @@ pub async fn execute_legend_command(
             _ => translate_run_result(
                 &command,
                 &arg0,
-                legend_pure_runtime::runner::run_function(model, &registry, &arg0),
+                legend_pure_runtime::runner::run_function(model, &registry, populators, &arg0),
             ),
         }
     })
