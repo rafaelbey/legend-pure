@@ -139,6 +139,132 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260513-03 — Extend LSP Find Usages to profile tags/stereotypes, enum values, and class properties
+
+- **Type:** feature
+- **Area:** lsp | pure
+- **Priority:** P2
+- **Reporter:** Rafael
+- **Filed:** 2026-05-13
+
+**Summary**
+T-20260511-07 shipped V1 Find Usages (element-level: classes,
+functions, associations, profiles, enums-as-elements). It explicitly
+deferred sub-element granularity — clicking a property name, an
+enum *value*, or a stereotype/tag reference returns an empty result.
+Expand the reverse-reference index and the LSP cursor-resolver to
+cover those targets so "Find All References" on:
+- a class property (declaration or any `obj.propA` / `obj.qpA(...)`
+  / `^Class(propA = …)` site),
+- an enum value (declaration or any `EnumType.VALUE` site),
+- a profile stereotype or tag (declaration in
+  `Profile p { stereotypes : [s1]; tags : [t1]; }` or any
+  `<<p.s1>>` / `{p.t1 = '...'}` annotation site),
+
+returns the full workspace set, same UX as the V1 element flow.
+
+**Repro / Context**
+- **Property**: cursor on `propA` in
+  `Class abc::Class1 { propA: Integer[1]; }` → invoke editor's
+  "Find All References" → today: empty. Expected: every site that
+  reads `$x.propA`, calls a `->propA()` qualified property, or
+  binds it via `^abc::Class1(propA = …)`.
+- **Enum value**: cursor on `A` in
+  `Enum abc::Abc { A, B, C }` → today: empty. Expected: every
+  site that writes `abc::Abc.A`.
+- **Stereotype**: cursor on `s1` in
+  `Profile abc::p { stereotypes : [s1, s2]; }` → today: empty.
+  Expected: every `<<abc::p.s1>>` annotation site across the
+  workspace. Same for tags via `{abc::p.t1 = 'val'}`.
+- Acceptance criteria:
+  - LSP `textDocument/references` returns the workspace-wide set
+    for each of the three new target kinds.
+  - `include_declaration = true` includes the declaration site
+    (in the parent element's body); `false` omits it.
+  - Performance stays in the V1 ballpark (subsecond warm) — these
+    are index additions, not whole-model scans.
+  - The pinned V1-limitation test
+    `references_empty_on_property_call_v1_limitation`
+    (`crates/lsp/src/handlers.rs::tests`) flips from "asserts
+    empty" to "asserts non-empty + populated"; rename so it
+    documents the new contract.
+  - Three new integration tests in `crates/lsp/src/handlers.rs::tests`
+    — one per target kind — driving the full cursor → references
+    round-trip from a fixture workspace.
+
+**Notes**
+- Index seam is `crates/pure/src/refs.rs`, the same one
+  T-20260511-07 leaned on (`ReferenceIndex::usages_of`,
+  `ReferenceIndex::find_at`). The V1 audit (T-20260511-07
+  agent-audit, follow-ups section) already flagged this as the
+  triage candidate: `Reference.target_element: Option<ElementId>`
+  is `None` for `PropertyCall`/`QualifiedPropertyCall`/`Variable`
+  at `refs.rs:490/507/522`. Two design options:
+  - **Option A — richer target enum**: replace
+    `target_element: Option<ElementId>` with
+    `target: ReferenceTarget` where
+    `enum ReferenceTarget { Element(ElementId),
+      Property { owner: ElementId, name: SmolStr },
+      EnumValue { owner: ElementId, name: SmolStr },
+      ProfileMember { owner: ElementId, kind: StereotypeOrTag, name: SmolStr } }`.
+    Reverse-index keyed by the same enum. Single index, no
+    fan-out at the LSP layer.
+  - **Option B — sibling indexes**: keep `target_element` for
+    element-level, add three parallel reverse-indexes — one per
+    sub-element kind — keyed by `(ElementId, SmolStr)`. Smaller
+    blast radius on existing callers but three lookups at the
+    LSP layer.
+  Recommend Option A: one shape, one place to maintain. Option B
+  is the right escape hatch only if migration cost on existing
+  `ReferenceIndex` consumers turns out larger than expected.
+- Site enumeration to wire up in `crates/pure/src/refs.rs`:
+  - Property: `ExprKind::PropertyCall` (LHS), `QualifiedPropertyCall`
+    (LHS), `^Class(propA = …)` key-expression bindings,
+    constraint expressions that reference `$this.propA`.
+  - Enum value: `ExprKind::EnumValueRef` (or whichever variant
+    carries `Enum.MEMBER` — confirm against the AST), plus any
+    `cast(@Enum.MEMBER)` corner cases.
+  - Stereotype / tag: `Annotated::stereotypes` / `tagged_values`
+    on every element + every nested element. Profile-side
+    declarations live on `Profile.stereotypes` / `Profile.tags`
+    (per the Pass-1-shells memory note); both ends need a stable
+    name → reverse-index key.
+- Cursor → target resolution (LSP side,
+  `crates/lsp/src/handlers.rs::references_for_position`):
+  - Reference-site click already goes through
+    `ReferenceIndex::find_at` — extend it to return the richer
+    target when the cursor sits inside a property name span,
+    enum-member span, or stereotype/tag-name span.
+  - Declaration-site click: extend the existing two-tier
+    fallback (`model.locate` + `cursor_in_source_info_inclusive`)
+    to inspect property / enum-value / stereotype / tag spans
+    inside the parent element's body, not just the parent's
+    `name_source_info`. Source spans for these sub-elements have
+    to be preserved at parse time — verify the AST already
+    carries them, or extend `crates/ast/` (per the
+    "No parallel Vecs for paired data" memory note: bundle name
+    + span into a struct, never use position-aligned siblings).
+- IntelliJ side: no client changes expected. ⌥F7 auto-binds
+  whatever target the cursor resolves to once the server returns
+  results — same wiring T-20260511-07 used.
+- Distinct from refactor-rename (out of scope here): renaming a
+  property / enum value / stereotype across the workspace is a
+  natural follow-up but needs `textDocument/rename` plumbing too.
+  File separately once Find Usages on these targets is solid.
+- Adjacent: T-20260511-06 (global diagnostics) shares the reverse-
+  reference index. Any schema change to `Reference.target` should
+  be coordinated with that work.
+- Don't conflate variables with the above. `Variable` (locals,
+  parameters) is a different cursor target — workspace-wide
+  references on a local don't make sense; that's a buffer-scoped
+  query. Keep the V1 empty-result behaviour for `Variable` and
+  file a separate item if buffer-scoped local-references becomes
+  a real ask.
+
+<!-- agent-audit:start id=T-20260513-03 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
 ### T-20260513-02 — IntelliJ plugin should restart the LSP subprocess on classpath / library config change
 
 - **Type:** feature
