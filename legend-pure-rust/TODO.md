@@ -373,108 +373,6 @@ Acceptance criteria:
   Status: Fix landed.
 <!-- agent-audit:end -->
 
-### T-20260512-04 — Property default values not applied at `^Class(...)` instantiation (multiplicity violation)
-
-- **Type:** parity-gap
-- **Area:** runtime | compiler
-- **Priority:** P1
-- **Reporter:** Rafael
-- **Filed:** 2026-05-12
-
-**Summary**
-A property with a default value should be auto-populated when the
-caller omits it in a `^Class(...)` constructor. Today the multiplicity
-validator fires instead, treating the property as unset.
-
-**Repro / Context**
-
-```pure
-Class abc::Class2 {
-    prop: abc::Class1[1];
-    prop2: abc::Abc[1] = abc::Abc.A;
-    prop3: Integer[1];
-}
-
-^abc::Class2(prop = ^abc::Class1(propA = 12), prop3 = 123);
-```
-
-Actual error:
-
-```
-Error instantiating class 'Class2'.  The following properties have
-multiplicity violations: 'prop2' requires 1 value, got 0
-```
-
-Expected: `prop2` is populated from its declared default
-(`abc::Abc.A`); no multiplicity violation; instance constructed
-successfully.
-
-Java-parity reference: upstream Java Pure applies property defaults
-during `new`/`^Class(...)` construction. Pattern matches the same
-defaulting that already works for top-level `function` parameter
-defaults (existing tests cover that path).
-
-**Notes**
-- Likely seams:
-  - Constructor lowering — wherever `ExprKind::NewInstance` lowers
-    to runtime instantiation, the per-property default expression
-    should be inserted for any unsupplied property *before* the
-    multiplicity check fires.
-  - Or the property-defaults pass — if defaults are stored on
-    `Property` but ignored at runtime construction, the runtime
-    side is what needs the fix.
-- Validation order is load-bearing: defaults must be substituted
-  *before* multiplicity validation, otherwise the validator sees
-  zero values and (correctly) rejects.
-- Related TODOs (same family — `^Class(...)` semantics):
-  - T-20260511-02 — required properties not checked
-    (zero-value violation in the *intended* direction).
-  - T-20260511-03 — supplied value not type/multiplicity-checked.
-  - T-20260511-04 — unknown property names not rejected.
-  This one is the inverse of T-20260511-02: same code path, opposite
-  symptom (defaults should pre-empt the "missing" verdict).
-- Test seed: add to `crates/runtime/tests/` (or the closest
-  existing `^Class(...)` integration test) — fixture with three
-  classes (`Class1`, `Abc` enum-or-class, `Class2`), omit the
-  default-bearing property, assert it materialises to the default
-  value at runtime.
-
-<!-- agent-audit:start id=T-20260512-04 -->
-<!-- Agents: append entries below. Do not rewrite the developer block above. -->
-- 2026-05-12 — root cause: `^Class(...)` and Pure-source
-  `new(class, id, [keyExpr])` share `finish_construction`
-  (`crates/runtime/src/native/lang.rs:662`), which applied caller-
-  supplied triples but never walked the class hierarchy for
-  unspecified properties' `default_value` expressions. The third
-  constructor overload, `DynamicNew` (same file), already did this
-  correctly at lines 1236–1279 — the two paths had drifted, and the
-  compile-time check `ConstructorMissingRequiredProperty` correctly
-  short-circuits on defaulted properties so the divergence only showed
-  at runtime.
-- Fix: extracted `apply_property_defaults(ctx, obj, class_id,
-  supplied_keys)` as a shared private helper in
-  `crates/runtime/src/native/lang.rs`. `finish_construction` now
-  back-fills unsupplied properties from their `default_value` between
-  `apply_property_triples` and the deferred multiplicity validation.
-  `DynamicNew::execute` was refactored to call the same helper —
-  structural fix that eliminates the drift point per the
-  `feedback_no_tactical_hacks` memory.
-- Canonical tests: added five `<<test.Test>>` functions to
-  `legend-pure-core/.../platform/pure/grammar/functions/lang/creation/new.pure`
-  under `meta::pure::functions::lang::tests::newAtRuntime`:
-  primitive default, primitive default overridden, enum default,
-  enum default overridden, inherited default. They run on every
-  stack's surveyor (Java + Rust). Rust surveyor: 385/0/0 (was 380),
-  including the five new ones. Full `cargo test -p
-  legend-pure-runtime`: green. `cargo test -p legend-pure-parser-pure`:
-  green. `cargo fmt --check`, copyright check: clean.
-- Pre-existing limitation preserved (mirrors `DynamicNew`):
-  `populate_association_inverses` runs over caller triples only, not
-  over defaults. Out of scope for this TODO; file a follow-up only if
-  default-valued association ends become a real use case.
-  Status: Fix landed.
-<!-- agent-audit:end -->
-
 ### T-20260512-03 — Virtual filesystem surfacing "decompiled" elements from `.purem` binaries
 
 - **Type:** feature
@@ -757,6 +655,111 @@ Today diagnostics surface only for files the editor has opened — the
 
 <!-- Resolved / migrated / wontfix items, newest first. Keep the full block
      including the final audit-block status for posterity. -->
+
+### T-20260512-04 — Property default values not applied at `^Class(...)` instantiation (multiplicity violation)
+
+- **Type:** parity-gap
+- **Area:** runtime | compiler
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-12
+
+**Summary**
+A property with a default value should be auto-populated when the
+caller omits it in a `^Class(...)` constructor. Today the multiplicity
+validator fires instead, treating the property as unset.
+
+**Repro / Context**
+
+```pure
+Class abc::Class2 {
+    prop: abc::Class1[1];
+    prop2: abc::Abc[1] = abc::Abc.A;
+    prop3: Integer[1];
+}
+
+^abc::Class2(prop = ^abc::Class1(propA = 12), prop3 = 123);
+```
+
+Actual error:
+
+```
+Error instantiating class 'Class2'.  The following properties have
+multiplicity violations: 'prop2' requires 1 value, got 0
+```
+
+Expected: `prop2` is populated from its declared default
+(`abc::Abc.A`); no multiplicity violation; instance constructed
+successfully.
+
+Java-parity reference: upstream Java Pure applies property defaults
+during `new`/`^Class(...)` construction. Pattern matches the same
+defaulting that already works for top-level `function` parameter
+defaults (existing tests cover that path).
+
+**Notes**
+- Likely seams:
+  - Constructor lowering — wherever `ExprKind::NewInstance` lowers
+    to runtime instantiation, the per-property default expression
+    should be inserted for any unsupplied property *before* the
+    multiplicity check fires.
+  - Or the property-defaults pass — if defaults are stored on
+    `Property` but ignored at runtime construction, the runtime
+    side is what needs the fix.
+- Validation order is load-bearing: defaults must be substituted
+  *before* multiplicity validation, otherwise the validator sees
+  zero values and (correctly) rejects.
+- Related TODOs (same family — `^Class(...)` semantics):
+  - T-20260511-02 — required properties not checked
+    (zero-value violation in the *intended* direction).
+  - T-20260511-03 — supplied value not type/multiplicity-checked.
+  - T-20260511-04 — unknown property names not rejected.
+  This one is the inverse of T-20260511-02: same code path, opposite
+  symptom (defaults should pre-empt the "missing" verdict).
+- Test seed: add to `crates/runtime/tests/` (or the closest
+  existing `^Class(...)` integration test) — fixture with three
+  classes (`Class1`, `Abc` enum-or-class, `Class2`), omit the
+  default-bearing property, assert it materialises to the default
+  value at runtime.
+
+<!-- agent-audit:start id=T-20260512-04 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+- 2026-05-12 — root cause: `^Class(...)` and Pure-source
+  `new(class, id, [keyExpr])` share `finish_construction`
+  (`crates/runtime/src/native/lang.rs:662`), which applied caller-
+  supplied triples but never walked the class hierarchy for
+  unspecified properties' `default_value` expressions. The third
+  constructor overload, `DynamicNew` (same file), already did this
+  correctly at lines 1236–1279 — the two paths had drifted, and the
+  compile-time check `ConstructorMissingRequiredProperty` correctly
+  short-circuits on defaulted properties so the divergence only showed
+  at runtime.
+- Fix: extracted `apply_property_defaults(ctx, obj, class_id,
+  supplied_keys)` as a shared private helper in
+  `crates/runtime/src/native/lang.rs`. `finish_construction` now
+  back-fills unsupplied properties from their `default_value` between
+  `apply_property_triples` and the deferred multiplicity validation.
+  `DynamicNew::execute` was refactored to call the same helper —
+  structural fix that eliminates the drift point per the
+  `feedback_no_tactical_hacks` memory.
+- Canonical tests: added five `<<test.Test>>` functions to
+  `legend-pure-core/.../platform/pure/grammar/functions/lang/creation/new.pure`
+  under `meta::pure::functions::lang::tests::newAtRuntime`:
+  primitive default, primitive default overridden, enum default,
+  enum default overridden, inherited default. They run on every
+  stack's surveyor (Java + Rust). Rust surveyor: 385/0/0 (was 380),
+  including the five new ones. Full `cargo test -p
+  legend-pure-runtime`: green. `cargo test -p legend-pure-parser-pure`:
+  green. `cargo fmt --check`, copyright check: clean.
+- Pre-existing limitation preserved (mirrors `DynamicNew`):
+  `populate_association_inverses` runs over caller triples only, not
+  over defaults. Out of scope for this TODO; file a follow-up only if
+  default-valued association ends become a real use case.
+- 2026-05-13 — moved to Closed. Fix landed on `legend-pure-rust` as
+  commit `26e738c7ebb` ("fix(runtime): apply property defaults at
+  `^Class(...)` (T-20260512-04)").
+  Status: Fix landed.
+<!-- agent-audit:end -->
 
 ### T-20260512-05 — `toMultiplicity` doesn't compile + missing test coverage
 
