@@ -1897,10 +1897,15 @@ impl NativeFunction for GetMapStats {
         let Value::Map(m) = &values[0] else {
             return Err(PureRuntimeError::type_mismatch("Map", &values[0]).into());
         };
-        let counter = m.borrow().get_if_absent_counter;
+        let map = m.borrow();
+        let counter = map.get_if_absent_counter;
+        let size = map.entries.len() as i64;
+        drop(map);
         let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::MAP_STATS);
         ctx.heap_mut()
             .mutate_add(&obj, "getIfAbsentCounter", &[Value::Integer(counter)])?;
+        ctx.heap_mut()
+            .mutate_add(&obj, "size", &[Value::Integer(size)])?;
         Ok(Evaluated::new(Value::Object(obj)))
     }
 
