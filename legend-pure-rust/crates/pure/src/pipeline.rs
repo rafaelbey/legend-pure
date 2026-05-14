@@ -31,7 +31,7 @@
 //! 5. **Freeze** — Call `rebuild_derived_indexes()`.
 //! 6. **Validation (Pass 3)** — Read-only pass on the frozen model.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::element as ast;
@@ -382,7 +382,7 @@ pub fn finalize_model(
     model.rebuild_derived_indexes();
 
     // ---- Pass 2.5: Type Inference ----
-    pass_infer(model, &mut errors);
+    pass_infer(model, &mut errors, None);
 
     // ---- Pass 3: Validation ----
     errors.extend(crate::validate::validate(model, None));
@@ -398,6 +398,230 @@ pub fn finalize_model(
     }
 
     errors
+}
+
+// ---------------------------------------------------------------------------
+// Incremental recompile (T-20260513-01 Phase 1)
+// ---------------------------------------------------------------------------
+
+/// Result of an incremental recompile: the mutated model, accumulated
+/// errors across the rebuilt chunks, and the chunk-ids that re-ran
+/// (sorted for test determinism).
+#[derive(Debug)]
+pub struct IncrementalOutcome {
+    /// The updated model.
+    pub model: PureModel,
+    /// Errors collected across all reruns plus the finalize step.
+    pub errors: Vec<CompilationError>,
+    /// Chunk ids that actually re-ran, sorted ascending.
+    pub rerun_chunks: Vec<u16>,
+}
+
+/// Recompile a subset of `model.chunks` in place from pre-parsed
+/// source files. The LSP server uses this as its hot-path
+/// `did_change` handler — see T-20260513-01.
+///
+/// Contract:
+///
+/// - `rerun_order` lists chunk ids in topological repo order (each
+///   chunk's upstream chunks appear earlier in the slice). The caller
+///   computes this from its `chunk_dependents` graph.
+/// - `chunk_inputs[chunk_id]` is the **full** source-file list for
+///   that chunk's repo — both freshly re-parsed files and AST-cache
+///   hits. The chunk is rebuilt from scratch using exactly these
+///   inputs.
+/// - Every `chunk_id` in `rerun_order` must already exist in
+///   `model.chunks` (incremental recompile never grows the chunks
+///   vector — Pass 1 writes in place into the pinned slot).
+/// - Bootstrap chunk 0 is never a rerun target.
+///
+/// Each rerun chunk is rebuilt by:
+///
+/// 1. Tombstoning prior `(chunk_id, _)` entries from every package's
+///    `children_elements` list (keeps the package tree consistent
+///    with the freshly re-declared element set).
+/// 2. Running Pass 1 ([`pass_declare_into`]) → Pass 1.5 (topo) →
+///    Pass 2a (signatures) → Pass 2b (function bodies) → Pass 2b'
+///    (class bodies) — the same passes [`compile_repo_slice_with_islands`]
+///    runs, scoped to one chunk's source files. Extension `declare` /
+///    `define_signatures` / `define_bodies` hooks run scoped to that
+///    chunk's inputs.
+/// 3. Pinning `chunk_id` so clean chunks' `(chunk_id, local_idx)`
+///    refs into other clean chunks survive. Refs from clean chunks
+///    into rerun chunks are by construction within the rerun set
+///    itself — the caller's closure over `chunk_dependents`
+///    guarantees this.
+///
+/// After all rerun chunks are rebuilt, `rebuild_derived_indexes`
+/// runs whole-model (cheap), then Pass 2.5 ([`pass_infer`]) and
+/// Pass 3 ([`crate::validate::validate`]) run bounded to the rerun
+/// set, and extension `validate` hooks run whole-model (their
+/// `RefCell` scratch state is rebuilt per compile anyway).
+///
+/// `chunk_inputs` is consumed by-move so callers don't pay an extra
+/// clone on the AST cache they're already holding.
+#[must_use]
+pub fn compile_chunks_incremental(
+    mut model: PureModel,
+    mut chunk_inputs: HashMap<u16, Vec<SourceFile>>,
+    rerun_order: Vec<u16>,
+    auto_imports: &[SmolStr],
+    extensions: &[&dyn crate::extension::CompilerExtension],
+    island_lowerers: &[Box<dyn crate::island_lower::IslandLowerer>],
+) -> IncrementalOutcome {
+    let mut errors: Vec<CompilationError> = Vec::new();
+    let rerun_set: HashSet<u16> = rerun_order.iter().copied().collect();
+
+    for &chunk_id in &rerun_order {
+        debug_assert!(chunk_id != 0, "bootstrap chunk is never a rerun target");
+        debug_assert!(
+            (chunk_id as usize) < model.chunks.len(),
+            "compile_chunks_incremental: rerun_order references chunk_id {chunk_id} \
+             not present in model.chunks (len = {len})",
+            len = model.chunks.len(),
+        );
+        let Some(source_files) = chunk_inputs.remove(&chunk_id) else {
+            continue;
+        };
+        recompile_chunk_in_place(
+            chunk_id,
+            &source_files,
+            auto_imports,
+            extensions,
+            island_lowerers,
+            &mut model,
+            &mut errors,
+        );
+    }
+
+    // Finalize: defensive whole-model index rebuild + bounded inference
+    // and validation. Extension validate hooks run whole-model because
+    // their cross-element scratch state isn't chunk-partitioned.
+    model.rebuild_derived_indexes();
+    pass_infer(&mut model, &mut errors, Some(&rerun_set));
+    errors.extend(crate::validate::validate(&model, Some(&rerun_set)));
+    for ext in extensions {
+        let mut ctx = ValidateCtx {
+            model: &model,
+            auto_imports,
+            errors: &mut errors,
+        };
+        ext.validate(&mut ctx);
+    }
+
+    let mut sorted_rerun: Vec<u16> = rerun_set.into_iter().collect();
+    sorted_rerun.sort_unstable();
+    IncrementalOutcome {
+        model,
+        errors,
+        rerun_chunks: sorted_rerun,
+    }
+}
+
+/// Rebuild a single chunk in place. Mirrors the per-chunk passes of
+/// [`compile_repo_slice_with_islands`] but writes into the existing
+/// `chunk_id` slot rather than allocating a new chunk.
+fn recompile_chunk_in_place(
+    chunk_id: u16,
+    source_files: &[SourceFile],
+    auto_imports: &[SmolStr],
+    extensions: &[&dyn crate::extension::CompilerExtension],
+    island_lowerers: &[Box<dyn crate::island_lower::IslandLowerer>],
+    model: &mut PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    // ---- Tombstone: drop (chunk_id, _) ids from every package's
+    // children_elements. The package arena itself stays — entries are
+    // re-registered by pass_declare_into as elements are re-allocated.
+    for pkg_idx in 0..model.global_packages.len() {
+        let pkg = model.global_packages.get_mut(pkg_idx);
+        pkg.children_elements.retain(|eid| match eid {
+            ElementId::InstanceId { chunk_id: c, .. } => *c != chunk_id,
+            ElementId::Package(_) => true,
+        });
+    }
+    // Reset the chunk slot so pass_declare_into's debug_assert sees the
+    // slot exists. The new content is written in by pass_declare_inner.
+    model.chunks[chunk_id as usize] = ModelChunk::new(chunk_id);
+
+    // ---- Pass 1: Declaration (in place at chunk_id) ----
+    let (declarations, unit_mappings) = pass_declare_into(chunk_id, source_files, model, errors);
+
+    // ---- Pass 1: Extension declare hooks ----
+    for ext in extensions {
+        let mut ctx = DeclareCtx {
+            source_files,
+            model,
+            auto_imports,
+            errors,
+        };
+        ext.declare(&mut ctx);
+    }
+
+    // ---- Pass 1.5: Topological Sort (within this chunk) ----
+    let sorted = pass_topo_sort(&declarations, source_files, model, errors);
+
+    // ---- Pass 2a: Signatures & Non-Function Elements ----
+    let (id_to_decl, mut import_scope_cache) = pass_define_signatures(
+        &sorted,
+        source_files,
+        &declarations,
+        &unit_mappings,
+        auto_imports,
+        model,
+        errors,
+    );
+
+    // ---- Pass 2a: Extension define_signatures hooks ----
+    for ext in extensions {
+        let mut ctx = DefineCtx {
+            source_files,
+            model,
+            auto_imports,
+            errors,
+        };
+        ext.define_signatures(&mut ctx);
+    }
+
+    // ---- Pass 2b: Function Bodies ----
+    pass_define_bodies(
+        &sorted,
+        source_files,
+        &id_to_decl,
+        &mut import_scope_cache,
+        auto_imports,
+        model,
+        island_lowerers,
+        errors,
+    );
+
+    // ---- Pass 2b': Class / Association / Primitive bodies ----
+    pass_define_class_bodies(
+        &sorted,
+        source_files,
+        &id_to_decl,
+        &mut import_scope_cache,
+        auto_imports,
+        model,
+        island_lowerers,
+        errors,
+    );
+
+    // ---- Pass 2b: Extension define_bodies hooks ----
+    for ext in extensions {
+        let mut ctx = DefineCtx {
+            source_files,
+            model,
+            auto_imports,
+            errors,
+        };
+        ext.define_bodies(&mut ctx);
+    }
+
+    // Rebuild derived indexes so a subsequent rerun chunk in the same
+    // call sees this chunk's freshly-registered associations and
+    // specializations. Matches compile_repo_slice_with_islands.
+    model.rebuild_derived_indexes();
 }
 
 /// Convenience macro for `compile()` with optional auto-imports.
@@ -740,10 +964,47 @@ fn pass_declare(
     HashMap<SmolStr, Vec<Declaration>>,
     HashMap<ElementId, UnitMapping>,
 ) {
-    let mut declarations: HashMap<SmolStr, Vec<Declaration>> = HashMap::new();
-    let mut unit_mappings: HashMap<ElementId, UnitMapping> = HashMap::new();
     #[allow(clippy::cast_possible_truncation)] // chunks.len() is bounded by u16 in practice
     let chunk_id = model.chunks.len() as u16;
+    pass_declare_inner(chunk_id, false, source_files, model, errors)
+}
+
+/// Pass 1, scoped to a specific `chunk_id` that **already exists** in
+/// `model.chunks`. Used by the incremental recompile path
+/// ([`compile_chunks_incremental`]) to rebuild a chunk in place
+/// without growing the chunk vector.
+///
+/// Callers must tombstone any prior `children_elements` entries
+/// pointing into `chunk_id` from `model.global_packages` before
+/// invoking this — otherwise the package tree retains stale refs.
+fn pass_declare_into(
+    chunk_id: u16,
+    source_files: &[SourceFile],
+    model: &mut PureModel,
+    errors: &mut Vec<CompilationError>,
+) -> (
+    HashMap<SmolStr, Vec<Declaration>>,
+    HashMap<ElementId, UnitMapping>,
+) {
+    debug_assert!(
+        (chunk_id as usize) < model.chunks.len(),
+        "pass_declare_into requires the chunk slot to already exist"
+    );
+    pass_declare_inner(chunk_id, true, source_files, model, errors)
+}
+
+fn pass_declare_inner(
+    chunk_id: u16,
+    in_place: bool,
+    source_files: &[SourceFile],
+    model: &mut PureModel,
+    errors: &mut Vec<CompilationError>,
+) -> (
+    HashMap<SmolStr, Vec<Declaration>>,
+    HashMap<ElementId, UnitMapping>,
+) {
+    let mut declarations: HashMap<SmolStr, Vec<Declaration>> = HashMap::new();
+    let mut unit_mappings: HashMap<ElementId, UnitMapping> = HashMap::new();
     let mut chunk = ModelChunk::new(chunk_id);
 
     for (file_idx, source_file) in source_files.iter().enumerate() {
@@ -858,8 +1119,15 @@ fn pass_declare(
     // An empty source list (no files at all — e.g. an empty repo in a
     // classpath) stays a no-op: nothing to allocate into the chunk
     // for, no chunk pushed.
+    //
+    // Incremental recompile (`in_place == true`) writes directly into
+    // the existing slot rather than growing the chunks vector.
     if !source_files.is_empty() {
-        model.chunks.push(chunk);
+        if in_place {
+            model.chunks[chunk_id as usize] = chunk;
+        } else {
+            model.chunks.push(chunk);
+        }
     }
     (declarations, unit_mappings)
 }
@@ -2223,8 +2491,16 @@ fn get_ast_element<'a>(source_files: &'a [SourceFile], decl: &Declaration) -> &'
 ///
 /// For each function, infers types for every expression in the body and sets
 /// `type_info` on each expression node in place.
+///
+/// `chunk_set` bounds inference to a subset of chunks (LSP-side
+/// incremental recompile, T-20260513-01). `None` = whole-model,
+/// preserves the pre-incremental behaviour.
 #[tracing::instrument(level = "info", name = "pass_infer", skip_all)]
-fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
+fn pass_infer(
+    model: &mut PureModel,
+    errors: &mut Vec<CompilationError>,
+    chunk_set: Option<&HashSet<u16>>,
+) {
     use crate::infer;
 
     // Collect (chunk_idx, element_idx, params, body) pairs, avoiding borrow conflicts.
@@ -2258,6 +2534,11 @@ fn pass_infer(model: &mut PureModel, errors: &mut Vec<CompilationError>) {
     // never had `type_info` populated, which silently degraded
     // dispatch precision and downstream type-mismatch detection.
     for (chunk_idx, chunk) in model.chunks.iter().enumerate().skip(1) {
+        if let Some(set) = chunk_set
+            && !set.contains(&chunk.chunk_id)
+        {
+            continue;
+        }
         for (local_idx, element) in chunk.elements.iter() {
             match element {
                 Element::Function(f) if !f.body.is_empty() => {
