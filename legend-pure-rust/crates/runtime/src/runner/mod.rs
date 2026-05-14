@@ -104,6 +104,12 @@ impl EvalHooks for CapturingHooks {
         _source: &legend_pure_parser_ast::SourceInfo,
         _context: &crate::context::VariableContext,
     ) -> bool {
+        // CapturingHooks never requests a pause — it only intercepts
+        // `console_output` to redirect Pure-level `print` / `println`
+        // into a captured buffer. The new EvalHooks trait signature
+        // returns `bool` so DAP-aware hooks can signal "build a
+        // snapshot tree before running this expression"; for plain
+        // capture we always say "no, just keep going".
         false
     }
     fn after_eval(&mut self, _source: &legend_pure_parser_ast::SourceInfo, _result: &Value) {}

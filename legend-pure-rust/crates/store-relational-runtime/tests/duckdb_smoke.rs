@@ -66,6 +66,7 @@ fn user_repo(content: &str) -> repo::Repo {
             content: content.into(),
         }],
         meta: Some(meta),
+        source_root: None,
     }
 }
 
