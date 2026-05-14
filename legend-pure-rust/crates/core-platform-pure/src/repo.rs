@@ -673,6 +673,81 @@ pub fn load_with_extensions(
         Box<dyn legend_pure_parser_parser::SectionParser>,
     >,
 ) -> Result<PureModel, PartialPureModel> {
+    let parsed = parse_repos(repos, section_parsers_factory);
+    load_from_parsed(repos, parsed, auto_imports, extensions)
+}
+
+/// Result of parsing one repo. `source_files` is `Some` for
+/// [`Repo::Embedded`] / [`Repo::Filesystem`] and `None` for
+/// [`Repo::Purem`] (binary repos have nothing to parse — the slice
+/// is read at load time).
+#[derive(Debug, Default)]
+pub struct RepoParseResult {
+    /// Parsed source files for this repo, or `None` for binary repos.
+    pub source_files: Option<Vec<legend_pure_parser_ast::section::SourceFile>>,
+    /// Parse errors accumulated for this repo.
+    pub errors: Vec<CompilationError>,
+}
+
+/// Parse every source-shaped ([`Repo::Embedded`] / [`Repo::Filesystem`])
+/// repo in `repos`, returning a vec parallel to `repos`. Binary
+/// ([`Repo::Purem`]) entries get a default [`RepoParseResult`] —
+/// `source_files: None`, no errors.
+///
+/// The LSP server uses this entry point to cache parsed ASTs across
+/// edits (T-20260513-01 incremental recompile); see
+/// [`load_from_parsed`] for the matching compile step.
+pub fn parse_repos(
+    repos: &[Repo],
+    section_parsers_factory: &mut dyn FnMut() -> Vec<
+        Box<dyn legend_pure_parser_parser::SectionParser>,
+    >,
+) -> Vec<RepoParseResult> {
+    repos
+        .iter()
+        .map(|repo| match repo {
+            Repo::Embedded { .. } | Repo::Filesystem { .. } => {
+                let (source_files, errors) =
+                    parse_repo_sources_with_sections(repo, section_parsers_factory);
+                RepoParseResult {
+                    source_files: Some(source_files),
+                    errors,
+                }
+            }
+            Repo::Purem { .. } => RepoParseResult::default(),
+        })
+        .collect()
+}
+
+/// Compile a model from pre-parsed source files, then finalize.
+///
+/// `parsed` must be parallel to `repos`: each entry's
+/// `source_files: Some(_)` is used as the input to
+/// [`pipeline::compile_repo_slice_with_islands`] for the corresponding
+/// [`Repo::Embedded`] / [`Repo::Filesystem`] entry; `source_files:
+/// None` slots correspond to [`Repo::Purem`] entries, which are
+/// merged from their binary blob at this stage. Parse errors from
+/// `parsed` are folded into the returned error list.
+///
+/// Splitting parse from compile lets the LSP cache parsed ASTs across
+/// edits — see T-20260513-01.
+///
+/// # Errors
+///
+/// Same as [`load`].
+#[allow(clippy::result_large_err)]
+pub fn load_from_parsed(
+    repos: &[Repo],
+    parsed: Vec<RepoParseResult>,
+    auto_imports: &[SmolStr],
+    extensions: &[&dyn legend_pure_parser_pure::extension::CompilerExtension],
+) -> Result<PureModel, PartialPureModel> {
+    assert_eq!(
+        repos.len(),
+        parsed.len(),
+        "parse_repos result must be parallel to the repos slice it was built from"
+    );
+
     let sorted = match crate::topo::topo_sort_repos(repos) {
         Ok(s) => s,
         Err(topo_err) => {
@@ -688,16 +763,26 @@ pub fn load_with_extensions(
     populate_repo_visibility(&mut model, repos);
     let mut errors: Vec<CompilationError> = Vec::new();
 
-    for repo in sorted {
+    // Map each topo-sorted &Repo to its index in the original `repos`
+    // slice. `parsed` is parallel to `repos`, so this gives O(1) lookup
+    // of the matching parse result inside the compile loop.
+    let topo_indices: Vec<usize> = sorted
+        .iter()
+        .filter_map(|sorted_repo| repos.iter().position(|r| std::ptr::eq(r, *sorted_repo)))
+        .collect();
+
+    for idx in topo_indices {
+        let repo = &repos[idx];
+        let parsed_for_repo = &parsed[idx];
         match repo {
             Repo::Embedded { .. } | Repo::Filesystem { .. } => {
-                let (parsed_files, parse_errs) =
-                    parse_repo_sources_with_sections(repo, section_parsers_factory);
-                errors.extend(parse_errs);
+                errors.extend(parsed_for_repo.errors.iter().cloned());
+                let empty = Vec::new();
+                let source_files = parsed_for_repo.source_files.as_ref().unwrap_or(&empty);
                 let lowerers = default_island_lowerers();
                 let (_range, slice_errs) = pipeline::compile_repo_slice_with_islands(
                     &mut model,
-                    &parsed_files,
+                    source_files,
                     auto_imports,
                     extensions,
                     &lowerers,
