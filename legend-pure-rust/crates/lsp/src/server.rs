@@ -245,6 +245,15 @@ impl LanguageServer for Backend {
         {
             let mut ws = self.workspace.lock().await;
             ws.set_open_buffer(uri.clone(), change.text);
+            // Mark dirty for the incremental recompile dispatch
+            // (T-20260513-01). If the URI doesn't map to a known
+            // canonical path, the next compile falls back to the cold
+            // (full) path — which is the correct behaviour for an
+            // unseen file (new file added to a repo, or an outside
+            // file the workspace never saw).
+            if let Some(canonical) = ws.canonical_path_for(&uri) {
+                ws.dirty_files.insert(canonical.into());
+            }
         }
         self.recompile_and_publish().await;
     }
