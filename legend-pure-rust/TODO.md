@@ -726,86 +726,6 @@ the plugin and call the restart hook on the Legend Pure
 <!-- Agents: append entries below. Do not rewrite the developer block above. -->
 <!-- agent-audit:end -->
 
-### T-20260513-01 — LSP recompiles the whole workspace on every change; needs incremental (chunk-scoped → element-scoped) compilation
-
-- **Type:** perf
-- **Area:** lsp | pure | runtime
-- **Priority:** P1
-- **Reporter:** Rafael
-- **Filed:** 2026-05-13
-
-**Summary**
-Today the LSP server reruns the full compilation pipeline against the
-entire workspace on every text-document change. As the platform model
-grows (244 files / ~1660 elements compile-clean today per
-`legend-pure-rust/CLAUDE.md`) latency on typing in the IDE compounds
-linearly with workspace size. Two-stage improvement:
-1. **Chunk-scoped recompile** — only re-hydrate the edited chunk and
-   the transitively-dependent downstream chunks. Upstream chunks are
-   reused as-is.
-2. **Element-scoped recompile (long term)** — push dependency tracking
-   down to the `ElementId` level so a body edit on one function only
-   reruns the validators/lowerers that observed that element. This
-   is the right shape for a Salsa-style demand-driven query engine;
-   evaluate adopting Salsa (or a hand-rolled equivalent) as the
-   compilation cache layer.
-
-**Repro / Context**
-- Edit any `.pure` file in an IntelliJ session with `legend lsp`
-  attached. Observe the diagnostic/hover/completion latency grows
-  with workspace size, not with the size of the local edit.
-- Acceptance criteria:
-  - **Phase 1 (chunk-scoped)**: on a single-file edit, only the
-    edited chunk + chunks that import/depend on it are rerun.
-    Measured by instrumenting the pipeline and asserting
-    `len(rerun_chunks) ≤ 1 + len(downstream(edited_chunk))` in a
-    targeted integration test.
-  - **Phase 2 (element-scoped, Salsa or equivalent)**: a body-only
-    edit on a function `f` whose signature is unchanged reruns only
-    Pass-2b lowering for `f` and its dependents; Pass-1 shells,
-    Pass-2a signatures, and validators on unrelated elements are
-    cache-hit. Demonstrated by an LSP integration test that snapshots
-    the recompiled-element set across a typing burst.
-  - No regression in `cargo test --workspace`, `cargo lint-lib`,
-    `cargo lint`, or in the existing LSP test suite. Surveyor
-    (`eval_surveyor_root_strict_pass`) and PCT strict-pass tests
-    remain green.
-
-**Notes**
-- Today's seam: `legend lsp` (`crates/cli`) → `crates/lsp` → calls into
-  `crates/pure` end-to-end compile each tick. Identify the per-change
-  entry point and route it through a cached `PureModel` that tracks
-  per-chunk staleness.
-- Pass-1 shell creation already populates every syntactic AST field
-  (per the "Validators next to the data" memory note), which is the
-  precondition for chunk-scoped invalidation — a downstream chunk
-  whose imports' shells haven't changed can be considered up-to-date
-  without rebuilding its dependencies.
-- Salsa evaluation criteria (Phase 2): query granularity (per
-  `ElementId`? per pass + `ElementId`?), interaction with the existing
-  `Arc<PureModel>` snapshot model, cost of plumbing through the
-  recursive-descent parser + pass-1/2a/2b pipeline, behaviour on
-  hot reload during DAP sessions. Decide *before* implementing —
-  a wholesale Salsa migration is large enough to be a BACKLOG item,
-  not a TODO.
-- Adjacent: the `cargo build` cold-path already feels this — DSL
-  `.purem` rebuilds drive 5–15 min link times (`CLAUDE.md` build-time
-  opt-ins section), and the `LEGEND_PURE_SKIP_DSL_SNAPSHOTS=1`
-  escape hatch is a tell that the build graph isn't fine-grained
-  enough. Phase 2 likely benefits both the LSP and the build script.
-- Don't conflate parse caching with semantic caching. The parser is
-  already fast; the wins are in Pass-2a (signature hydration), Pass-2b
-  (body lowering), and the validator suite — those are the heavy
-  passes that touch every chunk on a full recompile today.
-- Test infrastructure: existing LSP integration tests under
-  `crates/lsp/tests/` are the right home for chunk-scoped assertions.
-  Phase 2 will likely need a new harness that records the set of
-  recompiled query nodes per edit.
-
-<!-- agent-audit:start id=T-20260513-01 -->
-<!-- Agents: append entries below. Do not rewrite the developer block above. -->
-<!-- agent-audit:end -->
-
 ### T-20260512-07 — Audit `eval_tests.rs` for coverage already gated by surveyor `<<test.Test>>` runs
 
 - **Type:** refactor
@@ -1110,6 +1030,123 @@ tests either skip silently or fail when CI runs the workspace gates.
 
 <!-- Resolved / migrated / wontfix items, newest first. Keep the full block
      including the final audit-block status for posterity. -->
+
+### T-20260513-01 — LSP recompiles the whole workspace on every change; needs incremental (chunk-scoped → element-scoped) compilation
+
+- **Type:** perf
+- **Area:** lsp | pure | runtime
+- **Priority:** P1
+- **Reporter:** Rafael
+- **Filed:** 2026-05-13
+
+**Summary**
+Today the LSP server reruns the full compilation pipeline against the
+entire workspace on every text-document change. As the platform model
+grows (244 files / ~1660 elements compile-clean today per
+`legend-pure-rust/CLAUDE.md`) latency on typing in the IDE compounds
+linearly with workspace size. Two-stage improvement:
+1. **Chunk-scoped recompile** — only re-hydrate the edited chunk and
+   the transitively-dependent downstream chunks. Upstream chunks are
+   reused as-is.
+2. **Element-scoped recompile (long term)** — push dependency tracking
+   down to the `ElementId` level so a body edit on one function only
+   reruns the validators/lowerers that observed that element. This
+   is the right shape for a Salsa-style demand-driven query engine;
+   evaluate adopting Salsa (or a hand-rolled equivalent) as the
+   compilation cache layer.
+
+**Repro / Context**
+- Edit any `.pure` file in an IntelliJ session with `legend lsp`
+  attached. Observe the diagnostic/hover/completion latency grows
+  with workspace size, not with the size of the local edit.
+- Acceptance criteria:
+  - **Phase 1 (chunk-scoped)**: on a single-file edit, only the
+    edited chunk + chunks that import/depend on it are rerun.
+    Measured by instrumenting the pipeline and asserting
+    `len(rerun_chunks) ≤ 1 + len(downstream(edited_chunk))` in a
+    targeted integration test.
+  - **Phase 2 (element-scoped, Salsa or equivalent)**: a body-only
+    edit on a function `f` whose signature is unchanged reruns only
+    Pass-2b lowering for `f` and its dependents; Pass-1 shells,
+    Pass-2a signatures, and validators on unrelated elements are
+    cache-hit. Demonstrated by an LSP integration test that snapshots
+    the recompiled-element set across a typing burst.
+  - No regression in `cargo test --workspace`, `cargo lint-lib`,
+    `cargo lint`, or in the existing LSP test suite. Surveyor
+    (`eval_surveyor_root_strict_pass`) and PCT strict-pass tests
+    remain green.
+
+**Notes**
+- Today's seam: `legend lsp` (`crates/cli`) → `crates/lsp` → calls into
+  `crates/pure` end-to-end compile each tick. Identify the per-change
+  entry point and route it through a cached `PureModel` that tracks
+  per-chunk staleness.
+- Pass-1 shell creation already populates every syntactic AST field
+  (per the "Validators next to the data" memory note), which is the
+  precondition for chunk-scoped invalidation — a downstream chunk
+  whose imports' shells haven't changed can be considered up-to-date
+  without rebuilding its dependencies.
+- Salsa evaluation criteria (Phase 2): query granularity (per
+  `ElementId`? per pass + `ElementId`?), interaction with the existing
+  `Arc<PureModel>` snapshot model, cost of plumbing through the
+  recursive-descent parser + pass-1/2a/2b pipeline, behaviour on
+  hot reload during DAP sessions. Decide *before* implementing —
+  a wholesale Salsa migration is large enough to be a BACKLOG item,
+  not a TODO.
+- Adjacent: the `cargo build` cold-path already feels this — DSL
+  `.purem` rebuilds drive 5–15 min link times (`CLAUDE.md` build-time
+  opt-ins section), and the `LEGEND_PURE_SKIP_DSL_SNAPSHOTS=1`
+  escape hatch is a tell that the build graph isn't fine-grained
+  enough. Phase 2 likely benefits both the LSP and the build script.
+- Don't conflate parse caching with semantic caching. The parser is
+  already fast; the wins are in Pass-2a (signature hydration), Pass-2b
+  (body lowering), and the validator suite — those are the heavy
+  passes that touch every chunk on a full recompile today.
+- Test infrastructure: existing LSP integration tests under
+  `crates/lsp/tests/` are the right home for chunk-scoped assertions.
+  Phase 2 will likely need a new harness that records the set of
+  recompiled query nodes per edit.
+
+<!-- agent-audit:start id=T-20260513-01 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+- 2026-05-13 — **Phase 1 landed.** Four commits on `legend-pure-rust`:
+  - `86a020c3665` refactor(pure): thread `chunk_set` through cross-chunk
+    validators (`validate::validate` + 5 walkers in
+    `crates/pure/src/validate.rs`).
+  - `ebd0f4ba93b` refactor(core-platform): split `parse_repos` from
+    `load_from_parsed` (`crates/core-platform-pure/src/repo.rs`). LSP
+    captures parsed ASTs between the two stages and seeds its cache.
+  - `142dba0f523` feat(pure): `pipeline::compile_chunks_incremental` +
+    `IncrementalOutcome` (`crates/pure/src/pipeline.rs`). Rebuilds a
+    subset of `model.chunks` in place from pre-parsed source files;
+    pins `chunk_id`, tombstones package-tree entries, runs Pass 1→2b'
+    per rerun chunk, then Pass 2.5/3 bounded to the rerun set. 3 unit
+    tests in `crates/pure/tests/incremental_recompile.rs`.
+  - `890c963e8fc` feat(lsp): incremental recompile with per-file AST
+    cache (`crates/lsp/src/workspace.rs`,
+    `crates/lsp/src/server.rs`). New `Workspace` state:
+    `parsed_files`, `path_to_chunk`, `chunk_files`,
+    `chunk_dependents`, `dirty_files`, `last_rerun_chunks` (test
+    getter), `parse_count_since_last_compile` (test getter).
+    `did_change` marks dirty by canonical path. `compile()` dispatches
+    to `full_compile` (cold) or `incremental_compile` (hot).
+    `parse_one_file` + `read_content_for` + `closure` +
+    `topo_order_for_rerun` helpers. Parse-error policy retains prior
+    model when a dirty file fails to parse. 5 integration tests in
+    `crates/lsp/tests/incremental_recompile.rs` cover all four plan
+    scenarios (A1 parse-cache, B1 self-contained edit, B2 downstream
+    rerun, B3 element removal surfaces downstream errors, B4
+    parse-error keeps prior model).
+- 2026-05-13 — **Phase 2 spun off to BACKLOG** as planned: see
+  `legend-pure-rust/BACKLOG.md` Compiler section "Incremental
+  compilation" row, updated to mark Phase 1 done and call out Phase 2
+  (element-scoped, Salsa-or-equivalent) with a design-doc-first
+  decision gate.
+- 2026-05-13 — Verification: full `cargo nextest run --workspace`
+  green (2105/2105). `cargo fmt --check` clean. Copyright headers
+  present on the new test file.
+  Status: Fix landed (Phase 1); Phase 2 → BACKLOG
+<!-- agent-audit:end -->
 
 ### T-20260512-06 — DAP debugger renders variables with Rust-internal `Debug` shape; needs Pure-syntax view + navigable structure
 
