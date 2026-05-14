@@ -25,7 +25,7 @@ import java.lang.reflect.Method;
  * <ul>
  *   <li>{@code equals} / {@code hashCode} / {@code toString} to identity
  *       on the wrapped {@link PureRustInstance}'s pointer;</li>
- *   <li>the {@code $instancePointer()} / {@code $evaluator()} sentinels
+ *   <li>the {@code _instancePointer()} / {@code _evaluator()} sentinels
  *       to the captured fields, without touching the evaluator;</li>
  *   <li>any other call (zero-arg or qualified-property) to
  *       {@link PureRustInstance#getProperty(String, Object...)}, with
@@ -87,18 +87,18 @@ public final class PureInvocationHandler implements InvocationHandler
         // Pure property of the same name.
         if (declaringClass == PureRegistered.class)
         {
-            if ("$instancePointer".equals(name))
+            if ("_instancePointer".equals(name))
             {
                 return instance.instancePointer();
             }
-            if ("$evaluator".equals(name))
+            if ("_evaluator".equals(name))
             {
                 return evaluator;
             }
         }
         if (declaringClass == Any.class)
         {
-            if ("$rustInstance".equals(name))
+            if ("_rustInstance".equals(name))
             {
                 return instance;
             }
@@ -121,11 +121,14 @@ public final class PureInvocationHandler implements InvocationHandler
 
     private boolean equalsByPointer(Object other)
     {
-        if (other == null) return false;
+        if (other == null)
+        {
+            return false;
+        }
         // Two proxies are equal iff their underlying handles match.
         if (other instanceof PureRegistered)
         {
-            return ((PureRegistered) other).$instancePointer() == instance.instancePointer();
+            return ((PureRegistered) other)._instancePointer() == instance.instancePointer();
         }
         if (other instanceof PureRustInstance)
         {
@@ -136,7 +139,10 @@ public final class PureInvocationHandler implements InvocationHandler
 
     private static Object[] unwrapArgs(Object[] args)
     {
-        if (args == null) return new Object[0];
+        if (args == null)
+        {
+            return new Object[0];
+        }
         Object[] out = new Object[args.length];
         for (int i = 0; i < args.length; i++)
         {

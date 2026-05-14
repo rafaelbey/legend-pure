@@ -388,7 +388,6 @@ public final class PureBindingsProcessor extends AbstractProcessor
         }
     }
 
-    /** Parsed manifest contents. Mirrors {@code dispatch::ParsedManifest}. */
     private static final class ParsedManifest
     {
         String pkg = "";
@@ -397,7 +396,6 @@ public final class PureBindingsProcessor extends AbstractProcessor
         final List<String> fqns = new ArrayList<>();
     }
 
-    /** Internal shape used to fall through to a single Diagnostic emission point. */
     private static final class BindingsException extends Exception
     {
         BindingsException(String message)

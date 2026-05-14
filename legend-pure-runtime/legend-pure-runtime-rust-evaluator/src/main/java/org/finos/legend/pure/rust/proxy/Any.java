@@ -26,7 +26,7 @@ import org.finos.legend.pure.rust.PureRustInstance;
  * to wrap, even when the runtime classifier isn't registered for any
  * more-specific generated interface. That gives callers a typed
  * fallback they can {@code instanceof}-narrow or drop down on via
- * {@link #$rustInstance()} to call dynamic
+ * {@link #_rustInstance()} to call dynamic
  * {@link PureRustInstance#getProperty(String, Object...)}.
  * <p>
  * <strong>Hand-written, not generated.</strong> The codegen recognises
@@ -44,5 +44,5 @@ public interface Any extends PureRegistered
      * the value back to {@link org.finos.legend.pure.rust.PureRustEvaluator#evaluate}
      * as an opaque argument.
      */
-    PureRustInstance $rustInstance();
+    PureRustInstance _rustInstance();
 }
