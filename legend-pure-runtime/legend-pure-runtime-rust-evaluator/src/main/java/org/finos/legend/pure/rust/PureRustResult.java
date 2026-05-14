@@ -16,8 +16,10 @@ package org.finos.legend.pure.rust;
 
 import java.util.List;
 
-class PureRustResult {
-    public enum Type {
+class PureRustResult
+{
+    public enum Type
+    {
         NULL,
         BOOLEAN,
         INTEGER,
@@ -32,47 +34,80 @@ class PureRustResult {
     private final long contextPointer;
 
     // Internal constructor used by JNI
-    private PureRustResult(Type type, Object value, long contextPointer) {
+    private PureRustResult(Type type, Object value, long contextPointer)
+    {
         this.type = type;
         this.value = value;
         this.contextPointer = contextPointer;
     }
 
-    PureRustResult(String value, long contextPointer) {
+    PureRustResult(String value, long contextPointer)
+    {
         this(Type.STRING, value, contextPointer);
     }
 
-    PureRustResult(boolean value, long contextPointer) {
+    PureRustResult(boolean value, long contextPointer)
+    {
         this(Type.BOOLEAN, value, contextPointer);
     }
 
-    PureRustResult(long value, long contextPointer) {
+    PureRustResult(long value, long contextPointer)
+    {
         this(Type.INTEGER, value, contextPointer);
     }
 
-    PureRustResult(double value, long contextPointer) {
+    PureRustResult(double value, long contextPointer)
+    {
         this(Type.FLOAT, value, contextPointer);
     }
 
-    PureRustResult(long contextPointer) {
+    PureRustResult(long contextPointer)
+    {
         this(Type.NULL, null, contextPointer);
     }
 
-    PureRustResult(PureRustResult[] value, long contextPointer) {
+    PureRustResult(PureRustResult[] value, long contextPointer)
+    {
         this(Type.ARRAY, value, contextPointer);
     }
 
-    PureRustResult(PureRustInstance value, long contextPointer) {
+    PureRustResult(PureRustInstance value, long contextPointer)
+    {
         this(Type.INSTANCE_POINTER, value.instancePointer, contextPointer);
     }
 
-    Type getType() { return type; }
+    Type getType()
+    {
+        return type;
+    }
 
-    protected Boolean getAsBoolean() { return (Boolean) value; }
-    protected Long getAsInteger() { return ((Number) value).longValue(); }
-    protected Double getAsFloat() { return ((Number) value).doubleValue(); }
-    protected String getAsString() { return (String) value; }
-    protected long getAsInstancePointer() { return (Long) value; }
+    protected Boolean getAsBoolean()
+    {
+        return (Boolean) value;
+    }
 
-    PureRustResult[] getAsArray() { return (PureRustResult[]) value; }
+    protected Long getAsInteger()
+    {
+        return ((Number) value).longValue();
+    }
+
+    protected Double getAsFloat()
+    {
+        return ((Number) value).doubleValue();
+    }
+
+    protected String getAsString()
+    {
+        return (String) value;
+    }
+
+    protected long getAsInstancePointer()
+    {
+        return (Long) value;
+    }
+
+    PureRustResult[] getAsArray()
+    {
+        return (PureRustResult[]) value;
+    }
 }

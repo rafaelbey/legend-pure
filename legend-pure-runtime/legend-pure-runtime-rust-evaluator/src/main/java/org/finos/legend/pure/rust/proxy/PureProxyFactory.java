@@ -63,7 +63,9 @@ public final class PureProxyFactory
         register("meta::pure::metamodel::type::Any", Any.class);
     }
 
-    private PureProxyFactory() {}
+    private PureProxyFactory()
+    {
+    }
 
     /**
      * Register a generated interface for a Pure classifier FQN.
@@ -129,15 +131,24 @@ public final class PureProxyFactory
             PureRustEvaluator eval,
             IdentityHashMap<PureRegistered, PureRustInstance> visited)
     {
-        if (userImpl == null) throw new IllegalArgumentException("userImpl is null");
-        if (iface == null) throw new IllegalArgumentException("iface is null");
+        if (userImpl == null)
+        {
+            throw new IllegalArgumentException("userImpl is null");
+        }
+        if (iface == null)
+        {
+            throw new IllegalArgumentException("iface is null");
+        }
 
         // Cycle / sharing guard: if we've already materialised this
         // exact user object (identity, not equals), reuse the existing
         // heap instance so reference structure is preserved and
         // self-references don't blow the stack.
         PureRustInstance existing = visited.get(userImpl);
-        if (existing != null) return existing;
+        if (existing != null)
+        {
+            return existing;
+        }
 
         // If the input is itself a proxy, its handle is already on the
         // heap — return that, no re-materialisation needed.
@@ -189,8 +200,13 @@ public final class PureProxyFactory
             // Force interface initialisation so the registry populates
             // (`$REGISTERED` is a side-effect-init field; reading any
             // static-final on the interface triggers it).
-            try { Class.forName(iface.getName(), true, iface.getClassLoader()); }
-            catch (ClassNotFoundException ignored) { }
+            try
+            {
+                Class.forName(iface.getName(), true, iface.getClassLoader());
+            }
+            catch (ClassNotFoundException ignored)
+            {
+            }
             classifierFqn = INTERFACE_TO_CLASSIFIER.get(iface);
         }
         if (classifierFqn == null)
@@ -215,7 +231,10 @@ public final class PureProxyFactory
             PureRustEvaluator eval,
             IdentityHashMap<PureRegistered, PureRustInstance> visited)
     {
-        if (raw == null) return null;
+        if (raw == null)
+        {
+            return null;
+        }
         if (raw instanceof Optional)
         {
             return ((Optional<?>) raw).map(v -> materialiseValue(v, eval, visited)).orElse(null);
@@ -227,7 +246,7 @@ public final class PureProxyFactory
             // wrapRustResult sees a PureRustInstance, not the proxy.
             if (Proxy.isProxyClass(raw.getClass()))
             {
-                return new PureRustInstanceHandle(reg.$instancePointer());
+                return new PureRustInstanceHandle(reg._instancePointer());
             }
             // Pick the most-specific generated interface this user
             // class implements so the recursive create finds the right
@@ -287,14 +306,35 @@ public final class PureProxyFactory
         Set<String> seenNames = new java.util.HashSet<>();
         for (Method m : iface.getMethods())
         {
-            if (m.getParameterCount() != 0) continue;
-            if (java.lang.reflect.Modifier.isStatic(m.getModifiers())) continue;
-            if (m.getDeclaringClass() == Object.class) continue;
-            if (m.getDeclaringClass() == PureRegistered.class) continue;
+            if (m.getParameterCount() != 0)
+            {
+                continue;
+            }
+            if (java.lang.reflect.Modifier.isStatic(m.getModifiers()))
+            {
+                continue;
+            }
+            if (m.getDeclaringClass() == Object.class)
+            {
+                continue;
+            }
+            if (m.getDeclaringClass() == PureRegistered.class)
+            {
+                continue;
+            }
             String name = m.getName();
-            if (name.equals("$instancePointer") || name.equals("$evaluator")) continue;
-            if (name.equals("__register")) continue;
-            if (!seenNames.add(name)) continue; // dedup overrides
+            if (name.equals("_instancePointer") || name.equals("_evaluator"))
+            {
+                continue;
+            }
+            if (name.equals("__register"))
+            {
+                continue;
+            }
+            if (!seenNames.add(name))
+            {
+                continue; // dedup overrides
+            }
             out.add(m);
         }
         return out;
@@ -308,7 +348,10 @@ public final class PureProxyFactory
     private static String pureNameOf(Method m)
     {
         String n = m.getName();
-        if (n.length() > 1 && n.endsWith("_")) return n.substring(0, n.length() - 1);
+        if (n.length() > 1 && n.endsWith("_"))
+        {
+            return n.substring(0, n.length() - 1);
+        }
         return n;
     }
 
@@ -369,7 +412,7 @@ public final class PureProxyFactory
         // PureRustInstance: pick the interface to proxy as.
         // pickInterface always returns at least Any.class, so every
         // heap object hands back a typed proxy that the caller can
-        // instanceof-narrow or drop down on via $rustInstance().
+        // instanceof-narrow or drop down on via _rustInstance().
         if (raw instanceof PureRustInstance)
         {
             PureRustInstance instance = (PureRustInstance) raw;
@@ -409,7 +452,7 @@ public final class PureProxyFactory
         }
         if (value instanceof PureRegistered)
         {
-            return new PureRustInstanceHandle(((PureRegistered) value).$instancePointer());
+            return new PureRustInstanceHandle(((PureRegistered) value)._instancePointer());
         }
         if (value instanceof Iterable && !(value instanceof PureRustInstance))
         {
@@ -434,7 +477,7 @@ public final class PureProxyFactory
      *       (i.e. {@link PureRegistered}-extending) interface.</li>
      *   <li>{@link Any} — the universal fallback. Every Pure heap
      *       object is at least an Any, so callers always get a typed
-     *       proxy with a {@link Any#$rustInstance()} drop-down to
+     *       proxy with a {@link Any#_rustInstance()} drop-down to
      *       dynamic dispatch.</li>
      * </ol>
      */

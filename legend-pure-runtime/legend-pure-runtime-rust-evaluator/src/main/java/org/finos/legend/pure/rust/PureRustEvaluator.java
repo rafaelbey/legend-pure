@@ -39,10 +39,11 @@ import java.util.Map;
  */
 public class PureRustEvaluator implements Closeable
 {
-    private final static Cleaner cleaner = Cleaner.create();
+    private static final Cleaner cleaner = Cleaner.create();
 
     // Load the native library
-    static {
+    static
+    {
         // We'll manage loading the appropriate JNI library for the OS
         System.loadLibrary("pure_rust_jni");
     }
@@ -56,7 +57,8 @@ public class PureRustEvaluator implements Closeable
     /**
      * Initialize the Rust evaluator context with the given source repository.
      */
-    public PureRustEvaluator() {
+    public PureRustEvaluator()
+    {
         long context = nativeInitContext();
         this.contextPointer = context;
         this.cleanable = cleaner.register(this, () -> PureRustEvaluator.nativeFreeContext(context));
@@ -275,11 +277,17 @@ public class PureRustEvaluator implements Closeable
     }
 
     // --- JNI Native Methods ---
-    private native static long nativeInitContext();
-    private native static void nativeFreeContext(long contextPtr);
-    private native static void nativeFreeInstance(long contextPtr, long instancePointer);
-    private native static PureRustResult nativeEvaluate(long contextPtr, String functionPath, PureRustResult[] args);
-    private native static PureRustResult nativeGetProperty(long contextPtr, long instancePtr, String propertyName, PureRustResult[] args);
-    private native static String nativeGetClassifier(long contextPtr, long instancePtr);
-    private native static long nativeNew(long contextPtr, String classifierFqn, String[] propertyNames, PureRustResult[] propertyValues);
+    private static native long nativeInitContext();
+
+    private static native void nativeFreeContext(long contextPtr);
+
+    private static native void nativeFreeInstance(long contextPtr, long instancePointer);
+
+    private static native PureRustResult nativeEvaluate(long contextPtr, String functionPath, PureRustResult[] args);
+
+    private static native PureRustResult nativeGetProperty(long contextPtr, long instancePtr, String propertyName, PureRustResult[] args);
+
+    private static native String nativeGetClassifier(long contextPtr, long instancePtr);
+
+    private static native long nativeNew(long contextPtr, String classifierFqn, String[] propertyNames, PureRustResult[] propertyValues);
 }

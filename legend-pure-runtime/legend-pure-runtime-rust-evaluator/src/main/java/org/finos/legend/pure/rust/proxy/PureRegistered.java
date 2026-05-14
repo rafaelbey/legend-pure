@@ -40,10 +40,10 @@ public interface PureRegistered
      * @return the i64 handle (as a {@code long}) corresponding to the
      *         underlying {@link org.finos.legend.pure.rust.PureRustInstance}.
      */
-    long $instancePointer();
+    long _instancePointer();
 
     /**
      * The {@link PureRustEvaluator} that owns the wrapped instance.
      */
-    PureRustEvaluator $evaluator();
+    PureRustEvaluator _evaluator();
 }
