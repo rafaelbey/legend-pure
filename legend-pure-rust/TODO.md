@@ -139,6 +139,196 @@ Read top-to-bottom on every visit:
 
 <!-- New items go here. Newest at the top. -->
 
+### T-20260513-08 — Native function to scope-compile a grammar fragment into an ephemeral `PureModel` and run a user lambda over the new elements
+
+- **Type:** feature
+- **Area:** runtime | pure | compiler
+- **Priority:** P2
+- **Reporter:** Rafael
+- **Filed:** 2026-05-13
+
+**Summary**
+Add a native (Pure-callable) function whose signature is, roughly:
+
+```pure
+native function meta::pure::functions::lang::withScopedSource(
+    source: String[1],
+    body  : {PackageableElement[*] -> Nil[0]}[1]
+): Nil[0];
+```
+
+Behaviour: parse + compile `source` as Pure grammar into an **ephemeral
+chunk**, build a transient `PureModel` that equals the current model
+plus the new chunk, evaluate `body` in that transient model with the
+newly-added elements bound to the lambda's `PackageableElement[*]`
+parameter, then discard the transient model on return. The underlying
+`PureModel` the caller is running against must end up byte-identical
+to what it was before the call — this is a sandbox, not a mutation.
+
+Primary use cases:
+- REPL / playground: try out a new class definition against a live
+  model without re-running the build.
+- Generative / metaprogramming flows: build small `.pure` strings on
+  the fly (template instantiation, code-gen scenarios) and walk the
+  resulting elements with normal `meta::pure::functions::meta::*`
+  reflection.
+- Test fixtures: stand up a tiny synthetic model inline in a
+  `<<test.Test>>` without an out-of-band file on disk.
+
+**Repro / Context**
+- Today there is no Pure-level way to introduce new elements into the
+  running model; the only entry points are build-time
+  (`compile_repo_slice`) and editor-time (LSP open/save). Pure source
+  cannot programmatically construct an element graph.
+- Example user flow:
+  ```pure
+  let snippet = '
+    Class scratch::Person { name: String[1]; age: Integer[1]; }
+    function scratch::greet(p: scratch::Person[1]): String[1] {
+      \'Hi \' + $p.name
+    }
+  ';
+  $snippet->withScopedSource(
+    {newElements |
+       // newElements: PackageableElement[*]
+       // — the 1 Class + 1 function just compiled.
+       $newElements->size()->println();                   // 2
+       let person = ^scratch::Person(name='Ada', age=36);
+       scratch::greet($person)->println();                // 'Hi Ada'
+    }
+  );
+  // Back to the original model — `scratch::Person` is no longer
+  // resolvable here; `^scratch::Person(...)` errors.
+  ```
+- Acceptance criteria:
+  - Native is registered under the standard
+    `legend_pure_runtime::native::lang` registry, dispatched by
+    declared mangled FQN per the `reference_mangling` memory note.
+  - Parses `source` via the same parser pipeline used by
+    `legend lsp` / `compile_repo_slice` (no separate parser).
+    Parse / compile errors on the snippet surface as a `PureException`
+    raised from the native — the caller can `assertError` against it.
+  - Compilation appends a single `ModelChunk` to a *transient*
+    `PureModel` derived from the current one. The lambda's
+    `PackageableElement[*]` argument is the list of every element
+    declared in the new chunk, in declaration order.
+  - Inside `body`, every standard reflection / construction /
+    invocation primitive that already works on platform elements
+    must work on the new elements:
+    - `^scratch::Person(...)` constructs instances.
+    - `scratch::greet(p)` evaluates as a function call.
+    - `$newElements->meta::pure::functions::meta::properties()`
+      walks property metadata.
+    - `cast(@scratch::Person)`, `instanceOf`, `subTypeOf` all
+      resolve the new types.
+  - On `body` return (or panic / `PureException`), the transient
+    chunk is dropped and any heap objects created against the new
+    types are garbage-collected by Rust's RAII. The caller's
+    `PureModel` is the same `Arc` it started with (or a new one
+    whose chunks vector is bitwise-equal — pick whichever fits the
+    runtime's snapshot model best, but don't leak the new chunk).
+  - Nesting: `withScopedSource` calls inside `body` compose
+    cleanly. Inner scope sees outer scope's added elements as part
+    of "the current model".
+  - Test coverage:
+    - `<<test.Test>>` under
+      `platform/pure/essential/lang/scope/withScopedSource.pure`
+      (new file): positive paths (class+function, instance
+      construction, reflection); parse error in `source`; compile
+      error in `source` (e.g. unresolved type ref); body
+      `PureException` propagates; round-trip — same set of
+      resolvable FQNs before and after.
+    - Rust seam test in `crates/runtime/tests/` only if the Pure-
+      side coverage misses something Rust-specific (e.g. that the
+      transient model is dropped — assert via reference counts on
+      a model `Arc`).
+
+**Notes**
+- Compile seam: `crates/pure/src/pipeline.rs::compile_repo_slice`
+  (line 240) already takes `&mut PureModel` + a slice of source
+  files and appends a chunk. The new native wraps:
+  1. Clone the current `PureModel` (or copy-on-write — see note
+     below) into a transient `model_scoped`.
+  2. `compile_repo_slice(&mut model_scoped, &[("<scoped>", source)],
+     …)` — pass an empty auto-imports list, or the caller's
+     auto-imports if available via `EvalContext`.
+  3. Translate any returned `CompilationError`s into
+     `PureException` and short-circuit.
+  4. Identify the new chunk's `ElementId`s (everything in
+     `model_scoped.chunks.last()`).
+  5. Call `body` with the corresponding `Value::Element` list,
+     under an `EvalContext` whose `model` reference points at
+     `model_scoped`.
+  6. Drop `model_scoped` on return — the original `Arc<PureModel>`
+     was never mutated.
+- `PureModel` clone cost: this is the load-bearing perf question.
+  Cloning the full `PureModel` per `withScopedSource` call is
+  O(model size) and would be unusable at scale. Two strategies:
+  - **Cheap clone via `Arc`/`im-rc`**: if the `PureModel`'s
+    internal collections are already persistent (per the
+    "Heap design" memory note, the runtime uses `im-rc` for
+    persistent structures), the clone is structural-share +
+    new chunk slot. Confirm against `crates/pure/src/model.rs`.
+  - **Layered model**: keep a base `Arc<PureModel>` immutable
+    and overlay the transient chunk via a thin
+    `ScopedPureModel<'a> { base: &'a PureModel, extra: ModelChunk }`
+    wrapper. The compiler/runtime would need to consult both,
+    but every read-only path already iterates by chunk so this
+    is mostly mechanical. Recommended if (1) turns out costly.
+- Lambda return type: `Nil[0]` — the callback is invoked for its
+  side effects, not its value. Mirrors `forEach`. Don't widen to
+  `Any[*]` unless a real use case appears.
+- Lambda parameter type: `PackageableElement[*]` is the simplest
+  shape. Consider `PackageableElement[1..*]` so parse-error-with-
+  zero-elements doesn't even reach the lambda — but parse errors
+  raise a `PureException` instead of giving the lambda an empty
+  list, so multiplicity stays `[*]`.
+- Naming: `withScopedSource` is one option; alternatives:
+  `withCompiledSource`, `evalInScopedModel`, `withScratchModel`.
+  Pick at triage. Java-parity reference: I don't know a direct
+  Java analogue — file as a Rust-first feature, not a parity gap.
+  *Verify against `legend-pure-core/.../platform/` before claiming
+  there's no Java precedent.*
+- Visibility / repo boundary: scoped source defaults to the
+  pseudo-repo `<scoped>` (or similar sentinel). Repo-visibility
+  validators (per `reference_access_validator` memory) need to
+  treat the sentinel either as fully open or as inheriting the
+  caller's repo context — design this explicitly, don't let it
+  emerge by accident. Per the "Translate errors, don't pre-validate"
+  memory: let the existing validator run and translate any
+  visibility error into a `PureException` from the native.
+- Mutation safety: the transient chunk must not be observable
+  from any other thread. `Arc<PureModel>` is shared, so the clone
+  must be private — `Arc::make_mut` or an unshared `PureModel`.
+  Confirm `EvalContext.model` is per-evaluator (single-threaded)
+  before relying on this.
+- Side effects: per the runtime's purity gate (memoization), this
+  native is *not* pure — it mutates ephemeral state and calls a
+  side-effecting lambda. Register with `SideEffectFunction`
+  classification so memoization correctly skips call sites.
+- Out of scope (defer to follow-ups):
+  - **Persistent install**: a sibling native that *keeps* the new
+    chunk in the model permanently. Different lifecycle, different
+    safety story — file separately if needed.
+  - **Cross-call element handle**: returning the new elements to
+    the caller as long-lived `PackageableElement`s usable after
+    `withScopedSource` exits. Today's design intentionally limits
+    scope to the lambda body — handles outside the scope would
+    dangle.
+  - **Editing existing elements**: only adds. Modifying or
+    replacing an element from the underlying model is a different
+    feature (with much harder semantics around dispatch / type-
+    hierarchy invariants).
+- Adjacent: T-20260513-01 (incremental compilation). If chunk-
+  scoped invalidation lands first, this native gets cheap clone
+  semantics for free — the same machinery that lets the LSP
+  recompile one chunk can splice in a temporary chunk and rip
+  it out on lambda return.
+
+<!-- agent-audit:start id=T-20260513-08 -->
+<!-- Agents: append entries below. Do not rewrite the developer block above. -->
+<!-- agent-audit:end -->
+
 ### T-20260513-07 — MCP `reload_workspace` should compute file deltas and reuse the chunk-scoped incremental path (mirror of T-20260513-01)
 
 - **Type:** perf
