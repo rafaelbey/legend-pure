@@ -385,7 +385,7 @@ pub fn finalize_model(
     pass_infer(model, &mut errors);
 
     // ---- Pass 3: Validation ----
-    errors.extend(crate::validate::validate(model));
+    errors.extend(crate::validate::validate(model, None));
 
     // ---- Pass 3: Extension validate hooks ----
     for ext in extensions {

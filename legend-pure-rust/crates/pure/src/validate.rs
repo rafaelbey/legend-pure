@@ -99,39 +99,57 @@ use crate::types::{ExprKind, FunctionCallData, TypeExpr, ValueSpec};
 /// [`crate::pipeline::hydrate_element_signature`] via the piecewise
 /// helpers below — this entry point keeps only validators whose
 /// inputs span multiple chunks.
+///
+/// `chunk_set` bounds the cross-chunk walkers to a subset of chunks
+/// (LSP-side incremental recompile, T-20260513-01). `None` =
+/// whole-model, preserves the pre-incremental behaviour.
 #[tracing::instrument(level = "info", name = "validate", skip_all)]
-pub(crate) fn validate(model: &PureModel) -> Vec<CompilationError> {
+pub(crate) fn validate(
+    model: &PureModel,
+    chunk_set: Option<&HashSet<u16>>,
+) -> Vec<CompilationError> {
     let mut errors = Vec::new();
 
     // Repo-boundary visibility — cross-repo refs are inherently a
     // multi-chunk concern; only resolvable on the merged model.
-    errors.extend(validate_repo_visibility(model));
+    errors.extend(validate_repo_visibility(model, chunk_set));
 
     // Repo `pattern` membership — has to be cross-chunk because DSL
     // extensions allocate `Element::DSLInstance` rows directly through
     // their `define()` paths, bypassing
     // `pipeline::hydrate_element_signature`. A per-element call there
     // would silently miss every Mapping / Database / Diagram declaration.
-    errors.extend(validate_repo_pattern_membership(model));
+    errors.extend(validate_repo_pattern_membership(model, chunk_set));
 
     // Property default-value type+multiplicity compat — cross-chunk
     // because the default-value expression's inferred `type_info` is
     // populated by Pass 2.5 inference, not Pass 2b lowering.
-    errors.extend(validate_property_default_values(model));
+    errors.extend(validate_property_default_values(model, chunk_set));
 
     // `^Class(prop = val)` value compat — cross-chunk for the same
     // reason. T-04 (unknown key) and T-02 (missing required) fire
     // eagerly at `lower::new_instance::lower_new_instance`; only the
     // value-vs-property compat lives here.
-    errors.extend(validate_constructor_bindings(model));
+    errors.extend(validate_constructor_bindings(model, chunk_set));
 
     // Access-level (`<<access.private/protected>>`) use-site walk:
     // walks every `ElementId` reference inside each non-bootstrap
     // element and checks the *target's* access level. Targets
     // routinely live in earlier chunks, so this stays cross-chunk.
-    errors.extend(validate_access_levels(model));
+    errors.extend(validate_access_levels(model, chunk_set));
 
     errors
+}
+
+/// Returns true when the chunk should be skipped under `chunk_set`
+/// (used by the cross-chunk walkers below). A `None` chunk_set means
+/// "iterate every chunk" — preserves whole-model behaviour.
+#[inline]
+fn skip_chunk(chunk_set: Option<&HashSet<u16>>, chunk_id: u16) -> bool {
+    match chunk_set {
+        None => false,
+        Some(set) => !set.contains(&chunk_id),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -381,7 +399,10 @@ pub(crate) fn validate_duplicate_properties(
 /// declared dependencies. No-op when `model.repo_visibility` is empty,
 /// so existing tests that build a model without going through a real
 /// loader stay green.
-fn validate_repo_visibility(model: &PureModel) -> Vec<CompilationError> {
+fn validate_repo_visibility(
+    model: &PureModel,
+    chunk_set: Option<&HashSet<u16>>,
+) -> Vec<CompilationError> {
     use crate::purem::walk::walk_element_ids;
     use crate::visibility::{check_element_visible, source_repo_name};
 
@@ -392,6 +413,9 @@ fn validate_repo_visibility(model: &PureModel) -> Vec<CompilationError> {
 
     // Skip chunk 0 (bootstrap) — its source has no repo prefix.
     for chunk in model.chunks.iter().skip(1) {
+        if skip_chunk(chunk_set, chunk.chunk_id) {
+            continue;
+        }
         for (local_idx, _element) in chunk.elements.iter() {
             let node = chunk.nodes.get(local_idx);
             let use_site = &node.source_info.source;
@@ -449,7 +473,10 @@ fn validate_repo_visibility(model: &PureModel) -> Vec<CompilationError> {
 /// [`crate::visibility::source_repo_name`], and `<pattern>` is the
 /// descriptor's pattern verbatim (not the `^(?:…)$`-wrapped internal
 /// form).
-fn validate_repo_pattern_membership(model: &PureModel) -> Vec<CompilationError> {
+fn validate_repo_pattern_membership(
+    model: &PureModel,
+    chunk_set: Option<&HashSet<u16>>,
+) -> Vec<CompilationError> {
     use crate::visibility::source_repo_name;
 
     let mut errors = Vec::new();
@@ -459,6 +486,9 @@ fn validate_repo_pattern_membership(model: &PureModel) -> Vec<CompilationError> 
 
     // Skip chunk 0 (bootstrap) — its source has no repo prefix.
     for chunk in model.chunks.iter().skip(1) {
+        if skip_chunk(chunk_set, chunk.chunk_id) {
+            continue;
+        }
         for (local_idx, _element) in chunk.elements.iter() {
             let node = chunk.nodes.get(local_idx);
             let use_site = &node.source_info.source;
@@ -516,10 +546,16 @@ fn validate_repo_pattern_membership(model: &PureModel) -> Vec<CompilationError> 
 /// `resolve::is_type_compatible_structural` +
 /// `resolve::is_multiplicity_compatible` — the same helpers that gate
 /// qualified-property argument binding.
-fn validate_property_default_values(model: &PureModel) -> Vec<CompilationError> {
+fn validate_property_default_values(
+    model: &PureModel,
+    chunk_set: Option<&HashSet<u16>>,
+) -> Vec<CompilationError> {
     let mut errors = Vec::new();
 
     for chunk in model.chunks.iter().skip(1) {
+        if skip_chunk(chunk_set, chunk.chunk_id) {
+            continue;
+        }
         for (local_idx, element) in chunk.elements.iter() {
             let owner_id = ElementId::InstanceId {
                 chunk_id: chunk.chunk_id,
@@ -616,10 +652,16 @@ fn check_property_default(
 /// rejects `+=` to single-value slots (which is semantically invalid
 /// anyway). The looser "element-type compat against the collection
 /// slot's element type" rule is a v2 follow-up.
-fn validate_constructor_bindings(model: &PureModel) -> Vec<CompilationError> {
+fn validate_constructor_bindings(
+    model: &PureModel,
+    chunk_set: Option<&HashSet<u16>>,
+) -> Vec<CompilationError> {
     let mut errors = Vec::new();
 
     for chunk in model.chunks.iter().skip(1) {
+        if skip_chunk(chunk_set, chunk.chunk_id) {
+            continue;
+        }
         for (_local_idx, element) in chunk.elements.iter() {
             visit_value_specs_in_element(element, &mut |vs| {
                 check_new_call(vs, model, &mut errors);
@@ -823,7 +865,10 @@ where
 /// No-op when `meta::pure::profiles::access` isn't registered (so
 /// the existing tests that build a model from raw sources without
 /// bootstrap stay green).
-fn validate_access_levels(model: &PureModel) -> Vec<CompilationError> {
+fn validate_access_levels(
+    model: &PureModel,
+    chunk_set: Option<&HashSet<u16>>,
+) -> Vec<CompilationError> {
     let mut errors = Vec::new();
 
     if access::access_profile_id(model).is_none() {
@@ -836,6 +881,9 @@ fn validate_access_levels(model: &PureModel) -> Vec<CompilationError> {
 
     // Skip chunk 0 (M3 bootstrap is compiler-trusted).
     for chunk in model.chunks.iter().skip(1) {
+        if skip_chunk(chunk_set, chunk.chunk_id) {
+            continue;
+        }
         for (local_idx, element) in chunk.elements.iter() {
             let node = chunk.nodes.get(local_idx);
             // Step B — usage checks. Use-site package = this
