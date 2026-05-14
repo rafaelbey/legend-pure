@@ -103,7 +103,8 @@ impl EvalHooks for CapturingHooks {
         &mut self,
         _source: &legend_pure_parser_ast::SourceInfo,
         _context: &crate::context::VariableContext,
-    ) {
+    ) -> bool {
+        false
     }
     fn after_eval(&mut self, _source: &legend_pure_parser_ast::SourceInfo, _result: &Value) {}
     fn enter_function(&mut self, _name: &str, _source: &legend_pure_parser_ast::SourceInfo) {}
