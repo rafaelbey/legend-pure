@@ -29,6 +29,7 @@ fn categorize_platform_errors_detailed() {
                     legend_pure_parser_pure::error::CompilationErrorKind::InvalidSuperType { .. } => "InvalidSuperType",
                     legend_pure_parser_pure::error::CompilationErrorKind::InvalidAnnotation { .. } => "InvalidAnnotation",
                     legend_pure_parser_pure::error::CompilationErrorKind::DuplicateProperty { .. } => "DuplicateProperty",
+                    legend_pure_parser_pure::error::CompilationErrorKind::PropertyConflict { .. } => "PropertyConflict",
                     legend_pure_parser_pure::error::CompilationErrorKind::DuplicateVariable { .. } => "DuplicateVariable",
                     legend_pure_parser_pure::error::CompilationErrorKind::ParseFailure { .. } => "ParseFailure",
                     legend_pure_parser_pure::error::CompilationErrorKind::AmbiguousImport { .. } => "AmbiguousImport",

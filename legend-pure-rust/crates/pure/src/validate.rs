@@ -73,6 +73,7 @@
 //! | Cross-repo refs respect declared dependencies | cross-chunk | `NotVisible` |
 //! | Element's package matches its repo's allowed pattern | cross-chunk | `PackageNotInRepoPattern` |
 //! | Property default value type+mult compatible with declared shape | cross-chunk | `PropertyDefaultValueIncompatible` |
+//! | Subclass property is a legal override of the inherited one (LSP) | cross-chunk | `PropertyConflict` |
 //! | `^Class(prop=val)` value type+mult compatible with property | cross-chunk | `ConstructorPropertyTypeMismatch` |
 //! | `^Class(unknownKey=...)` resolves to a real property | cross-chunk | `UnknownProperty` |
 //! | `^Class()` supplies every required-no-default property | cross-chunk | `ConstructorMissingRequiredProperty` |
@@ -125,6 +126,12 @@ pub(crate) fn validate(
     // because the default-value expression's inferred `type_info` is
     // populated by Pass 2.5 inference, not Pass 2b lowering.
     errors.extend(validate_property_default_values(model, chunk_set));
+
+    // Cross-hierarchy property override compat — cross-chunk because a
+    // subclass and its superclass routinely live in different chunks
+    // (user code extending a `.purem`-loaded platform class). Java
+    // parity: `ClassValidator.validatePropertyOverrides`.
+    errors.extend(validate_property_overrides(model, chunk_set));
 
     // `^Class(prop = val)` value compat — cross-chunk for the same
     // reason. T-04 (unknown key) and T-02 (missing required) fire
@@ -388,6 +395,369 @@ pub(crate) fn validate_duplicate_properties(
             });
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Property Override Validation (cross-hierarchy)
+// ---------------------------------------------------------------------------
+
+/// Walks every class and checks that every property (simple +
+/// qualified, plus association-injected) in its inheritance closure
+/// is a *legal override* of any like-named property declared higher
+/// in that closure.
+///
+/// Java parity: [`ClassValidator.validatePropertyOverrides`] —
+/// the full nested-MRO algorithm, not the simpler own-vs-ancestors
+/// shortcut. The outer loop walks every class C in the model; for each
+/// C we materialise the MRO closure (C + every strict ancestor in BFS
+/// order) and compare *every* pair `(MRO[i], MRO[j])` with `i < j`.
+/// This catches three distinct cases under one loop:
+///
+/// * **Direct override** — `i = 0`, spec = C itself, genl = some
+///   ancestor. C's own property must be a legal override of the
+///   inherited one.
+/// * **Transitive override** — `i > 0`, spec and genl both ancestors of
+///   C. An ancestor's redeclaration that conflicts with a further-up
+///   ancestor surfaces here (when validating C, or earlier when
+///   validating the immediate descendant — dedup picks whichever fires
+///   first).
+/// * **Diamond** — `i > 0`, spec and genl on parallel branches of C's
+///   MRO. Neither is an ancestor of the other, so neither catches the
+///   conflict on its own; only at the join class do both become
+///   visible. C is the most-derived such join point.
+///
+/// **Simple properties** are invariant — a redeclaration must carry the
+/// **same** type and multiplicity as the inherited declaration. (This
+/// is what the M3 platform exercises when `Type.name` shadows
+/// `ModelElement.name`: both are `String[1]`, so the override is legal.)
+///
+/// **Qualified properties** follow Liskov-substitution rules:
+///
+/// | Position | Direction | Rule |
+/// |---|---|---|
+/// | return type | covariant | spec return must be the same or a subtype of genl return |
+/// | return mult | covariant | spec return multiplicity must be subsumed by genl return mult |
+/// | param count | invariant | identical |
+/// | param type (per slot) | contravariant | spec param must be the same or a supertype of genl param |
+/// | param mult (per slot) | contravariant | spec param multiplicity must subsume genl param mult |
+///
+/// **Cross-chunk placement.** A subclass and its superclass routinely
+/// live in different chunks — user code extending a platform class
+/// loaded from `.purem` is the canonical example. Per-element-eager
+/// would silently miss those, so this walker runs in the merged-model
+/// `validate()` entry point alongside `validate_property_default_values`.
+///
+/// **Dedup.** Without intervention, a conflict between `A.prop` and
+/// `X.prop` (with `A extends X`) reports once when validating A *and*
+/// again when validating any descendant of A. The shared
+/// `(spec_owner, genl_owner, name)` key collapses those duplicates so
+/// each unique conflict is reported once. Iteration order is
+/// chunk-then-local-idx, which in practice matches declaration order
+/// (parent before child), so attribution lands on the closest class
+/// that exposes the conflict — A for direct conflicts, the join class
+/// for diamonds.
+fn validate_property_overrides(
+    model: &PureModel,
+    chunk_set: Option<&HashSet<u16>>,
+) -> Vec<CompilationError> {
+    let mut errors = Vec::new();
+    // (spec_owner_id, genl_owner_id, property_name, kind) — collapses
+    // the same conflict reported once per descendant.
+    let mut seen: HashSet<ConflictKey> = HashSet::new();
+
+    for chunk in &model.chunks {
+        if skip_chunk(chunk_set, chunk.chunk_id) {
+            continue;
+        }
+        for (local_idx, element) in chunk.elements.iter() {
+            if !matches!(element, Element::Class(_)) {
+                continue;
+            }
+            let class_id = ElementId::InstanceId {
+                chunk_id: chunk.chunk_id,
+                local_idx,
+            };
+            let class_name = model.element_name(class_id).clone();
+
+            let mro = collect_mro(class_id, model);
+            if mro.len() < 2 {
+                // No strict ancestors → nothing to check.
+                continue;
+            }
+
+            // Materialise visible properties once per MRO entry.
+            let simple_by_idx: Vec<Vec<VisibleProperty<'_>>> = mro
+                .iter()
+                .map(|id| collect_simple_properties(*id, model))
+                .collect();
+            let qualified_by_idx: Vec<Vec<VisibleQualifiedProperty<'_>>> = mro
+                .iter()
+                .map(|id| collect_qualified_properties(*id, model))
+                .collect();
+
+            for (i, spec_simple) in simple_by_idx.iter().enumerate() {
+                for spec in spec_simple {
+                    for genl_simple in &simple_by_idx[(i + 1)..] {
+                        for genl in genl_simple.iter().filter(|p| p.prop.name == spec.prop.name) {
+                            if !is_simple_property_override_valid(spec.prop, genl.prop, model) {
+                                let key = ConflictKey::Simple {
+                                    spec_owner: spec.owner_id,
+                                    genl_owner: genl.owner_id,
+                                    name: spec.prop.name.clone(),
+                                };
+                                if seen.insert(key) {
+                                    emit_property_conflict(
+                                        &class_name,
+                                        &model.element_name(spec.owner_id).clone(),
+                                        &model.element_name(genl.owner_id).clone(),
+                                        &spec.prop.name,
+                                        &spec.prop.source_info,
+                                        &mut errors,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for (i, spec_qual) in qualified_by_idx.iter().enumerate() {
+                for spec in spec_qual {
+                    let spec_arity = spec.qp.parameters.len();
+                    for genl_qual in &qualified_by_idx[(i + 1)..] {
+                        for genl in genl_qual.iter().filter(|q| {
+                            q.qp.name == spec.qp.name && q.qp.parameters.len() == spec_arity
+                        }) {
+                            if !is_qualified_property_override_valid(spec.qp, genl.qp, model) {
+                                let key = ConflictKey::Qualified {
+                                    spec_owner: spec.owner_id,
+                                    genl_owner: genl.owner_id,
+                                    name: spec.qp.name.clone(),
+                                    param_count: spec_arity,
+                                };
+                                if seen.insert(key) {
+                                    emit_property_conflict(
+                                        &class_name,
+                                        &model.element_name(spec.owner_id).clone(),
+                                        &model.element_name(genl.owner_id).clone(),
+                                        &spec.qp.name,
+                                        &spec.qp.source_info,
+                                        &mut errors,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    errors
+}
+
+/// Dedup key for `validate_property_overrides`. Simple and qualified
+/// conflicts live in disjoint name-spaces — a qualified `name(x)` on
+/// A and a simple `name` on B should still both report if they
+/// somehow co-occur, so the kind tag is part of the key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ConflictKey {
+    Simple {
+        spec_owner: ElementId,
+        genl_owner: ElementId,
+        name: SmolStr,
+    },
+    Qualified {
+        spec_owner: ElementId,
+        genl_owner: ElementId,
+        name: SmolStr,
+        param_count: usize,
+    },
+}
+
+/// A simple property visible at a class, with the element id of
+/// whichever class or association actually declares it. Used both for
+/// the comparison loop and for the dedup key — assoc-injected ends
+/// dedupe under the Association's id, not the class they surface on.
+struct VisibleProperty<'m> {
+    prop: &'m Property,
+    owner_id: ElementId,
+}
+
+struct VisibleQualifiedProperty<'m> {
+    qp: &'m QualifiedProperty,
+    owner_id: ElementId,
+}
+
+/// Walk `class_id`'s MRO BFS-style, returning `[class_id, ancestors…]`.
+/// The class itself is included so the override pair loop can treat it
+/// uniformly. Cycles are guarded by the `visited` set — defence in
+/// depth; `validate_super_types` already rejects self-inheritance, but
+/// a malformed model shouldn't loop here.
+fn collect_mro(class_id: ElementId, model: &PureModel) -> Vec<ElementId> {
+    use std::collections::VecDeque;
+    let mut out: Vec<ElementId> = Vec::new();
+    let mut visited: HashSet<ElementId> = HashSet::new();
+    let mut queue: VecDeque<ElementId> = VecDeque::new();
+    queue.push_back(class_id);
+    while let Some(current) = queue.pop_front() {
+        if !visited.insert(current) {
+            continue;
+        }
+        out.push(current);
+        if let Element::Class(c) = model.get_element(current) {
+            for st in &c.super_types {
+                if let TypeExpr::Named { element, .. } = st {
+                    queue.push_back(*element);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Collect every simple property visible at `class_id`: declared +
+/// association-injected. Each item carries the element id of its true
+/// owner — the class for declared, the association for injected.
+fn collect_simple_properties<'m>(
+    class_id: ElementId,
+    model: &'m PureModel,
+) -> Vec<VisibleProperty<'m>> {
+    let mut out: Vec<VisibleProperty<'m>> = Vec::new();
+    if let Element::Class(c) = model.get_element(class_id) {
+        for p in &c.properties {
+            out.push(VisibleProperty {
+                prop: p,
+                owner_id: class_id,
+            });
+        }
+    }
+    for (assoc_id, self_idx) in model.association_properties(class_id) {
+        if let Element::Association(assoc) = model.get_element(*assoc_id) {
+            let other_idx = 1 - *self_idx;
+            if let Some(p) = assoc.properties.get(other_idx) {
+                out.push(VisibleProperty {
+                    prop: p,
+                    owner_id: *assoc_id,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Collect every qualified property visible at `class_id`. Java
+/// doesn't surface qualified properties through associations, so we
+/// only walk the declared list.
+fn collect_qualified_properties<'m>(
+    class_id: ElementId,
+    model: &'m PureModel,
+) -> Vec<VisibleQualifiedProperty<'m>> {
+    let mut out: Vec<VisibleQualifiedProperty<'m>> = Vec::new();
+    if let Element::Class(c) = model.get_element(class_id) {
+        for q in &c.qualified_properties {
+            out.push(VisibleQualifiedProperty {
+                qp: q,
+                owner_id: class_id,
+            });
+        }
+    }
+    out
+}
+
+
+/// Java parity: `ClassValidator.isPropertyOverrideValid`. Simple
+/// properties are invariant — the inherited declaration's type and
+/// multiplicity must match exactly. Structural compatibility in *both*
+/// directions (`A <: B && B <: A`) substitutes for raw `==` so
+/// `TypeExpr` spans don't leak into equality.
+fn is_simple_property_override_valid(
+    spec: &Property,
+    genl: &Property,
+    model: &PureModel,
+) -> bool {
+    types_structurally_equal(&spec.type_expr, &genl.type_expr, model)
+        && spec.multiplicity == genl.multiplicity
+}
+
+/// Java parity: `ClassValidator.isQualifiedPropertyOverrideValid`.
+/// Covariant return (`spec <: genl`), contravariant params
+/// (`genl <: spec`), invariant param count.
+fn is_qualified_property_override_valid(
+    spec: &QualifiedProperty,
+    genl: &QualifiedProperty,
+    model: &PureModel,
+) -> bool {
+    // Return type — covariant (spec must be same or more specific than genl).
+    if !crate::resolve::is_type_compatible_structural(&spec.return_type, &genl.return_type, model)
+    {
+        return false;
+    }
+    // Return multiplicity — spec must be subsumed by genl.
+    if !crate::resolve::is_multiplicity_compatible(
+        Some(&spec.return_multiplicity),
+        &genl.return_multiplicity,
+    ) {
+        return false;
+    }
+    // Param count is the join key — caller filtered on it, so this is a
+    // defensive guard. Keeps `validate_qualified_property_overrides`
+    // honest if someone reuses this helper later.
+    if spec.parameters.len() != genl.parameters.len() {
+        return false;
+    }
+    // Per-slot params: contravariant (genl <: spec on type, genl subsumed by
+    // spec on multiplicity). The Rust port stores QP parameters WITHOUT
+    // the implicit `this` slot (added explicitly at inference time in
+    // `pipeline.rs`), so iterate `0..n` — *not* `1..n` like Java.
+    for (spec_p, genl_p) in spec.parameters.iter().zip(genl.parameters.iter()) {
+        if !crate::resolve::is_type_compatible_structural(&genl_p.type_expr, &spec_p.type_expr, model) {
+            return false;
+        }
+        if !crate::resolve::is_multiplicity_compatible(
+            Some(&genl_p.multiplicity),
+            &spec_p.multiplicity,
+        ) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Structural identity on `TypeExpr` via two-direction
+/// `is_type_compatible_structural`. `TypeExpr::Named` carries spans
+/// that diverge for two declarations even when the types are
+/// semantically identical, so bare `==` is unsafe.
+fn types_structurally_equal(a: &TypeExpr, b: &TypeExpr, model: &PureModel) -> bool {
+    crate::resolve::is_type_compatible_structural(a, b, model)
+        && crate::resolve::is_type_compatible_structural(b, a, model)
+}
+
+/// Java parity: `ClassValidator.throwPropertyConflictException`. The
+/// `class_name` is the class being validated (the one whose MRO
+/// exposes both halves of the conflict). `spec_class_name` and
+/// `genl_class_name` are the actual declaration sites — same names
+/// when a class directly redeclares an inherited property, distinct
+/// names for transitive or diamond conflicts.
+fn emit_property_conflict(
+    class_name: &SmolStr,
+    spec_class_name: &SmolStr,
+    genl_class_name: &SmolStr,
+    property_name: &SmolStr,
+    source_info: &SourceInfo,
+    errors: &mut Vec<CompilationError>,
+) {
+    errors.push(CompilationError {
+        message: format!(
+            "Property conflict on class {class_name}: property '{property_name}' \
+             defined on {spec_class_name} conflicts with property '{property_name}' \
+             defined on {genl_class_name}"
+        ),
+        source_info: source_info.clone(),
+        kind: CompilationErrorKind::PropertyConflict {
+            class_name: class_name.clone(),
+            super_class_name: genl_class_name.clone(),
+            property_name: property_name.clone(),
+        },
+    });
 }
 
 // ---------------------------------------------------------------------------

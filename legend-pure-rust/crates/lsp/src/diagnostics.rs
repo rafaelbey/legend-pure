@@ -53,6 +53,7 @@ pub fn error_code(kind: &CompilationErrorKind) -> &'static str {
         CompilationErrorKind::InvalidSuperType { .. } => "invalidSuperType",
         CompilationErrorKind::InvalidAnnotation { .. } => "invalidAnnotation",
         CompilationErrorKind::DuplicateProperty { .. } => "duplicateProperty",
+        CompilationErrorKind::PropertyConflict { .. } => "propertyConflict",
         CompilationErrorKind::AmbiguousImport { .. } => "ambiguousImport",
         CompilationErrorKind::UnsupportedExpression { .. } => "unsupportedExpression",
         CompilationErrorKind::ParseFailure { .. } => "parseFailure",

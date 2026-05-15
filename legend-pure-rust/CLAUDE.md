@@ -159,10 +159,22 @@ the next Java-divergence bug harder to find.
 - **Prefer one correct layer over many half-correct ones.** A single
   structural fix usually removes several symptomatic bugs at once. Shallow
   fixes tend to multiply.
-- **If the right fix is too large for this change, defer cleanly.** Mark
-  the test `#[ignore = "needs <structural fix>"]` with a one-line reason
-  and file a follow-up. Never paper over with a guard that only works for
-  this test's input.
+- **Never defer the right solution.** If you can see the correct fix and
+  it's within reach in this change, implement it. Don't ship a known-
+  partial version with a `TODO`, a follow-up ticket, or a "we'll handle
+  the rare case later" caveat when the full fix is feasible now. The
+  test-skip + follow-up combo is the path of last resort for genuinely
+  blocking dependencies (a missing upstream feature, a parser-level
+  change that requires a separate landing), not a license to skip the
+  hard part of a check-in. A half-fix erases the signal the missing
+  cases generate: if the validator catches 90% of the violations,
+  reviewers and future agents stop questioning the 10%, and the
+  remaining gap quietly outlives its TODO. Do the whole thing.
+- **If you genuinely must defer, defer cleanly.** Mark the test
+  `#[ignore = "needs <structural fix>"]` with a one-line reason and file
+  a follow-up. Never paper over with a guard that only works for this
+  test's input. But before you reach for this, prove to yourself the
+  full fix really *isn't* in reach — most of the time it is.
 - **"The test passes" ≠ "the behaviour is correct."** A green check on a
   narrowly tuned fix is worse than a red one, because the red one keeps
   pointing at the real work.

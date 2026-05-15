@@ -115,6 +115,18 @@ pub enum CompilationErrorKind {
         /// The duplicate property name.
         property_name: SmolStr,
     },
+    /// A property declared on a subclass conflicts with one inherited from
+    /// a generalization. Java-parity: `ClassValidator.throwPropertyConflictException`
+    /// (covers both simple-property invariance violations and qualified-property
+    /// LSP-rule violations).
+    PropertyConflict {
+        /// The owning subclass.
+        class_name: SmolStr,
+        /// The generalization declaring the conflicting property.
+        super_class_name: SmolStr,
+        /// The conflicting property name.
+        property_name: SmolStr,
+    },
     /// An unqualified name resolves to multiple elements via imports.
     AmbiguousImport {
         /// The ambiguous simple name.
