@@ -2713,16 +2713,18 @@ impl NativeFunction for ElementPath {
 /// Pure `reactivate(vs:ValueSpecification[1], vars:Map<String, List<Any>>[1]):Any[*]`
 ///
 /// Mirror of [`Deactivate`]. Java Pure re-evaluates a previously-deactivated
-/// value-spec, optionally substituting free variables from the `vars` map.
-/// The Rust runtime treats `Value::Function` closures as the `ValueSpec`
-/// proxy already (see [`Deactivate`] and the `expressionSequence` round-trip
-/// in `eval_property_access`), so reactivation just means invoking the
-/// closure. Non-closure specs pass through unchanged — they were never
-/// genuinely "deactivated" in the first place.
+/// value-spec, looking up free variables **exclusively** in the supplied
+/// `vars` Map (`Map<String, List<Any>>`). The caller's `VariableContext` is
+/// intentionally invisible to the reactivated expression — reactivation can
+/// run on a different stack frame entirely (router/preeval patterns
+/// deactivate here and reactivate elsewhere), so the captured spec must
+/// carry its scope explicitly via `vars`.
 ///
-/// `vars` is currently ignored: the closures we store carry their own
-/// captures, so free-variable substitution is only needed for deep
-/// value-spec introspection the runtime does not yet model.
+/// Mirrors Java `Reactivate.java` (interpreted mode: fresh
+/// `VariableContext.newVariableContext()` with no parent) and
+/// `Reactivator.reactivateWithoutJavaCompilationImpl` (compiled mode:
+/// strict `lambdaOpenVariablesMap.get(varName)` lookup; absent ⇒
+/// `PureDynamicReactivateException("Attempt to use out of scope variable: " + varName)`).
 #[derive(Debug)]
 pub struct Reactivate;
 
@@ -2732,15 +2734,17 @@ impl NativeFunction for Reactivate {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException> {
-        if args.is_empty() {
-            return Err(PureRuntimeError::EvaluationError(
-                "reactivate: expected at least 1 argument".into(),
-            )
+        if args.len() != 2 {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "reactivate: expected 2 arguments, got {}",
+                args.len()
+            ))
             .into());
         }
         let values = force_all(args, ctx)?;
         let spec = values[0].clone();
-        Ok(Evaluated::new(reactivate_value(&spec, ctx)?))
+        let vars = build_vars_from_pure_map(&values[1], ctx)?;
+        Ok(Evaluated::new(reactivate_value(&spec, &vars, ctx)?))
     }
 
     fn signature(&self) -> &'static str {
@@ -2748,22 +2752,102 @@ impl NativeFunction for Reactivate {
     }
 }
 
+/// Unpack the Pure `Map<String, List<Any>>` second argument of [`Reactivate`]
+/// into a flat Rust `HashMap<SmolStr, Value>` that the recursive reactivate
+/// helpers consult on every `VariableExpression` lookup.
+///
+/// Each entry's value is a `List<Any>` heap object whose `.values` slot
+/// holds the captured binding(s); we collapse via [`Value::from_vec`] so
+/// `[1]` lists become scalars (`Value::Integer(_)`), `[*]` lists become
+/// `Value::Collection`, and empty lists become `Value::Unit` — matching the
+/// shape every other variable lookup site in the runtime expects.
+///
+/// Two carriers are accepted, both produced by canonical Pure idioms:
+/// - `Value::Map(_)` — emitted by `newMap(...)` and `openVariableValues(...)`.
+///   The Java-parity canonical shape for a populated Map.
+/// - `Value::Object(_)` classified as `Map<U,V>` — emitted by the
+///   constructor expression `^Map<K, V>()` used in the 1-arg `reactivate`
+///   overload in `platform/pure/essential/meta/reflect/reactivate.pure:22`.
+///   This shape is always empty in practice (the constructor takes no
+///   args and `Map<K,V>` exposes no addable `.values` property), so we
+///   short-circuit to an empty result rather than inspecting properties.
+///
+/// This is the inverse of the `Map<String, List<Any>>` builder in
+/// [`OpenVariableValues::execute`], so the two natives form a clean
+/// capture/restore pair for DMR cycles.
+#[allow(clippy::result_large_err)]
+fn build_vars_from_pure_map(
+    map_value: &Value,
+    ctx: &dyn EvalContextTrait,
+) -> Result<std::collections::HashMap<SmolStr, Value>, PureException> {
+    let mut out = std::collections::HashMap::new();
+    match map_value {
+        Value::Map(rc) => {
+            for (k, v) in rc.borrow().entries.iter() {
+                let crate::value::ValueKey::String(name) = k else {
+                    return Err(PureRuntimeError::EvaluationError(format!(
+                        "reactivate: vars map keys must be String, got {k:?}"
+                    ))
+                    .into());
+                };
+                let Value::Object(list_id) = v else {
+                    return Err(PureRuntimeError::EvaluationError(format!(
+                        "reactivate: vars map entry '{name}' must be a List<Any> heap object, got {}",
+                        v.type_name()
+                    ))
+                    .into());
+                };
+                let elems = ctx.heap().get_property_values(list_id, "values")?;
+                let value = Value::from_vec(elems.iter().cloned().collect());
+                out.insert(name.clone(), value);
+            }
+        }
+        Value::Object(obj_id) => {
+            let classifier = ctx.heap().classifier(&obj_id.clone())?.to_string();
+            if classifier != "meta::pure::functions::collection::Map" {
+                return Err(PureRuntimeError::EvaluationError(format!(
+                    "reactivate: vars must be a Map<String, List<Any>>, got Object<{classifier}>"
+                ))
+                .into());
+            }
+            // `^Map<K, V>()` produces an empty Map carrier — no entries
+            // to materialise. The 1-arg reactivate overload in
+            // platform/pure/essential/meta/reflect/reactivate.pure:22
+            // is the only call site that produces this shape.
+        }
+        other => {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "reactivate: vars must be a Map<String, List<Any>>, got {}",
+                other.type_name()
+            ))
+            .into());
+        }
+    }
+    Ok(out)
+}
+
 /// Recursively re-evaluate an AST-metamodel heap wrapper back to its
-/// runtime value.
+/// runtime value, using `vars` as the **only** variable scope.
 ///
 /// Mirrors [`deactivate_spec`] in reverse:
 /// - `InstanceValue { values }` → flatten `.values` (each element itself
 ///   reactivated, so nested `InstanceValue { values = [x] }` collapses).
-/// - `VariableExpression { name }` → look up `name` in the current
-///   evaluator scope; Java Pure's optional `vars` Map argument isn't
-///   threaded through here, matching the existing native's behaviour.
+/// - `VariableExpression { name }` → look up `name` in `vars`; absent ⇒
+///   `Attempt to use out of scope variable: {name}` error (Java-parity
+///   message — matches `Reactivator.reactivateWithoutJavaCompilationImpl`).
+///   The caller's `ctx.context()` is intentionally NOT consulted —
+///   reactivation can run on a different stack frame.
 /// - `SimpleFunctionExpression { func, functionName, parametersValues }`
-///   → reactivate each parameter, resolve the callable (prefer the
-///   stored `func` element, fall back to dispatching by `functionName`),
-///   and invoke via `ctx.call_function`.
+///   → reactivate each parameter with the same `vars`, resolve the
+///   callable (prefer the stored `func` element, fall back to dispatching
+///   by `functionName`), and invoke via `ctx.call_function`.
 /// - Any other heap object / scalar passes through unchanged.
 #[allow(clippy::result_large_err)]
-fn reactivate_value(value: &Value, ctx: &mut dyn EvalContextTrait) -> Result<Value, PureException> {
+fn reactivate_value(
+    value: &Value,
+    vars: &std::collections::HashMap<SmolStr, Value>,
+    ctx: &mut dyn EvalContextTrait,
+) -> Result<Value, PureException> {
     let Value::Object(obj_id) = value else {
         // 0-arg lambda thunks deactivated as the body of
         // `{|expr}.expressionSequence->evaluateAndDeactivate()->at(0)`
@@ -2811,15 +2895,15 @@ fn reactivate_value(value: &Value, ctx: &mut dyn EvalContextTrait) -> Result<Val
     let model = ctx.model();
     if classifier_extends_m3(model, classifier_id, crate::m3_paths::INSTANCE_VALUE) {
         tracing::debug!("reactivate: → instance_value handler");
-        return reactivate_instance_value(obj_id.clone(), ctx);
+        return reactivate_instance_value(obj_id.clone(), vars, ctx);
     }
     if classifier_extends_m3(model, classifier_id, crate::m3_paths::VARIABLE_EXPRESSION) {
         tracing::debug!("reactivate: → variable_expression handler");
-        return reactivate_variable_expression(obj_id.clone(), ctx);
+        return reactivate_variable_expression(obj_id.clone(), vars, ctx);
     }
     if classifier_extends_m3(model, classifier_id, crate::m3_paths::FUNCTION_EXPRESSION) {
         tracing::debug!("reactivate: → function_expression handler");
-        return reactivate_function_expression(obj_id.clone(), ctx);
+        return reactivate_function_expression(obj_id.clone(), vars, ctx);
     }
 
     // Any other heap object — not a deactivated spec we know about; pass
@@ -2831,17 +2915,19 @@ fn reactivate_value(value: &Value, ctx: &mut dyn EvalContextTrait) -> Result<Val
 /// Reactivate an `InstanceValue`-classified heap row by flattening
 /// its `.values` slot, recursively reactivating each entry, and
 /// merging Collection results in-place. Empty `.values` collapses to
-/// `Value::Unit` via [`Value::from_vec`].
+/// `Value::Unit` via [`Value::from_vec`]. `vars` threads through to
+/// any nested `VariableExpression`.
 #[allow(clippy::result_large_err)]
 fn reactivate_instance_value(
     obj_id: crate::heap::ObjectHandle,
+    vars: &std::collections::HashMap<SmolStr, Value>,
     ctx: &mut dyn EvalContextTrait,
 ) -> Result<Value, PureException> {
     let vals = ctx.heap().get_property_values(&obj_id, "values")?;
     let raw: Vec<Value> = vals.iter().cloned().collect();
     let mut out: Vec<Value> = Vec::with_capacity(raw.len());
     for v in raw {
-        let reactivated = reactivate_value(&v, ctx)?;
+        let reactivated = reactivate_value(&v, vars, ctx)?;
         match reactivated {
             Value::Collection(coll) => {
                 for inner in coll.iter() {
@@ -2856,14 +2942,19 @@ fn reactivate_instance_value(
 }
 
 /// Reactivate a `VariableExpression`-classified heap row by reading
-/// its `.name` slot and looking the variable up in the current
-/// evaluator scope. Errors with `reactivate: variable '{name}' not
-/// bound in the current scope` when the lookup fails — distinct from
-/// the generic `Variable '{name}' not found` evaluator message so
-/// reactivate failures are diagnosable separately.
+/// its `.name` slot and looking the variable up in `vars`. The
+/// caller's `ctx.context()` is intentionally never consulted — the
+/// captured spec might be reactivated on a different stack frame.
+///
+/// Errors with the Java-parity message
+/// `Attempt to use out of scope variable: {name}` when the lookup
+/// fails, matching `PureDynamicReactivateException` in
+/// `Reactivator.reactivateWithoutJavaCompilationImpl` so parity tooling
+/// can grep for a single canonical string.
 #[allow(clippy::result_large_err)]
 fn reactivate_variable_expression(
     obj_id: crate::heap::ObjectHandle,
+    vars: &std::collections::HashMap<SmolStr, Value>,
     ctx: &mut dyn EvalContextTrait,
 ) -> Result<Value, PureException> {
     let name_vals = ctx.heap().get_property_values(&obj_id, "name")?;
@@ -2873,13 +2964,13 @@ fn reactivate_variable_expression(
         )
         .into());
     };
-    if let Some(v) = ctx.context().get(name) {
+    if let Some(v) = vars.get(name.as_str()) {
         return Ok(v.clone());
     }
-    Err(PureRuntimeError::EvaluationError(format!(
-        "reactivate: variable '{name}' not bound in the current scope"
-    ))
-    .into())
+    Err(
+        PureRuntimeError::EvaluationError(format!("Attempt to use out of scope variable: {name}"))
+            .into(),
+    )
 }
 
 /// Reactivate a `FunctionExpression`-classified heap row
@@ -2900,6 +2991,7 @@ fn reactivate_variable_expression(
 #[allow(clippy::result_large_err)]
 fn reactivate_function_expression(
     obj_id: crate::heap::ObjectHandle,
+    vars: &std::collections::HashMap<SmolStr, Value>,
     ctx: &mut dyn EvalContextTrait,
 ) -> Result<Value, PureException> {
     let params = ctx
@@ -2908,7 +3000,7 @@ fn reactivate_function_expression(
     let raw_params: Vec<Value> = params.iter().cloned().collect();
     let mut reactivated_params: Vec<Value> = Vec::with_capacity(raw_params.len());
     for p in raw_params {
-        reactivated_params.push(reactivate_value(&p, ctx)?);
+        reactivated_params.push(reactivate_value(&p, vars, ctx)?);
     }
     let func_vals = ctx.heap().get_property_values(&obj_id, "func")?;
     if let Some(func_val) = func_vals.iter().next() {

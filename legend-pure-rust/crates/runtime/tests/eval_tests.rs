@@ -452,6 +452,34 @@ fn deactivate_property_access_func_carries_property_wrapper() {
     assert_eq!(result, Value::String("lastName".into()));
 }
 
+#[test]
+fn reactivate_empty_vars_on_free_variable_errors_with_java_parity_message() {
+    // Locks the reactivate contract: when the deactivated spec is a
+    // VariableExpression (i.e. references a free variable like `$x`) and
+    // the supplied `vars` map is empty, reactivate must fail with the
+    // Java-parity message
+    //   "Attempt to use out of scope variable: x"
+    // (see Reactivator.reactivateWithoutJavaCompilationImpl in
+    // legend-pure-runtime-java-engine-compiled).
+    //
+    // Pre-fix the Rust native silently fell back to the caller's
+    // VariableContext (`ctx.context().get(name)`), so this expression
+    // would have returned 7 instead of erroring — exactly the bug this
+    // test pins. Any regression to a current-context fallback will
+    // re-green the assertion and break the test immediately.
+    let source = r"
+        function test::f(): Any[*] {
+            let x = 7;
+            $x->deactivate()->reactivate()
+        }
+    ";
+    let err = eval_pure_err(source, "f__Any_MANY_");
+    assert!(
+        err.contains("Attempt to use out of scope variable: x"),
+        "expected Java-parity out-of-scope error, got: {err}"
+    );
+}
+
 // ===========================================================================
 // 1. Literals
 // ===========================================================================

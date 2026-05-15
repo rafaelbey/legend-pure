@@ -311,24 +311,39 @@ function <<test.Test>> meta::pure::functions::lang::tests::copy::testCopyAssocia
    // Closes §3.3 unknown 2 in metaprogramming.md. testCopyWithAssociation
    // (line 176) proves copy preserves bidirectional association links on
    // a freshly-constructed object. This test exercises the same shape
-   // after a deactivate→reactivate cycle: the router routinely deactivates
-   // a VariableExpression and reactivates to recover the bound value,
-   // then copies. The reactivated value must be the SAME heap entry as
-   // the original (Rc identity), so the inverse-link cache is intact and
-   // a subsequent copy appends to the same firmX.employees collection.
+   // after a deactivate→reactivate cycle — the router/preeval pattern.
+   //
+   // The vars Map argument is load-bearing: reactivate must NOT fall back
+   // to the caller's evaluator scope, because the captured spec might be
+   // reactivated on a different stack frame entirely. Both halves of the
+   // contract are asserted below.
    let pierre = ^LA_Person(firstName='Pierre', lastName='Doe', firm=^LA_Firm(legalName='FirmX'));
    let firmX = $pierre.firm->toOne();
    assertEquals($pierre, $firmX.employees);
 
-   // deactivate's defer_param_execution captures the VariableExpression
-   // for `pierre`; reactivate re-evaluates it, returning the same Rc'd
-   // LA_Person heap entry. Casting back to LA_Person is necessary
-   // because reactivate's return type is Any[*].
-   let recovered = $pierre->deactivate()->reactivate()->toOne()->cast(@LA_Person);
+   // Negative: empty-vars reactivate of a free-variable VariableExpression
+   // must fail with the Java-parity message. Locks the contract that the
+   // caller's lexical scope is invisible to reactivation — any regression
+   // to a current-context fallback will re-green this assertion and trip
+   // the test immediately.
+   assertError(
+      | $pierre->deactivate()->reactivate()->toOne()->cast(@LA_Person),
+      'Attempt to use out of scope variable: pierre'
+   );
+
+   // Positive: capture pierre via a lambda body so openVariableValues
+   // surfaces the binding as Map<String, List<Any>>, then thread it
+   // explicitly through reactivate. Same shape as
+   // testReactivateBodyWithCapturedOpenVar in reactivate.pure — mirrors
+   // what router/preeval do in real consumer code.
+   let lambda = {| $pierre};
+   let body = $lambda->evaluateAndDeactivate().expressionSequence->toOne();
+   let recovered = $body->reactivate($lambda->openVariableValues())->toOne()->cast(@LA_Person);
    assertIs($firmX, $recovered.firm->toOne());
 
-   // Now copy the recovered object — inverse-link maintenance must
-   // append the new copy to firmX.employees alongside the original.
+   // Inverse-link maintenance through DMR — the new copy must append to
+   // firmX.employees alongside the original, proving the inverse-link
+   // cache survived the deactivate→reactivate→copy chain.
    let bob = ^$recovered(firstName='Bob', lastName='Roe');
    assertEquals('Bob', $bob.firstName);
    assertIs($firmX, $bob.firm->toOne());
