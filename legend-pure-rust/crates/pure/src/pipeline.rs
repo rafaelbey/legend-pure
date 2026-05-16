@@ -275,6 +275,12 @@ pub fn compile_repo_slice_with_islands(
 ) -> (std::ops::Range<usize>, Vec<CompilationError>) {
     let chunks_before = model.chunks.len();
     let mut errors = Vec::new();
+    // Take the scope out of model so we can hold &mut model and
+    // &mut scope simultaneously in ctx constructors. Restored at
+    // function return so subsequent compile_repo_slice + finalize_model
+    // calls on the same model see the same scope (declare → validate
+    // flow across functions).
+    let mut scope = std::mem::take(&mut model.compile_scope);
 
     // ---- Pass 1: Declaration ----
     let (declarations, unit_mappings) = pass_declare(source_files, model, &mut errors);
@@ -289,6 +295,7 @@ pub fn compile_repo_slice_with_islands(
             model,
             auto_imports,
             errors: &mut errors,
+            scope: Some(&mut scope),
         };
         ext.declare(&mut ctx);
     }
@@ -317,6 +324,7 @@ pub fn compile_repo_slice_with_islands(
             model,
             auto_imports,
             errors: &mut errors,
+            scope: Some(&mut scope),
         };
         ext.define_signatures(&mut ctx);
     }
@@ -363,6 +371,7 @@ pub fn compile_repo_slice_with_islands(
             model,
             auto_imports,
             errors: &mut errors,
+            scope: Some(&mut scope),
         };
         ext.define_bodies(&mut ctx);
     }
@@ -372,6 +381,10 @@ pub fn compile_repo_slice_with_islands(
     // Cheap (O(N) over the new chunks) and keeps the resolver/property
     // lookup correct across the chain of repo compilations.
     model.rebuild_derived_indexes();
+
+    // Restore the scope so the next compile_repo_slice or finalize_model
+    // sees the accumulated per-compile state.
+    model.compile_scope = scope;
 
     let chunks_after = model.chunks.len();
     (chunks_before..chunks_after, errors)
@@ -402,15 +415,23 @@ pub fn finalize_model(
     // ---- Pass 3: Validation ----
     errors.extend(crate::validate::validate(model, None));
 
+    // Take scope so it's accessible alongside the (now-immutable) model
+    // borrow that ValidateCtx requires. Restored at end so cross-compile
+    // callers see the same scope on subsequent compile_repo_slice calls.
+    let scope = std::mem::take(&mut model.compile_scope);
+
     // ---- Pass 3: Extension validate hooks ----
     for ext in extensions {
         let mut ctx = ValidateCtx {
             model,
             auto_imports,
             errors: &mut errors,
+            scope: Some(&scope),
         };
         ext.validate(&mut ctx);
     }
+
+    model.compile_scope = scope;
 
     errors
 }
@@ -515,14 +536,19 @@ pub fn compile_chunks_incremental(
     model.rebuild_derived_indexes();
     pass_infer(&mut model, &mut errors, Some(&rerun_set));
     errors.extend(crate::validate::validate(&model, Some(&rerun_set)));
+
+    // Take scope so validate can read it alongside the &model borrow.
+    let scope = std::mem::take(&mut model.compile_scope);
     for ext in extensions {
         let mut ctx = ValidateCtx {
             model: &model,
             auto_imports,
             errors: &mut errors,
+            scope: Some(&scope),
         };
         ext.validate(&mut ctx);
     }
+    model.compile_scope = scope;
 
     let mut sorted_rerun: Vec<u16> = rerun_set.into_iter().collect();
     sorted_rerun.sort_unstable();
@@ -545,6 +571,11 @@ fn recompile_chunk_in_place(
     model: &mut PureModel,
     errors: &mut Vec<CompilationError>,
 ) {
+    // Per-chunk recompile takes the scope out of model for the duration
+    // of this chunk's passes (declare → define_*); it's restored at the
+    // end so subsequent chunks and the outer compile_chunks_incremental
+    // finalize see the accumulated extension state.
+    let mut scope = std::mem::take(&mut model.compile_scope);
     // ---- Tombstone: drop (chunk_id, _) ids from every package's
     // children_elements. The package arena itself stays — entries are
     // re-registered by pass_declare_into as elements are re-allocated.
@@ -569,6 +600,7 @@ fn recompile_chunk_in_place(
             model,
             auto_imports,
             errors,
+            scope: Some(&mut scope),
         };
         ext.declare(&mut ctx);
     }
@@ -594,6 +626,7 @@ fn recompile_chunk_in_place(
             model,
             auto_imports,
             errors,
+            scope: Some(&mut scope),
         };
         ext.define_signatures(&mut ctx);
     }
@@ -629,6 +662,7 @@ fn recompile_chunk_in_place(
             model,
             auto_imports,
             errors,
+            scope: Some(&mut scope),
         };
         ext.define_bodies(&mut ctx);
     }

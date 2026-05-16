@@ -560,9 +560,15 @@ The fields on `DSLInstance` are all `pub`
 (`crates/pure/src/model.rs:160-173`), so this constructor call works
 unchanged from an external crate.
 
-> **Verify in B4**: confirm `PureModel` exposes a `pub` element-push
-> API for external callers. If today's API is `pub(crate)`, the audit
-> in plan item B4 promotes it.
+The actual push-into-model is a multi-step sequence — see
+`crates/dsl-diagram/src/compiler.rs:245-333` for the canonical pattern.
+You allocate a `ModelChunk` slot via
+`ctx.model.chunks[i].alloc_element(ElementNode { … }, Element::DSLInstance { … })`,
+then register the resulting `ElementId::InstanceId { chunk_id, local_idx }`
+in its parent package via `ctx.model.register_element(pkg_id, eid)`.
+All the surface types (`ModelChunk`, `ElementNode`,
+`ElementId::InstanceId`, `PackageId`) and field accessors are `pub`;
+no wrapper helper is needed for external consumers.
 
 ---
 

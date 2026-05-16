@@ -52,6 +52,7 @@ fn run_lifecycle(source: &str) -> RelationalExtension {
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
+        scope: None,
     };
     extension.declare(&mut declare_ctx);
 
@@ -60,6 +61,7 @@ fn run_lifecycle(source: &str) -> RelationalExtension {
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
+        scope: None,
     };
     extension.define_bodies(&mut define_ctx);
 
@@ -97,6 +99,7 @@ fn run_lifecycle_with_mapping(source: &str) -> RelationalExtension {
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
+        scope: None,
     };
     extension.declare(&mut declare_ctx);
 
@@ -105,6 +108,7 @@ fn run_lifecycle_with_mapping(source: &str) -> RelationalExtension {
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
+        scope: None,
     };
     extension.define_bodies(&mut define_ctx);
 
@@ -1634,6 +1638,7 @@ fn resolved_databases_empty_before_define_bodies() {
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
+        scope: None,
     };
     extension.declare(&mut declare_ctx);
 

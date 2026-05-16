@@ -54,6 +54,7 @@
 //! whose elements carry executable bodies (e.g. Mapping property
 //! mappings) also overrides `define_bodies`.
 
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
 use legend_pure_parser_ast::SourceInfo;
@@ -66,10 +67,109 @@ use crate::error::CompilationError;
 use crate::model::PureModel;
 use crate::types::{Multiplicity, Parameter, ResolvedType, TypeExpr};
 
+/// Per-compile scratch arena threaded through every `CompilerExtension`
+/// hook (`declare` → `define_signatures` → `define_bodies` →
+/// `validate`).
+///
+/// Each extension stashes its per-compile state here keyed by
+/// `TypeId`. The arena is freshly allocated by
+/// [`crate::pipeline::compile_with_extensions`] and dropped when
+/// compilation finishes — restores the per-compile isolation that
+/// stateful extensions used to obtain via a `RefCell` field on their
+/// own struct.
+///
+/// Lets a `CompilerExtension` be a stateless unit struct (so it can
+/// be `Sync` and self-register via `#[distributed_slice]`) while
+/// still carrying compile-time data between passes.
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(Default)]
+/// struct DiagramCompileState {
+///     diagrams: HashMap<SmolStr, RegisteredDiagram>,
+/// }
+///
+/// impl CompilerExtension for DiagramExtension {
+///     fn declare(&self, ctx: &mut DeclareCtx<'_>) {
+///         let state = ctx.scope.get_or_default::<DiagramCompileState>();
+///         state.diagrams.insert(fqn, reg);
+///     }
+///
+///     fn validate(&self, ctx: &mut ValidateCtx<'_>) {
+///         let Some(state) = ctx.scope.get::<DiagramCompileState>() else { return };
+///         for (fqn, reg) in &state.diagrams { … }
+///     }
+/// }
+/// ```
+pub struct CompileExtensionScope {
+    /// `Send + Sync` bounds mirror [`crate::model::PureModel::extension_arenas`]
+    /// so the model (which owns a `compile_scope`) can be shared
+    /// across threads — notably by the LSP's multi-threaded executor.
+    /// Extension state types stored here must satisfy these bounds;
+    /// stateless `Copy` / plain data types are the natural fit.
+    state: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+}
+
+impl CompileExtensionScope {
+    /// Construct an empty scope. Called once per compile by the
+    /// pipeline; extension callers should not construct this directly.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            state: HashMap::new(),
+        }
+    }
+
+    /// Get a mutable reference to the per-compile `T`, initialising
+    /// it with `T::default()` on first access in this compile.
+    ///
+    /// `T: Send + Sync` mirrors the slice's storage bound so the
+    /// containing [`crate::model::PureModel`] can stay `Send + Sync`.
+    ///
+    /// # Panics
+    /// Never — the `TypeId` ↔ `T` invariant is upheld internally.
+    pub fn get_or_default<T: Default + Any + Send + Sync>(&mut self) -> &mut T {
+        let entry = self
+            .state
+            .entry(TypeId::of::<T>())
+            .or_insert_with(|| Box::new(T::default()));
+        // Safe: the TypeId key uniquely identifies T.
+        entry
+            .downcast_mut::<T>()
+            .unwrap_or_else(|| unreachable!("CompileExtensionScope: TypeId<T> entry mismatched"))
+    }
+
+    /// Get an immutable reference to the per-compile `T` if it has
+    /// been initialised in this compile, else `None`.
+    #[must_use]
+    pub fn get<T: Any + Send + Sync>(&self) -> Option<&T> {
+        self.state
+            .get(&TypeId::of::<T>())
+            .and_then(|b| b.downcast_ref::<T>())
+    }
+}
+
+impl Default for CompileExtensionScope {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for CompileExtensionScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompileExtensionScope")
+            .field("entries", &self.state.len())
+            .finish()
+    }
+}
+
 /// Context passed to [`CompilerExtension::declare`].
 ///
 /// Borrows the source files (read-only) and the in-progress model
 /// (mutable). Errors collected during declaration go into `errors`.
+/// Per-compile state stashed in `scope` survives through subsequent
+/// passes (`define_*`, `validate`).
 pub struct DeclareCtx<'a> {
     /// Parsed source files for this compilation unit.
     pub source_files: &'a [SourceFile],
@@ -79,6 +179,15 @@ pub struct DeclareCtx<'a> {
     pub auto_imports: &'a [SmolStr],
     /// Accumulated compilation errors.
     pub errors: &'a mut Vec<CompilationError>,
+    /// Per-compile scratch arena — extensions stash data here keyed
+    /// by `TypeId` and read it back in later passes. See
+    /// [`CompileExtensionScope`].
+    ///
+    /// `None` when constructed outside the normal pipeline — typically
+    /// in tests that build a ctx by hand and don't exercise the
+    /// declare→validate scope-passing flow. Stateful extensions that
+    /// need the scope should branch on `is_some()`.
+    pub scope: Option<&'a mut CompileExtensionScope>,
 }
 
 /// Context passed to [`CompilerExtension::define_signatures`] and
@@ -96,6 +205,9 @@ pub struct DefineCtx<'a> {
     pub auto_imports: &'a [SmolStr],
     /// Accumulated compilation errors.
     pub errors: &'a mut Vec<CompilationError>,
+    /// Per-compile scratch arena — see [`CompileExtensionScope`]. May
+    /// be `None` in hand-built test contexts.
+    pub scope: Option<&'a mut CompileExtensionScope>,
 }
 
 /// Context passed to [`CompilerExtension::validate`].
@@ -113,6 +225,11 @@ pub struct ValidateCtx<'a> {
     pub auto_imports: &'a [SmolStr],
     /// Accumulated compilation errors.
     pub errors: &'a mut Vec<CompilationError>,
+    /// Per-compile scratch arena — see [`CompileExtensionScope`].
+    /// Read-only here (validate is a read pass over the frozen model;
+    /// extensions consume data their `declare` / `define_*` hooks
+    /// stashed earlier). May be `None` in hand-built test contexts.
+    pub scope: Option<&'a CompileExtensionScope>,
 }
 
 /// Plug-in contract for M2 DSLs.

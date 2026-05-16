@@ -50,6 +50,7 @@ fn run_validator(source: &str) -> Vec<CompilationError> {
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
+        scope: None,
     };
     extension.declare(&mut declare_ctx);
     let mut define_ctx = legend_pure_parser_pure::extension::DefineCtx {
@@ -57,6 +58,7 @@ fn run_validator(source: &str) -> Vec<CompilationError> {
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
+        scope: None,
     };
     extension.define_bodies(&mut define_ctx);
     let frozen = bootstrap;
@@ -64,6 +66,7 @@ fn run_validator(source: &str) -> Vec<CompilationError> {
         model: &frozen,
         auto_imports: &auto_imports,
         errors: &mut errors,
+        scope: None,
     };
     extension.validate(&mut validate_ctx);
     errors

@@ -64,6 +64,7 @@ fn run_with_visibility(
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
+        scope: None,
     };
     extension.declare(&mut declare_ctx);
 
@@ -72,6 +73,7 @@ fn run_with_visibility(
         model: &frozen,
         auto_imports: &auto_imports,
         errors: &mut errors,
+        scope: None,
     };
     extension.validate(&mut validate_ctx);
     errors

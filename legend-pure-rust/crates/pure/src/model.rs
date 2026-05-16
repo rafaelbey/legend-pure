@@ -312,6 +312,27 @@ pub struct PureModel {
 
     /// Derived indexes, computed post-freeze.
     derived: DerivedIndexes,
+
+    /// Per-compile scratch arena for [`crate::extension::CompilerExtension`]
+    /// implementations to stash data between passes (declare →
+    /// define_signatures → define_bodies → validate).
+    ///
+    /// Pipeline functions ([`crate::pipeline::compile_repo_slice`],
+    /// [`crate::pipeline::finalize_model`],
+    /// [`crate::pipeline::compile_chunks_incremental`]) take this out
+    /// via [`std::mem::take`] at the start of their work and restore
+    /// it before returning — that's how `&mut model` and `&mut scope`
+    /// can both be live inside a ctx constructor.
+    ///
+    /// Lifts the need for stateful `CompilerExtension`s to hold
+    /// `RefCell` fields on their own struct, which means those
+    /// extensions can now be unit-struct types satisfying `Sync` for
+    /// `#[distributed_slice]` self-registration.
+    ///
+    /// Not serialised — it's purely a compile-time scratch space and
+    /// holds no model graph data. Reset to empty by `take` /
+    /// `std::mem::take` semantics outside an active pipeline call.
+    pub compile_scope: crate::extension::CompileExtensionScope,
 }
 
 impl PureModel {
@@ -335,6 +356,7 @@ impl PureModel {
             repo_visibility: HashMap::new(),
             repo_patterns: HashMap::new(),
             derived: DerivedIndexes::default(),
+            compile_scope: crate::extension::CompileExtensionScope::new(),
         }
     }
 
