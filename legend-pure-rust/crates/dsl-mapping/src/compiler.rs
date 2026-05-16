@@ -57,7 +57,6 @@
 //! no further follow-up — the user already has a primary diagnostic
 //! to act on.
 
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use legend_pure_parser_ast::SourceInfo;
@@ -67,7 +66,7 @@ use legend_pure_parser_ast::element::PackageableElement;
 use legend_pure_parser_ast::source_info::Spanned;
 use legend_pure_parser_pure::error::{CompilationError, CompilationErrorKind};
 use legend_pure_parser_pure::extension::{
-    CompilerExtension, DeclareCtx, ValidateCtx, lower_and_infer_expression,
+    COMPILER_EXTENSIONS, CompilerExtension, DeclareCtx, ValidateCtx, lower_and_infer_expression,
 };
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{
@@ -75,6 +74,7 @@ use legend_pure_parser_pure::model::{
 };
 use legend_pure_parser_pure::resolve::{is_multiplicity_compatible, is_subtype};
 use legend_pure_parser_pure::types::{Multiplicity, ResolvedType, TypeExpr};
+use linkme::distributed_slice;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
@@ -93,16 +93,32 @@ use crate::ast::{
 
 /// Compiler extension for the `###Mapping` DSL.
 ///
-/// Construct one per
-/// [`compile_with_extensions`](legend_pure_parser_pure::pipeline::compile_with_extensions)
-/// invocation; do not share across compilations because the
-/// extension's internal map is reset per call.
+/// Stateless unit struct — per-compile data lives in
+/// [`MappingCompileState`] stashed in `ctx.scope` (and read back
+/// from `model.compile_scope` by `walk_references` post-compile).
+/// Lets the extension self-register via the
+/// [`COMPILER_EXTENSIONS`] distributed slice so any binary that
+/// depends on `legend-pure-dsl-mapping` picks it up automatically.
+#[derive(Debug, Default)]
+pub struct MappingExtension;
+
+/// Self-registration into the compiler's `COMPILER_EXTENSIONS`
+/// distributed slice — discoverable via
+/// [`legend_pure_parser_pure::pipeline::compile`].
+#[distributed_slice(COMPILER_EXTENSIONS)]
+static MAPPING_EXTENSION: &(dyn CompilerExtension + Sync) = &MappingExtension;
+
+/// Per-compile scratch state stashed in `ctx.scope`. Holds the
+/// mappings collected during `declare` so `validate` and
+/// `walk_references` can re-walk them with their AST in hand.
+/// `model.compile_scope` retains the state after `finalize_model`
+/// returns, so `walk_references` (called by `build_reference_index`
+/// after compile) can read from the model.
 #[derive(Default)]
-pub struct MappingExtension {
+struct MappingCompileState {
     /// Mappings collected during `declare`, keyed by FQN
-    /// (`"pkg::sub::Name"`). Per-extension state — not stored in
-    /// `PureModel`. Use [`Self::mappings`] to inspect after compile.
-    mappings: RefCell<HashMap<SmolStr, RegisteredMapping>>,
+    /// (`"pkg::sub::Name"`).
+    mappings: HashMap<SmolStr, RegisteredMapping>,
 }
 
 /// One registered mapping alongside its bookkeeping FQN.
@@ -256,14 +272,29 @@ impl CompilerExtension for MappingExtension {
     }
 
     fn declare(&self, ctx: &mut DeclareCtx<'_>) {
-        let mut registry = self.mappings.borrow_mut();
         // Pass 1 already created the slice's chunk and pushed it onto
         // `model.chunks`; the just-created chunk is the last one. We
         // allocate `Element::DSLInstance` rows there alongside the M3
         // elements parsed from the same source file.
         let chunk_id = (ctx.model.chunks.len().saturating_sub(1)) as u16;
 
-        for source_file in ctx.source_files {
+        // Destructure ctx so model/errors/scope/source_files are
+        // independently borrowable inside the loop. The scope chain
+        // hands us the per-compile mapping registry that
+        // declare / validate / walk_references all share.
+        let DeclareCtx {
+            source_files,
+            model,
+            errors,
+            scope,
+            ..
+        } = ctx;
+        let scope = scope
+            .as_deref_mut()
+            .expect("MappingExtension requires `scope` wired in DeclareCtx (pipeline supplies it)");
+        let registry = &mut scope.get_or_default::<MappingCompileState>().mappings;
+
+        for source_file in *source_files {
             for section in &source_file.sections {
                 if section.kind.as_str() != crate::ast::SECTION_KIND {
                     continue;
@@ -278,7 +309,7 @@ impl CompilerExtension for MappingExtension {
 
                     let fqn = build_fqn(m);
                     if registry.contains_key(&fqn) {
-                        ctx.errors.push(CompilationError {
+                        errors.push(CompilationError {
                             message: format!("Duplicate mapping '{fqn}'"),
                             source_info: m.source_info.clone(),
                             kind: CompilationErrorKind::DuplicateElement { name: fqn.clone() },
@@ -288,7 +319,9 @@ impl CompilerExtension for MappingExtension {
                         continue;
                     }
 
-                    // Dual-write 1/2 — extension RefCell (existing API).
+                    // Dual-write 1/2 — per-compile registry (validate
+                    // + walk_references read from here for AST-backed
+                    // operations).
                     registry.insert(
                         fqn.clone(),
                         RegisteredMapping {
@@ -305,7 +338,7 @@ impl CompilerExtension for MappingExtension {
                     let data = match snapshot.encode() {
                         Ok(bytes) => bytes,
                         Err(e) => {
-                            ctx.errors.push(CompilationError {
+                            errors.push(CompilationError {
                                 message: format!(
                                     "Failed to encode MappingSnapshot for '{fqn}': {e}"
                                 ),
@@ -318,12 +351,12 @@ impl CompilerExtension for MappingExtension {
 
                     let pkg_path = pkg_segments(m);
                     let package_id = if pkg_path.is_empty() {
-                        ctx.model.root_package
+                        model.root_package
                     } else {
-                        ctx.model.get_or_create_package(&pkg_path)
+                        model.get_or_create_package(&pkg_path)
                     };
 
-                    let Some(chunk) = ctx.model.chunks.get_mut(chunk_id as usize) else {
+                    let Some(chunk) = model.chunks.get_mut(chunk_id as usize) else {
                         continue;
                     };
                     let local_idx = chunk.alloc_element(
@@ -343,35 +376,42 @@ impl CompilerExtension for MappingExtension {
                         chunk_id,
                         local_idx,
                     };
-                    ctx.model.register_element(package_id, id);
+                    model.register_element(package_id, id);
                 }
             }
         }
     }
 
     fn validate(&self, ctx: &mut ValidateCtx<'_>) {
-        let registry = self.mappings.borrow();
-        check_include_dag(&registry, ctx.errors);
+        // Pull the per-compile registry the declare hook stashed in
+        // the scope. Absent scope (hand-built ctx) or no mappings
+        // declared in this compile — both no-op cleanly.
+        let Some(scope) = ctx.scope else { return };
+        let Some(state) = scope.get::<MappingCompileState>() else {
+            return;
+        };
+        let registry = &state.mappings;
+        check_include_dag(registry, ctx.errors);
         for (_, reg) in registry.iter() {
-            validate_mapping(&reg.def, &registry, ctx.model, ctx.auto_imports, ctx.errors);
+            validate_mapping(&reg.def, registry, ctx.model, ctx.auto_imports, ctx.errors);
         }
         // Phase E1: every (source, target) FQN in every
         // MappingInclude.store_substitutions must resolve to a known
         // element on the model.
-        validate_substitution_endpoints(&registry, ctx.model, ctx.errors);
+        validate_substitution_endpoints(registry, ctx.model, ctx.errors);
         // Phase E2: detect cycles in the substitution graph
         // accumulated through each mapping's include closure. Java
         // parity: DatabaseSubstitutionHandler's
         // collectStoreSubstitutionsAlongPath — emits "Cyclic Store
         // Substitution for store [X] in mapping hierarchy".
-        validate_substitution_cycles(&registry, ctx.errors);
+        validate_substitution_cycles(registry, ctx.errors);
         // Phase E3: each substitution's `source` store must actually
         // be referenced by the included mapping (or by its own
         // includes' substitution targets). Java parity:
         // `StoreSubstitutionValidator.run` — emits "Store
         // Substitution Error in mapping [X] as [Y] does not exist
         // in included mapping [Z]".
-        validate_store_substitution_existence(&registry, ctx.errors);
+        validate_store_substitution_existence(registry, ctx.errors);
         // Phase 2 visibility: walk every cross-element reference
         // (mapping includes, class-mapping target classes, Pure
         // body `~src` clauses, operation function refs, enum-ref
@@ -379,7 +419,7 @@ impl CompilerExtension for MappingExtension {
         // `NotVisible` for refs whose target home repo is not in
         // the use-site repo's declared dependencies. No-op when
         // `model.repo_visibility` is empty.
-        validate_repo_visibility(&registry, ctx.model, ctx.errors);
+        validate_repo_visibility(registry, ctx.model, ctx.errors);
     }
 
     /// Surface Mapping-DSL reference sites to the IDE's reference
@@ -398,8 +438,14 @@ impl CompilerExtension for MappingExtension {
         model: &legend_pure_parser_pure::model::PureModel,
         visit: &mut dyn FnMut(legend_pure_parser_pure::refs::Reference),
     ) {
-        let registry = self.mappings.borrow();
-        for (_, reg) in registry.iter() {
+        // Post-compile read of the per-compile registry that `declare`
+        // stashed in the scope. The pipeline's `finalize_model`
+        // restores `model.compile_scope` before returning, so this
+        // walk runs against the same data validate consumed.
+        let Some(state) = model.compile_scope.get::<MappingCompileState>() else {
+            return;
+        };
+        for (_, reg) in state.mappings.iter() {
             for include in &reg.def.includes {
                 push_element_ref(
                     model,
