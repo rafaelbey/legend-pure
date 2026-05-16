@@ -422,26 +422,45 @@ impl CompilerExtension for MappingExtension {
         validate_repo_visibility(registry, ctx.model, ctx.errors);
     }
 
-    /// Surface Mapping-DSL reference sites to the IDE's reference
-    /// index. Each entry becomes a clickable region that goto-def
-    /// can navigate from.
-    ///
-    /// Covered today:
-    /// - **Class-mapping target class** — `pkg::Firm : Pure { … }`
-    ///   click `pkg::Firm` → jumps to the Class declaration.
-    /// - **Pure-body source class** — `~src pkg::SrcClass` → jumps
-    ///   to that class.
-    /// - **Mapping include target** — `include other::Mapping` →
-    ///   jumps to the included Mapping element.
+    // walk_references moved to `MappingIdeExtension` below — see
+    // Phase 2-FULL. The default no-op on `CompilerExtension` applies
+    // here.
+}
+
+/// IDE-side reference contributor for the Mapping DSL.
+///
+/// Self-registers via [`IDE_EXTENSIONS`]; picked up automatically by
+/// [`legend_pure_parser_pure::refs::build_reference_index`] when the
+/// `dsl-mapping` crate is link-forced into the consumer binary.
+/// Surfaces:
+/// - **Class-mapping target class** — `pkg::Firm : Pure { … }`
+///   click `pkg::Firm` → jumps to the Class declaration.
+/// - **Pure-body source class** — `~src pkg::SrcClass` → jumps to
+///   that class.
+/// - **Mapping include target** — `include other::Mapping` → jumps
+///   to the included Mapping element.
+#[derive(Debug, Default)]
+pub struct MappingIdeExtension;
+
+#[distributed_slice(legend_pure_parser_pure::refs::IDE_EXTENSIONS)]
+static MAPPING_IDE_EXTENSION: &dyn legend_pure_parser_pure::refs::IdeExtension =
+    &MappingIdeExtension;
+
+impl legend_pure_parser_pure::refs::IdeExtension for MappingIdeExtension {
+    fn name(&self) -> &'static str {
+        "dsl-mapping"
+    }
+
     fn walk_references(
         &self,
         model: &legend_pure_parser_pure::model::PureModel,
         visit: &mut dyn FnMut(legend_pure_parser_pure::refs::Reference),
     ) {
-        // Post-compile read of the per-compile registry that `declare`
-        // stashed in the scope. The pipeline's `finalize_model`
-        // restores `model.compile_scope` before returning, so this
-        // walk runs against the same data validate consumed.
+        // Post-compile read of the per-compile registry that
+        // `MappingExtension::declare` stashed in the scope. The
+        // pipeline's `finalize_model` restores `model.compile_scope`
+        // before returning, so this walk runs against the same data
+        // validate consumed.
         let Some(state) = model.compile_scope.get::<MappingCompileState>() else {
             return;
         };

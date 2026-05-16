@@ -807,28 +807,48 @@ impl CompilerExtension for RelationalExtension {
         validate_predicate_return_types(dbs, resolved, ctx.errors);
     }
 
-    /// Surface Relational-DSL reference sites to the IDE's reference
-    /// index.
-    ///
-    /// Covered today:
-    /// - **Database include target** — `include other::Db` →
-    ///   jumps to the included Database element.
-    ///
-    /// Schema/table/column refs and the join-tree FQNs follow once
-    /// the relational AST tracks their per-segment spans. Today they
-    /// flow as `db.schema.table.col` strings without per-segment
-    /// `SourceInfo`, so we can't yet surface a clickable region per
-    /// segment.
+    // walk_references moved to `RelationalIdeExtension` below — see
+    // Phase 2-FULL. The default no-op on `CompilerExtension` applies
+    // here.
+}
+
+/// IDE-side reference contributor for the Relational DSL.
+///
+/// Self-registers via [`legend_pure_parser_pure::refs::IDE_EXTENSIONS`];
+/// picked up automatically by
+/// [`legend_pure_parser_pure::refs::build_reference_index`] when the
+/// `dsl-relational` crate is link-forced into the consumer binary.
+/// Surfaces:
+/// - **Database include target** — `include other::Db` → jumps to
+///   the included Database element.
+///
+/// Schema/table/column refs and the join-tree FQNs follow once the
+/// relational AST tracks their per-segment spans. Today they flow as
+/// `db.schema.table.col` strings without per-segment `SourceInfo`,
+/// so we can't yet surface a clickable region per segment.
+#[derive(Debug, Default)]
+pub struct RelationalIdeExtension;
+
+#[distributed_slice(legend_pure_parser_pure::refs::IDE_EXTENSIONS)]
+static RELATIONAL_IDE_EXTENSION: &dyn legend_pure_parser_pure::refs::IdeExtension =
+    &RelationalIdeExtension;
+
+impl legend_pure_parser_pure::refs::IdeExtension for RelationalIdeExtension {
+    fn name(&self) -> &'static str {
+        "RelationalExtension"
+    }
+
     fn walk_references(
         &self,
         model: &legend_pure_parser_pure::model::PureModel,
         visit: &mut dyn FnMut(legend_pure_parser_pure::refs::Reference),
     ) {
         use legend_pure_parser_ast::element::PackageableElement;
-        // Post-compile read of the per-compile registry that `declare`
-        // stashed in the scope. The pipeline's `finalize_model`
-        // restores `model.compile_scope` before returning, so this
-        // walk runs against the same data validate consumed.
+        // Post-compile read of the per-compile registry that
+        // `RelationalExtension::declare` stashed in the scope. The
+        // pipeline's `finalize_model` restores `model.compile_scope`
+        // before returning, so this walk runs against the same data
+        // validate consumed.
         let Some(state) = model.compile_scope.get::<RelationalCompileState>() else {
             return;
         };

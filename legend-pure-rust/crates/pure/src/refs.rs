@@ -235,11 +235,22 @@ pub fn build_reference_index(model: &PureModel) -> ReferenceIndex {
 /// Build a [`ReferenceIndex`] including DSL-extension contributions.
 ///
 /// Walks the core model first (stereotypes, tagged values, function
-/// calls, type refs, enum values), then asks each extension to
-/// contribute its own reference sites — Mapping class refs, Relational
-/// table refs, etc. The same lookup machinery
+/// calls, type refs, enum values), then asks each [`IdeExtension`]
+/// (both the explicit `CompilerExtension::walk_references` overrides
+/// passed in via `extensions` and the discovered [`IDE_EXTENSIONS`]
+/// slice) to contribute its own reference sites — Mapping class
+/// refs, Relational table refs, etc. The same lookup machinery
 /// (`find_at` / `usages_of`) then serves both core and DSL refs
 /// uniformly to the IDE.
+///
+/// The `extensions` slice is retained for back-compat with callers
+/// like the LSP that still pass an explicit list of
+/// [`CompilerExtension`]s. After Phase 2-FULL it's effectively
+/// dead weight for the in-tree DSLs (they no longer override
+/// `walk_references` — see the sibling `MappingIdeExtension` /
+/// `RelationalIdeExtension` impls in the respective DSL crates) but
+/// the call still works for any future external extension that
+/// hasn't migrated.
 #[must_use]
 pub fn build_reference_index_with_extensions(
     model: &PureModel,
@@ -249,6 +260,9 @@ pub fn build_reference_index_with_extensions(
     walk_references(model, &mut |r| index.push(r));
     for ext in extensions {
         ext.walk_references(model, &mut |r| index.push(r));
+    }
+    for ide_ext in discovered_ide_extensions() {
+        ide_ext.walk_references(model, &mut |r| index.push(r));
     }
     index.finalize();
     index
