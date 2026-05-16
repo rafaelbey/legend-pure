@@ -1424,7 +1424,6 @@ fn walk_expr_kind_refs(
         | ExprKind::BooleanLiteral(_)
         | ExprKind::DateLiteral(_)
         | ExprKind::Variable { .. }
-        | ExprKind::Column
         | ExprKind::MultiplicityReference { .. } => {}
         ExprKind::FunctionCall(d)
         | ExprKind::PropertyCall(d)

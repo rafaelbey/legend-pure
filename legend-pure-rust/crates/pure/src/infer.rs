@@ -557,9 +557,6 @@ fn infer_expr(ctx: &mut InferCtx<'_>, expr: &mut ValueSpec) -> Option<ResolvedTy
             })
         }
 
-        // -- Column (TDS — deferred) ----------------------------------------
-        ExprKind::Column => None,
-
         // -- Relation literals ----------------------------------------------
         // Mirror the lowering-time `type_info` so dispatch builds the right
         // mangled FQN regardless of whether the literal is consumed before

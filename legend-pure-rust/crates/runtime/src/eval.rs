@@ -511,8 +511,6 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                     crate::native::meta::build_multiplicity_wrapper(&mut self.heap, multiplicity)?;
                 Ok(Value::Object(handle))
             }
-            ExprKind::Column => Ok(Value::Unit),
-
             // -- Relation literals -------------------------------------
             // `@(cols)` and `~[cols]` materialise heap shapes whose
             // structure mirrors Java's `_RelationType.build` /
@@ -2796,7 +2794,6 @@ fn walk_free_variables(
         | ExprKind::TypeReference { .. }
         | ExprKind::MultiplicityReference { .. }
         | ExprKind::PackageableElementRef { .. }
-        | ExprKind::Column
         | ExprKind::RelationLiteral { .. }
         | ExprKind::ColSpecArrayLiteral { .. }
         | ExprKind::ColSpecLiteral { .. } => {}

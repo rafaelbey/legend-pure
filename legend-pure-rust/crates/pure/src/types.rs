@@ -496,10 +496,6 @@ pub enum ExprKind {
         element: ElementId,
     },
 
-    // -- Column (TDS — placeholder) ----------------------------------------
-    /// Column expression (TDS — full lowering deferred).
-    Column,
-
     // -- Relation type literals -------------------------------------------
     /// `@(name:Type[mult], …)` — anonymous relation type at expression
     /// position. Materialises a `meta::pure::metamodel::relation::RelationType`

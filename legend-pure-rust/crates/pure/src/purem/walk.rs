@@ -299,8 +299,7 @@ fn walk_expr_kind(kind: &mut ExprKind, visit: &mut dyn FnMut(&mut ElementId)) {
         | ExprKind::StringLiteral(_)
         | ExprKind::BooleanLiteral(_)
         | ExprKind::DateLiteral(_)
-        | ExprKind::Variable { .. }
-        | ExprKind::Column => {}
+        | ExprKind::Variable { .. } => {}
         ExprKind::FunctionCall(d)
         | ExprKind::PropertyCall(d)
         | ExprKind::QualifiedPropertyCall(d) => {
