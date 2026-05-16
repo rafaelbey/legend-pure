@@ -2028,6 +2028,7 @@ dependencies = [
  "legend-pure-parser-lexer",
  "legend-pure-parser-parser",
  "legend-pure-parser-pure",
+ "linkme",
  "postcard",
  "serde",
  "smol_str",

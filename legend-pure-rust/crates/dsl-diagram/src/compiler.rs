@@ -36,17 +36,19 @@
 //! `.purem` round-trips first-class. Migrating consumers to the
 //! graph-walk side and deleting the `RefCell` is follow-up work.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 
 use legend_pure_parser_ast::element::Element as AstElement;
 use legend_pure_parser_ast::element::PackageableElement;
 use legend_pure_parser_pure::error::{CompilationError, CompilationErrorKind};
-use legend_pure_parser_pure::extension::{CompilerExtension, DeclareCtx, DefineCtx, ValidateCtx};
+use legend_pure_parser_pure::extension::{
+    COMPILER_EXTENSIONS, CompilerExtension, DeclareCtx, DefineCtx, ValidateCtx,
+};
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{
     DSLInstance, Element as ModelElement, ElementNode, PureModel,
 };
+use linkme::distributed_slice;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
@@ -60,15 +62,30 @@ pub const DIAGRAM_CLASSIFIER_FQN: &str = "meta::pure::diagram::Diagram";
 
 /// Compiler extension for the Diagram DSL.
 ///
-/// Construct one per [`compile_with_extensions`](legend_pure_parser_pure::pipeline::compile_with_extensions)
-/// invocation; do not share across compilations because the
-/// extension's internal map is reset each call.
+/// Stateless unit struct — per-compile data lives in
+/// [`DiagramCompileState`] stashed in `ctx.scope`. Lets the
+/// extension self-register via the
+/// [`COMPILER_EXTENSIONS`] distributed slice so any binary that
+/// depends on `legend-pure-dsl-diagram` picks it up automatically.
+#[derive(Debug, Default)]
+pub struct DiagramExtension;
+
+/// Self-registration into the compiler's `COMPILER_EXTENSIONS`
+/// distributed slice. Discoverable via
+/// [`legend_pure_parser_pure::pipeline::compile`] (no per-binary
+/// wiring required for downstream consumers).
+#[distributed_slice(COMPILER_EXTENSIONS)]
+static DIAGRAM_EXTENSION: &(dyn CompilerExtension + Sync) = &DiagramExtension;
+
+/// Per-compile scratch state stashed in `ctx.scope`. Holds the
+/// diagrams collected during `declare` so `validate` can re-walk
+/// them with their AST in hand. Fresh per compile — the pipeline's
+/// scope is reset between `compile_with_extensions` calls.
 #[derive(Default)]
-pub struct DiagramExtension {
+struct DiagramCompileState {
     /// Diagrams collected during `declare`, keyed by their FQN
-    /// (`"pkg::sub::Name"`). Per-extension state — not stored in
-    /// `PureModel`. Use [`Self::diagrams`] to inspect after compile.
-    diagrams: RefCell<HashMap<SmolStr, RegisteredDiagram>>,
+    /// (`"pkg::sub::Name"`).
+    diagrams: HashMap<SmolStr, RegisteredDiagram>,
 }
 
 /// One registered diagram alongside its bookkeeping ID.
@@ -243,14 +260,30 @@ impl CompilerExtension for DiagramExtension {
     }
 
     fn declare(&self, ctx: &mut DeclareCtx<'_>) {
-        let mut registry = self.diagrams.borrow_mut();
         // Pass 1 has already created (or reused) the slice's chunk
         // and pushed it onto `model.chunks`. The just-created chunk
         // is the last one — we allocate `Element::DSLInstance` rows
         // there alongside the M3 elements from the same source file.
         let chunk_id = (ctx.model.chunks.len().saturating_sub(1)) as u16;
 
-        for source_file in ctx.source_files {
+        // Destructure ctx so model, errors, scope, source_files are
+        // independently borrowable inside the loop. The scope chain
+        // hands us a `&mut HashMap<SmolStr, RegisteredDiagram>` (the
+        // per-compile registry) that lives for the duration of this
+        // declare call.
+        let DeclareCtx {
+            source_files,
+            model,
+            errors,
+            scope,
+            ..
+        } = ctx;
+        let scope = scope
+            .as_deref_mut()
+            .expect("DiagramExtension requires `scope` wired in DeclareCtx (pipeline supplies it)");
+        let registry = &mut scope.get_or_default::<DiagramCompileState>().diagrams;
+
+        for source_file in *source_files {
             for section in &source_file.sections {
                 if section.kind.as_str() != crate::ast::SECTION_KIND {
                     continue;
@@ -265,7 +298,7 @@ impl CompilerExtension for DiagramExtension {
 
                     let fqn = build_fqn(d);
                     if registry.contains_key(&fqn) {
-                        ctx.errors.push(CompilationError {
+                        errors.push(CompilationError {
                             message: format!("Duplicate diagram '{fqn}'"),
                             source_info: d.source_info.clone(),
                             kind: CompilationErrorKind::DuplicateElement { name: fqn.clone() },
@@ -275,7 +308,8 @@ impl CompilerExtension for DiagramExtension {
                         continue;
                     }
 
-                    // Dual-write 1/2 — extension RefCell (existing API).
+                    // Dual-write 1/2 — per-compile registry (validate
+                    // reads from here for AST-backed checks).
                     registry.insert(
                         fqn.clone(),
                         RegisteredDiagram {
@@ -292,7 +326,7 @@ impl CompilerExtension for DiagramExtension {
                     let data = match snapshot.encode() {
                         Ok(bytes) => bytes,
                         Err(e) => {
-                            ctx.errors.push(CompilationError {
+                            errors.push(CompilationError {
                                 message: format!(
                                     "Failed to encode DiagramSnapshot for '{fqn}': {e}"
                                 ),
@@ -305,12 +339,12 @@ impl CompilerExtension for DiagramExtension {
 
                     let pkg_path = pkg_segments(d);
                     let package_id = if pkg_path.is_empty() {
-                        ctx.model.root_package
+                        model.root_package
                     } else {
-                        ctx.model.get_or_create_package(&pkg_path)
+                        model.get_or_create_package(&pkg_path)
                     };
 
-                    let Some(chunk) = ctx.model.chunks.get_mut(chunk_id as usize) else {
+                    let Some(chunk) = model.chunks.get_mut(chunk_id as usize) else {
                         continue; // pathological: no chunk yet
                     };
                     let local_idx = chunk.alloc_element(
@@ -330,7 +364,7 @@ impl CompilerExtension for DiagramExtension {
                         chunk_id,
                         local_idx,
                     };
-                    ctx.model.register_element(package_id, id);
+                    model.register_element(package_id, id);
                 }
             }
         }
@@ -348,8 +382,14 @@ impl CompilerExtension for DiagramExtension {
     }
 
     fn validate(&self, ctx: &mut ValidateCtx<'_>) {
-        let registry = self.diagrams.borrow();
-        for (_fqn, reg) in registry.iter() {
+        // Pull the per-compile registry the declare hook stashed in
+        // the scope. Absent scope (hand-built ctx) or no diagrams
+        // declared in this compile — both no-op cleanly.
+        let Some(scope) = ctx.scope else { return };
+        let Some(state) = scope.get::<DiagramCompileState>() else {
+            return;
+        };
+        for (_fqn, reg) in state.diagrams.iter() {
             validate_diagram(&reg.def, ctx.model, ctx.errors);
         }
     }

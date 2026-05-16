@@ -22,9 +22,7 @@
 //! `#[distributed_slice]`. This test locks in the invariant that
 //! data written in one pass is visible to a later pass.
 
-use legend_pure_parser_pure::extension::{
-    CompilerExtension, DeclareCtx, DefineCtx, ValidateCtx,
-};
+use legend_pure_parser_pure::extension::{CompilerExtension, DeclareCtx, DefineCtx, ValidateCtx};
 use legend_pure_parser_pure::pipeline::compile_with_extensions;
 
 /// Per-compile state a stateless `CompilerExtension` stashes in the
