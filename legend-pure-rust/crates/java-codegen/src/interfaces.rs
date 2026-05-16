@@ -123,8 +123,10 @@ pub(crate) fn emit_class_interface(
     // also extends a sibling interface that provides its own default
     // for the same name. Suppress the redeclaration on the child side
     // and inherit the supertype's default. Multiplicity narrowing /
-    // type narrowing across supertypes is rare in M3 and not worth
-    // a richer override-emission policy in v1.
+    // type narrowing across distinct supertype declarations is handled
+    // by `diamond_overrides` below — the joining `@Override default`
+    // takes the intersection of all colliding multiplicities and the
+    // most-specific common type.
     let supertype_property_names = collect_supertype_property_names(model, class_id, reachable);
 
     // Direct properties.
@@ -311,13 +313,31 @@ fn direct_property_name_set(model: &PureModel, class_id: ElementId) -> HashSet<S
 
 /// For each simple property name declared by **two or more distinct**
 /// ancestors-in-closure of `class_id`, return one [`DiamondOverride`]
-/// describing the override emission this class needs. The returned
-/// `java_type` and `default_body` come from one of the colliding
-/// declarations (deterministic but order-dependent on the supertype
-/// walk); when those declarations agree on multiplicity (the typical
-/// M3 case where two ancestors carry shadowed copies of `name:
-/// String[0..1]`) the override is exactly correct. Disagreements are
-/// rare in the M3 metamodel and not worth a richer policy in v1.
+/// describing the override emission this class needs.
+///
+/// **Multiplicity policy.** When the colliding declarations agree on
+/// multiplicity (the typical M3 case — two ancestors with shadowed
+/// copies of `name: String[1]`), that shared multiplicity flows
+/// through unchanged. When they disagree (e.g. `[0..1]` on one branch,
+/// `[1]` on the other), the override emits the **intersection** —
+/// `max(lower)..min(upper)`. The intersection is the only multiplicity
+/// that simultaneously satisfies every upstream contract; emitting a
+/// looser shape would produce a default body that violates the
+/// stricter parent's `[1]` requirement, and emitting a stricter shape
+/// would over-constrain the optional branch. Unsatisfiable
+/// intersections (lower > upper after combining) fall back to
+/// [`Multiplicity::PureOne`] so the generated method stays abstract
+/// at runtime — the validator's `PropertyConflict` rule already
+/// rejects this configuration, so reaching the fallback means we're
+/// emitting from an unvalidated or partial model.
+///
+/// **Type policy.** Pick the most-specific common type — if one
+/// declaration's type is a subtype of every other's, that's the
+/// emission type. Otherwise fall back to the first declaration; this
+/// case is also rejected by the validator (`is_simple_property_override_valid`
+/// requires structural type identity), so the fallback only fires
+/// under the same "unvalidated model" condition as the multiplicity
+/// fallback.
 ///
 /// Qualified properties and association-injected properties are
 /// included in the conflict set, but only simple-property collisions
@@ -353,13 +373,16 @@ fn diamond_overrides(
         if distinct.len() < 2 {
             continue;
         }
-        let Some((_, ty_expr, mult)) = decls.first() else {
-            continue;
-        };
+        // Intersect multiplicities across every distinct ancestor
+        // declaration; narrow types to the most-specific common one.
+        // Both helpers are deterministic and produce semantically
+        // sound emissions even when the input declarations disagree.
+        let intersected_mult = intersect_multiplicities(decls.iter().map(|(_, _, m)| m));
+        let chosen_ty = most_specific_type(model, decls);
         let return_ty = render_java_type(
             model,
-            ty_expr,
-            mult,
+            chosen_ty,
+            &intersected_mult,
             &pure_fqn,
             TypePosition::Return,
             opts,
@@ -367,7 +390,7 @@ fn diamond_overrides(
             bootstrap,
         )?;
         let java_name = safe_java_identifier(name);
-        let default_body = match default_body_for(mult) {
+        let default_body = match default_body_for(&intersected_mult) {
             Some(body) => body.to_owned(),
             // [1] mults can't easily resolve a diamond from the joining
             // class — fall back to throwing at runtime so the generated
@@ -385,6 +408,92 @@ fn diamond_overrides(
         });
     }
     Ok(out)
+}
+
+/// Intersect a sequence of multiplicities into the narrowest shape
+/// that satisfies every input — `max(lower)..min(upper)`. Used by
+/// [`diamond_overrides`] to pick a single multiplicity that's sound
+/// under all colliding ancestor declarations.
+///
+/// Returns [`Multiplicity::PureOne`] when the intersection is empty
+/// (`lower > upper`) — the validator's `PropertyConflict` rule rejects
+/// that case, so the fallback only matters for emissions from
+/// partially-validated models. Otherwise reconstructs the canonical
+/// shape: `PureOne` for `1..1`, `ZeroOrOne` for `0..1`, `OneOrMany`
+/// for `1..*`, `ZeroOrMany` for `0..*`, or `Range` for the rest.
+fn intersect_multiplicities<'a>(mults: impl Iterator<Item = &'a Multiplicity>) -> Multiplicity {
+    let (mut lo, mut hi) = (0u32, u32::MAX);
+    let mut saw_any = false;
+    for m in mults {
+        saw_any = true;
+        let (l, h) = mult_bounds_local(m);
+        if l > lo {
+            lo = l;
+        }
+        if h < hi {
+            hi = h;
+        }
+    }
+    if !saw_any || lo > hi {
+        return Multiplicity::PureOne;
+    }
+    match (lo, hi) {
+        (1, 1) => Multiplicity::PureOne,
+        (0, 1) => Multiplicity::ZeroOrOne,
+        (1, u32::MAX) => Multiplicity::OneOrMany,
+        (0, u32::MAX) => Multiplicity::ZeroOrMany,
+        (lower, hi_v) => Multiplicity::Range {
+            lower,
+            upper: if hi_v == u32::MAX { None } else { Some(hi_v) },
+        },
+    }
+}
+
+/// Local copy of `resolve::mult_bounds` — the pure crate exports the
+/// helper as `pub(crate)`, not `pub`, so we mirror it here rather than
+/// widen its visibility just for codegen.
+fn mult_bounds_local(m: &Multiplicity) -> (u32, u32) {
+    match m {
+        Multiplicity::PureOne => (1, 1),
+        Multiplicity::ZeroOrOne => (0, 1),
+        Multiplicity::OneOrMany => (1, u32::MAX),
+        Multiplicity::Range { lower, upper } => (*lower, upper.unwrap_or(u32::MAX)),
+        Multiplicity::ZeroOrMany | Multiplicity::Variable(_) => (0, u32::MAX),
+    }
+}
+
+/// Pick the most-specific type among `decls`: the one whose `TypeExpr`
+/// is a subtype of every other declaration's. Falls back to the first
+/// declaration's type when no such common subtype exists.
+///
+/// Non-`Named` type expressions (`Generic`, `FunctionType`) are
+/// treated permissively — they're type holes that any concrete type
+/// can flow into, so a `Named` declaration counts as a subtype of
+/// any non-`Named` peer.
+fn most_specific_type<'a>(
+    model: &PureModel,
+    decls: &'a [(ElementId, TypeExpr, Multiplicity)],
+) -> &'a TypeExpr {
+    use legend_pure_parser_pure::resolve::is_subtype;
+    for (_, candidate_ty, _) in decls {
+        let TypeExpr::Named {
+            element: candidate_eid,
+            ..
+        } = candidate_ty
+        else {
+            continue;
+        };
+        let is_specific = decls.iter().all(|(_, other_ty, _)| match other_ty {
+            TypeExpr::Named {
+                element: other_eid, ..
+            } => *candidate_eid == *other_eid || is_subtype(*candidate_eid, *other_eid, model),
+            _ => true,
+        });
+        if is_specific {
+            return candidate_ty;
+        }
+    }
+    &decls[0].1
 }
 
 fn walk_ancestors_collecting(

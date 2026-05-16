@@ -272,18 +272,27 @@ chain), so a user class whose *parent* implements the generated
 interface won't resolve. Adequate for the `class MyPerson implements
 Person` case, needs a fix for deeper hierarchies.
 
-**Diamond-inheritance break (2026-05-07).** Pure's M3 lets a subclass
-*redeclare* an inherited property as a no-op shadow (`Type.name`
-shadows `ModelElement.name`, etc.). When two such ancestors-in-closure
-each emit a `default` method for the same property name, Java
-rejects the joining interface ("inherits unrelated defaults"). The
-codegen now (a) suppresses redeclarations on the child whose direct
-supertype-in-closure already declares the same property name, and
+**Diamond-inheritance break (2026-05-07; multiplicity/type narrowing
+added 2026-05-15).** Pure's M3 lets a subclass *redeclare* an
+inherited property as a no-op shadow (`Type.name` shadows
+`ModelElement.name`, etc.). When two such ancestors-in-closure each
+emit a `default` method for the same property name, Java rejects the
+joining interface ("inherits unrelated defaults"). The codegen now
+(a) suppresses redeclarations on the child whose direct
+supertype-in-closure already declares the same property name,
 (b) emits an explicit `@Override default` on any joining class whose
 supertype graph carries two distinct declarations of the same simple
-property. Multiplicity narrowing across distinct ancestors is rare
-in M3 and not handled in v1 — would need a richer override-emission
-policy. See `crates/java-codegen/src/interfaces.rs::diamond_overrides`.
+property, and (c) when the colliding declarations disagree, takes the
+**intersection** of all multiplicities (`max(lower)..min(upper)`) and
+the **most-specific common type** so the emitted method satisfies
+every upstream contract. The cross-hierarchy property override
+validator (`crates/pure/src/validate.rs::validate_property_overrides`)
+rejects mismatched-mult/type diamonds before they reach codegen, but
+the narrowing logic stays sound when codegen runs on a partial
+(unvalidated) model. See
+`crates/java-codegen/src/interfaces.rs::diamond_overrides`,
+`intersect_multiplicities`, and `most_specific_type`, plus
+`tests/diamond_overrides.rs`.
 
 Verification: 16 codegen unit + integration tests (`-p
 legend-pure-java-codegen`) + 4 new `dispatch_smoke` tests for the
