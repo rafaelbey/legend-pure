@@ -24,6 +24,7 @@ repository.workspace = true
 legend-pure-parser-ast = { path = "../ast" }
 legend-pure-parser-parser = { path = "../parser" }
 legend-pure-parser-pure = { path = "../pure" }
+legend-pure-ide = { path = "../ide" }
 legend-pure-core-platform = { path = "../core-platform-pure" }
 # Runtime: needed for `workspace/executeCommand` to evaluate
 # parameterless Pure functions from the gutter ▶ Run icon. The LSP

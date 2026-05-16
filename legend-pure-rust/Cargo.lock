@@ -2060,6 +2060,7 @@ dependencies = [
  "indoc",
  "insta",
  "legend-pure-core-platform",
+ "legend-pure-ide",
  "legend-pure-parser-ast",
  "legend-pure-parser-compose",
  "legend-pure-parser-lexer",
@@ -2094,6 +2095,7 @@ dependencies = [
  "indoc",
  "legend-pure-core-platform",
  "legend-pure-dsl-mapping",
+ "legend-pure-ide",
  "legend-pure-parser-ast",
  "legend-pure-parser-lexer",
  "legend-pure-parser-parser",
@@ -2154,6 +2156,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "legend-pure-ide"
+version = "0.1.0"
+dependencies = [
+ "legend-pure-parser-ast",
+ "legend-pure-parser-pure",
+ "linkme",
+ "serde",
+ "smol_str",
+]
+
+[[package]]
 name = "legend-pure-java-codegen"
 version = "0.1.0"
 dependencies = [
@@ -2177,6 +2190,7 @@ dependencies = [
  "legend-pure-dsl-relational",
  "legend-pure-dsl-relational-runtime",
  "legend-pure-dsl-store",
+ "legend-pure-ide",
  "legend-pure-parser-ast",
  "legend-pure-parser-parser",
  "legend-pure-parser-pure",

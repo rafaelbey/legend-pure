@@ -253,6 +253,15 @@ pub trait CompilerExtension {
     /// Pass 3 — validate. Default no-op.
     fn validate(&self, _ctx: &mut ValidateCtx<'_>) {}
 
+    // walk_references method removed in Phase 2.5 — IDE-side reference
+    // contribution is now its own trait (`legend_pure_ide::IdeExtension`)
+    // discovered via a separate distributed slice. DSLs that contribute
+    // reference sites ship a sibling unit-struct IdeExtension impl
+    // (see crates/dsl-mapping and crates/dsl-relational for the pattern).
+    // Keeping walk_references on CompilerExtension would force pure to
+    // depend on the ide crate (for Reference) — Phase 2.5 broke that
+    // cycle by lifting refs out of pure entirely.
+
     /// Names of extensions that must run *before* this one within each pass.
     ///
     /// Default: no dependencies. The compiler pipeline iterates
@@ -270,27 +279,6 @@ pub trait CompilerExtension {
     /// path in the message.
     fn depends_on(&self) -> &'static [&'static str] {
         &[]
-    }
-
-    /// Contribute references to the IDE's reference index.
-    ///
-    /// Called by [`crate::refs::build_reference_index`] (and any
-    /// other [`crate::refs::walk_references`] caller) after all
-    /// compile passes complete. The extension walks its own
-    /// resolved data — typically `Element::DSLInstance` payloads
-    /// written during `declare` — and pushes one
-    /// [`crate::refs::Reference`] per source-level reference site.
-    ///
-    /// Default no-op so existing extensions that don't yet
-    /// participate in IDE navigation keep compiling. The Mapping,
-    /// Relational, and Store DSLs override to surface their own
-    /// references (class refs in `: Pure { … }`, table refs in
-    /// `Join` clauses, etc.).
-    fn walk_references(
-        &self,
-        _model: &crate::model::PureModel,
-        _visit: &mut dyn FnMut(crate::refs::Reference),
-    ) {
     }
 }
 

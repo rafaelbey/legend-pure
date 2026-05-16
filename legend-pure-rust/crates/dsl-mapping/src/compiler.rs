@@ -430,7 +430,7 @@ impl CompilerExtension for MappingExtension {
 /// IDE-side reference contributor for the Mapping DSL.
 ///
 /// Self-registers via [`IDE_EXTENSIONS`]; picked up automatically by
-/// [`legend_pure_parser_pure::refs::build_reference_index`] when the
+/// [`legend_pure_ide::build_reference_index`] when the
 /// `dsl-mapping` crate is link-forced into the consumer binary.
 /// Surfaces:
 /// - **Class-mapping target class** — `pkg::Firm : Pure { … }`
@@ -442,11 +442,10 @@ impl CompilerExtension for MappingExtension {
 #[derive(Debug, Default)]
 pub struct MappingIdeExtension;
 
-#[distributed_slice(legend_pure_parser_pure::refs::IDE_EXTENSIONS)]
-static MAPPING_IDE_EXTENSION: &dyn legend_pure_parser_pure::refs::IdeExtension =
-    &MappingIdeExtension;
+#[distributed_slice(legend_pure_ide::IDE_EXTENSIONS)]
+static MAPPING_IDE_EXTENSION: &dyn legend_pure_ide::IdeExtension = &MappingIdeExtension;
 
-impl legend_pure_parser_pure::refs::IdeExtension for MappingIdeExtension {
+impl legend_pure_ide::IdeExtension for MappingIdeExtension {
     fn name(&self) -> &'static str {
         "dsl-mapping"
     }
@@ -454,7 +453,7 @@ impl legend_pure_parser_pure::refs::IdeExtension for MappingIdeExtension {
     fn walk_references(
         &self,
         model: &legend_pure_parser_pure::model::PureModel,
-        visit: &mut dyn FnMut(legend_pure_parser_pure::refs::Reference),
+        visit: &mut dyn FnMut(legend_pure_ide::Reference),
     ) {
         // Post-compile read of the per-compile registry that
         // `MappingExtension::declare` stashed in the scope. The
@@ -469,26 +468,16 @@ impl legend_pure_parser_pure::refs::IdeExtension for MappingIdeExtension {
                 push_element_ref(
                     model,
                     &include.included,
-                    legend_pure_parser_pure::refs::RefKind::TypeRef,
+                    legend_pure_ide::RefKind::TypeRef,
                     visit,
                 );
             }
             for cm in &reg.def.class_mappings {
-                push_element_ref(
-                    model,
-                    &cm.class,
-                    legend_pure_parser_pure::refs::RefKind::TypeRef,
-                    visit,
-                );
+                push_element_ref(model, &cm.class, legend_pure_ide::RefKind::TypeRef, visit);
                 if let crate::ast::ClassMappingBody::Pure(body) = &cm.body
                     && let Some(src) = &body.src_class
                 {
-                    push_element_ref(
-                        model,
-                        src,
-                        legend_pure_parser_pure::refs::RefKind::TypeRef,
-                        visit,
-                    );
+                    push_element_ref(model, src, legend_pure_ide::RefKind::TypeRef, visit);
                 }
             }
         }
@@ -501,8 +490,8 @@ impl legend_pure_parser_pure::refs::IdeExtension for MappingIdeExtension {
 fn push_element_ref(
     model: &legend_pure_parser_pure::model::PureModel,
     ptr: &PackageableElementPtr,
-    kind: legend_pure_parser_pure::refs::RefKind,
-    visit: &mut dyn FnMut(legend_pure_parser_pure::refs::Reference),
+    kind: legend_pure_ide::RefKind,
+    visit: &mut dyn FnMut(legend_pure_ide::Reference),
 ) {
     use legend_pure_parser_ast::element::PackageableElement;
     let target_id = if let Some(pkg) = ptr.package() {
@@ -515,7 +504,7 @@ fn push_element_ref(
         return;
     }
     let target = model.get_node(target_id).name_source_info.clone();
-    visit(legend_pure_parser_pure::refs::Reference {
+    visit(legend_pure_ide::Reference {
         range: ptr.source_info.clone(),
         kind,
         target_element: Some(target_id),

@@ -814,9 +814,9 @@ impl CompilerExtension for RelationalExtension {
 
 /// IDE-side reference contributor for the Relational DSL.
 ///
-/// Self-registers via [`legend_pure_parser_pure::refs::IDE_EXTENSIONS`];
+/// Self-registers via [`legend_pure_ide::IDE_EXTENSIONS`];
 /// picked up automatically by
-/// [`legend_pure_parser_pure::refs::build_reference_index`] when the
+/// [`legend_pure_ide::build_reference_index`] when the
 /// `dsl-relational` crate is link-forced into the consumer binary.
 /// Surfaces:
 /// - **Database include target** — `include other::Db` → jumps to
@@ -829,11 +829,10 @@ impl CompilerExtension for RelationalExtension {
 #[derive(Debug, Default)]
 pub struct RelationalIdeExtension;
 
-#[distributed_slice(legend_pure_parser_pure::refs::IDE_EXTENSIONS)]
-static RELATIONAL_IDE_EXTENSION: &dyn legend_pure_parser_pure::refs::IdeExtension =
-    &RelationalIdeExtension;
+#[distributed_slice(legend_pure_ide::IDE_EXTENSIONS)]
+static RELATIONAL_IDE_EXTENSION: &dyn legend_pure_ide::IdeExtension = &RelationalIdeExtension;
 
-impl legend_pure_parser_pure::refs::IdeExtension for RelationalIdeExtension {
+impl legend_pure_ide::IdeExtension for RelationalIdeExtension {
     fn name(&self) -> &'static str {
         "RelationalExtension"
     }
@@ -841,7 +840,7 @@ impl legend_pure_parser_pure::refs::IdeExtension for RelationalIdeExtension {
     fn walk_references(
         &self,
         model: &legend_pure_parser_pure::model::PureModel,
-        visit: &mut dyn FnMut(legend_pure_parser_pure::refs::Reference),
+        visit: &mut dyn FnMut(legend_pure_ide::Reference),
     ) {
         use legend_pure_parser_ast::element::PackageableElement;
         // Post-compile read of the per-compile registry that
@@ -867,9 +866,9 @@ impl legend_pure_parser_pure::refs::IdeExtension for RelationalIdeExtension {
                     continue;
                 }
                 let target = model.get_node(target_id).name_source_info.clone();
-                visit(legend_pure_parser_pure::refs::Reference {
+                visit(legend_pure_ide::Reference {
                     range: include.included.source_info.clone(),
-                    kind: legend_pure_parser_pure::refs::RefKind::TypeRef,
+                    kind: legend_pure_ide::RefKind::TypeRef,
                     target_element: Some(target_id),
                     target,
                 });

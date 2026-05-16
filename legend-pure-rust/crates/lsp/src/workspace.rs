@@ -34,6 +34,7 @@ use legend_pure_dsl_mapping::parser::MappingSectionParser;
 use legend_pure_dsl_relational::compiler::RelationalExtension;
 use legend_pure_dsl_relational::parser::RelationalSectionParser;
 use legend_pure_dsl_store::compiler::RelationStoreExtension;
+use legend_pure_ide::{ReferenceIndex, build_reference_index};
 use legend_pure_parser_ast::section::SourceFile;
 use legend_pure_parser_parser::SectionParser;
 use legend_pure_parser_pure::error::{CompilationError, CompilationErrorKind};
@@ -41,7 +42,6 @@ use legend_pure_parser_pure::extension::CompilerExtension;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::PureModel;
 use legend_pure_parser_pure::pipeline;
-use legend_pure_parser_pure::refs::{ReferenceIndex, build_reference_index_with_extensions};
 use smol_str::SmolStr;
 use tower_lsp_server::ls_types::Uri;
 
@@ -257,10 +257,16 @@ impl Workspace {
         }
         self.diagnostics = by_source;
         let model_arc = Arc::new(model);
-        self.references = Some(Arc::new(build_reference_index_with_extensions(
-            &model_arc,
-            &extensions,
-        )));
+        // Reference index now comes from `build_reference_index` —
+        // the discovered IdeExtension slice handles Mapping +
+        // Relational refs automatically (Phase 2-FULL extracted them
+        // from CompilerExtension::walk_references; Phase 2.5 moved
+        // the trait + helpers into the dedicated legend-pure-ide
+        // crate). The explicit CompilerExtension list `extensions`
+        // is still held by the workspace for compile-time wiring;
+        // dead weight here but harmless.
+        let _ = &extensions;
+        self.references = Some(Arc::new(build_reference_index(&model_arc)));
         self.model = Some(model_arc);
 
         // Seed the incremental caches from the compiled model + parsed inputs.
@@ -384,10 +390,16 @@ impl Workspace {
         //    (cheap relative to lowering), refresh path/chunk maps and
         //    chunk_dependents from the new model.
         let model_arc = Arc::new(outcome.model);
-        self.references = Some(Arc::new(build_reference_index_with_extensions(
-            &model_arc,
-            &extensions,
-        )));
+        // Reference index now comes from `build_reference_index` —
+        // the discovered IdeExtension slice handles Mapping +
+        // Relational refs automatically (Phase 2-FULL extracted them
+        // from CompilerExtension::walk_references; Phase 2.5 moved
+        // the trait + helpers into the dedicated legend-pure-ide
+        // crate). The explicit CompilerExtension list `extensions`
+        // is still held by the workspace for compile-time wiring;
+        // dead weight here but harmless.
+        let _ = &extensions;
+        self.references = Some(Arc::new(build_reference_index(&model_arc)));
         self.model = Some(model_arc);
         self.rebuild_path_and_chunk_indexes();
         self.rebuild_chunk_dependents();

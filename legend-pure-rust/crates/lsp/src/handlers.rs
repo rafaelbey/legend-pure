@@ -18,12 +18,12 @@
 
 use std::collections::{HashMap, HashSet};
 
+use legend_pure_ide::ReferenceIndex;
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_pure::error::CompilationError;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::locate::{Located, LocatedKind};
 use legend_pure_parser_pure::model::{Element, PureModel};
-use legend_pure_parser_pure::refs::ReferenceIndex;
 use legend_pure_parser_pure::types::{ResolvedType, TypeExpr};
 use tower_lsp_server::ls_types::{
     CodeLens, Command, Diagnostic, DocumentSymbol, Hover, HoverContents, Location, LocationLink,
@@ -1313,7 +1313,7 @@ mod tests {
         // the parameter `name`, declared at line 1 col 22 (1-indexed)
         // → 0-indexed col 21.
         let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
-        let index = legend_pure_parser_pure::refs::build_reference_index(&model);
+        let index = legend_pure_ide::build_reference_index(&model);
         let loc = definition_for_position(
             &model,
             Some(&index),
@@ -1768,7 +1768,7 @@ Class test::Person
     /// Build the reverse-index for a one-file fixture. Same helper
     /// pattern as the existing `definition_resolves_variable_…` test.
     fn refs_for(model: &PureModel) -> ReferenceIndex {
-        legend_pure_parser_pure::refs::build_reference_index(model)
+        legend_pure_ide::build_reference_index(model)
     }
 
     #[test]
@@ -1962,13 +1962,13 @@ function test::nameOf(p: test::Person[1]): String[1]
     /// here is the URI-resolution branch, not the compile pipeline.
     #[test]
     fn references_cross_file_uri_resolves_via_resolver() {
+        use legend_pure_ide::{RefKind, Reference, ReferenceIndex};
         use legend_pure_parser_ast::SourceInfo as SI;
         use legend_pure_parser_pure::ids::ElementId;
         use legend_pure_parser_pure::model::{
             Element as ModelElement, ElementNode, ModelChunk, PureModel,
         };
         use legend_pure_parser_pure::nodes::class::Class;
-        use legend_pure_parser_pure::refs::{RefKind, Reference, ReferenceIndex};
 
         let mut model = PureModel::new();
         let test_pkg = model.get_or_create_package(&[smol_str::SmolStr::new("test")]);

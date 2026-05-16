@@ -14,7 +14,7 @@
 
 //! Proves `MappingIdeExtension`'s `#[distributed_slice(IDE_EXTENSIONS)]`
 //! registration surfaces through
-//! [`legend_pure_parser_pure::refs::discovered_ide_extensions`] when
+//! [`legend_pure_ide::discovered_ide_extensions`] when
 //! the `dsl-mapping` crate is in the consumer's link graph. The IDE
 //! extension was extracted from `CompilerExtension::walk_references`
 //! in Phase 2-FULL — this test pins the new discovery path.
@@ -22,7 +22,7 @@
 #[allow(unused_imports)]
 use legend_pure_dsl_mapping::compiler::MappingIdeExtension as _;
 
-use legend_pure_parser_pure::refs::discovered_ide_extensions;
+use legend_pure_ide::discovered_ide_extensions;
 
 #[test]
 fn mapping_ide_extension_appears_in_discovered_ide_slice() {

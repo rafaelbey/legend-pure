@@ -23,6 +23,7 @@ members = [
     "crates/parser",
     "crates/protocol",
     "crates/pure",
+    "crates/ide",
     "crates/runtime",
     "crates/jni",
     "crates/java-codegen",

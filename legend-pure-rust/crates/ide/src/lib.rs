@@ -28,17 +28,28 @@
 //! The data model is **uniform**: every clickable thing in a Pure file
 //! becomes a `Reference`. Adding a new ref kind = one push during the
 //! build walk, no parallel locator extension.
+//!
+//! # Crate layering
+//!
+//! This crate (`legend-pure-ide`) sits one layer above
+//! `legend-pure-parser-pure` (the semantic/compiler layer). Pre-Phase
+//! 2.5 the IDE machinery lived inside `pure` itself — this crate
+//! exists to separate IDE tooling concerns from the compiler so `pure`
+//! stays focused on the semantic model.
+
+#![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
 use legend_pure_parser_ast::SourceInfo;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use std::collections::HashMap;
 
-use crate::annotations::{StereotypeRef, TaggedValueRef};
-use crate::ids::ElementId;
-use crate::model::{Element, PureModel};
-use crate::nodes::class::Class;
-use crate::types::{ExprKind, Parameter, TypeExpr, ValueSpec};
+use legend_pure_parser_pure::annotations::{StereotypeRef, TaggedValueRef};
+use legend_pure_parser_pure::ids::ElementId;
+use legend_pure_parser_pure::model::{Element, PureModel};
+use legend_pure_parser_pure::nodes::class::Class;
+use legend_pure_parser_pure::types::{ExprKind, Parameter, TypeExpr, ValueSpec};
 
 /// What kind of source reference this is. Carried for IDE rendering
 /// hints (semantic-token coloring, distinct hover labels) and for
@@ -85,7 +96,7 @@ pub struct Reference {
     pub target: SourceInfo,
 }
 
-/// Index of all source references in a [`crate::model::PureModel`].
+/// Index of all source references in a [`legend_pure_parser_pure::model::PureModel`].
 ///
 /// Built once after compile by [`build_reference_index`]. Two
 /// access patterns:
@@ -208,7 +219,7 @@ fn area(span: &SourceInfo) -> u64 {
 /// - Implement bespoke collectors (find-references with filtering,
 ///   semantic-token producers, deprecated-symbol scans).
 /// - Be DSL extensions that contribute their own references on top
-///   of the core walk via [`crate::extension::CompilerExtension::walk_references`].
+///   of the core walk via [`the (now-removed) `CompilerExtension::walk_references``].
 pub fn walk_references(model: &PureModel, visit: &mut dyn FnMut(Reference)) {
     for chunk in &model.chunks {
         for (idx, _node) in chunk.nodes.iter() {
@@ -227,45 +238,23 @@ pub fn walk_references(model: &PureModel, visit: &mut dyn FnMut(Reference)) {
 /// Convenience wrapper over [`walk_references`] that pushes each
 /// emitted reference into the index. Cheap (single linear walk over
 /// chunks) so callers can rebuild after each compile.
-#[must_use]
-pub fn build_reference_index(model: &PureModel) -> ReferenceIndex {
-    build_reference_index_with_extensions(model, &[])
-}
-
 /// Build a [`ReferenceIndex`] including DSL-extension contributions.
 ///
 /// Walks the core model first (stereotypes, tagged values, function
-/// calls, type refs, enum values), then asks each [`IdeExtension`]
-/// (both the explicit `CompilerExtension::walk_references` overrides
-/// passed in via `extensions` and the discovered [`IDE_EXTENSIONS`]
-/// slice) to contribute its own reference sites — Mapping class
-/// refs, Relational table refs, etc. The same lookup machinery
+/// calls, type refs, enum values), then asks every [`IdeExtension`]
+/// discovered via the [`IDE_EXTENSIONS`] distributed slice to
+/// contribute its own reference sites — Mapping class refs,
+/// Relational table refs, etc. The same lookup machinery
 /// (`find_at` / `usages_of`) then serves both core and DSL refs
 /// uniformly to the IDE.
 ///
-/// The `extensions` slice is retained for back-compat with callers
-/// like the LSP that still pass an explicit list of
-/// [`CompilerExtension`]s. After Phase 2-FULL it's effectively
-/// dead weight for the in-tree DSLs (they no longer override
-/// `walk_references` — see the sibling `MappingIdeExtension` /
-/// `RelationalIdeExtension` impls in the respective DSL crates) but
-/// the call still works for any future external extension that
-/// hasn't migrated.
+/// External callers that want to compose an explicit IdeExtension
+/// set (typically tests) should use
+/// [`build_reference_index_with_ide_extensions`].
 #[must_use]
-pub fn build_reference_index_with_extensions(
-    model: &PureModel,
-    extensions: &[&dyn crate::extension::CompilerExtension],
-) -> ReferenceIndex {
-    let mut index = ReferenceIndex::default();
-    walk_references(model, &mut |r| index.push(r));
-    for ext in extensions {
-        ext.walk_references(model, &mut |r| index.push(r));
-    }
-    for ide_ext in discovered_ide_extensions() {
-        ide_ext.walk_references(model, &mut |r| index.push(r));
-    }
-    index.finalize();
-    index
+pub fn build_reference_index(model: &PureModel) -> ReferenceIndex {
+    let discovered = discovered_ide_extensions();
+    build_reference_index_with_ide_extensions(model, &discovered)
 }
 
 fn walk_element_references(
@@ -393,7 +382,8 @@ fn stereotype_decl_span(profile_element: &Element, name: &SmolStr) -> Option<Sou
         return None;
     };
     let decl = profile.stereotypes.iter().find(|n| &n.value == name)?;
-    if decl.source_info.source.as_str() == crate::nodes::profile::BOOTSTRAP_SOURCE {
+    if decl.source_info.source.as_str() == legend_pure_parser_pure::nodes::profile::BOOTSTRAP_SOURCE
+    {
         return None;
     }
     Some(decl.source_info.clone())
@@ -656,7 +646,8 @@ fn tag_decl_span(profile_element: &Element, name: &SmolStr) -> Option<SourceInfo
         return None;
     };
     let decl = profile.tags.iter().find(|n| &n.value == name)?;
-    if decl.source_info.source.as_str() == crate::nodes::profile::BOOTSTRAP_SOURCE {
+    if decl.source_info.source.as_str() == legend_pure_parser_pure::nodes::profile::BOOTSTRAP_SOURCE
+    {
         return None;
     }
     Some(decl.source_info.clone())
@@ -723,7 +714,9 @@ fn enum_value_decl_span(
     // navigation (`$some_enum_var.A`) isn't covered here — that'd
     // need the receiver's `type_info`, which the user-facing flow
     // doesn't exercise today.
-    let crate::types::ExprKind::PackageableElementRef { element } = &*receiver.kind else {
+    let legend_pure_parser_pure::types::ExprKind::PackageableElementRef { element } =
+        &*receiver.kind
+    else {
         return None;
     };
     let Element::Enumeration(enum_def) = model.try_get_element(*element)? else {
