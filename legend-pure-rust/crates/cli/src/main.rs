@@ -31,6 +31,22 @@ mod diagnostics;
 mod discovery;
 mod live;
 
+// Force-link the runtime-extension crates so their
+// `#[distributed_slice]` registrations end up in the final binary.
+// Without these, the linker is free to drop the entire crate object
+// file (no reachable code → no contribution to RUNTIME_EXTENSIONS /
+// DSL_POPULATORS / etc.). The `discovery_smoke` integration test in
+// `crates/runtime/tests/` demonstrates the same pattern.
+//
+// Downstream consumers building their own CLI binaries must follow
+// the same recipe — see `docs/extensions/downstream-recipe.md`.
+#[allow(unused_imports)]
+use legend_pure_dsl_mapping_runtime::MappingDSLPopulator as _;
+#[allow(unused_imports)]
+use legend_pure_dsl_relational_runtime::RelationalDatabaseDSLPopulator as _;
+#[allow(unused_imports)]
+use legend_pure_store_relational_runtime::RelationalStoreExtension as _;
+
 use clap::{Parser, Subcommand};
 
 /// The Legend CLI — parse, compile, test, and publish Pure models.

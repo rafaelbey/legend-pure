@@ -11,11 +11,70 @@ Cargo dependencies. The in-tree DSLs under `crates/dsl-*` are the
 worked references; this guide shows how to follow the same patterns
 from a sibling crate.
 
-> **Status:** the library-level extension SPI is stable. CLI-level
-> wiring still requires you to build your own binary that calls
-> `Evaluator::new_default_with_extensions(...)` directly — the stock
-> `legend` CLI does not yet accept a `--extensions` flag. See
-> [Gaps and roadmap](#gaps-and-roadmap) at the end.
+> **Status:** the library SPI and discovery layer are stable. Each
+> trait — `RuntimeExtension`, `CompilerExtension`, `SectionParser`,
+> `IslandParser`, `DSLPopulator`, `IdeExtension` — has a `linkme`
+> distributed slice; your extension annotates a `static` next to its
+> trait impl and any binary that pulls your crate in as a Cargo
+> dependency picks it up automatically. Stateful `CompilerExtension`s
+> still need explicit wiring (see §5 for the carve-out).
+
+---
+
+## 0. Quick start
+
+The 30-second version. Suppose you're adding a single native function
+called `greet`:
+
+```toml
+# Cargo.toml
+[dependencies]
+legend-pure-runtime = "<version>"
+linkme              = "0.3"
+```
+
+```rust
+// src/lib.rs
+use legend_pure_runtime::native::{
+    EvalContextTrait, Evaluated, NativeFunction, NativeRegistry,
+    RUNTIME_EXTENSIONS, RuntimeExtension, expect_args, force_all,
+};
+use legend_pure_runtime::error::PureException;
+use legend_pure_runtime::value::Value;
+use legend_pure_parser_pure::types::ValueSpec;
+use linkme::distributed_slice;
+
+#[derive(Debug)]
+struct Greet;
+
+impl NativeFunction for Greet {
+    fn execute(
+        &self, args: &[ValueSpec], ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        expect_args("mydsl::greet", args, 1)?;
+        let v = force_all(args, ctx)?;
+        let name = v[0].as_string()?;
+        Ok(Evaluated::new(Value::String(format!("hello, {name}").into())))
+    }
+    fn signature(&self) -> &'static str { "greet(String[1]): String[1]" }
+}
+
+pub struct GreetExtension;
+impl RuntimeExtension for GreetExtension {
+    fn name(&self) -> &'static str { "greet-extension" }
+    fn register_natives(&self, r: &mut NativeRegistry) {
+        r.register("greet_String_1__String_1_", Greet);
+    }
+}
+
+#[distributed_slice(RUNTIME_EXTENSIONS)]
+static GREET_EXT: &(dyn RuntimeExtension + Sync) = &GreetExtension;
+```
+
+That's it. Any consumer binary that depends on this crate and includes
+**one forcing import** (see [Link forcing](#link-forcing-important)
+below) picks up `greet` via `NativeRegistry::discovered()` or
+`Evaluator::builder().build(&model)` — no per-binary slice juggling.
 
 ---
 
@@ -37,13 +96,26 @@ A native-only extension (no new syntax, just new functions) needs only
 `SectionParser` + `CompilerExtension` + `DSLPopulator`, and ships a
 sibling `RuntimeExtension` if it adds natives.
 
+There is a sixth surface — `IdeExtension` (`crates/pure/src/refs.rs`)
+— for contributing IDE references (go-to-definition, find-usages).
+It's a separate, self-discoverable trait. In-tree DSLs still expose
+their `walk_references` via `CompilerExtension::walk_references`
+today; migration onto `IdeExtension` follows the state-into-model
+lift described in §5.
+
 In-tree templates this guide cites verbatim:
 
-- `crates/store-relational-runtime/` — `RuntimeExtension`
+- `crates/store-relational-runtime/src/extension.rs` — `RuntimeExtension`
+  with `#[distributed_slice(RUNTIME_EXTENSIONS)]`
 - `crates/dsl-relational/src/parser.rs` — `SectionParser`
 - `crates/dsl-relational/src/compiler.rs` — `CompilerExtension`
-- `crates/dsl-relational-runtime/src/lib.rs` — `DSLPopulator`
-- `crates/cli/src/commands/test.rs` — the runtime wiring exemplar (`NativeRegistry::with_extensions(&[&relational_ext])` + populator setup)
+- `crates/dsl-mapping-runtime/src/lib.rs` and
+  `crates/dsl-relational-runtime/src/lib.rs` — `DSLPopulator` with
+  `#[distributed_slice(DSL_POPULATORS)]`
+- `crates/cli/src/main.rs` — the canonical force-link recipe
+- `crates/cli/src/commands/test.rs` — the runtime wiring exemplar
+  (`NativeRegistry::discovered()` + `discovered_populators()` —
+  no per-extension slice in the command body)
 
 ---
 
@@ -74,13 +146,16 @@ mydsl-pure-extension/
 [dependencies]
 legend-pure-runtime       = "<version>"   # NativeRegistry, Evaluator, DSLPopulator
 legend-pure-pure          = "<version>"   # CompilerExtension, PureModel, Element
-legend-pure-parser        = "<version>"   # ParserContext, SectionParser, IslandParser
+legend-pure-parser-parser = "<version>"   # ParserContext, SectionParser, IslandParser
 legend-pure-parser-ast    = "<version>"   # DSLElement, Expression, SourceInfo
 legend-pure-parser-pure   = "<version>"   # ValueSpec, type system
 smol_str                  = "0.3"
+linkme                    = "0.3"          # distributed-slice self-registration
 ```
 
-Add `clap` + `miette` if you ship your own CLI binary (see §9).
+Add `legend-cli` if you want to inherit its `main()` dispatcher
+(recommended — see §8). Add `clap` + `miette` only if you write a
+bespoke binary.
 
 > **Today**: these crates are not yet published to crates.io. While you
 > build against this repo, use `path = "../legend-pure-rust/crates/<name>"`
@@ -146,12 +221,24 @@ The pattern mirrors
 exactly — including the convention of one zero-sized type per native so
 dispatch never probes argument shape positionally.
 
-**Wiring**: pass it through `NativeRegistry::with_extensions`:
+**Wiring** — register the static next to the impl:
 
 ```rust
-let registry = NativeRegistry::with_extensions(&[&MyExtension]);
-let mut evaluator = Evaluator::new_default(&model, &registry);
+use legend_pure_runtime::native::RUNTIME_EXTENSIONS;
+use linkme::distributed_slice;
+
+#[distributed_slice(RUNTIME_EXTENSIONS)]
+static MY_EXT: &(dyn RuntimeExtension + Sync) = &MyExtension;
 ```
+
+That's all the registration. Any consumer binary using
+`NativeRegistry::discovered()` or `Evaluator::builder().build(&model)`
+picks it up automatically — provided the consumer adds the link-forcing
+import described in [§8.1 Link forcing](#link-forcing-important).
+
+The explicit alternative — `NativeRegistry::with_extensions(&[&MyExtension])`
+— remains for tests that compose a deliberate native set, or for
+embedders that want to suppress discovered registrations.
 
 ### Eager vs. short-circuit natives
 
@@ -181,10 +268,16 @@ connection per evaluator. Process-wide state needs a different
 mechanism (see `store-relational-runtime::set_extension_configs` for one
 example).
 
-> **Gap today**: the stock `legend` CLI hard-codes the in-tree
-> extensions in `crates/cli/src/commands/test.rs`. To use your
-> extension you must build your own CLI binary (§9). Tracked in the
-> plan as item B2.
+### Sync requirement
+
+The `RUNTIME_EXTENSIONS` slice stores `&'static (dyn RuntimeExtension + Sync)`
+because the slice is a `static` and `Sync` is required for `static`
+items shared across threads. Stateless unit structs
+(`pub struct MyExtension;`) are `Sync` automatically. Stateful
+extensions that need interior mutability must use thread-safe
+primitives (`Mutex`, `RwLock`, atomics) or move per-evaluator state
+into [`ExtensionStateStore`](#per-evaluator-state) as the section
+above shows.
 
 ---
 
@@ -195,7 +288,7 @@ CLI parallelises file parsing via Rayon — keep your parser stateless
 (zero-sized struct is ideal).
 
 ```rust
-use legend_pure_parser::{ParserContext, SectionParser, error::ParseError};
+use legend_pure_parser_parser::{ParserContext, SectionParser, error::ParseError};
 use legend_pure_parser_ast::dsl::DSLElement;
 
 pub struct MyDslSectionParser;
@@ -233,7 +326,7 @@ inside a Pure expression (graph fetch trees, path expressions, embedded
 SQL):
 
 ```rust
-use legend_pure_parser::{ParserContext, IslandParser, error::ParseError};
+use legend_pure_parser_parser::{ParserContext, IslandParser, error::ParseError};
 use legend_pure_parser_ast::island::IslandContent;
 
 pub struct MyIslandParser;
@@ -254,7 +347,7 @@ impl IslandParser for MyIslandParser {
 **Wiring** — both go through the parser entry points:
 
 ```rust
-use legend_pure_parser::{parse_with_islands, parse_with_sections};
+use legend_pure_parser_parser::{parse_with_islands, parse_with_sections};
 
 let islands: Vec<Box<dyn IslandParser>> = vec![Box::new(MyIslandParser)];
 let sections: Vec<Box<dyn SectionParser>> = vec![Box::new(MyDslSectionParser)];
@@ -262,10 +355,26 @@ let sections: Vec<Box<dyn SectionParser>> = vec![Box::new(MyDslSectionParser)];
 let (file, errors) = parse_with_sections(source, "file.pure", &islands, &sections);
 ```
 
-> **Gap today**: there is no automatic discovery (no `inventory` /
-> `linkme` registration). You construct these slices explicitly in
-> your binary. Cited as a possible future enhancement, not on the
-> short-term roadmap.
+**Wiring** — register the parser statics next to the impls:
+
+```rust
+use legend_pure_parser_parser::island::{IslandParser, ISLAND_PARSERS};
+use legend_pure_parser_parser::section_parser::{SectionParser, SECTION_PARSERS};
+use linkme::distributed_slice;
+
+#[distributed_slice(SECTION_PARSERS)]
+static MY_SECTION: &(dyn SectionParser + Send + Sync) = &MyDslSectionParser;
+
+#[distributed_slice(ISLAND_PARSERS)]
+static MY_ISLAND: &(dyn IslandParser + Send + Sync) = &MyIslandParser;
+```
+
+Any consumer using `legend_pure_parser_parser::parse(src, name)`
+picks up both. The explicit `parse_with_islands` / `parse_with_sections`
+calls remain for tests that compose plugin sets by hand.
+
+Discovery validates at startup: two parsers with the same `tag()` or
+`kind()` panic with both source extensions named.
 
 ---
 
@@ -314,6 +423,55 @@ struct) and `:426` (the trait impl). The relational extension overrides
 `declare` and `validate`; Mapping additionally overrides
 `define_bodies` for property-mapping bodies.
 
+### Stateless vs. stateful: the discovery carve-out
+
+The `COMPILER_EXTENSIONS` distributed slice stores
+`&'static (dyn CompilerExtension + Sync)`. A stateless unit struct
+(`pub struct MyDslExtension;`) registers with one line:
+
+```rust
+use legend_pure_pure::extension::COMPILER_EXTENSIONS;
+use linkme::distributed_slice;
+
+#[distributed_slice(COMPILER_EXTENSIONS)]
+static MY_DSL_EXT: &(dyn CompilerExtension + Sync) = &MyDslExtension;
+```
+
+**A `CompilerExtension` that holds `RefCell`-backed per-compile state
+cannot self-register** — `RefCell` isn't `Sync`. The in-tree
+`RelationalExtension` and `MappingExtension` fall in this bucket today
+(they accumulate `databases` / `mappings` RefCells across `declare`
+and `validate`). Those extensions stay explicit callers of
+[`compile_with_extensions`](https://docs.rs/legend-pure-pure/0.1/legend_pure_pure/pipeline/fn.compile_with_extensions.html)
+until their state migrates into `Element::DSLInstance` (see §6) and
+the struct becomes a unit type.
+
+If your DSL needs per-compile state, two clean shapes work:
+
+1. **Put the state in the model.** Use `Element::DSLInstance` (§6) as
+   the source of truth. `declare` writes; `validate` and downstream
+   reads pull from the model. The extension struct stays stateless and
+   self-registers.
+2. **Stay explicit.** Construct a fresh `MyDslExtension` per compile,
+   pass it through `compile_with_extensions(&chunks, &[&ext])`. You
+   give up auto-discovery in exchange for the simpler shape — the
+   plan accepts this trade-off for the existing in-tree DSLs.
+
+### Ordering: `depends_on`
+
+When extension B's `declare` reads model state extension A wrote *in
+the same pass*, declare the dependency:
+
+```rust
+impl CompilerExtension for MyDslExtension {
+    fn name(&self) -> &'static str { "mydsl" }
+    fn depends_on(&self) -> &'static [&'static str] { &["RelationalExtension"] }
+}
+```
+
+`discovered_compiler_extensions()` runs a Kahn topological sort and
+panics on cycles with the cycle path in the message.
+
 ### Validating embedded user expressions
 
 When your DSL accepts a user-written Pure expression (a filter
@@ -338,15 +496,17 @@ appends any errors to your accumulator. See
 `crates/pure/src/extension.rs:211-268` for full semantics including
 limitations around generic type parameters.
 
-**Wiring**:
+**Wiring** — production default uses discovery, tests use explicit:
 
 ```rust
-use legend_pure_pure::pipeline::compile_with_extensions;
+use legend_pure_pure::pipeline::{compile, compile_with_extensions};
 
-let model = compile_with_extensions(
-    chunks,
-    &[&MyDslExtension],
-)?;
+// Production (default): discovers + topo-sorts every CompilerExtension
+// registered via #[distributed_slice(COMPILER_EXTENSIONS)] in linked crates.
+let model = compile(chunks, &auto_imports)?;
+
+// Tests / stateful extensions: explicit composition.
+let model = compile_with_extensions(chunks, &auto_imports, &[&MyDslExtension])?;
 ```
 
 ---
@@ -423,61 +583,100 @@ impl DSLPopulator for MyDslPopulator {
 Template: `crates/dsl-relational-runtime/src/lib.rs:88-203`
 (`RelationalDatabaseDSLPopulator`).
 
+**Wiring** — register next to the impl:
+
+```rust
+use legend_pure_runtime::dsl::DSL_POPULATORS;
+use linkme::distributed_slice;
+
+#[distributed_slice(DSL_POPULATORS)]
+static MY_DSL_POP: &(dyn DSLPopulator + Sync) = &MyDslPopulator;
+```
+
 Note the runtime walks populators in **chunk-element order**, so a
 populator can depend on rows allocated by an earlier-running populator
 in the same evaluator. The relational stack relies on this for
 `RelationalClassMappingDSLPopulator` to find Table rows that
-`RelationalDatabaseDSLPopulator` allocated first.
+`RelationalDatabaseDSLPopulator` allocated first. The order is driven
+by the compiler's `declare` hook (which decides element-emission
+order), not by the populator slice order — slice order only matters
+for tie-breaking among populators handling the same `dsl_name`, which
+is forbidden anyway (`discovered_populators()` panics on duplicates).
 
 ---
 
 ## 8. Wiring it together — the minimal custom binary
 
-Until the stock `legend` CLI grows extension flags, you ship your own
-binary. The full wiring lifts directly from
-`crates/cli/src/commands/test.rs:316-340`:
+With every trait surface self-registering, the consumer binary is one
+helper call plus the **link-forcing imports** that ensure the linker
+doesn't drop your extension crates.
 
 ```rust
-use legend_pure_runtime::dsl::{run_populators, DSLPopulator};
-use legend_pure_runtime::eval::Evaluator;
-use legend_pure_runtime::native::NativeRegistry;
-use legend_pure_parser::{parse_with_sections, parse_with_islands};
-use legend_pure_pure::pipeline::compile_with_extensions;
+// src/main.rs
+
+// 1. Force-link your extension crates. Without these `use` lines
+//    the linker is free to drop the entire crate object file (no
+//    reachable code → no contribution to the distributed slices).
+//    This is the only per-binary wiring step that remains.
+#[allow(unused_imports)]
+use mydsl::GreetExtension as _;
+#[allow(unused_imports)]
+use mydsl::MyDslSectionParser as _;
+#[allow(unused_imports)]
+use mydsl::MyDslPopulator as _;
 
 fn main() -> anyhow::Result<()> {
-    // 1. Parse with your section + island parsers.
-    let sections = vec![Box::new(mydsl::MyDslSectionParser) as Box<_>];
-    let islands  = vec![Box::new(mydsl::MyIslandParser)     as Box<_>];
-    let (parsed_file, parse_errors) = parse_with_sections(
-        &source, "input.pure", &islands, &sections,
-    );
-
-    // 2. Compile with your CompilerExtension.
-    let model = compile_with_extensions(
-        chunks_from(parsed_file),
-        &[&mydsl::MyDslExtension],
-    )?;
-
-    // 3. Build a native registry that includes your extension.
-    let registry = NativeRegistry::with_extensions(&[&mydsl::MyExtension]);
-
-    // 4. Construct the evaluator and run your populators.
-    let mut evaluator = Evaluator::new_default(&model, &registry);
-    let populators: &[&dyn DSLPopulator] = &[&mydsl::MyDslPopulator];
-    run_populators(&model, evaluator.heap_mut(), populators);
-
-    // 5. Drive evaluation.
-    let result = evaluator.evaluate_fqn("mydsl::tests::run__Boolean_1_", &[])?;
-    println!("{:?}", result);
-    Ok(())
+    // 2. Hand off to the stock CLI dispatcher; everything else flows
+    //    through discovery.
+    legend_cli::main()
 }
 ```
 
-> **Gap today**: every external consumer copies this skeleton. Plan
-> item B2 will extract a `legend_pure_cli::run_with_extensions(...)`
-> helper so your `main.rs` shrinks to ~10 lines and inherits the
-> stock CLI's subcommand dispatch, classpath handling, and exit
-> codes.
+That's it. The stock `legend` CLI's command set (`parse`, `check`,
+`test`, `run`, `repl`, …) all dispatch through
+`NativeRegistry::discovered()`, `pipeline::compile()` (discovered
+`CompilerExtension`s), `parse()` (discovered parsers), and
+`Evaluator::builder().build()` (discovered populators). Your extension
+flows into all of them automatically.
+
+### Link forcing (important)
+
+`linkme` distributed slices live in dedicated linker sections. The
+sections are populated by the *static* declarations
+(`#[distributed_slice(FOO)] static MY_X: …`) — but **only if the
+containing crate is actually linked into the final binary**. Rust's
+linker is allowed to drop crate object files entirely when nothing in
+your binary references them.
+
+The simple rule: in your binary's `main.rs`, add one `use foo::Item as _;`
+line per extension crate. Any name from the crate will do — the
+import's purpose is to make the linker keep the crate, not to use the
+item. The `#[allow(unused_imports)]` silences the dead-import warning.
+
+The in-tree `crates/cli/src/main.rs` follows the same pattern for the
+relational extension and the three DSL populators. Mirror it for your
+own crates.
+
+### Constructing an evaluator outside the CLI
+
+If you're embedding the evaluator in a service or test harness rather
+than shipping a CLI binary:
+
+```rust
+use legend_pure_runtime::eval::Evaluator;
+
+// Defaults: discovered native registry + discovered DSL populators.
+let evaluator = Evaluator::builder().build(&model);
+
+// Or override individual knobs for tests:
+let evaluator = Evaluator::builder()
+    .registry(&my_explicit_registry)
+    .populators(&[&MyTestPopulator])
+    .build(&model);
+```
+
+The same force-link rule applies — your embedder binary must `use`
+something from each extension crate it wants discovered.
 
 ---
 
@@ -503,12 +702,14 @@ The CLI top-level `--classpath <path>` flag is wired through
 resolver lives at `crates/cli/src/classpath.rs:`
 `resolve_classpath(path, cwd) -> ResolvedClasspath { repos, extra_auto_imports, extension_configs }`.
 
-> **Gap today**: subcommand bodies still discard the resolved
-> classpath (`crates/cli/src/commands/test.rs:186`: `let _ = classpath;`),
-> so the stock CLI ignores it for most commands. Until plan item B1
-> lands, build your own binary that calls
-> `legend_cli::classpath::resolve_classpath` directly and feeds the
-> result into `compile_with_extensions` and your evaluator setup.
+> **In flight**: most CLI subcommands still discard the resolved
+> classpath (`crates/cli/src/commands/test.rs:186`: `let _ = classpath;`)
+> while the receiving call sites are migrated to the builder. The
+> top-level `--classpath` flag is already plumbed; subcommand bodies
+> just need to call `crate::classpath::resolve_classpath(...)` and
+> thread the result into `Evaluator::builder()` / `pipeline::compile()`.
+> Tracked as item 4 in the [Gaps and roadmap](#gaps-and-roadmap) at
+> the end of this doc.
 
 ---
 
@@ -551,10 +752,11 @@ Two options, simplest first:
   binary that pulls your `MyExtension` + `MyDslExtension` and
   combines them with other extensions.
 
-> **Gap today**: there is no in-tree publishing template or
-> "downstream extension cookiecutter". Once the example crate at
-> `legend-pure-rust/examples/mydsl-extension/` lands (plan item B5)
-> it serves as the runnable template.
+> **In flight**: there is no in-tree publishing template /
+> "downstream extension cookiecutter" yet. The
+> `examples/mydsl-extension/` crate (item 5 in [Gaps and
+> roadmap](#gaps-and-roadmap)) will serve as the runnable template
+> once it lands.
 
 ---
 
@@ -566,9 +768,9 @@ else is best-effort backwards-compatible.
 
 | Crate | Public surface |
 |---|---|
-| `legend-pure-runtime` | `native::{NativeFunction, NativeRegistry, RuntimeExtension, ExtensionStateStore}`, `value::Value`, `eval::{Evaluator, EvalContextTrait, Evaluated}`, `heap::{RuntimeHeap, ObjectHandle}`, `dsl::{DSLPopulator, DSLPopulationCtx, run_populators}`, `error::{PureException, PureRuntimeError}` |
-| `legend-pure-pure` | `model::{PureModel, Element, DSLInstance}`, `extension::{CompilerExtension, DeclareCtx, DefineCtx, ValidateCtx, lower_and_infer_expression}`, `pipeline::compile_with_extensions`, `refs::Reference`, `types::{TypeExpr, Multiplicity, ResolvedType, Parameter}` |
-| `legend-pure-parser` | `ParserContext`, `IslandParser`, `SectionParser`, `parse_with_islands`, `parse_with_sections`, `error::ParseError` |
+| `legend-pure-runtime` | `native::{NativeFunction, NativeRegistry, RuntimeExtension, RUNTIME_EXTENSIONS, ExtensionStateStore}`, `value::Value`, `eval::{Evaluator, EvalContextTrait, Evaluated}`, `builder::EvaluatorBuilder`, `heap::{RuntimeHeap, ObjectHandle}`, `dsl::{DSLPopulator, DSLPopulationCtx, DSL_POPULATORS, discovered_populators, run_populators}`, `error::{PureException, PureRuntimeError}` |
+| `legend-pure-pure` | `model::{PureModel, Element, DSLInstance}`, `extension::{CompilerExtension, COMPILER_EXTENSIONS, discovered_compiler_extensions, DeclareCtx, DefineCtx, ValidateCtx, lower_and_infer_expression}`, `pipeline::{compile, compile_with_extensions}`, `refs::{Reference, IdeExtension, IDE_EXTENSIONS, discovered_ide_extensions, build_reference_index, build_reference_index_with_ide_extensions}`, `types::{TypeExpr, Multiplicity, ResolvedType, Parameter}` |
+| `legend-pure-parser-parser` | `ParserContext`, `IslandParser`, `ISLAND_PARSERS`, `discovered_island_parsers`, `SectionParser`, `SECTION_PARSERS`, `discovered_section_parsers`, `parse`, `parse_with_islands`, `parse_with_sections`, `error::ParseError` |
 | `legend-pure-parser-ast` | `dsl::DSLElement`, `island::IslandContent`, `expression::Expression`, `section::SourceFile`, `SourceInfo`, derive macros |
 | `legend-pure-parser-pure` | `model::PureModel`, `types::{ValueSpec, ExprKind}` |
 
@@ -576,29 +778,46 @@ else is best-effort backwards-compatible.
 
 ## Gaps and roadmap
 
-Today's recipe leans on a custom binary because two CLI integration
-items haven't landed yet. The Phase-B plan at
-`~/.claude/plans/how-will-be-the-hashed-sparkle.md` sequences them:
+The discovery infrastructure and the in-tree stateless extension
+self-registrations have landed; the CLI flows through
+`NativeRegistry::discovered()` and `discovered_populators()`. The
+known remaining items, with the smallest first:
 
-1. **B1 — Consume the wired `--classpath` arg** (size S). Subcommand
-   bodies stop discarding the resolved classpath and feed it into
-   compile/load. Unblocks `legend test --classpath …` for downstream
-   repos that ship `.purem` snapshots.
-2. **B2 — Factor out `legend_pure_cli::run_with_extensions(...)`**
-   (size L). Lets your `main.rs` shrink to ~10 lines and inherit
-   subcommand dispatch.
-3. **B3 — Repo descriptors + manifest** (size M, already BACKLOG P1).
-   Replaces hand-listed paths with a Java-Pure-style
-   `repo.definition.json` schema.
-4. **B4 — Visibility audit** (size XS). Resolves the duplicate
-   `parse_qualified_name` declaration at
-   `crates/parser/src/parser/mod.rs:324` / `:434` and confirms every
-   `pub(crate)` symbol the example crate reaches for is promoted.
-5. **B5 — Worked example crate** (size M). A runnable
-   `examples/mydsl-extension/` that this recipe cross-references and
-   that CI builds, so the recipe never goes stale.
+1. **Stateful `CompilerExtension` migration**. `MappingExtension`,
+   `RelationalExtension`, `DiagramExtension` hold `RefCell`-backed
+   per-compile state today and can't satisfy the `Sync` bound the
+   distributed slice requires. Lift the state into
+   `Element::DSLInstance` (Diagram is already there for its primary
+   payload — Mapping / Relational still write the registry side too)
+   so the structs become unit types and can self-register. Tracked as
+   "Phase 3 FULL" in
+   `~/.claude/plans/how-will-be-the-hashed-sparkle.md`.
+2. **`IdeExtension` migration of `walk_references`**. Blocked on item
+   1; once the stateful `CompilerExtension`s self-register, their
+   `walk_references` impls move into companion stateless
+   `IdeExtension` impls and the legacy hook can be removed from
+   `CompilerExtension`. Tracked as "Phase 2".
+3. **Evaluator extension-config flow** (`Phase 4`).
+   `EvaluatorBuilder::extension_configs(toml)` → `ExtensionStateStore::get_config::<T>(...)`
+   gives extensions a per-evaluator configuration channel.
+   `store-relational-runtime::set_extension_configs` (a process-wide
+   `OnceLock`) goes away — restores test isolation between concurrent
+   evaluators.
+4. **CLI `--classpath` consumption** (`Phase 5` continuation).
+   `crates/cli/src/main.rs:140-153` already threads the flag through;
+   subcommand bodies (`test.rs:186` is the prototype) need to call
+   `crate::classpath::resolve_classpath(...)` and feed the resolved
+   repos / `extension_configs` into the builder.
+5. **Worked example crate** (`Phase 6`). `examples/mydsl-extension/`
+   outside the workspace, demonstrating the full discovery path.
+   CI-built so the recipe never goes stale.
+6. **Repo descriptors + manifest** (`Phase B3`, existing BACKLOG P1).
+   Independent of the discovery work — Java-Pure-style
+   `repo.definition.json` schema replacing the hand-listed paths in
+   `crates/core-platform-pure/build.rs`.
 
-Until those land, the in-tree DSLs (`crates/dsl-relational/`,
-`crates/dsl-mapping/`, `crates/dsl-diagram/`) are the only source of
-truth for the extension surface, and external consumers walk the same
-trait shapes from a sibling crate.
+Until items 1 & 2 land, external consumers can still self-register
+*stateless* `CompilerExtension`s, `SectionParser`s, `IslandParser`s,
+`RuntimeExtension`s, and `DSLPopulator`s. Stateful
+`CompilerExtension`s use the explicit
+`compile_with_extensions(&chunks, &[&ext])` path.

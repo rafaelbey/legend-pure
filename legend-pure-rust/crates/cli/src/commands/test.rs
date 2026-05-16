@@ -313,30 +313,23 @@ fn run_once(
         }
     };
 
-    // Pull in the relational-store extension so platform tests that
-    // exercise `executeInDb` / `loadCsv*` / fetch* metadata natives can
-    // route through the DuckDB-backed bodies. Each Evaluator built below
-    // gets its own DuckDB connection through `ExtensionStateStore`; no
-    // process-wide state.
-    let relational_ext = legend_pure_store_relational_runtime::RelationalStoreExtension;
-    let registry = NativeRegistry::with_extensions(&[&relational_ext]);
-
-    // DSL populators hydrate `Element::DSLInstance` heap rows (e.g. the
-    // Database/Schema/Table chain a `###Relational` block produces) so
-    // Pure tests can navigate them reflectively. Without this wiring,
-    // `let tbl = mydb.schemas->at(0).tables->at(0)` returns empty.
-    let mapping_pop = legend_pure_dsl_mapping_runtime::MappingDSLPopulator;
-    let database_pop = legend_pure_dsl_relational_runtime::RelationalDatabaseDSLPopulator;
-    let class_mapping_pop = legend_pure_dsl_relational_runtime::RelationalClassMappingDSLPopulator;
-    let populators: &[&dyn legend_pure_runtime::dsl::DSLPopulator] =
-        &[&mapping_pop, &database_pop, &class_mapping_pop];
+    // Discover every `RuntimeExtension` and `DSLPopulator` linked into
+    // this binary via the `#[distributed_slice]` registrations in
+    // their owning crates (see `crates/cli/src/main.rs` for the
+    // force-link `use` statements that ensure the linker doesn't drop
+    // the registrations). The platform standard set + the relational
+    // store DuckDB-backed natives + the Mapping/Database/ClassMapping
+    // populators all land in the same `discovered()` call — no
+    // per-extension wiring in this command body.
+    let registry = NativeRegistry::discovered();
+    let populators = legend_pure_runtime::dsl::discovered_populators();
 
     if args.coverage {
         // Coverage path — use CoverageHooks.
         let mut hooks = CoverageHooks::new(args.coverage_filter.clone());
         hooks.map_mut().populate_coverable(&model);
         let mut evaluator = Evaluator::with_hooks(&model, &registry, hooks);
-        legend_pure_runtime::dsl::run_populators(&model, evaluator.heap_mut(), populators);
+        legend_pure_runtime::dsl::run_populators(&model, evaluator.heap_mut(), &populators);
 
         let (report, fail) = run_tests(&model, &mut evaluator, args)?;
         match args.format {
@@ -378,7 +371,7 @@ fn run_once(
     } else {
         // Production path — zero-overhead NoOpHooks.
         let mut evaluator = Evaluator::new(&model, &registry);
-        legend_pure_runtime::dsl::run_populators(&model, evaluator.heap_mut(), populators);
+        legend_pure_runtime::dsl::run_populators(&model, evaluator.heap_mut(), &populators);
         let (report, fail) = run_tests(&model, &mut evaluator, args)?;
         match args.format {
             TestFormat::Pretty => report.render(&model, args.show_detail),
