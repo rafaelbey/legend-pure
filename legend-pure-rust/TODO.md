@@ -633,7 +633,7 @@ available) and server start time so:
 <!-- Agents: append entries below. Do not rewrite the developer block above. -->
 <!-- agent-audit:end -->
 
-### T-20260513-01 — MCP / LSP: render_fqn returns mangled function names, blocking run_pct/run_test
+### T-20260513-04 — MCP / LSP: render_fqn returns mangled function names, blocking run_pct/run_test
 
 - **Type:** bug
 - **Area:** mcp | lsp | runtime

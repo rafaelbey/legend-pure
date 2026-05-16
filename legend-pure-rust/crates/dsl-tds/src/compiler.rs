@@ -24,10 +24,11 @@
 //!    must resolve to a Class, `PrimitiveType`, or Enumeration in the
 //!    [`PureModel`].
 //!
-//! Lowering of the island into a real [`PureModel`] value is
-//! deferred — the core lowering pass still reports
-//! `UnsupportedExpression { kind: "Island" }`. This commit
-//! implements *validation* only.
+//! Lowering into a [`PureModel`] value lives in `crate::lower::TDSIslandLowerer`,
+//! which the core lowering pass dispatches via the [`IslandLowerer`]
+//! plug-in registry (`crate::lower::default_island_lowerers`). This
+//! `compiler` module handles validation only; the lowering pair-trip is
+//! covered by `crate::lower`.
 
 use legend_pure_parser_ast::SourceFile;
 use legend_pure_parser_ast::element::Element as AstElement;

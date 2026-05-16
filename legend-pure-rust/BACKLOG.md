@@ -14,7 +14,7 @@ in its crate directory; this file provides the high-level view.
 | Parser | ✅ Complete | 0 | ~400+ | Full grammar coverage |
 | Compiler | ✅ Platform clean | **0** | 117 lib + ~180 integration | 244 files / ~1660 elements (M3 + Store + Mapping + Diagram + Graph + TDS + **Relational** DSL metamodels) |
 | Runtime | ✅ Surveyor 246/0/0; PCT 465/465 | N/A | 357 lib + 71 eval + 246 surveyor | PCT broad-canary at 100% with 9 manifest exclusions |
-| CLI | 🚧 Partial | N/A | ~20+ | 8/11 commands; `legend test --pct` defaults to bundled `pct_grammar_rust_native.json` exclusions |
+| CLI | ✅ Shipped | N/A | ~20+ | All 16 subcommands implemented; `legend test --pct` defaults to bundled `pct_grammar_rust_native.json` exclusions |
 | Java codegen | ✅ v1 | N/A | 16 | `legend java-bindings` + proxy runtime; hand-written `Any` as universal proxy supertype |
 | **Total** | | **0** | **~1500+** | |
 
@@ -175,8 +175,10 @@ checks; drop the flag for full statistical-strength baselines (~5min).
 ## CLI (`crates/cli`)
 
 ### Implemented ✅
-`parse`, `check`, `init`, `version`, `completions`, `emit`, `test`,
-`java-bindings`
+All 16 subcommands wired in `crates/cli/src/main.rs`:
+`parse`, `emit`, `compile`, `check`, `lsp`, `dap`, `mcp`, `test`,
+`run`, `coverage`, `init`, `java-bindings`, `completions`, `repl`,
+`snapshot`, `version`.
 
 `legend test --pct` runs the platform PCT suite. By default it loads
 `crates/runtime/resources/pct_grammar_rust_native.json` and applies the
@@ -190,14 +192,11 @@ substitutes another manifest.
 |------|----------|-------|
 | `legend run <fqn>` is workspace-blind | P2 | The subcommand evaluates `fqn` against the embedded platform only — there's no `--classpath` plumbing, so any user-defined FQN dies with `Function not found`. The IntelliJ ▶ gutter sidesteps this entirely by routing through the LSP's `workspace/executeCommand`, which evaluates against the LSP's compiled `PureModel` (open buffers + classpath cascade). Terminal users still need the CLI parity: thread `legend_cli::classpath::load_classpath` into `crates/cli/src/commands/run.rs` so `legend run --classpath <toml> <fqn>` resolves the same set of files the editor sees. Shares fix with the `--classpath` flag-wiring entry under "Parser → Open / Deferred". |
 
-### Stubs 🚧
-
-| Command | Priority | Blocked On |
-|---------|----------|------------|
-| `compile` | P1 | Compiler crate stabilization |
-| `plan` | P2 | Execution plan generation |
-| `package` | P2 | Compilation + artifact packaging |
-| `publish` | P3 | Package + registry upload |
+`plan` / `package` / `publish` were removed from the CLI surface on
+2026-05-16 (commit `e71a1ea0a`). Their stubs returned
+`CliError::NotImplemented` while advertising functionality that didn't
+exist; design context for when the prerequisites land lives in
+`docs/deferred/cli_{plan,package,publish}.md`.
 
 ---
 

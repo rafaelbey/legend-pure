@@ -30,10 +30,12 @@
 //! ```
 //!
 //! The metaclass at compile time is
-//! `meta::pure::metamodel::relation::TDS<T>` (see
-//! [`crate::compiler`], commit #14). For now the protocol shape
-//! preserves the parsed structure verbatim; compiler extension turns
-//! it into a `csv: String[1]` instance later.
+//! `meta::pure::metamodel::relation::TDS<T>` (resolved in
+//! [`crate::compiler`]). The protocol shape preserves the parsed
+//! structure verbatim — the compiler + lower modules turn it into
+//! the typed `TDS<T>` heap shape at compile time; protocol
+//! serialisation stays syntactic so the JSON survives without the
+//! compiled model in scope.
 //!
 //! Plug-in callers register via [`default_island_protocols`] when
 //! calling [`legend_pure_parser_protocol::dispatch_island_convert`].

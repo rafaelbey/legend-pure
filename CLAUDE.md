@@ -26,8 +26,11 @@ is the canonical platform definition consumed by **both** stacks.
 - **Runtime** — 🚧 Active. Tree-walking interpreter with ~50 native functions,
   persistent data structures (`im-rc`), RAII-driven `Rc<RefCell<HeapEntry>>`
   heap, lazy call stack. Passing platform PCT subset.
-- **CLI** — 🚧 Partial. 6 of 11 commands implemented (`parse`, `check`, `init`,
-  `version`, `completions`, `emit`). Stubs: `compile`, `test`, `plan`, `package`, `publish`.
+- **CLI** — ✅ Shipped. All 16 subcommands implemented (`parse`, `emit`,
+  `compile`, `check`, `lsp`, `dap`, `mcp`, `test`, `run`, `coverage`, `init`,
+  `java-bindings`, `completions`, `repl`, `snapshot`, `version`).
+  `plan` / `package` / `publish` were removed 2026-05-16; design context for
+  when their prerequisites land lives in `legend-pure-rust/docs/deferred/`.
 
 ### Java Stack — Maintenance Mode
 - Stable. All tests pass. Used by FINOS `legend-engine` as a compiled dependency.

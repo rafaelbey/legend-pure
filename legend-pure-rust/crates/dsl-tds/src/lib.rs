@@ -39,8 +39,9 @@
 //! ```
 //!
 //! The Java implementation uses Deephaven CSV parsing for the data
-//! rows; Rust port keeps the rows as raw strings until the
-//! [`compiler`] extension lands the typed lowering (commit #14).
+//! rows; the Rust port carries the rows as raw strings through parse
+//! and protocol conversion, and the [`compiler`] + [`lower`] modules
+//! produce the typed `TDS<T>` heap shape at lowering time.
 //!
 //! Crate layout:
 //!

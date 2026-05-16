@@ -16,8 +16,8 @@
 //!
 //! [`TDSExpr`] is the root content node implementing
 //! [`IslandContent`]. It captures the syntactic shape only — type
-//! resolution and CSV typing happen later in the [`crate::compiler`]
-//! pass (commit #14).
+//! resolution and CSV typing happen in [`crate::compiler`] and
+//! [`crate::lower`] respectively.
 
 use std::any::Any;
 
