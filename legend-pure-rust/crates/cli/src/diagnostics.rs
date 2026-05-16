@@ -46,14 +46,6 @@ pub enum CliError {
     #[error("JSON serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
-    /// A command is not yet implemented.
-    #[error("command '{command}' is not yet implemented: {description}. {reason}")]
-    NotImplemented {
-        command: &'static str,
-        description: &'static str,
-        reason: &'static str,
-    },
-
     /// A custom error message.
     #[error("{0}")]
     Custom(String),
@@ -70,28 +62,6 @@ pub enum CliError {
 /// Print a [`CliError`] to stderr with colored formatting.
 pub fn print_error(error: &CliError) {
     match error {
-        CliError::NotImplemented {
-            command,
-            description,
-            reason,
-        } => {
-            eprintln!();
-            eprintln!(
-                "  {} `legend {}` — {}",
-                "🚧".dimmed(),
-                command.yellow().bold(),
-                description
-            );
-            eprintln!();
-            eprintln!("  {}", reason.dimmed());
-            eprintln!();
-            eprintln!("  This feature is under development. Track progress at:");
-            eprintln!(
-                "  {}",
-                "https://github.com/finos/legend-engine".cyan().underline()
-            );
-            eprintln!();
-        }
         CliError::ParseErrors(_) | CliError::CompilationErrors(_) => {
             // Errors are already printed inline during processing.
             // Just print the summary here.

@@ -99,15 +99,6 @@ enum Commands {
     /// Merge and report on Pure code coverage
     Coverage(commands::coverage_cmd::CoverageArgs),
 
-    /// Generate an execution plan for a function or query
-    Plan(commands::plan::PlanArgs),
-
-    /// Parse, compile, and generate distributable artifacts
-    Package(commands::package::PackageArgs),
-
-    /// Package and publish artifacts to the depot repository
-    Publish(commands::publish::PublishArgs),
-
     /// Initialize a new Legend project
     Init(commands::init::InitArgs),
 
@@ -143,9 +134,6 @@ fn main() {
         Commands::Test(args) => commands::test::run(args, classpath),
         Commands::Run(args) => commands::run::run(args, classpath),
         Commands::Coverage(args) => commands::coverage_cmd::run(args),
-        Commands::Plan(args) => commands::plan::run(args),
-        Commands::Package(args) => commands::package::run(args),
-        Commands::Publish(args) => commands::publish::run(args),
         Commands::Init(args) => commands::init::run(args),
         Commands::JavaBindings(args) => commands::java_bindings::run(args),
         Commands::Completions(args) => commands::completions::run(args),

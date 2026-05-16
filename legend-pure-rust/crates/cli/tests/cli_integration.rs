@@ -193,35 +193,19 @@ fn test_test_command_runs_surveyor() {
         .stderr(predicate::str::contains("Test Suite completed"));
 }
 
+// The `plan`, `package`, and `publish` stub commands were removed
+// from the CLI on 2026-05-16 — keeping them in the help output was
+// advertising functionality that didn't exist. Design context lives
+// in `docs/deferred/cli_{plan,package,publish}.md` for when the real
+// implementations land.
 #[test]
-fn test_stub_plan_command() {
-    let mut cmd = Command::cargo_bin("legend").unwrap();
-    cmd.env("NO_COLOR", "1");
-    cmd.arg("plan")
-        .arg("someFunction()")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("under development"));
-}
-
-#[test]
-fn test_stub_package_command() {
-    let mut cmd = Command::cargo_bin("legend").unwrap();
-    cmd.env("NO_COLOR", "1");
-    cmd.arg("package")
-        .arg(".")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("under development"));
-}
-
-#[test]
-fn test_stub_publish_command() {
-    let mut cmd = Command::cargo_bin("legend").unwrap();
-    cmd.env("NO_COLOR", "1");
-    cmd.arg("publish")
-        .arg(".")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("under development"));
+fn removed_stub_commands_are_not_recognized() {
+    for subcommand in ["plan", "package", "publish"] {
+        let mut cmd = Command::cargo_bin("legend").unwrap();
+        cmd.env("NO_COLOR", "1");
+        cmd.arg(subcommand)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("unrecognized subcommand"));
+    }
 }
