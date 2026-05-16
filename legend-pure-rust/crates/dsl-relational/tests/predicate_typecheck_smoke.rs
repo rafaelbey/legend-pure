@@ -44,13 +44,18 @@ fn run_validator(source: &str) -> Vec<CompilationError> {
     let mut errors: Vec<CompilationError> = Vec::new();
     let mut bootstrap = legend_pure_parser_pure::pipeline::init_bootstrap_model();
     let auto_imports: Vec<SmolStr> = Vec::new();
+    // Take the model's scope, thread it through declare → define_bodies
+    // → validate so the extension's per-compile state survives the
+    // three passes. Restored on the model isn't strictly needed here
+    // (we don't read it post-validate), but mirrors the pipeline shape.
+    let mut scope = std::mem::take(&mut bootstrap.compile_scope);
 
     let mut declare_ctx = legend_pure_parser_pure::extension::DeclareCtx {
         source_files: &files,
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
-        scope: None,
+        scope: Some(&mut scope),
     };
     extension.declare(&mut declare_ctx);
     let mut define_ctx = legend_pure_parser_pure::extension::DefineCtx {
@@ -58,7 +63,7 @@ fn run_validator(source: &str) -> Vec<CompilationError> {
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
-        scope: None,
+        scope: Some(&mut scope),
     };
     extension.define_bodies(&mut define_ctx);
     let frozen = bootstrap;
@@ -66,7 +71,7 @@ fn run_validator(source: &str) -> Vec<CompilationError> {
         model: &frozen,
         auto_imports: &auto_imports,
         errors: &mut errors,
-        scope: None,
+        scope: Some(&scope),
     };
     extension.validate(&mut validate_ctx);
     errors

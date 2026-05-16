@@ -62,18 +62,20 @@
 //! See [`crates/dsl-mapping/src/compiler.rs`] for the trait-shape
 //! template these validators follow.
 
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::element::Element as AstElement;
 use legend_pure_parser_ast::element::PackageableElement as _;
 use legend_pure_parser_pure::error::{CompilationError, CompilationErrorKind};
-use legend_pure_parser_pure::extension::{CompilerExtension, DeclareCtx, ValidateCtx};
+use legend_pure_parser_pure::extension::{
+    COMPILER_EXTENSIONS, CompilerExtension, DeclareCtx, ValidateCtx,
+};
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{
     DSLInstance, Element as ModelElement, ElementNode, PureModel,
 };
+use linkme::distributed_slice;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
@@ -108,96 +110,132 @@ use legend_pure_dsl_mapping::ast::{ClassMappingBody, MappingDef};
 
 /// Compiler extension for the `###Relational` DSL.
 ///
-/// Construct one per
-/// [`compile_with_extensions`](legend_pure_parser_pure::pipeline::compile_with_extensions)
-/// invocation; do not share across compilations because the
-/// extension's internal map is reset per call.
+/// Stateless unit struct — per-compile data lives in
+/// [`RelationalCompileState`] stashed in `ctx.scope` (and read back
+/// from `model.compile_scope` by `walk_references` and the public
+/// `resolved_*` accessors post-compile). Lets the extension
+/// self-register via the [`COMPILER_EXTENSIONS`] distributed slice
+/// so any binary that depends on `legend-pure-dsl-relational` picks
+/// it up automatically.
+#[derive(Debug, Default)]
+pub struct RelationalExtension;
+
+/// Self-registration into the compiler's `COMPILER_EXTENSIONS`
+/// distributed slice — discoverable via
+/// [`legend_pure_parser_pure::pipeline::compile`].
+#[distributed_slice(COMPILER_EXTENSIONS)]
+static RELATIONAL_EXTENSION: &(dyn CompilerExtension + Sync) = &RelationalExtension;
+
+/// Per-compile scratch state stashed in `ctx.scope`. Holds all five
+/// data tables the Relational extension used to keep as `RefCell`
+/// fields on its own struct:
+///
+/// - `databases` — written by `declare`, read by `validate` /
+///   `walk_references`.
+/// - `relational_class_mappings` — written by `declare` (sidecar
+///   bodies from `###Mapping` sections), read by `validate`.
+/// - `resolved_databases` — written by `define_bodies`, read by
+///   `validate` and the public [`RelationalExtension::resolved_databases`]
+///   accessor.
+/// - `resolved_class_mappings` — written by `define_bodies`, read by
+///   `validate` and the public
+///   [`RelationalExtension::resolved_class_mappings`] accessor.
+/// - `mapping_includes` — written by `declare`, read by Phase E4
+///   cross-mapping inline / extends id resolution.
+///
+/// `model.compile_scope` retains the state after `finalize_model`
+/// returns, so post-compile accessors and `walk_references` work
+/// against the same data validate consumed.
 #[derive(Default)]
-pub struct RelationalExtension {
-    /// Databases collected during `declare`, keyed by FQN
-    /// (`"pkg::sub::Name"`). Per-extension state — not stored in
-    /// `PureModel`. Use [`Self::databases`] to inspect after compile.
-    databases: RefCell<HashMap<SmolStr, RegisteredDatabase>>,
+pub struct RelationalCompileState {
+    /// Databases collected during `declare`, keyed by FQN.
+    pub databases: HashMap<SmolStr, RegisteredDatabase>,
     /// `Class : Relational { … }` mapping bodies collected during
-    /// `declare`, indexed by enclosing-mapping FQN. Used by Stage-8
-    /// validators to check class-mapping shape (embedded uniqueness,
-    /// inline target lookup, association arity) without requiring
-    /// the model to carry mapping AST.
-    relational_class_mappings: RefCell<Vec<RegisteredRelationalClassMapping>>,
-    /// Per-database resolved snapshot built during Pass 2b
-    /// (`define_bodies`). Keyed by database FQN. See
-    /// [`crate::processor::ResolvedDatabase`] for the shape and
-    /// [`Self::resolved_databases`] for the post-compile accessor.
-    resolved_databases: RefCell<HashMap<SmolStr, crate::processor::ResolvedDatabase>>,
-    /// Resolved relational class mappings built during Pass 2b
-    /// (Phase B4). One entry per registered `Class : Relational { ... }`
-    /// body, in registration order. See
-    /// [`crate::processor::ResolvedClassMapping`] and
-    /// [`Self::resolved_class_mappings`].
-    resolved_class_mappings: RefCell<Vec<crate::processor::ResolvedClassMapping>>,
-    /// Per-mapping include FQNs captured during `declare()`. Keyed
-    /// by mapping FQN, value is the list of FQNs in that mapping's
-    /// `includes`. Used by Phase E4 (cross-mapping inline + extends
-    /// id resolution) to walk the include closure when looking up
-    /// class-mapping ids.
-    mapping_includes: RefCell<HashMap<SmolStr, Vec<SmolStr>>>,
+    /// `declare`.
+    pub relational_class_mappings: Vec<RegisteredRelationalClassMapping>,
+    /// Per-database resolved snapshot built during Pass 2b.
+    pub resolved_databases: HashMap<SmolStr, crate::processor::ResolvedDatabase>,
+    /// Resolved relational class mappings built during Pass 2b.
+    pub resolved_class_mappings: Vec<crate::processor::ResolvedClassMapping>,
+    /// Per-mapping include FQNs captured during `declare()`.
+    pub mapping_includes: HashMap<SmolStr, Vec<SmolStr>>,
 }
 
 /// One registered database, plus the source file it came from
 /// (carried for diagnostics that point back at the original site).
+///
+/// `pub` because [`RelationalCompileState::databases`] is a public
+/// field; external callers reading the state via
+/// [`RelationalExtension::resolved_databases`] never see this type
+/// directly (they get a `&HashMap<SmolStr, ResolvedDatabase>`), but
+/// the type still has to surface to satisfy Rust's visibility rules.
 #[derive(Debug, Clone)]
-struct RegisteredDatabase {
+pub struct RegisteredDatabase {
     /// The database AST node (cloned from the parser output).
-    def: DatabaseDef,
+    pub(crate) def: DatabaseDef,
 }
 
 /// One `Class : Relational { … }` body, captured with the enclosing
 /// `Mapping`'s FQN and the class-mapping id (for cross-reference
 /// lookups in Stage-8 validators).
 #[derive(Debug, Clone)]
-struct RegisteredRelationalClassMapping {
+pub struct RegisteredRelationalClassMapping {
     /// FQN of the enclosing `Mapping`.
-    mapping_fqn: SmolStr,
+    pub(crate) mapping_fqn: SmolStr,
     /// Class-mapping id — the explicit `[id]` if set, else the class FQN.
-    class_mapping_id: SmolStr,
+    pub(crate) class_mapping_id: SmolStr,
     /// FQN of the class this mapping implements — taken verbatim from
     /// the AST `ClassMapping.class` pointer. Used by per-property
     /// validators that look up the class on `ctx.model` to inspect
     /// declared properties' types.
-    class_fqn: SmolStr,
+    pub(crate) class_fqn: SmolStr,
     /// `extends [superId]` — captured so Stage-8 can validate
     /// extends-on-association forbidden (G3).
-    extends: Option<SmolStr>,
+    pub(crate) extends: Option<SmolStr>,
     /// Span of the entire class-mapping declaration (for diagnostics
     /// that span the whole `Class : Relational { ... }` shape).
-    class_mapping_source_info: SourceInfo,
+    pub(crate) class_mapping_source_info: SourceInfo,
     /// The relational body (cloned from the AST).
-    body: RelationalClassMappingBody,
+    pub(crate) body: RelationalClassMappingBody,
 }
 
 impl RelationalExtension {
-    /// Construct a fresh extension. Each `compile_with_extensions`
-    /// call should get its own.
+    /// Construct a fresh extension instance. Unit-struct convenience;
+    /// equivalent to `RelationalExtension::default()` or
+    /// `RelationalExtension` directly.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Snapshot of the per-database resolved state built during Pass 2b.
-    /// Keyed by database FQN. Empty until [`CompilerExtension::define_bodies`]
-    /// runs — call this only post-compile.
+    /// Snapshot of the per-database resolved state built during Pass 2b,
+    /// pulled from `model.compile_scope`. Keyed by database FQN.
+    /// Empty until [`CompilerExtension::define_bodies`] has run on
+    /// this model.
     #[must_use]
-    pub fn resolved_databases(&self) -> HashMap<SmolStr, crate::processor::ResolvedDatabase> {
-        self.resolved_databases.borrow().clone()
+    pub fn resolved_databases(
+        model: &PureModel,
+    ) -> HashMap<SmolStr, crate::processor::ResolvedDatabase> {
+        model
+            .compile_scope
+            .get::<RelationalCompileState>()
+            .map(|s| s.resolved_databases.clone())
+            .unwrap_or_default()
     }
 
     /// Snapshot of the resolved relational class mappings built during
-    /// Pass 2b (Phase B4). One entry per registered class mapping,
-    /// in registration order. Empty until
-    /// [`CompilerExtension::define_bodies`] runs.
+    /// Pass 2b (Phase B4). One entry per registered class mapping, in
+    /// registration order. Empty until
+    /// [`CompilerExtension::define_bodies`] has run on this model.
     #[must_use]
-    pub fn resolved_class_mappings(&self) -> Vec<crate::processor::ResolvedClassMapping> {
-        self.resolved_class_mappings.borrow().clone()
+    pub fn resolved_class_mappings(
+        model: &PureModel,
+    ) -> Vec<crate::processor::ResolvedClassMapping> {
+        model
+            .compile_scope
+            .get::<RelationalCompileState>()
+            .map(|s| s.resolved_class_mappings.clone())
+            .unwrap_or_default()
     }
 
     /// Snapshot of all registered databases **as graph elements** —
@@ -429,20 +467,34 @@ impl CompilerExtension for RelationalExtension {
     }
 
     fn declare(&self, ctx: &mut DeclareCtx<'_>) {
-        let mut by_fqn = self.databases.borrow_mut();
-        by_fqn.clear();
-        let mut relational_class_mappings = self.relational_class_mappings.borrow_mut();
-        relational_class_mappings.clear();
-        let mut mapping_includes = self.mapping_includes.borrow_mut();
-        mapping_includes.clear();
-        for source in ctx.source_files {
+        // Destructure ctx so model/errors/scope/source_files are
+        // independently borrowable inside the nested loops. Then
+        // split-borrow the scope state's three declare-time fields
+        // so each can mutate in the same loop.
+        let DeclareCtx {
+            source_files,
+            model,
+            errors,
+            scope,
+            ..
+        } = ctx;
+        let scope = scope.as_deref_mut().expect(
+            "RelationalExtension requires `scope` wired in DeclareCtx (pipeline supplies it)",
+        );
+        let RelationalCompileState {
+            databases: by_fqn,
+            relational_class_mappings,
+            mapping_includes,
+            ..
+        } = scope.get_or_default::<RelationalCompileState>();
+        for source in *source_files {
             for section in &source.sections {
                 match section.kind.as_str() {
                     "Relational" => {
                         // Pass 1 created the slice's chunk; allocate
                         // `Element::DSLInstance` rows there alongside
                         // the M3 elements parsed from the same file.
-                        let chunk_id = (ctx.model.chunks.len().saturating_sub(1)) as u16;
+                        let chunk_id = (model.chunks.len().saturating_sub(1)) as u16;
                         for element in &section.elements {
                             let AstElement::DSLElement(boxed) = element else {
                                 continue;
@@ -452,7 +504,7 @@ impl CompilerExtension for RelationalExtension {
                             };
                             let fqn = database_fqn(db);
                             if by_fqn.contains_key(&fqn) {
-                                ctx.errors.push(CompilationError {
+                                errors.push(CompilationError {
                                     message: format!("Duplicate Database '{fqn}'"),
                                     source_info: db.source_info.clone(),
                                     kind: CompilationErrorKind::DuplicateElement {
@@ -472,7 +524,7 @@ impl CompilerExtension for RelationalExtension {
                             let data = match snapshot.encode() {
                                 Ok(bytes) => bytes,
                                 Err(e) => {
-                                    ctx.errors.push(CompilationError {
+                                    errors.push(CompilationError {
                                         message: format!(
                                             "Failed to encode DatabaseSnapshot for '{fqn}': {e}"
                                         ),
@@ -490,11 +542,11 @@ impl CompilerExtension for RelationalExtension {
                                 .map(|p| p.segments().into_iter().cloned().collect())
                                 .unwrap_or_default();
                             let package_id = if pkg_path.is_empty() {
-                                ctx.model.root_package
+                                model.root_package
                             } else {
-                                ctx.model.get_or_create_package(&pkg_path)
+                                model.get_or_create_package(&pkg_path)
                             };
-                            let Some(chunk) = ctx.model.chunks.get_mut(chunk_id as usize) else {
+                            let Some(chunk) = model.chunks.get_mut(chunk_id as usize) else {
                                 continue;
                             };
                             let local_idx = chunk.alloc_element(
@@ -514,7 +566,7 @@ impl CompilerExtension for RelationalExtension {
                                 chunk_id,
                                 local_idx,
                             };
-                            ctx.model.register_element(package_id, id);
+                            model.register_element(package_id, id);
                         }
                     }
                     "Mapping" => {
@@ -522,7 +574,7 @@ impl CompilerExtension for RelationalExtension {
                         // class-mappings land in the same chunk Pass 1
                         // just created for this source file. Same
                         // pattern as the Database arm above.
-                        let chunk_id = (ctx.model.chunks.len().saturating_sub(1)) as u16;
+                        let chunk_id = (model.chunks.len().saturating_sub(1)) as u16;
                         for element in &section.elements {
                             let AstElement::DSLElement(boxed) = element else {
                                 continue;
@@ -586,7 +638,7 @@ impl CompilerExtension for RelationalExtension {
                                 let data = match snapshot.encode() {
                                     Ok(bytes) => bytes,
                                     Err(e) => {
-                                        ctx.errors.push(CompilationError {
+                                        errors.push(CompilationError {
                                             message: format!(
                                                 "Failed to encode RelationalClassMappingSnapshot for \
                                                  '{mapping_fqn}.{class_mapping_id}': {e}"
@@ -599,8 +651,7 @@ impl CompilerExtension for RelationalExtension {
                                         continue;
                                     }
                                 };
-                                let Some(chunk) = ctx.model.chunks.get_mut(chunk_id as usize)
-                                else {
+                                let Some(chunk) = model.chunks.get_mut(chunk_id as usize) else {
                                     continue;
                                 };
                                 let synthetic_name =
@@ -610,7 +661,7 @@ impl CompilerExtension for RelationalExtension {
                                         name: synthetic_name,
                                         source_info: cm.source_info.clone(),
                                         name_source_info: cm.source_info.clone(),
-                                        parent_package: ctx.model.root_package,
+                                        parent_package: model.root_package,
                                     },
                                     ModelElement::DSLInstance(DSLInstance {
                                         dsl_name: SmolStr::new(RELATIONAL_CLASS_MAPPING_DSL_NAME),
@@ -635,79 +686,97 @@ impl CompilerExtension for RelationalExtension {
         }
     }
 
-    fn define_bodies(&self, _ctx: &mut legend_pure_parser_pure::extension::DefineCtx<'_>) {
+    fn define_bodies(&self, ctx: &mut legend_pure_parser_pure::extension::DefineCtx<'_>) {
+        // Pull the per-compile state declare stashed; split-borrow the
+        // four fields touched here so each is independently mutable.
+        let scope = ctx
+            .scope
+            .as_deref_mut()
+            .expect("RelationalExtension requires `scope` wired in DefineCtx");
+        let RelationalCompileState {
+            databases,
+            relational_class_mappings,
+            resolved_databases,
+            resolved_class_mappings,
+            ..
+        } = scope.get_or_default::<RelationalCompileState>();
+
         // Phase B1: build the per-database resolved snapshot.
-        let dbs = self.databases.borrow();
-        let mut resolved = self.resolved_databases.borrow_mut();
-        resolved.clear();
-        for (fqn, reg) in dbs.iter() {
+        resolved_databases.clear();
+        for (fqn, reg) in databases.iter() {
             let snapshot = crate::processor::process_database(&reg.def);
-            resolved.insert(fqn.clone(), snapshot);
+            resolved_databases.insert(fqn.clone(), snapshot);
         }
 
         // Phase B2: resolve op-body column refs against the snapshot
         // map. Cross-db resolution requires the full snapshot
         // population from B1, so this is a second pass.
-        let defs_by_fqn: HashMap<SmolStr, DatabaseDef> = dbs
+        let defs_by_fqn: HashMap<SmolStr, DatabaseDef> = databases
             .iter()
             .map(|(k, v)| (k.clone(), v.def.clone()))
             .collect();
-        crate::processor::resolve_op_bodies(&mut resolved, &defs_by_fqn);
+        crate::processor::resolve_op_bodies(resolved_databases, &defs_by_fqn);
         // Phase B3: resolve view body column refs + infer main tables.
-        crate::processor::resolve_view_bodies(&mut resolved, &defs_by_fqn);
+        crate::processor::resolve_view_bodies(resolved_databases, &defs_by_fqn);
         // Phase B4: resolve class-mapping property values.
-        let class_mappings = self.relational_class_mappings.borrow();
-        let mut resolved_cms = self.resolved_class_mappings.borrow_mut();
-        resolved_cms.clear();
-        for reg in class_mappings.iter() {
-            resolved_cms.push(crate::processor::resolve_class_mapping(
+        resolved_class_mappings.clear();
+        for reg in relational_class_mappings.iter() {
+            resolved_class_mappings.push(crate::processor::resolve_class_mapping(
                 &reg.body,
                 &reg.mapping_fqn,
                 &reg.class_mapping_id,
                 reg.extends.as_ref(),
-                &resolved,
+                resolved_databases,
                 &defs_by_fqn,
             ));
         }
         // Phase B5: inherit main-table / primary-database through the
         // `extends` chain.
-        crate::processor::apply_extends_inheritance(&mut resolved_cms);
+        crate::processor::apply_extends_inheritance(resolved_class_mappings);
         // Phase C: synthesise milestoning embedded mappings for class
         // mappings whose effective main table declares a
         // `milestoning(...)` spec.
-        crate::processor::apply_milestoning_synthesis(&mut resolved_cms, &resolved);
+        crate::processor::apply_milestoning_synthesis(resolved_class_mappings, resolved_databases);
     }
 
     fn validate(&self, ctx: &mut ValidateCtx<'_>) {
-        let dbs = self.databases.borrow();
+        // Pull the per-compile state populated by declare +
+        // define_bodies. Absent scope (hand-built ctx) or no Relational
+        // sections in this compile — both no-op cleanly.
+        let Some(scope) = ctx.scope else { return };
+        let Some(state) = scope.get::<RelationalCompileState>() else {
+            return;
+        };
+        let dbs = &state.databases;
+        let class_mappings = &state.relational_class_mappings;
+        let mapping_includes = &state.mapping_includes;
+        let resolved = &state.resolved_databases;
+        let resolved_cms = &state.resolved_class_mappings;
+
         // V1 + V2: include graph (acyclic + each FQN resolves to a
         // registered database).
-        validate_include_graph(&dbs, ctx.errors);
+        validate_include_graph(dbs, ctx.errors);
         // V3 + V4 + V5: per-database body validation.
         for reg in dbs.values() {
-            validate_database(&reg.def, &dbs, ctx.errors);
+            validate_database(&reg.def, dbs, ctx.errors);
         }
         // Stage 8 + 9: per-class-mapping validation.
-        let class_mappings = self.relational_class_mappings.borrow();
-        let mapping_includes = self.mapping_includes.borrow();
-        validate_relational_class_mappings(&class_mappings, &dbs, &mapping_includes, ctx.errors);
+        validate_relational_class_mappings(class_mappings, dbs, mapping_includes, ctx.errors);
         // Phase D: repo-boundary visibility for `include` and `[db]`
         // qualifiers. No-op when `model.repo_visibility` is empty (so
         // existing tests that build a model without descriptors stay
         // green).
-        validate_repo_visibility(&dbs, ctx.model, ctx.errors);
+        validate_repo_visibility(dbs, ctx.model, ctx.errors);
         // Phase A3' (post-B2): JoinTreeNode parity — chained
         // `@a > @b > ...` join sequences must share end-tables. Reads
         // the resolved snapshots from `define_bodies` so it can pull
         // each Join's distinct table set without re-walking the AST.
-        let resolved = self.resolved_databases.borrow();
-        let resolved_cms = self.resolved_class_mappings.borrow();
-        validate_join_tree_chains(&class_mappings, &resolved, &resolved_cms, ctx.errors);
+        validate_join_tree_chains(class_mappings, resolved, resolved_cms, ctx.errors);
         // Phase A4: RelationalAssociationImplementationValidator
         // parity — every property line on an AssociationMapping body
         // must (a) reference a join sequence, and (b) form a chain
         // from the source class mapping's main table to the target's.
-        validate_association_mapping_joins(&class_mappings, &resolved_cms, &resolved, ctx.errors);
+        validate_association_mapping_joins(class_mappings, resolved_cms, resolved, ctx.errors);
         // Phase A5: RelationalInstanceSetImplementationValidator
         // parity — per-property checks against the target class's
         // declared property types: data-type properties forbid
@@ -715,27 +784,27 @@ impl CompilerExtension for RelationalExtension {
         // transformer; class-typed properties require a join sequence
         // (Java errors with "Mapping Error! The target type:'X' is
         // not a data type but the relationalOperation is not a join").
-        validate_class_mapping_property_types(&class_mappings, ctx.model, ctx.errors);
+        validate_class_mapping_property_types(class_mappings, ctx.model, ctx.errors);
         // Phase A6: Inline-target subtype check — when an embedded
         // mapping carries an `Inline[setId]` trailer, the inline
         // target's class must be a subtype of the property's
         // declared target class. Java parity:
         // "The inlineSetImplementationId '...' is implementing the
         // class 'X' which is not a subType of 'Y'".
-        validate_inline_target_subtypes(&class_mappings, &mapping_includes, ctx.model, ctx.errors);
+        validate_inline_target_subtypes(class_mappings, mapping_includes, ctx.model, ctx.errors);
         // Phase A7: AssociationMapping target identity. An
         // AssociationMapping body's class FQN must resolve to an
         // `Association` element on the model (not a Class), and
         // each association can be mapped at most once per Mapping
         // (Java parity: TestAssociationMappingValidation).
-        validate_association_mapping_targets(&class_mappings, ctx.model, ctx.errors);
+        validate_association_mapping_targets(class_mappings, ctx.model, ctx.errors);
         // Phase B': Filter / Join / MultiGrainFilter predicate
         // bodies must return Boolean[1]. Uses the resolved
         // snapshots already populated by `define_bodies` for
         // column-type lookups; un-modeled DynaFunctions and
         // unresolved column refs type as `Any` (silent, no false
         // positives).
-        validate_predicate_return_types(&dbs, &resolved, ctx.errors);
+        validate_predicate_return_types(dbs, resolved, ctx.errors);
     }
 
     /// Surface Relational-DSL reference sites to the IDE's reference
@@ -756,8 +825,14 @@ impl CompilerExtension for RelationalExtension {
         visit: &mut dyn FnMut(legend_pure_parser_pure::refs::Reference),
     ) {
         use legend_pure_parser_ast::element::PackageableElement;
-        let dbs = self.databases.borrow();
-        for reg in dbs.values() {
+        // Post-compile read of the per-compile registry that `declare`
+        // stashed in the scope. The pipeline's `finalize_model`
+        // restores `model.compile_scope` before returning, so this
+        // walk runs against the same data validate consumed.
+        let Some(state) = model.compile_scope.get::<RelationalCompileState>() else {
+            return;
+        };
+        for reg in state.databases.values() {
             for include in &reg.def.includes {
                 let target_id = if let Some(pkg) = include.included.package() {
                     model.resolve_in_package(pkg, include.included.name())

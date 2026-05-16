@@ -26,7 +26,8 @@ use legend_pure_dsl_relational::parser::RelationalSectionParser;
 use legend_pure_dsl_relational::processor::PureColumnType;
 use legend_pure_parser_ast::SourceFile;
 use legend_pure_parser_pure::error::CompilationError;
-use legend_pure_parser_pure::extension::CompilerExtension;
+use legend_pure_parser_pure::extension::{CompileExtensionScope, CompilerExtension};
+use legend_pure_parser_pure::model::PureModel;
 use smol_str::SmolStr;
 
 fn parse_source(source: &str) -> SourceFile {
@@ -39,7 +40,7 @@ fn parse_source(source: &str) -> SourceFile {
     .expect("source must parse")
 }
 
-fn run_lifecycle(source: &str) -> RelationalExtension {
+fn run_lifecycle(source: &str) -> PureModel {
     let file = parse_source(source);
     let files: [SourceFile; 1] = [file];
     let extension = RelationalExtension::new();
@@ -47,12 +48,16 @@ fn run_lifecycle(source: &str) -> RelationalExtension {
     let auto_imports: Vec<SmolStr> = Vec::new();
 
     let mut bootstrap = legend_pure_parser_pure::pipeline::init_bootstrap_model();
+    // Take the model's scope, thread it through declare + define_bodies,
+    // restore it so `RelationalExtension::resolved_databases(&model)`
+    // can read the populated state.
+    let mut scope = std::mem::take(&mut bootstrap.compile_scope);
     let mut declare_ctx = legend_pure_parser_pure::extension::DeclareCtx {
         source_files: &files,
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
-        scope: None,
+        scope: Some(&mut scope),
     };
     extension.declare(&mut declare_ctx);
 
@@ -61,18 +66,19 @@ fn run_lifecycle(source: &str) -> RelationalExtension {
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
-        scope: None,
+        scope: Some(&mut scope),
     };
     extension.define_bodies(&mut define_ctx);
 
-    extension
+    bootstrap.compile_scope = scope;
+    bootstrap
 }
 
 /// Lifecycle helper that registers BOTH the relational section parser
 /// and a Mapping section parser with the relational class-mapping body
 /// hook. Used by Phase B4 fixtures that need a `Class : Relational
 /// { ... }` body to be registered + resolved.
-fn run_lifecycle_with_mapping(source: &str) -> RelationalExtension {
+fn run_lifecycle_with_mapping(source: &str) -> PureModel {
     use legend_pure_dsl_mapping::parser::MappingSectionParser;
     use legend_pure_dsl_relational::parser::RelationalClassMappingBodyParser;
 
@@ -94,12 +100,13 @@ fn run_lifecycle_with_mapping(source: &str) -> RelationalExtension {
     let auto_imports: Vec<SmolStr> = Vec::new();
 
     let mut bootstrap = legend_pure_parser_pure::pipeline::init_bootstrap_model();
+    let mut scope = std::mem::take(&mut bootstrap.compile_scope);
     let mut declare_ctx = legend_pure_parser_pure::extension::DeclareCtx {
         source_files: &files,
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
-        scope: None,
+        scope: Some(&mut scope),
     };
     extension.declare(&mut declare_ctx);
 
@@ -108,11 +115,12 @@ fn run_lifecycle_with_mapping(source: &str) -> RelationalExtension {
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
-        scope: None,
+        scope: Some(&mut scope),
     };
     extension.define_bodies(&mut define_ctx);
 
-    extension
+    bootstrap.compile_scope = scope;
+    bootstrap
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +201,7 @@ fn pure_column_type_pure_name_round_trip() {
 
 #[test]
 fn resolves_top_level_table_columns_with_pure_types() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -205,7 +213,7 @@ fn resolves_top_level_table_columns_with_pure_types() {
           )
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let db = resolved
         .get("pkg::db")
         .expect("pkg::db missing from resolved");
@@ -244,7 +252,7 @@ fn resolves_top_level_table_columns_with_pure_types() {
 
 #[test]
 fn resolves_schema_nested_tables() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -259,7 +267,7 @@ fn resolves_schema_nested_tables() {
           )
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let db = resolved.get("pkg::db").expect("missing");
     assert_eq!(db.tables_by_name.len(), 2);
     let t = db
@@ -277,14 +285,14 @@ fn resolves_schema_nested_tables() {
 
 #[test]
 fn unknown_sql_type_resolves_to_none_pure_type() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::db
         (
           Table t (id INT PRIMARY KEY, mystery WIDGET)
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let db = resolved.get("pkg::db").expect("missing");
     let t = db.tables_by_name.get("t").expect("t missing");
     let mystery = t.column("mystery").expect("mystery missing");
@@ -298,7 +306,7 @@ fn unknown_sql_type_resolves_to_none_pure_type() {
 
 #[test]
 fn collects_join_filter_multigrain_names() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -309,7 +317,7 @@ fn collects_join_filter_multigrain_names() {
           MultiGrainFilter mgf1 (t.id > 5)
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let db = resolved.get("pkg::db").expect("missing");
     assert_eq!(db.join_names, vec![SmolStr::new("j1")]);
     assert_eq!(db.filter_names, vec![SmolStr::new("f1")]);
@@ -318,7 +326,7 @@ fn collects_join_filter_multigrain_names() {
 
 #[test]
 fn collects_include_fqns_in_source_order() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::base
         (
@@ -339,7 +347,7 @@ fn collects_include_fqns_in_source_order() {
           Table local (id INT PRIMARY KEY)
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let derived = resolved.get("pkg::derived").expect("missing");
     assert_eq!(
         derived.include_fqns,
@@ -356,7 +364,7 @@ fn collects_include_fqns_in_source_order() {
 
 #[test]
 fn multi_database_each_resolved_independently() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::a
         (
@@ -369,7 +377,7 @@ fn multi_database_each_resolved_independently() {
           Table tb (id BIGINT PRIMARY KEY)
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     assert_eq!(resolved.len(), 2);
     let a = resolved.get("pkg::a").expect("missing pkg::a");
     let b = resolved.get("pkg::b").expect("missing pkg::b");
@@ -392,7 +400,7 @@ fn multi_database_each_resolved_independently() {
 
 #[test]
 fn resolves_filter_op_columns_to_local_table_columns() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -400,7 +408,7 @@ fn resolves_filter_op_columns_to_local_table_columns() {
           Filter f1 (t.id = 1 and t.qty > 0)
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let db = resolved.get("pkg::db").expect("missing");
     assert_eq!(db.filter_bodies.len(), 1);
     let body = &db.filter_bodies[0];
@@ -427,7 +435,7 @@ fn resolves_filter_op_columns_to_local_table_columns() {
 
 #[test]
 fn resolves_join_op_columns_across_two_tables() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -436,7 +444,7 @@ fn resolves_join_op_columns_across_two_tables() {
           Join sToD (src.fk = dst.id)
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let db = resolved.get("pkg::db").expect("missing");
     assert_eq!(db.join_bodies.len(), 1);
     let body = &db.join_bodies[0];
@@ -456,7 +464,7 @@ fn resolves_join_op_columns_across_two_tables() {
 
 #[test]
 fn resolves_op_columns_across_includes() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::base
         (
@@ -471,7 +479,7 @@ fn resolves_op_columns_across_includes() {
           Filter f (sharedT.id = localT.id)
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let main = resolved.get("pkg::main").expect("missing");
     assert_eq!(main.filter_bodies.len(), 1);
     let body = &main.filter_bodies[0];
@@ -488,7 +496,7 @@ fn resolves_op_columns_across_includes() {
 
 #[test]
 fn resolves_explicit_db_qualifier_to_other_database() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::other
         (
@@ -502,7 +510,7 @@ fn resolves_explicit_db_qualifier_to_other_database() {
           Filter f ([pkg::other]foreign.id = local.id)
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let main = resolved.get("pkg::main").expect("missing");
     let body = &main.filter_bodies[0];
 
@@ -525,7 +533,7 @@ fn resolves_explicit_db_qualifier_to_other_database() {
 fn flags_unresolved_table_in_op_body() {
     // V4 raises a hard error; the resolver still produces a binding
     // with `unresolved_table = true` for downstream consumers.
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -533,7 +541,7 @@ fn flags_unresolved_table_in_op_body() {
           Filter f (missing.id = t.id)
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let db = resolved.get("pkg::db").expect("missing");
     let body = &db.filter_bodies[0];
     let missing = &body.bindings[0];
@@ -543,7 +551,7 @@ fn flags_unresolved_table_in_op_body() {
 
 #[test]
 fn flags_unresolved_database_in_op_body() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -551,7 +559,7 @@ fn flags_unresolved_database_in_op_body() {
           Filter f ([pkg::nope]t.id = t.id)
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let db = resolved.get("pkg::db").expect("missing");
     let body = &db.filter_bodies[0];
     let missing = &body.bindings[0];
@@ -560,7 +568,7 @@ fn flags_unresolved_database_in_op_body() {
 
 #[test]
 fn collects_multi_grain_filter_bodies() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -568,7 +576,7 @@ fn collects_multi_grain_filter_bodies() {
           MultiGrainFilter byRegion (t.region = 'US')
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let db = resolved.get("pkg::db").expect("missing");
     assert_eq!(db.multi_grain_filter_bodies.len(), 1);
     let body = &db.multi_grain_filter_bodies[0];
@@ -584,7 +592,7 @@ fn collects_multi_grain_filter_bodies() {
 
 #[test]
 fn resolves_view_with_single_main_table() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -595,7 +603,7 @@ fn resolves_view_with_single_main_table() {
           )
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let db = resolved.get("pkg::db").expect("missing");
     assert_eq!(db.view_bodies.len(), 1);
     let body = &db.view_bodies[0];
@@ -615,7 +623,7 @@ fn resolves_view_with_single_main_table() {
 
 #[test]
 fn detects_view_with_multiple_main_tables() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -627,7 +635,7 @@ fn detects_view_with_multiple_main_tables() {
           )
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let db = resolved.get("pkg::db").expect("missing");
     let body = &db.view_bodies[0];
     assert_eq!(body.referenced_tables.len(), 2);
@@ -639,7 +647,7 @@ fn detects_view_with_multiple_main_tables() {
 
 #[test]
 fn resolves_view_with_target_set_id() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -650,7 +658,7 @@ fn resolves_view_with_target_set_id() {
           )
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let db = resolved.get("pkg::db").expect("missing");
     let body = &db.view_bodies[0];
     let line = &body.columns[0];
@@ -666,7 +674,7 @@ fn resolves_view_with_target_set_id() {
 
 #[test]
 fn resolves_view_referencing_table_via_explicit_db() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::other
         (
@@ -683,7 +691,7 @@ fn resolves_view_referencing_table_via_explicit_db() {
           )
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let main = resolved.get("pkg::main").expect("missing");
     let body = &main.view_bodies[0];
     let line = &body.columns[0];
@@ -699,7 +707,7 @@ fn resolves_view_referencing_table_via_explicit_db() {
 
 #[test]
 fn view_with_constant_value_has_no_binding() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -710,7 +718,7 @@ fn view_with_constant_value_has_no_binding() {
           )
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let db = resolved.get("pkg::db").expect("missing");
     let body = &db.view_bodies[0];
     assert_eq!(body.columns.len(), 2);
@@ -726,7 +734,7 @@ fn view_with_constant_value_has_no_binding() {
 
 #[test]
 fn resolves_class_mapping_with_main_table_and_property_values() {
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -746,7 +754,7 @@ fn resolves_class_mapping_with_main_table_and_property_values() {
           }
         )
     "});
-    let resolved = extension.resolved_class_mappings();
+    let resolved = RelationalExtension::resolved_class_mappings(&model);
     assert_eq!(resolved.len(), 1);
     let cm = &resolved[0];
     assert_eq!(cm.mapping_fqn.as_str(), "pkg::TradeMap");
@@ -757,7 +765,7 @@ fn resolves_class_mapping_with_main_table_and_property_values() {
     assert_eq!(cm.properties.len(), 2);
 
     // Both properties resolve to columns on tradeTable.
-    let dbs = extension.resolved_databases();
+    let dbs = RelationalExtension::resolved_databases(&model);
     let id_prop = &cm.properties[0];
     assert_eq!(id_prop.property_name.as_str(), "id");
     let id_binding = match &id_prop.kind {
@@ -775,7 +783,7 @@ fn resolves_class_mapping_with_main_table_and_property_values() {
 
 #[test]
 fn flags_inconsistent_main_tables_in_class_mapping() {
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -796,7 +804,7 @@ fn flags_inconsistent_main_tables_in_class_mapping() {
           }
         )
     "});
-    let resolved = extension.resolved_class_mappings();
+    let resolved = RelationalExtension::resolved_class_mappings(&model);
     let cm = &resolved[0];
     assert_eq!(cm.referenced_tables.len(), 2);
     // ~mainTable says 'a', but property values reference both 'a' and
@@ -807,7 +815,7 @@ fn flags_inconsistent_main_tables_in_class_mapping() {
 
 #[test]
 fn resolves_scope_wrapped_lines_with_scope_db() {
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::other
         (
@@ -839,11 +847,11 @@ fn resolves_scope_wrapped_lines_with_scope_db() {
           }
         )
     "});
-    let resolved = extension.resolved_class_mappings();
+    let resolved = RelationalExtension::resolved_class_mappings(&model);
     let cm = &resolved[0];
     // Two properties resolved: x against pkg::main, y against pkg::other.
     assert_eq!(cm.properties.len(), 2);
-    let dbs = extension.resolved_databases();
+    let dbs = RelationalExtension::resolved_databases(&model);
 
     let x_binding = match &cm.properties[0].kind {
         legend_pure_dsl_relational::processor::ResolvedClassMappingPropertyKind::Single {
@@ -866,7 +874,7 @@ fn resolves_scope_wrapped_lines_with_scope_db() {
 
 #[test]
 fn embedded_property_marked_as_embedded_kind() {
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -892,7 +900,7 @@ fn embedded_property_marked_as_embedded_kind() {
           }
         )
     "});
-    let resolved = extension.resolved_class_mappings();
+    let resolved = RelationalExtension::resolved_class_mappings(&model);
     let cm = &resolved[0];
     assert_eq!(cm.properties.len(), 2);
     assert!(matches!(
@@ -907,7 +915,7 @@ fn class_mapping_without_main_table_marks_db_unresolved_on_lines() {
     // Java parity: a class mapping with no `~mainTable` and no per-line
     // `[db]` qualifier can't pin the database. Each binding records
     // `unresolved_database`.
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -926,7 +934,7 @@ fn class_mapping_without_main_table_marks_db_unresolved_on_lines() {
           }
         )
     "});
-    let resolved = extension.resolved_class_mappings();
+    let resolved = RelationalExtension::resolved_class_mappings(&model);
     let cm = &resolved[0];
     assert!(cm.primary_database.is_none());
     let binding = match &cm.properties[0].kind {
@@ -944,7 +952,7 @@ fn class_mapping_without_main_table_marks_db_unresolved_on_lines() {
 
 #[test]
 fn child_inherits_main_table_from_parent_via_extends() {
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -970,7 +978,7 @@ fn child_inherits_main_table_from_parent_via_extends() {
           }
         )
     "});
-    let resolved = extension.resolved_class_mappings();
+    let resolved = RelationalExtension::resolved_class_mappings(&model);
     assert_eq!(resolved.len(), 2);
     let parent = resolved
         .iter()
@@ -993,7 +1001,7 @@ fn child_inherits_main_table_from_parent_via_extends() {
 
 #[test]
 fn child_with_own_main_table_does_not_inherit() {
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -1021,7 +1029,7 @@ fn child_with_own_main_table_does_not_inherit() {
           }
         )
     "});
-    let resolved = extension.resolved_class_mappings();
+    let resolved = RelationalExtension::resolved_class_mappings(&model);
     let child = resolved
         .iter()
         .find(|cm| cm.class_mapping_id.as_str() == "childMap")
@@ -1033,7 +1041,7 @@ fn child_with_own_main_table_does_not_inherit() {
 
 #[test]
 fn extends_inheritance_walks_three_level_chain() {
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -1065,7 +1073,7 @@ fn extends_inheritance_walks_three_level_chain() {
           }
         )
     "});
-    let resolved = extension.resolved_class_mappings();
+    let resolved = RelationalExtension::resolved_class_mappings(&model);
     let c = resolved
         .iter()
         .find(|cm| cm.class_mapping_id.as_str() == "cMap")
@@ -1077,7 +1085,7 @@ fn extends_inheritance_walks_three_level_chain() {
 
 #[test]
 fn extends_chain_with_no_ancestor_main_table_stays_none() {
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -1102,7 +1110,7 @@ fn extends_chain_with_no_ancestor_main_table_stays_none() {
           }
         )
     "});
-    let resolved = extension.resolved_class_mappings();
+    let resolved = RelationalExtension::resolved_class_mappings(&model);
     let child = resolved
         .iter()
         .find(|cm| cm.class_mapping_id.as_str() == "childMap")
@@ -1116,7 +1124,7 @@ fn extends_chain_with_no_ancestor_main_table_stays_none() {
 fn extends_inheritance_terminates_on_cycle() {
     // Hypothetical cycle: A extends B, B extends A (Java errors via
     // G1, but the inheritance walker should still terminate).
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -1141,7 +1149,7 @@ fn extends_inheritance_terminates_on_cycle() {
           }
         )
     "});
-    let resolved = extension.resolved_class_mappings();
+    let resolved = RelationalExtension::resolved_class_mappings(&model);
     // Walker terminates without panicking and leaves both with None
     // effective main table.
     let a = resolved
@@ -1162,7 +1170,7 @@ fn extends_inheritance_terminates_on_cycle() {
 
 #[test]
 fn resolves_association_mapping_with_two_ends() {
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -1205,7 +1213,7 @@ fn resolves_association_mapping_with_two_ends() {
           }
         )
     "});
-    let resolved = extension.resolved_class_mappings();
+    let resolved = RelationalExtension::resolved_class_mappings(&model);
     let assoc = resolved
         .iter()
         .find(|cm| {
@@ -1225,7 +1233,7 @@ fn resolves_association_mapping_with_two_ends() {
     assert_eq!(assoc.properties[1].target_id.as_deref(), Some("tradeMap"));
 
     // Each end's value is bound to a column.
-    let dbs = extension.resolved_databases();
+    let dbs = RelationalExtension::resolved_databases(&model);
     let trade_binding = match &assoc.properties[0].kind {
         legend_pure_dsl_relational::processor::ResolvedClassMappingPropertyKind::Single {
             binding,
@@ -1239,7 +1247,7 @@ fn resolves_association_mapping_with_two_ends() {
 
 #[test]
 fn association_mapping_kind_distinguishes_from_class_mapping() {
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -1280,7 +1288,7 @@ fn association_mapping_kind_distinguishes_from_class_mapping() {
           }
         )
     "});
-    let resolved = extension.resolved_class_mappings();
+    let resolved = RelationalExtension::resolved_class_mappings(&model);
     let class_mappings = resolved
         .iter()
         .filter(|cm| {
@@ -1309,7 +1317,7 @@ fn association_mapping_kind_distinguishes_from_class_mapping() {
 
 #[test]
 fn synthesizes_from_thru_for_business_milestoned_main_table() {
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -1334,7 +1342,7 @@ fn synthesizes_from_thru_for_business_milestoned_main_table() {
           }
         )
     "});
-    let resolved = extension.resolved_class_mappings();
+    let resolved = RelationalExtension::resolved_class_mappings(&model);
     let cm = &resolved[0];
     let synth = cm
         .synthesized_milestoning
@@ -1356,7 +1364,7 @@ fn synthesizes_from_thru_for_business_milestoned_main_table() {
     assert_eq!(names, vec!["from", "thru"]);
 
     // Each binding points at the milestoning column on the main table.
-    let dbs = extension.resolved_databases();
+    let dbs = RelationalExtension::resolved_databases(&model);
     let from_col = synth.property_bindings[0]
         .1
         .resolved_column(&dbs)
@@ -1371,7 +1379,7 @@ fn synthesizes_from_thru_for_business_milestoned_main_table() {
 
 #[test]
 fn synthesizes_in_out_for_processing_milestoned_main_table() {
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -1396,7 +1404,7 @@ fn synthesizes_in_out_for_processing_milestoned_main_table() {
           }
         )
     "});
-    let synth = extension.resolved_class_mappings()[0]
+    let synth = RelationalExtension::resolved_class_mappings(&model)[0]
         .synthesized_milestoning
         .clone()
         .expect("expected synthesized milestoning");
@@ -1410,7 +1418,7 @@ fn synthesizes_in_out_for_processing_milestoned_main_table() {
 
 #[test]
 fn synthesizes_all_four_for_bitemporal_main_table() {
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -1440,7 +1448,7 @@ fn synthesizes_all_four_for_bitemporal_main_table() {
           }
         )
     "});
-    let synth = extension.resolved_class_mappings()[0]
+    let synth = RelationalExtension::resolved_class_mappings(&model)[0]
         .synthesized_milestoning
         .clone()
         .expect("expected synthesized milestoning");
@@ -1455,7 +1463,7 @@ fn synthesizes_all_four_for_bitemporal_main_table() {
 
 #[test]
 fn synthesis_skipped_for_non_milestoned_table() {
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -1475,7 +1483,7 @@ fn synthesis_skipped_for_non_milestoned_table() {
           }
         )
     "});
-    let cm = &extension.resolved_class_mappings()[0];
+    let cm = &RelationalExtension::resolved_class_mappings(&model)[0];
     assert!(cm.synthesized_milestoning.is_none());
 }
 
@@ -1485,7 +1493,7 @@ fn synthesis_skipped_when_parent_already_milestoned() {
     // when the parent's super_set_impl_id is non-null and the parent
     // is milestoned. The child inherits the synthesised mapping via
     // the parent.
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -1516,7 +1524,7 @@ fn synthesis_skipped_when_parent_already_milestoned() {
           }
         )
     "});
-    let resolved = extension.resolved_class_mappings();
+    let resolved = RelationalExtension::resolved_class_mappings(&model);
     let parent = resolved
         .iter()
         .find(|cm| cm.class_mapping_id.as_str() == "parentMap")
@@ -1533,7 +1541,7 @@ fn synthesis_skipped_when_parent_already_milestoned() {
 
 #[test]
 fn synthesizes_for_business_snapshot_milestoning() {
-    let extension = run_lifecycle_with_mapping(indoc! {r"
+    let model = run_lifecycle_with_mapping(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -1557,7 +1565,7 @@ fn synthesizes_for_business_snapshot_milestoning() {
           }
         )
     "});
-    let synth = extension.resolved_class_mappings()[0]
+    let synth = RelationalExtension::resolved_class_mappings(&model)[0]
         .synthesized_milestoning
         .clone()
         .expect("expected synthesized milestoning");
@@ -1568,7 +1576,7 @@ fn synthesizes_for_business_snapshot_milestoning() {
         .collect();
     // Snapshot maps both 'from' and 'thru' to the same column.
     assert_eq!(names, vec!["from", "thru"]);
-    let dbs = extension.resolved_databases();
+    let dbs = RelationalExtension::resolved_databases(&model);
     let from_col = synth.property_bindings[0]
         .1
         .resolved_column(&dbs)
@@ -1583,7 +1591,7 @@ fn synthesizes_for_business_snapshot_milestoning() {
 
 #[test]
 fn resolved_table_carries_milestoning_definitions() {
-    let extension = run_lifecycle(indoc! {r"
+    let model = run_lifecycle(indoc! {r"
         ###Relational
         Database pkg::db
         (
@@ -1600,7 +1608,7 @@ fn resolved_table_carries_milestoning_definitions() {
           )
         )
     "});
-    let resolved = extension.resolved_databases();
+    let resolved = RelationalExtension::resolved_databases(&model);
     let db = resolved.get("pkg::db").expect("missing");
     let table = db.tables_by_name.get("biT").expect("biT missing");
     let milestoning = table.milestoning.as_ref().expect("expected milestoning");
@@ -1633,14 +1641,16 @@ fn resolved_databases_empty_before_define_bodies() {
     let auto_imports: Vec<SmolStr> = Vec::new();
 
     let mut bootstrap = legend_pure_parser_pure::pipeline::init_bootstrap_model();
+    let mut scope = std::mem::take(&mut bootstrap.compile_scope);
     let mut declare_ctx = legend_pure_parser_pure::extension::DeclareCtx {
         source_files: &files,
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
-        scope: None,
+        scope: Some(&mut scope),
     };
     extension.declare(&mut declare_ctx);
+    bootstrap.compile_scope = scope;
 
-    assert!(extension.resolved_databases().is_empty());
+    assert!(RelationalExtension::resolved_databases(&bootstrap).is_empty());
 }

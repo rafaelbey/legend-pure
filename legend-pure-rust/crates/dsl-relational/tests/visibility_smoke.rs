@@ -46,6 +46,7 @@ fn run_with_visibility(
     visibility: &[(&str, &[&str])],
 ) -> Vec<CompilationError> {
     let mut bootstrap = legend_pure_parser_pure::pipeline::init_bootstrap_model();
+    let mut scope = std::mem::take(&mut bootstrap.compile_scope);
     for (name, deps) in visibility {
         let mut set: BTreeSet<SmolStr> = BTreeSet::new();
         set.insert(SmolStr::new(*name));
@@ -64,7 +65,7 @@ fn run_with_visibility(
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
-        scope: None,
+        scope: Some(&mut scope),
     };
     extension.declare(&mut declare_ctx);
 
@@ -73,7 +74,7 @@ fn run_with_visibility(
         model: &frozen,
         auto_imports: &auto_imports,
         errors: &mut errors,
-        scope: None,
+        scope: Some(&mut scope),
     };
     extension.validate(&mut validate_ctx);
     errors

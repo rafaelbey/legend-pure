@@ -37,6 +37,7 @@ legend-pure-dsl-mapping = { path = "../dsl-mapping" }
 postcard = { version = "1", features = ["alloc"] }
 serde = { workspace = true, features = ["derive"] }
 smol_str = { workspace = true, features = ["serde"] }
+linkme = { workspace = true }
 
 [dev-dependencies]
 indoc = "2"

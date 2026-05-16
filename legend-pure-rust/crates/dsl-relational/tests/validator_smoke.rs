@@ -52,13 +52,14 @@ fn run_validator(source: &str) -> Vec<CompilationError> {
     // post-B validators (A3' join-tree-node chain checks) read in
     // `validate`, and `validate` runs the structural checks.
     let mut bootstrap = legend_pure_parser_pure::pipeline::init_bootstrap_model();
+    let mut scope = std::mem::take(&mut bootstrap.compile_scope);
     let auto_imports: Vec<SmolStr> = Vec::new();
     let mut declare_ctx = legend_pure_parser_pure::extension::DeclareCtx {
         source_files: &files,
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
-        scope: None,
+        scope: Some(&mut scope),
     };
     extension.declare(&mut declare_ctx);
     let mut define_ctx = legend_pure_parser_pure::extension::DefineCtx {
@@ -66,7 +67,7 @@ fn run_validator(source: &str) -> Vec<CompilationError> {
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
-        scope: None,
+        scope: Some(&mut scope),
     };
     extension.define_bodies(&mut define_ctx);
     let frozen = bootstrap;
@@ -74,7 +75,7 @@ fn run_validator(source: &str) -> Vec<CompilationError> {
         model: &frozen,
         auto_imports: &auto_imports,
         errors: &mut errors,
-        scope: None,
+        scope: Some(&mut scope),
     };
     extension.validate(&mut validate_ctx);
     errors
@@ -483,13 +484,14 @@ fn run_validator_with_mapping(source: &str) -> Vec<CompilationError> {
     let mut errors: Vec<CompilationError> = Vec::new();
 
     let mut bootstrap = legend_pure_parser_pure::pipeline::init_bootstrap_model();
+    let mut scope = std::mem::take(&mut bootstrap.compile_scope);
     let auto_imports: Vec<SmolStr> = Vec::new();
     let mut declare_ctx = legend_pure_parser_pure::extension::DeclareCtx {
         source_files: &files,
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
-        scope: None,
+        scope: Some(&mut scope),
     };
     extension.declare(&mut declare_ctx);
     // Phase B1+ validators (e.g. A3' join-tree-node chain checks)
@@ -499,7 +501,7 @@ fn run_validator_with_mapping(source: &str) -> Vec<CompilationError> {
         model: &mut bootstrap,
         auto_imports: &auto_imports,
         errors: &mut errors,
-        scope: None,
+        scope: Some(&mut scope),
     };
     extension.define_bodies(&mut define_ctx);
     let frozen = bootstrap;
@@ -507,7 +509,7 @@ fn run_validator_with_mapping(source: &str) -> Vec<CompilationError> {
         model: &frozen,
         auto_imports: &auto_imports,
         errors: &mut errors,
-        scope: None,
+        scope: Some(&mut scope),
     };
     extension.validate(&mut validate_ctx);
     errors
