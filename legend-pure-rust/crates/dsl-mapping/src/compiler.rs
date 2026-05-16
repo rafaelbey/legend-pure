@@ -1652,8 +1652,15 @@ fn validate_aggregate_value(
                 describe_type(ty, model)
             ),
             source_info: av.aggregate_fn.source_info().clone(),
-            kind: CompilationErrorKind::UnsupportedExpression {
-                kind: SmolStr::new_static("AggregateAggregateFnReturnType"),
+            // Mirrors the sibling `~mapFn` rule above — both are
+            // "expression is supported but its inferred type contradicts
+            // the slot's declared shape", which is exactly what
+            // `TypeMismatch` is documented for.
+            kind: CompilationErrorKind::TypeMismatch {
+                context: SmolStr::new_static("aggregation aggregateFn"),
+                target: SmolStr::new(target_class_fqn),
+                expected: SmolStr::new_static("DataType (primitive / enumeration)"),
+                actual: SmolStr::new(describe_type(ty, model)),
             },
         });
     }

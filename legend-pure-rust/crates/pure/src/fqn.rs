@@ -105,11 +105,15 @@ pub(crate) fn build_function_fqn(simple_name: &str, func: &Function, model: &Pur
 
 /// Append the type name to the signature.
 ///
-/// Java's `appendSignatureStringForType`:
+/// Java's `appendSignatureStringForType` cases:
 /// - Generic (rawType == null): uses type parameter name (T, V, etc.)
 /// - Unit: `Measure$UnitName`
 /// - `PackageableElement`: `rawType.getName()` (String, Integer, Relation, etc.)
-/// - `FunctionType`: `"FunctionTypeTODO"` (Java marks this as unsupported)
+/// - `FunctionType`: literal `"FunctionTypeTODO"` (an unimplemented case
+///   on the Java side — the string is what Java actually emits, not a
+///   Rust-side forward TODO). The Rust port emits `"Function"` instead
+///   for pragmatic compatibility with registered FQNs; the divergence is
+///   intentional and stable.
 fn append_type_signature(builder: &mut String, type_expr: &TypeExpr, model: &PureModel) {
     match type_expr {
         TypeExpr::Named { element, .. } => {
@@ -122,9 +126,15 @@ fn append_type_signature(builder: &mut String, type_expr: &TypeExpr, model: &Pur
             builder.push_str(name);
         }
         TypeExpr::FunctionType { .. } => {
-            // Java returns "FunctionTypeTODO" here. In practice, function-typed
-            // parameters use Function<> which resolves as a Named type.
-            // We use "Function" for pragmatic compatibility with registered FQNs.
+            // Java emits the literal string `"FunctionTypeTODO"` here
+            // (its `appendSignatureStringForType` has an unimplemented
+            // branch). In practice function-typed parameters use
+            // `Function<>` which resolves as a Named type, so the
+            // FunctionType path is rare. We deviate from Java by
+            // emitting `"Function"` — the registered FQNs in the
+            // function index use `Function` as the type token, so this
+            // makes lookup work where Java's literal string wouldn't.
+            // Intentional divergence, not a forward TODO.
             builder.push_str("Function");
         }
         TypeExpr::Relation(_) => {

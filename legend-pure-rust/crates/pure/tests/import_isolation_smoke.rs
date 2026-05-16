@@ -233,13 +233,16 @@ Class abc::Class2 extends Class1 {
 }
 
 // ---------------------------------------------------------------------------
-// Sweep — TODO T-20260510-01 lists "verify, don't trust the list" sites
-// beyond `extends` and property types. Pin each one with a no-import-errors
-// + with-import-compiles pair. The fix lives at `resolve_unqualified`
-// in `crates/pure/src/resolve.rs` (the chokepoint for short-name lookup);
-// every site below either reaches it via `resolve_type_ref` or via
-// `resolve_element_ptr` — these tests prove that's the actual structure
-// rather than the developer's hopeful claim.
+// Sweep coverage (T-20260510-01, closed 2026-05-11) — locks the sites
+// beyond `extends` and property types that the original ticket's
+// "verify, don't trust the list" note enumerated. Every site below
+// reaches the chokepoint `resolve_unqualified`
+// (crates/pure/src/resolve.rs) via `resolve_type_ref` or
+// `resolve_element_ptr`; these tests prove the routing structurally
+// rather than relying on the original ticket's hopeful claim.
+//
+// Not a forward TODO — the audit-end on T-20260510-01 confirmed no
+// additional fix is needed (central chokepoint covers every site).
 // ---------------------------------------------------------------------------
 
 // 9. Function parameter type — short cross-package ref

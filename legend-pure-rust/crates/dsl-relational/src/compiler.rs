@@ -873,11 +873,16 @@ fn check_predicate(
              got {actual}"
         ),
         source_info: source_info.clone(),
-        // TODO(error-kinds): same TypeMismatch story as the
-        // dsl-mapping ~filter return-type rule — closest existing
-        // variant.
-        kind: CompilationErrorKind::UnsupportedExpression {
-            kind: SmolStr::new_static("RelationalPredicateReturnType"),
+        // `TypeMismatch` is the documented variant for "expression is
+        // supported but its inferred type contradicts the slot's
+        // declared shape" — exactly this predicate-return-type rule.
+        // Context label distinguishes Filter / Join / MultiGrainFilter
+        // for downstream consumers that bucket on the kind.
+        kind: CompilationErrorKind::TypeMismatch {
+            context: SmolStr::new(format!("{kind} predicate")),
+            target: SmolStr::new(format!("{db_fqn}::{name}")),
+            expected: SmolStr::new_static("Boolean[1]"),
+            actual: SmolStr::new(actual),
         },
     });
 }

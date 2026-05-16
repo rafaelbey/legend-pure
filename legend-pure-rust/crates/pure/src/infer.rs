@@ -1088,9 +1088,14 @@ enum PropertyLookup {
     ///
     /// Also used when the receiver is an M3 metatype (`Class<X>`,
     /// `Enumeration<X>`, etc.) — element-side reflection (`MyEnum.RED`,
-    /// `Person.name`) goes through runtime dispatch and the compile-time
-    /// check would produce false positives. TODO: tighten this once the
-    /// metatype-aware lookup lands.
+    /// `Person.name`) goes through runtime dispatch, so the compile-time
+    /// check returns `UnknownTarget` to avoid false positives. Tightening
+    /// this requires a metatype-aware lookup that walks the M3 metatype's
+    /// declared properties (`Class.name`, `Class.properties`,
+    /// `Enumeration.values`, …); the predicate `is_metatype_carrier`
+    /// already identifies the receivers, so the missing piece is the
+    /// metatype-side property table. Forward-looking infra dependency,
+    /// not actionable in isolation.
     UnknownTarget,
 }
 
