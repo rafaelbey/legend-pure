@@ -142,17 +142,34 @@ impl H2State {
         })
     }
 
-    /// Construct an `H2State` using the process-wide config cache
-    /// ([`crate::extension_configs`]) overlaid with env-var overrides.
-    /// This is the entry point natives use when dispatching the H2
-    /// backend — no per-call config plumbing required.
+    /// Construct an `H2State` using the supplied
+    /// `[extension.relational]` sub-table (from per-evaluator
+    /// configuration) overlaid with env-var overrides.
+    ///
+    /// Callers typically extract the sub-table via
+    /// [`legend_pure_runtime::native::EvalContextTrait::config_for`]
+    /// just before calling this — see the dispatch.rs / resultset.rs
+    /// use sites for the canonical shape.
     ///
     /// # Errors
     /// Returns the underlying [`crate::H2ConfigError`] surfaced as a
     /// [`PureException`] when no jar is configured anywhere, or
     /// propagates spawn / connect failures.
-    pub fn from_global_config() -> Result<Self, PureException> {
-        let cfg = crate::H2Config::resolve(crate::extension_configs())
+    pub fn from_relational_table(
+        relational: std::collections::HashMap<String, toml::Value>,
+    ) -> Result<Self, PureException> {
+        // H2Config::resolve expects the outer-shape
+        // HashMap<extension_name, HashMap<field, Value>>; wrap the
+        // single sub-table we have. Keeps H2Config's API stable while
+        // unblocking per-evaluator config flow.
+        let mut wrapper: std::collections::HashMap<
+            String,
+            std::collections::HashMap<String, toml::Value>,
+        > = std::collections::HashMap::new();
+        if !relational.is_empty() {
+            wrapper.insert("relational".to_string(), relational);
+        }
+        let cfg = crate::H2Config::resolve(&wrapper)
             .map_err(|e| PureRuntimeError::EvaluationError(e.to_string()))?;
         Self::new(&cfg)
     }

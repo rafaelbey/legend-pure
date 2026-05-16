@@ -34,6 +34,8 @@
 //!     .build(&model);
 //! ```
 
+use std::collections::HashMap;
+
 use legend_pure_parser_pure::model::PureModel;
 
 use crate::dsl::DSLPopulator;
@@ -50,6 +52,7 @@ use crate::native::NativeRegistry;
 pub struct EvaluatorBuilder<'a> {
     registry: Option<&'a NativeRegistry>,
     populators: Option<Vec<&'a dyn DSLPopulator>>,
+    extension_configs: Option<HashMap<String, HashMap<String, toml::Value>>>,
 }
 
 impl<'a> EvaluatorBuilder<'a> {
@@ -58,6 +61,7 @@ impl<'a> EvaluatorBuilder<'a> {
         Self {
             registry: None,
             populators: None,
+            extension_configs: None,
         }
     }
 
@@ -80,6 +84,25 @@ impl<'a> EvaluatorBuilder<'a> {
     /// [`crate::dsl::discovered_populators`].
     pub fn populators(mut self, populators: &[&'a dyn DSLPopulator]) -> Self {
         self.populators = Some(populators.to_vec());
+        self
+    }
+
+    /// Install per-evaluator extension configuration sourced from the
+    /// `[extension.<name>]` tables in `legend-pure-classpath.toml`.
+    ///
+    /// The CLI typically passes
+    /// `legend_cli::classpath::ResolvedClasspath::extension_configs`
+    /// verbatim. Extensions look up their sub-table via
+    /// [`crate::native::EvalContextTrait::config_for`] during native
+    /// dispatch or populator execution.
+    ///
+    /// Default is the empty table — extensions fall back to
+    /// defaults / env-var overrides when no configuration is present.
+    pub fn extension_configs(
+        mut self,
+        cfgs: HashMap<String, HashMap<String, toml::Value>>,
+    ) -> Self {
+        self.extension_configs = Some(cfgs);
         self
     }
 
@@ -117,6 +140,9 @@ impl<'a> EvaluatorBuilder<'a> {
         });
 
         let mut eval = Evaluator::new(model, registry);
+        if let Some(cfgs) = self.extension_configs {
+            eval.set_extension_configs(cfgs);
+        }
         if !populators.is_empty() {
             crate::dsl::run_populators(model, eval.heap_mut(), &populators);
         }
@@ -156,5 +182,37 @@ mod tests {
         let model = PureModel::new();
         let pops: [&dyn DSLPopulator; 0] = [];
         let _eval = Evaluator::builder().populators(&pops).build(&model);
+    }
+
+    #[test]
+    fn extension_configs_round_trip_via_builder() {
+        let model = PureModel::new();
+        let mut inner = HashMap::new();
+        inner.insert("port".to_string(), toml::Value::Integer(9999));
+        let mut cfgs = HashMap::new();
+        cfgs.insert("relational.h2".to_string(), inner);
+
+        let eval = Evaluator::builder().extension_configs(cfgs).build(&model);
+
+        let sub = eval
+            .config_for("relational.h2")
+            .expect("relational.h2 sub-table installed");
+        assert_eq!(
+            sub.get("port"),
+            Some(&toml::Value::Integer(9999)),
+            "port value round-trips verbatim through the builder",
+        );
+
+        assert!(
+            eval.config_for("unknown.ext").is_none(),
+            "unknown extension name yields None",
+        );
+    }
+
+    #[test]
+    fn extension_configs_default_is_empty_when_unset() {
+        let model = PureModel::new();
+        let eval = Evaluator::builder().build(&model);
+        assert!(eval.config_for("anything").is_none());
     }
 }

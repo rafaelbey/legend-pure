@@ -34,6 +34,12 @@ tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 linkme = { workspace = true }
+# Per-evaluator extension configuration carried via
+# `Evaluator::builder().extension_configs(...)`. Mirrors the shape
+# produced by `legend_cli::classpath::resolve_classpath`
+# (`HashMap<String, HashMap<String, toml::Value>>`) so the CLI can
+# thread it through verbatim.
+toml = "0.8"
 
 [dev-dependencies]
 legend-pure-parser-parser = { path = "../parser" }

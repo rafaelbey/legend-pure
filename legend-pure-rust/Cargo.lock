@@ -2360,6 +2360,7 @@ dependencies = [
  "serde_json",
  "smol_str",
  "thiserror 2.0.18",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]

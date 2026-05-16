@@ -264,9 +264,29 @@ state.do_something();
 ```
 
 This is the pattern `store-relational-runtime` uses to keep one DuckDB
-connection per evaluator. Process-wide state needs a different
-mechanism (see `store-relational-runtime::set_extension_configs` for one
-example).
+connection per evaluator.
+
+### Per-evaluator configuration
+
+For declarative configuration (jar paths, connection strings,
+credentials, feature flags) sourced from
+`legend-pure-classpath.toml`'s `[extension.<name>]` tables, use
+[`EvalContextTrait::config_for`](https://docs.rs/legend-pure-runtime/0.1/legend_pure_runtime/native/trait.EvalContextTrait.html#method.config_for):
+
+```rust
+let sub = ctx.config_for("mydsl");        // Option<&HashMap<String, toml::Value>>
+let port = sub
+    .and_then(|m| m.get("port"))
+    .and_then(toml::Value::as_integer)
+    .unwrap_or(default_port);
+```
+
+The CLI threads the resolved
+`legend_cli::classpath::ResolvedClasspath::extension_configs` through
+to `Evaluator::builder().extension_configs(...)` for you — your
+extension just reads its sub-table. Per-evaluator (not process-wide),
+so two evaluators can carry independent tenant configs / credentials
+without leaking into each other.
 
 ### Sync requirement
 
@@ -797,21 +817,18 @@ known remaining items, with the smallest first:
    `walk_references` impls move into companion stateless
    `IdeExtension` impls and the legacy hook can be removed from
    `CompilerExtension`. Tracked as "Phase 2".
-3. **Evaluator extension-config flow** (`Phase 4`).
-   `EvaluatorBuilder::extension_configs(toml)` → `ExtensionStateStore::get_config::<T>(...)`
-   gives extensions a per-evaluator configuration channel.
-   `store-relational-runtime::set_extension_configs` (a process-wide
-   `OnceLock`) goes away — restores test isolation between concurrent
-   evaluators.
-4. **CLI `--classpath` consumption** (`Phase 5` continuation).
-   `crates/cli/src/main.rs:140-153` already threads the flag through;
-   subcommand bodies (`test.rs:186` is the prototype) need to call
-   `crate::classpath::resolve_classpath(...)` and feed the resolved
-   repos / `extension_configs` into the builder.
-5. **Worked example crate** (`Phase 6`). `examples/mydsl-extension/`
+3. **CLI `--classpath` consumption** for repo loading. The
+   `[extension.<name>]` tables flow through to the evaluator (Phase 4
+   wired `legend test`'s `extension_configs`), but the classpath's
+   *repos* still aren't read by most subcommands. `legend test` falls
+   back to `load_platform()` (embedded) unless `--live` is used;
+   `legend run`, `legend check`, etc. behave similarly. Wire
+   `resolve_classpath` outputs into model loading the same way
+   `extension_configs` is now wired.
+4. **Worked example crate** (`Phase 6`). `examples/mydsl-extension/`
    outside the workspace, demonstrating the full discovery path.
    CI-built so the recipe never goes stale.
-6. **Repo descriptors + manifest** (`Phase B3`, existing BACKLOG P1).
+5. **Repo descriptors + manifest** (`Phase B3`, existing BACKLOG P1).
    Independent of the discovery work — Java-Pure-style
    `repo.definition.json` schema replacing the hand-listed paths in
    `crates/core-platform-pure/build.rs`.

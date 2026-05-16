@@ -183,7 +183,15 @@ pub struct TestArgs {
 /// `--live` / `--platform-dir` shortcut applies.
 #[allow(clippy::needless_pass_by_value)] // clap convention
 pub fn run(args: TestArgs, classpath: Option<&std::path::Path>) -> Result<(), CliError> {
-    let _ = classpath; // wired through main; full integration deferred to Phase 5
+    // Resolve the `[extension.<name>]` tables from the classpath
+    // cascade so the H2 backend (and any future per-evaluator-config
+    // consumer) picks them up. Model loading still uses load_platform
+    // / live descriptors below — full classpath-driven repo loading
+    // is a separate, larger refactor tracked as a remaining gap.
+    let cwd = std::env::current_dir().map_err(|e| CliError::Custom(format!("cwd: {e}")))?;
+    let resolved_classpath = crate::classpath::resolve_classpath(classpath, &cwd)
+        .map_err(|e| CliError::Custom(format!("classpath: {e}")))?;
+    let extension_configs = resolved_classpath.extension_configs;
     let mode_label = args
         .mode
         .iter()
@@ -221,7 +229,13 @@ pub fn run(args: TestArgs, classpath: Option<&std::path::Path>) -> Result<(), Cl
     let mut _debouncer = None;
 
     loop {
-        let res = run_once(&args, &mode_label, &pct_via, descriptor.as_deref());
+        let res = run_once(
+            &args,
+            &mode_label,
+            &pct_via,
+            descriptor.as_deref(),
+            &extension_configs,
+        );
 
         if !args.watch {
             return res;
@@ -269,6 +283,10 @@ fn run_once(
     mode_label: &str,
     pct_via: &str,
     live_descriptor: Option<&std::path::Path>,
+    extension_configs: &std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, toml::Value>,
+    >,
 ) -> Result<(), CliError> {
     eprintln!(
         "{} {} in {}{}{}",
@@ -329,6 +347,7 @@ fn run_once(
         let mut hooks = CoverageHooks::new(args.coverage_filter.clone());
         hooks.map_mut().populate_coverable(&model);
         let mut evaluator = Evaluator::with_hooks(&model, &registry, hooks);
+        evaluator.set_extension_configs(extension_configs.clone());
         legend_pure_runtime::dsl::run_populators(&model, evaluator.heap_mut(), &populators);
 
         let (report, fail) = run_tests(&model, &mut evaluator, args)?;
@@ -371,6 +390,7 @@ fn run_once(
     } else {
         // Production path — zero-overhead NoOpHooks.
         let mut evaluator = Evaluator::new(&model, &registry);
+        evaluator.set_extension_configs(extension_configs.clone());
         legend_pure_runtime::dsl::run_populators(&model, evaluator.heap_mut(), &populators);
         let (report, fail) = run_tests(&model, &mut evaluator, args)?;
         match args.format {

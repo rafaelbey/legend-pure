@@ -130,6 +130,21 @@ pub struct Evaluator<'model, H: EvalHooks = NoOpHooks> {
     /// tests) stay isolated.
     extensions: ExtensionStateStore,
 
+    /// Per-evaluator extension configuration sourced from
+    /// `legend-pure-classpath.toml`'s `[extension.<name>]` tables.
+    ///
+    /// Outer key is the extension name (e.g. `"relational.h2"`); inner
+    /// is the field name within that extension's config table. Extensions
+    /// read their sub-table via
+    /// [`crate::native::EvalContextTrait::config_for`].
+    ///
+    /// Per-evaluator instead of process-wide because concurrent
+    /// evaluators may target different tenants / connection strings /
+    /// credentials and must stay isolated. Restores test isolation that
+    /// the `store-relational-runtime::set_extension_configs` `OnceLock`
+    /// previously sacrificed (deleted in this commit).
+    extension_configs: HashMap<String, HashMap<String, toml::Value>>,
+
     /// Instrumentation hooks (zero-cost for `NoOpHooks`).
     hooks: H,
 
@@ -184,6 +199,7 @@ impl<'model> Evaluator<'model, NoOpHooks> {
             natives,
             member_wrapper_cache: HashMap::new(),
             extensions: ExtensionStateStore::new(),
+            extension_configs: HashMap::new(),
             hooks: NoOpHooks,
             rendering_depth: 0,
         }
@@ -258,6 +274,7 @@ impl<'model> Evaluator<'model, NoOpHooks> {
             natives: registry,
             member_wrapper_cache: HashMap::new(),
             extensions: ExtensionStateStore::new(),
+            extension_configs: HashMap::new(),
             hooks: NoOpHooks,
             rendering_depth: 0,
         }
@@ -317,6 +334,7 @@ impl<'model> Evaluator<'model, NoOpHooks> {
             natives: leaked_default_registry(),
             member_wrapper_cache: HashMap::new(),
             extensions: ExtensionStateStore::new(),
+            extension_configs: HashMap::new(),
             hooks: NoOpHooks,
             rendering_depth: 0,
         }
@@ -339,6 +357,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             natives,
             member_wrapper_cache: HashMap::new(),
             extensions: ExtensionStateStore::new(),
+            extension_configs: HashMap::new(),
             hooks,
             rendering_depth: 0,
         }
@@ -376,6 +395,37 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
     #[must_use]
     pub fn natives(&self) -> &NativeRegistry {
         self.natives
+    }
+
+    /// Install per-evaluator extension configuration.
+    ///
+    /// Typically called by [`crate::builder::EvaluatorBuilder::build`]
+    /// from the resolved
+    /// `legend_cli::classpath::ResolvedClasspath::extension_configs`,
+    /// but exposed publicly so callers using
+    /// [`with_hooks`](Self::with_hooks) or other explicit constructors
+    /// can wire configuration in too.
+    ///
+    /// Replaces any previously-set table. Extensions retrieve their
+    /// per-evaluator sub-table via
+    /// [`crate::native::EvalContextTrait::config_for`].
+    pub fn set_extension_configs(&mut self, cfgs: HashMap<String, HashMap<String, toml::Value>>) {
+        self.extension_configs = cfgs;
+    }
+
+    /// Look up the configuration sub-table for an extension by name.
+    ///
+    /// Returns `None` when no `[extension.<name>]` table was present
+    /// in the classpath TOML (or when no configs were installed at
+    /// all). Extensions fall back to defaults / env-var overrides in
+    /// that case.
+    ///
+    /// Mirrors [`crate::native::EvalContextTrait::config_for`] for
+    /// callers that hold the evaluator directly (e.g. tests, the
+    /// builder).
+    #[must_use]
+    pub fn config_for(&self, name: &str) -> Option<&HashMap<String, toml::Value>> {
+        self.extension_configs.get(name)
     }
 
     /// Access the per-evaluator extension state store.
@@ -2550,6 +2600,10 @@ impl<H: EvalHooks> crate::native::EvalContextTrait for EvalContext<'_, '_, H> {
 
     fn extensions(&self) -> &crate::extensions::ExtensionStateStore {
         &self.evaluator.extensions
+    }
+
+    fn config_for(&self, name: &str) -> Option<&HashMap<String, toml::Value>> {
+        self.evaluator.config_for(name)
     }
 
     fn invoke_qualified_property(

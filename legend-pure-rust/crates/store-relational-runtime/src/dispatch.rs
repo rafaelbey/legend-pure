@@ -142,9 +142,15 @@ impl RelationalBackend for H2Backend {
         ctx: &mut dyn EvalContextTrait,
         sql: &str,
     ) -> Result<(), PureException> {
+        // Pre-extract the `[extension.relational]` sub-table by value
+        // so the lazy `get_or_init` closure doesn't co-borrow `ctx`
+        // alongside the `extensions()` reborrow above. Cheap clone —
+        // configs are tiny and only consulted on first H2 call per
+        // evaluator (cached in `ExtensionStateStore` thereafter).
+        let relational = ctx.config_for("relational").cloned().unwrap_or_default();
         let state = ctx
             .extensions()
-            .get_or_init::<H2State, _>(H2State::from_global_config)?;
+            .get_or_init::<H2State, _>(|| H2State::from_relational_table(relational))?;
         state.with_client(|c| c.batch_execute(sql))?;
         Ok(())
     }

@@ -105,10 +105,14 @@ pub fn run_sql_to_result_set_h2(
     let null_cell = Value::Object(sql_null_handle);
 
     let start = std::time::Instant::now();
+    // Pre-extract the `[extension.relational]` sub-table by value so
+    // the lazy `get_or_init` closure doesn't co-borrow `ctx` alongside
+    // the `extensions()` reborrow. See dispatch.rs for the same shape.
+    let relational = ctx.config_for("relational").cloned().unwrap_or_default();
     let (column_names, rows) = {
         let state = ctx
             .extensions()
-            .get_or_init::<H2State, _>(H2State::from_global_config)?;
+            .get_or_init::<H2State, _>(|| H2State::from_relational_table(relational))?;
         state.with_client(|c| {
             let messages = c.simple_query(sql)?;
             // Find the RowDescription via the first SimpleQueryRow's

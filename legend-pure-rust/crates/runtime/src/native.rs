@@ -242,6 +242,31 @@ pub trait EvalContextTrait {
     /// state.do_something();
     /// ```
     fn extensions(&self) -> &crate::extensions::ExtensionStateStore;
+
+    /// Look up the per-evaluator configuration sub-table for an
+    /// extension by name.
+    ///
+    /// Per-evaluator counterpart to the `[extension.<name>]` tables
+    /// in `legend-pure-classpath.toml`. The outer caller (`legend test`,
+    /// `legend run`, an embedder, …) resolves the classpath into a
+    /// `HashMap<String, HashMap<String, toml::Value>>` and threads it
+    /// into the evaluator via
+    /// [`crate::builder::EvaluatorBuilder::extension_configs`] /
+    /// [`crate::eval::Evaluator::set_extension_configs`]. Each
+    /// extension's native looks up its sub-table here.
+    ///
+    /// Returns `None` when no configuration was installed (every
+    /// evaluator starts with an empty config table) or when no
+    /// `[extension.<name>]` table was present in the classpath. The
+    /// extension should fall back to defaults / env-var overrides in
+    /// that case.
+    ///
+    /// The default impl returns `None` so test stubs (e.g.
+    /// [`crate::native::MockCtx`]) and embedders that don't care
+    /// about classpath configuration don't have to override it.
+    fn config_for(&self, _name: &str) -> Option<&HashMap<String, toml::Value>> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
