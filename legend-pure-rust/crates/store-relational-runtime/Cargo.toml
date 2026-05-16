@@ -31,6 +31,7 @@ rust_decimal = { workspace = true }
 serde = { workspace = true }
 toml = "0.8"
 thiserror = { workspace = true }
+linkme = { workspace = true }
 
 # DuckDB Rust driver. `bundled` builds libduckdb from source so no
 # system install is needed; adds 30-60s to cold builds, then cached.

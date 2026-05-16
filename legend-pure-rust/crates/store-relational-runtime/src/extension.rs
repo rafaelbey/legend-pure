@@ -21,7 +21,8 @@
 //! extension table) so both stacks dispatch the same Pure calls to the
 //! same native implementations.
 
-use legend_pure_runtime::native::{NativeRegistry, RuntimeExtension};
+use legend_pure_runtime::native::{NativeRegistry, RUNTIME_EXTENSIONS, RuntimeExtension};
+use linkme::distributed_slice;
 
 use crate::natives::execute_in_db::ExecuteInDb;
 use crate::natives::fetch_metadata::{
@@ -44,6 +45,13 @@ use crate::natives::temp_table::{CreateTempTable, CreateTempTableWithFinally, Dr
 /// ```
 #[derive(Debug, Default)]
 pub struct RelationalStoreExtension;
+
+/// Self-registration into the runtime's `RUNTIME_EXTENSIONS`
+/// distributed slice so any binary that depends on this crate picks
+/// up the relational natives via `NativeRegistry::discovered()` with
+/// no per-binary wiring.
+#[distributed_slice(RUNTIME_EXTENSIONS)]
+static RELATIONAL_STORE_EXTENSION: &(dyn RuntimeExtension + Sync) = &RelationalStoreExtension;
 
 impl RuntimeExtension for RelationalStoreExtension {
     fn name(&self) -> &'static str {

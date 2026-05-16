@@ -83,17 +83,32 @@ pub struct PartialPureModel {
 /// in every section (e.g., `meta::pure::metamodel`, `meta::pure::profiles`).
 /// The caller controls which packages are auto-imported.
 ///
+/// **Extension discovery**: every [`crate::extension::CompilerExtension`]
+/// registered via the [`crate::extension::COMPILER_EXTENSIONS`]
+/// distributed slice is folded in automatically, topologically sorted
+/// by [`crate::extension::CompilerExtension::depends_on`] declarations.
+/// Tests that need to compose extensions by hand should call
+/// [`compile_with_extensions`] instead.
+///
 /// # Errors
 ///
 /// - `Ok(PureModel)` — compilation succeeded with zero errors
 /// - `Err(PartialPureModel)` — errors occurred, but the model is still
 ///   available via [`PartialPureModel::model`] for diagnostics / LSP
+///
+/// # Panics
+///
+/// Panics at extension discovery if two `CompilerExtension`s share a
+/// `name()`, an extension declares an unknown dependency, or the
+/// dependency graph contains a cycle. See
+/// [`crate::extension::discovered_compiler_extensions`].
 #[allow(clippy::result_large_err)] // Ok(PureModel) is equally large — intentional API
 pub fn compile(
     source_files: &[SourceFile],
     auto_imports: &[SmolStr],
 ) -> Result<PureModel, PartialPureModel> {
-    compile_with_extensions(source_files, auto_imports, &[])
+    let discovered = crate::extension::discovered_compiler_extensions();
+    compile_with_extensions(source_files, auto_imports, &discovered)
 }
 
 /// Compiles with a slice of [`CompilerExtension`]s. Extensions plug

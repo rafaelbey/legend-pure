@@ -59,6 +59,7 @@ use std::collections::HashMap;
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_ast::expression::Expression;
 use legend_pure_parser_ast::section::SourceFile;
+use linkme::distributed_slice;
 use smol_str::SmolStr;
 
 use crate::error::CompilationError;
@@ -134,6 +135,25 @@ pub trait CompilerExtension {
 
     /// Pass 3 — validate. Default no-op.
     fn validate(&self, _ctx: &mut ValidateCtx<'_>) {}
+
+    /// Names of extensions that must run *before* this one within each pass.
+    ///
+    /// Default: no dependencies. The compiler pipeline iterates
+    /// extensions in slice order within each pass (Pass 1 declare, Pass 2a
+    /// signatures, Pass 2b bodies, Pass 3 validate); across passes there
+    /// is a hard barrier (every extension's Pass-N completes before any
+    /// extension's Pass-(N+1) starts), so cross-pass ordering is automatic.
+    ///
+    /// **In-pass** ordering only matters when extension B reads model
+    /// state that extension A wrote *in the same pass*. Override this
+    /// method when that's the case; the discovery helper uses the
+    /// declared edges to topologically sort the slice once at startup.
+    ///
+    /// Cycles in the dependency graph panic at startup with the cycle
+    /// path in the message.
+    fn depends_on(&self) -> &'static [&'static str] {
+        &[]
+    }
 
     /// Contribute references to the IDE's reference index.
     ///
@@ -265,4 +285,244 @@ pub fn lower_and_infer_expression(
     crate::infer::infer_function_body(model, &params, &mut body, errors);
 
     body.into_iter().next()?.type_info.map(|t| *t)
+}
+
+// ---------------------------------------------------------------------------
+// COMPILER_EXTENSIONS — distributed slice + topo-sorted discovery
+// ---------------------------------------------------------------------------
+
+/// Distributed slice into which each [`CompilerExtension`]-providing
+/// crate registers its top-level extension instance.
+///
+/// Use the `#[distributed_slice]` attribute next to the extension
+/// instance to make it discoverable by
+/// [`discovered_compiler_extensions`] and by
+/// [`crate::pipeline::compile`]:
+///
+/// ```ignore
+/// use legend_pure_pure::extension::{CompilerExtension, COMPILER_EXTENSIONS};
+/// use linkme::distributed_slice;
+///
+/// #[distributed_slice(COMPILER_EXTENSIONS)]
+/// static MY_EXT: &(dyn CompilerExtension + Sync) = &MyExtension;
+/// ```
+///
+/// The `+ Sync` bound is required because the slice is a `static`. A
+/// `CompilerExtension` that carries per-compile mutable state (e.g.
+/// `RefCell`-backed accumulators) cannot self-register through this
+/// slice — those extensions remain explicit
+/// [`crate::pipeline::compile_with_extensions`] callers until they
+/// migrate their state into [`crate::model::Element::DSLInstance`].
+#[distributed_slice]
+pub static COMPILER_EXTENSIONS: [&'static (dyn CompilerExtension + Sync)] = [..];
+
+/// Discover and topologically sort the [`COMPILER_EXTENSIONS`] slice.
+///
+/// Within each compile pass the pipeline runs extensions in the
+/// returned order. The topo-sort respects each extension's
+/// [`CompilerExtension::depends_on`] declaration so that an extension
+/// reading another's in-pass output runs after its dependency.
+///
+/// # Panics
+///
+/// - Two extensions register the same [`CompilerExtension::name`].
+/// - The dependency graph has a cycle. The panic message names the
+///   cycle path.
+/// - An extension declares a dependency on a name that is not
+///   registered. The panic message names both ends.
+#[must_use]
+pub fn discovered_compiler_extensions() -> Vec<&'static dyn CompilerExtension> {
+    topo_sort_compiler_extensions(COMPILER_EXTENSIONS.iter().copied())
+}
+
+/// Strict-validating topo-sort factored out for unit-testing without
+/// touching the global [`COMPILER_EXTENSIONS`] slice.
+#[must_use]
+fn topo_sort_compiler_extensions<I>(extensions: I) -> Vec<&'static dyn CompilerExtension>
+where
+    I: IntoIterator<Item = &'static (dyn CompilerExtension + Sync)>,
+{
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let exts: Vec<&'static (dyn CompilerExtension + Sync)> = extensions.into_iter().collect();
+
+    // 1. Validate uniqueness of names.
+    let mut by_name: BTreeMap<&'static str, &'static (dyn CompilerExtension + Sync)> =
+        BTreeMap::new();
+    for ext in &exts {
+        let name = ext.name();
+        assert!(
+            by_name.insert(name, *ext).is_none(),
+            "discovered_compiler_extensions: two extensions registered under name `{name}`. \
+             Extension names must be globally unique.",
+        );
+    }
+
+    // 2. Validate every dependency edge points at a registered extension.
+    for ext in &exts {
+        let name = ext.name();
+        for dep in ext.depends_on() {
+            assert!(
+                by_name.contains_key(dep),
+                "discovered_compiler_extensions: extension `{name}` declares dependency on `{dep}`, \
+                 which is not registered. Check that the providing crate is in your Cargo \
+                 dependency graph and links its #[distributed_slice] static.",
+            );
+        }
+    }
+
+    // 3. Kahn's algorithm — BTreeSet so the output order is
+    //    deterministic for equal-priority extensions.
+    let mut in_degree: BTreeMap<&'static str, usize> =
+        by_name.keys().map(|n| (*n, 0_usize)).collect();
+    // Reverse adjacency: for each node, the set of nodes that depend on it.
+    let mut dependents: BTreeMap<&'static str, BTreeSet<&'static str>> =
+        by_name.keys().map(|n| (*n, BTreeSet::new())).collect();
+    for ext in &exts {
+        for dep in ext.depends_on() {
+            // dep -> ext (dep must run first)
+            *in_degree.get_mut(ext.name()).unwrap_or(&mut 0) += 1;
+            if let Some(set) = dependents.get_mut(dep) {
+                set.insert(ext.name());
+            }
+        }
+    }
+
+    let mut ready: BTreeSet<&'static str> = in_degree
+        .iter()
+        .filter_map(|(n, d)| if *d == 0 { Some(*n) } else { None })
+        .collect();
+    let mut out: Vec<&'static dyn CompilerExtension> = Vec::with_capacity(exts.len());
+    while let Some(name) = ready.iter().next().copied() {
+        ready.remove(&name);
+        if let Some(ext) = by_name.get(name) {
+            out.push(*ext);
+        }
+        if let Some(deps) = dependents.get(&name).cloned() {
+            for dependent in deps {
+                if let Some(d) = in_degree.get_mut(dependent) {
+                    *d = d.saturating_sub(1);
+                    if *d == 0 {
+                        ready.insert(dependent);
+                    }
+                }
+            }
+        }
+    }
+
+    if out.len() != exts.len() {
+        // Remaining nodes have non-zero in_degree → cycle.
+        let remaining: Vec<&'static str> = in_degree
+            .iter()
+            .filter_map(|(n, d)| if *d > 0 { Some(*n) } else { None })
+            .collect();
+        panic!(
+            "discovered_compiler_extensions: dependency cycle among extensions {remaining:?}. \
+             Inspect each extension's `depends_on` declaration to find the cycle.",
+        );
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct A;
+    struct B;
+    struct C;
+    struct ADup;
+    struct BadDep;
+
+    impl CompilerExtension for A {
+        fn name(&self) -> &'static str {
+            "A"
+        }
+    }
+    impl CompilerExtension for B {
+        fn name(&self) -> &'static str {
+            "B"
+        }
+        fn depends_on(&self) -> &'static [&'static str] {
+            &["A"]
+        }
+    }
+    impl CompilerExtension for C {
+        fn name(&self) -> &'static str {
+            "C"
+        }
+        fn depends_on(&self) -> &'static [&'static str] {
+            &["B"]
+        }
+    }
+    impl CompilerExtension for ADup {
+        fn name(&self) -> &'static str {
+            "A"
+        }
+    }
+    impl CompilerExtension for BadDep {
+        fn name(&self) -> &'static str {
+            "BadDep"
+        }
+        fn depends_on(&self) -> &'static [&'static str] {
+            &["DoesNotExist"]
+        }
+    }
+
+    #[test]
+    fn discovered_empty_slice_returns_empty_vec() {
+        // Phase-1 invariant; once Phase 3 lands the count goes up.
+        assert!(discovered_compiler_extensions().is_empty());
+    }
+
+    #[test]
+    fn topo_sort_orders_by_depends_on() {
+        // Input order C, A, B but C depends on B which depends on A,
+        // so expected order is A, B, C.
+        let exts: [&'static (dyn CompilerExtension + Sync); 3] = [&C, &A, &B];
+        let out = topo_sort_compiler_extensions(exts.iter().copied());
+        let names: Vec<&str> = out.iter().map(|e| e.name()).collect();
+        assert_eq!(names, vec!["A", "B", "C"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "two extensions registered under name `A`")]
+    fn topo_sort_panics_on_duplicate_names() {
+        let exts: [&'static (dyn CompilerExtension + Sync); 2] = [&A, &ADup];
+        let _ = topo_sort_compiler_extensions(exts.iter().copied());
+    }
+
+    #[test]
+    #[should_panic(expected = "declares dependency on `DoesNotExist`")]
+    fn topo_sort_panics_on_unknown_dep() {
+        let exts: [&'static (dyn CompilerExtension + Sync); 1] = [&BadDep];
+        let _ = topo_sort_compiler_extensions(exts.iter().copied());
+    }
+
+    // Cyclic pair — Cyc1 depends on Cyc2, Cyc2 depends on Cyc1.
+    struct Cyc1;
+    struct Cyc2;
+    impl CompilerExtension for Cyc1 {
+        fn name(&self) -> &'static str {
+            "Cyc1"
+        }
+        fn depends_on(&self) -> &'static [&'static str] {
+            &["Cyc2"]
+        }
+    }
+    impl CompilerExtension for Cyc2 {
+        fn name(&self) -> &'static str {
+            "Cyc2"
+        }
+        fn depends_on(&self) -> &'static [&'static str] {
+            &["Cyc1"]
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "dependency cycle among extensions")]
+    fn topo_sort_panics_on_cycle() {
+        let exts: [&'static (dyn CompilerExtension + Sync); 2] = [&Cyc1, &Cyc2];
+        let _ = topo_sort_compiler_extensions(exts.iter().copied());
+    }
 }

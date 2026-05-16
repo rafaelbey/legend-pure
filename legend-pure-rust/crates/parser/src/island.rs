@@ -46,7 +46,10 @@
 //!
 //! [`IslandContent`]: legend_pure_parser_ast::island::IslandContent
 
+use std::collections::HashSet;
+
 use legend_pure_parser_ast::island::IslandContent;
+use linkme::distributed_slice;
 
 use crate::error::ParseError;
 use crate::parser::ParserContext;
@@ -113,4 +116,139 @@ pub trait IslandParser: Send + Sync {
 #[must_use]
 pub fn default_island_parsers() -> Vec<Box<dyn IslandParser>> {
     Vec::new()
+}
+
+// ---------------------------------------------------------------------------
+// ISLAND_PARSERS — distributed slice for self-registering island grammars
+// ---------------------------------------------------------------------------
+
+/// Distributed slice into which each [`IslandParser`]-providing crate
+/// registers its parser instance.
+///
+/// ```ignore
+/// use legend_pure_parser_parser::island::{IslandParser, ISLAND_PARSERS};
+/// use linkme::distributed_slice;
+///
+/// #[distributed_slice(ISLAND_PARSERS)]
+/// static MY_ISLAND: &(dyn IslandParser + Send + Sync) = &MyIslandParser;
+/// ```
+///
+/// The slice is consumed by [`discovered_island_parsers`] which
+/// returns a `Vec<&'static dyn IslandParser>` ready to thread into
+/// [`crate::parse`]. Discovery validates that no two registered
+/// parsers share a `tag()`.
+#[distributed_slice]
+pub static ISLAND_PARSERS: [&'static (dyn IslandParser + Send + Sync)] = [..];
+
+/// Discover and validate the [`ISLAND_PARSERS`] slice.
+///
+/// # Panics
+///
+/// Panics when two registered island parsers share a `tag()`. Each
+/// tag must be globally unique because the main parser dispatches by
+/// tag string match.
+#[must_use]
+pub fn discovered_island_parsers() -> Vec<&'static (dyn IslandParser + Send + Sync)> {
+    validate_island_parsers(ISLAND_PARSERS.iter().copied())
+}
+
+/// Strict-validating helper factored out for unit-testing without
+/// touching the global [`ISLAND_PARSERS`] slice.
+#[must_use]
+fn validate_island_parsers<I>(parsers: I) -> Vec<&'static (dyn IslandParser + Send + Sync)>
+where
+    I: IntoIterator<Item = &'static (dyn IslandParser + Send + Sync)>,
+{
+    let mut seen: HashSet<&'static str> = HashSet::new();
+    let mut out: Vec<&'static (dyn IslandParser + Send + Sync)> = Vec::new();
+    for p in parsers {
+        let tag = p.tag();
+        assert!(
+            seen.insert(tag),
+            "discovered_island_parsers: two island parsers registered for tag `{tag}`. \
+             Each `#{tag}{{ … }}#` form must have exactly one parser; collision is a misconfiguration.",
+        );
+        out.push(p);
+    }
+    out
+}
+
+/// Owning wrapper that exposes a `&'static dyn IslandParser` through
+/// the `Vec<Box<dyn IslandParser>>` plumbing the parser internals
+/// require today. Internal bridge used by [`crate::parse`] to fold
+/// the discovered slice into the existing
+/// [`crate::Parser::with_plugins`] entry point without churning the
+/// parser's storage representation.
+pub(crate) struct StaticIslandParser(pub &'static (dyn IslandParser + Send + Sync));
+
+impl IslandParser for StaticIslandParser {
+    fn tag(&self) -> &str {
+        self.0.tag()
+    }
+    fn parse(&self, ctx: &mut ParserContext<'_>) -> Result<Box<dyn IslandContent>, ParseError> {
+        self.0.parse(ctx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ParserContext;
+
+    struct TagA;
+    struct TagB;
+    struct TagADup;
+
+    impl IslandParser for TagA {
+        fn tag(&self) -> &'static str {
+            "tag-a"
+        }
+        fn parse(
+            &self,
+            _ctx: &mut ParserContext<'_>,
+        ) -> Result<Box<dyn IslandContent>, ParseError> {
+            unimplemented!()
+        }
+    }
+    impl IslandParser for TagB {
+        fn tag(&self) -> &'static str {
+            "tag-b"
+        }
+        fn parse(
+            &self,
+            _ctx: &mut ParserContext<'_>,
+        ) -> Result<Box<dyn IslandContent>, ParseError> {
+            unimplemented!()
+        }
+    }
+    impl IslandParser for TagADup {
+        fn tag(&self) -> &'static str {
+            "tag-a"
+        }
+        fn parse(
+            &self,
+            _ctx: &mut ParserContext<'_>,
+        ) -> Result<Box<dyn IslandContent>, ParseError> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn discovered_empty_slice_returns_empty_vec() {
+        assert!(discovered_island_parsers().is_empty());
+    }
+
+    #[test]
+    fn validate_accepts_unique_tags() {
+        let parsers: [&'static (dyn IslandParser + Send + Sync); 2] = [&TagA, &TagB];
+        let out = validate_island_parsers(parsers.iter().copied());
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "two island parsers registered for tag `tag-a`")]
+    fn validate_panics_on_tag_collision() {
+        let parsers: [&'static (dyn IslandParser + Send + Sync); 2] = [&TagA, &TagADup];
+        let _ = validate_island_parsers(parsers.iter().copied());
+    }
 }

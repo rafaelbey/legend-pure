@@ -263,6 +263,32 @@ impl<'model> Evaluator<'model, NoOpHooks> {
         }
     }
 
+    /// Start a fluent builder for an [`Evaluator`].
+    ///
+    /// Fold this into the production code path when you want the
+    /// distributed-slice defaults (every [`crate::native::RuntimeExtension`]
+    /// and [`crate::dsl::DSLPopulator`] in the linked dependency
+    /// graph). Override individual pieces with the builder's setters
+    /// when you want explicit control — typically for tests:
+    ///
+    /// ```ignore
+    /// use legend_pure_runtime::eval::Evaluator;
+    ///
+    /// // Production: pure default — discovers everything.
+    /// let eval = Evaluator::builder().build(&model);
+    ///
+    /// // Test: explicit registry + explicit populators.
+    /// let eval = Evaluator::builder()
+    ///     .registry(&my_test_registry)
+    ///     .populators(&[&MyTestPopulator])
+    ///     .build(&model);
+    /// ```
+    ///
+    /// See [`crate::builder::EvaluatorBuilder`] for the full API.
+    pub fn builder() -> crate::builder::EvaluatorBuilder<'model> {
+        crate::builder::EvaluatorBuilder::new()
+    }
+
     /// Build an evaluator that also runs DSL-instance populators
     /// after the standard metamodel bootstrap.
     ///

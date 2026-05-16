@@ -33,6 +33,7 @@ jiff = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+linkme = { workspace = true }
 
 [dev-dependencies]
 legend-pure-parser-parser = { path = "../parser" }

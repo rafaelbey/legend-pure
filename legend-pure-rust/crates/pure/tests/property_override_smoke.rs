@@ -51,12 +51,10 @@ fn collect_conflicts(errors: &[CompilationError]) -> Vec<&CompilationError> {
 fn simple_override_same_type_and_mult_is_legal() {
     // Mirrors the M3 platform pattern where `Type.name` shadows
     // `ModelElement.name` — both `String[1]`, so no conflict.
-    let errs = run(
-        r"
+    let errs = run(r"
         Class abc::Base { prop : String[1]; }
         Class abc::Sub extends abc::Base { prop : String[1]; }
-        ",
-    );
+        ");
     let hits = collect_conflicts(&errs);
     assert!(
         hits.is_empty(),
@@ -66,12 +64,10 @@ fn simple_override_same_type_and_mult_is_legal() {
 
 #[test]
 fn simple_override_different_type_is_rejected() {
-    let errs = run(
-        r"
+    let errs = run(r"
         Class abc::Base { prop : String[1]; }
         Class abc::Sub extends abc::Base { prop : Integer[1]; }
-        ",
-    );
+        ");
     let hits = collect_conflicts(&errs);
     assert!(
         !hits.is_empty(),
@@ -92,12 +88,10 @@ fn simple_override_different_type_is_rejected() {
 
 #[test]
 fn simple_override_different_mult_is_rejected() {
-    let errs = run(
-        r"
+    let errs = run(r"
         Class abc::Base { prop : String[1]; }
         Class abc::Sub extends abc::Base { prop : String[0..1]; }
-        ",
-    );
+        ");
     let hits = collect_conflicts(&errs);
     assert!(
         !hits.is_empty(),
@@ -110,12 +104,10 @@ fn override_with_subtype_is_rejected_for_simple_property() {
     // Simple properties are invariant — even a more-specific subtype
     // (Integer <: Number) is rejected. Java parity: only qualified
     // properties get the LSP relaxation.
-    let errs = run(
-        r"
+    let errs = run(r"
         Class abc::Base { prop : Number[1]; }
         Class abc::Sub extends abc::Base { prop : Integer[1]; }
-        ",
-    );
+        ");
     let hits = collect_conflicts(&errs);
     assert!(
         !hits.is_empty(),
@@ -127,13 +119,11 @@ fn override_with_subtype_is_rejected_for_simple_property() {
 fn transitive_inheritance_chain_is_validated() {
     // Conflict must surface across a B → A → Root chain when B
     // redeclares a property declared two levels up.
-    let errs = run(
-        r"
+    let errs = run(r"
         Class abc::Root { prop : String[1]; }
         Class abc::Middle extends abc::Root {}
         Class abc::Leaf extends abc::Middle { prop : Integer[1]; }
-        ",
-    );
+        ");
     let hits = collect_conflicts(&errs);
     assert!(
         !hits.is_empty(),
@@ -157,16 +147,14 @@ fn transitive_inheritance_chain_is_validated() {
 
 #[test]
 fn qualified_override_identical_signature_is_legal() {
-    let errs = run(
-        r"
+    let errs = run(r"
         Class abc::Base {
             describe(){'hi'}: String[1];
         }
         Class abc::Sub extends abc::Base {
             describe(){'hello'}: String[1];
         }
-        ",
-    );
+        ");
     let hits = collect_conflicts(&errs);
     assert!(
         hits.is_empty(),
@@ -177,16 +165,14 @@ fn qualified_override_identical_signature_is_legal() {
 #[test]
 fn qualified_override_covariant_return_is_legal() {
     // Return Integer <: Number on subclass — LSP-legal.
-    let errs = run(
-        r"
+    let errs = run(r"
         Class abc::Base {
             value(){0}: Number[1];
         }
         Class abc::Sub extends abc::Base {
             value(){1}: Integer[1];
         }
-        ",
-    );
+        ");
     let hits = collect_conflicts(&errs);
     assert!(
         hits.is_empty(),
@@ -198,16 +184,14 @@ fn qualified_override_covariant_return_is_legal() {
 fn qualified_override_incompatible_return_is_rejected() {
     // Number is NOT a subtype of Integer — illegal narrowing on the
     // wrong direction.
-    let errs = run(
-        r"
+    let errs = run(r"
         Class abc::Base {
             value(){1}: Integer[1];
         }
         Class abc::Sub extends abc::Base {
             value(){1.0}: Number[1];
         }
-        ",
-    );
+        ");
     let hits = collect_conflicts(&errs);
     assert!(
         !hits.is_empty(),
@@ -228,13 +212,11 @@ fn diamond_with_incompatible_parallel_declarations_conflicts_at_join() {
     // Neither `LeftBranch` nor `RightBranch` extends the other, so the
     // conflict only manifests at `Join`, which sees both. Java's nested
     // MRO loop catches this; we mirror it.
-    let errs = run(
-        r"
+    let errs = run(r"
         Class abc::LeftBranch { name : String[1]; }
         Class abc::RightBranch { name : Integer[1]; }
         Class abc::Join extends abc::LeftBranch, abc::RightBranch {}
-        ",
-    );
+        ");
     let hits = collect_conflicts(&errs);
     assert!(
         !hits.is_empty(),
@@ -261,13 +243,11 @@ fn diamond_with_identical_parallel_declarations_is_legal() {
     // `Type.name` shadowing `ModelElement.name` is the M3 platform's
     // canonical diamond — both `String[1]`, so the redeclaration is
     // benign. Verify that pattern in miniature.
-    let errs = run(
-        r"
+    let errs = run(r"
         Class abc::LeftBranch { name : String[1]; }
         Class abc::RightBranch { name : String[1]; }
         Class abc::Join extends abc::LeftBranch, abc::RightBranch {}
-        ",
-    );
+        ");
     let hits = collect_conflicts(&errs);
     assert!(
         hits.is_empty(),
@@ -280,15 +260,13 @@ fn diamond_conflict_reported_once_not_per_descendant() {
     // Without dedup, every descendant of the join class would re-report
     // the same `(LeftBranch.name, RightBranch.name)` conflict. The
     // dedup HashSet collapses those.
-    let errs = run(
-        r"
+    let errs = run(r"
         Class abc::LeftBranch { name : String[1]; }
         Class abc::RightBranch { name : Integer[1]; }
         Class abc::Join extends abc::LeftBranch, abc::RightBranch {}
         Class abc::LeafA extends abc::Join {}
         Class abc::LeafB extends abc::Join {}
-        ",
-    );
+        ");
     let hits = collect_conflicts(&errs);
     assert_eq!(
         hits.len(),
@@ -308,12 +286,10 @@ fn generic_specialization_with_matching_property_is_legal() {
     // the supertype reference and redeclares `value : String[1]`. The
     // validator's structural-compat helper is permissive on the
     // `TypeExpr::Generic` placeholder, so this should be accepted.
-    let errs = run(
-        r"
+    let errs = run(r"
         Class abc::Container<T> { value : T[1]; }
         Class abc::StringContainer extends abc::Container<String> { value : String[1]; }
-        ",
-    );
+        ");
     let hits = collect_conflicts(&errs);
     assert!(
         hits.is_empty(),
@@ -326,16 +302,14 @@ fn qualified_with_different_param_count_coexists_with_inherited() {
     // Java matches inherited QPs on `(name, paramCount)`. A subclass QP
     // with the same name but different arity doesn't trigger override
     // validation against an inherited QP with a different arity.
-    let errs = run(
-        r"
+    let errs = run(r"
         Class abc::Base {
             describe(){'base'}: String[1];
         }
         Class abc::Sub extends abc::Base {
             describe(suffix : String[1]){$suffix}: String[1];
         }
-        ",
-    );
+        ");
     let hits = collect_conflicts(&errs);
     assert!(
         hits.is_empty(),

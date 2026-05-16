@@ -2081,6 +2081,7 @@ dependencies = [
  "legend-pure-parser-parser",
  "legend-pure-parser-pure",
  "legend-pure-runtime",
+ "linkme",
  "smol_str",
 ]
 
@@ -2112,6 +2113,7 @@ dependencies = [
  "legend-pure-parser-parser",
  "legend-pure-parser-pure",
  "legend-pure-runtime",
+ "linkme",
  "smol_str",
 ]
 
@@ -2282,6 +2284,7 @@ dependencies = [
  "insta",
  "legend-pure-parser-ast",
  "legend-pure-parser-lexer",
+ "linkme",
  "rayon",
  "serde",
  "smol_str",
@@ -2310,6 +2313,7 @@ dependencies = [
  "legend-pure-core-platform",
  "legend-pure-parser-ast",
  "legend-pure-parser-parser",
+ "linkme",
  "postcard",
  "regex",
  "rust_decimal",
@@ -2350,6 +2354,7 @@ dependencies = [
  "legend-pure-parser-parser",
  "legend-pure-parser-pure",
  "legend-pure-store-relational-runtime",
+ "linkme",
  "rust_decimal",
  "serde",
  "serde_json",
@@ -2390,6 +2395,7 @@ dependencies = [
  "legend-pure-parser-ast",
  "legend-pure-parser-pure",
  "legend-pure-runtime",
+ "linkme",
  "postgres",
  "rust_decimal",
  "serde",
@@ -2493,6 +2499,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e02f3bb43d335493c96bf3fd3a321600bf6bd07ed34bc64118e9293bdffea46c"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "linkme"
+version = "0.3.36"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e83272d46373fb8decca684579ac3e7c8f3d71d4cc3aa693df8759e260ae41cf"
+dependencies = [
+ "linkme-impl",
+]
+
+[[package]]
+name = "linkme-impl"
+version = "0.3.36"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32d59e20403c7d08fe62b4376edfe5c7fb2ef1e6b1465379686d0f21c8df444b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]

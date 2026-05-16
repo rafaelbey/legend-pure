@@ -100,13 +100,27 @@ impl std::fmt::Display for PartialSourceFile {
 
 /// Parse Pure source text into an AST [`SourceFile`].
 ///
-/// Uses the default set of island grammar plugins (currently graph fetch).
+/// Threads every [`IslandParser`] and [`SectionParser`] discovered via
+/// the [`crate::island::ISLAND_PARSERS`] / [`crate::SECTION_PARSERS`]
+/// distributed slices into the parser. This is the production default —
+/// each linked DSL crate self-registers its parsers, and the binary
+/// inherits them with no per-call wiring.
+///
+/// Tests that need to compose plugins by hand should call
+/// [`parse_with_islands`] or [`parse_with_sections`] instead.
 ///
 /// # Errors
 ///
 /// - `Ok(SourceFile)` — all elements parsed successfully
 /// - `Err(PartialSourceFile)` — some elements failed to parse, but valid
 ///   elements are preserved in `partial.source_file`
+///
+/// # Panics
+///
+/// Panics at discovery time when two registered island parsers share a
+/// `tag()` or two section parsers share a `kind()`. See
+/// [`crate::island::discovered_island_parsers`] and
+/// [`crate::section_parser::discovered_section_parsers`].
 #[allow(clippy::result_large_err)]
 pub fn parse(source: &str, source_name: &str) -> Result<SourceFile, PartialSourceFile> {
     let tokens =
@@ -118,7 +132,23 @@ pub fn parse(source: &str, source_name: &str) -> Result<SourceFile, PartialSourc
             errors: vec![e.into()],
         })?;
     let cursor = cursor::Cursor::new(tokens);
-    let mut p = parser::Parser::new(cursor);
+    let discovered_islands = crate::island::discovered_island_parsers();
+    let discovered_sections = crate::section_parser::discovered_section_parsers();
+    if discovered_islands.is_empty() && discovered_sections.is_empty() {
+        // Hot path: no DSL crates registered any parsers. Skip the
+        // wrapper / boxing allocations entirely.
+        let mut p = parser::Parser::new(cursor);
+        return p.parse_source_file();
+    }
+    let islands: Vec<Box<dyn IslandParser>> = discovered_islands
+        .into_iter()
+        .map(|p| Box::new(crate::island::StaticIslandParser(p)) as Box<dyn IslandParser>)
+        .collect();
+    let sections: Vec<Box<dyn SectionParser>> = discovered_sections
+        .into_iter()
+        .map(|p| Box::new(crate::section_parser::StaticSectionParser(p)) as Box<dyn SectionParser>)
+        .collect();
+    let mut p = parser::Parser::with_plugins(cursor, islands, sections);
     p.parse_source_file()
 }
 

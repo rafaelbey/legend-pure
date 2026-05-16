@@ -663,17 +663,12 @@ fn collect_qualified_properties<'m>(
     out
 }
 
-
 /// Java parity: `ClassValidator.isPropertyOverrideValid`. Simple
 /// properties are invariant — the inherited declaration's type and
 /// multiplicity must match exactly. Structural compatibility in *both*
 /// directions (`A <: B && B <: A`) substitutes for raw `==` so
 /// `TypeExpr` spans don't leak into equality.
-fn is_simple_property_override_valid(
-    spec: &Property,
-    genl: &Property,
-    model: &PureModel,
-) -> bool {
+fn is_simple_property_override_valid(spec: &Property, genl: &Property, model: &PureModel) -> bool {
     types_structurally_equal(&spec.type_expr, &genl.type_expr, model)
         && spec.multiplicity == genl.multiplicity
 }
@@ -687,8 +682,7 @@ fn is_qualified_property_override_valid(
     model: &PureModel,
 ) -> bool {
     // Return type — covariant (spec must be same or more specific than genl).
-    if !crate::resolve::is_type_compatible_structural(&spec.return_type, &genl.return_type, model)
-    {
+    if !crate::resolve::is_type_compatible_structural(&spec.return_type, &genl.return_type, model) {
         return false;
     }
     // Return multiplicity — spec must be subsumed by genl.
@@ -709,7 +703,11 @@ fn is_qualified_property_override_valid(
     // the implicit `this` slot (added explicitly at inference time in
     // `pipeline.rs`), so iterate `0..n` — *not* `1..n` like Java.
     for (spec_p, genl_p) in spec.parameters.iter().zip(genl.parameters.iter()) {
-        if !crate::resolve::is_type_compatible_structural(&genl_p.type_expr, &spec_p.type_expr, model) {
+        if !crate::resolve::is_type_compatible_structural(
+            &genl_p.type_expr,
+            &spec_p.type_expr,
+            model,
+        ) {
             return false;
         }
         if !crate::resolve::is_multiplicity_compatible(

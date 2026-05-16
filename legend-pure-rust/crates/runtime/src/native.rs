@@ -45,13 +45,14 @@
 //!   lambda spec to a `Value::Function`, then invoke it per element via
 //!   [`EvalContextTrait::call_function`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 #[cfg(test)]
 use legend_pure_parser_ast::SourceInfo;
 use legend_pure_parser_pure::model::PureModel;
 use legend_pure_parser_pure::types::{ExprKind, ValueSpec};
+use linkme::distributed_slice;
 use rust_decimal::Decimal;
 use smol_str::SmolStr;
 
@@ -451,6 +452,10 @@ impl NativeRegistry {
     /// semantics). Extension natives override platform natives if they
     /// share a mangled FQN — use this with care.
     ///
+    /// Prefer [`discovered`](Self::discovered) for production wiring;
+    /// `with_extensions` exists as the explicit escape hatch for tests
+    /// and bespoke embedders that need to compose extensions by hand.
+    ///
     /// [`register`]: NativeRegistry::register
     #[must_use]
     pub fn with_extensions(extensions: &[&dyn RuntimeExtension]) -> Self {
@@ -460,7 +465,118 @@ impl NativeRegistry {
         }
         registry
     }
+
+    /// Create a registry pre-loaded with the platform standard natives
+    /// plus every [`RuntimeExtension`] discovered via the
+    /// [`RUNTIME_EXTENSIONS`] distributed slice.
+    ///
+    /// This is the production default — equivalent to Java Pure's
+    /// `ServiceLoader.load(InterpretedExtension.class)` cascade. Each
+    /// linked extension crate self-registers next to its impl via
+    /// `#[distributed_slice(RUNTIME_EXTENSIONS)]`; the binary that
+    /// pulls those crates in as dependencies inherits the natives with
+    /// zero per-binary wiring.
+    ///
+    /// # Panics
+    ///
+    /// Panics at construction time when:
+    ///
+    /// - Two distributed-slice extensions claim the same mangled FQN.
+    ///   The compiler already guarantees one [`Function`] element per
+    ///   FQN, so a runtime collision is always a misconfiguration; the
+    ///   panic names both contributing extensions and the conflicting
+    ///   key.
+    /// - A distributed-slice extension claims a mangled FQN already
+    ///   provided by the platform [`standard`](Self::standard) set.
+    ///   Platform natives are the lingua franca every Pure program
+    ///   relies on; overriding one would break consumers
+    ///   silently. Tests that need to swap a platform native use
+    ///   [`with_extensions`](Self::with_extensions) (last-write-wins).
+    ///
+    /// [`Function`]: legend_pure_parser_pure::model::Element::Function
+    #[must_use]
+    pub fn discovered() -> Self {
+        Self::merge_extensions(Self::standard(), RUNTIME_EXTENSIONS.iter().copied())
+    }
+
+    /// Merge the supplied extensions onto `base` with strict
+    /// duplicate-key detection.
+    ///
+    /// Factored out so the panic paths can be unit-tested without
+    /// touching the global [`RUNTIME_EXTENSIONS`] slice. Public callers
+    /// should use [`discovered`](Self::discovered).
+    ///
+    /// `#[allow(clippy::manual_assert)]` is applied because the
+    /// `if let Some(prev_owner) = …` shape captures the previous
+    /// owner's name for the panic message; rewriting as `assert!`
+    /// would force a second `get` lookup or an `unwrap` after the
+    /// assertion.
+    #[must_use]
+    #[allow(clippy::manual_assert)]
+    fn merge_extensions<'a, I>(base: Self, extensions: I) -> Self
+    where
+        I: IntoIterator<Item = &'a (dyn RuntimeExtension + Sync)>,
+    {
+        let mut combined = base;
+        let standard_keys: HashSet<SmolStr> = combined.functions.keys().cloned().collect();
+        let mut ext_owners: HashMap<SmolStr, &'static str> = HashMap::new();
+
+        for ext in extensions {
+            let new_owner = ext.name();
+            let mut scratch = NativeRegistry::new();
+            ext.register_natives(&mut scratch);
+            for (key, func) in scratch.functions {
+                assert!(
+                    !standard_keys.contains(&key),
+                    "NativeRegistry::discovered: extension `{new_owner}` claims mangled FQN `{key}`, \
+                     which is already provided by the platform standard registry. \
+                     Platform natives are immutable; remove the registration in the extension \
+                     or use NativeRegistry::with_extensions for a deliberate override.",
+                );
+                if let Some(prev_owner) = ext_owners.get(&key) {
+                    panic!(
+                        "NativeRegistry::discovered: duplicate native registration for `{key}`: \
+                         both extensions `{prev_owner}` and `{new_owner}` claim this mangled FQN. \
+                         The compiler emits one Function element per FQN; a runtime collision is \
+                         always a misconfiguration. Exactly one extension may implement a given native.",
+                    );
+                }
+                ext_owners.insert(key.clone(), new_owner);
+                combined.functions.insert(key, func);
+            }
+        }
+        combined
+    }
 }
+
+// ---------------------------------------------------------------------------
+// RUNTIME_EXTENSIONS — distributed slice for self-registering extensions
+// ---------------------------------------------------------------------------
+
+/// Distributed slice into which each [`RuntimeExtension`]-providing
+/// crate registers its top-level extension instance.
+///
+/// Use the `#[distributed_slice]` attribute next to the extension
+/// instance to make it discoverable by
+/// [`NativeRegistry::discovered`]:
+///
+/// ```ignore
+/// use legend_pure_runtime::native::{RuntimeExtension, RUNTIME_EXTENSIONS};
+/// use linkme::distributed_slice;
+///
+/// #[distributed_slice(RUNTIME_EXTENSIONS)]
+/// static MY_EXT: &(dyn RuntimeExtension + Sync) = &MyExtension;
+/// ```
+///
+/// The `+ Sync` bound is required because the slice is a `static`:
+/// extension instances live for the process lifetime and may be read
+/// concurrently from multiple Evaluators. Stateless unit structs
+/// (`pub struct MyExtension;`) are `Sync` automatically. Stateful
+/// extensions that need interior mutability should use thread-safe
+/// primitives (`Mutex`, `RwLock`, atomics) or move their state into
+/// the [`crate::extensions::ExtensionStateStore`] per-evaluator.
+#[distributed_slice]
+pub static RUNTIME_EXTENSIONS: [&'static (dyn RuntimeExtension + Sync)] = [..];
 
 // ---------------------------------------------------------------------------
 // Argument validation helpers
@@ -793,6 +909,81 @@ mod tests {
         let args = vec![lit_int(1)];
         assert!(expect_min_args("test", &args, 1).is_ok());
         assert!(expect_min_args("test", &args, 2).is_err());
+    }
+
+    // -- discovered() + merge_extensions() ------------------------------
+
+    #[derive(Debug)]
+    struct ExtA;
+    #[derive(Debug)]
+    struct ExtB;
+    #[derive(Debug)]
+    struct PlatformOverrideExt;
+
+    impl RuntimeExtension for ExtA {
+        fn name(&self) -> &'static str {
+            "ext-a"
+        }
+        fn register_natives(&self, r: &mut NativeRegistry) {
+            r.register("ext_a_native_String_1__String_1_", ConstantFn(Value::Unit));
+        }
+    }
+    impl RuntimeExtension for ExtB {
+        fn name(&self) -> &'static str {
+            "ext-b"
+        }
+        fn register_natives(&self, r: &mut NativeRegistry) {
+            r.register("ext_a_native_String_1__String_1_", ConstantFn(Value::Unit));
+        }
+    }
+    impl RuntimeExtension for PlatformOverrideExt {
+        fn name(&self) -> &'static str {
+            "platform-override"
+        }
+        fn register_natives(&self, r: &mut NativeRegistry) {
+            // `plus_Integer_MANY__Integer_1_` is registered by
+            // `arithmetic::register` — any attempt by an extension to
+            // override it must panic.
+            r.register("plus_Integer_MANY__Integer_1_", ConstantFn(Value::Unit));
+        }
+    }
+
+    #[test]
+    fn discovered_with_empty_slice_equals_standard() {
+        // RUNTIME_EXTENSIONS is empty in Phase 1 — `discovered()` reduces to `standard()`.
+        // Once Phase 3 lands and in-tree DSLs self-register, this test
+        // becomes a moving target and will be replaced by a baseline assertion
+        // against the discovered count.
+        assert_eq!(
+            NativeRegistry::discovered().len(),
+            NativeRegistry::standard().len()
+        );
+    }
+
+    #[test]
+    fn merge_extensions_includes_extension_natives() {
+        let merged = NativeRegistry::merge_extensions(
+            NativeRegistry::standard(),
+            std::iter::once(&ExtA as &(dyn RuntimeExtension + Sync)),
+        );
+        assert!(merged.get("ext_a_native_String_1__String_1_").is_some());
+        assert_eq!(merged.len(), NativeRegistry::standard().len() + 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate native registration")]
+    fn merge_extensions_panics_on_extension_vs_extension_collision() {
+        let exts: [&(dyn RuntimeExtension + Sync); 2] = [&ExtA, &ExtB];
+        let _ = NativeRegistry::merge_extensions(NativeRegistry::standard(), exts.iter().copied());
+    }
+
+    #[test]
+    #[should_panic(expected = "platform standard registry")]
+    fn merge_extensions_panics_on_extension_vs_platform_collision() {
+        let _ = NativeRegistry::merge_extensions(
+            NativeRegistry::standard(),
+            std::iter::once(&PlatformOverrideExt as &(dyn RuntimeExtension + Sync)),
+        );
     }
 
     #[test]

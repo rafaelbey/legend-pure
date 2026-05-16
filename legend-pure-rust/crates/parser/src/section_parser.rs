@@ -42,7 +42,10 @@
 //! Implementations must be `Send + Sync` (matching [`IslandParser`])
 //! because the CLI parallelises file parsing via Rayon.
 
+use std::collections::HashSet;
+
 use legend_pure_parser_ast::dsl::DSLElement;
+use linkme::distributed_slice;
 
 use crate::ParserContext;
 use crate::error::ParseError;
@@ -80,4 +83,143 @@ pub trait SectionParser: Send + Sync {
         ctx: &mut ParserContext<'_>,
         errors: &mut Vec<ParseError>,
     ) -> Vec<Box<dyn DSLElement>>;
+}
+
+// ---------------------------------------------------------------------------
+// SECTION_PARSERS — distributed slice for self-registering section grammars
+// ---------------------------------------------------------------------------
+
+/// Distributed slice into which each [`SectionParser`]-providing crate
+/// registers its parser instance.
+///
+/// ```ignore
+/// use legend_pure_parser_parser::section_parser::{SectionParser, SECTION_PARSERS};
+/// use linkme::distributed_slice;
+///
+/// #[distributed_slice(SECTION_PARSERS)]
+/// static MY_SECTION: &(dyn SectionParser + Send + Sync) = &MyDslSectionParser;
+/// ```
+///
+/// The slice is consumed by [`discovered_section_parsers`] which
+/// validates that no two registered parsers share a `kind()`.
+#[distributed_slice]
+pub static SECTION_PARSERS: [&'static (dyn SectionParser + Send + Sync)] = [..];
+
+/// Discover and validate the [`SECTION_PARSERS`] slice.
+///
+/// # Panics
+///
+/// Panics when two registered section parsers share a `kind()`. Each
+/// section header (e.g. `###Mapping`) must dispatch to exactly one
+/// parser; collision is a misconfiguration.
+#[must_use]
+pub fn discovered_section_parsers() -> Vec<&'static (dyn SectionParser + Send + Sync)> {
+    validate_section_parsers(SECTION_PARSERS.iter().copied())
+}
+
+/// Strict-validating helper factored out for unit-testing without
+/// touching the global [`SECTION_PARSERS`] slice.
+#[must_use]
+fn validate_section_parsers<I>(parsers: I) -> Vec<&'static (dyn SectionParser + Send + Sync)>
+where
+    I: IntoIterator<Item = &'static (dyn SectionParser + Send + Sync)>,
+{
+    let mut seen: HashSet<&'static str> = HashSet::new();
+    let mut out: Vec<&'static (dyn SectionParser + Send + Sync)> = Vec::new();
+    for p in parsers {
+        let kind = p.kind();
+        assert!(
+            seen.insert(kind),
+            "discovered_section_parsers: two section parsers registered for kind `{kind}`. \
+             Each `###{kind}` block must dispatch to exactly one parser; collision is a misconfiguration.",
+        );
+        out.push(p);
+    }
+    out
+}
+
+/// Owning wrapper that exposes a `&'static dyn SectionParser` through
+/// the `Vec<Box<dyn SectionParser>>` plumbing the parser internals
+/// require today. Internal bridge used by [`crate::parse`] to fold
+/// the discovered slice into the existing
+/// [`crate::Parser::with_plugins`] entry point without churning the
+/// parser's storage representation.
+pub(crate) struct StaticSectionParser(pub &'static (dyn SectionParser + Send + Sync));
+
+impl SectionParser for StaticSectionParser {
+    fn kind(&self) -> &str {
+        self.0.kind()
+    }
+    fn parse_body(
+        &self,
+        ctx: &mut ParserContext<'_>,
+        errors: &mut Vec<ParseError>,
+    ) -> Vec<Box<dyn DSLElement>> {
+        self.0.parse_body(ctx, errors)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct KindA;
+    struct KindB;
+    struct KindADup;
+
+    impl SectionParser for KindA {
+        fn kind(&self) -> &'static str {
+            "KindA"
+        }
+        fn parse_body(
+            &self,
+            _ctx: &mut ParserContext<'_>,
+            _errors: &mut Vec<ParseError>,
+        ) -> Vec<Box<dyn DSLElement>> {
+            Vec::new()
+        }
+    }
+    impl SectionParser for KindB {
+        fn kind(&self) -> &'static str {
+            "KindB"
+        }
+        fn parse_body(
+            &self,
+            _ctx: &mut ParserContext<'_>,
+            _errors: &mut Vec<ParseError>,
+        ) -> Vec<Box<dyn DSLElement>> {
+            Vec::new()
+        }
+    }
+    impl SectionParser for KindADup {
+        fn kind(&self) -> &'static str {
+            "KindA"
+        }
+        fn parse_body(
+            &self,
+            _ctx: &mut ParserContext<'_>,
+            _errors: &mut Vec<ParseError>,
+        ) -> Vec<Box<dyn DSLElement>> {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn discovered_empty_slice_returns_empty_vec() {
+        assert!(discovered_section_parsers().is_empty());
+    }
+
+    #[test]
+    fn validate_accepts_unique_kinds() {
+        let parsers: [&'static (dyn SectionParser + Send + Sync); 2] = [&KindA, &KindB];
+        let out = validate_section_parsers(parsers.iter().copied());
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "two section parsers registered for kind `KindA`")]
+    fn validate_panics_on_kind_collision() {
+        let parsers: [&'static (dyn SectionParser + Send + Sync); 2] = [&KindA, &KindADup];
+        let _ = validate_section_parsers(parsers.iter().copied());
+    }
 }

@@ -25,6 +25,7 @@ legend-pure-dsl-relational = { path = "../dsl-relational" }
 legend-pure-runtime = { path = "../runtime" }
 legend-pure-parser-pure = { path = "../pure" }
 smol_str = { workspace = true }
+linkme = { workspace = true }
 
 [dev-dependencies]
 indoc = "2"

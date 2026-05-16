@@ -87,6 +87,14 @@ pub const DEFAULT_SCHEMA_NAME: &str = "default";
 /// Zero-sized — all dispatch flows through the snapshot payload.
 pub struct RelationalDatabaseDSLPopulator;
 
+/// Self-registration into the runtime's `DSL_POPULATORS` distributed
+/// slice so any binary that depends on this crate picks up the
+/// Database populator via `Evaluator::builder().build(...)` with no
+/// per-binary wiring.
+#[linkme::distributed_slice(legend_pure_runtime::dsl::DSL_POPULATORS)]
+static RELATIONAL_DATABASE_DSL_POPULATOR: &(dyn DSLPopulator + Sync) =
+    &RelationalDatabaseDSLPopulator;
+
 impl DSLPopulator for RelationalDatabaseDSLPopulator {
     fn dsl_name(&self) -> &'static str {
         DATABASE_DSL_NAME
@@ -238,6 +246,13 @@ fn resolve_fqn(model: &PureModel, fqn: &str) -> Option<ElementId> {
 /// the join sequence are deferred to follow-up commits when the
 /// snapshot grows the corresponding fields.
 pub struct RelationalClassMappingDSLPopulator;
+
+/// Self-registration into the runtime's `DSL_POPULATORS` distributed
+/// slice so the sidecar `RelationalClassMapping` populator is picked
+/// up alongside the Database populator.
+#[linkme::distributed_slice(legend_pure_runtime::dsl::DSL_POPULATORS)]
+static RELATIONAL_CLASS_MAPPING_DSL_POPULATOR: &(dyn DSLPopulator + Sync) =
+    &RelationalClassMappingDSLPopulator;
 
 impl DSLPopulator for RelationalClassMappingDSLPopulator {
     fn dsl_name(&self) -> &'static str {

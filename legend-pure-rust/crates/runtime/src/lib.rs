@@ -58,6 +58,7 @@
 // Boxing it at every call site would require rewriting the entire native API.
 #![allow(clippy::result_large_err)]
 
+pub mod builder;
 pub mod context;
 pub mod date;
 pub mod debug;

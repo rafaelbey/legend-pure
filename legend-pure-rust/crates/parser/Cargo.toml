@@ -28,6 +28,7 @@ serde = { workspace = true, features = ["derive"] }
 smol_str = { workspace = true, features = ["serde"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+linkme = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

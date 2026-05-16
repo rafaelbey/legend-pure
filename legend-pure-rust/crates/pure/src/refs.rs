@@ -794,3 +794,148 @@ fn walk_type_expr(model: &PureModel, ty: &TypeExpr, visit: &mut dyn FnMut(Refere
         TypeExpr::Relation(_) | TypeExpr::Generic(_) | TypeExpr::Unresolved => {}
     }
 }
+
+// ---------------------------------------------------------------------------
+// IdeExtension — standalone IDE reference contribution trait
+// ---------------------------------------------------------------------------
+
+/// Plugin contract for contributing IDE references (go-to-definition,
+/// find-usages, navigation) on top of the core walk performed by
+/// [`walk_references`].
+///
+/// Extracted from `CompilerExtension::walk_references` so a DSL crate
+/// can ship pure compile hooks without IDE participation, and an IDE
+/// adjunct (future hover / completion / code-actions) can live in its
+/// own crate without touching the compiler trait.
+///
+/// Each implementation walks its own resolved DSL data
+/// (typically [`Element::DSLInstance`] payloads) and pushes one
+/// [`Reference`] per source-level reference site into `visit`.
+pub trait IdeExtension: Send + Sync + 'static {
+    /// Stable identifier for the extension — surfaced in tracing
+    /// spans and diagnostics.
+    fn name(&self) -> &'static str;
+
+    /// Emit references for this extension's DSL elements.
+    fn walk_references(&self, model: &PureModel, visit: &mut dyn FnMut(Reference));
+}
+
+/// Distributed slice into which each [`IdeExtension`]-providing crate
+/// registers its instance.
+///
+/// ```ignore
+/// use legend_pure_pure::refs::{IdeExtension, IDE_EXTENSIONS};
+/// use linkme::distributed_slice;
+///
+/// #[distributed_slice(IDE_EXTENSIONS)]
+/// static MY_IDE: &dyn IdeExtension = &MyDslIdeExtension;
+/// ```
+///
+/// Stateless unit structs are the natural shape — IDE walks are
+/// read-only against the model, so no per-extension mutable state is
+/// needed.
+#[linkme::distributed_slice]
+pub static IDE_EXTENSIONS: [&'static dyn IdeExtension] = [..];
+
+/// Discover and validate the [`IDE_EXTENSIONS`] slice.
+///
+/// # Panics
+///
+/// Panics when two registered IDE extensions share a `name()`.
+/// Extension names must be globally unique for diagnostics traceability.
+#[must_use]
+pub fn discovered_ide_extensions() -> Vec<&'static dyn IdeExtension> {
+    validate_ide_extensions(IDE_EXTENSIONS.iter().copied())
+}
+
+#[must_use]
+fn validate_ide_extensions<I>(extensions: I) -> Vec<&'static dyn IdeExtension>
+where
+    I: IntoIterator<Item = &'static dyn IdeExtension>,
+{
+    use std::collections::HashSet;
+    let mut seen: HashSet<&'static str> = HashSet::new();
+    let mut out: Vec<&'static dyn IdeExtension> = Vec::new();
+    for ext in extensions {
+        let name = ext.name();
+        assert!(
+            seen.insert(name),
+            "discovered_ide_extensions: two IdeExtensions registered under name `{name}`. \
+             Extension names must be globally unique.",
+        );
+        out.push(ext);
+    }
+    out
+}
+
+/// Build a [`ReferenceIndex`] including discovered IDE-extension
+/// contributions.
+///
+/// Walks the core model first, then asks each discovered
+/// [`IdeExtension`] to contribute its own reference sites. Same
+/// shape as
+/// [`build_reference_index_with_extensions`](self::build_reference_index_with_extensions)
+/// (which routes through the legacy `CompilerExtension::walk_references`
+/// hook); the two will collapse to a single entry point in Phase 2
+/// once all in-tree DSLs migrate their walk_references impls onto the
+/// new trait.
+#[must_use]
+pub fn build_reference_index_with_ide_extensions(
+    model: &PureModel,
+    extensions: &[&dyn IdeExtension],
+) -> ReferenceIndex {
+    let mut index = ReferenceIndex::default();
+    walk_references(model, &mut |r| index.push(r));
+    for ext in extensions {
+        ext.walk_references(model, &mut |r| index.push(r));
+    }
+    index.finalize();
+    index
+}
+
+#[cfg(test)]
+mod ide_extension_tests {
+    use super::*;
+
+    struct IdeA;
+    struct IdeB;
+    struct IdeADup;
+
+    impl IdeExtension for IdeA {
+        fn name(&self) -> &'static str {
+            "ide-a"
+        }
+        fn walk_references(&self, _model: &PureModel, _visit: &mut dyn FnMut(Reference)) {}
+    }
+    impl IdeExtension for IdeB {
+        fn name(&self) -> &'static str {
+            "ide-b"
+        }
+        fn walk_references(&self, _model: &PureModel, _visit: &mut dyn FnMut(Reference)) {}
+    }
+    impl IdeExtension for IdeADup {
+        fn name(&self) -> &'static str {
+            "ide-a"
+        }
+        fn walk_references(&self, _model: &PureModel, _visit: &mut dyn FnMut(Reference)) {}
+    }
+
+    #[test]
+    fn discovered_empty_slice_returns_empty_vec() {
+        assert!(discovered_ide_extensions().is_empty());
+    }
+
+    #[test]
+    fn validate_accepts_unique_names() {
+        let exts: [&'static dyn IdeExtension; 2] = [&IdeA, &IdeB];
+        let out = validate_ide_extensions(exts.iter().copied());
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "two IdeExtensions registered under name `ide-a`")]
+    fn validate_panics_on_name_collision() {
+        let exts: [&'static dyn IdeExtension; 2] = [&IdeA, &IdeADup];
+        let _ = validate_ide_extensions(exts.iter().copied());
+    }
+}

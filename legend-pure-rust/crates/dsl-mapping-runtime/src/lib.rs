@@ -80,6 +80,13 @@ pub fn classifier_for_body_kind(body_kind: &str) -> &'static str {
 /// there is no per-evaluator state.
 pub struct MappingDSLPopulator;
 
+/// Self-registration into the runtime's `DSL_POPULATORS` distributed
+/// slice so any binary that depends on this crate picks up the
+/// mapping populator via `Evaluator::builder().build(...)` with no
+/// per-binary wiring.
+#[linkme::distributed_slice(legend_pure_runtime::dsl::DSL_POPULATORS)]
+static MAPPING_DSL_POPULATOR: &(dyn DSLPopulator + Sync) = &MappingDSLPopulator;
+
 impl DSLPopulator for MappingDSLPopulator {
     fn dsl_name(&self) -> &'static str {
         MAPPING_DSL_NAME
