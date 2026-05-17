@@ -93,14 +93,14 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeI
 /// [`legend_pure_core_platform::classpath::compile_classpath_bytes`]
 /// for the full contract.
 ///
-/// This entry point uses [`crate::context::JniContext::new_with_configs`],
-/// which differs from [`Java_*_nativeInitContext`] in two ways:
-///
-/// 1. Native registry is [`NativeRegistry::discovered`], so downstream
-///    `#[distributed_slice(RUNTIME_EXTENSIONS)]` contributions linked
-///    into the cdylib are active.
-/// 2. `[extension.<…>]` tables from the TOML are wired into the
-///    evaluator via `set_extension_configs`.
+/// This entry point uses [`crate::context::JniContext::new_with_configs`].
+/// Both this and the parameterless [`Java_*_nativeInitContext`] route
+/// through `discovered()` for the native registry — so distributed-
+/// slice extensions linked into the cdylib are active regardless of
+/// which init path Java picks. The bytes-mode path additionally
+/// pre-seeds `[extension.<…>]` configs from the TOML so per-evaluator
+/// engine settings (H2 ports, lake credentials, …) are available
+/// without the old `OnceLock` global.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeInitContextWithClasspath<
     'local,

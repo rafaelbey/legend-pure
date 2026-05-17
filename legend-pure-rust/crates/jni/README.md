@@ -10,25 +10,26 @@ Builds a `cdylib` named `pure_rust_jni`, which the Java side loads via
 
 ## Native entry points
 
-Six FFI symbols, all under
+Eight FFI symbols, all under
 `Java_org_finos_legend_pure_rust_PureRustEvaluator_*`:
 
-| Symbol                | Returns           | Purpose                                                                 |
-| --------------------- | ----------------- | ----------------------------------------------------------------------- |
-| `nativeInitContext`   | `jlong`           | Loads the platform model (embedded `.purem` + filesystem repos), wraps it in a `JniContext`, returns the heap-allocated pointer Java holds opaque. |
-| `nativeFreeContext`   | `void`            | Drops the boxed `JniContext` and every strong handle it owned.          |
-| `nativeEvaluate`      | `PureRustResult`  | Resolves a Pure FQN (mangled or unmangled) to an `ElementId`, applies the callable to the `args[]`, returns the marshalled result. |
-| `nativeGetProperty`   | `PureRustResult`  | Reads a property off a heap object by name (e.g. `firstName`); arg list supports qualified properties. |
-| `nativeGetClassifier` | `String`          | Returns the runtime classifier FQN of a heap object, e.g. `"meta::pure::metamodel::type::Class"`. |
-| `nativeNew`           | `jlong`           | Allocates a fresh dynamic heap object: takes a classifier FQN plus parallel `propertyNames[]` / `propertyValues[]` arrays, calls `RuntimeHeap::alloc_dynamic` + `mutate_set`, registers the handle, returns the encoded `i64` pointer. Used by `PureProxyFactory.create(userImpl, iface, eval)`. |
-| `nativeFreeInstance`  | `void`            | Releases the strong handle for a single instance pointer. Wired to the Java `Cleaner` so handles drop when their `PureRustInstance` is GC'd. |
+| Symbol                          | Returns           | Purpose                                                                 |
+| ------------------------------- | ----------------- | ----------------------------------------------------------------------- |
+| `nativeInitContext`             | `jlong`           | Loads the embedded platform model, wraps it in a `JniContext` backed by `NativeRegistry::discovered()` with empty extension configs. For consumers that don't ship a classpath TOML — distributed-slice extensions linked into the cdylib still activate. |
+| `nativeInitContextWithClasspath`| `jlong`           | Takes a `byte[]` containing `legend-pure-classpath.toml` (typically read from JAR resources via `getResourceAsStream(...).readAllBytes()`), compiles the classpath into a `PureModel`, and seeds `[extension.<…>]` configs into the evaluator. TOML must be self-contained (absolute `[[repo]] path =` or its own `root = "/abs/path"`). See `docs/extensions/downstream-recipe.md` §11.1 for the full contract. |
+| `nativeFreeContext`             | `void`            | Drops the boxed `JniContext` and every strong handle it owned.          |
+| `nativeEvaluate`                | `PureRustResult`  | Resolves a Pure FQN (mangled or unmangled) to an `ElementId`, applies the callable to the `args[]`, returns the marshalled result. |
+| `nativeGetProperty`             | `PureRustResult`  | Reads a property off a heap object by name (e.g. `firstName`); arg list supports qualified properties. |
+| `nativeGetClassifier`           | `String`          | Returns the runtime classifier FQN of a heap object, e.g. `"meta::pure::metamodel::type::Class"`. |
+| `nativeNew`                     | `jlong`           | Allocates a fresh dynamic heap object: takes a classifier FQN plus parallel `propertyNames[]` / `propertyValues[]` arrays, calls `RuntimeHeap::alloc_dynamic` + `mutate_set`, registers the handle, returns the encoded `i64` pointer. Used by `PureProxyFactory.create(userImpl, iface, eval)`. |
+| `nativeFreeInstance`            | `void`            | Releases the strong handle for a single instance pointer. Wired to the Java `Cleaner` so handles drop when their `PureRustInstance` is GC'd. |
 
 ## Internals
 
 | File             | Responsibility                                                                        |
 | ---------------- | ------------------------------------------------------------------------------------- |
-| `lib.rs`         | The seven `Java_*` exports, `catch_unwind` panic-→-`PureRustException` translation, JNI argument marshalling. |
-| `context.rs`     | `JniContext` (model + native registry + evaluator) and `JniHandleTable` — a `slotmap`-backed registry mapping the `i64` Java holds back to the strong `Rc<RefCell<HeapEntry>>` clones that keep heap objects alive. |
+| `lib.rs`         | The eight `Java_*` exports, `catch_unwind` panic-→-`PureRustException` translation, JNI argument marshalling. |
+| `context.rs`     | `JniContext` (model + native registry + evaluator) and `JniHandleTable` — a `slotmap`-backed registry mapping the `i64` Java holds back to the strong `Rc<RefCell<HeapEntry>>` clones that keep heap objects alive. `JniContext::new` delegates to `new_with_configs(model, HashMap::new())`; both constructors use `NativeRegistry::discovered()` so distributed-slice extensions are visible regardless of which init entry Java picks. |
 | `conversion.rs`  | `PureRustResult` ↔ `Value` marshalling. Handles primitives (`Boolean`, `Integer`, `Float`, `String`), `INSTANCE_POINTER` (registers / lookups via `JniHandleTable`), and `ARRAY` (recursive). |
 
 ## Lifetime / leak model

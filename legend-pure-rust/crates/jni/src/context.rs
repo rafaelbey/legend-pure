@@ -129,30 +129,35 @@ pub struct JniContext {
 }
 
 impl JniContext {
+    /// Construct a [`JniContext`] backed by [`NativeRegistry::discovered`]
+    /// with empty extension configs. Convenience wrapper around
+    /// [`Self::new_with_configs`] for callers (the parameterless
+    /// `Java_*_nativeInitContext` entry) that don't have a classpath
+    /// to source `[extension.<…>]` tables from.
+    ///
+    /// `discovered()` activates every linked
+    /// `#[distributed_slice(RUNTIME_EXTENSIONS)]` contribution, so
+    /// downstream cdylibs built via the `mydsl-jni-extension`
+    /// forwarder pattern get their custom extensions active here as
+    /// well. The in-tree `pure_rust_jni` cdylib links no extensions
+    /// at the slice level, so `discovered()` collapses to
+    /// `standard()` for stock consumers and the change is a no-op
+    /// for them.
     pub fn new(model: PureModel) -> Self {
-        let model_ptr = Box::into_raw(Box::new(model));
-        let registry_ptr = Box::into_raw(Box::new(NativeRegistry::standard()));
-        let evaluator = Evaluator::new(unsafe { &*model_ptr }, unsafe { &*registry_ptr });
-        let evaluator_ptr = Box::into_raw(Box::new(evaluator)).cast::<Evaluator<'static>>();
-
-        Self {
-            model: model_ptr,
-            registry: registry_ptr,
-            evaluator: evaluator_ptr,
-            handles: RefCell::new(JniHandleTable::new()),
-        }
+        Self::new_with_configs(model, HashMap::new())
     }
 
     /// Construct a [`JniContext`] backed by the discovered native
-    /// registry (every linked `RuntimeExtension` distributed slice
-    /// contributes its natives) and seed the evaluator with
-    /// `[extension.<…>]` configs from a parsed classpath.
+    /// registry and seed the evaluator with `[extension.<…>]` configs
+    /// from a parsed classpath.
     ///
-    /// This is the [`nativeInitContextWithClasspath`] companion to
-    /// [`Self::new`]: downstream consumers shipping their own JNI
-    /// cdylib via `examples/mydsl-jni-extension/` get their custom
-    /// extensions active here (the parameterless [`Self::new`] path
-    /// stays on `NativeRegistry::standard()` for backward compat).
+    /// This is the constructor `Java_*_nativeInitContextWithClasspath`
+    /// drives directly; [`Self::new`] also routes here with an empty
+    /// configs map. Both entry points share the same registry shape
+    /// — `discovered()` — so distributed-slice extensions are
+    /// visible regardless of which init path Java chose. The two
+    /// init paths now differ only in whether the evaluator's
+    /// extension configs are pre-seeded from a TOML.
     pub fn new_with_configs(
         model: PureModel,
         extension_configs: HashMap<String, HashMap<String, toml::Value>>,

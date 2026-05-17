@@ -979,17 +979,20 @@ TOML. On the Rust side, [`compile_classpath_bytes`] decodes the bytes
 zero-copy via `std::str::from_utf8` (the `toml` crate exposes only
 `from_str(&str)` since TOML is UTF-8 text), parses, merges with the
 embedded platform, runs `repo::load`, and constructs a [`JniContext`]
-backed by:
+with `evaluator.set_extension_configs(...)` so
+`[extension.<domain>.<engine>]` tables from the TOML reach the
+evaluator (H2 backend ports, lake credentials, … — without the old
+`OnceLock` global).
 
-1. **`NativeRegistry::discovered()`** — every linked
-   `#[distributed_slice(RUNTIME_EXTENSIONS)]` contribution is active,
-   so your custom extensions fire as expected. (The parameterless
-   `nativeInitContext` stays on `NativeRegistry::standard()` for
-   backward compat.)
-2. **`evaluator.set_extension_configs(...)`** — `[extension.<domain>.<engine>]`
-   tables from the TOML reach the evaluator, so per-evaluator config
-   (H2 backend ports, lake credentials, …) works without the old
-   `OnceLock` global.
+Both init entries — the parameterless `nativeInitContext` and this
+bytes-mode `nativeInitContextWithClasspath` — share the same registry
+shape: `NativeRegistry::discovered()`. Every linked
+`#[distributed_slice(RUNTIME_EXTENSIONS)]` contribution is active
+regardless of which init path Java picks, so downstream cdylibs built
+via the `mydsl-jni-extension` forwarder pattern can use either entry
+and get their extensions. The remaining difference between the two:
+bytes-mode pre-seeds the evaluator's extension configs from the TOML;
+the parameterless entry starts with an empty config map.
 
 **Self-contained TOML contract.** Bytes-mode has no on-disk source to
 derive a base from, so the TOML must be self-describing — every
