@@ -22,7 +22,15 @@ repository.workspace = true
 
 [lib]
 name = "pure_rust_jni"
-crate-type = ["cdylib"]
+# Dual-crate-type: the in-tree build still produces the canonical
+# `libpure_rust_jni.{dylib,so,dll}` shipped to Java consumers, AND
+# downstream cdylibs can pull this crate in as an rlib dependency
+# (which preserves the `#[no_mangle] pub extern "system" fn Java_*`
+# symbols through static linking) to produce their OWN JNI cdylib
+# that bundles their custom extensions. See
+# `docs/extensions/downstream-recipe.md` §11.1 and the worked
+# `examples/mydsl-jni-extension/` template.
+crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 legend-pure-parser-ast = { path = "../ast" }

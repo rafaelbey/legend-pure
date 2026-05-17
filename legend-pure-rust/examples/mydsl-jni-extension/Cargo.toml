@@ -1,0 +1,51 @@
+# Copyright 2026 Goldman Sachs
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Standalone workspace (not pulled into the parent legend-pure-rust/
+# workspace), mirroring `examples/mydsl-extension/`. Critical for the
+# example's purpose: an in-workspace cdylib could reach `pub(crate)`
+# items through workspace unification, masking visibility / linker
+# bugs a real external consumer would hit.
+[workspace]
+
+[package]
+name = "legend-pure-mydsl-jni-extension"
+description = "Worked example: a downstream cdylib that re-exports the legend-pure-parser-jni JNI symbols and link-forces a custom extension crate (legend-pure-mydsl-extension). Produces `libmydsl_pure_jni.{dylib,so,dll}` — drop-in for Java consumers that need the in-tree JNI surface plus a custom DSL's extensions. See ../mydsl-jni-extension/README.md and the recipe doc §11.1."
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "mydsl_pure_jni"
+crate-type = ["cdylib"]
+
+[dependencies]
+# legend-pure-parser-jni as an *rlib* dep. The downstream cdylib
+# (this crate's src/lib.rs) writes one `#[no_mangle] pub extern
+# "system" fn Java_*` forwarder per upstream entry point that just
+# delegates to the upstream's implementation. This is the canonical
+# Rust-JNI pattern for getting symbols out of a cdylib built on top
+# of an rlib — rustc DCEs unreachable rlib code by default, so
+# without explicit forwarders the `Java_*` symbols don't ship.
+legend-pure-parser-jni = { path = "../../crates/jni" }
+
+# The `jni` crate provides the FFI types (`JNIEnv`, `jlong`, etc.)
+# the forwarder signatures spell out. Must match the version the
+# upstream uses (currently `jni = "0.21"` per the workspace).
+jni = "0.21"
+
+# The downstream extension crate (carries the distributed-slice
+# statics that the JNI dispatch path picks up via discovered_*()).
+legend-pure-mydsl-extension = { path = "../mydsl-extension" }

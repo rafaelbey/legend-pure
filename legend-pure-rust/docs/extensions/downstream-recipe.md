@@ -873,7 +873,15 @@ Three shapes, depending on how your downstream consumes Pure:
 When the downstream is a Java service (legend-engine, an SDK client,
 etc.) that loads a Pure evaluator via JNI, the same discovery model
 applies — the wrapping shape just shifts from a Rust binary to a
-Rust **cdylib**:
+Rust **cdylib** that depends on `legend-pure-parser-jni` as an rlib
+and emits its own `lib<yourname>_pure_jni.{dylib,so,dll}`. Java
+consumers `System.loadLibrary("<yourname>_pure_jni")` instead of
+`pure_rust_jni`; same `Java_org_finos_legend_pure_rust_…` symbol
+table, plus your extensions discovered at evaluator construction.
+
+The runnable template is
+[`examples/mydsl-jni-extension/`](../../examples/mydsl-jni-extension/);
+copy that directory as a starting point. The shape:
 
 ```toml
 # downstream-jni/Cargo.toml
@@ -882,45 +890,74 @@ name = "mydsl_pure_jni"
 crate-type = ["cdylib"]
 
 [dependencies]
-legend-pure-parser-jni = { version = "<version>" }    # in-tree JNI surface
-mydsl-pure-extension   = { version = "<version>" }
-linkme                 = "0.3"
+legend-pure-parser-jni      = { version = "<version>" }   # in-tree JNI surface (rlib)
+legend-pure-mydsl-extension = { version = "<version>" }   # your extension crate
+jni                         = "0.21"                       # for the forwarder signatures
 ```
 
 ```rust
 // downstream-jni/src/lib.rs
 
-// Force-link both the JNI symbol-providing crate AND your
-// extension crate. The cdylib's linker preserves the
-// `#[no_mangle] pub extern "system" fn Java_*` symbols from
-// legend-pure-parser-jni (via static linking through the rlib);
-// your distributed-slice statics from the extension crate land in
-// the same final binary's link graph.
+// (1) Force-link the extension crate so its distributed-slice
+// statics reach this cdylib's link graph.
 #[allow(unused_imports)]
-use legend_pure_parser_jni as _;
-#[allow(unused_imports)]
-use mydsl_pure_extension::prelude::MyDslRuntimeExtension as _;
-// ... other force-link imports for each extension surface ...
+use legend_pure_mydsl_extension::prelude::MyDslRuntimeExtension as _;
+// … one `use … as _;` per extension surface …
+
+// (2) Forwarder `#[no_mangle] pub extern "system" fn Java_*` per
+// upstream entry point. Each forwarder is a one-line delegating
+// call. Without these, rustc's cdylib build DCE drops the rlib's
+// `Java_*` symbols entirely — `nm` would show zero. With them, the
+// downstream cdylib's symbol table matches the upstream's exactly.
+use jni::JNIEnv;
+use jni::objects::{JClass, JObject, JObjectArray, JString};
+use jni::sys::jlong;
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeInitContext<
+    'local,
+>(env: JNIEnv<'local>, class: JClass<'local>) -> jlong {
+    pure_rust_jni::Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeInitContext(env, class)
+}
+// … 6 more forwarders for the remaining Java_* entries; see
+// `examples/mydsl-jni-extension/src/lib.rs` for all 7 …
 ```
 
-Java consumer code calls `System.loadLibrary("mydsl_pure_jni")`
-instead of `pure_rust_jni` — same JNI function signatures, same
-`Java_org_finos_legend_pure_rust_PureRustEvaluator_*` symbol
-table, plus your extensions discovered at evaluator construction.
+#### Why forwarders, not `pub use upstream::*;`?
 
-> **Caveat: verify symbol re-export.** The `#[no_mangle]` re-export
-> through cdylib-on-rlib is a well-established Rust pattern but is
-> sensitive to LTO and `--gc-sections` settings. Run `nm
-> target/release/libmydsl_pure_jni.{dylib,so}` and grep for
-> `Java_` to confirm every JNI symbol shipped. The same link-forcing
-> risk that affects binaries affects cdylibs.
+Rustc's default cdylib build dead-code-eliminates unreachable rlib
+code. Plain `pub use legend_pure_parser_jni::*;` and even
+`-Wl,-exported_symbol,_Java_*` linker-flag tricks leave the cdylib
+with **zero** `Java_*` symbols — `nm` shows nothing because the
+upstream's no-mangle items aren't reachable from any cdylib-owned
+code at all. The forwarder pattern — one downstream-owned
+`#[no_mangle] pub extern "system" fn Java_*` per entry — is the
+canonical Rust-JNI cdylib-on-rlib idiom and the one shape that
+robustly preserves the symbol table.
 
-> **Today**: `legend-pure-parser-jni`'s `Cargo.toml` is still
-> `crate-type = ["cdylib"]` only — the rlib flip needed to make it
-> consumable as a dep by a downstream cdylib is a small follow-up.
-> Until then, downstream cdylibs that need their extensions in the
-> JNI binary build a forked `legend-pure-parser-jni` with their
-> extension crate added as a dep + force-link imports.
+A pleasant side-effect: once *any* forwarder establishes a real
+call into the upstream rlib, additional upstream `#[no_mangle]`
+items in the same crate ship for free. The
+`examples/mydsl-jni-extension/` template writes 7 forwarders and
+ships 8 symbols — the bonus `Java_*_nativeGenerateBindings` from a
+different upstream module rides along.
+
+#### Verify
+
+```bash
+cd examples/mydsl-jni-extension
+cargo build --release
+nm -gU target/release/libmydsl_pure_jni.dylib | grep ' _Java_' | wc -l
+# Should match the stock libpure_rust_jni.dylib for the same target.
+```
+
+The example crate's `tests/symbols.rs` automates this check —
+fails loudly with the missing symbol list if a forwarder regresses.
+
+> **Windows**: prefix-based symbol exports aren't a thing in MSVC,
+> but the `#[no_mangle] pub extern "system" fn` forwarder pattern
+> Just Works on `x86_64-pc-windows-msvc` — no `.def` file needed.
+> Verify with `dumpbin /EXPORTS mydsl_pure_jni.dll`.
 
 ---
 
@@ -964,23 +1001,16 @@ Remaining items, in priority order:
    `--classpath` is explicit). Extend the same pattern to `test`,
    `run`, `repl` so a downstream project can compile its own
    classpath without touching `--live`.
-2. **JNI lib/cdylib split** (§11.1). Flip
-   `crates/jni/Cargo.toml`'s `crate-type` to `["rlib", "cdylib"]`
-   so downstream cdylibs can depend on the in-tree JNI surface as
-   an rlib, force-link their extensions, and produce their own
-   `libmydsl_pure_jni.{dylib,so,dll}` with extensions live. Document
-   the `nm` verification step alongside.
-3. **Repo descriptors + manifest** (BACKLOG P1, independent of the
+2. **Repo descriptors + manifest** (BACKLOG P1, independent of the
    extension story). Java-Pure-style `repo.definition.json` schema
    replacing the hand-listed paths in
    `crates/core-platform-pure/build.rs`. Unblocks downstream repos
    shipping their own descriptors.
 
-Until items 1 & 2 land, downstream consumers who need
-classpath-driven repo compilation use `--live` (works today) and
-those who need JNI distribution fork the in-tree `legend-pure-parser-jni`
-crate. The discovery layer below them works unchanged — those are
-last-mile distribution concerns.
+Until item 1 lands, downstream consumers who need classpath-driven
+repo compilation use `--live` (works today). The discovery layer
+below the CLI works unchanged — last-mile distribution concerns
+only.
 
 Until items 1 & 2 land, downstream consumers who need
 classpath-driven repo compilation through `legend test` / `run` /
