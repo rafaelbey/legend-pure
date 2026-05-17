@@ -68,7 +68,14 @@ pub struct RunArgs {
 /// test command).
 #[allow(clippy::needless_pass_by_value)] // clap convention
 pub fn run(args: RunArgs, classpath: Option<&std::path::Path>) -> Result<(), CliError> {
-    let _ = classpath; // wired through; full integration deferred (parity with `legend test`)
+    // Resolve the classpath cascade so any `[extension.<name>]`
+    // tables flow through to the evaluator. Model loading still uses
+    // load_platform / live descriptors (the classpath's *repos* would
+    // also be a meaningful source here, but that's a separate behavior
+    // change tracked alongside the snapshot command).
+    let cwd = std::env::current_dir().map_err(|e| CliError::Custom(format!("cwd: {e}")))?;
+    let resolved_classpath = crate::classpath::resolve_classpath(classpath, &cwd)
+        .map_err(|e| CliError::Custom(format!("classpath: {e}")))?;
 
     eprintln!(
         "{} {}",
@@ -109,8 +116,16 @@ pub fn run(args: RunArgs, classpath: Option<&std::path::Path>) -> Result<(), Cli
         }
     };
 
-    let registry = NativeRegistry::standard();
-    let mut evaluator = Evaluator::new(&model, &registry);
+    // `discovered()` picks up every linked `RuntimeExtension` —
+    // matches `legend test`. The evaluator builder also pulls in
+    // discovered populators and applies the classpath's extension
+    // configs (so e.g. the H2 backend sees its `[extension.relational.h2]`
+    // settings).
+    let registry = NativeRegistry::discovered();
+    let mut evaluator = Evaluator::builder()
+        .registry(&registry)
+        .extension_configs(resolved_classpath.extension_configs)
+        .build(&model);
 
     let result = evaluator
         .call(&args.function, &[])

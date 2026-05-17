@@ -92,7 +92,13 @@ pub struct ReplArgs {
 /// deferred to a follow-up).
 #[allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
 pub fn run(args: ReplArgs, classpath: Option<&std::path::Path>) -> Result<(), CliError> {
-    let _ = classpath;
+    // Resolve the classpath cascade so the REPL's evaluator picks
+    // up `[extension.<name>]` configuration the same way
+    // `legend test` and `legend run` do.
+    let cwd = std::env::current_dir().map_err(|e| CliError::Custom(format!("cwd: {e}")))?;
+    let resolved_classpath = crate::classpath::resolve_classpath(classpath, &cwd)
+        .map_err(|e| CliError::Custom(format!("classpath: {e}")))?;
+    let extension_configs = resolved_classpath.extension_configs;
     // Build the auto-import list once.
     let auto_imports: Vec<SmolStr> = PLATFORM_AUTO_IMPORTS
         .iter()
@@ -322,9 +328,15 @@ pub fn run(args: ReplArgs, classpath: Option<&std::path::Path>) -> Result<(), Cl
         };
         let compile_ms = t0.elapsed().as_millis();
 
-        // Evaluate.
-        let registry = NativeRegistry::standard();
-        let mut evaluator = Evaluator::new(&model, &registry);
+        // Evaluate. `discovered()` + builder mirror `legend test` /
+        // `legend run`: every linked RuntimeExtension contributes its
+        // natives; the classpath's extension_configs reach the
+        // evaluator via the builder.
+        let registry = NativeRegistry::discovered();
+        let mut evaluator = Evaluator::builder()
+            .registry(&registry)
+            .extension_configs(extension_configs.clone())
+            .build(&model);
 
         match evaluator.call(&fn_name, &[]) {
             Ok(value) => {

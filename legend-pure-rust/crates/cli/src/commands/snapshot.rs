@@ -67,18 +67,41 @@ pub fn run(args: SnapshotArgs, classpath: Option<&std::path::Path>) -> Result<()
             "`--all` and `--repo <name>` are mutually exclusive".into(),
         ));
     }
-    let _ = classpath; // explicit override not yet wired into snapshot's load path
 
-    // 1. Compile the embedded platform.
-    let model = match platform::load_platform() {
-        Ok(m) => m,
-        Err(p) => {
-            // Bail early on platform compile errors — a bad input model
-            // would produce a bogus `.purem`.
-            return Err(CliError::Custom(format!(
-                "platform did not compile cleanly ({} errors); refusing to write a snapshot",
-                p.errors.len(),
-            )));
+    // 1. Compile the repo set. When `--classpath <path>` is explicit,
+    // load through `repo::load(resolved.repos, …)` so the user can
+    // snapshot their own classpath (not just the embedded platform).
+    // Without `--classpath`, the cascade falls through to the embedded
+    // fallback — same shape as the previous behavior.
+    let cwd = std::env::current_dir().map_err(|e| CliError::Custom(format!("cwd: {e}")))?;
+    let resolved_classpath = crate::classpath::resolve_classpath(classpath, &cwd)
+        .map_err(|e| CliError::Custom(format!("classpath: {e}")))?;
+    let model = if classpath.is_some() {
+        let mut auto_imports: Vec<smol_str::SmolStr> = platform::PLATFORM_AUTO_IMPORTS
+            .iter()
+            .map(|&s| smol_str::SmolStr::new(s))
+            .collect();
+        auto_imports.extend(resolved_classpath.extra_auto_imports.iter().cloned());
+        match legend_pure_core_platform::repo::load(&resolved_classpath.repos, &auto_imports) {
+            Ok(m) => m,
+            Err(p) => {
+                return Err(CliError::Custom(format!(
+                    "classpath did not compile cleanly ({} errors); refusing to write a snapshot",
+                    p.errors.len(),
+                )));
+            }
+        }
+    } else {
+        match platform::load_platform() {
+            Ok(m) => m,
+            Err(p) => {
+                // Bail early on platform compile errors — a bad input model
+                // would produce a bogus `.purem`.
+                return Err(CliError::Custom(format!(
+                    "platform did not compile cleanly ({} errors); refusing to write a snapshot",
+                    p.errors.len(),
+                )));
+            }
         }
     };
 

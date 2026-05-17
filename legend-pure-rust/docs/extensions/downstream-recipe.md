@@ -11,13 +11,17 @@ Cargo dependencies. The in-tree DSLs under `crates/dsl-*` are the
 worked references; this guide shows how to follow the same patterns
 from a sibling crate.
 
-> **Status:** the library SPI and discovery layer are stable. Each
+> **Status:** the extension story is structurally complete. Each
 > trait — `RuntimeExtension`, `CompilerExtension`, `SectionParser`,
 > `IslandParser`, `DSLPopulator`, `IdeExtension` — has a `linkme`
 > distributed slice; your extension annotates a `static` next to its
 > trait impl and any binary that pulls your crate in as a Cargo
-> dependency picks it up automatically. Stateful `CompilerExtension`s
-> still need explicit wiring (see §5 for the carve-out).
+> dependency picks it up automatically. Per-compile state lives in
+> [`CompileExtensionScope`](#stateless-self-registration--per-compile-state)
+> threaded through the ctx, so your extension type stays `Sync` and
+> self-registers. The runnable
+> [`examples/mydsl-extension/`](../../examples/mydsl-extension/)
+> template proves the full path end-to-end.
 
 ---
 
@@ -78,7 +82,7 @@ below) picks up `greet` via `NativeRegistry::discovered()` or
 
 ---
 
-## 1. The five extension surfaces
+## 1. The six extension surfaces
 
 Pick the surfaces you need; they're independent and you can implement
 one without touching the others.
@@ -90,18 +94,13 @@ one without touching the others.
 | Section grammar | `SectionParser` | `crates/parser/src/section_parser.rs` | You introduce `###MyDsl` blocks |
 | Island grammar | `IslandParser` | `crates/parser/src/island.rs` | You embed `#tag{ … }#` micro-syntaxes inside Pure expressions |
 | Heap hydration | `DSLPopulator` | `crates/runtime/src/dsl.rs` | Your DSL stores data in `Element::DSLInstance` and you want it reflected on the runtime heap |
+| IDE references | `IdeExtension` | `crates/ide/src/lib.rs` | Your DSL surfaces clickable reference regions for goto-def / find-usages |
 
 A native-only extension (no new syntax, just new functions) needs only
 `RuntimeExtension`. A typical full DSL implements
 `SectionParser` + `CompilerExtension` + `DSLPopulator`, and ships a
-sibling `RuntimeExtension` if it adds natives.
-
-There is a sixth surface — `IdeExtension` (`crates/pure/src/refs.rs`)
-— for contributing IDE references (go-to-definition, find-usages).
-It's a separate, self-discoverable trait. In-tree DSLs still expose
-their `walk_references` via `CompilerExtension::walk_references`
-today; migration onto `IdeExtension` follows the state-into-model
-lift described in §5.
+sibling `RuntimeExtension` if it adds natives. Add `IdeExtension`
+when you want IDE-side reference navigation.
 
 In-tree templates this guide cites verbatim:
 
@@ -109,13 +108,22 @@ In-tree templates this guide cites verbatim:
   with `#[distributed_slice(RUNTIME_EXTENSIONS)]`
 - `crates/dsl-relational/src/parser.rs` — `SectionParser`
 - `crates/dsl-relational/src/compiler.rs` — `CompilerExtension`
+  (declare / define_bodies / validate using `ctx.scope` for
+  per-compile state) + `RelationalIdeExtension` (`IdeExtension`
+  reading from `model.compile_scope` post-compile)
+- `crates/dsl-mapping/src/compiler.rs` — same pattern for Mapping,
+  including the canonical `MappingIdeExtension`
 - `crates/dsl-mapping-runtime/src/lib.rs` and
   `crates/dsl-relational-runtime/src/lib.rs` — `DSLPopulator` with
   `#[distributed_slice(DSL_POPULATORS)]`
-- `crates/cli/src/main.rs` — the canonical force-link recipe
-- `crates/cli/src/commands/test.rs` — the runtime wiring exemplar
-  (`NativeRegistry::discovered()` + `discovered_populators()` —
-  no per-extension slice in the command body)
+- `crates/cli/src/main.rs` + `crates/cli/src/lib.rs` — the canonical
+  force-link recipe and the `legend_cli::main_entry()` shape
+- **`examples/mydsl-extension/`** — a runnable end-to-end template
+  (outside the parent workspace, just like a real downstream
+  consumer would build). Six unit-struct extensions covering every
+  surface, with `mydsl-legend` binary wrapping
+  `legend_cli::main_entry()`. Fork this directory to start your own
+  DSL crate.
 
 ---
 
@@ -137,7 +145,7 @@ mydsl-pure-extension/
 ├── tests/
 │   └── smoke.rs
 └── bin/
-    └── mydsl-legend.rs   # custom CLI binary (see §9)
+    └── mydsl-legend.rs   # custom CLI binary (see §8)
 ```
 
 `Cargo.toml` dependency floor:
@@ -145,21 +153,23 @@ mydsl-pure-extension/
 ```toml
 [dependencies]
 legend-pure-runtime       = "<version>"   # NativeRegistry, Evaluator, DSLPopulator
-legend-pure-pure          = "<version>"   # CompilerExtension, PureModel, Element
+legend-pure-parser-pure   = "<version>"   # CompilerExtension, PureModel, Element, types
 legend-pure-parser-parser = "<version>"   # ParserContext, SectionParser, IslandParser
 legend-pure-parser-ast    = "<version>"   # DSLElement, Expression, SourceInfo
-legend-pure-parser-pure   = "<version>"   # ValueSpec, type system
+legend-pure-ide           = "<version>"   # IdeExtension, IDE_EXTENSIONS, Reference
 smol_str                  = "0.3"
 linkme                    = "0.3"          # distributed-slice self-registration
 ```
 
-Add `legend-cli` if you want to inherit its `main()` dispatcher
+Add `legend-cli` if you want to inherit its `main_entry()` dispatcher
 (recommended — see §8). Add `clap` + `miette` only if you write a
 bespoke binary.
 
 > **Today**: these crates are not yet published to crates.io. While you
 > build against this repo, use `path = "../legend-pure-rust/crates/<name>"`
-> dependencies. Publication is tracked separately.
+> dependencies. The runnable [`examples/mydsl-extension/`](../../examples/mydsl-extension/)
+> template uses this shape verbatim — copy its `Cargo.toml` for
+> reference.
 
 ---
 
@@ -409,15 +419,16 @@ pipeline calls four hooks per pass:
 | `define_signatures` | 2a | Resolve element / type references needed before bodies lower |
 | `define_bodies` | 2b | Lower function bodies, constraint expressions, qualified-property bodies |
 | `validate` | 3 | Read-only checks on the frozen model |
-| `walk_references` | — | Contribute references to the IDE index (called by `build_reference_index`) |
 
 All hooks default to no-op, so override only what you contribute.
+IDE-side reference contribution lives on a separate `IdeExtension`
+trait in the `legend-pure-ide` crate (see §7's companion subsection).
 
 ```rust
-use legend_pure_pure::extension::{
+use legend_pure_parser_pure::extension::{
     CompilerExtension, DeclareCtx, DefineCtx, ValidateCtx,
 };
-use legend_pure_pure::model::{Element, DSLInstance};
+use legend_pure_parser_pure::model::{Element, DSLInstance};
 
 pub struct MyDslExtension;
 
@@ -443,39 +454,60 @@ struct) and `:426` (the trait impl). The relational extension overrides
 `declare` and `validate`; Mapping additionally overrides
 `define_bodies` for property-mapping bodies.
 
-### Stateless vs. stateful: the discovery carve-out
+### Stateless self-registration + per-compile state
 
 The `COMPILER_EXTENSIONS` distributed slice stores
-`&'static (dyn CompilerExtension + Sync)`. A stateless unit struct
-(`pub struct MyDslExtension;`) registers with one line:
+`&'static (dyn CompilerExtension + Sync)` — so your extension type
+must be `Sync`. The cleanest shape is a unit struct:
 
 ```rust
-use legend_pure_pure::extension::COMPILER_EXTENSIONS;
+use legend_pure_parser_pure::extension::COMPILER_EXTENSIONS;
 use linkme::distributed_slice;
+
+#[derive(Debug, Default)]
+pub struct MyDslExtension;
 
 #[distributed_slice(COMPILER_EXTENSIONS)]
 static MY_DSL_EXT: &(dyn CompilerExtension + Sync) = &MyDslExtension;
 ```
 
-**A `CompilerExtension` that holds `RefCell`-backed per-compile state
-cannot self-register** — `RefCell` isn't `Sync`. The in-tree
-`RelationalExtension` and `MappingExtension` fall in this bucket today
-(they accumulate `databases` / `mappings` RefCells across `declare`
-and `validate`). Those extensions stay explicit callers of
-[`compile_with_extensions`](https://docs.rs/legend-pure-pure/0.1/legend_pure_pure/pipeline/fn.compile_with_extensions.html)
-until their state migrates into `Element::DSLInstance` (see §6) and
-the struct becomes a unit type.
+**Per-compile state** (the data your `declare` accumulates and
+`validate` consumes) doesn't live on the struct — it goes in
+`ctx.scope`, the per-compile [`CompileExtensionScope`] arena
+threaded through every hook:
 
-If your DSL needs per-compile state, two clean shapes work:
+```rust
+#[derive(Default)]
+struct MyDslCompileState {
+    elements: HashMap<SmolStr, MyDef>,
+}
 
-1. **Put the state in the model.** Use `Element::DSLInstance` (§6) as
-   the source of truth. `declare` writes; `validate` and downstream
-   reads pull from the model. The extension struct stays stateless and
-   self-registers.
-2. **Stay explicit.** Construct a fresh `MyDslExtension` per compile,
-   pass it through `compile_with_extensions(&chunks, &[&ext])`. You
-   give up auto-discovery in exchange for the simpler shape — the
-   plan accepts this trade-off for the existing in-tree DSLs.
+impl CompilerExtension for MyDslExtension {
+    fn declare(&self, ctx: &mut DeclareCtx<'_>) {
+        let state = ctx
+            .scope
+            .as_deref_mut()
+            .expect("scope wired by pipeline")
+            .get_or_default::<MyDslCompileState>();
+        state.elements.insert(fqn, def);
+    }
+
+    fn validate(&self, ctx: &mut ValidateCtx<'_>) {
+        let Some(scope) = ctx.scope else { return };
+        let Some(state) = scope.get::<MyDslCompileState>() else { return };
+        for (fqn, def) in &state.elements { /* validate */ }
+    }
+}
+```
+
+`CompileExtensionScope` is type-id-keyed and `Send + Sync`-bound,
+so your state type must be plain data (no `RefCell` / `Rc`).
+[`MappingExtension`](../../crates/dsl-mapping/src/compiler.rs) and
+[`RelationalExtension`](../../crates/dsl-relational/src/compiler.rs)
+are the canonical in-tree references — both fully migrated and
+self-registering.
+
+[`CompileExtensionScope`]: ../../crates/pure/src/extension.rs
 
 ### Ordering: `depends_on`
 
@@ -499,8 +531,8 @@ predicate, a derivation, a constraint), don't re-implement type
 inference — use the public helper:
 
 ```rust
-use legend_pure_pure::extension::lower_and_infer_expression;
-use legend_pure_pure::types::{Multiplicity, TypeExpr};
+use legend_pure_parser_pure::extension::lower_and_infer_expression;
+use legend_pure_parser_pure::types::{Multiplicity, TypeExpr};
 
 let inferred = lower_and_infer_expression(
     ctx.model,
@@ -519,13 +551,13 @@ limitations around generic type parameters.
 **Wiring** — production default uses discovery, tests use explicit:
 
 ```rust
-use legend_pure_pure::pipeline::{compile, compile_with_extensions};
+use legend_pure_parser_pure::pipeline::{compile, compile_with_extensions};
 
 // Production (default): discovers + topo-sorts every CompilerExtension
 // registered via #[distributed_slice(COMPILER_EXTENSIONS)] in linked crates.
 let model = compile(chunks, &auto_imports)?;
 
-// Tests / stateful extensions: explicit composition.
+// Tests / hand-composed extension sets: explicit slice.
 let model = compile_with_extensions(chunks, &auto_imports, &[&MyDslExtension])?;
 ```
 
@@ -629,41 +661,94 @@ order), not by the populator slice order — slice order only matters
 for tie-breaking among populators handling the same `dsl_name`, which
 is forbidden anyway (`discovered_populators()` panics on duplicates).
 
+### 7.1 IDE references via `IdeExtension`
+
+IDE-side reference contribution (clickable goto-def / find-usages
+regions) is a separate trait in the [`legend-pure-ide`](../../crates/ide/)
+crate. Implementations are unit structs that read your DSL's
+per-compile state out of `model.compile_scope` post-compile and
+push one `Reference` per source-level reference site:
+
+```rust
+use legend_pure_ide::{IDE_EXTENSIONS, IdeExtension, Reference};
+use legend_pure_parser_pure::model::PureModel;
+use linkme::distributed_slice;
+
+#[derive(Debug, Default)]
+pub struct MyDslIdeExtension;
+
+impl IdeExtension for MyDslIdeExtension {
+    fn name(&self) -> &'static str { "mydsl-ide" }
+
+    fn walk_references(&self, model: &PureModel, visit: &mut dyn FnMut(Reference)) {
+        let Some(state) = model.compile_scope.get::<MyDslCompileState>() else { return };
+        for (fqn, def) in &state.elements {
+            // visit(Reference { range, kind, target_element, target });
+        }
+    }
+}
+
+#[distributed_slice(IDE_EXTENSIONS)]
+static MY_DSL_IDE: &dyn IdeExtension = &MyDslIdeExtension;
+```
+
+Template: [`crates/dsl-mapping/src/compiler.rs`](../../crates/dsl-mapping/src/compiler.rs)
+(`MappingIdeExtension`) and the analogous
+`RelationalIdeExtension` in `crates/dsl-relational/src/compiler.rs`.
+`build_reference_index(&model)` walks the discovered slice
+automatically.
+
 ---
 
 ## 8. Wiring it together — the minimal custom binary
 
 With every trait surface self-registering, the consumer binary is one
 helper call plus the **link-forcing imports** that ensure the linker
-doesn't drop your extension crates.
+doesn't drop your extension crates. The shape below is the actual,
+working shape from
+[`examples/mydsl-extension/src/main.rs`](../../examples/mydsl-extension/src/main.rs):
 
 ```rust
 // src/main.rs
 
-// 1. Force-link your extension crates. Without these `use` lines
+// 1. Force-link your extension crate(s). Without these `use` lines
 //    the linker is free to drop the entire crate object file (no
 //    reachable code → no contribution to the distributed slices).
-//    This is the only per-binary wiring step that remains.
+//    One `use … as _;` per extension crate is enough.
 #[allow(unused_imports)]
-use mydsl::GreetExtension as _;
+use mydsl::prelude::MyDslRuntimeExtension as _;
 #[allow(unused_imports)]
-use mydsl::MyDslSectionParser as _;
+use mydsl::prelude::MyDslCompilerExtension as _;
 #[allow(unused_imports)]
-use mydsl::MyDslPopulator as _;
+use mydsl::prelude::MyDslSectionParser as _;
+#[allow(unused_imports)]
+use mydsl::prelude::MyDslIslandParser as _;
+#[allow(unused_imports)]
+use mydsl::prelude::MyDslPopulator as _;
+#[allow(unused_imports)]
+use mydsl::prelude::MyDslIdeExtension as _;
 
-fn main() -> anyhow::Result<()> {
+fn main() {
     // 2. Hand off to the stock CLI dispatcher; everything else flows
     //    through discovery.
-    legend_cli::main()
+    legend_cli::main_entry();
 }
 ```
 
 That's it. The stock `legend` CLI's command set (`parse`, `check`,
-`test`, `run`, `repl`, …) all dispatch through
+`test`, `run`, `repl`, `snapshot`, …) all dispatch through
 `NativeRegistry::discovered()`, `pipeline::compile()` (discovered
 `CompilerExtension`s), `parse()` (discovered parsers), and
-`Evaluator::builder().build()` (discovered populators). Your extension
-flows into all of them automatically.
+`Evaluator::builder().build()` (discovered populators + extension
+configs from `--classpath`). Your extension flows into all of them
+automatically.
+
+> **Run the template yourself:**
+> ```bash
+> cd legend-pure-rust/examples/mydsl-extension
+> cargo test                                # 6/6 discovery smoke tests
+> cargo run --bin mydsl-legend -- version   # the wrapped CLI works
+> ```
 
 ### Link forcing (important)
 
@@ -766,23 +851,76 @@ drive it from a Rust integration test. The in-tree pattern is at
 
 ## 11. Distribution
 
-Two options, simplest first:
+Three shapes, depending on how your downstream consumes Pure:
 
-- **Cargo-install a custom binary** —
+- **Cargo-install a custom CLI binary** —
   `cargo install --bin mydsl-legend --path .` and downstream users
   invoke `mydsl-legend test`, `mydsl-legend run …` exactly like
   `legend`. The binary contains your extensions, the
   `legend-pure-*` crates, and any platform `.pure` source you embed.
-- **Library crate consumed by an embedding app** — publish
-  `mydsl-pure-extension` as a library; embedders build their own
-  binary that pulls your `MyExtension` + `MyDslExtension` and
-  combines them with other extensions.
+  The runnable template is
+  [`examples/mydsl-extension/`](../../examples/mydsl-extension/) —
+  fork it for your own project.
+- **Library crate consumed by an embedding app** — publish your
+  extension crate as a library; embedders build their own Rust
+  binary that pulls your types and force-links them. The embedder's
+  binary wraps `legend_cli::main_entry()` (or builds an `Evaluator`
+  directly for embedded use).
+- **JNI cdylib for Java consumers** — see §11.1 below.
 
-> **In flight**: there is no in-tree publishing template /
-> "downstream extension cookiecutter" yet. The
-> `examples/mydsl-extension/` crate (item 5 in [Gaps and
-> roadmap](#gaps-and-roadmap)) will serve as the runnable template
-> once it lands.
+### 11.1 JNI / Java consumers
+
+When the downstream is a Java service (legend-engine, an SDK client,
+etc.) that loads a Pure evaluator via JNI, the same discovery model
+applies — the wrapping shape just shifts from a Rust binary to a
+Rust **cdylib**:
+
+```toml
+# downstream-jni/Cargo.toml
+[lib]
+name = "mydsl_pure_jni"
+crate-type = ["cdylib"]
+
+[dependencies]
+legend-pure-parser-jni = { version = "<version>" }    # in-tree JNI surface
+mydsl-pure-extension   = { version = "<version>" }
+linkme                 = "0.3"
+```
+
+```rust
+// downstream-jni/src/lib.rs
+
+// Force-link both the JNI symbol-providing crate AND your
+// extension crate. The cdylib's linker preserves the
+// `#[no_mangle] pub extern "system" fn Java_*` symbols from
+// legend-pure-parser-jni (via static linking through the rlib);
+// your distributed-slice statics from the extension crate land in
+// the same final binary's link graph.
+#[allow(unused_imports)]
+use legend_pure_parser_jni as _;
+#[allow(unused_imports)]
+use mydsl_pure_extension::prelude::MyDslRuntimeExtension as _;
+// ... other force-link imports for each extension surface ...
+```
+
+Java consumer code calls `System.loadLibrary("mydsl_pure_jni")`
+instead of `pure_rust_jni` — same JNI function signatures, same
+`Java_org_finos_legend_pure_rust_PureRustEvaluator_*` symbol
+table, plus your extensions discovered at evaluator construction.
+
+> **Caveat: verify symbol re-export.** The `#[no_mangle]` re-export
+> through cdylib-on-rlib is a well-established Rust pattern but is
+> sensitive to LTO and `--gc-sections` settings. Run `nm
+> target/release/libmydsl_pure_jni.{dylib,so}` and grep for
+> `Java_` to confirm every JNI symbol shipped. The same link-forcing
+> risk that affects binaries affects cdylibs.
+
+> **Today**: `legend-pure-parser-jni`'s `Cargo.toml` is still
+> `crate-type = ["cdylib"]` only — the rlib flip needed to make it
+> consumable as a dep by a downstream cdylib is a small follow-up.
+> Until then, downstream cdylibs that need their extensions in the
+> JNI binary build a forked `legend-pure-parser-jni` with their
+> extension crate added as a dep + force-link imports.
 
 ---
 
@@ -795,52 +933,59 @@ else is best-effort backwards-compatible.
 | Crate | Public surface |
 |---|---|
 | `legend-pure-runtime` | `native::{NativeFunction, NativeRegistry, RuntimeExtension, RUNTIME_EXTENSIONS, ExtensionStateStore}`, `value::Value`, `eval::{Evaluator, EvalContextTrait, Evaluated}`, `builder::EvaluatorBuilder`, `heap::{RuntimeHeap, ObjectHandle}`, `dsl::{DSLPopulator, DSLPopulationCtx, DSL_POPULATORS, discovered_populators, run_populators}`, `error::{PureException, PureRuntimeError}` |
-| `legend-pure-pure` | `model::{PureModel, Element, DSLInstance}`, `extension::{CompilerExtension, COMPILER_EXTENSIONS, discovered_compiler_extensions, DeclareCtx, DefineCtx, ValidateCtx, lower_and_infer_expression}`, `pipeline::{compile, compile_with_extensions}`, `refs::{Reference, IdeExtension, IDE_EXTENSIONS, discovered_ide_extensions, build_reference_index, build_reference_index_with_ide_extensions}`, `types::{TypeExpr, Multiplicity, ResolvedType, Parameter}` |
+| `legend-pure-parser-pure` | `model::{PureModel, Element, DSLInstance}`, `extension::{CompilerExtension, COMPILER_EXTENSIONS, discovered_compiler_extensions, CompileExtensionScope, DeclareCtx, DefineCtx, ValidateCtx, lower_and_infer_expression}`, `pipeline::{compile, compile_with_extensions}`, `types::{TypeExpr, Multiplicity, ResolvedType, Parameter, ValueSpec, ExprKind}` |
+| `legend-pure-ide` | `IdeExtension`, `IDE_EXTENSIONS`, `discovered_ide_extensions`, `Reference`, `RefKind`, `ReferenceIndex`, `build_reference_index`, `build_reference_index_with_ide_extensions`, `walk_references` |
 | `legend-pure-parser-parser` | `ParserContext`, `IslandParser`, `ISLAND_PARSERS`, `discovered_island_parsers`, `SectionParser`, `SECTION_PARSERS`, `discovered_section_parsers`, `parse`, `parse_with_islands`, `parse_with_sections`, `error::ParseError` |
 | `legend-pure-parser-ast` | `dsl::DSLElement`, `island::IslandContent`, `expression::Expression`, `section::SourceFile`, `SourceInfo`, derive macros |
-| `legend-pure-parser-pure` | `model::PureModel`, `types::{ValueSpec, ExprKind}` |
+| `legend-cli` | `main_entry`, `classpath::resolve_classpath`, `diagnostics::CliError` (for downstream binaries that wrap the stock CLI dispatch) |
 
 ---
 
 ## Gaps and roadmap
 
-The discovery infrastructure and the in-tree stateless extension
-self-registrations have landed; the CLI flows through
-`NativeRegistry::discovered()` and `discovered_populators()`. The
-known remaining items, with the smallest first:
+The extension story is structurally complete: discovery infrastructure
+shipped (Phase 1), all in-tree DSLs self-register (Phase 3 LIGHT +
+FULL), `walk_references` moved off `CompilerExtension` onto the
+dedicated `IdeExtension` trait (Phase 2), reference machinery lifted
+into a separate `legend-pure-ide` crate (Phase 2.5), evaluator
+extension-config flow + `OnceLock` removal (Phase 4), CLI flows
+through `NativeRegistry::discovered()` and `Evaluator::builder()`
+(Phase 5), `--classpath` consumed by `test` / `run` / `repl` /
+`snapshot` (Phase 5 finish), and the runnable
+[`examples/mydsl-extension/`](../../examples/mydsl-extension/) template
+proves the recipe end-to-end (Phase 6).
 
-1. **Stateful `CompilerExtension` migration**. `MappingExtension`,
-   `RelationalExtension`, `DiagramExtension` hold `RefCell`-backed
-   per-compile state today and can't satisfy the `Sync` bound the
-   distributed slice requires. Lift the state into
-   `Element::DSLInstance` (Diagram is already there for its primary
-   payload — Mapping / Relational still write the registry side too)
-   so the structs become unit types and can self-register. Tracked as
-   "Phase 3 FULL" in
-   `~/.claude/plans/how-will-be-the-hashed-sparkle.md`.
-2. **`IdeExtension` migration of `walk_references`**. Blocked on item
-   1; once the stateful `CompilerExtension`s self-register, their
-   `walk_references` impls move into companion stateless
-   `IdeExtension` impls and the legacy hook can be removed from
-   `CompilerExtension`. Tracked as "Phase 2".
-3. **CLI `--classpath` consumption** for repo loading. The
-   `[extension.<name>]` tables flow through to the evaluator (Phase 4
-   wired `legend test`'s `extension_configs`), but the classpath's
-   *repos* still aren't read by most subcommands. `legend test` falls
-   back to `load_platform()` (embedded) unless `--live` is used;
-   `legend run`, `legend check`, etc. behave similarly. Wire
-   `resolve_classpath` outputs into model loading the same way
-   `extension_configs` is now wired.
-4. **Worked example crate** (`Phase 6`). `examples/mydsl-extension/`
-   outside the workspace, demonstrating the full discovery path.
-   CI-built so the recipe never goes stale.
-5. **Repo descriptors + manifest** (`Phase B3`, existing BACKLOG P1).
-   Independent of the discovery work — Java-Pure-style
-   `repo.definition.json` schema replacing the hand-listed paths in
-   `crates/core-platform-pure/build.rs`.
+Remaining items, in priority order:
 
-Until items 1 & 2 land, external consumers can still self-register
-*stateless* `CompilerExtension`s, `SectionParser`s, `IslandParser`s,
-`RuntimeExtension`s, and `DSLPopulator`s. Stateful
-`CompilerExtension`s use the explicit
-`compile_with_extensions(&chunks, &[&ext])` path.
+1. **CLI repo loading from classpath.** Subcommands now consume
+   `extension_configs` from the resolved classpath but still load
+   *repos* from `load_platform()` / `--live`; `snapshot` is the
+   exception (it switches to `repo::load(resolved.repos, …)` when
+   `--classpath` is explicit). Extend the same pattern to `test`,
+   `run`, `repl` so a downstream project can compile its own
+   classpath without touching `--live`.
+2. **JNI lib/cdylib split** (§11.1). Flip
+   `crates/jni/Cargo.toml`'s `crate-type` to `["rlib", "cdylib"]`
+   so downstream cdylibs can depend on the in-tree JNI surface as
+   an rlib, force-link their extensions, and produce their own
+   `libmydsl_pure_jni.{dylib,so,dll}` with extensions live. Document
+   the `nm` verification step alongside.
+3. **Repo descriptors + manifest** (BACKLOG P1, independent of the
+   extension story). Java-Pure-style `repo.definition.json` schema
+   replacing the hand-listed paths in
+   `crates/core-platform-pure/build.rs`. Unblocks downstream repos
+   shipping their own descriptors.
+
+Until items 1 & 2 land, downstream consumers who need
+classpath-driven repo compilation use `--live` (works today) and
+those who need JNI distribution fork the in-tree `legend-pure-parser-jni`
+crate. The discovery layer below them works unchanged — those are
+last-mile distribution concerns.
+
+Until items 1 & 2 land, downstream consumers who need
+classpath-driven repo compilation through `legend test` / `run` /
+`repl` use `--live` as the workaround, and those who need JNI
+distribution fork the in-tree `legend-pure-parser-jni` crate. The
+extension API itself works end-to-end today — the structural shape
+the recipe describes is the structural shape consumers will use
+post-publication.
