@@ -177,6 +177,42 @@ fn test_completions() {
         .stdout(predicate::str::contains("_legend()"));
 }
 
+#[test]
+fn test_test_command_with_explicit_classpath_loads_repos() {
+    // `legend test --classpath <toml> --live` should:
+    //   1. emit the "--live / --watch / --platform-dir ignored" warning
+    //      because --classpath wins;
+    //   2. compile the embedded platform via `repo::load(resolved.repos, …)`
+    //      (the classpath branch — empty toml falls through to
+    //      `Repo::default_embedded()`, which is the trimmed platform blob);
+    //   3. drive the surveyor to completion against a known-clean package
+    //      that lives in the trimmed embedded blob.
+    //
+    // The package `meta::pure::functions::math` exists in the trimmed
+    // platform blob; its test cases live in the separate `.tests`
+    // artifact (not in `default_embedded()` — by design, downstream
+    // classpaths shouldn't auto-include our test artifacts), so the
+    // surveyor reports 0 tests and exits 0.
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("legend-pure-classpath.toml");
+    std::fs::write(&toml_path, "root = \".\"\n").unwrap();
+
+    let mut cmd = Command::cargo_bin("legend").unwrap();
+    cmd.env("NO_COLOR", "1");
+    cmd.arg("test")
+        .arg("--classpath")
+        .arg(&toml_path)
+        .arg("--live")
+        .arg("--package")
+        .arg("meta::pure::functions::math")
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains("`--live` / `--watch` / `--platform-dir` ignored")
+                .and(predicate::str::contains("Test Suite completed")),
+        );
+}
+
 // Stubs coverage
 #[test]
 fn test_test_command_runs_surveyor() {

@@ -87,28 +87,49 @@ pub struct ReplArgs {
 
 /// Execute the `legend repl` command.
 ///
-/// `classpath` is the resolved `--classpath` flag (currently a
-/// thread-through; full integration with the REPL's reload loop is
-/// deferred to a follow-up).
+/// `classpath` is the resolved `--classpath` flag. When set explicitly,
+/// the REPL loads its platform sources from the classpath's resolved
+/// repo set (matching `legend snapshot` / `legend run`); `--live`
+/// becomes a no-op (with a stderr warning) and `:reload` / `:watch`
+/// remain unavailable since classpath sources aren't filesystem-watched
+/// from a single root.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
-pub fn run(args: ReplArgs, classpath: Option<&std::path::Path>) -> Result<(), CliError> {
-    // Resolve the classpath cascade so the REPL's evaluator picks
-    // up `[extension.<name>]` configuration the same way
-    // `legend test` and `legend run` do.
+pub fn run(mut args: ReplArgs, classpath: Option<&std::path::Path>) -> Result<(), CliError> {
+    // Resolve the classpath cascade so the REPL's evaluator picks up
+    // `[extension.<name>]` configuration AND (when --classpath is
+    // explicit) its repo set.
     let cwd = std::env::current_dir().map_err(|e| CliError::Custom(format!("cwd: {e}")))?;
     let resolved_classpath = crate::classpath::resolve_classpath(classpath, &cwd)
         .map_err(|e| CliError::Custom(format!("classpath: {e}")))?;
     let extension_configs = resolved_classpath.extension_configs;
-    // Build the auto-import list once.
-    let auto_imports: Vec<SmolStr> = PLATFORM_AUTO_IMPORTS
+    let classpath_explicit = classpath.is_some();
+    if classpath_explicit && args.live {
+        eprintln!(
+            "  {} `--live` ignored when `--classpath` is set; `:reload` / `:watch` are unavailable in classpath mode",
+            "warning:".yellow().bold(),
+        );
+        // Disable downstream `--live`-gated behavior; `:reload` / `:watch`
+        // handlers already error when args.live is false, which is the
+        // desired UX in classpath mode.
+        args.live = false;
+    }
+    // Build the auto-import list once. Classpath-declared extras are
+    // appended to the platform defaults so classpath-shipped repos can
+    // depend on their own auto-imports.
+    let mut auto_imports: Vec<SmolStr> = PLATFORM_AUTO_IMPORTS
         .iter()
         .map(|&s| SmolStr::new(s))
         .collect();
+    if classpath_explicit {
+        auto_imports.extend(resolved_classpath.extra_auto_imports.iter().cloned());
+    }
 
     // Collect the platform source pairs for re-use in every compile cycle.
     let repl_helper = "function meta::pure::functions::string::__repl_toString(v: Any[1]): String[1] { $v->toString() }";
 
-    let mut repos: Vec<Repo> = if args.live {
+    let mut repos: Vec<Repo> = if classpath_explicit {
+        resolved_classpath.repos
+    } else if args.live {
         let descriptor = crate::live::resolve_platform_descriptor(args.platform_dir.as_deref())?;
         crate::live::live_repos(&descriptor)?
     } else {

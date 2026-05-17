@@ -49,7 +49,7 @@ use owo_colors::OwoColorize;
 
 use super::coverage::{CoverageHooks, CoverageMap};
 use legend_pure_core_platform::platform::{PLATFORM_AUTO_IMPORTS, load_platform};
-use legend_pure_core_platform::repo;
+use legend_pure_core_platform::repo::{self, Repo};
 use legend_pure_parser_pure::model::PureModel;
 use legend_pure_runtime::error::PureException;
 use legend_pure_runtime::eval::Evaluator;
@@ -177,21 +177,34 @@ pub struct TestArgs {
 
 /// Execute the `legend test` command.
 ///
-/// `classpath` is the resolved `--classpath` flag. When present, the
-/// command resolves repos from the classpath cascade (env, ancestor,
-/// next-to-binary, embedded fallback). When absent, the legacy
-/// `--live` / `--platform-dir` shortcut applies.
+/// `classpath` is the resolved `--classpath` flag. When set explicitly,
+/// the command compiles the classpath's resolved repo set (same path
+/// `legend snapshot` / `legend run` / `legend repl` take); `--live` /
+/// `--watch` / `--platform-dir` are then ignored with a stderr warning,
+/// and the watch loop short-circuits to a single run. When unset, the
+/// legacy `--live` / embedded cascade applies.
 #[allow(clippy::needless_pass_by_value)] // clap convention
 pub fn run(args: TestArgs, classpath: Option<&std::path::Path>) -> Result<(), CliError> {
-    // Resolve the `[extension.<name>]` tables from the classpath
-    // cascade so the H2 backend (and any future per-evaluator-config
-    // consumer) picks them up. Model loading still uses load_platform
-    // / live descriptors below — full classpath-driven repo loading
-    // is a separate, larger refactor tracked as a remaining gap.
     let cwd = std::env::current_dir().map_err(|e| CliError::Custom(format!("cwd: {e}")))?;
     let resolved_classpath = crate::classpath::resolve_classpath(classpath, &cwd)
         .map_err(|e| CliError::Custom(format!("classpath: {e}")))?;
     let extension_configs = resolved_classpath.extension_configs;
+    let classpath_explicit = classpath.is_some();
+    if classpath_explicit && (args.live || args.watch) {
+        eprintln!(
+            "  {} `--live` / `--watch` / `--platform-dir` ignored when `--classpath` is set",
+            "warning:".yellow().bold(),
+        );
+    }
+    let classpath_repos: Option<Vec<Repo>> = classpath_explicit.then(|| resolved_classpath.repos);
+    let classpath_extra_auto_imports: Vec<smol_str::SmolStr> = if classpath_explicit {
+        resolved_classpath.extra_auto_imports
+    } else {
+        Vec::new()
+    };
+    // --watch only makes sense for the live-source-root watcher; with
+    // an explicit classpath there's no single root to watch.
+    let watch_effective = args.watch && !classpath_explicit;
     let mode_label = args
         .mode
         .iter()
@@ -216,7 +229,7 @@ pub fn run(args: TestArgs, classpath: Option<&std::path::Path>) -> Result<(), Cl
     } else {
         String::new()
     };
-    let descriptor = if args.live || args.watch {
+    let descriptor = if !classpath_explicit && (args.live || args.watch) {
         Some(crate::live::resolve_platform_descriptor(
             args.platform_dir.as_deref(),
         )?)
@@ -234,10 +247,12 @@ pub fn run(args: TestArgs, classpath: Option<&std::path::Path>) -> Result<(), Cl
             &mode_label,
             &pct_via,
             descriptor.as_deref(),
+            classpath_repos.as_deref(),
+            &classpath_extra_auto_imports,
             &extension_configs,
         );
 
-        if !args.watch {
+        if !watch_effective {
             return res;
         }
 
@@ -283,6 +298,8 @@ fn run_once(
     mode_label: &str,
     pct_via: &str,
     live_descriptor: Option<&std::path::Path>,
+    classpath_repos: Option<&[Repo]>,
+    classpath_extra_auto_imports: &[smol_str::SmolStr],
     extension_configs: &std::collections::HashMap<
         String,
         std::collections::HashMap<String, toml::Value>,
@@ -300,7 +317,24 @@ fn run_once(
         pct_via,
     );
 
-    let model = if let Some(descriptor) = live_descriptor {
+    let model = if let Some(repos) = classpath_repos {
+        let mut auto_imports: Vec<smol_str::SmolStr> = PLATFORM_AUTO_IMPORTS
+            .iter()
+            .map(|&s| smol_str::SmolStr::new(s))
+            .collect();
+        auto_imports.extend(classpath_extra_auto_imports.iter().cloned());
+        match repo::load(repos, &auto_imports) {
+            Ok(m) => m,
+            Err(partial) => {
+                eprintln!(
+                    "  {} classpath compiled with {} error(s)",
+                    "warning:".yellow().bold(),
+                    partial.errors.len()
+                );
+                partial.model
+            }
+        }
+    } else if let Some(descriptor) = live_descriptor {
         let repos = crate::live::live_repos(descriptor)?;
         let auto_imports: Vec<smol_str::SmolStr> = PLATFORM_AUTO_IMPORTS
             .iter()

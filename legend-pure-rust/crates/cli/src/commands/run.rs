@@ -32,7 +32,7 @@ use std::path::PathBuf;
 use clap::Args;
 use owo_colors::OwoColorize;
 
-use legend_pure_core_platform::platform::load_platform;
+use legend_pure_core_platform::platform::{PLATFORM_AUTO_IMPORTS, load_platform};
 use legend_pure_runtime::eval::Evaluator;
 use legend_pure_runtime::native::NativeRegistry;
 use legend_pure_runtime::value::Value;
@@ -62,20 +62,23 @@ pub struct RunArgs {
 
 /// `legend run` entry point.
 ///
-/// `classpath` is the global `--classpath` flag — threaded through
-/// the same way `legend test` consumes it (currently a no-op
-/// pass-through; full classpath integration tracked alongside the
-/// test command).
+/// `classpath` is the global `--classpath` flag. When set explicitly,
+/// the model is loaded from the classpath's resolved repo set (same
+/// path `legend snapshot` takes); `--live` / `--platform-dir` are then
+/// ignored with a stderr warning. When unset, the legacy `--live` /
+/// embedded cascade applies.
 #[allow(clippy::needless_pass_by_value)] // clap convention
 pub fn run(args: RunArgs, classpath: Option<&std::path::Path>) -> Result<(), CliError> {
-    // Resolve the classpath cascade so any `[extension.<name>]`
-    // tables flow through to the evaluator. Model loading still uses
-    // load_platform / live descriptors (the classpath's *repos* would
-    // also be a meaningful source here, but that's a separate behavior
-    // change tracked alongside the snapshot command).
     let cwd = std::env::current_dir().map_err(|e| CliError::Custom(format!("cwd: {e}")))?;
     let resolved_classpath = crate::classpath::resolve_classpath(classpath, &cwd)
         .map_err(|e| CliError::Custom(format!("classpath: {e}")))?;
+    let classpath_explicit = classpath.is_some();
+    if classpath_explicit && args.live {
+        eprintln!(
+            "  {} `--live` / `--platform-dir` ignored when `--classpath` is set",
+            "warning:".yellow().bold(),
+        );
+    }
 
     eprintln!(
         "{} {}",
@@ -83,14 +86,30 @@ pub fn run(args: RunArgs, classpath: Option<&std::path::Path>) -> Result<(), Cli
         args.function.as_str().bold(),
     );
 
-    let model = if args.live {
+    let model = if classpath_explicit {
+        let mut auto_imports: Vec<smol_str::SmolStr> = PLATFORM_AUTO_IMPORTS
+            .iter()
+            .map(|&s| smol_str::SmolStr::new(s))
+            .collect();
+        auto_imports.extend(resolved_classpath.extra_auto_imports.iter().cloned());
+        match legend_pure_core_platform::repo::load(&resolved_classpath.repos, &auto_imports) {
+            Ok(m) => m,
+            Err(partial) => {
+                eprintln!(
+                    "  {} classpath compiled with {} error(s)",
+                    "warning:".yellow().bold(),
+                    partial.errors.len()
+                );
+                partial.model
+            }
+        }
+    } else if args.live {
         let descriptor = crate::live::resolve_platform_descriptor(args.platform_dir.as_deref())?;
         let repos = crate::live::live_repos(&descriptor)?;
-        let auto_imports: Vec<smol_str::SmolStr> =
-            legend_pure_core_platform::platform::PLATFORM_AUTO_IMPORTS
-                .iter()
-                .map(|&s| smol_str::SmolStr::new(s))
-                .collect();
+        let auto_imports: Vec<smol_str::SmolStr> = PLATFORM_AUTO_IMPORTS
+            .iter()
+            .map(|&s| smol_str::SmolStr::new(s))
+            .collect();
         match legend_pure_core_platform::repo::load(&repos, &auto_imports) {
             Ok(m) => m,
             Err(partial) => {

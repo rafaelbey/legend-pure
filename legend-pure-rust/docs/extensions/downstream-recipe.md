@@ -988,34 +988,23 @@ into a separate `legend-pure-ide` crate (Phase 2.5), evaluator
 extension-config flow + `OnceLock` removal (Phase 4), CLI flows
 through `NativeRegistry::discovered()` and `Evaluator::builder()`
 (Phase 5), `--classpath` consumed by `test` / `run` / `repl` /
-`snapshot` (Phase 5 finish), and the runnable
+`snapshot` (Phase 5 finish — every subcommand now compiles the
+classpath's repo set via `repo::load(resolved.repos, …)` when
+`--classpath` is explicit; `--live` / `--watch` / `--platform-dir`
+become no-ops with a stderr warning), and the runnable
 [`examples/mydsl-extension/`](../../examples/mydsl-extension/) template
 proves the recipe end-to-end (Phase 6).
 
 Remaining items, in priority order:
 
-1. **CLI repo loading from classpath.** Subcommands now consume
-   `extension_configs` from the resolved classpath but still load
-   *repos* from `load_platform()` / `--live`; `snapshot` is the
-   exception (it switches to `repo::load(resolved.repos, …)` when
-   `--classpath` is explicit). Extend the same pattern to `test`,
-   `run`, `repl` so a downstream project can compile its own
-   classpath without touching `--live`.
-2. **Repo descriptors + manifest** (BACKLOG P1, independent of the
+1. **Repo descriptors + manifest** (BACKLOG P1, independent of the
    extension story). Java-Pure-style `repo.definition.json` schema
    replacing the hand-listed paths in
    `crates/core-platform-pure/build.rs`. Unblocks downstream repos
    shipping their own descriptors.
 
-Until item 1 lands, downstream consumers who need classpath-driven
-repo compilation use `--live` (works today). The discovery layer
-below the CLI works unchanged — last-mile distribution concerns
-only.
-
-Until items 1 & 2 land, downstream consumers who need
-classpath-driven repo compilation through `legend test` / `run` /
-`repl` use `--live` as the workaround, and those who need JNI
-distribution fork the in-tree `legend-pure-parser-jni` crate. The
-extension API itself works end-to-end today — the structural shape
-the recipe describes is the structural shape consumers will use
-post-publication.
+Until item 1 lands, downstream consumers who need JNI distribution
+fork the in-tree `legend-pure-parser-jni` crate. The extension API
+and the CLI's classpath-driven loading both work end-to-end today —
+the structural shape the recipe describes is the structural shape
+consumers will use post-publication.
