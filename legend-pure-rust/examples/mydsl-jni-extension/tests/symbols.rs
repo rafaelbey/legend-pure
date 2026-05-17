@@ -31,6 +31,7 @@ use std::process::Command;
 /// entries.
 const EXPECTED_SYMBOLS: &[&str] = &[
     "Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeInitContext",
+    "Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeInitContextWithClasspath",
     "Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeEvaluate",
     "Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeGetProperty",
     "Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeGetClassifier",

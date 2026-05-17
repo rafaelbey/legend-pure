@@ -1763,6 +1763,7 @@ dependencies = [
  "serde_json",
  "smol_str",
  "thiserror 2.0.18",
+ "toml",
  "tracing",
  "walkdir",
 ]
@@ -2027,6 +2028,7 @@ dependencies = [
  "legend-pure-runtime",
  "slotmap",
  "smol_str",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]

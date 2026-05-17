@@ -45,5 +45,10 @@ slotmap = { workspace = true }
 smol_str = { workspace = true }
 im-rc = { workspace = true }
 jni = { workspace = true }
+# `toml::Value` is the type carried by `[extension.<…>]` tables from
+# the parsed classpath through the Evaluator's `set_extension_configs`.
+# Shared between core-platform-pure's classpath parser and JNI's
+# nativeInitContextWithClasspath entry point.
+toml = "0.8"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

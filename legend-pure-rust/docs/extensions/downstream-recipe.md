@@ -959,6 +959,99 @@ fails loudly with the missing symbol list if a forwarder regresses.
 > Just Works on `x86_64-pc-windows-msvc` — no `.def` file needed.
 > Verify with `dumpbin /EXPORTS mydsl_pure_jni.dll`.
 
+#### Classpath as a byte array (`nativeInitContextWithClasspath`)
+
+The `Java_*_nativeInitContext` entry above loads only the embedded
+platform — no classpath, no extension configs. For downstream Java
+consumers that ship their own `legend-pure-classpath.toml` (typically
+inside the JAR under `META-INF/`), the bridge exposes a second
+init entry that takes the TOML as a `byte[]`:
+
+```java
+byte[] toml = MyApp.class
+    .getResourceAsStream("META-INF/legend-pure-classpath.toml")
+    .readAllBytes();
+long ctx = PureRustEvaluator.nativeInitContextWithClasspath(toml);
+```
+
+No file is read from disk for the TOML itself — the bytes ARE the
+TOML. On the Rust side, [`compile_classpath_bytes`] decodes the bytes
+zero-copy via `std::str::from_utf8` (the `toml` crate exposes only
+`from_str(&str)` since TOML is UTF-8 text), parses, merges with the
+embedded platform, runs `repo::load`, and constructs a [`JniContext`]
+backed by:
+
+1. **`NativeRegistry::discovered()`** — every linked
+   `#[distributed_slice(RUNTIME_EXTENSIONS)]` contribution is active,
+   so your custom extensions fire as expected. (The parameterless
+   `nativeInitContext` stays on `NativeRegistry::standard()` for
+   backward compat.)
+2. **`evaluator.set_extension_configs(...)`** — `[extension.<domain>.<engine>]`
+   tables from the TOML reach the evaluator, so per-evaluator config
+   (H2 backend ports, lake credentials, …) works without the old
+   `OnceLock` global.
+
+**Self-contained TOML contract.** Bytes-mode has no on-disk source to
+derive a base from, so the TOML must be self-describing — every
+`[[repo]] path = "..."` must be **absolute**, OR the TOML must set
+`root = "/abs/path"` at the top. Relative paths without a TOML `root`
+resolve against the filesystem root (`/`) and almost always fail with
+a clear `PathMissing` error. Two patterns Java consumers use to keep
+the bytes self-contained:
+
+```toml
+# Pattern A — TOML-level root override
+root = "/var/lib/myapp/pure"
+
+[[repo]]
+name = "platform"
+kind = "purem"
+path = "platform.purem"   # resolves to /var/lib/myapp/pure/platform.purem
+
+# Pattern B — absolute paths per entry
+[[repo]]
+name = "platform"
+kind = "purem"
+path = "/var/lib/myapp/pure/platform.purem"
+```
+
+Both make the classpath byte-loadable without any side-channel.
+
+The signature deliberately does NOT accept a `root: &Path` parameter:
+passing both bytes AND a path would imply a hybrid model where Java
+extracts the TOML to disk anyway, in which case the existing file-
+loading path (`legend_cli::classpath::load_classpath`) is the honest
+API. Bytes mode is for "TOML is fully self-describing" usage.
+
+Forwarder for the downstream cdylib (mirror in
+[`examples/mydsl-jni-extension/src/lib.rs`](../../examples/mydsl-jni-extension/src/lib.rs)):
+
+```rust
+use jni::objects::JByteArray;
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeInitContextWithClasspath<
+    'local,
+>(
+    env: JNIEnv<'local>,
+    class: JClass<'local>,
+    classpath_bytes: JByteArray<'local>,
+) -> jlong {
+    pure_rust_jni::Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeInitContextWithClasspath(
+        env,
+        class,
+        classpath_bytes,
+    )
+}
+```
+
+The example crate's `EXPECTED_SYMBOLS` (in `tests/symbols.rs`) now
+includes this entry; downstream cdylibs that copy the template and
+don't add the forwarder will fail their own symbol-parity test at
+`cargo test` time.
+
+[`compile_classpath_bytes`]: ../../crates/core-platform-pure/src/classpath.rs
+
 ---
 
 ## Stable API reference
@@ -974,7 +1067,9 @@ else is best-effort backwards-compatible.
 | `legend-pure-ide` | `IdeExtension`, `IDE_EXTENSIONS`, `discovered_ide_extensions`, `Reference`, `RefKind`, `ReferenceIndex`, `build_reference_index`, `build_reference_index_with_ide_extensions`, `walk_references` |
 | `legend-pure-parser-parser` | `ParserContext`, `IslandParser`, `ISLAND_PARSERS`, `discovered_island_parsers`, `SectionParser`, `SECTION_PARSERS`, `discovered_section_parsers`, `parse`, `parse_with_islands`, `parse_with_sections`, `error::ParseError` |
 | `legend-pure-parser-ast` | `dsl::DSLElement`, `island::IslandContent`, `expression::Expression`, `section::SourceFile`, `SourceInfo`, derive macros |
-| `legend-cli` | `main_entry`, `classpath::resolve_classpath`, `diagnostics::CliError` (for downstream binaries that wrap the stock CLI dispatch) |
+| `legend-pure-core-platform` | `platform::{load_platform, PLATFORM_AUTO_IMPORTS}`, `repo::{Repo, RepoMeta, load}`, `classpath::{Classpath, ResolvedClasspath, ClasspathError, parse_classpath_toml, merge_with_embedded, compile_classpath_bytes}` (the last is the JNI byte-array entry point — see §11.1) |
+| `legend-cli` | `main_entry`, `classpath::{resolve_classpath, load_classpath, synthetic_from_snapshots_dir, discover_classpath}` (CLI cascade on top of the shared parser), `diagnostics::CliError` |
+| `legend-pure-parser-jni` | `Java_*_nativeInitContext`, `Java_*_nativeInitContextWithClasspath` (byte-array classpath, §11.1), `Java_*_nativeEvaluate`, `Java_*_nativeGetProperty`, `Java_*_nativeGetClassifier`, `Java_*_nativeNew`, `Java_*_nativeFreeContext`, `Java_*_nativeFreeInstance` |
 
 ---
 

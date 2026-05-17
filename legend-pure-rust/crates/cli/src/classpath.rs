@@ -12,12 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Parse `legend-pure-classpath.toml` into a `Vec<Repo>` ready for
-//! [`legend_pure_core_platform::repo::load`].
+//! CLI-side classpath resolution: file loading, discovery cascade, and
+//! synthetic snapshot-dir scanning on top of the shared parser in
+//! [`legend_pure_core_platform::classpath`].
 //!
-//! The classpath is the distribution primitive: it lists every repo a
-//! runtime should compose, with its kind + location. End-users edit the
-//! TOML to swap in newer `.purem` files without rebuilding the binary.
+//! The parse layer (`[[repo]]` → `Vec<Repo>`, `[extension.<…>]` tables,
+//! merge-with-embedded shadow-by-name) lives in
+//! `crates/core-platform-pure/src/classpath.rs` so the JNI bridge can
+//! reuse it without inheriting `legend-cli`'s dep tree. Everything in
+//! this file is CLI-specific: reading the TOML from disk, walking
+//! ancestors for `legend-pure-classpath.toml`, building a synthetic
+//! classpath from a `snapshots/` directory next to the binary, and
+//! threading the seven-step resolution cascade.
 //!
 //! # Schema (`legend-pure-classpath.toml`)
 //!
@@ -56,120 +62,17 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use legend_pure_core_platform::repo::{Repo, RepoError, RepoMeta};
-use serde::Deserialize;
-use smol_str::SmolStr;
-use thiserror::Error;
+use legend_pure_core_platform::repo::{Repo, RepoMeta};
 
-/// Parsed classpath metadata.
-#[derive(Debug)]
-pub struct Classpath {
-    /// Resolved root for relative paths.
-    #[allow(dead_code)] // kept for Debug diagnostics
-    pub root: PathBuf,
-    /// Additional auto-imports declared in the TOML (caller still
-    /// applies platform defaults on top).
-    pub extra_auto_imports: Vec<SmolStr>,
-    /// Resolved repos, in the order declared in the TOML. Topo-sort is
-    /// applied later by [`legend_pure_core_platform::repo::load`].
-    pub repos: Vec<Repo>,
-    /// Engine configs harvested from `[extension.<domain>.<engine>]`
-    /// tables. The outer key is the extension domain
-    /// (e.g. `"relational"`), the inner key is the engine name
-    /// (e.g. `"h2"`), and the value is the raw TOML table — the owning
-    /// extension crate re-deserializes its slice into a typed struct
-    /// on demand.
-    pub extension_configs: HashMap<String, HashMap<String, toml::Value>>,
-}
+pub use legend_pure_core_platform::classpath::{
+    Classpath, ClasspathError, ResolvedClasspath, merge_with_embedded, parse_classpath_toml,
+};
 
-/// Errors raised by [`load_classpath`].
-#[derive(Debug, Error)]
-pub enum ClasspathError {
-    /// Reading the TOML file failed.
-    #[error("reading classpath {}: {source}", path.display())]
-    Io {
-        /// Path that failed.
-        path: PathBuf,
-        /// Underlying I/O error.
-        #[source]
-        source: std::io::Error,
-    },
-    /// TOML parse failure.
-    #[error("invalid TOML in {}: {source}", path.display())]
-    Parse {
-        /// Path that failed.
-        path: PathBuf,
-        /// Underlying parser error.
-        #[source]
-        source: toml::de::Error,
-    },
-    /// A `[[repo]]` referenced a path that does not exist.
-    #[error("repo '{name}': path '{}' not found", path.display())]
-    PathMissing {
-        /// Repo name.
-        name: String,
-        /// Path that wasn't found.
-        path: PathBuf,
-    },
-    /// Two repos declared the same `name`.
-    #[error("duplicate repo name in classpath: '{name}'")]
-    DuplicateName {
-        /// Repo name.
-        name: String,
-    },
-    /// Constructing the underlying [`Repo`] failed.
-    #[error("repo '{name}': {source}")]
-    RepoBuild {
-        /// Repo name.
-        name: String,
-        /// Underlying repo error.
-        #[source]
-        source: RepoError,
-    },
-    /// A `kind` is not yet supported.
-    #[error("repo '{name}': unsupported kind '{kind}'")]
-    UnsupportedKind {
-        /// Repo name.
-        name: String,
-        /// Requested kind.
-        kind: String,
-    },
-}
-
-#[derive(Debug, Deserialize)]
-struct ClasspathToml {
-    #[serde(default)]
-    root: Option<String>,
-    #[serde(default)]
-    auto_imports: Vec<String>,
-    #[serde(default, rename = "repo")]
-    repos: Vec<RepoEntryToml>,
-    /// `[extension.<domain>.<engine>]` tables. Held opaquely; owning
-    /// extensions re-deserialize their own slice on demand.
-    #[serde(default)]
-    extension: HashMap<String, HashMap<String, toml::Value>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RepoEntryToml {
-    name: String,
-    kind: String,
-    #[serde(default)]
-    path: Option<String>,
-    #[serde(default)]
-    descriptor: Option<String>,
-    #[serde(default)]
-    pattern: Option<String>,
-    #[serde(default)]
-    dependencies: Option<Vec<String>>,
-}
-
-/// Parse a classpath TOML file into resolved [`Repo`]s.
+/// Load a classpath TOML from disk.
 ///
-/// `toml_path` is read as text, deserialized, then each `[[repo]]` is
-/// turned into a real [`Repo`] (`Purem`, `Filesystem`, etc.) with
-/// relative paths resolved against the TOML's `root` (or the TOML's
-/// parent directory if `root` is unset).
+/// Reads the file, then delegates parsing to
+/// [`legend_pure_core_platform::classpath::parse_classpath_toml`] with
+/// the TOML's parent directory as the base for relative paths.
 ///
 /// # Errors
 ///
@@ -179,156 +82,10 @@ pub fn load_classpath(toml_path: &Path) -> Result<Classpath, ClasspathError> {
         path: toml_path.to_path_buf(),
         source,
     })?;
-    let parsed: ClasspathToml = toml::from_str(&text).map_err(|source| ClasspathError::Parse {
-        path: toml_path.to_path_buf(),
-        source,
-    })?;
-
-    // Resolve root.
     let parent = toml_path
         .parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-    let root = match &parsed.root {
-        None => parent.clone(),
-        Some(r) => {
-            let p = PathBuf::from(r);
-            if p.is_absolute() { p } else { parent.join(p) }
-        }
-    };
-
-    // Build repos.
-    let mut repos: Vec<Repo> = Vec::with_capacity(parsed.repos.len());
-    let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for entry in &parsed.repos {
-        if !seen_names.insert(entry.name.clone()) {
-            return Err(ClasspathError::DuplicateName {
-                name: entry.name.clone(),
-            });
-        }
-        let repo = build_repo(&root, entry)?;
-        repos.push(repo);
-    }
-
-    Ok(Classpath {
-        root,
-        extra_auto_imports: parsed.auto_imports.into_iter().map(SmolStr::new).collect(),
-        repos,
-        extension_configs: parsed.extension,
-    })
-}
-
-fn build_repo(root: &Path, entry: &RepoEntryToml) -> Result<Repo, ClasspathError> {
-    match entry.kind.as_str() {
-        "purem" => build_purem(root, entry),
-        "filesystem" => build_filesystem(root, entry),
-        // Kinds reserved for v2:
-        // "embedded" | "maven" => not yet supported
-        other => Err(ClasspathError::UnsupportedKind {
-            name: entry.name.clone(),
-            kind: other.to_string(),
-        }),
-    }
-}
-
-fn build_purem(root: &Path, entry: &RepoEntryToml) -> Result<Repo, ClasspathError> {
-    let path_str = entry.path.as_deref().ok_or_else(|| {
-        // Surface a missing-`path` for purem as RepoBuild for one place
-        // to handle, with a clear message.
-        ClasspathError::RepoBuild {
-            name: entry.name.clone(),
-            source: RepoError::DescriptorParse(format!(
-                "[[repo]] '{}' kind=purem requires a `path = ...` field",
-                entry.name
-            )),
-        }
-    })?;
-    let path = resolve_relative(root, path_str);
-    if !path.is_file() {
-        return Err(ClasspathError::PathMissing {
-            name: entry.name.clone(),
-            path,
-        });
-    }
-    // Build a leaked-static RepoMeta from the entry. The `name` field
-    // comes from the TOML; pattern/dependencies fall back to defaults
-    // when absent.
-    let meta = leak_repo_meta(entry);
-    Repo::from_purem_file(&path, format!("/{}", entry.name), meta).map_err(|source| {
-        ClasspathError::RepoBuild {
-            name: entry.name.clone(),
-            source,
-        }
-    })
-}
-
-fn build_filesystem(root: &Path, entry: &RepoEntryToml) -> Result<Repo, ClasspathError> {
-    if let Some(desc) = &entry.descriptor {
-        let descriptor_path = resolve_relative(root, desc);
-        if !descriptor_path.is_file() {
-            return Err(ClasspathError::PathMissing {
-                name: entry.name.clone(),
-                path: descriptor_path,
-            });
-        }
-        Repo::from_descriptor(&descriptor_path).map_err(|source| ClasspathError::RepoBuild {
-            name: entry.name.clone(),
-            source,
-        })
-    } else if let Some(p) = &entry.path {
-        let dir = resolve_relative(root, p);
-        if !dir.is_dir() {
-            return Err(ClasspathError::PathMissing {
-                name: entry.name.clone(),
-                path: dir,
-            });
-        }
-        // Note: from_filesystem doesn't carry RepoMeta. Topo-sort
-        // currently rejects anonymous repos, so kind=filesystem in a
-        // classpath should always go through descriptor=. Document and
-        // surface a build error.
-        let _ = dir;
-        Err(ClasspathError::RepoBuild {
-            name: entry.name.clone(),
-            source: RepoError::DescriptorParse("kind=filesystem requires `descriptor = ...` (a Java repo descriptor JSON); the bare `path =` form is reserved".to_string()),
-        })
-    } else {
-        Err(ClasspathError::RepoBuild {
-            name: entry.name.clone(),
-            source: RepoError::DescriptorParse(format!(
-                "[[repo]] '{}' kind=filesystem requires a `descriptor = ...` field",
-                entry.name
-            )),
-        })
-    }
-}
-
-fn resolve_relative(root: &Path, p: &str) -> PathBuf {
-    let pb = PathBuf::from(p);
-    if pb.is_absolute() { pb } else { root.join(pb) }
-}
-
-fn leak_repo_meta(entry: &RepoEntryToml) -> RepoMeta {
-    let name: &'static str = Box::leak(entry.name.clone().into_boxed_str());
-    let pattern: &'static str = Box::leak(
-        entry
-            .pattern
-            .clone()
-            .unwrap_or_else(|| ".*".to_string())
-            .into_boxed_str(),
-    );
-    let deps: Vec<&'static str> = entry
-        .dependencies
-        .clone()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|d| Box::leak(d.into_boxed_str()) as &'static str)
-        .collect();
-    let dependencies: &'static [&'static str] = Box::leak(deps.into_boxed_slice());
-    RepoMeta {
-        name,
-        pattern,
-        dependencies,
-    }
+    parse_classpath_toml(&text, &toml_path.display().to_string(), &parent)
 }
 
 /// Default classpath filename — looked up alongside the CLI binary if no
@@ -446,26 +203,6 @@ pub fn synthetic_from_snapshots_dir(dir: &Path) -> Result<Classpath, ClasspathEr
     })
 }
 
-/// The fully-resolved repo set for a CLI invocation.
-///
-/// Built by [`resolve_classpath`], which walks the discovery cascade
-/// described in `crates/cli/src/classpath.rs`'s module docs.
-#[derive(Debug)]
-pub struct ResolvedClasspath {
-    /// Source path the classpath came from, for diagnostics. `None`
-    /// when the resolver fell back to embedded.
-    #[allow(dead_code)] // kept for Debug diagnostics
-    pub source: Option<PathBuf>,
-    /// Repos to load, deduped by name (classpath wins over embedded).
-    pub repos: Vec<Repo>,
-    /// Extra auto-imports declared in the classpath TOML, on top of
-    /// the platform defaults.
-    pub extra_auto_imports: Vec<SmolStr>,
-    /// `[extension.<domain>.<engine>]` tables for runtime extensions.
-    /// Empty when the resolver falls back to embedded.
-    pub extension_configs: HashMap<String, HashMap<String, toml::Value>>,
-}
-
 /// Resolution cascade for a CLI invocation:
 /// 1. `--classpath <PATH>` flag (highest priority).
 /// 2. `LEGEND_PURE_CLASSPATH` env var.
@@ -535,39 +272,20 @@ pub fn resolve_classpath(
         }
     }
 
-    // Step 7: embedded fallback.
-    Ok(ResolvedClasspath {
-        source: None,
-        repos: Repo::default_embedded(),
+    // Step 7: embedded fallback. Build an empty parsed classpath and
+    // merge — keeps the shadow-by-name path uniform.
+    let cp = Classpath {
+        root: PathBuf::from("."),
         extra_auto_imports: Vec::new(),
+        repos: Vec::new(),
         extension_configs: HashMap::new(),
-    })
-}
-
-/// Merge a parsed classpath with the embedded fallback: classpath
-/// entries shadow same-name embedded entries.
-fn merge_with_embedded(cp: Classpath, source: Option<PathBuf>) -> ResolvedClasspath {
-    let cp_names: std::collections::HashSet<String> = cp
-        .repos
-        .iter()
-        .filter_map(|r| r.meta().map(|m| m.name.to_string()))
-        .collect();
-    let mut repos = cp.repos;
-    for embedded in Repo::default_embedded() {
-        let Some(meta) = embedded.meta() else {
-            continue;
-        };
-        if cp_names.contains(meta.name) {
-            continue; // shadowed
-        }
-        repos.push(embedded);
-    }
-    ResolvedClasspath {
-        source,
-        repos,
-        extra_auto_imports: cp.extra_auto_imports,
-        extension_configs: cp.extension_configs,
-    }
+    };
+    let mut resolved = merge_with_embedded(cp, None);
+    // Step-7 fallback intentionally signals "no source" — the
+    // merge_with_embedded helper would propagate the `None` we passed
+    // already, so this is redundant but kept explicit for clarity.
+    resolved.source = None;
+    Ok(resolved)
 }
 
 #[cfg(test)]
@@ -602,8 +320,6 @@ path = "snapshots/a.purem"
 "#,
         );
 
-        // Postcard'll fail to deserialize the empty payload as a slice,
-        // which is fine — `from_purem_file` only validates the header.
         let cp = load_classpath(&toml_path).expect("load");
         assert_eq!(cp.repos.len(), 1);
         let meta = cp.repos[0].meta().expect("meta");
@@ -666,13 +382,11 @@ path = "no-such.purem"
         let dir = tmp.path().join("snapshots");
         std::fs::create_dir_all(&dir).expect("mkdir");
 
-        // Two valid (header-only) blobs.
         for name in ["one.purem", "two.purem"] {
             let mut blob = Vec::new();
             legend_pure_parser_pure::purem::header::write_header(&mut blob, 0);
             write_file(&dir.join(name), &blob);
         }
-        // A non-purem file should be ignored.
         write_file(&dir.join("README.txt"), b"not a purem");
 
         let cp = synthetic_from_snapshots_dir(&dir).expect("synthetic build");
@@ -688,12 +402,8 @@ path = "no-such.purem"
 
     #[test]
     fn resolve_classpath_explicit_flag_includes_platform() {
-        // Explicit classpath that doesn't shadow `platform` should
-        // still merge in the embedded platform via shadow-by-name
-        // semantics.
         let tmp = tempfile::tempdir().expect("tempdir");
         let toml_path = tmp.path().join("legend-pure-classpath.toml");
-        // Empty classpath — no [[repo]] entries.
         write_file(&toml_path, b"# empty classpath\n");
         let resolved = resolve_classpath(Some(&toml_path), tmp.path()).expect("resolve explicit");
         assert!(resolved.source.is_some());
@@ -729,8 +439,6 @@ path = "platform.purem"
             .expect("explicit classpath should resolve");
         assert!(resolved.source.is_some(), "source path tracked");
 
-        // Exactly one repo named "platform" — the classpath copy
-        // shadows the embedded one.
         let platform_count = resolved
             .repos
             .iter()
@@ -774,7 +482,6 @@ account = "test-acct"
             table.get("pg_port").and_then(|v| v.as_integer()),
             Some(5435)
         );
-        // Sibling domains coexist.
         let lake = cp
             .extension_configs
             .get("lake")

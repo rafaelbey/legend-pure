@@ -46,6 +46,7 @@
 //! standalone crate that any Rust crate owning Pure repos can use
 //! from its own `build.rs`.
 
+pub mod classpath;
 pub mod platform;
 pub mod repo;
 pub mod sources;

@@ -64,7 +64,7 @@ use legend_pure_mydsl_extension::prelude::MyDslSectionParser as _;
 //     here; the cargo build will fail loudly if a signature changes.
 
 use jni::JNIEnv;
-use jni::objects::{JClass, JObject, JObjectArray, JString};
+use jni::objects::{JByteArray, JClass, JObject, JObjectArray, JString};
 use jni::sys::jlong;
 
 #[unsafe(no_mangle)]
@@ -75,6 +75,21 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeI
     class: JClass<'local>,
 ) -> jlong {
     pure_rust_jni::Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeInitContext(env, class)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeInitContextWithClasspath<
+    'local,
+>(
+    env: JNIEnv<'local>,
+    class: JClass<'local>,
+    classpath_bytes: JByteArray<'local>,
+) -> jlong {
+    pure_rust_jni::Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeInitContextWithClasspath(
+        env,
+        class,
+        classpath_bytes,
+    )
 }
 
 #[unsafe(no_mangle)]

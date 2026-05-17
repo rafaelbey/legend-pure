@@ -23,10 +23,11 @@ mod context;
 mod conversion;
 
 use jni::JNIEnv;
-use jni::objects::{JClass, JObjectArray, JString};
+use jni::objects::{JByteArray, JClass, JObjectArray, JString};
 use jni::sys::jlong;
 
 use crate::context::JniContext;
+use legend_pure_core_platform::classpath::compile_classpath_bytes;
 use legend_pure_core_platform::repo::{self, Repo};
 
 /// Initializes the `JniContext` by loading the platform models.
@@ -70,6 +71,67 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeI
             let _ = env.throw_new(
                 "org/finos/legend/pure/rust/PureRustException",
                 "Rust paniced during initialization",
+            );
+            0
+        }
+    }
+}
+
+/// Initializes a [`JniContext`] from a classpath TOML supplied as a
+/// byte array.
+///
+/// Java reads the classpath TOML from JAR resources — typically via
+/// `getResourceAsStream("META-INF/legend-pure-classpath.toml")` — and
+/// hands the raw bytes here. No file is read from disk for the TOML
+/// itself; the bytes ARE the TOML.
+///
+/// The TOML must be **self-contained**: every `[[repo]] path = "..."`
+/// must be absolute, OR the TOML must set `root = "/abs/path"` at the
+/// top. Relative paths without a TOML `root` resolve against the
+/// filesystem root and almost always fail with a clear `PathMissing`
+/// error. See
+/// [`legend_pure_core_platform::classpath::compile_classpath_bytes`]
+/// for the full contract.
+///
+/// This entry point uses [`crate::context::JniContext::new_with_configs`],
+/// which differs from [`Java_*_nativeInitContext`] in two ways:
+///
+/// 1. Native registry is [`NativeRegistry::discovered`], so downstream
+///    `#[distributed_slice(RUNTIME_EXTENSIONS)]` contributions linked
+///    into the cdylib are active.
+/// 2. `[extension.<…>]` tables from the TOML are wired into the
+///    evaluator via `set_extension_configs`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeInitContextWithClasspath<
+    'local,
+>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    classpath_bytes: JByteArray<'local>,
+) -> jlong {
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<jlong, String> {
+            let bytes = env
+                .convert_byte_array(&classpath_bytes)
+                .map_err(|e| format!("reading classpath bytes from JVM: {e}"))?;
+            let (model, extension_configs) =
+                compile_classpath_bytes(&bytes).map_err(|e| e.to_string())?;
+            Ok(Box::into_raw(Box::new(JniContext::new_with_configs(
+                model,
+                extension_configs,
+            ))) as jlong)
+        }));
+
+    match result {
+        Ok(Ok(ptr)) => ptr,
+        Ok(Err(e)) => {
+            let _ = env.throw_new("org/finos/legend/pure/rust/PureRustException", e);
+            0
+        }
+        Err(_) => {
+            let _ = env.throw_new(
+                "org/finos/legend/pure/rust/PureRustException",
+                "Rust paniced during nativeInitContextWithClasspath",
             );
             0
         }

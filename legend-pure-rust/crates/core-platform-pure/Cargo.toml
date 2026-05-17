@@ -79,6 +79,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 smol_str = { workspace = true }
 thiserror = { workspace = true }
+# Classpath TOML parsing shared by `legend-cli` and `legend-pure-parser-jni`.
+# Kept here (next to the `Repo` abstraction it produces) so the JNI cdylib
+# doesn't have to pull in `legend-cli`'s much larger dep tree (rustyline,
+# notify, owo_colors, lsp/dap/mcp, …) just to parse a classpath TOML.
+toml = "0.8"
 tracing = { workspace = true }
 walkdir = { workspace = true }
 

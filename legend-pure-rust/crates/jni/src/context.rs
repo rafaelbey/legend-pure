@@ -143,6 +143,34 @@ impl JniContext {
         }
     }
 
+    /// Construct a [`JniContext`] backed by the discovered native
+    /// registry (every linked `RuntimeExtension` distributed slice
+    /// contributes its natives) and seed the evaluator with
+    /// `[extension.<…>]` configs from a parsed classpath.
+    ///
+    /// This is the [`nativeInitContextWithClasspath`] companion to
+    /// [`Self::new`]: downstream consumers shipping their own JNI
+    /// cdylib via `examples/mydsl-jni-extension/` get their custom
+    /// extensions active here (the parameterless [`Self::new`] path
+    /// stays on `NativeRegistry::standard()` for backward compat).
+    pub fn new_with_configs(
+        model: PureModel,
+        extension_configs: HashMap<String, HashMap<String, toml::Value>>,
+    ) -> Self {
+        let model_ptr = Box::into_raw(Box::new(model));
+        let registry_ptr = Box::into_raw(Box::new(NativeRegistry::discovered()));
+        let mut evaluator = Evaluator::new(unsafe { &*model_ptr }, unsafe { &*registry_ptr });
+        evaluator.set_extension_configs(extension_configs);
+        let evaluator_ptr = Box::into_raw(Box::new(evaluator)).cast::<Evaluator<'static>>();
+
+        Self {
+            model: model_ptr,
+            registry: registry_ptr,
+            evaluator: evaluator_ptr,
+            handles: RefCell::new(JniHandleTable::new()),
+        }
+    }
+
     pub fn evaluate(&mut self, function_path: &str, args: &[Value]) -> Result<Value, String> {
         let evaluator = unsafe { &mut *self.evaluator };
         let segments: Vec<smol_str::SmolStr> = function_path

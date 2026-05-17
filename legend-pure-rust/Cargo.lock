@@ -1995,6 +1995,7 @@ dependencies = [
  "smol_str",
  "tempfile",
  "thiserror 2.0.18",
+ "toml",
  "tracing",
  "walkdir",
 ]
@@ -2279,6 +2280,7 @@ dependencies = [
  "legend-pure-runtime",
  "slotmap",
  "smol_str",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]

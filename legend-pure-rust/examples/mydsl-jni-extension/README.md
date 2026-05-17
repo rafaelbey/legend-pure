@@ -37,7 +37,9 @@ table, with the downstream's extensions live.
 cd legend-pure-rust/examples/mydsl-jni-extension
 cargo build --release
 
-# 8 expected: 7 PureRustEvaluator entries + 1 PureBindingsGenerator
+# 9 expected: 8 PureRustEvaluator entries (including the classpath-byte-array
+# `nativeInitContextWithClasspath` for Java consumers loading the TOML from
+# classpath resources) + 1 PureBindingsGenerator.
 nm -gU target/release/libmydsl_pure_jni.dylib | grep ' _Java_' | wc -l
 
 # Should match the stock cdylib for the same target:
