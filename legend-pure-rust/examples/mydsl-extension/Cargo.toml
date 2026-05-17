@@ -1,0 +1,52 @@
+# Copyright 2026 Goldman Sachs
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The empty `[workspace]` table anchors this Cargo.toml as the root of
+# its OWN workspace, so it isn't pulled in as a member of the parent
+# `legend-pure-rust/` workspace. Critical for the example's purpose:
+# it must build the same way a genuine external consumer would — via
+# path deps to the in-tree crates rather than as a sibling crate that
+# can reach `pub(crate)` items through workspace unification.
+[workspace]
+
+[package]
+name = "legend-pure-mydsl-extension"
+description = "Worked example: a downstream crate that ships its own DSL section, compiler hooks, native function, DSL populator, and IDE-references contribution, all self-registered via #[distributed_slice]. The companion `mydsl-legend` binary wraps `legend_cli::main()`; downstream consumers fork this directory as a starting point. See README.md."
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "mydsl-legend"
+path = "src/main.rs"
+
+[dependencies]
+# Path-deps mirror what a real external consumer would write as
+# crates.io version constraints once these crates are published.
+legend-pure-parser-ast    = { path = "../../crates/ast" }
+legend-pure-parser-parser = { path = "../../crates/parser" }
+legend-pure-parser-pure   = { path = "../../crates/pure" }
+legend-pure-runtime       = { path = "../../crates/runtime" }
+legend-pure-ide           = { path = "../../crates/ide" }
+legend-cli                = { path = "../../crates/cli" }
+
+linkme   = "0.3"
+smol_str = "0.3"
+
+[dev-dependencies]
+legend-pure-parser-ast = { path = "../../crates/ast" }
