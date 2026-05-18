@@ -23,4 +23,5 @@ pub mod execute_in_db;
 pub mod fetch_metadata;
 pub mod load_csv;
 pub mod load_values;
+pub mod log_activities;
 pub mod temp_table;

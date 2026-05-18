@@ -59,6 +59,13 @@ pub const STEREOTYPE: &Classifier = "meta::pure::metamodel::extension::Stereotyp
 /// `{tag = 'value'}` annotation.
 pub const TAGGED_VALUE: &Classifier = "meta::pure::metamodel::extension::TaggedValue";
 
+/// `meta::pure::metamodel::extension::Tag` — the tag *declaration* on a
+/// `Profile.tags` list. Distinct from [`TAGGED_VALUE`] (the annotation
+/// instance carrying a string value). The
+/// `meta::pure::functions::meta::tag(profile, str)` native returns a
+/// `Tag` (a declaration handle), not a `TaggedValue`.
+pub const TAG: &Classifier = "meta::pure::metamodel::extension::Tag";
+
 /// `meta::pure::metamodel::type::Class` — the M3 metatype every
 /// user-defined Class is an instance of. Used by the type-info back-fill
 /// in `New::execute` to identify a `Class<T>`-typed first argument

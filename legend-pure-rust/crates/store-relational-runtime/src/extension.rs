@@ -31,6 +31,7 @@ use crate::natives::fetch_metadata::{
 };
 use crate::natives::load_csv::LoadCsvToDbTable;
 use crate::natives::load_values::LoadValuesToDbTable;
+use crate::natives::log_activities::LogActivities;
 use crate::natives::temp_table::{CreateTempTable, CreateTempTableWithFinally, DropTempTable};
 
 /// Registers the 10 relational-store native bodies into a runtime native
@@ -124,6 +125,14 @@ impl RuntimeExtension for RelationalStoreExtension {
             "dropTempTable_String_1__DatabaseConnection_1__Nil_0_",
             DropTempTable,
         );
+
+        // `logActivities` lives in `platform_store_relational/runtimeLogging.pure`
+        // — declared in the relational repo, so registration belongs in
+        // this extension rather than the core runtime.
+        r.register(
+            "logActivities_Activity_MANY__Nil_0_",
+            LogActivities,
+        );
     }
 }
 
@@ -132,7 +141,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registers_all_ten_native_keys() {
+    fn registers_all_native_keys() {
         let mut registry = NativeRegistry::new();
         RelationalStoreExtension.register_natives(&mut registry);
 
@@ -150,13 +159,14 @@ mod tests {
             "createTempTable_String_1__Column_MANY__Function_1__DatabaseConnection_1__Nil_0_",
             "createTempTable_String_1__Column_MANY__Function_1__Boolean_1__DatabaseConnection_1__Nil_0_",
             "dropTempTable_String_1__DatabaseConnection_1__Nil_0_",
+            "logActivities_Activity_MANY__Nil_0_",
         ] {
             assert!(
                 registry.get(key).is_some(),
                 "expected mangled key `{key}` to be registered"
             );
         }
-        // 10 distinct natives, 12 registrations (2 createTempTable + 2 loadValuesToDbTable overloads).
-        assert_eq!(registry.len(), 12);
+        // 11 distinct natives, 13 registrations (2 createTempTable + 2 loadValuesToDbTable overloads).
+        assert_eq!(registry.len(), 13);
     }
 }

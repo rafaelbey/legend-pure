@@ -40,6 +40,10 @@ linkme = { workspace = true }
 # (`HashMap<String, HashMap<String, toml::Value>>`) so the CLI can
 # thread it through verbatim.
 toml = "0.8"
+# `rand` is a transitive dep already (jiff → rand); making it a direct
+# dep lets `meta::pure::functions::math::random()` use the system
+# entropy source without rolling a hand-built LCG.
+rand = "0.10"
 
 [dev-dependencies]
 legend-pure-parser-parser = { path = "../parser" }

@@ -55,11 +55,14 @@ use legend_pure_store_relational_runtime::RelationalStoreExtension as _;
 /// `NativeRegistry::discovered()`. These are the "the runtime can't
 /// possibly call this" gaps that Stream 2b drives down.
 ///
-/// **Baseline measured 2026-05-18:** 9 Missing. Ceiling is set with
-/// ~6 of headroom; tightens as natives land. **Do not raise** — a
-/// regression means a native got dropped from the registry or a new
-/// platform declaration landed without an impl.
-const MISSING_CEILING: usize = 15;
+/// **Baseline measured 2026-05-18 (post 2b first batch):** 5 Missing
+/// after `random`, `stereotype`, `tag`, and `logActivities` landed.
+/// Ceiling sits at 10 — ~5 of headroom over the baseline. Tightens
+/// further as the remaining 5 (milestoning `getAllVersions[*]`,
+/// `replaceTreeNode`, `rawEvalProperty`, `removeOverride`) land.
+/// **Do not raise** — a regression means a native got dropped from
+/// the registry or a new platform declaration landed without an impl.
+const MISSING_CEILING: usize = 10;
 
 /// Ceiling on [`GapKind::SignatureMismatch`] findings — natives that
 /// exist but whose registered key doesn't exactly match the platform's

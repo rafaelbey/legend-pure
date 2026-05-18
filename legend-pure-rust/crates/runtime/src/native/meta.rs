@@ -3222,4 +3222,130 @@ pub fn register(registry: &mut NativeRegistry) {
         ElementPath,
     );
     registry.register("openVariableValues_Function_1__Map_1_", OpenVariableValues);
+    registry.register(
+        "stereotype_Profile_1__String_1__Stereotype_1_",
+        StereotypeLookup,
+    );
+    registry.register("tag_Profile_1__String_1__Tag_1_", TagLookup);
+}
+
+// ---------------------------------------------------------------------------
+// Profile annotation reflection: `stereotype` / `tag`
+// ---------------------------------------------------------------------------
+
+/// Pure `stereotype(profile:Profile[1], str:String[1]):Stereotype[1]`.
+///
+/// Returns a fresh heap-allocated `Stereotype` object whose `value`
+/// is the stereotype name and `profile` is the originating Profile
+/// element. Errors when the name is not declared on the profile
+/// (Java parity: `org.finos.legend.pure.m3.navigation.profile.Profile`
+/// raises `Profile X does not have a stereotype named Y`).
+///
+/// The returned object structurally matches the wrappers `eval.rs`
+/// builds for the `stereotypes` reflective property — same classifier,
+/// same property shape — so callers comparing by structural equality
+/// see them as equivalent.
+#[derive(Debug)]
+pub struct StereotypeLookup;
+
+impl NativeFunction for StereotypeLookup {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("stereotype", &values, 2)?;
+        let (profile_id, profile_name) = expect_profile_arg(&values[0], "stereotype", ctx.model())?;
+        let name = values[1].as_string()?.to_string();
+        let declared = match ctx.model().get_element(profile_id) {
+            Element::Profile(profile) => profile.stereotypes.iter().any(|s| s.value == name),
+            _ => false,
+        };
+        if !declared {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "stereotype: '{name}' is not declared on Profile {profile_name}"
+            ))
+            .into());
+        }
+        let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::STEREOTYPE);
+        ctx.heap_mut()
+            .mutate_add(&obj, "value", &[Value::String(SmolStr::new(name))])?;
+        ctx.heap_mut()
+            .mutate_add(&obj, "profile", &[Value::Element(profile_id)])?;
+        Ok(Evaluated::new(Value::Object(obj)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "stereotype(Profile[1], String[1]):Stereotype[1]"
+    }
+}
+
+/// Pure `tag(profile:Profile[1], str:String[1]):Tag[1]`.
+///
+/// Sibling of [`StereotypeLookup`] for tag declarations. The returned
+/// `Tag` is a fresh heap object with `value` (the tag name) and
+/// `profile` (the originating Profile element). Distinct from
+/// [`crate::m3_paths::TAGGED_VALUE`] (an *instance* with a bound
+/// string value); `tag(...)` returns the declaration handle.
+#[derive(Debug)]
+pub struct TagLookup;
+
+impl NativeFunction for TagLookup {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("tag", &values, 2)?;
+        let (profile_id, profile_name) = expect_profile_arg(&values[0], "tag", ctx.model())?;
+        let name = values[1].as_string()?.to_string();
+        let declared = match ctx.model().get_element(profile_id) {
+            Element::Profile(profile) => profile.tags.iter().any(|t| t.value == name),
+            _ => false,
+        };
+        if !declared {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "tag: '{name}' is not declared on Profile {profile_name}"
+            ))
+            .into());
+        }
+        let obj = ctx.heap_mut().alloc_dynamic(crate::m3_paths::TAG);
+        ctx.heap_mut()
+            .mutate_add(&obj, "value", &[Value::String(SmolStr::new(name))])?;
+        ctx.heap_mut()
+            .mutate_add(&obj, "profile", &[Value::Element(profile_id)])?;
+        Ok(Evaluated::new(Value::Object(obj)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "tag(Profile[1], String[1]):Tag[1]"
+    }
+}
+
+/// Helper: extract the Profile `ElementId` from arg 0, returning a
+/// human-readable profile name alongside for use in error messages.
+/// Returns an `EvaluationError` if the arg isn't a Profile element.
+fn expect_profile_arg(
+    v: &Value,
+    native_name: &str,
+    model: &PureModel,
+) -> Result<(ElementId, String), PureException> {
+    let id = match v {
+        Value::Element(eid) => *eid,
+        _ => {
+            return Err(PureRuntimeError::EvaluationError(format!(
+                "{native_name}: arg 0 must be a Profile element"
+            ))
+            .into());
+        }
+    };
+    if !matches!(model.get_element(id), Element::Profile(_)) {
+        return Err(PureRuntimeError::EvaluationError(format!(
+            "{native_name}: arg 0 is not a Profile element"
+        ))
+        .into());
+    }
+    Ok((id, build_element_path(model, id, "::", false)))
 }

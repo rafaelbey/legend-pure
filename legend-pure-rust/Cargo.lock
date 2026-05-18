@@ -2374,6 +2374,7 @@ dependencies = [
  "legend-pure-parser-pure",
  "legend-pure-store-relational-runtime",
  "linkme",
+ "rand 0.10.1",
  "rust_decimal",
  "serde",
  "serde_json",

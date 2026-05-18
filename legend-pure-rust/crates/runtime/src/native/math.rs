@@ -753,6 +753,33 @@ impl NativeFunction for ParseFloat {
     }
 }
 
+/// Pure `random():Float[1]` — uniform `[0.0, 1.0)` floating-point value.
+///
+/// Java parity: `Math.random()` returns a `double` in `[0.0, 1.0)`
+/// backed by `java.util.Random`. Rust uses `rand::random::<f64>()`
+/// which has the same range and a thread-local seeded RNG, matching
+/// Java's per-thread semantics. Declared with
+/// `<<functionType.SideEffectFunction>>` on the platform side, so
+/// memoization is skipped automatically — every call observes a
+/// fresh value.
+#[derive(Debug)]
+pub struct Random;
+
+impl NativeFunction for Random {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        _ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        expect_args("random", args, 0)?;
+        Ok(Evaluated::new(Value::Float(rand::random::<f64>())))
+    }
+
+    fn signature(&self) -> &'static str {
+        "random():Float[1]"
+    }
+}
+
 /// Pure `parseBoolean(String[1]):Boolean[1]` — case-insensitive
 /// `"true"` / `"false"`.
 ///
@@ -811,6 +838,7 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("log_Number_1__Float_1_", Log);
     registry.register("log10_Number_1__Float_1_", Log10);
     registry.register("pow_Number_1__Number_1__Float_1_", Pow);
+    registry.register("random__Float_1_", Random);
 
     // trigonometric
     registry.register("sin_Number_1__Float_1_", Sin);
@@ -1708,6 +1736,30 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // random
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn random_returns_float_in_unit_range() {
+        // 10 draws — every result must be a Float in `[0, 1)`. The
+        // chance of `rand` returning the same value twice in a row
+        // is negligible, but we don't assert distinctness because
+        // the contract is uniformity, not non-repetition.
+        for _ in 0..10 {
+            let r = Random.execute(&[], &mut MockCtx).unwrap();
+            let Value::Float(f) = r.into_value() else {
+                panic!("expected Float");
+            };
+            assert!((0.0..1.0).contains(&f), "random() returned {f}");
+        }
+    }
+
+    #[test]
+    fn random_rejects_extra_args() {
+        assert!(Random.execute(&[lit_int(1)], &mut MockCtx).is_err());
+    }
+
+    // -----------------------------------------------------------------------
     // Registration sanity check
     // -----------------------------------------------------------------------
 
@@ -1715,8 +1767,9 @@ mod tests {
     fn register_adds_all_natives() {
         let mut reg = NativeRegistry::new();
         register(&mut reg);
-        // 23 base natives + 2 round overloads (Phase 3) = 25.
-        assert_eq!(reg.len(), 25, "expected 25 math natives registered");
+        // 23 base natives + 2 round overloads (Phase 3) + 1 random = 26.
+        assert_eq!(reg.len(), 26, "expected 26 math natives registered");
+        assert!(reg.get("random__Float_1_").is_some());
         assert!(reg.get("floor_Number_1__Integer_1_").is_some());
         assert!(reg.get("atan2_Number_1__Number_1__Float_1_").is_some());
         assert!(reg.get("parseBoolean_String_1__Boolean_1_").is_some());
