@@ -2352,7 +2352,18 @@ pub fn register(registry: &mut NativeRegistry) {
         "new_Class_1__String_1__KeyExpression_MANY__T_1_",
         NewWithKeyExpressions,
     );
+    // Platform `new.pure` declares the 2-arg form `new<T>(Class<T>[1],
+    // String[1]):T[1]` (no third arg). The impl already accepts 2 args
+    // (the third KeyExpression list is optional). Alias so exact-FQN
+    // dispatch finds it.
+    registry.register("new_Class_1__String_1__T_1_", New);
     registry.register("copy_T_1__KeyExpression_MANY__T_1_", Copy);
+    // Platform `copy.pure` declares two overloads with the `String[1]`
+    // id slot between source and KeyExpressions (mandatory id arg the
+    // earlier registration omitted). Same Copy impl handles both arg
+    // counts; alias under the platform-exact keys.
+    registry.register("copy_T_1__String_1__T_1_", Copy);
+    registry.register("copy_T_1__String_1__KeyExpression_MANY__T_1_", Copy);
     // Basic dynamicNew — Class / GenericType receivers, no override hooks.
     // The hook-bearing overloads (property / default / post-init lambdas)
     // share the same mangled `dynamicNew_*` family and are registered

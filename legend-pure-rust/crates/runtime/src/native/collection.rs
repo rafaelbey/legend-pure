@@ -2060,6 +2060,14 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("reverse_T_m__T_m_", Reverse);
     registry.register("indexOf_T_MANY__T_1__Integer_1_", IndexOf);
     registry.register("add_T_m__T_1__T_$1_MANY$_", Add);
+    // Platform `add.pure` declares two overloads with `T[*]` (not the
+    // earlier-registered `T[m]`): 2-arg `add(T[*], T[1])` and 3-arg
+    // `add(T[*], Integer[1], T[1])`. The impl already dispatches on
+    // arg-count for both shapes — register the platform keys verbatim
+    // so exact-FQN dispatch finds the impl without falling back to
+    // `find_by_prefix`.
+    registry.register("add_T_MANY__T_1__T_$1_MANY$_", Add);
+    registry.register("add_T_MANY__Integer_1__T_1__T_$1_MANY$_", Add);
     registry.register("slice_T_MANY__Integer_1__Integer_1__T_MANY_", Slice);
     registry.register("sort_T_m__Function_$0_1$__Function_$0_1$__T_m_", Sort);
     registry.register(
@@ -2072,6 +2080,10 @@ pub fn register(registry: &mut NativeRegistry) {
 
     // Map primitives
     registry.register("newMap_Pair_MANY__Map_1_", NewMap);
+    // 2-arg overload: `newMap(Pair<U,V>[*], Property<U,Any|1>[*])`.
+    // The Property arg is accepted for signature parity but not yet
+    // honoured (per the `NewMap::execute` doc comment) — same impl.
+    registry.register("newMap_Pair_MANY__Property_MANY__Map_1_", NewMap);
     registry.register("get_Map_1__U_1__V_$0_1$_", Get);
     registry.register("keys_Map_1__U_MANY_", Keys);
     registry.register("put_Map_1__U_1__V_1__Map_1_", Put);

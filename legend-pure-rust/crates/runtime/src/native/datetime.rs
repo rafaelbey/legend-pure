@@ -1220,10 +1220,22 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("year_Date_1__Integer_1_", Year);
     registry.register("monthNumber_Date_1__Integer_1_", MonthNumber);
     registry.register("dayOfMonth_Date_1__Integer_1_", DayOfMonth);
+    // `hour` / `minute` / `second` are declared on `Date[1]` at the
+    // platform level (the receiver may be StrictDate or DateTime; the
+    // impl handles both). The earlier `DateTime_1` keys are kept as
+    // aliases for callers that already mangled with the narrower type.
+    registry.register("hour_Date_1__Integer_1_", Hour);
     registry.register("hour_DateTime_1__Integer_1_", Hour);
+    registry.register("minute_Date_1__Integer_1_", Minute);
     registry.register("minute_DateTime_1__Integer_1_", Minute);
+    registry.register("second_Date_1__Integer_1_", Second);
     registry.register("second_DateTime_1__Integer_1_", Second);
 
+    // `datePart` declares return type `Date[1]` on the platform side;
+    // `StrictDate_1` was the prior key (StrictDate is a subtype of
+    // Date). Register both so exact-FQN dispatch finds the platform
+    // shape AND the narrower-return shape still resolves.
+    registry.register("datePart_Date_1__Date_1_", DatePart);
     registry.register("datePart_Date_1__StrictDate_1_", DatePart);
 
     registry.register(
@@ -1245,7 +1257,19 @@ pub fn register(registry: &mut NativeRegistry) {
 
     registry.register("parseDate_String_1__Date_1_", ParseDate);
 
-    // date(...) overloads — six mangled keys pointing at one impl.
+    // `date(...)` overloads — the platform declares return types that
+    // narrow with arity:
+    //   1 Int       → Date
+    //   2 Int       → Date
+    //   3 Int       → StrictDate (year-month-day, no time component)
+    //   4 Int       → DateTime (year-month-day-hour)
+    //   5 Int       → DateTime (year-month-day-hour-minute)
+    //   5 Int + Num → DateTime (…with seconds)
+    //   6 Int       → DateTime (legacy seconds-as-int spelling)
+    // The runtime impl handles every arity uniformly; we register
+    // under both the platform's narrowed-return keys AND the older
+    // generic `Date` keys so callers compiled either way find the
+    // impl by exact match.
     registry.register("date_Integer_1__Date_1_", DateConstruct);
     registry.register("date_Integer_1__Integer_1__Date_1_", DateConstruct);
     registry.register(
@@ -1253,11 +1277,27 @@ pub fn register(registry: &mut NativeRegistry) {
         DateConstruct,
     );
     registry.register(
+        "date_Integer_1__Integer_1__Integer_1__StrictDate_1_",
+        DateConstruct,
+    );
+    registry.register(
         "date_Integer_1__Integer_1__Integer_1__Integer_1__Date_1_",
         DateConstruct,
     );
     registry.register(
+        "date_Integer_1__Integer_1__Integer_1__Integer_1__DateTime_1_",
+        DateConstruct,
+    );
+    registry.register(
         "date_Integer_1__Integer_1__Integer_1__Integer_1__Integer_1__Date_1_",
+        DateConstruct,
+    );
+    registry.register(
+        "date_Integer_1__Integer_1__Integer_1__Integer_1__Integer_1__DateTime_1_",
+        DateConstruct,
+    );
+    registry.register(
+        "date_Integer_1__Integer_1__Integer_1__Integer_1__Integer_1__Number_1__DateTime_1_",
         DateConstruct,
     );
     registry.register(

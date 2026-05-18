@@ -15,3 +15,22 @@
 import meta::pure::test::pct::*;
 
 native function <<PCT.function, PCT.platformOnly>> meta::pure::functions::meta::stereotype(profile:Profile[1], str:String[1]):Stereotype[1];
+
+function <<test.Test>> meta::pure::functions::meta::tests::profile::testStereotypeLookup():Boolean[1]
+{
+   // `meta::pure::profiles::test` declares `Test` as a stereotype.
+   // The lookup must return a Stereotype whose `value` is `'Test'`
+   // and whose `profile` points back to the originating Profile.
+   let s = stereotype(meta::pure::profiles::test, 'Test');
+   assertEquals('Test', $s.value);
+   assertEquals(meta::pure::profiles::test, $s.profile);
+}
+
+function <<test.Test>> meta::pure::functions::meta::tests::profile::testStereotypeUnknownErrors():Boolean[1]
+{
+   // Unknown name on a known profile must raise.
+   assertError(
+      |stereotype(meta::pure::profiles::test, 'NoSuchStereotype'),
+      'stereotype: \'NoSuchStereotype\' is not declared on Profile meta::pure::profiles::test'
+   );
+}

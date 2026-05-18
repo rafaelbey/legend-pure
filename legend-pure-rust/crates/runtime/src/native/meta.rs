@@ -3186,6 +3186,10 @@ pub fn register(registry: &mut NativeRegistry) {
     );
     registry.register("instanceOf_Any_1__Type_1__Boolean_1_", InstanceOf);
     registry.register("cast_Any_m__V_1__V_m_", Cast);
+    // Platform mangles the type-parameter as `T` (`cast.pure:18`); the
+    // earlier registration used `V` (an internal-naming choice). Same
+    // impl, alias under both so exact-FQN dispatch finds it either way.
+    registry.register("cast_Any_m__T_1__T_m_", Cast);
     // `match` is generic — the compiler-produced mangled name depends on
     // `T`/`m`/`n` bindings at the call site. Register under a key that starts
     // with `"match_"` so the runtime's simple-name prefix fallback finds it
@@ -3195,6 +3199,10 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("id_Any_1__String_1_", Id);
     registry.register("type_Any_1__Type_1_", TypeOf);
     registry.register("genericType_Any_1__GenericType_1_", GenericTypeOf);
+    // Platform spec declares `genericType(Any[*]):GenericType[1]`; the
+    // `_Any_1_` key was the earlier (single-value) form. Alias under
+    // both for exact-FQN dispatch.
+    registry.register("genericType_Any_MANY__GenericType_1_", GenericTypeOf);
     registry.register("rawType_GenericType_1__Type_$0_1$_", RawType);
     registry.register("enumName_Enumeration_1__String_1_", EnumName);
     // `enumValues` is generic — the compiler may mangle with different

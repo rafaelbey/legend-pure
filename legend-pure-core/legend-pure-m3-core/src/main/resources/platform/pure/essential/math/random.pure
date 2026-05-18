@@ -15,3 +15,13 @@
 import meta::pure::test::pct::*;
 
 native function <<functionType.SideEffectFunction, PCT.function>> meta::pure::functions::math::random():Float[1];
+
+function <<test.Test>> meta::pure::functions::math::tests::random::testRandomInUnitRange():Boolean[1]
+{
+   // `random()` must return a Float in `[0.0, 1.0)`. Cannot assert
+   // determinism (`<<functionType.SideEffectFunction>>` skips
+   // memoisation), so we only assert the range invariant.
+   let v = random();
+   assertEquals(true, $v >= 0.0);
+   assertEquals(true, $v < 1.0);
+}

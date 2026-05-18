@@ -838,6 +838,10 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("log_Number_1__Float_1_", Log);
     registry.register("log10_Number_1__Float_1_", Log10);
     registry.register("pow_Number_1__Number_1__Float_1_", Pow);
+    // Platform declares `pow(Number,Number):Number` — `Number` is the
+    // common supertype of the actual `Float` return. Alias under both
+    // so exact-FQN dispatch hits the impl either way.
+    registry.register("pow_Number_1__Number_1__Number_1_", Pow);
     registry.register("random__Float_1_", Random);
 
     // trigonometric
@@ -1767,8 +1771,8 @@ mod tests {
     fn register_adds_all_natives() {
         let mut reg = NativeRegistry::new();
         register(&mut reg);
-        // 23 base natives + 2 round overloads (Phase 3) + 1 random = 26.
-        assert_eq!(reg.len(), 26, "expected 26 math natives registered");
+        // 23 base + 2 round overloads + 1 random + 1 pow Number-return alias = 27.
+        assert_eq!(reg.len(), 27, "expected 27 math natives registered");
         assert!(reg.get("random__Float_1_").is_some());
         assert!(reg.get("floor_Number_1__Integer_1_").is_some());
         assert!(reg.get("atan2_Number_1__Number_1__Float_1_").is_some());

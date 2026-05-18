@@ -67,9 +67,16 @@ const MISSING_CEILING: usize = 10;
 /// Ceiling on [`GapKind::SignatureMismatch`] findings — natives that
 /// exist but whose registered key doesn't exactly match the platform's
 /// mangled FQN. Dispatch survives today via `find_by_prefix`, but Java
-/// parity requires exact-FQN match, so these are latent. Baseline 19;
-/// ceiling sits above with ~6 of headroom.
-const MISMATCH_CEILING: usize = 25;
+/// parity requires exact-FQN match.
+///
+/// **Baseline measured 2026-05-18 (post 2b second batch):** 2 Mismatch
+/// after the bulk-alias commit aligned 17 keys. The remaining 2 are
+/// the milestoning `getAll(Class, Date)` and `getAll(Class, Date, Date)`
+/// overloads — `GetAll::execute` rejects Date args by arity, so an
+/// alias would silently route to a runtime-error path. Those belong
+/// with the milestoning implementation work, not the aliasing batch.
+/// Ceiling sits at 5 — ~3 of headroom.
+const MISMATCH_CEILING: usize = 5;
 
 /// Severity for an audit finding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
