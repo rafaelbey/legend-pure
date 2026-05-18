@@ -165,6 +165,18 @@ function <<test.Test>> meta::pure::functions::lang::tests::new::testNewWithInher
    );
 }
 
+// Java-facing helper: constructs `LA_ChildInheritsAgeConstraint` with an
+// out-of-range `age` so the inherited `ageNonNeg` constraint trips. The
+// JNI test harness calls this via
+// `pureRustEvaluator.evaluate("...::LA_triggerInheritedConstraintViolation")`
+// to verify the resulting `PureRustEvaluationException` carries the
+// structured `kind`, `constraintId`, `constraintKind`, and `ownerFqn`
+// fields populated by the Rust-side payload builder.
+function meta::pure::functions::lang::tests::new::LA_triggerInheritedConstraintViolation(): Any[*]
+{
+   ^LA_ChildInheritsAgeConstraint(age=-1, name='X')
+}
+
 function <<test.Test>> meta::pure::functions::lang::tests::newAtRuntime::testNewWithChildWithReverseOneToManyProperty():Boolean[1]
 {
    let car = ^LA_Car(name='Bugatti', owner=^LA_Person(firstName='John', lastName='Roe', cars=[^LA_Car(name='Audi')]));

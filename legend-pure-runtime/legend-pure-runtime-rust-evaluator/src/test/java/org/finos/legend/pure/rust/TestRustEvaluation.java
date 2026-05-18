@@ -95,4 +95,60 @@ public class TestRustEvaluation
         PureRustEvaluationException excp = Assertions.assertThrows(PureRustEvaluationException.class, () -> result.getProperty("rawType"));
         Assertions.assertTrue(excp.getMessage().startsWith("Stale or unknown JNI handle:"), "Message was:" + excp.getMessage());
     }
+
+    /**
+     * Function-not-found is an FFI-boundary "execution" error: the Rust side
+     * synthesises a {@code PureException} with kind {@code EXECUTION_ERROR}
+     * and an empty call stack. The structured-throw helper must carry the
+     * kind through to the Java exception's {@code getKind()} field.
+     */
+    @Test
+    void testEvaluationExceptionCarriesKindField()
+    {
+        PureRustEvaluationException excp = Assertions.assertThrows(
+                PureRustEvaluationException.class,
+                () -> pureRustEvaluator.evaluate("meta::pure::functions::math::plus__Any_1_"));
+        Assertions.assertEquals(PureRustEvaluationException.Kind.EXECUTION_ERROR, excp.getKind(),
+                "kind was: " + excp.getKind());
+        // Constraint-violation-only fields stay null for execution errors.
+        Assertions.assertNull(excp.getConstraintId(), "constraintId should be null for execution error");
+        Assertions.assertNull(excp.getConstraintKind(), "constraintKind should be null for execution error");
+        Assertions.assertNull(excp.getOwnerFqn(), "ownerFqn should be null for execution error");
+    }
+
+    /**
+     * End-to-end test for the structured-throw path on a constraint
+     * violation. Triggers
+     * {@code ^LA_ChildInheritsAgeConstraint(age=-1, name='X')} via the
+     * Java-facing helper {@code LA_triggerInheritedConstraintViolation},
+     * asserts the {@code PureRustEvaluationException} carries the
+     * structured fields (kind = CONSTRAINT_VIOLATION, constraintId =
+     * "ageNonNeg", constraintKind = CLASS, ownerFqn ending in
+     * "LA_ParentWithAgeConstraint"). The legacy {@code getMessage()}
+     * keeps the canonical violation-message shape for backwards
+     * compatibility.
+     */
+    @Test
+    void testConstraintViolationCarriesStructuredFields()
+    {
+        PureRustEvaluationException excp = Assertions.assertThrows(
+                PureRustEvaluationException.class,
+                () -> pureRustEvaluator.evaluate(
+                        "meta::pure::functions::lang::tests::new::LA_triggerInheritedConstraintViolation"));
+        Assertions.assertEquals(PureRustEvaluationException.Kind.CONSTRAINT_VIOLATION, excp.getKind(),
+                "kind was: " + excp.getKind());
+        Assertions.assertEquals("ageNonNeg", excp.getConstraintId(),
+                "constraintId was: " + excp.getConstraintId());
+        Assertions.assertEquals(PureRustEvaluationException.ConstraintKind.CLASS, excp.getConstraintKind(),
+                "constraintKind was: " + excp.getConstraintKind());
+        Assertions.assertNotNull(excp.getOwnerFqn(), "ownerFqn should be set");
+        Assertions.assertTrue(excp.getOwnerFqn().endsWith("LA_ParentWithAgeConstraint"),
+                "ownerFqn was: " + excp.getOwnerFqn());
+        // Legacy contract: getMessage() carries the canonical violation
+        // message string (used by assertError tests on the Pure side).
+        Assertions.assertTrue(excp.getMessage().contains("Constraint :[ageNonNeg]"),
+                "message was: " + excp.getMessage());
+        Assertions.assertTrue(excp.getMessage().contains("age must be non-negative"),
+                "message was: " + excp.getMessage());
+    }
 }

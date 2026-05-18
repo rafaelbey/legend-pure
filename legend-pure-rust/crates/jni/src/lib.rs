@@ -21,14 +21,87 @@
 mod codegen;
 mod context;
 mod conversion;
+mod exception;
 
 use jni::JNIEnv;
-use jni::objects::{JByteArray, JClass, JObjectArray, JString};
+use jni::objects::{JByteArray, JClass, JObject, JObjectArray, JString};
 use jni::sys::jlong;
 
 use crate::context::JniContext;
+use crate::exception::{ExceptionPayload, pure_exception_to_payload};
 use legend_pure_core_platform::classpath::compile_classpath_bytes;
 use legend_pure_core_platform::repo::{self, Repo};
+use legend_pure_runtime::error::PureException;
+
+const PURE_RUST_EVAL_EXC: &str = "org/finos/legend/pure/rust/PureRustEvaluationException";
+
+/// Build the Java `PureRustEvaluationException` from a structured
+/// `PureException` and throw it via JNI.
+///
+/// Best-effort: if any JNI call fails (e.g. the rich constructor isn't
+/// found because the Java side is older than this binary), falls back
+/// to `env.throw_new(PURE_RUST_EVAL_EXC, message)` which targets the
+/// pre-existing message-only constructor. The fallback path is also
+/// what end users see if they swap in an older
+/// `legend-pure-runtime-rust-evaluator` JAR.
+fn throw_pure_exception(env: &mut JNIEnv, exc: &PureException) {
+    let payload = pure_exception_to_payload(exc);
+    if try_throw_rich(env, &payload).is_err() {
+        // Ensure any pending exception from the failed rich-throw
+        // attempt is cleared before the fallback throw, otherwise
+        // throw_new returns Err and the Java side never sees an
+        // exception.
+        let _ = env.exception_clear();
+        let _ = env.throw_new(PURE_RUST_EVAL_EXC, &payload.message);
+    }
+}
+
+#[allow(clippy::too_many_lines)] // Linear JNI plumbing — splitting hurts readability
+fn try_throw_rich(env: &mut JNIEnv, payload: &ExceptionPayload) -> jni::errors::Result<()> {
+    use jni::objects::{JObject, JValue};
+    let message = env.new_string(&payload.message)?;
+    let kind = env.new_string(payload.kind)?;
+    let source_info: JObject<'_> = match &payload.source_info {
+        Some(s) => env.new_string(s)?.into(),
+        None => JObject::null(),
+    };
+    let stack_class = env.find_class("java/lang/String")?;
+    let empty_string = env.new_string("")?;
+    let call_stack_arr =
+        env.new_object_array(payload.call_stack.len() as i32, &stack_class, &empty_string)?;
+    for (i, frame) in payload.call_stack.iter().enumerate() {
+        let frame_str = env.new_string(frame)?;
+        env.set_object_array_element(&call_stack_arr, i as i32, &frame_str)?;
+    }
+    let constraint_id: JObject<'_> = match &payload.constraint_id {
+        Some(s) => env.new_string(s)?.into(),
+        None => JObject::null(),
+    };
+    let constraint_kind: JObject<'_> = match payload.constraint_kind {
+        Some(s) => env.new_string(s)?.into(),
+        None => JObject::null(),
+    };
+    let owner_fqn: JObject<'_> = match &payload.owner_fqn {
+        Some(s) => env.new_string(s)?.into(),
+        None => JObject::null(),
+    };
+
+    let exc_obj = env.new_object(
+        PURE_RUST_EVAL_EXC,
+        ExceptionPayload::RICH_CTOR_SIG,
+        &[
+            JValue::Object(&message.into()),
+            JValue::Object(&kind.into()),
+            JValue::Object(&source_info),
+            JValue::Object(&call_stack_arr.into()),
+            JValue::Object(&constraint_id),
+            JValue::Object(&constraint_kind),
+            JValue::Object(&owner_fqn),
+        ],
+    )?;
+    env.throw(jni::objects::JThrowable::from(exc_obj))?;
+    Ok(())
+}
 
 /// Initializes the `JniContext` by loading the platform models.
 #[unsafe(no_mangle)]
@@ -163,20 +236,17 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeE
 
     match result {
         Ok(Ok(val)) => conversion::rust_to_java_result(&mut env, &val, context_ptr)
-            .unwrap_or_else(|_| jni::objects::JObject::null()),
+            .unwrap_or_else(|_| JObject::null()),
         Ok(Err(err)) => {
-            let _ = env.throw_new(
-                "org/finos/legend/pure/rust/PureRustEvaluationException",
-                err,
-            );
-            jni::objects::JObject::null()
+            throw_pure_exception(&mut env, &err);
+            JObject::null()
         }
         Err(_) => {
             let _ = env.throw_new(
                 "org/finos/legend/pure/rust/PureRustException",
                 "Rust paniced during evaluation",
             );
-            jni::objects::JObject::null()
+            JObject::null()
         }
     }
 }
@@ -197,7 +267,7 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeG
     complex_ptr: jlong,
     property_name: JString<'local>,
     args: JObjectArray<'local>,
-) -> jni::objects::JObject<'local> {
+) -> JObject<'local> {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let context = unsafe { &mut *(context_ptr as *mut JniContext) };
         let prop_str: String = env.get_string(&property_name).unwrap().into();
@@ -209,20 +279,17 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeG
 
     match result {
         Ok(Ok(val)) => conversion::rust_to_java_result(&mut env, &val, context_ptr)
-            .unwrap_or_else(|_| jni::objects::JObject::null()),
+            .unwrap_or_else(|_| JObject::null()),
         Ok(Err(err)) => {
-            let _ = env.throw_new(
-                "org/finos/legend/pure/rust/PureRustEvaluationException",
-                err,
-            );
-            jni::objects::JObject::null()
+            throw_pure_exception(&mut env, &err);
+            JObject::null()
         }
         Err(_) => {
             let _ = env.throw_new(
                 "org/finos/legend/pure/rust/PureRustException",
                 "Rust paniced during property evaluation",
             );
-            jni::objects::JObject::null()
+            JObject::null()
         }
     }
 }

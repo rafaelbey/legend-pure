@@ -176,7 +176,12 @@ impl JniContext {
         }
     }
 
-    pub fn evaluate(&mut self, function_path: &str, args: &[Value]) -> Result<Value, String> {
+    pub fn evaluate(
+        &mut self,
+        function_path: &str,
+        args: &[Value],
+    ) -> Result<Value, legend_pure_runtime::error::PureException> {
+        use legend_pure_runtime::error::{PureException, PureRuntimeError};
         let evaluator = unsafe { &mut *self.evaluator };
         let segments: Vec<smol_str::SmolStr> = function_path
             .split("::")
@@ -186,11 +191,21 @@ impl JniContext {
             .model()
             .resolve_function_by_path(&segments)
             .or_else(|| evaluator.model().resolve_by_path(&segments))
-            .ok_or_else(|| format!("Function not found: {function_path}"))?;
+            .ok_or_else(|| {
+                // FFI-boundary "function not found" — synthesize a
+                // minimal `PureException` so JNI throw paths stay
+                // uniform (kind/source/stack all preserved through
+                // the structured throw helper).
+                PureException::execution(
+                    PureRuntimeError::EvaluationError(format!(
+                        "Function not found: {function_path}"
+                    )),
+                    legend_pure_parser_ast::SourceInfo::new("<ffi>", 0, 0, 0, 0),
+                    Vec::new(),
+                )
+            })?;
 
-        evaluator
-            .apply_callable(&Value::Element(element_id), args)
-            .map_err(|e| e.to_string())
+        evaluator.apply_callable(&Value::Element(element_id), args)
     }
 
     /// Emit a Pure object to Java. Registers `handle` in the table and
@@ -212,18 +227,26 @@ impl JniContext {
         complex_ptr: i64,
         property_name: &str,
         _args: &[Value],
-    ) -> Result<Value, String> {
+    ) -> Result<Value, legend_pure_runtime::error::PureException> {
+        use legend_pure_runtime::error::{PureException, PureRuntimeError};
+        let ffi_err = |msg: String| {
+            PureException::execution(
+                PureRuntimeError::EvaluationError(msg),
+                legend_pure_parser_ast::SourceInfo::new("<ffi>", 0, 0, 0, 0),
+                Vec::new(),
+            )
+        };
         let handle = self
             .resolve_i64(complex_ptr)
-            .ok_or_else(|| format!("Stale or unknown JNI handle: {complex_ptr}"))?;
+            .ok_or_else(|| ffi_err(format!("Stale or unknown JNI handle: {complex_ptr}")))?;
         let evaluator = unsafe { &mut *self.evaluator };
 
         let values = evaluator
             .heap()
             .get_property_values(&handle, property_name)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| ffi_err(e.to_string()))?;
         if values.is_empty() {
-            return Err(format!("Property '{property_name}' not found"));
+            return Err(ffi_err(format!("Property '{property_name}' not found")));
         }
         let collected: Vec<Value> = values.iter().cloned().collect();
         Ok(Value::from_vec(collected))
