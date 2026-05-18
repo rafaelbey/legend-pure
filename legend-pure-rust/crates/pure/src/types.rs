@@ -589,12 +589,14 @@ pub struct PathStepLowered {
     pub source_info: SourceInfo,
 }
 
-/// One column in a `RelationLiteral` / `ColSpecArrayLiteral`.
+/// One column in a `RelationLiteral` / `ColSpecArrayLiteral` /
+/// `ColSpecLiteral`.
 ///
 /// Captured at lowering so the runtime allocator can materialise the
-/// `Column` heap shape (`name`, `nameWildCard=false`,
-/// `classifierGenericType` chaining down to `type_element` with
-/// `multiplicity`) without re-resolving names.
+/// `Column` / `ColSpec` / `FuncColSpec` heap shape (`name`,
+/// `nameWildCard=false`, `classifierGenericType` chaining down to
+/// `type_element` with `multiplicity`, plus the `function` slot for
+/// `FuncColSpec`) without re-resolving names or re-lowering bodies.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RelationColumnLowered {
     /// Column name (e.g. `"x"` in `~[x:String[1]]`).
@@ -604,6 +606,23 @@ pub struct RelationColumnLowered {
     /// Column multiplicity. Defaults to `ZeroOrOne` when the source omits
     /// `[mult]` (matches the platform's expected `'x:String[0..1]'` form).
     pub multiplicity: Multiplicity,
+    /// Optional initialiser lambda from `~name:lam` / `~name:T|...:lam`
+    /// (the `Func`/`Agg` `ColSpecLiteralKind` cases). `None` for plain
+    /// `~name` / `~name:Type[mult]` columns and for `~[…]` array entries
+    /// that aren't lambda-bearing.
+    ///
+    /// Populated by `lower_column` when the source carried an
+    /// `ast_expr::ColumnTypeSpec::Lambda(_)`. The runtime allocator
+    /// (`alloc_func_col_spec_literal`) reads this to set the
+    /// `FuncColSpec.function` slot, which the `extend` native then
+    /// invokes per row.
+    ///
+    /// No `skip_serializing_if` — postcard is positional and the
+    /// deserializer always reads an Option discriminant here. Omitting
+    /// the byte on serialize when `None` produces a one-byte wire
+    /// truncation that reads the next struct's bytes as the
+    /// discriminant.
+    pub init_lambda: Option<ValueSpec>,
 }
 
 /// Backward-compatible alias: existing code uses `Expression` throughout

@@ -241,6 +241,13 @@ pub const COL_SPEC: &Classifier = "meta::pure::metamodel::relation::ColSpec";
 /// .getFirst()._rawType()._columns()`.
 pub const COL_SPEC_ARRAY: &Classifier = "meta::pure::metamodel::relation::ColSpecArray";
 
+/// `meta::pure::metamodel::relation::FuncColSpec` — heap classifier for
+/// the `~name:lam` lambda-bearing column literal. Carries
+/// `name: String[1]` and `function: Function<Z>[1]` (the init lambda
+/// the user supplied). Allocated by the runtime when a `ColSpecLiteral`
+/// with `kind = Func` is evaluated; consumed by `extend`.
+pub const FUNC_COL_SPEC: &Classifier = "meta::pure::metamodel::relation::FuncColSpec";
+
 /// `meta::pure::functions::relation::SortInfo` — heap classifier for a
 /// single sort key. Carries `column: ColSpec<T>[1]` plus
 /// `direction: SortType[1]`. Allocated by the `ascending` / `descending`

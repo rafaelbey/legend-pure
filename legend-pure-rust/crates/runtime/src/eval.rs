@@ -588,9 +588,30 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 crate::relation::alloc_col_spec_array_literal(&mut self.heap, self.model, columns)
                     .map(Value::Object)
             }
-            ExprKind::ColSpecLiteral { column, .. } => {
-                crate::relation::alloc_col_spec_literal(&mut self.heap, self.model, column)
-                    .map(Value::Object)
+            ExprKind::ColSpecLiteral { column, kind } => {
+                // `Func`-kind (`~name:lam`) materialises the
+                // `FuncColSpec` heap shape with the lambda evaluated
+                // against the enclosing scope so any free-variable
+                // captures survive into the `function` slot. Other
+                // kinds (`Plain` for `~name`, and the not-yet-
+                // implemented `Agg` for `~name:f:r`) fall back to the
+                // simpler `ColSpec` allocator — the column NAME still
+                // survives so downstream natives that only care about
+                // names (`select`, `rename`) work.
+                match (kind, column.init_lambda.as_ref()) {
+                    (legend_pure_parser_pure::types::ColSpecLiteralKind::Func, Some(lambda_vs)) => {
+                        let function_value = self.eval(lambda_vs)?;
+                        crate::relation::alloc_func_col_spec_literal(
+                            &mut self.heap,
+                            self.model,
+                            column,
+                            function_value,
+                        )
+                        .map(Value::Object)
+                    }
+                    _ => crate::relation::alloc_col_spec_literal(&mut self.heap, self.model, column)
+                        .map(Value::Object),
+                }
             }
 
             // Materialises a callable `Function<{U[1]→V[m]}>` value that

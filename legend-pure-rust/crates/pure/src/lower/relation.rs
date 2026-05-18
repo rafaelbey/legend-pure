@@ -121,6 +121,7 @@ pub(super) fn lower_column(
             name,
             type_element: crate::bootstrap::ANY_ID,
             multiplicity: Multiplicity::ZeroOrOne,
+            init_lambda: None,
         }
     });
     Some(typed(
@@ -191,6 +192,7 @@ pub(super) fn lower_relation_columns(
                 name: c.name.clone(),
                 type_element,
                 multiplicity,
+                init_lambda: None,
             })
         })
         .collect()
@@ -203,14 +205,14 @@ pub(super) fn lower_relation_columns(
 ///
 /// - `name:Type[mult]` — typed column. Type resolves; multiplicity
 ///   parsed if present, else `[0..1]`.
-/// - `name` (bare) and `name:lam|...` (lambda-bearing — Func/Agg) —
-///   the type / lambda payload isn't preserved here yet, but the
-///   column NAME must be kept so the runtime allocator populates the
-///   `ColSpecArray.names` slot. Synthesise a placeholder
-///   `(Any, [0..1])` so downstream consumers (`select`, `rename`,
-///   `extend`) at least see the column name. Lambda-body preservation
-///   is tracked separately — see `extend_func_col_spec_currently_drops_its_lambda`
-///   in the engine smoke tests.
+/// - `name:lam|...` (lambda-bearing — `Func`/`Agg` `ColSpecLiteralKind`)
+///   — synthesise a placeholder `(Any, [0..1])` for type/multiplicity
+///   and lower the init lambda into `init_lambda` so the runtime
+///   allocator can populate the `FuncColSpec.function` slot. Lambda
+///   parameters with no declared type get `Any[1]` expectations — the
+///   runtime evaluates `$x.col` via dynamic slot lookup on the
+///   row-tuple heap object the per-row binding produces.
+/// - `name` (bare) — placeholder type, no lambda.
 fn lower_relation_columns_from_specs(
     cols: &[ast_expr::ColumnSpec],
     ctx: &mut ResolutionContext<'_>,
@@ -218,7 +220,7 @@ fn lower_relation_columns_from_specs(
 ) -> Vec<RelationColumnLowered> {
     cols.iter()
         .map(|c| {
-            // Typed column → resolve and use as-is.
+            // Typed column → resolve and use as-is. No init lambda.
             if let Some(ast_expr::ColumnTypeSpec::Typed(type_ref, mult)) = &c.type_spec {
                 let resolved = resolve::resolve_type_ref(type_ref, ctx, errors);
                 if let Some(TypeExpr::Named {
@@ -233,17 +235,46 @@ fn lower_relation_columns_from_specs(
                         name: c.name.clone(),
                         type_element,
                         multiplicity,
+                        init_lambda: None,
                     };
                 }
                 // Type didn't resolve to Named — fall through to the
                 // placeholder so the column name survives.
             }
-            // Bare name or lambda-bearing — placeholder type. Lambda
-            // bodies are dropped here (see lower_column doc).
+            // Lambda-bearing column → lower the init lambda with
+            // synthetic Any-typed parameters. The runtime binds row
+            // values dynamically via slot lookup on `$x.<col>`, so
+            // compile-time inference for the param doesn't need to be
+            // precise. Bare-name columns (no type_spec) skip the
+            // lambda branch.
+            let init_lambda = match &c.type_spec {
+                Some(ast_expr::ColumnTypeSpec::Lambda(l)) => {
+                    let any_param: (TypeExpr, Multiplicity) = (
+                        TypeExpr::Named {
+                            element: crate::bootstrap::ANY_ID,
+                            type_arguments: vec![],
+                            value_arguments: vec![],
+                            multiplicity_arguments: vec![],
+                            source_info: None,
+                        },
+                        Multiplicity::PureOne,
+                    );
+                    let expected: Vec<Option<(TypeExpr, Multiplicity)>> =
+                        l.parameters.iter().map(|_| Some(any_param.clone())).collect();
+                    super::lambda::lower_lambda_with_expected_types(
+                        l,
+                        Some(&expected),
+                        ctx,
+                        errors,
+                    )
+                }
+                _ => None,
+            };
             RelationColumnLowered {
                 name: c.name.clone(),
                 type_element: crate::bootstrap::ANY_ID,
                 multiplicity: Multiplicity::ZeroOrOne,
+                init_lambda,
             }
         })
         .collect()

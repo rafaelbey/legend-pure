@@ -325,6 +325,52 @@ pub fn alloc_col_spec_literal(
     Ok(cs)
 }
 
+/// Allocate a `FuncColSpec` literal — the heap shape behind
+/// `~name:lam` syntax. Mirrors `alloc_col_spec_literal` for the
+/// `name` + `classifierGenericType` slots, plus a `function` slot
+/// carrying the (already-evaluated) init lambda the `extend` native
+/// invokes per row.
+///
+/// The caller (`eval.rs::ColSpecLiteral`) evaluates
+/// `column.init_lambda` against the enclosing scope first so the
+/// resulting `Value::Function` captures any outer-scope variables the
+/// lambda body reads. This allocator just slots the produced value
+/// onto the heap object — it doesn't itself compile or close over
+/// anything.
+///
+/// # Errors
+/// Returns `PureException` if any underlying heap allocation fails.
+#[allow(clippy::result_large_err)]
+pub fn alloc_func_col_spec_literal(
+    heap: &mut RuntimeHeap,
+    model: &PureModel,
+    column: &RelationColumnLowered,
+    function_value: Value,
+) -> Result<ObjectHandle, PureException> {
+    let column_obj = alloc_column(heap, model, column)?;
+
+    let inner_gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
+    heap.mutate_add(&inner_gt, "rawType", &[Value::Object(column_obj)])
+        .map_err(PureException::from)?;
+
+    let outer_gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
+    let fcs_raw_type =
+        m3_paths::resolve(model, m3_paths::FUNC_COL_SPEC).map_or(Value::Unit, Value::Element);
+    heap.mutate_add(&outer_gt, "rawType", &[fcs_raw_type])
+        .map_err(PureException::from)?;
+    heap.mutate_add(&outer_gt, "typeArguments", &[Value::Object(inner_gt)])
+        .map_err(PureException::from)?;
+
+    let fcs = heap.alloc_dynamic(m3_paths::FUNC_COL_SPEC);
+    heap.mutate_add(&fcs, "name", &[Value::String(column.name.clone())])
+        .map_err(PureException::from)?;
+    heap.mutate_add(&fcs, "function", &[function_value])
+        .map_err(PureException::from)?;
+    heap.mutate_add(&fcs, "classifierGenericType", &[Value::Object(outer_gt)])
+        .map_err(PureException::from)?;
+    Ok(fcs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
