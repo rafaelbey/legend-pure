@@ -805,6 +805,51 @@ mod tests {
     use super::*;
     use crate::nodes::class;
 
+    /// Documents the memory cost of `ElementNode`'s two parallel
+    /// `SourceInfo` fields (`source_info` + `name_source_info`). The
+    /// `Cleaner SourceInformation name-span representation` BACKLOG
+    /// item (Compiler > Open Work) gates its refactor decision on
+    /// this measurement.
+    ///
+    /// Numbers are also captured in BACKLOG.md's entry; this test
+    /// keeps them tied to the source by running on every CI build —
+    /// the assertions fail if `SourceInfo` or `ElementNode` grow,
+    /// so the BACKLOG entry can be re-read for a stale-numbers
+    /// audit. Update both together.
+    #[test]
+    fn element_node_size_for_source_info_audit() {
+        let si_size = std::mem::size_of::<SourceInfo>();
+        let en_size = std::mem::size_of::<ElementNode>();
+        let smolstr_size = std::mem::size_of::<smol_str::SmolStr>();
+
+        // Print so `cargo test -- --nocapture` reports them cleanly.
+        eprintln!("== ElementNode memory audit ==");
+        eprintln!("  sizeof(SmolStr)       = {smolstr_size}");
+        eprintln!("  sizeof(SourceInfo)    = {si_size}");
+        eprintln!("  sizeof(ElementNode)   = {en_size}");
+        eprintln!();
+        eprintln!("Per-element savings if `name_source_info` field");
+        eprintln!("collapses into `source_info` (Java-7-field shape):");
+        for n in [1_660usize, 10_000, 100_000, 1_000_000] {
+            let cur = en_size * n;
+            let after = (en_size - si_size) * n;
+            let saved = si_size * n;
+            eprintln!("  N={n:>9}: {cur:>11} → {after:>11} bytes (saved {saved:>10})");
+        }
+
+        // Regression assertions — if SourceInfo or ElementNode grow
+        // beyond the recorded baseline, surface a noisy test failure
+        // so BACKLOG numbers can be refreshed deliberately rather
+        // than drifting silently. SmolStr is 24 bytes on every
+        // current target; SourceInfo lays out as
+        // `{ SmolStr (24), u32 × 4 (16) } = 40` with no padding.
+        assert_eq!(smolstr_size, 24, "SmolStr footprint changed");
+        assert_eq!(si_size, 40, "SourceInfo footprint changed");
+        // ElementNode: SmolStr (24) + SourceInfo × 2 (80) +
+        // PackageId (4 — single u32) + padding to next align = 112.
+        assert_eq!(en_size, 112, "ElementNode footprint changed");
+    }
+
     fn test_source() -> SourceInfo {
         SourceInfo::new("test.pure", 1, 1, 1, 10)
     }
