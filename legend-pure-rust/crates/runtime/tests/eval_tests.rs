@@ -507,6 +507,54 @@ fn evaluator_new_default_uses_standard_registry() {
 }
 
 #[test]
+fn expect_args_guards_reflective_dispatch_against_wrong_arity() {
+    // Locks the conclusion of the 2026-05-17 expect_args audit: the
+    // per-native `expect_args("name", args, N)?` call is NOT redundant
+    // boilerplate. The compiler's Pass-2 dispatcher narrows overloads
+    // by param count when mangling FQNs (`size_Any_MANY__Integer_1_`),
+    // so compiler-emitted FunctionApplication calls hit the right
+    // native by construction. But reflective entry points
+    // (`apply_callable`, JNI `nativeEvaluate`, surveyor's
+    // `executeTest($t->cast(@Function<…>))`, Pure-level `eval`/`evaluate`)
+    // resolve a function element + call it with a bare `Vec<Value>` —
+    // `dispatch_compiled_function` (crates/runtime/src/eval.rs:2480)
+    // routes those straight into `execute_native_with_values` with
+    // zero arity validation. The native's own `expect_args` is the
+    // ONLY guard on this path.
+    //
+    // Drop-the-checks attempts that pass on the compiler-dispatched
+    // suite will quietly let JNI / surveyor callers pass under-/over-
+    // arity arg vectors into natives that index `values[N]` directly
+    // — out-of-bounds panic on `apply_callable(size, &[])` is exactly
+    // what this test exists to prevent.
+    use legend_pure_runtime::eval::Evaluator;
+    let model = compile_with_platform("");
+    let registry = NativeRegistry::standard();
+    let mut evaluator = Evaluator::new(&model, &registry);
+
+    let size_id = model
+        .resolve_function_by_path(&[
+            SmolStr::new("meta"),
+            SmolStr::new("pure"),
+            SmolStr::new("functions"),
+            SmolStr::new("collection"),
+            SmolStr::new("size"),
+        ])
+        .expect("meta::pure::functions::collection::size must resolve");
+
+    // Reflective dispatch with 0 args (size takes 1). The arity error
+    // must surface via the native's `expect_args`, NOT a Rust panic.
+    let err = evaluator
+        .apply_callable(&Value::Element(size_id), &[])
+        .expect_err("apply_callable with wrong arity must error, not panic");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("size") && msg.contains("expected 1"),
+        "expected the expect_args(\"size\", _, 1) message, got: {msg}"
+    );
+}
+
+#[test]
 fn store_dsl_metamodel_resolves_in_platform() {
     // Locks the Store DSL embedding: the platform_dsl_store repo
     // ships two metamodel files (`grammar/store.pure`,
