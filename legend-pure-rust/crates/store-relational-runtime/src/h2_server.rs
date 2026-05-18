@@ -25,13 +25,28 @@
 //! downstream — each [`crate::connection::H2State`] opens a unique
 //! `mem:<uuid>` logical database against the shared server.
 //!
-//! Lifecycle: the Java child outlives the `Box::leak`'d `H2Server`
-//! struct and is reaped by the OS when the test binary exits. No
-//! explicit shutdown call is made. A `#[cfg(unix)]
-//! pre_exec(PR_SET_PDEATHSIG)` polish that would propagate parent
-//! death to the child is **not** included here — the crate is
-//! `#![forbid(unsafe_code)]` and `pre_exec` requires unsafe.
-//! Tracked in `BACKLOG.md` for a later JNI-bridge revisit.
+//! Lifecycle: the Java child outlives the `H2Server` struct (stored
+//! in a static `OnceLock`) and is reaped by the OS when the test
+//! binary exits normally — no explicit shutdown call is made.
+//!
+//! **Parent-SIGKILL edge case.** When `cargo test` (or any other
+//! parent) is SIGKILL'd rather than exiting normally, the H2 child
+//! becomes a zombie. The standard Linux fix is
+//! `Command::pre_exec(|| prctl(PR_SET_PDEATHSIG, SIGTERM))`, but
+//! `pre_exec` requires `unsafe` and this crate has
+//! `#![forbid(unsafe_code)]`. Rather than lift the crate-wide forbid
+//! (a meaningful policy change) or pull in a transitive `nix` / `prctl`
+//! crate dep for one syscall, the limitation is accepted: H2 zombies
+//! after parent-SIGKILL are recovered manually with:
+//!
+//! ```bash
+//! pkill -f h2.tools.Server   # one-shot cleanup
+//! lsof -i :5435              # verify port released
+//! ```
+//!
+//! In practice this only matters during local-dev iteration where the
+//! user explicitly SIGKILLs `cargo test`; in CI the runner cleanup
+//! handles the orphan and the next run gets a fresh port.
 
 use std::io::{BufRead, BufReader};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream};
