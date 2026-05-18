@@ -12,80 +12,51 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Native functions over `Relation` / `RelationType` / `Column` /
+//! Platform-defined native functions over `RelationType` / `Column` /
 //! `ColSpec` / `ColSpecArray` / `TDS`.
 //!
-//! Mirrors `legend-pure-runtime/.../natives/essentials/meta/type/relation`.
+//! Only natives whose *declarations* live in the legend-pure platform
+//! repos (`platform`, `platform_dsl_tds`) belong here:
+//!
+//! - `addColumns(RelationType, ColSpecArray)` — declared in
+//!   `platform/.../essential/meta/type/relation/addColumns.pure`
+//! - `stringToTDS(String):TDS` — declared in `platform_dsl_tds/tds.pure`
+//!
+//! Engine-side relation natives (`filter`/`sort`/`distinct`/`extend`/
+//! `select`/`rename`/`columns`/`limit`/`drop`/`concatenate`/`size`/
+//! `ascending`/`descending`) — whose declarations live in
+//! `core_functions_relation` — ship as a runtime extension in the
+//! legend-engine workspace
+//! (`legend-engine-rust/crates/natives-functions-relation`).
+//!
+//! Shared row-tuple, CSV, and heap-walk helpers stay in this crate's
+//! [`shared`] module (publicly exposed) so the engine extension can
+//! reuse them.
+//!
 //! All M3 identification is by ElementId (`m3_paths::resolve`), never
 //! classifier-string matching — see `feedback_no_classifier_string_compare`.
-//!
-//! Each native lives in its own file under this directory so multiple
-//! contributors (and parallel work-streams) can land additions without
-//! the merge-conflict surface of a single 2000-line module. Internal
-//! helpers — heap walks, TDS row-access, etc. — are in `shared.rs`.
 
 mod add_columns;
-mod ascending;
-mod columns;
-mod concatenate;
-mod descending;
-mod distinct;
-mod drop;
-mod filter;
-mod limit;
-mod rename;
-mod select;
-mod shared;
-mod size;
-mod sort;
-mod sort_info;
+pub mod shared;
 mod string_to_tds;
 
 use crate::native::NativeRegistry;
 
 pub use add_columns::AddColumns;
-pub use ascending::Ascending;
-pub use columns::Columns;
-pub use concatenate::Concatenate;
-pub use descending::Descending;
-pub use distinct::Distinct;
-pub use drop::Drop;
-pub use filter::Filter;
-pub use limit::Limit;
-pub use rename::Rename;
-pub use select::{SelectColSpec, SelectColSpecArray};
-pub use size::Size;
-pub use sort::Sort;
 pub use string_to_tds::StringToTDS;
 
-/// Register relation native functions into the registry under their
-/// mangled Pure FQNs.
+/// Register the platform-defined relation natives into the registry.
+///
+/// Called from [`NativeRegistry::standard`] — these two natives are
+/// part of the minimum surface every Pure program can call. Engine-
+/// defined relation natives (`filter`, `sort`, `extend`, …) register
+/// separately through the
+/// [`RuntimeExtension`](crate::native::RuntimeExtension) SPI from the
+/// `legend-engine-rust-natives-functions-relation` crate.
 pub fn register(registry: &mut NativeRegistry) {
     registry.register(
         "addColumns_RelationType_1__ColSpecArray_1__RelationType_1_",
         AddColumns,
     );
     registry.register("stringToTDS_String_1__TDS_1_", StringToTDS);
-    registry.register("size_Relation_1__Integer_1_", Size);
-    registry.register("distinct_Relation_1__Relation_1_", Distinct);
-    registry.register(
-        "concatenate_Relation_1__Relation_1__Relation_1_",
-        Concatenate,
-    );
-    registry.register("filter_Relation_1__Function_1__Relation_1_", Filter);
-    registry.register("limit_Relation_1__Integer_1__Relation_1_", Limit);
-    registry.register("drop_Relation_1__Integer_1__Relation_1_", Drop);
-    registry.register(
-        "rename_Relation_1__ColSpec_1__ColSpec_1__Relation_1_",
-        Rename,
-    );
-    registry.register("select_Relation_1__ColSpec_1__Relation_1_", SelectColSpec);
-    registry.register(
-        "select_Relation_1__ColSpecArray_1__Relation_1_",
-        SelectColSpecArray,
-    );
-    registry.register("columns_Relation_1__Column_MANY_", Columns);
-    registry.register("sort_Relation_1__SortInfo_MANY__Relation_1_", Sort);
-    registry.register("ascending_ColSpec_1__SortInfo_1_", Ascending);
-    registry.register("descending_ColSpec_1__SortInfo_1_", Descending);
 }

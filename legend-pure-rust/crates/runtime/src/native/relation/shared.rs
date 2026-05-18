@@ -46,7 +46,7 @@ use crate::value::Value;
 /// `((ColSpecArrayInstance)…)._classifierGenericType()._typeArguments()
 ///   .getFirst()._rawType()._columns()` chain.
 #[allow(clippy::result_large_err)]
-pub(super) fn read_col_spec_array_columns(
+pub fn read_col_spec_array_columns(
     cs_obj: ObjectHandle,
     ctx: &mut dyn EvalContextTrait,
 ) -> Result<Vec<Value>, PureException> {
@@ -77,7 +77,7 @@ pub(super) fn read_col_spec_array_columns(
 
 /// Read a single Object out of `obj.<slot>`.
 #[allow(clippy::result_large_err)]
-pub(super) fn single_object_slot(
+pub fn single_object_slot(
     obj: ObjectHandle,
     slot: &str,
     ctx: &mut dyn EvalContextTrait,
@@ -102,7 +102,7 @@ pub(super) fn single_object_slot(
 /// Unwrap `Value::Object(InstanceValue).values` if needed; otherwise
 /// require a bare `Value::Object`. Mirrors `lang.rs::unwrap_instance_value_*`.
 #[allow(clippy::result_large_err)]
-pub(super) fn unwrap_instance_value(
+pub fn unwrap_instance_value(
     value: &Value,
     instance_value_id: Option<legend_pure_parser_pure::ids::ElementId>,
     ctx: &mut dyn EvalContextTrait,
@@ -149,7 +149,7 @@ pub(super) fn unwrap_instance_value(
 /// have unwrapped any `InstanceValue` wrapper via
 /// [`unwrap_instance_value`] beforehand.
 #[allow(clippy::result_large_err)]
-pub(super) fn read_parsed_tds(
+pub fn read_parsed_tds(
     fn_name: &'static str,
     tds_obj: &ObjectHandle,
     ctx: &mut dyn EvalContextTrait,
@@ -179,7 +179,7 @@ pub(super) fn read_parsed_tds(
 /// Convenience wrapper: render an entire [`ParsedTDS`] back to canonical
 /// CSV form by feeding its `columns` + `rows` through
 /// [`render_csv_from_columns_and_rows`].
-pub(super) fn render_canonical_csv(parsed: &ParsedTDS) -> String {
+pub fn render_canonical_csv(parsed: &ParsedTDS) -> String {
     render_csv_from_columns_and_rows(&parsed.columns, &parsed.rows)
 }
 
@@ -205,7 +205,7 @@ pub(super) fn render_canonical_csv(parsed: &ParsedTDS) -> String {
 /// - `String(s)` → wrapped in single quotes; any internal `'` escaped
 ///   as `\'`.
 /// - `StrictDate(s)`, `DateTime(s)` → verbatim (already source-form).
-pub(super) fn render_csv_from_columns_and_rows(
+pub fn render_csv_from_columns_and_rows(
     columns: &[ParsedColumn],
     rows: &[Vec<Option<TypedCell>>],
 ) -> String {
@@ -263,7 +263,7 @@ fn render_cell(cell: Option<&TypedCell>) -> String {
 /// and reads the row's columns through standard `PropertyCall` slot
 /// lookup at runtime.
 #[allow(clippy::result_large_err)]
-pub(super) fn build_row_tuple(
+pub fn build_row_tuple(
     columns: &[ParsedColumn],
     row: &[Option<TypedCell>],
     ctx: &mut dyn EvalContextTrait,
@@ -289,7 +289,7 @@ pub(super) fn build_row_tuple(
 /// the runtime's typed-cell handling for those is its own follow-up,
 /// and the underlying storage in `TypedCell` is already a string.
 /// `String` likewise — the smolstr is widened.
-pub(super) fn typed_cell_to_value(cell: &TypedCell) -> Value {
+pub fn typed_cell_to_value(cell: &TypedCell) -> Value {
     match cell {
         TypedCell::Integer(i) => Value::Integer(*i),
         TypedCell::Float(f) => Value::Float(*f),
