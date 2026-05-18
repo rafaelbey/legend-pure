@@ -315,11 +315,19 @@ pub fn generate(config: &HubSpokeConfig) -> (String, ModelStats) {
 
     // ---- Functions ----
     if config.include_functions {
-        // A few simple functions to stress function compilation
+        // A few simple functions to stress function compilation.
+        //
+        // Body returns the parameter directly rather than concatenating
+        // (`'hello ' + $name`) — `+` is platform-defined `plus` and the
+        // compile/* benches don't load the platform, so platform-only
+        // operators would fail dispatch and panic the bench at
+        // `crates/stress/benches/pipeline.rs:343`. Returning `$name`
+        // keeps the param-use + signature semantics under test without
+        // dragging in `plus`.
         let fn_count = hubs / 20;
         for f in 0..fn_count {
             sb.push_str(&format!(
-                "function test::greet{f}(name: String[1]): String[1]\n{{\n  'hello ' + $name\n}}\n\n"
+                "function test::greet{f}(name: String[1]): String[1]\n{{\n  $name\n}}\n\n"
             ));
         }
         stats.functions = fn_count;
@@ -373,10 +381,13 @@ pub fn generate_files(config: &HubSpokeConfig) -> Vec<(String, String)> {
     }
 
     if config.include_functions {
+        // See the in-place generator above for why bodies return $name
+        // directly instead of concatenating — `+` is platform-defined
+        // `plus` and the compile/* benches don't load the platform.
         let fn_count = hubs / 20;
         for f in 0..fn_count {
             preamble.push_str(&format!(
-                "function test::greet{f}(name: String[1]): String[1]\n{{\n  'hello ' + $name\n}}\n\n"
+                "function test::greet{f}(name: String[1]): String[1]\n{{\n  $name\n}}\n\n"
             ));
         }
     }
