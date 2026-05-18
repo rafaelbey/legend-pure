@@ -66,6 +66,12 @@ pub const TAGGED_VALUE: &Classifier = "meta::pure::metamodel::extension::TaggedV
 /// `Tag` (a declaration handle), not a `TaggedValue`.
 pub const TAG: &Classifier = "meta::pure::metamodel::extension::Tag";
 
+/// `meta::pure::functions::collection::TreeNode` — anonymous tree node
+/// with a single `childrenData: TreeNode[*]` property. Used by
+/// `replaceTreeNode` to allocate replacement clones during the
+/// persistent-copy traversal.
+pub const TREE_NODE: &Classifier = "meta::pure::functions::collection::TreeNode";
+
 /// `meta::pure::metamodel::type::Class` — the M3 metatype every
 /// user-defined Class is an instance of. Used by the type-info back-fill
 /// in `New::execute` to identify a `Class<T>`-typed first argument

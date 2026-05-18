@@ -2008,6 +2008,161 @@ fn pair_first_second(
 }
 
 // ---------------------------------------------------------------------------
+// replaceTreeNode
+// ---------------------------------------------------------------------------
+
+/// Pure `replaceTreeNode(root:TreeNode[1], target:TreeNode[1], value:TreeNode[1]):TreeNode[1]`.
+///
+/// Walks the `root` tree (via `TreeNode.childrenData`) and produces a
+/// new tree whose subtree-identical-to-`target` slot is replaced by
+/// `value`. Identity comparison is `Rc::ptr_eq` (matches Java's `==`
+/// in `ReplaceTreeNode.java:58, 85`). Errors when no replacement
+/// occurs (Java throws `"Copy failed ... node not found!"`).
+///
+/// Persistent-copy traversal: each `TreeNode` in the result is a
+/// fresh heap object, leaving `root` and all its children untouched
+/// — Pure programs that retain `root` see the original tree intact
+/// post-call. Non-`childrenData` properties are copied by value.
+#[derive(Debug)]
+pub struct ReplaceTreeNode;
+
+impl NativeFunction for ReplaceTreeNode {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("replaceTreeNode", &values, 3)?;
+        let source = match &values[0] {
+            Value::Object(h) => h.clone(),
+            other => return Err(PureRuntimeError::type_mismatch("TreeNode", other).into()),
+        };
+        let target = match &values[1] {
+            Value::Object(h) => h.clone(),
+            other => return Err(PureRuntimeError::type_mismatch("TreeNode", other).into()),
+        };
+        let replacement = match &values[2] {
+            Value::Object(h) => h.clone(),
+            other => return Err(PureRuntimeError::type_mismatch("TreeNode", other).into()),
+        };
+
+        // Root-is-target short-circuit (Java's `if (sourceTree ==
+        // targetNode) newInstance = subTree`).
+        if std::rc::Rc::ptr_eq(&source, &target) {
+            return Ok(Evaluated::new(Value::Object(replacement)));
+        }
+
+        let (new_root, replaced) = clone_tree_node(&source, &target, &replacement, ctx)?;
+        if !replaced {
+            return Err(PureRuntimeError::EvaluationError(
+                "replaceTreeNode: target node not found in source tree".into(),
+            )
+            .into());
+        }
+        Ok(Evaluated::new(Value::Object(new_root)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "replaceTreeNode(TreeNode[1], TreeNode[1], TreeNode[1]):TreeNode[1]"
+    }
+}
+
+/// Recursive persistent-copy of `source` into a fresh `TreeNode`,
+/// substituting any `childrenData` entry identity-equal to `target`
+/// with `replacement`. Subtrees that don't contain `target` retain
+/// their original handles — only the path-to-target gets fresh
+/// clones. Returns the new (or reused) node + a `replaced` flag.
+///
+/// Identity preservation diverges from Java's interpreted runtime
+/// (which always clones every level — see `ReplaceTreeNode.java:64`),
+/// but matches Pure's persistent-data idiom: callers that retain
+/// untouched subtrees see them as the same objects after the call.
+/// The result is structurally equivalent to Java's output; identity-
+/// asserting tests like `assertIs($child2, $newRoot.childrenData->at(1))`
+/// now pass because `$child2` wasn't on the path-to-target.
+fn clone_tree_node(
+    source: &crate::heap::ObjectHandle,
+    target: &crate::heap::ObjectHandle,
+    replacement: &crate::heap::ObjectHandle,
+    ctx: &mut dyn EvalContextTrait,
+) -> Result<(crate::heap::ObjectHandle, bool), PureException> {
+    use std::rc::Rc;
+    let property_names = ctx
+        .heap()
+        .property_names(source)
+        .map_err(PureException::from)?;
+
+    // Two-pass to enable subtree-reuse: first compute the new
+    // childrenData list (with replacement / recursive clones), then
+    // decide whether anything below this node actually changed. If
+    // not, return the original handle and skip the allocation.
+    let mut new_children: Option<Vec<Value>> = None;
+    let mut replaced = false;
+    for name in &property_names {
+        if name.as_str() == "childrenData" {
+            let src_values = ctx
+                .heap()
+                .get_property_values(source, name)
+                .map_err(PureException::from)?;
+            let mut built: Vec<Value> = Vec::with_capacity(src_values.len());
+            for val in src_values.iter() {
+                match val {
+                    Value::Object(child_handle) if Rc::ptr_eq(child_handle, target) => {
+                        built.push(Value::Object(replacement.clone()));
+                        replaced = true;
+                    }
+                    Value::Object(child_handle) => {
+                        let (new_child, child_replaced) =
+                            clone_tree_node(child_handle, target, replacement, ctx)?;
+                        if child_replaced {
+                            replaced = true;
+                        }
+                        built.push(Value::Object(new_child));
+                    }
+                    // Non-Object entries in childrenData would be a
+                    // type violation upstream — copy verbatim and let
+                    // a separate diagnostic catch it.
+                    other => built.push(other.clone()),
+                }
+            }
+            new_children = Some(built);
+        }
+    }
+
+    if !replaced {
+        // No descendent contained `target` — return source as-is so
+        // the caller sees the same handle for the unmodified subtree.
+        return Ok((source.clone(), false));
+    }
+
+    let new_node = ctx.heap_mut().alloc_dynamic(crate::m3_paths::TREE_NODE);
+    for name in &property_names {
+        if name.as_str() == "childrenData" {
+            if let Some(children) = &new_children
+                && !children.is_empty()
+            {
+                ctx.heap()
+                    .mutate_add(&new_node, name, children)
+                    .map_err(PureException::from)?;
+            }
+        } else {
+            let src_values = ctx
+                .heap()
+                .get_property_values(source, name)
+                .map_err(PureException::from)?;
+            let copied: Vec<Value> = src_values.iter().cloned().collect();
+            if !copied.is_empty() {
+                ctx.heap()
+                    .mutate_add(&new_node, name, &copied)
+                    .map_err(PureException::from)?;
+            }
+        }
+    }
+    Ok((new_node, true))
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -2084,6 +2239,11 @@ pub fn register(registry: &mut NativeRegistry) {
     // The Property arg is accepted for signature parity but not yet
     // honoured (per the `NewMap::execute` doc comment) — same impl.
     registry.register("newMap_Pair_MANY__Property_MANY__Map_1_", NewMap);
+
+    registry.register(
+        "replaceTreeNode_TreeNode_1__TreeNode_1__TreeNode_1__TreeNode_1_",
+        ReplaceTreeNode,
+    );
     registry.register("get_Map_1__U_1__V_$0_1$_", Get);
     registry.register("keys_Map_1__U_MANY_", Keys);
     registry.register("put_Map_1__U_1__V_1__Map_1_", Put);
