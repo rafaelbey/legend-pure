@@ -38,26 +38,35 @@ use std::path::PathBuf;
 use legend_pure_core_platform::platform;
 use legend_pure_parser_pure::model::{Element, PureModel};
 use legend_pure_runtime::native::NativeRegistry;
+// Reference every shipped extension crate so the `linkme`
+// distributed-slice entries register at link time. Without one of these
+// `use`s, cargo-test's linker prunes the crate as unreferenced and
+// `NativeRegistry::discovered()` reports the extension's natives as
+// Missing — making the audit falsely flag legitimately-implemented
+// natives. The renames (`as _`) keep the imports namespace-clean
+// without shadowing.
+use legend_pure_dsl_mapping_runtime::MappingDSLPopulator as _;
+use legend_pure_dsl_relational_runtime::RelationalDatabaseDSLPopulator as _;
+use legend_pure_store_relational_runtime::RelationalStoreExtension as _;
 
 /// Hard ceiling on the number of [`GapKind::Missing`] findings — i.e.
 /// platform `native function` declarations whose simple name has *no*
 /// `NativeFunction` registered under any signature in
-/// `NativeRegistry::standard()`. These are the "the runtime can't
+/// `NativeRegistry::discovered()`. These are the "the runtime can't
 /// possibly call this" gaps that Stream 2b drives down.
 ///
-/// **Baseline measured 2026-05-18:** see the report's "Missing" line.
-/// Ceiling is set with a small headroom over the baseline; tightens as
-/// natives land. **Do not raise** — a regression means a native got
-/// dropped from the registry or a new platform declaration landed
-/// without an impl.
-const MISSING_CEILING: usize = 30;
+/// **Baseline measured 2026-05-18:** 9 Missing. Ceiling is set with
+/// ~6 of headroom; tightens as natives land. **Do not raise** — a
+/// regression means a native got dropped from the registry or a new
+/// platform declaration landed without an impl.
+const MISSING_CEILING: usize = 15;
 
 /// Ceiling on [`GapKind::SignatureMismatch`] findings — natives that
 /// exist but whose registered key doesn't exactly match the platform's
 /// mangled FQN. Dispatch survives today via `find_by_prefix`, but Java
-/// parity requires exact-FQN match, so these are latent. Ceiling sits
-/// above baseline; lower when individual fixes land.
-const MISMATCH_CEILING: usize = 35;
+/// parity requires exact-FQN match, so these are latent. Baseline 19;
+/// ceiling sits above with ~6 of headroom.
+const MISMATCH_CEILING: usize = 25;
 
 /// Severity for an audit finding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,7 +109,13 @@ fn pct_native_coverage_audit_under_ceiling() {
         Ok(m) => m,
         Err(p) => p.model,
     };
-    let registry = NativeRegistry::standard();
+    // `discovered()` pulls in every `#[distributed_slice(RUNTIME_EXTENSIONS)]`
+    // contribution alongside the platform-standard natives — same
+    // composition the production `Evaluator::new_default(...)` uses, and
+    // what `evaluator.evaluate(...)` actually dispatches against at
+    // runtime. Using `standard()` would falsely flag the entire
+    // relational-store extension as Missing.
+    let registry = NativeRegistry::discovered();
 
     let mut gaps: Vec<Gap> = Vec::new();
     let mut total_natives = 0usize;
