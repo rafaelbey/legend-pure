@@ -478,9 +478,14 @@ impl CompilerExtension for RelationalExtension {
             scope,
             ..
         } = ctx;
-        let scope = scope.as_deref_mut().expect(
-            "RelationalExtension requires `scope` wired in DeclareCtx (pipeline supplies it)",
-        );
+        // Per DeclareCtx's documented contract: stateful extensions
+        // skip when `scope` is None. The normal pipeline wires it;
+        // hand-built test contexts that exercise other behavior
+        // legitimately omit it, in which case this extension has no
+        // per-compile registry to populate and silently no-ops.
+        let Some(scope) = scope.as_deref_mut() else {
+            return;
+        };
         let RelationalCompileState {
             databases: by_fqn,
             relational_class_mappings,
@@ -687,12 +692,15 @@ impl CompilerExtension for RelationalExtension {
     }
 
     fn define_bodies(&self, ctx: &mut legend_pure_parser_pure::extension::DefineCtx<'_>) {
+        // Per DefineCtx's documented contract: stateful extensions
+        // skip when `scope` is None. The normal pipeline wires it;
+        // hand-built test contexts that omit it have no per-compile
+        // state from `declare` to consume here.
+        let Some(scope) = ctx.scope.as_deref_mut() else {
+            return;
+        };
         // Pull the per-compile state declare stashed; split-borrow the
         // four fields touched here so each is independently mutable.
-        let scope = ctx
-            .scope
-            .as_deref_mut()
-            .expect("RelationalExtension requires `scope` wired in DefineCtx");
         let RelationalCompileState {
             databases,
             relational_class_mappings,

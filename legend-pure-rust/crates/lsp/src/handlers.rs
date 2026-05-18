@@ -1115,9 +1115,19 @@ fn translate_run_result(
             extras: build_extras(&result.stdout, None),
         }
     } else {
+        // RunResult's contract guarantees Some(error) when ok=false,
+        // but `expect` is forbidden in library code. Fall back to a
+        // synthetic error that surfaces the contract violation through
+        // the same channel rather than panicking.
         let err = result
             .error
-            .expect("RunResult { ok: false } must carry an error");
+            .unwrap_or_else(|| legend_pure_runtime::runner::RunError {
+                message:
+                    "RunResult { ok: false } missing structured error (producer contract violation)"
+                        .to_string(),
+                stack: Vec::new(),
+                raw: String::new(),
+            });
         let detail = serde_json::json!({
             "fqn": fqn,
             "message": err.message,

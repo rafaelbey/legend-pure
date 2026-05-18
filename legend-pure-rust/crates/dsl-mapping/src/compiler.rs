@@ -289,9 +289,14 @@ impl CompilerExtension for MappingExtension {
             scope,
             ..
         } = ctx;
-        let scope = scope
-            .as_deref_mut()
-            .expect("MappingExtension requires `scope` wired in DeclareCtx (pipeline supplies it)");
+        // Per DeclareCtx's documented contract: stateful extensions
+        // skip when `scope` is None. The normal pipeline wires it;
+        // hand-built test contexts that exercise other behavior
+        // legitimately omit it, in which case this extension has no
+        // per-compile registry to populate and silently no-ops.
+        let Some(scope) = scope.as_deref_mut() else {
+            return;
+        };
         let registry = &mut scope.get_or_default::<MappingCompileState>().mappings;
 
         for source_file in *source_files {
