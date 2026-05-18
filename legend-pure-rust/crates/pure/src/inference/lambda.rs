@@ -220,15 +220,31 @@ pub(crate) fn bind_from_lambda_body(
     let Some(last_expr) = lambda_body.last() else {
         return;
     };
-    let Some(body_eid) = resolve::infer_type_from_valuespec(last_expr, model, &extended) else {
-        return;
-    };
-    let body_te = TypeExpr::Named {
-        element: body_eid,
-        type_arguments: vec![],
-        multiplicity_arguments: Vec::new(),
-        value_arguments: vec![],
-        source_info: None,
+    // Prefer the full `TypeExpr` shape (preserves `type_arguments` for
+    // parametric returns like `^List<Variant>(...)`) over the bare
+    // `ElementId` from `infer_type_from_valuespec` — without
+    // `type_arguments`, `Z` binds to bare `List` and property access on
+    // `$result.values` falls back through `Generic("X")[*]` via the
+    // class generic-substitution path, losing the inner `Variant`.
+    // Fall back to the bare-element path when the richer query can't
+    // produce a TypeExpr (rare; e.g. a Lambda body whose last expression
+    // is itself an unresolved kind), so existing call sites keep their
+    // behaviour.
+    let body_te = match resolve::infer_typeexpr_from_valuespec(last_expr, model, &extended) {
+        Some(te) => te,
+        None => {
+            let Some(body_eid) = resolve::infer_type_from_valuespec(last_expr, model, &extended)
+            else {
+                return;
+            };
+            TypeExpr::Named {
+                element: body_eid,
+                type_arguments: vec![],
+                multiplicity_arguments: Vec::new(),
+                value_arguments: vec![],
+                source_info: None,
+            }
+        }
     };
     resolve::bind_type(return_type, &body_te, &mut bindings.ty, model);
 

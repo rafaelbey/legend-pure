@@ -2652,11 +2652,35 @@ pub(crate) fn infer_generic_bindings(
     // FunctionType slot's multiplicity allows multi-element collections,
     // so we walk every Lambda inside the Collection and bind from each
     // body in turn (LUB-merging through `bind_type`).
+    //
+    // **Z-propagation through bound-T parameter slots.** Some param
+    // shapes hide the FunctionType behind a generic that was *just
+    // bound* in pass-1. Concretely, PCT-runner-style shapes like
+    // `eval<T,V|m,n>(func:Function<{T[n]->V[m]}>, param:T[n]):V[m]`
+    // called with `$f:Function<{Function<{->Z[y]}>->Z[y]}>` bind
+    // `T = Function<{->Z[y]}>` from arg 1's structural slot (lands
+    // in `ty_auth`). Param 2's literal type is `Generic("T")[n]` —
+    // not a FunctionType at the source level, so pass-2 would skip
+    // it. After substituting the structural (`ty_auth`) bindings,
+    // param 2 becomes `Function<{->Z[y]}>[n]`, the inner Function
+    // is now visible, and `bind_from_lambda_body` can flow the
+    // lambda body's return type into `Z`.
+    //
+    // We substitute from `ty_auth` (NOT `ty`) because top-level
+    // Generic-leaf bindings populate `ty` only via Constraint-mode
+    // LUB, which can widen the binding away from a structural
+    // FunctionType (e.g. arg 1 contributes `Function<…>` and arg 2
+    // contributes `Named<LambdaFunction>{[]}` → LUB collapses to
+    // `Named<Function>{[]}`, losing the inner). `ty_auth` only
+    // accumulates structural-slot bindings, which are Pure-invariant
+    // and stay intact.
     for (param, arg) in params.iter().zip(args.iter()) {
+        let substituted = substitute_type(&param.type_expr, &ctx.bindings.ty_auth);
         // The param type may be FunctionType directly, or Named<Function>[FunctionType]
-        // (the common `Function<{T[1]->V[*]}>` spelling).
-        let function_type = match &param.type_expr {
-            TypeExpr::FunctionType { .. } => Some(&param.type_expr),
+        // (the common `Function<{T[1]->V[*]}>` spelling). After substitution,
+        // a bound `T[n]` may resolve to either of these shapes.
+        let function_type = match &substituted {
+            TypeExpr::FunctionType { .. } => Some(&substituted),
             TypeExpr::Named { type_arguments, .. } => type_arguments
                 .iter()
                 .find(|ta| matches!(ta, TypeExpr::FunctionType { .. })),

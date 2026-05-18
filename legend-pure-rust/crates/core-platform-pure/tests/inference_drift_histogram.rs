@@ -49,11 +49,21 @@ use legend_pure_parser_pure::types::{
 ///
 /// Baseline measured during the Item 3 audit (May 2026): **5931**
 /// (4380 type + 1551 multiplicity, across 563 functions with non-zero
-/// drift). The ceiling is set to 6500 — small headroom over the
-/// baseline so a real regression trips. Lower this when a chain-
-/// inference fix lands. **Do not raise** — a regression is the alarm
-/// this ceiling exists to surface.
-const DRIFT_CEILING: usize = 6500;
+/// drift).
+///
+/// **Z-propagation fix (May 2026-05-18)**: substituting `ty_auth`
+/// bindings into the param type before pass-2's FunctionType check
+/// (`resolve::infer_generic_bindings`) plus using
+/// `infer_typeexpr_from_valuespec` (instead of bare-element
+/// `infer_type_from_valuespec`) in
+/// `inference::lambda::bind_from_lambda_body` propagates inner
+/// generics through PCT-runner-style call shapes. New post-fix
+/// measurement: **4531** (2977 type + 1554 multiplicity, across 567
+/// functions). Ceiling lowered from 6500 to 4800 — leaves ~270
+/// headroom for natural micro-drift and trips on real regressions.
+/// Lower this when a chain-inference fix lands. **Do not raise** —
+/// a regression is the alarm this ceiling exists to surface.
+const DRIFT_CEILING: usize = 4800;
 
 /// Per-function tally.
 #[derive(Default, Debug, Clone)]
