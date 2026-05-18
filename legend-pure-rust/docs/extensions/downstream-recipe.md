@@ -1078,31 +1078,44 @@ else is best-effort backwards-compatible.
 
 ## Gaps and roadmap
 
-The extension story is structurally complete: discovery infrastructure
-shipped (Phase 1), all in-tree DSLs self-register (Phase 3 LIGHT +
-FULL), `walk_references` moved off `CompilerExtension` onto the
-dedicated `IdeExtension` trait (Phase 2), reference machinery lifted
-into a separate `legend-pure-ide` crate (Phase 2.5), evaluator
-extension-config flow + `OnceLock` removal (Phase 4), CLI flows
-through `NativeRegistry::discovered()` and `Evaluator::builder()`
-(Phase 5), `--classpath` consumed by `test` / `run` / `repl` /
-`snapshot` (Phase 5 finish — every subcommand now compiles the
-classpath's repo set via `repo::load(resolved.repos, …)` when
-`--classpath` is explicit; `--live` / `--watch` / `--platform-dir`
-become no-ops with a stderr warning), and the runnable
-[`examples/mydsl-extension/`](../../examples/mydsl-extension/) template
-proves the recipe end-to-end (Phase 6).
+The extension story is structurally complete and ships every
+documented shape end-to-end:
 
-Remaining items, in priority order:
+- **Discovery** — every plug-in trait carries a `linkme`
+  distributed slice; downstream crates self-register by annotating
+  one `static` per impl (Phase 1).
+- **In-tree DSL migration** — `dsl-diagram`, `dsl-mapping`,
+  `dsl-relational`, `dsl-graph`, `dsl-store`, `dsl-tds`,
+  `dsl-path`, and `store-relational` all self-register through
+  the slice mechanism (Phase 3 LIGHT + FULL).
+- **IDE separation** — `walk_references` is owned by a dedicated
+  `IdeExtension` trait in the `legend-pure-ide` crate, so a DSL
+  can ship compiler hooks without an IDE participation and vice
+  versa (Phase 2 + 2.5).
+- **Per-evaluator state + configs** — `CompileExtensionScope`
+  threads stateful extensions through ctx without `Sync` bounds;
+  `Evaluator::builder().extension_configs(...)` replaced the old
+  `OnceLock` global in `store-relational-runtime` (Phase 4).
+- **CLI classpath integration** — `test` / `run` / `repl` /
+  `snapshot` compile the classpath's repo set via
+  `repo::load(resolved.repos, …)` when `--classpath` is explicit;
+  `--live` / `--watch` / `--platform-dir` become no-ops with a
+  stderr warning (Phase 5).
+- **JNI distribution** — `legend-pure-parser-jni` ships as a dual
+  `["rlib", "cdylib"]` crate; downstream cdylibs depend on it as
+  an rlib + use the [`mydsl-jni-extension`](../../examples/mydsl-jni-extension/)
+  forwarder pattern to produce their own
+  `lib<name>_pure_jni.{dylib,so,dll}`. The
+  `nativeInitContextWithClasspath(byte[])` entry point compiles
+  classpath TOML supplied directly from JAR resources without
+  filesystem coordination (§11.1).
+- **Worked examples** — [`examples/mydsl-extension/`](../../examples/mydsl-extension/)
+  and [`examples/mydsl-jni-extension/`](../../examples/mydsl-jni-extension/)
+  prove the recipe end-to-end and are CI-built.
 
-1. **Repo descriptors + manifest** (BACKLOG P1, independent of the
-   extension story). Java-Pure-style `repo.definition.json` schema
-   replacing the hand-listed paths in
-   `crates/core-platform-pure/build.rs`. Unblocks downstream repos
-   shipping their own descriptors.
-
-Until item 1 lands, downstream consumers who need JNI distribution
-fork the in-tree `legend-pure-parser-jni` crate. The extension API
-and the CLI's classpath-driven loading both work end-to-end today —
-the structural shape the recipe describes is the structural shape
-consumers will use post-publication.
+The extension API and CLI / JNI distribution paths all work today —
+the structural shape this recipe describes is the structural shape
+downstream consumers will use post-publication. Open items beyond
+the recipe scope (incremental compilation, body parallelization,
+full PCT native coverage, etc.) live in
+[`BACKLOG.md`](../../BACKLOG.md).
