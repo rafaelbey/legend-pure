@@ -2319,6 +2319,122 @@ impl NativeFunction for GetAll {
 }
 
 // ---------------------------------------------------------------------------
+// removeOverride
+// ---------------------------------------------------------------------------
+
+/// Pure `removeOverride<T>(instance:T[1]):T[1]`.
+///
+/// Clears the `elementOverride` slot on the instance and returns the
+/// same instance. Java parity:
+/// `legend-pure-runtime-java-engine-interpreted/.../meta/RemoveOverride.java`
+/// calls `Instance.removeProperty(values, M3Properties.elementOverride)`
+/// on the wrapped target and returns the original `InstanceValue`.
+///
+/// In our runtime the arg is the unwrapped `Value::Object` directly
+/// (no `InstanceValue` wrapper layer), so the impl reduces to
+/// `mutate_set("elementOverride", &[])` against the heap entry.
+/// Non-Object args (literals, collections) pass through unchanged —
+/// they don't carry an override slot.
+#[derive(Debug)]
+pub struct RemoveOverride;
+
+impl NativeFunction for RemoveOverride {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("removeOverride", &values, 1)?;
+        if let Value::Object(handle) = &values[0] {
+            ctx.heap()
+                .mutate_set(handle, "elementOverride", &[])
+                .map_err(PureException::from)?;
+        }
+        Ok(Evaluated::new(values[0].clone()))
+    }
+
+    fn signature(&self) -> &'static str {
+        "removeOverride(T[1]):T[1]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// rawEvalProperty
+// ---------------------------------------------------------------------------
+
+/// Pure `rawEvalProperty<V|m>(p:Property<Nil,V|m>[1], a:Any[1]):V[m]`.
+///
+/// Reads `p.name` to discover which property to access, then returns
+/// the values of that property on `a`. Bypasses normal dispatch
+/// (`a.<prop>()` would route through compiled property-call
+/// dispatch); "raw" eval just reads the heap slot. Java parity:
+/// `RawEvalProperty.execute` extracts the Property's name and
+/// invokes `executeProperty` on the target.
+///
+/// Errors when arg 0 isn't a Property reference, when arg 1 isn't a
+/// heap-backed instance, or when the property doesn't exist on the
+/// instance's classifier (mirrors Java's
+/// `class_findPropertyOrQualifiedPropertyUsingGeneralization` null-
+/// check at line 56).
+#[derive(Debug)]
+pub struct RawEvalProperty;
+
+impl NativeFunction for RawEvalProperty {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("rawEvalProperty", &values, 2)?;
+        let prop_handle = match &values[0] {
+            Value::Object(h) => h.clone(),
+            other => {
+                return Err(PureRuntimeError::type_mismatch("Property", other).into());
+            }
+        };
+        let target_handle = match &values[1] {
+            Value::Object(h) => h.clone(),
+            other => {
+                return Err(PureRuntimeError::type_mismatch("Any[Object]", other).into());
+            }
+        };
+        // Property's `name` slot carries a String — read it through the
+        // heap rather than reflectively dispatching `.name()` (raw eval
+        // by definition bypasses dispatch).
+        let name_values = ctx
+            .heap()
+            .get_property_values(&prop_handle, "name")
+            .map_err(PureException::from)?;
+        let Some(Value::String(prop_name)) = name_values.iter().next() else {
+            return Err(PureRuntimeError::EvaluationError(
+                "rawEvalProperty: Property.name is missing or not a String".into(),
+            )
+            .into());
+        };
+        let prop_name_str = prop_name.clone();
+        let target_values = ctx
+            .heap()
+            .get_property_values(&target_handle, &prop_name_str)
+            .map_err(PureException::from)?;
+        if target_values.is_empty() {
+            // Property exists on the classifier but currently has no
+            // values — return an empty Value. Distinct from
+            // property-not-found (which raises). Java's runtime
+            // returns `Nil[0]` here, same as our empty Value::from_vec.
+            return Ok(Evaluated::new(Value::from_vec(Vec::new())));
+        }
+        let collected: Vec<Value> = target_values.iter().cloned().collect();
+        Ok(Evaluated::new(Value::from_vec(collected)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "rawEvalProperty(Property<Nil,V|m>[1], Any[1]):V[m]"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -2426,4 +2542,11 @@ pub fn register(registry: &mut NativeRegistry) {
     // packed into `List<Any>` heap objects. See `evaluate.pure` platform
     // source. Mangled name matches the stored FQN.
     registry.register("evaluate_Function_1__List_MANY__Any_MANY_", Evaluate);
+
+    // Reflective property / override management.
+    registry.register("removeOverride_T_1__T_1_", RemoveOverride);
+    registry.register(
+        "rawEvalProperty_Property_1__Any_1__V_m_",
+        RawEvalProperty,
+    );
 }

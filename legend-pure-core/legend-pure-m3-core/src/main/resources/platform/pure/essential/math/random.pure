@@ -18,10 +18,17 @@ native function <<functionType.SideEffectFunction, PCT.function>> meta::pure::fu
 
 function <<test.Test>> meta::pure::functions::math::tests::random::testRandomInUnitRange():Boolean[1]
 {
-   // `random()` must return a Float in `[0.0, 1.0)`. Cannot assert
-   // determinism (`<<functionType.SideEffectFunction>>` skips
-   // memoisation), so we only assert the range invariant.
-   let v = random();
-   assertEquals(true, $v >= 0.0);
-   assertEquals(true, $v < 1.0);
+   // `random()` must return a Float in `[0.0, 1.0)`. Two consecutive
+   // calls must not be equal — `<<functionType.SideEffectFunction>>`
+   // skips memoisation, so each invocation draws fresh entropy.
+   // A repeat would either mean memoisation leaked through OR the
+   // PRNG returned the same value twice (probability ~2^-52, well
+   // below any test flakiness threshold).
+   let a = random();
+   let b = random();
+   assert($a >= 0.0);
+   assert($a < 1.0);
+   assert($b >= 0.0);
+   assert($b < 1.0);
+   assert($a != $b);
 }
