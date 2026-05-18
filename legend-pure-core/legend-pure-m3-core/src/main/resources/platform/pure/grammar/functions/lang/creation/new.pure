@@ -131,6 +131,40 @@ function <<test.Test>> meta::pure::functions::lang::tests::new::testNewWithTypeV
    assertError(|^MyClassWithTypeVariables(1)(text = ['a', 'b']).res('z'), 'Constraint :[wx] violated in the Class MyClassWithTypeVariables, Message: Error 2 >= 1');
 }
 
+
+// Inherited class constraints — a child class triggers a constraint declared
+// on a parent class. Java parity: `_Class.allConstraints()` walks the
+// generalization chain so subclass instances are validated against every
+// ancestor's constraint.
+Class meta::pure::functions::lang::tests::new::LA_ParentWithAgeConstraint
+[
+   ageNonNeg(~function: $this.age >= 0 ~message: 'age must be non-negative')
+]
+{
+   age : Integer[1];
+}
+
+Class meta::pure::functions::lang::tests::new::LA_ChildInheritsAgeConstraint
+   extends LA_ParentWithAgeConstraint
+{
+   name : String[1];
+}
+
+function <<test.Test>> meta::pure::functions::lang::tests::new::testNewWithInheritedConstraintPasses():Any[*]
+{
+   let c = ^LA_ChildInheritsAgeConstraint(age=10, name='Alice');
+   assertEquals(10, $c.age);
+   assertEquals('Alice', $c.name);
+}
+
+function <<test.Test>> meta::pure::functions::lang::tests::new::testNewWithInheritedConstraintFails():Any[*]
+{
+   assertError(
+      |^LA_ChildInheritsAgeConstraint(age=-1, name='Alice'),
+      'Constraint :[ageNonNeg] violated in the Class LA_ParentWithAgeConstraint, Message: age must be non-negative'
+   );
+}
+
 function <<test.Test>> meta::pure::functions::lang::tests::newAtRuntime::testNewWithChildWithReverseOneToManyProperty():Boolean[1]
 {
    let car = ^LA_Car(name='Bugatti', owner=^LA_Person(firstName='John', lastName='Roe', cars=[^LA_Car(name='Audi')]));

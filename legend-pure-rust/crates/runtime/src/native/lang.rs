@@ -2020,13 +2020,74 @@ fn clone_heap_object(
 /// evaluate the constraint body, raise `ConstraintViolation` on the
 /// first failure with the canonical message shape.
 ///
-/// Inheritance walking is intentionally *not* threaded through —
-/// constraints declared on parent classes are not yet evaluated. The
-/// remaining failing platform tests (testNewWithConstraintExtended /
-/// similar) require the same chain logic the primitive path has;
-/// tracked under the constraint-runtime backlog item.
+/// Walks the supertype chain (most-specific first): evaluates the
+/// leaf class's constraints, then each transitive parent's. A `visited`
+/// set guards against multi-inheritance diamonds. Java parity:
+/// constraints declared on parent classes apply to subclass instances.
+/// Parent-level `type_variable_parameters` aren't currently rebound —
+/// the supertype walk receives no value-args, so a parent that
+/// references its own type-var inside its constraint body will see
+/// the variable un-bound. Parametric-inheritance value-arg threading
+/// is a follow-up (mirrors the primitive path's
+/// `super_type_value_arguments` chain, which needs a Class-side
+/// equivalent that doesn't exist yet on `Class.super_types: Vec<TypeExpr>`).
 #[allow(clippy::result_large_err)]
 fn evaluate_class_constraints(
+    ctx: &mut dyn EvalContextTrait,
+    class_id: ElementId,
+    obj: ObjectHandle,
+    type_var_values: &[Value],
+) -> Result<(), PureException> {
+    let mut visited: std::collections::HashSet<ElementId> = std::collections::HashSet::new();
+    evaluate_class_constraints_with_inheritance(
+        ctx,
+        class_id,
+        obj,
+        type_var_values,
+        &mut visited,
+    )
+}
+
+#[allow(clippy::result_large_err)]
+fn evaluate_class_constraints_with_inheritance(
+    ctx: &mut dyn EvalContextTrait,
+    class_id: ElementId,
+    obj: ObjectHandle,
+    type_var_values: &[Value],
+    visited: &mut std::collections::HashSet<ElementId>,
+) -> Result<(), PureException> {
+    if !visited.insert(class_id) {
+        return Ok(());
+    }
+    // Evaluate this level's own constraints first. Type-var values
+    // belong to this level (the caller supplies them for the leaf;
+    // parent levels recurse with an empty slice — see note on
+    // parametric-inheritance follow-up in the wrapper's doc).
+    evaluate_class_constraints_at_level(ctx, class_id, obj.clone(), type_var_values)?;
+
+    // Collect parent class ids before recursing — borrowing the model
+    // through `ctx.model()` inside the recursive call would conflict
+    // with the mutable evaluate path.
+    let parents: Vec<ElementId> = match ctx.model().get_element(class_id) {
+        Element::Class(class) => class
+            .super_types
+            .iter()
+            .filter_map(|st| match st {
+                legend_pure_parser_pure::types::TypeExpr::Named { element, .. } => Some(*element),
+                _ => None,
+            })
+            .filter(|eid| matches!(ctx.model().get_element(*eid), Element::Class(_)))
+            .collect(),
+        _ => Vec::new(),
+    };
+    for parent_id in parents {
+        evaluate_class_constraints_with_inheritance(ctx, parent_id, obj.clone(), &[], visited)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::result_large_err)]
+fn evaluate_class_constraints_at_level(
     ctx: &mut dyn EvalContextTrait,
     class_id: ElementId,
     obj: ObjectHandle,
