@@ -369,4 +369,26 @@ pub enum CompilationErrorKind {
         /// Rendered actual multiplicity.
         actual: SmolStr,
     },
+    /// A constraint body's inferred type is not `Boolean[1]`, or its
+    /// optional message expression's inferred type is not `String[1]`.
+    /// Constraints `[name(~function: <expr> ~message: <expr>)]` declared
+    /// on a Class or PrimitiveType must satisfy these slot signatures —
+    /// runtime evaluation in `evaluate_class_constraints` /
+    /// `evaluate_primitive_constraints` reads `Value::Boolean(true|false)`
+    /// from `function` and `Value::String(_)` from `message`, so a
+    /// mismatch surfaces as a runtime error with the constraint's source
+    /// location. The compile-time validator catches it earlier.
+    ConstraintBodyTypeMismatch {
+        /// `::`-joined FQN of the constraint-owning Class or
+        /// PrimitiveType.
+        owner_fqn: SmolStr,
+        /// Constraint name (or numeric index when anonymous).
+        constraint_id: SmolStr,
+        /// Which slot mismatched: `"body"` or `"message"`.
+        slot: SmolStr,
+        /// Required shape (`"Boolean[1]"` or `"String[1]"`).
+        expected: SmolStr,
+        /// Inferred shape, rendered as `T[m]`.
+        actual: SmolStr,
+    },
 }

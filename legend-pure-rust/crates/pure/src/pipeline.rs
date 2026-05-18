@@ -1697,6 +1697,13 @@ fn pass_define_class_bodies(
             );
         }
 
+        // Compute the owner's FQN once for any constraint diagnostics
+        // emitted inline by `lower_constraints`. Cheap (joins
+        // package-segment names with `::`) and only used by Class /
+        // PrimitiveType arms.
+        let owner_fqn: SmolStr =
+            SmolStr::new(crate::purem::fqn_path::element_fqn_path(model, id).join("::"));
+
         // Lower body-shape items into owned locals. This temporarily
         // borrows `model` mutably via `ctx`; we drop ctx before patching.
         let (new_constraints, new_qp_bodies, new_default_values) = {
@@ -1712,7 +1719,7 @@ fn pass_define_class_bodies(
             };
             match ast_element {
                 ast::Element::Class(c) => (
-                    lower_constraints(&c.constraints, &mut ctx, errors),
+                    lower_constraints(&c.constraints, &owner_fqn, &mut ctx, errors),
                     lower_qualified_property_bodies(&c.qualified_properties, &mut ctx, errors),
                     lower_property_default_values(&c.properties, &mut ctx, errors),
                 ),
@@ -1722,7 +1729,7 @@ fn pass_define_class_bodies(
                     lower_property_default_values(&a.properties, &mut ctx, errors),
                 ),
                 ast::Element::Primitive(p) => (
-                    lower_constraints(&p.constraints, &mut ctx, errors),
+                    lower_constraints(&p.constraints, &owner_fqn, &mut ctx, errors),
                     Vec::new(),
                     Vec::new(),
                 ),
@@ -2402,19 +2409,56 @@ fn lower_type_variable_parameters(
 }
 
 /// Lowers AST constraints to Pure constraints.
+///
+/// Constraint expressions are checked for type compatibility inline as
+/// they're lowered: the `function` body must evaluate to `Boolean[1]`,
+/// and an optional `message` must evaluate to `String[1]`. Both checks
+/// run at the source of truth (where the constraint is constructed)
+/// rather than as a post-hoc cross-chunk validator. Inference is
+/// available here because Pass 2a (signatures) is fully hydrated by
+/// the time `pass_define_class_bodies` invokes this function.
 fn lower_constraints(
     constraints: &[ast::Constraint],
+    owner_fqn: &SmolStr,
     ctx: &mut ResolutionContext<'_>,
     errors: &mut Vec<CompilationError>,
 ) -> Vec<class::Constraint> {
     constraints
         .iter()
-        .filter_map(|c| {
+        .enumerate()
+        .filter_map(|(idx, c)| {
             let function = crate::lower::lower_expression(&c.function_definition, ctx, errors)?;
             let message = c
                 .message
                 .as_ref()
                 .and_then(|m| crate::lower::lower_expression(m, ctx, errors));
+
+            let constraint_id = c
+                .name
+                .clone()
+                .unwrap_or_else(|| SmolStr::new(idx.to_string()));
+
+            check_constraint_slot_type(
+                &function,
+                owner_fqn,
+                &constraint_id,
+                ConstraintSlotName::Body,
+                &c.source_info,
+                ctx,
+                errors,
+            );
+            if let Some(msg) = &message {
+                check_constraint_slot_type(
+                    msg,
+                    owner_fqn,
+                    &constraint_id,
+                    ConstraintSlotName::Message,
+                    &c.source_info,
+                    ctx,
+                    errors,
+                );
+            }
+
             Some(class::Constraint {
                 name: c.name.clone(),
                 source_info: c.source_info.clone(),
@@ -2425,6 +2469,94 @@ fn lower_constraints(
             })
         })
         .collect()
+}
+
+#[derive(Clone, Copy)]
+enum ConstraintSlotName {
+    /// `Constraint.function` — predicate, must be `Boolean[1]`.
+    Body,
+    /// `Constraint.message` — failure message, must be `String[1]`.
+    Message,
+}
+
+impl ConstraintSlotName {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Body => "body",
+            Self::Message => "message",
+        }
+    }
+
+    fn expected_label(self) -> &'static str {
+        match self {
+            Self::Body => "Boolean[1]",
+            Self::Message => "String[1]",
+        }
+    }
+
+    fn expected_type(self) -> crate::types::TypeExpr {
+        let element = match self {
+            Self::Body => crate::bootstrap::BOOLEAN_ID,
+            Self::Message => crate::bootstrap::STRING_ID,
+        };
+        crate::types::TypeExpr::Named {
+            element,
+            type_arguments: Vec::new(),
+            multiplicity_arguments: Vec::new(),
+            value_arguments: vec![],
+            source_info: None,
+        }
+    }
+}
+
+/// Type-check one constraint slot (body or message) against its
+/// required signature. Inlined into [`lower_constraints`] so the
+/// diagnostic fires the moment the constraint is built — no cross-
+/// chunk pass needed. Skips silently when inference can't recover a
+/// type (a separate compile error will already exist for the
+/// underlying expression problem).
+fn check_constraint_slot_type(
+    expr: &crate::types::ValueSpec,
+    owner_fqn: &SmolStr,
+    constraint_id: &SmolStr,
+    slot: ConstraintSlotName,
+    constraint_source: &SourceInfo,
+    ctx: &ResolutionContext<'_>,
+    errors: &mut Vec<CompilationError>,
+) {
+    let Some(actual_ty) =
+        crate::resolve::infer_typeexpr_from_valuespec(expr, ctx.model, &ctx.variable_types)
+    else {
+        return;
+    };
+    let Some(actual_mult) =
+        crate::resolve::infer_multiplicity_from_valuespec(expr, ctx.model, &ctx.variable_types)
+    else {
+        return;
+    };
+    let expected_ty = slot.expected_type();
+    let expected_mult = crate::types::Multiplicity::PureOne;
+    let type_ok = crate::resolve::is_type_compatible_structural(&actual_ty, &expected_ty, ctx.model);
+    let mult_ok = crate::resolve::is_multiplicity_compatible(Some(&actual_mult), &expected_mult);
+    if type_ok && mult_ok {
+        return;
+    }
+    let actual = crate::infer::render_type(ctx.model, &actual_ty, &actual_mult);
+    let expected_label = slot.expected_label();
+    errors.push(CompilationError {
+        message: format!(
+            "Constraint '{constraint_id}' {slot_label} of '{owner_fqn}' is '{actual}', expected '{expected_label}'",
+            slot_label = slot.label(),
+        ),
+        source_info: constraint_source.clone(),
+        kind: CompilationErrorKind::ConstraintBodyTypeMismatch {
+            owner_fqn: owner_fqn.clone(),
+            constraint_id: constraint_id.clone(),
+            slot: SmolStr::new_static(slot.label()),
+            expected: SmolStr::new_static(expected_label),
+            actual: SmolStr::new(actual),
+        },
+    });
 }
 
 /// Converts an AST `AggregationKind` to the Pure equivalent.

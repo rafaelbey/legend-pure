@@ -402,3 +402,106 @@ function test::caller(): Integer[1] { test::wantsTwo(1) }
          Got: {result:?}"
     );
 }
+
+// ===========================================================================
+// CATEGORY 8: Constraint body / message type compatibility
+// ===========================================================================
+//
+// `[name(~function: <expr> ~message: <expr>)]` constraint slots have
+// fixed signatures: body must be `Boolean[1]`, message must be
+// `String[1]`. The runtime evaluators (`evaluate_class_constraints` /
+// `evaluate_primitive_constraints`) read `Value::Boolean` and
+// `Value::String` respectively — a mismatch either crashes or silently
+// drops the user-supplied message. The check fires inline during
+// `lower_constraints` so the diagnostic carries the constraint's
+// source location, not a downstream symptom.
+
+#[test]
+fn neg_class_constraint_body_not_boolean_errors() {
+    // Body returns `Integer[1]` instead of `Boolean[1]` — the
+    // misshapen body must surface `ConstraintBodyTypeMismatch` with
+    // `slot = "body"` at the constraint's source span. Uses a
+    // synthetic native to avoid platform-only operators (`+`, `>=`
+    // etc. aren't available in this self-contained compile harness).
+    let source = r"
+###Pure
+native function test::asInt(x: Integer[1]): Integer[1];
+Class test::Bad
+[
+   bad(~function: test::asInt($this.age) ~message: 'unused')
+]
+{
+   age : Integer[1];
+}
+";
+    expect_diagnostic_kind(
+        &[source],
+        "constraint body returning Integer must surface \
+         ConstraintBodyTypeMismatch slot=body",
+        |k| matches!(
+            k,
+            CompilationErrorKind::ConstraintBodyTypeMismatch { slot, .. }
+            if slot.as_str() == "body"
+        ),
+    );
+}
+
+#[test]
+fn neg_class_constraint_message_not_string_errors() {
+    // Message returns `Integer[1]` instead of `String[1]`. The body
+    // is a correctly-shaped `Boolean[1]`; only the message slot is
+    // wrong, so the validator must emit one error with
+    // `slot = "message"` and not flag the body.
+    let source = r"
+###Pure
+native function test::isPositive(x: Integer[1]): Boolean[1];
+native function test::asInt(x: Integer[1]): Integer[1];
+Class test::BadMsg
+[
+   m(~function: test::isPositive($this.age) ~message: test::asInt($this.age))
+]
+{
+   age : Integer[1];
+}
+";
+    expect_diagnostic_kind(
+        &[source],
+        "constraint message returning Integer must surface \
+         ConstraintBodyTypeMismatch slot=message",
+        |k| matches!(
+            k,
+            CompilationErrorKind::ConstraintBodyTypeMismatch { slot, .. }
+            if slot.as_str() == "message"
+        ),
+    );
+}
+
+#[test]
+fn pos_class_constraint_with_valid_signatures_compiles() {
+    // Boolean[1] body + String[1] message must compile cleanly with
+    // no `ConstraintBodyTypeMismatch`. Positive sibling to the two
+    // negative cases above so a refactor that breaks valid
+    // constraints flips THIS test from green to red instead of
+    // silently widening the negative-case acceptance.
+    let source = r"
+###Pure
+native function test::isPositive(x: Integer[1]): Boolean[1];
+Class test::Good
+[
+   ok(~function: test::isPositive($this.age) ~message: 'age must be positive')
+]
+{
+   age : Integer[1];
+}
+";
+    let result = compile(&[source]);
+    if let Err(partial) = &result {
+        for e in &partial.errors {
+            assert!(
+                !matches!(e.kind, CompilationErrorKind::ConstraintBodyTypeMismatch { .. }),
+                "Valid constraint must not surface ConstraintBodyTypeMismatch; got {}",
+                e.message
+            );
+        }
+    }
+}
