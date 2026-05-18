@@ -154,15 +154,32 @@ pub fn run_sql_to_result_set_h2(
 /// name), so we heuristic-parse:
 /// 1. `None` → `null_cell` (SQL NULL).
 /// 2. Parses cleanly as `i64` → `Value::Integer`.
-/// 3. Parses cleanly as `f64` (and isn't already int) → `Value::Float`.
-/// 4. Matches a bool literal (`true`/`false`/`t`/`f`/`TRUE`/`FALSE`)
+/// 3. Matches `YYYY-MM-DD HH:MM:SS[.subsec]` (PG TIMESTAMP text)
+///    → `Value::Date` via `jiff::civil::DateTime::strptime`.
+/// 4. Matches `YYYY-MM-DD` (PG DATE text) → `Value::Date` via
+///    `jiff::civil::Date::strptime`.
+/// 5. Parses cleanly as `f64` → `Value::Float`. Reject NaN/Inf to
+///    keep semantics tight.
+/// 6. Matches a bool literal (`true`/`false`/`t`/`f`/`TRUE`/`FALSE`)
 ///    → `Value::Boolean`.
-/// 5. Otherwise → `Value::String`.
+/// 7. Otherwise → `Value::String`.
+///
+/// Step ordering: date/timestamp BEFORE float because
+/// `2024-01-15`.parse::<f64>()` fails (correctly), but we want the
+/// recognition to be deterministic regardless of any future float
+/// parser leniency. NUMERIC text is left to fall through to the
+/// float branch — PG NUMERIC and FLOAT both surface as decimal-
+/// dot text, and disambiguating them from text alone is unsafe
+/// (`123.45` could be either, and `Value::Decimal` vs `Value::Float`
+/// affects downstream arithmetic). A tighter NUMERIC mapping would
+/// need binary-protocol type-OID info, tracked in BACKLOG.
 ///
 /// This gives Pure callers the same value types they'd see from
 /// DuckDB for the common scalar shapes — `assertEquals(2, ...)`
 /// against a `count(*)` result matches; a `'hello'` VARCHAR column
-/// surfaces as `Value::String("hello")`.
+/// surfaces as `Value::String("hello")`; a DATE column returns a
+/// usable `Value::Date` for `->year()` / `->month()` / `->dayOfMonth()`
+/// downstream natives.
 ///
 /// Trade-off: a user inserting the literal text `"123"` into a
 /// VARCHAR column reads it back as `Value::Integer(123)` here, while
@@ -176,6 +193,21 @@ fn cell_to_value_pg_text(cell_text: Option<&str>, null_cell: &Value) -> Value {
     // Try integer first — `"123"` is unambiguous.
     if let Ok(i) = text.parse::<i64>() {
         return Value::Integer(i);
+    }
+    // PG TIMESTAMP text: `YYYY-MM-DD HH:MM:SS` with optional
+    // `.subsec` and optional `+TZ` (we strip TZ before parsing —
+    // jiff civil types are TZ-agnostic; the SQL semantics are
+    // "calendar wall time" for the receiving Pure side regardless).
+    if text.len() >= 19
+        && let Some(dt) = parse_pg_timestamp(text)
+    {
+        return Value::Date(legend_pure_runtime::date::PureDate::from_civil_datetime(dt));
+    }
+    // PG DATE text: exactly `YYYY-MM-DD`.
+    if text.len() == 10
+        && let Ok(date) = jiff::civil::Date::strptime("%Y-%m-%d", text)
+    {
+        return Value::Date(legend_pure_runtime::date::PureDate::from_civil_date(date));
     }
     // Then float — `"1.5"` and `"1e3"` parse via this branch but not
     // by `i64::parse`. Reject NaN/Inf to keep semantics tight.
@@ -192,6 +224,33 @@ fn cell_to_value_pg_text(cell_text: Option<&str>, null_cell: &Value) -> Value {
     }
     // Fallback: raw text.
     Value::String(SmolStr::new(text))
+}
+
+/// Best-effort PG TIMESTAMP parser. Accepts the canonical
+/// `YYYY-MM-DD HH:MM:SS` form with optional fractional seconds and a
+/// trailing timezone offset (`+HH`, `+HH:MM`, or `Z`). Returns `None`
+/// for anything that doesn't match — the caller falls through to the
+/// next branch.
+fn parse_pg_timestamp(text: &str) -> Option<jiff::civil::DateTime> {
+    // Strip a trailing TZ specifier so jiff's civil parser doesn't
+    // reject it. PG's `timestamp without time zone` text omits the
+    // suffix entirely; `timestamp with time zone` adds it. Either way
+    // the Pure runtime stores the calendar wall time only.
+    let body = if let Some(idx) = text.rfind(['+', 'Z'])
+        && idx > 10
+    {
+        &text[..idx]
+    } else if let Some(idx) = text.rfind('-')
+        && idx > 10
+    {
+        &text[..idx]
+    } else {
+        text
+    };
+    // Prefer the subsecond format; fall back to whole-second.
+    jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S%.f", body)
+        .or_else(|_| jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", body))
+        .ok()
 }
 
 /// Build a `ResultSet` heap row populated from a freshly-fetched
@@ -445,5 +504,108 @@ mod tests {
             let values = fetch_one(c, "SELECT NULL", &null);
             assert_eq!(values[0], null);
         });
+    }
+
+    // ---------------------------------------------------------------------
+    // PG simple-query text cell recognition (H2 path)
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn pg_text_integer_and_string() {
+        let null = Value::String(SmolStr::new("<SQLNull>"));
+        assert_eq!(cell_to_value_pg_text(Some("42"), &null), Value::Integer(42));
+        assert_eq!(
+            cell_to_value_pg_text(Some("hello"), &null),
+            Value::String(SmolStr::new("hello"))
+        );
+    }
+
+    #[test]
+    fn pg_text_date_isodash() {
+        // PG DATE arrives as `YYYY-MM-DD` in simple-query text mode.
+        let null = Value::String(SmolStr::new("<SQLNull>"));
+        let v = cell_to_value_pg_text(Some("2024-01-15"), &null);
+        let Value::Date(p) = v else {
+            panic!("expected Date, got {v:?}");
+        };
+        let dt = p.inner_datetime();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 1);
+        assert_eq!(dt.day(), 15);
+    }
+
+    #[test]
+    fn pg_text_timestamp_whole_second() {
+        // PG TIMESTAMP arrives as `YYYY-MM-DD HH:MM:SS` (space sep).
+        let null = Value::String(SmolStr::new("<SQLNull>"));
+        let v = cell_to_value_pg_text(Some("2024-01-15 14:30:25"), &null);
+        let Value::Date(p) = v else {
+            panic!("expected Date, got {v:?}");
+        };
+        let dt = p.inner_datetime();
+        assert_eq!(dt.year(), 2024);
+        assert_eq!(dt.month(), 1);
+        assert_eq!(dt.day(), 15);
+        assert_eq!(dt.hour(), 14);
+        assert_eq!(dt.minute(), 30);
+        assert_eq!(dt.second(), 25);
+    }
+
+    #[test]
+    fn pg_text_timestamp_subsecond() {
+        // PG TIMESTAMP with fractional seconds.
+        let null = Value::String(SmolStr::new("<SQLNull>"));
+        let v = cell_to_value_pg_text(Some("2024-01-15 14:30:25.123456"), &null);
+        let Value::Date(p) = v else {
+            panic!("expected Date, got {v:?}");
+        };
+        let dt = p.inner_datetime();
+        assert_eq!(dt.subsec_nanosecond(), 123_456_000);
+    }
+
+    #[test]
+    fn pg_text_float_falls_through_to_float_branch() {
+        // Numeric / float text — `123.45` stays as Float (NUMERIC
+        // disambiguation is out of scope; needs binary-protocol
+        // type OIDs).
+        let null = Value::String(SmolStr::new("<SQLNull>"));
+        assert_eq!(
+            cell_to_value_pg_text(Some("123.45"), &null),
+            Value::Float(123.45)
+        );
+    }
+
+    #[test]
+    fn pg_text_bool_recognition() {
+        let null = Value::String(SmolStr::new("<SQLNull>"));
+        assert_eq!(
+            cell_to_value_pg_text(Some("t"), &null),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            cell_to_value_pg_text(Some("f"), &null),
+            Value::Boolean(false)
+        );
+        assert_eq!(
+            cell_to_value_pg_text(Some("TRUE"), &null),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn pg_text_short_dash_string_not_a_date() {
+        // Strings that LOOK like they have a dash but aren't ISO dates
+        // (wrong length, garbage characters) must fall through to
+        // Value::String, not silently become Date.
+        let null = Value::String(SmolStr::new("<SQLNull>"));
+        assert_eq!(
+            cell_to_value_pg_text(Some("ab-cd-ef-gh"), &null),
+            Value::String(SmolStr::new("ab-cd-ef-gh"))
+        );
+        assert_eq!(
+            cell_to_value_pg_text(Some("2024-13-99"), &null),
+            // Invalid date (month 13, day 99) — jiff rejects, fall through.
+            Value::String(SmolStr::new("2024-13-99"))
+        );
     }
 }
