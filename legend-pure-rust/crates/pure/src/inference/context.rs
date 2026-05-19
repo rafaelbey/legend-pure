@@ -93,6 +93,29 @@ pub(crate) struct GenericBindings {
     pub ty_auth: HashMap<SmolStr, TypeExpr>,
     /// Multiplicity-variable bindings: `m` → `Multiplicity::PureOne`.
     pub mult: HashMap<SmolStr, Multiplicity>,
+    /// Alpha-rename map: callee's original type-parameter name → fresh
+    /// per-callsite name (e.g. `T` → `__cs_42_T`). Populated by
+    /// `infer_generic_bindings` when the callee has any type
+    /// parameters, so the binding HashMap keys can't collide with
+    /// caller-scope generic names that happen to share letters.
+    ///
+    /// Without this, an outer `fn<T|m>(…)` body that calls
+    /// `eval<T,V|m,n>(…)` would have both `T`s land on the same key —
+    /// when eval's `T` LUB-widens to `Any` from a bare-FT vs
+    /// Named<Function> mismatch, substituting V's
+    /// binding (`Generic("T")` — caller's T-name as a placeholder)
+    /// follows the alias chain into eval's polluted T, yielding
+    /// `Any`. Renaming callee names to fresh keys keeps caller's `T`
+    /// distinct.
+    ///
+    /// Empty when the bindings were constructed outside
+    /// `infer_generic_bindings` (legacy `Default::default()` shape)
+    /// or when the callee has zero type parameters — in both cases
+    /// the lookup helpers are a no-op.
+    pub callee_rename: HashMap<SmolStr, SmolStr>,
+    /// Sibling of [`Self::callee_rename`] for multiplicity parameters
+    /// (`m`, `n`, …). Same motivation, same lifecycle.
+    pub callee_mult_rename: HashMap<SmolStr, SmolStr>,
 }
 
 impl GenericBindings {
@@ -112,7 +135,19 @@ impl GenericBindings {
     /// resolve through the enclosing function's bound parameters.
     #[must_use]
     pub fn make_concrete_type(&self, ty: &TypeExpr) -> TypeExpr {
-        crate::resolve::substitute_type(ty, &self.ty)
+        let renamed = crate::resolve::rename_callee_typeexpr(
+            ty,
+            &self.callee_rename,
+            &self.callee_mult_rename,
+        );
+        let substituted = crate::resolve::substitute_type(&renamed, &self.ty);
+        // Restore any unbound callee-fresh names back to their
+        // original callee names. Fresh names are an internal-only
+        // disambiguator; they must never escape into a returned
+        // `TypeExpr` (lowered ValueSpec `type_info`, serialized
+        // blobs, error messages, …).
+        let (inv_type, inv_mult) = invert_callee_rename(&self.callee_rename, &self.callee_mult_rename);
+        crate::resolve::rename_callee_typeexpr(&substituted, &inv_type, &inv_mult)
     }
 
     /// Substitute the multiplicity-variable bindings into `m`. Replaces
@@ -123,7 +158,10 @@ impl GenericBindings {
     /// Today it delegates to `crate::resolve::substitute_mult`.
     #[must_use]
     pub fn make_concrete_mult(&self, m: &Multiplicity) -> Multiplicity {
-        crate::resolve::substitute_mult(m, &self.mult)
+        let renamed = crate::resolve::rename_callee_multiplicity(m, &self.callee_mult_rename);
+        let substituted = crate::resolve::substitute_mult(&renamed, &self.mult);
+        let (_, inv_mult) = invert_callee_rename(&self.callee_rename, &self.callee_mult_rename);
+        crate::resolve::rename_callee_multiplicity(&substituted, &inv_mult)
     }
 
     /// Substitute using *only* authoritative bindings (those bound from
@@ -170,8 +208,30 @@ impl GenericBindings {
                 (k.clone(), value)
             })
             .collect();
-        crate::resolve::substitute_type(ty, &merged)
+        let renamed = crate::resolve::rename_callee_typeexpr(
+            ty,
+            &self.callee_rename,
+            &self.callee_mult_rename,
+        );
+        let substituted = crate::resolve::substitute_type(&renamed, &merged);
+        let (inv_type, inv_mult) = invert_callee_rename(&self.callee_rename, &self.callee_mult_rename);
+        crate::resolve::rename_callee_typeexpr(&substituted, &inv_type, &inv_mult)
     }
+}
+
+fn invert_callee_rename(
+    type_rename: &HashMap<SmolStr, SmolStr>,
+    mult_rename: &HashMap<SmolStr, SmolStr>,
+) -> (HashMap<SmolStr, SmolStr>, HashMap<SmolStr, SmolStr>) {
+    let inv_type: HashMap<SmolStr, SmolStr> = type_rename
+        .iter()
+        .map(|(k, v)| (v.clone(), k.clone()))
+        .collect();
+    let inv_mult: HashMap<SmolStr, SmolStr> = mult_rename
+        .iter()
+        .map(|(k, v)| (v.clone(), k.clone()))
+        .collect();
+    (inv_type, inv_mult)
 }
 
 // ---------------------------------------------------------------------------

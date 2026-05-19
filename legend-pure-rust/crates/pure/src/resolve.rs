@@ -1391,7 +1391,7 @@ pub(crate) fn infer_type_from_valuespec(
                 && let Element::Function(f) = model.get_element(*fid)
             {
                 let bindings = infer_generic_bindings(&f.parameters, arguments, model, var_types);
-                let substituted = substitute_type(&f.return_type, &bindings.ty);
+                let substituted = bindings.make_concrete_type(&f.return_type);
                 match &substituted {
                     crate::types::TypeExpr::Named { element, .. } => return Some(*element),
                     // Unbound type variable: report `None` (unknown), not
@@ -1611,7 +1611,7 @@ pub(crate) fn infer_typeexpr_from_valuespec(
                 return None;
             };
             let bindings = infer_generic_bindings(&f.parameters, arguments, model, var_types);
-            Some(substitute_type(&f.return_type, &bindings.ty))
+            Some(bindings.make_concrete_type(&f.return_type))
         }
         // Property / qualified-property invocation: class property
         // lookup, not function dispatch. `arguments[0]` is the receiver.
@@ -2518,7 +2518,7 @@ pub(crate) fn infer_multiplicity_from_valuespec(
         }) => function.and_then(|fid| {
             if let Element::Function(f) = model.get_element(fid) {
                 let bindings = infer_generic_bindings(&f.parameters, arguments, model, var_types);
-                Some(substitute_mult(&f.return_multiplicity, &bindings.mult))
+                Some(bindings.make_concrete_mult(&f.return_multiplicity))
             } else {
                 None
             }
@@ -2573,6 +2573,33 @@ pub(crate) fn infer_generic_bindings(
 ) -> GenericBindings {
     use crate::inference::context::{RegisterMode, TypeInferenceContext};
     use crate::types::{ExprKind, Multiplicity, TypeExpr};
+
+    // Alpha-rename callee's generics to fresh per-callsite names so the
+    // binding HashMap keys can't collide with caller-scope generic
+    // names. Without this, an outer `fn<T|m>(…)` body that calls
+    // `eval<T,V|m,n>(…)` has both `T`s landing on key "T" — eval's
+    // T LUB-widens to Any from a bare-FT vs Named<Function> mismatch
+    // on a non-inline arg, then substituting V (whose binding is
+    // `Generic("T")` for caller's T) follows the alias chain into
+    // eval's polluted T and yields Any.
+    //
+    // The rename map is stored in the returned `GenericBindings`;
+    // `make_concrete_type`/_strict/`make_concrete_mult` apply it
+    // transparently to their input so external callers don't need to
+    // know about the rename.
+    let (type_rename, mult_rename) = build_callee_rename(params);
+    let owned_renamed_params: Option<Vec<crate::types::Parameter>> =
+        if type_rename.is_empty() && mult_rename.is_empty() {
+            None
+        } else {
+            Some(
+                params
+                    .iter()
+                    .map(|p| rename_callee_parameter(p, &type_rename, &mult_rename))
+                    .collect(),
+            )
+        };
+    let params: &[crate::types::Parameter] = owned_renamed_params.as_deref().unwrap_or(params);
 
     // Step 3d-cont (Phase B): two-branch dispatch.
     //
@@ -2771,7 +2798,200 @@ pub(crate) fn infer_generic_bindings(
         }
     }
 
+    ctx.bindings.callee_rename = type_rename;
+    ctx.bindings.callee_mult_rename = mult_rename;
     ctx.bindings
+}
+
+/// Build the callee-original → fresh-per-callsite rename maps for
+/// `infer_generic_bindings`. Walks every parameter's `type_expr` and
+/// `multiplicity` collecting any `Generic(name)` and
+/// `Multiplicity::Variable(name)`, then assigns each a fresh name
+/// derived from a process-wide atomic counter. Returns empty maps when
+/// no generics were found (zero-overhead no-op for non-generic
+/// callees).
+fn build_callee_rename(
+    params: &[crate::types::Parameter],
+) -> (
+    HashMap<SmolStr, SmolStr>,
+    HashMap<SmolStr, SmolStr>,
+) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static CALLSITE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let mut type_names: std::collections::HashSet<SmolStr> = std::collections::HashSet::new();
+    let mut mult_names: std::collections::HashSet<SmolStr> = std::collections::HashSet::new();
+    for p in params {
+        collect_generic_names_in_typeexpr(&p.type_expr, &mut type_names, &mut mult_names);
+        if let crate::types::Multiplicity::Variable(n) = &p.multiplicity {
+            mult_names.insert(n.clone());
+        }
+    }
+    if type_names.is_empty() && mult_names.is_empty() {
+        return (HashMap::new(), HashMap::new());
+    }
+    let id = CALLSITE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let type_rename: HashMap<SmolStr, SmolStr> = type_names
+        .into_iter()
+        .map(|n| {
+            let fresh = SmolStr::new(format!("__cs{id}_{n}"));
+            (n, fresh)
+        })
+        .collect();
+    let mult_rename: HashMap<SmolStr, SmolStr> = mult_names
+        .into_iter()
+        .map(|n| {
+            let fresh = SmolStr::new(format!("__cs{id}_{n}"));
+            (n, fresh)
+        })
+        .collect();
+    (type_rename, mult_rename)
+}
+
+fn collect_generic_names_in_typeexpr(
+    te: &crate::types::TypeExpr,
+    type_names: &mut std::collections::HashSet<SmolStr>,
+    mult_names: &mut std::collections::HashSet<SmolStr>,
+) {
+    use crate::types::{Multiplicity, TypeExpr};
+    match te {
+        TypeExpr::Generic(name) => {
+            type_names.insert(name.clone());
+        }
+        TypeExpr::Named {
+            type_arguments,
+            multiplicity_arguments,
+            ..
+        } => {
+            for ta in type_arguments {
+                collect_generic_names_in_typeexpr(ta, type_names, mult_names);
+            }
+            for ma in multiplicity_arguments {
+                if let Multiplicity::Variable(n) = ma {
+                    mult_names.insert(n.clone());
+                }
+            }
+        }
+        TypeExpr::FunctionType {
+            parameters,
+            return_type,
+            return_multiplicity,
+        } => {
+            for (t, m) in parameters {
+                collect_generic_names_in_typeexpr(t, type_names, mult_names);
+                if let Multiplicity::Variable(n) = m {
+                    mult_names.insert(n.clone());
+                }
+            }
+            collect_generic_names_in_typeexpr(return_type, type_names, mult_names);
+            if let Multiplicity::Variable(n) = return_multiplicity {
+                mult_names.insert(n.clone());
+            }
+        }
+        TypeExpr::AlgebraUnion(left, right) => {
+            collect_generic_names_in_typeexpr(left, type_names, mult_names);
+            collect_generic_names_in_typeexpr(right, type_names, mult_names);
+        }
+        _ => {}
+    }
+}
+
+/// Apply a callee-scope rename map to a `TypeExpr`. Used internally by
+/// `infer_generic_bindings` to rewrite callee params before unification,
+/// and externally (via `GenericBindings::make_concrete_type`) to rewrite
+/// callee-named types before substitution.
+pub(crate) fn rename_callee_typeexpr(
+    te: &crate::types::TypeExpr,
+    type_rename: &HashMap<SmolStr, SmolStr>,
+    mult_rename: &HashMap<SmolStr, SmolStr>,
+) -> crate::types::TypeExpr {
+    use crate::types::TypeExpr;
+    if type_rename.is_empty() && mult_rename.is_empty() {
+        return te.clone();
+    }
+    match te {
+        TypeExpr::Generic(name) => {
+            if let Some(fresh) = type_rename.get(name) {
+                TypeExpr::Generic(fresh.clone())
+            } else {
+                te.clone()
+            }
+        }
+        TypeExpr::Named {
+            element,
+            type_arguments,
+            multiplicity_arguments,
+            value_arguments,
+            source_info,
+        } => TypeExpr::Named {
+            element: *element,
+            type_arguments: type_arguments
+                .iter()
+                .map(|ta| rename_callee_typeexpr(ta, type_rename, mult_rename))
+                .collect(),
+            multiplicity_arguments: multiplicity_arguments
+                .iter()
+                .map(|ma| rename_callee_multiplicity(ma, mult_rename))
+                .collect(),
+            value_arguments: value_arguments.clone(),
+            source_info: source_info.clone(),
+        },
+        TypeExpr::FunctionType {
+            parameters,
+            return_type,
+            return_multiplicity,
+        } => TypeExpr::FunctionType {
+            parameters: parameters
+                .iter()
+                .map(|(t, m)| {
+                    (
+                        rename_callee_typeexpr(t, type_rename, mult_rename),
+                        rename_callee_multiplicity(m, mult_rename),
+                    )
+                })
+                .collect(),
+            return_type: Box::new(rename_callee_typeexpr(return_type, type_rename, mult_rename)),
+            return_multiplicity: rename_callee_multiplicity(return_multiplicity, mult_rename),
+        },
+        TypeExpr::AlgebraUnion(left, right) => TypeExpr::AlgebraUnion(
+            Box::new(rename_callee_typeexpr(left, type_rename, mult_rename)),
+            Box::new(rename_callee_typeexpr(right, type_rename, mult_rename)),
+        ),
+        _ => te.clone(),
+    }
+}
+
+/// Apply a callee-scope mult rename map to a `Multiplicity`. Sibling
+/// of [`rename_callee_typeexpr`].
+pub(crate) fn rename_callee_multiplicity(
+    m: &crate::types::Multiplicity,
+    mult_rename: &HashMap<SmolStr, SmolStr>,
+) -> crate::types::Multiplicity {
+    use crate::types::Multiplicity;
+    if mult_rename.is_empty() {
+        return m.clone();
+    }
+    match m {
+        Multiplicity::Variable(name) => {
+            if let Some(fresh) = mult_rename.get(name) {
+                Multiplicity::Variable(fresh.clone())
+            } else {
+                m.clone()
+            }
+        }
+        _ => m.clone(),
+    }
+}
+
+fn rename_callee_parameter(
+    p: &crate::types::Parameter,
+    type_rename: &HashMap<SmolStr, SmolStr>,
+    mult_rename: &HashMap<SmolStr, SmolStr>,
+) -> crate::types::Parameter {
+    let mut np = p.clone();
+    np.type_expr = rename_callee_typeexpr(&p.type_expr, type_rename, mult_rename);
+    np.multiplicity = rename_callee_multiplicity(&p.multiplicity, mult_rename);
+    np
 }
 
 // `bind_from_lambda_body` lives in `crate::inference::lambda`

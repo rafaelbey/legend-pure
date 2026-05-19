@@ -155,8 +155,66 @@ function test::probe::let_bound_eval_chain<Z|y>(
     compile(&[source]).expect(
         "Z propagation: a let-bound lambda whose body returns a parametric \
          `Relation<Row>` must propagate that type through the outer PCT \
-         generic T so `$res->firstRow()` resolves cleanly to `Relation<Row>` \
+         generic Z so `$res->firstRow()` resolves cleanly to `Relation<Row>` \
          and binds X := Row. Mirrors the inline-lambda fix from 2026-05-18 \
          for the variable-arg path.",
+    );
+}
+
+/// Same shape as `zp_let_bound_lambda_eval_chain_binds_through_t`, but
+/// using `<T|m>` on the outer function — colliding with `eval`'s
+/// internal `<T,V|m,n>` parameter names in the flat binding HashMap
+/// `infer_generic_bindings` uses.
+///
+/// Pre-fix, Rust's `GenericBindings` was a flat
+/// `HashMap<SmolStr, TypeExpr>` keyed by name, so the outer's `T` and
+/// `eval`'s `T` collided. When `eval`'s `T` LUB-widened to `Any`
+/// (bare-FT vs `Named<Function>` mismatch on a non-inline arg),
+/// substituting `V` (`Generic("T")` — outer-T placeholder) followed
+/// the alias chain into `eval`'s polluted `T` and yielded `Any`.
+///
+/// Fix: alpha-rename callee's generics to fresh per-callsite names at
+/// `infer_generic_bindings` entry, store the rename map in
+/// `GenericBindings`, and apply it transparently in
+/// `make_concrete_type` / `make_concrete_mult` /
+/// `make_concrete_type_strict`. With renaming, eval's `T` lands on
+/// key `__cs_<id>_T` and outer's `T` stays the literal `T` — no
+/// collision.
+///
+/// The engine-side reproducers
+/// `probe_sort_on_pct_generic_compiles_cleanly` and
+/// `probe_extend_on_pct_generic_compiles_cleanly` exhibit this same
+/// collision pattern (they use `<T|m>` on the outer function); this
+/// pin guards the parity of the local Pure-side fix with their
+/// expected behaviour.
+#[test]
+fn zp_let_bound_lambda_eval_chain_with_name_collision() {
+    let source = r"
+###Pure
+Class test::probe::Row { id: Integer[1]; }
+Class test::probe::Relation<T> {}
+
+native function test::probe::eval<T,V|m,n>(
+    func: meta::pure::metamodel::function::Function<{T[n]->V[m]}>[1],
+    param: T[n]
+): V[m];
+
+native function test::probe::firstRow<X>(r: test::probe::Relation<X>[1]): X[1];
+
+function test::probe::let_bound_eval_chain_collide<T|m>(
+    f: meta::pure::metamodel::function::Function<{
+        meta::pure::metamodel::function::Function<{->T[m]}>[1]->T[m]
+    }>[1]
+): Boolean[1] {
+    let lam = {|^test::probe::Relation<test::probe::Row>()};
+    let res = $f->test::probe::eval($lam);
+    let row = $res->test::probe::firstRow();
+    true
+}
+";
+    compile(&[source]).expect(
+        "Alpha-rename keeps caller's outer <T|m> distinct from eval's \
+         <T,V|m,n> in the binding HashMap, so the let-bound-lambda Z-prop \
+         fix flows through even when the literal generic names overlap.",
     );
 }

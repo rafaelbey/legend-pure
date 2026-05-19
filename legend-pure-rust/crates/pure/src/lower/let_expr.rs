@@ -127,8 +127,8 @@ fn infer_let_type(
                     &ctx.variable_types,
                 );
                 Some((
-                    crate::resolve::substitute_type(&f.return_type, &bindings.ty),
-                    crate::resolve::substitute_mult(&f.return_multiplicity, &bindings.mult),
+                    bindings.make_concrete_type(&f.return_type),
+                    bindings.make_concrete_mult(&f.return_multiplicity),
                 ))
             } else {
                 None

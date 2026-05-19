@@ -150,8 +150,17 @@ pub(crate) fn expectations_from_callee_params(
             let expected = ft_params
                 .iter()
                 .map(|(ft_ty, ft_mult)| {
-                    let ty = resolve::substitute_type(ft_ty, &bindings.ty);
-                    let mult = resolve::substitute_mult(ft_mult, &bindings.mult);
+                    // Route through `make_concrete_type` /
+                    // `make_concrete_mult` so the alpha-rename map (set
+                    // by `infer_generic_bindings` to keep callee
+                    // generics distinct from caller generics) is
+                    // applied before substitution. Calling
+                    // `substitute_type` directly with `bindings.ty`
+                    // would miss because the HashMap keys are the
+                    // renamed callee names, but `ft_ty` here is the
+                    // callee's original param type expression.
+                    let ty = bindings.make_concrete_type(ft_ty);
+                    let mult = bindings.make_concrete_mult(ft_mult);
                     Some((ty, mult))
                 })
                 .collect::<Vec<_>>();
