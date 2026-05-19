@@ -290,6 +290,124 @@ function test::probe(c: test::Customer[1]): test::Address[*]
 // End-to-end: explicit + implicit return the same value
 // -------------------------------------------------------------------------
 
+// -------------------------------------------------------------------------
+// Variant 4 — AutoMap: collection property access threads milestoning
+// -------------------------------------------------------------------------
+
+#[test]
+fn automap_collection_runtime_returns_filtered_addresses() {
+    // End-to-end variant 4: seed multiple Customer / Address versions,
+    // run the AutoMap form, assert the runtime returns the date-filtered
+    // result.
+    let source = "\
+Class <<meta::pure::profiles::temporal.businesstemporal>> test::Address
+{
+    line: String[1];
+}
+
+Class <<meta::pure::profiles::temporal.businesstemporal>> test::Customer
+{
+    address: test::Address[1];
+}
+
+function test::countAddresses(): Integer[1]
+{
+    let a1 = ^test::Address(line='jan-A', businessDate=%2024-01-01);
+    let a2 = ^test::Address(line='jan-B', businessDate=%2024-01-01);
+    let c1 = ^test::Customer(addressAllVersions=$a1, businessDate=%2024-01-01);
+    let c2 = ^test::Customer(addressAllVersions=$a2, businessDate=%2024-01-01);
+    test::Customer->getAll(%2024-01-01).address->size()
+}
+";
+    let result = eval_pure(source, "countAddresses__Integer_1_");
+    assert!(
+        matches!(result, Value::Integer(2)),
+        "expected 2 addresses via AutoMap propagation, got {result:?}",
+    );
+}
+
+#[test]
+fn automap_on_collection_receiver_propagates_dates() {
+    // `Customer->getAll($d)` returns Customer[*]. Without an explicit
+    // map(c | …), writing `.address` on the [*] result is the AutoMap
+    // shape. Java's parser desugars this to `xs->map(c | $c.address)`;
+    // the Rust lowerer keeps it as a PropertyCall on the collection.
+    // Either way, propagation must recognise that the receiver carries
+    // dates and inject them.
+    let source = "\
+Class <<meta::pure::profiles::temporal.businesstemporal>> test::Address
+{
+    line: String[1];
+}
+
+Class <<meta::pure::profiles::temporal.businesstemporal>> test::Customer
+{
+    address: test::Address[1];
+}
+
+function test::pickAddress(d: Date[1]): test::Address[*]
+{
+    test::Customer->getAll($d).address
+}
+";
+    let model = compile_with_platform(source);
+    let body = function_body(&model, "pickAddress_Date_1__Address_MANY_");
+    let address_arity = find_qp_call(&body, "address").unwrap_or_else(|| {
+        panic!(
+            "expected AutoMap propagation to produce QP 'address'; body: {body:?}"
+        )
+    });
+    assert_eq!(
+        address_arity, 2,
+        "expected `.address` QP to be called with receiver + 1 date arg, got arity {address_arity}"
+    );
+}
+
+// -------------------------------------------------------------------------
+// Variant 2 — explicit QP propagates its dates downstream
+// -------------------------------------------------------------------------
+
+#[test]
+fn explicit_qp_dates_propagate_to_nested_milestoned_access() {
+    // Customer.address(d) returns Address (milestoned). Address has a
+    // milestoned-target property `street: Street[1]`. Writing
+    // `$c.address(%2024-01-01).street` should auto-thread %2024-01-01
+    // to the nested `.street` call via variant 2 propagation.
+    let source = "\
+Class <<meta::pure::profiles::temporal.businesstemporal>> test::Street
+{
+    line: String[1];
+}
+
+Class <<meta::pure::profiles::temporal.businesstemporal>> test::Address
+{
+    street: test::Street[1];
+}
+
+Class <<meta::pure::profiles::temporal.businesstemporal>> test::Customer
+{
+    address: test::Address[1];
+}
+
+function test::nestedAccess(): test::Street[*]
+{
+    test::Customer->getAll(%2024-01-01)->map(c | $c.address.street)
+}
+";
+    let model = compile_with_platform(source);
+    let body = function_body(&model, "nestedAccess__Street_MANY_");
+    // Look for the inner QP `street` — it should have receiver + 1 date arg.
+    let street_arity = find_qp_call(&body, "street").unwrap_or_else(|| {
+        panic!(
+            "expected propagation to rewrite nested `.street` access; body: {body:?}"
+        )
+    });
+    assert_eq!(
+        street_arity, 2,
+        "expected `.street` QP to be called with receiver + 1 date arg, got arity {street_arity}"
+    );
+}
+
 #[test]
 fn implicit_form_returns_same_value_as_explicit_form() {
     // Build a small heap, ask for one specific date via both forms,

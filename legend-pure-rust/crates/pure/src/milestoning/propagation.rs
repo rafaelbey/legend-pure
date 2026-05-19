@@ -436,28 +436,75 @@ fn detect_dates_from_qp_call(
     data: &FunctionCallData,
     scope: &PropagationScope,
 ) -> Option<MilestoningDates> {
-    // The receiver's milestoning context (variant 4: AutoMap-ish).
-    // arguments[0] is the receiver.
-    let receiver_dates = data
-        .arguments
-        .first()
-        .and_then(|r| detect_dates_from_expression(model, temporal_profile, r, scope));
-
-    // If the receiver carries dates, those dates apply to the result as
-    // well (the target class is also milestoned). For QP calls that
-    // already supplied explicit dates, those win.
-    let explicit_args: &[ValueSpec] = &data.arguments[data.arguments.len().min(1)..];
-    if explicit_args.iter().all(is_date_typed_expr) && !explicit_args.is_empty() {
-        // We don't know the target's stereotype without more model
-        // probing here, so we fall back to the receiver's dates which
-        // already encode the right stereotype on the source side.
-        // (For most cases the source and target stereotype match — the
-        // common pattern `Customer->getAll($d)->map(c | $c.address)`
-        // has $c carrying $d via business-temporal, and address
-        // returns a business-temporal class too.)
-        return receiver_dates;
+    // Variant 2 — `$x.qp($date)` / `$x.qp($pd, $bd)` with explicit
+    // dates. The dates the user passed *to this QP* describe the
+    // milestoning slice the result lives in, so they propagate to any
+    // nested milestoned-target access on the result.
+    //
+    // Detection: arg[0] is the receiver; arg[1..] are the explicit
+    // dates iff each is Date-typed and the receiver class declares a QP
+    // by this name + arity whose return type is milestoned.
+    if data.arguments.len() >= 2 {
+        let date_args = &data.arguments[1..];
+        if date_args.iter().all(is_date_typed_expr)
+            && let Some(receiver) = data.arguments.first()
+            && let Some(receiver_class_id) = resolved_class_of(receiver)
+            && let Element::Class(receiver_class) = model.get_element(receiver_class_id)
+            && let Some(target_stereotype) = find_qp_target_stereotype(
+                model,
+                receiver_class,
+                &data.function_name,
+                date_args.len(),
+                temporal_profile,
+            )
+            && let Some(dates) = MilestoningDates::from_source(target_stereotype, date_args)
+        {
+            return Some(dates);
+        }
     }
-    receiver_dates
+
+    // Variant 4 fallback / no-explicit-dates path — the receiver's own
+    // milestoning context propagates through this QP call to the
+    // result. Used for `$customer.address` where `address` was already
+    // rewritten to `address(td)` by a surrounding source.
+    data.arguments
+        .first()
+        .and_then(|r| detect_dates_from_expression(model, temporal_profile, r, scope))
+}
+
+/// Look up the target temporal stereotype for a qualified property on
+/// `receiver_class` by `name` and `extra_arity` (the number of arguments
+/// *after* the receiver). Walks supertypes for inherited QPs. Returns
+/// the QP's return-type stereotype, or `None` when the QP isn't
+/// milestoning-generated.
+fn find_qp_target_stereotype(
+    model: &PureModel,
+    receiver_class: &crate::nodes::class::Class,
+    qp_name: &SmolStr,
+    extra_arity: usize,
+    temporal_profile: ElementId,
+) -> Option<crate::milestoning::MilestoningStereotype> {
+    if let Some(qp) = receiver_class
+        .qualified_properties
+        .iter()
+        .find(|q| &q.name == qp_name && q.parameters.len() == extra_arity)
+        && let TypeExpr::Named { element, .. } = &qp.return_type
+        && let Some(s) = inherited_temporal_stereotype(model, *element, temporal_profile)
+    {
+        return Some(s);
+    }
+    // Walk supertypes.
+    for st in &receiver_class.super_types {
+        if let TypeExpr::Named { element, .. } = st
+            && *element != crate::bootstrap::ANY_ID
+            && let Element::Class(parent) = model.get_element(*element)
+            && let Some(s) =
+                find_qp_target_stereotype(model, parent, qp_name, extra_arity, temporal_profile)
+        {
+            return Some(s);
+        }
+    }
+    None
 }
 
 fn is_date_typed_expr(expr: &ValueSpec) -> bool {
