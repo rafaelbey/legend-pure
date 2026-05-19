@@ -329,6 +329,20 @@ pub fn compile_repo_slice_with_islands(
         ext.define_signatures(&mut ctx);
     }
 
+    // ---- Pass 2a': Milestoning Synthesis ----
+    // After Pass 2a every property's `type_expr` is resolved to a class
+    // `ElementId`, so we can detect milestoned target classes by stereotype.
+    // Synthesize the date properties, `milestoning` slot, edge-point
+    // properties, and qualified-property signatures here — *before* Pass 2b
+    // body lowering — so dispatch and type inference see the augmented
+    // property/QP surface. Bodies of the synthesized QPs are intentionally
+    // empty in Phase A; populating them requires the date-context propagation
+    // pass (Phase B) and the runtime `getAll(...)` natives.
+    //
+    // Java parity: `MilestoningClassProcessor.addMilestoningProperty` +
+    // `MilestoningPropertyProcessor.process`.
+    crate::milestoning::synthesis::synthesize(model, &mut errors);
+
     // ---- Pass 2b: Function Bodies + Class/Assoc/Primitive bodies ----
     // Compile expression bodies using fully-resolved function signatures.
     // Order within Pass 2b doesn't matter — every signature in the model
@@ -630,6 +644,11 @@ fn recompile_chunk_in_place(
         };
         ext.define_signatures(&mut ctx);
     }
+
+    // ---- Pass 2a': Milestoning Synthesis ----
+    // See `compile_repo_slice_with_islands` for the rationale; this is the
+    // incremental-rerun mirror.
+    crate::milestoning::synthesis::synthesize(model, errors);
 
     // ---- Pass 2b: Function Bodies ----
     pass_define_bodies(
@@ -1850,6 +1869,7 @@ fn create_shell(element: &ast::Element) -> Element {
             constraints: vec![],
             stereotypes: vec![],
             tagged_values: vec![],
+            original_milestoned_properties: vec![],
         }),
         ast::Element::Enumeration(_) => Element::Enumeration(Enumeration {
             values: vec![],
@@ -1933,6 +1953,7 @@ fn create_shell(element: &ast::Element) -> Element {
             qualified_properties: vec![],
             stereotypes: vec![],
             tagged_values: vec![],
+            original_milestoned_properties: vec![],
         }),
         ast::Element::Measure(_) => Element::Measure(Measure {
             canonical_unit: None,
@@ -2034,6 +2055,56 @@ fn hydrate_element_signature(
                 errors,
             );
 
+            // Milestoning declare-side validators (A4.1–A4.3). A4.4 fires
+            // from inside the synthesis pass — it depends on the post-Pass-2a
+            // candidate edge-point name. The hydration-inline trio here only
+            // reads own stereotypes + own properties + supertype IDs, so it
+            // runs cleanly against the slice we've already built.
+            if let Some(temporal_profile) = crate::milestoning::resolve_temporal_profile(ctx.model)
+            {
+                crate::milestoning::validate::validate_at_most_one_temporal_stereotype(
+                    &stereotypes,
+                    temporal_profile,
+                    &class_name,
+                    &class_si,
+                    errors,
+                );
+                crate::milestoning::validate::validate_reserved_property_names(
+                    &properties,
+                    &stereotypes,
+                    temporal_profile,
+                    &class_name,
+                    errors,
+                );
+                let super_temporal: Vec<(
+                    SmolStr,
+                    Option<crate::milestoning::MilestoningStereotype>,
+                )> = super_types
+                    .iter()
+                    .filter_map(|st| match st {
+                        TypeExpr::Named { element, .. } => Some(*element),
+                        _ => None,
+                    })
+                    .map(|sid| {
+                        let name = ctx.model.element_name(sid).clone();
+                        let kind = crate::milestoning::inherited_temporal_stereotype(
+                            ctx.model,
+                            sid,
+                            temporal_profile,
+                        );
+                        (name, kind)
+                    })
+                    .collect();
+                crate::milestoning::validate::validate_temporal_hierarchy_consistency(
+                    &stereotypes,
+                    &super_temporal,
+                    temporal_profile,
+                    &class_name,
+                    &class_si,
+                    errors,
+                );
+            }
+
             let type_variable_parameters =
                 lower_type_variable_parameters(&class_def.type_variable_parameters, ctx, errors);
             Element::Class(Class {
@@ -2050,6 +2121,7 @@ fn hydrate_element_signature(
                 constraints,
                 stereotypes,
                 tagged_values,
+                original_milestoned_properties: vec![],
             })
         }
         ast::Element::Enumeration(enum_def) => {
@@ -2166,6 +2238,7 @@ fn hydrate_element_signature(
                 qualified_properties,
                 stereotypes,
                 tagged_values,
+                original_milestoned_properties: vec![],
             })
         }
         ast::Element::NativeFunction(func_def) => {
@@ -2536,7 +2609,8 @@ fn check_constraint_slot_type(
     };
     let expected_ty = slot.expected_type();
     let expected_mult = crate::types::Multiplicity::PureOne;
-    let type_ok = crate::resolve::is_type_compatible_structural(&actual_ty, &expected_ty, ctx.model);
+    let type_ok =
+        crate::resolve::is_type_compatible_structural(&actual_ty, &expected_ty, ctx.model);
     let mult_ok = crate::resolve::is_multiplicity_compatible(Some(&actual_mult), &expected_mult);
     if type_ok && mult_ok {
         return;

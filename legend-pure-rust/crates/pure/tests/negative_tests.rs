@@ -438,11 +438,13 @@ Class test::Bad
         &[source],
         "constraint body returning Integer must surface \
          ConstraintBodyTypeMismatch slot=body",
-        |k| matches!(
-            k,
-            CompilationErrorKind::ConstraintBodyTypeMismatch { slot, .. }
-            if slot.as_str() == "body"
-        ),
+        |k| {
+            matches!(
+                k,
+                CompilationErrorKind::ConstraintBodyTypeMismatch { slot, .. }
+                if slot.as_str() == "body"
+            )
+        },
     );
 }
 
@@ -468,11 +470,13 @@ Class test::BadMsg
         &[source],
         "constraint message returning Integer must surface \
          ConstraintBodyTypeMismatch slot=message",
-        |k| matches!(
-            k,
-            CompilationErrorKind::ConstraintBodyTypeMismatch { slot, .. }
-            if slot.as_str() == "message"
-        ),
+        |k| {
+            matches!(
+                k,
+                CompilationErrorKind::ConstraintBodyTypeMismatch { slot, .. }
+                if slot.as_str() == "message"
+            )
+        },
     );
 }
 
@@ -498,7 +502,10 @@ Class test::Good
     if let Err(partial) = &result {
         for e in &partial.errors {
             assert!(
-                !matches!(e.kind, CompilationErrorKind::ConstraintBodyTypeMismatch { .. }),
+                !matches!(
+                    e.kind,
+                    CompilationErrorKind::ConstraintBodyTypeMismatch { .. }
+                ),
                 "Valid constraint must not surface ConstraintBodyTypeMismatch; got {}",
                 e.message
             );

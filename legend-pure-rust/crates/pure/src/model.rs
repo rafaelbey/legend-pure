@@ -865,6 +865,7 @@ mod tests {
             constraints: vec![],
             stereotypes: vec![],
             tagged_values: vec![],
+            original_milestoned_properties: vec![],
         }
     }
 

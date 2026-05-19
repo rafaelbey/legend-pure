@@ -237,6 +237,7 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
         constraints: vec![],
         stereotypes: vec![],
         tagged_values: vec![],
+        original_milestoned_properties: vec![],
     }));
     debug_assert_eq!(any_node, ANY_ID.local_idx());
     debug_assert_eq!(any_elem, ANY_ID.local_idx());
@@ -253,6 +254,7 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
         constraints: vec![],
         stereotypes: vec![],
         tagged_values: vec![],
+        original_milestoned_properties: vec![],
     }));
     debug_assert_eq!(nil_node, NIL_ID.local_idx());
     debug_assert_eq!(nil_elem, NIL_ID.local_idx());

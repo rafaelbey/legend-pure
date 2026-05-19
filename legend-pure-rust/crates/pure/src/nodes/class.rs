@@ -142,6 +142,13 @@ pub struct Class {
     /// extend a parameterized type: `extends List<String>`.
     pub super_types: Vec<TypeExpr>,
     /// Declared properties only.
+    ///
+    /// After milestoning post-processing
+    /// ([`crate::milestoning::synthesis`]), this slot holds the user-declared
+    /// properties whose target is **not** milestoned, plus any synthesized
+    /// edge-point + date properties. Properties whose target *is* milestoned
+    /// are moved to [`Self::original_milestoned_properties`] and replaced by
+    /// an `nameAllVersions` edge-point property here.
     pub properties: Vec<Property>,
     /// Qualified (derived) properties.
     pub qualified_properties: Vec<QualifiedProperty>,
@@ -151,6 +158,16 @@ pub struct Class {
     pub stereotypes: Vec<StereotypeRef>,
     /// Tagged values.
     pub tagged_values: Vec<TaggedValueRef>,
+    /// Properties moved aside by milestoning post-processing because their
+    /// target class carries a temporal stereotype. Empty for classes with no
+    /// milestoned-target properties.
+    ///
+    /// Java parity: `Class._originalMilestonedProperties()`. Populated by
+    /// [`crate::milestoning::synthesis`] after Pass 2a. The replacement
+    /// edge-point + qualified properties live in [`Self::properties`] /
+    /// [`Self::qualified_properties`].
+    #[serde(default)]
+    pub original_milestoned_properties: Vec<Property>,
 }
 
 impl Class {

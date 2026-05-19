@@ -529,6 +529,7 @@ impl<'a> M3Parser<'a> {
                     constraints: vec![],
                     stereotypes: vec![],
                     tagged_values: vec![],
+                    original_milestoned_properties: vec![],
                 }),
             );
             return;
@@ -626,6 +627,7 @@ impl<'a> M3Parser<'a> {
                 constraints: vec![],
                 stereotypes: vec![],
                 tagged_values: vec![],
+                original_milestoned_properties: vec![],
             }),
         );
     }

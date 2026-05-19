@@ -52,6 +52,10 @@ fn categorize_platform_errors_detailed() {
                     legend_pure_parser_pure::error::CompilationErrorKind::TypeMismatch { .. } => "TypeMismatch",
                     legend_pure_parser_pure::error::CompilationErrorKind::MultiplicityMismatch { .. } => "MultiplicityMismatch",
                     legend_pure_parser_pure::error::CompilationErrorKind::ConstraintBodyTypeMismatch { .. } => "ConstraintBodyTypeMismatch",
+                    legend_pure_parser_pure::error::CompilationErrorKind::MilestoningStereotypeConflict { .. } => "MilestoningStereotypeConflict",
+                    legend_pure_parser_pure::error::CompilationErrorKind::MilestoningReservedPropertyName { .. } => "MilestoningReservedPropertyName",
+                    legend_pure_parser_pure::error::CompilationErrorKind::MilestoningHierarchyMismatch { .. } => "MilestoningHierarchyMismatch",
+                    legend_pure_parser_pure::error::CompilationErrorKind::MilestoningEdgePointCollision { .. } => "MilestoningEdgePointCollision",
                 };
                 *by_kind.entry(kind_str.to_string()).or_default() += 1;
 

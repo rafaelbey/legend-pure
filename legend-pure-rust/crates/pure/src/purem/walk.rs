@@ -75,6 +75,9 @@ fn walk_element_ids_inner(element: &mut Element, visit: &mut dyn FnMut(&mut Elem
             for tv in &mut assoc.tagged_values {
                 walk_tag(tv, visit);
             }
+            for prop in &mut assoc.original_milestoned_properties {
+                walk_property(prop, visit);
+            }
         }
         Element::Measure(m) => {
             if let Some(c) = &mut m.canonical_unit {
@@ -176,6 +179,9 @@ fn walk_class(c: &mut Class, visit: &mut dyn FnMut(&mut ElementId)) {
     }
     for tv in &mut c.tagged_values {
         walk_tag(tv, visit);
+    }
+    for p in &mut c.original_milestoned_properties {
+        walk_property(p, visit);
     }
 }
 

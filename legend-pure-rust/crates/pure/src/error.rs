@@ -369,6 +369,56 @@ pub enum CompilationErrorKind {
         /// Rendered actual multiplicity.
         actual: SmolStr,
     },
+    /// A class carries two or three temporal stereotypes — only one of
+    /// `<<temporal.businesstemporal>>`, `<<temporal.processingtemporal>>`,
+    /// `<<temporal.bitemporal>>` may be applied per class. Java parity:
+    /// `MilestoningClassValidator.validateOnlyOneTemporalStereotype`.
+    MilestoningStereotypeConflict {
+        /// `::`-joined FQN of the offending class.
+        class_name: SmolStr,
+        /// The temporal stereotype value names that were applied (e.g.
+        /// `["businesstemporal", "processingtemporal"]`).
+        stereotypes: Vec<SmolStr>,
+    },
+    /// A milestoned class declares a property whose name is reserved by
+    /// milestoning synthesis (`businessDate`, `processingDate`,
+    /// `milestoning`, `from`, `thru`, `in`, `out` — exact set depends on
+    /// the stereotype). Java parity:
+    /// `MilestoningClassValidator.validatePropertyNamesAgainstMilestoning`.
+    MilestoningReservedPropertyName {
+        /// `::`-joined FQN of the offending class.
+        class_name: SmolStr,
+        /// The reserved property name the user tried to declare.
+        property_name: SmolStr,
+        /// The temporal stereotype value name that defines the reserved
+        /// set (`"businesstemporal"`, `"processingtemporal"`, `"bitemporal"`).
+        stereotype: SmolStr,
+    },
+    /// A class extends an ancestor that carries a temporal stereotype
+    /// different from the class's own. Java parity:
+    /// `MilestoningClassValidator.validateAllSubtypesInATemporalHierarchyHaveTheSameTemporalStereotype`.
+    MilestoningHierarchyMismatch {
+        /// `::`-joined FQN of the subclass.
+        class_name: SmolStr,
+        /// Temporal stereotype value name carried by the subclass.
+        own_stereotype: SmolStr,
+        /// `::`-joined FQN of the conflicting ancestor.
+        super_class_name: SmolStr,
+        /// Temporal stereotype value name carried by the ancestor.
+        super_stereotype: SmolStr,
+    },
+    /// A user-declared property collides with a name milestoning synthesis
+    /// would claim (`pAllVersions` / `pAllVersionsInRange`). Surfaced from
+    /// inside the synthesis pass when the candidate name matches an existing
+    /// property already on the owner class.
+    MilestoningEdgePointCollision {
+        /// `::`-joined FQN of the owning class.
+        class_name: SmolStr,
+        /// User-declared property name that collides.
+        user_property_name: SmolStr,
+        /// The synthesized name that triggered the collision.
+        synthesized_name: SmolStr,
+    },
     /// A constraint body's inferred type is not `Boolean[1]`, or its
     /// optional message expression's inferred type is not `String[1]`.
     /// Constraints `[name(~function: <expr> ~message: <expr>)]` declared

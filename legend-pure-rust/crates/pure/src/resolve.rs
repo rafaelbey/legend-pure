@@ -4234,6 +4234,7 @@ mod tests {
                 constraints: Vec::new(),
                 stereotypes: Vec::new(),
                 tagged_values: Vec::new(),
+                original_milestoned_properties: Vec::new(),
             }),
         );
         let pkg_id: PackageId =
@@ -4255,6 +4256,7 @@ mod tests {
                 constraints: Vec::new(),
                 stereotypes: Vec::new(),
                 tagged_values: Vec::new(),
+                original_milestoned_properties: Vec::new(),
             }),
         );
         model.chunks.push(chunk);

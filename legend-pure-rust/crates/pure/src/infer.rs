@@ -2971,6 +2971,7 @@ mod tests {
                 constraints: Vec::new(),
                 stereotypes: Vec::new(),
                 tagged_values: Vec::new(),
+                original_milestoned_properties: Vec::new(),
             }),
         );
         let box_id = crate::ids::ElementId::InstanceId {
@@ -3076,6 +3077,7 @@ mod tests {
                 constraints: Vec::new(),
                 stereotypes: Vec::new(),
                 tagged_values: Vec::new(),
+                original_milestoned_properties: Vec::new(),
             }),
         );
         let box_id = crate::ids::ElementId::InstanceId {

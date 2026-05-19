@@ -2005,6 +2005,7 @@ function test::nameOf(p: test::Person[1]): String[1]
                 constraints: Vec::new(),
                 stereotypes: Vec::new(),
                 tagged_values: Vec::new(),
+                original_milestoned_properties: Vec::new(),
             }),
         );
         let class_id = ElementId::InstanceId {

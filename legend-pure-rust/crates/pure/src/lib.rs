@@ -58,6 +58,7 @@ pub mod island_lower;
 pub mod locate;
 pub(crate) mod lower;
 pub(crate) mod m3_parser;
+pub mod milestoning;
 pub mod model;
 pub mod nodes;
 pub mod pipeline;

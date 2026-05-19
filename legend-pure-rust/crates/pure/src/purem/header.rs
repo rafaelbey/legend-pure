@@ -82,7 +82,7 @@ const SCHEMA_FINGERPRINT_TYPES: &str = concat!(
     "RelationColumnLowered{name,type_element,multiplicity}",
     "PrimitiveType{super_type,super_type_value_arguments,type_variable_parameters,constraints}",
     // crates/pure/src/nodes/*.rs
-    "Class{type_parameters,type_variable_parameters,super_types,properties,qualified_properties,constraints,stereotypes,tagged_values}",
+    "Class{type_parameters,type_variable_parameters,super_types,properties,qualified_properties,constraints,stereotypes,tagged_values,original_milestoned_properties}",
     "TypeParameter{name,variance}",
     "Variance{Invariant,Covariant,Contravariant}",
     "Property{name,source_info,type_expr,multiplicity,aggregation,default_value,stereotypes,tagged_values}",
@@ -90,7 +90,7 @@ const SCHEMA_FINGERPRINT_TYPES: &str = concat!(
     "Constraint{name,source_info,function,enforcement_level,external_id,message}",
     "AggregationKind{None,Shared,Composite}",
     "Function{function_name,is_native,parameters,return_type,return_multiplicity,body,stereotypes,tagged_values}",
-    "Association{properties,qualified_properties,stereotypes,tagged_values}",
+    "Association{properties,qualified_properties,stereotypes,tagged_values,original_milestoned_properties}",
     "Enumeration{values,stereotypes,tagged_values}",
     "EnumValue{name,source_info,stereotypes,tagged_values}",
     "Profile{stereotypes,tags}",
