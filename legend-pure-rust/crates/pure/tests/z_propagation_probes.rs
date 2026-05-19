@@ -106,3 +106,57 @@ function test::testToListOfVariants<Z|y>(
          to `Variant[*]`.",
     );
 }
+
+/// Companion to `zp_lambda_body_drives_outer_pct_generic_through_class_typearg`
+/// for the **let-bound lambda** variant of the same chain. The 2026-05-18
+/// fix handled inline lambdas (`$f->eval(|^Foo())`) by introspecting the
+/// lambda body in `infer_generic_bindings` pass-2. When the lambda is
+/// bound to a variable first (`let lam = |^Foo(); $f->eval($lam)`), the
+/// binder receives a `Variable` arg whose `var_types` entry already
+/// carries `Named<LambdaFunction>{type_args=[FunctionType{ret: Foo}]}`
+/// from `let_expr.rs:280-328`. The binder must extract the FunctionType
+/// from the variable's stored TypeExpr the same way it does for an
+/// inline lambda body.
+///
+/// Java parity: `FunctionMatch.newFunctionMatch` uses MATCH_CAUTIOUSLY
+/// for the value-parameter side — Java would also reject the downstream
+/// `$res->sort(...)` if `$res` stayed Generic. So Z-prop must succeed
+/// here for the engine-side PCT-Generic catalog to compile; the
+/// narrower must stay strict (no permissive workaround).
+#[test]
+fn zp_let_bound_lambda_eval_chain_binds_through_t() {
+    let source = r"
+###Pure
+Class test::probe::Row { id: Integer[1]; }
+Class test::probe::Relation<T> {}
+
+native function test::probe::eval<T,V|m,n>(
+    func: meta::pure::metamodel::function::Function<{T[n]->V[m]}>[1],
+    param: T[n]
+): V[m];
+
+// Strict per-row accessor: receiver must be concretely Relation,
+// not Generic. If the let-bound-lambda eval chain leaves $res as
+// Generic-T, this call mis-dispatches (or reports ambiguity) and
+// the test fails loudly.
+native function test::probe::firstRow<X>(r: test::probe::Relation<X>[1]): X[1];
+
+function test::probe::let_bound_eval_chain<Z|y>(
+    f: meta::pure::metamodel::function::Function<{
+        meta::pure::metamodel::function::Function<{->Z[y]}>[1]->Z[y]
+    }>[1]
+): Boolean[1] {
+    let lam = {|^test::probe::Relation<test::probe::Row>()};
+    let res = $f->test::probe::eval($lam);
+    let row = $res->test::probe::firstRow();
+    true
+}
+";
+    compile(&[source]).expect(
+        "Z propagation: a let-bound lambda whose body returns a parametric \
+         `Relation<Row>` must propagate that type through the outer PCT \
+         generic T so `$res->firstRow()` resolves cleanly to `Relation<Row>` \
+         and binds X := Row. Mirrors the inline-lambda fix from 2026-05-18 \
+         for the variable-arg path.",
+    );
+}

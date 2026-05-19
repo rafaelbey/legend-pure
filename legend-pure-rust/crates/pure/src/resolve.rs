@@ -2719,7 +2719,7 @@ pub(crate) fn infer_generic_bindings(
                 .iter()
                 .filter(|e| matches!(e.kind.as_ref(), ExprKind::Lambda { .. }))
                 .collect(),
-            _ => continue,
+            _ => Vec::new(),
         };
         for lambda_arg in lambda_args {
             crate::inference::lambda::bind_from_lambda_body(
@@ -2729,6 +2729,45 @@ pub(crate) fn infer_generic_bindings(
                 var_types,
                 &mut ctx.bindings,
             );
+        }
+
+        // **Variable-arg / call-result companion to inline-lambda
+        // introspection.** When pass-1 bound a top-level generic to a
+        // value whose declared TypeExpr carries a structural
+        // FunctionType (e.g. a let-bound lambda `let lam = {|^Foo()};`
+        // → `$lam` typed `Named<LambdaFunction>{[FunctionType{ret:
+        // Foo}]}`, or a function call returning a Function-typed
+        // value), pass-1's top-level Generic-leaf bind populates `ty`
+        // with the *outer* shape only. The inner FunctionType slots
+        // (return type, FT-params) never reach the generic variables
+        // they should bind through.
+        //
+        // Pass-1 with param `Generic("T")[n]` only sees the Generic
+        // leaf; it never recurses into a structural slot. Pass-2 has
+        // the substituted param (post `ty_auth`) which DOES expose
+        // the inner FunctionType — re-binding against the arg's
+        // declared TypeExpr at this depth lets `bind_type` walk
+        // FunctionType-params and FunctionType-return pairwise,
+        // flowing inner generics (e.g. `V` in `Function<{T->V}>`)
+        // into the concrete return type the variable/call already
+        // knew.
+        //
+        // For inline `Lambda` / `Collection`-of-`Lambda` args the
+        // body-introspection branch above already covers this via
+        // `bind_from_lambda_body`. The structural unification below
+        // is the companion path for **non-inline** arg shapes
+        // (Variable, FunctionCall, NewInstance, …) whose pre-resolved
+        // TypeExpr carries the FunctionType already. Java parity:
+        // Java's `TypeInferenceContext` iterates until fixed-point;
+        // we approximate by running this targeted unification once
+        // after the structural-bindings substitution exposes the
+        // inner shape.
+        if !matches!(
+            arg.kind.as_ref(),
+            ExprKind::Lambda { .. } | ExprKind::Collection { .. }
+        ) && let Some(arg_te) = infer_typeexpr_from_valuespec(arg, model, var_types)
+        {
+            bind_type(&substituted, &arg_te, &mut ctx.bindings.ty, model);
         }
     }
 
