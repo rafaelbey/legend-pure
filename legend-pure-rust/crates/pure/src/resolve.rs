@@ -3276,6 +3276,50 @@ pub(crate) fn bind_type_with_mode(
                 bind_mult_with_mode(p_ret_mult, a_ret_mult, mult_out, mode);
             }
         }
+        // Relation column-spec structural binding. The parser lowers
+        // `ColSpec<(?:Z)⊆T>` (and equivalent column-shaped type
+        // arguments inside Relation classes) to
+        // `Named<ColSpec>{[TypeExpr::Relation([col(?:Z)])]}`. When
+        // dispatch binds such a param against a concrete arg like
+        // `Named<ColSpec>{[TypeExpr::Relation([col(?:Number)])]}`, the
+        // Named arm above recurses pairwise into `type_arguments` and
+        // lands here on the Relation pair — without a Relation arm,
+        // `Z` never extracts from the arg's column type and stays
+        // Generic, which then poisons every downstream dispatch on
+        // eval's `Z[0..1]` return.
+        //
+        // Column alignment: positional. Parser-emitted constraint
+        // names like `?` are placeholders, not match keys (the
+        // platform's `eval<Z,T>(col:ColSpec<(?:Z)⊆T>[1], …)` /
+        // `rename<…,Z=(?:K)⊆T,…>` shapes all rely on positional pair
+        // alignment). If lengths mismatch we bind the shorter prefix
+        // and stop — same conservatism as `FunctionType` parameters
+        // above.
+        //
+        // Multiplicities propagate via `bind_mult_with_mode` so
+        // `Z[0..1]`-vs-`Number[1]` column-mult bindings flow into
+        // `mult_out`. `inside_structural` propagates from the
+        // recursion above; treating the column-type slot as
+        // structural matches Pure-invariant `Relation<T>`/`ColSpec<T>`
+        // semantics where the column's value type IS the binding
+        // source.
+        TypeExpr::Relation(p_cols) => {
+            if let TypeExpr::Relation(a_cols) = arg_ty {
+                for (pc, ac) in p_cols.iter().zip(a_cols.iter()) {
+                    bind_type_with_mode(
+                        &pc.type_expr,
+                        &ac.type_expr,
+                        out,
+                        ty_auth,
+                        mult_out,
+                        model,
+                        mode,
+                        inside_structural,
+                    );
+                    bind_mult_with_mode(&pc.multiplicity, &ac.multiplicity, mult_out, mode);
+                }
+            }
+        }
         _ => {}
     }
 }

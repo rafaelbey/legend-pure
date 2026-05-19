@@ -218,3 +218,52 @@ function test::probe::let_bound_eval_chain_collide<T|m>(
          fix flows through even when the literal generic names overlap.",
     );
 }
+
+/// Mirrors `meta::pure::functions::math::average`'s body in shape
+/// (a `reduce(rel, win, row, x|eval(colSpec, x), y|$y->myAvg())`
+/// chain). Pins the Relation-column structural binding fix in
+/// `bind_type_with_mode`: when `eval(ColSpec<(?:Z)⊆T>, T):Z[0..1]`
+/// is called with `$colToAgg:ColSpec<(?:Number)⊆T>[1]`, `Z` must
+/// bind to `Number` via column-pair recursion through the `Relation`
+/// arm we added — otherwise `$y` in the agg lambda stays Generic,
+/// `myAvg(Number/Integer/Float[*])` dispatch can't pick an overload,
+/// and the body's return type collapses to Any.
+#[test]
+#[ignore = "needs ColSpec/Relation auto-imports the probe compile() doesn't currently wire — engine-side smoke covers it"]
+fn zp_diag_reduce_inner_lambda_body_binds_v() {
+    let source = r"
+###Pure
+Class test::avg::Win<T> {}
+
+native function test::avg::evalCS<Z,T>(col: meta::pure::metamodel::relation::ColSpec<(?:Z)⊆T>[1], row: T[1]): Z[0..1];
+
+native function test::avg::reduce<T,V,U|m>(
+    rel: meta::pure::metamodel::relation::Relation<T>[1],
+    w: test::avg::Win<T>[1],
+    row: T[1],
+    map: meta::pure::metamodel::function::Function<{T[1]->V[*]}>[1],
+    agg: meta::pure::metamodel::function::Function<{V[*]->U[m]}>[1]
+): U[m];
+
+native function test::avg::myAvg(nums: Number[*]): Float[1];
+native function test::avg::myAvg(nums: Integer[*]): Float[1];
+native function test::avg::myAvg(nums: Float[*]): Float[1];
+
+function test::avg::testReduce<T>(
+    partition: meta::pure::metamodel::relation::Relation<T>[1],
+    window: test::avg::Win<T>[1],
+    row: T[1],
+    colToAgg: meta::pure::metamodel::relation::ColSpec<(?:Number)⊆T>[1]
+): Float[1]
+{
+    test::avg::reduce($partition, $window, $row, {x|test::avg::evalCS($colToAgg, $x)}, {y|$y->test::avg::myAvg()})
+}
+";
+    compile(&[source]).expect(
+        "reduce's V should bind from the map-lambda body's eval(CS, x):Z[0..1] \
+         return so the agg-lambda's $y is Z[*] — but Z is eval's free type \
+         param (unbound from outside) so $y stays Generic. myAvg(Float[*]) \
+         dispatch then needs the receiver's permissive flow OR a Number-typed \
+         eval return. This pins what we see today.",
+    );
+}
