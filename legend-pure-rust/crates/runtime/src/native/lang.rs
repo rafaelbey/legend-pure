@@ -2225,20 +2225,39 @@ impl NativeFunction for GetAll {
         let values = force_all(args, ctx)?;
         expect_args("getAll", &values, 1)?;
         let class_id = crate::native::meta::as_element_id(&values[0])?;
+        let instances = gather_all_instances(ctx, class_id)?;
+        Ok(Evaluated::new(Value::from_vec(instances)))
+    }
 
-        // Reject Nil — `Nil.all()` makes no sense (no instances are ever
-        // classified as Nil). Mirrors the same guard in `New` / `dynamicNew`.
-        if Some(class_id) == crate::m3_paths::resolve(ctx.model(), crate::m3_paths::NIL) {
-            return Err(PureRuntimeError::EvaluationError(
-                "Cannot getAll instances of meta::pure::metamodel::type::Nil".into(),
-            )
-            .into());
-        }
+    fn signature(&self) -> &'static str {
+        "getAll(class:Class<T>[1]):T[*]"
+    }
+}
 
-        let target_path =
-            crate::model_utils::build_element_path(ctx.model(), class_id, "::", false);
+/// Gather every live instance whose classifier matches `class_id`.
+///
+/// Shared by [`GetAll`] and the milestoning natives ([`GetAllWithDate`] /
+/// [`GetAllBitemporal`] / [`GetAllVersionsInRange`]). Walks the same two
+/// sources (`heap.iter_classifiers()` for metamodel rows + reachability
+/// walk from `VariableContext` roots for user-allocated objects) and
+/// dedups by `Rc::as_ptr` identity. The milestoning natives layer a
+/// date-property filter on top of the returned vector.
+pub(crate) fn gather_all_instances(
+    ctx: &mut dyn EvalContextTrait,
+    class_id: ElementId,
+) -> Result<Vec<Value>, PureException> {
+    // Reject Nil — `Nil.all()` makes no sense (no instances are ever
+    // classified as Nil). Mirrors the same guard in `New` / `dynamicNew`.
+    if Some(class_id) == crate::m3_paths::resolve(ctx.model(), crate::m3_paths::NIL) {
+        return Err(PureRuntimeError::EvaluationError(
+            "Cannot getAll instances of meta::pure::metamodel::type::Nil".into(),
+        )
+        .into());
+    }
 
-        // Two sources, deduped by Rc::as_ptr:
+    let target_path = crate::model_utils::build_element_path(ctx.model(), class_id, "::", false);
+
+    // Two sources, deduped by Rc::as_ptr:
         //   1. Metamodel arena — every bootstrapped element row whose
         //      classifier matches. Covers the common case `Class.all()`,
         //      `ConcreteFunctionDefinition.all()`, etc. in O(metamodel).
@@ -2247,74 +2266,294 @@ impl NativeFunction for GetAll {
         //      instances reachable from the live evaluator state. No
         //      global registry — once a binding drops, the instance is
         //      no longer reachable and is correctly excluded.
-        let mut seen: std::collections::HashSet<*const std::cell::RefCell<crate::heap::HeapEntry>> =
-            std::collections::HashSet::new();
-        let mut projected: Vec<Value> = Vec::new();
+    let mut seen: std::collections::HashSet<*const std::cell::RefCell<crate::heap::HeapEntry>> =
+        std::collections::HashSet::new();
+    let mut projected: Vec<Value> = Vec::new();
 
-        // Source 1: metamodel arena.
-        for (handle, cls) in ctx.heap().iter_classifiers() {
-            if cls.as_str() != target_path {
-                continue;
-            }
-            if !seen.insert(std::rc::Rc::as_ptr(&handle)) {
-                continue;
-            }
-            projected.push(match RuntimeHeap::element_for_object(&handle) {
-                Some(eid) => Value::Element(eid),
-                None => Value::Object(handle),
-            });
+    // Source 1: metamodel arena.
+    for (handle, cls) in ctx.heap().iter_classifiers() {
+        if cls.as_str() != target_path {
+            continue;
         }
-
-        // Source 2: reachability walk from VariableContext roots.
-        // Cost is paid only on getAll calls, not on the hot allocation
-        // path. Walks Collection / Map / Object properties depth-first.
-        let roots: Vec<Value> = ctx.context().iter_values().cloned().collect();
-        let mut worklist: Vec<Value> = roots;
-        while let Some(value) = worklist.pop() {
-            match value {
-                Value::Object(handle) => {
-                    let key = std::rc::Rc::as_ptr(&handle);
-                    if !seen.insert(key) {
-                        continue;
-                    }
-                    let (cls, prop_values): (smol_str::SmolStr, Vec<Value>) = {
-                        let entry = handle.borrow();
-                        let cls = entry.classifier();
-                        let prop_values: Vec<Value> = entry
-                            .property_names()
-                            .iter()
-                            .flat_map(|name| entry.get_property_values(name.as_str()).into_iter())
-                            .collect();
-                        (cls, prop_values)
-                    };
-                    if cls.as_str() == target_path
-                        && RuntimeHeap::element_for_object(&handle).is_none()
-                    {
-                        // Only emit user-allocated objects here; metamodel
-                        // rows were emitted in Source 1.
-                        projected.push(Value::Object(handle));
-                    }
-                    worklist.extend(prop_values);
-                }
-                Value::Collection(items) => {
-                    for v in items.iter() {
-                        worklist.push(v.clone());
-                    }
-                }
-                Value::Map(state) => {
-                    for v in state.borrow().entries.values() {
-                        worklist.push(v.clone());
-                    }
-                }
-                _ => {}
-            }
+        if !seen.insert(std::rc::Rc::as_ptr(&handle)) {
+            continue;
         }
+        projected.push(match RuntimeHeap::element_for_object(&handle) {
+            Some(eid) => Value::Element(eid),
+            None => Value::Object(handle),
+        });
+    }
 
-        Ok(Evaluated::new(Value::from_vec(projected)))
+    // Source 2: reachability walk from VariableContext roots.
+    // Cost is paid only on getAll calls, not on the hot allocation
+    // path. Walks Collection / Map / Object properties depth-first.
+    let roots: Vec<Value> = ctx.context().iter_values().cloned().collect();
+    let mut worklist: Vec<Value> = roots;
+    while let Some(value) = worklist.pop() {
+        match value {
+            Value::Object(handle) => {
+                let key = std::rc::Rc::as_ptr(&handle);
+                if !seen.insert(key) {
+                    continue;
+                }
+                let (cls, prop_values): (smol_str::SmolStr, Vec<Value>) = {
+                    let entry = handle.borrow();
+                    let cls = entry.classifier();
+                    let prop_values: Vec<Value> = entry
+                        .property_names()
+                        .iter()
+                        .flat_map(|name| entry.get_property_values(name.as_str()).into_iter())
+                        .collect();
+                    (cls, prop_values)
+                };
+                if cls.as_str() == target_path && RuntimeHeap::element_for_object(&handle).is_none()
+                {
+                    // Only emit user-allocated objects here; metamodel
+                    // rows were emitted in Source 1.
+                    projected.push(Value::Object(handle));
+                }
+                worklist.extend(prop_values);
+            }
+            Value::Collection(items) => {
+                for v in items.iter() {
+                    worklist.push(v.clone());
+                }
+            }
+            Value::Map(state) => {
+                for v in state.borrow().entries.values() {
+                    worklist.push(v.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(projected)
+}
+
+// ---------------------------------------------------------------------------
+// Milestoning natives — getAll(Class, Date) / getAll(Class, Date, Date) /
+// getAllVersionsInRange(Class, Date, Date)
+// ---------------------------------------------------------------------------
+
+/// Pure `getAll<T>(Class<T>[1], Date[1]): T[*]` — single-date filter.
+///
+/// For `businesstemporal` classes, filters by `businessDate == date`. For
+/// `processingtemporal`, filters by `processingDate == date`. For
+/// non-milestoned or `bitemporal` classes, this overload is invalid; the
+/// caller should use the 1-arg `getAll(Class)` or the 3-arg
+/// `getAll(Class, ProcessingDate, BusinessDate)` respectively.
+///
+/// Java parity: `getAll(Class<T>, Date) {filter $x.businessDate->eq(date)}`
+/// platform template applied to bytecode-emitted impls.
+#[derive(Debug)]
+pub struct GetAllWithDate;
+
+impl NativeFunction for GetAllWithDate {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("getAll", &values, 2)?;
+        let class_id = crate::native::meta::as_element_id(&values[0])?;
+        let date = require_date(&values[1], "getAll")?;
+        let stereo = milestoning_kind(ctx.model(), class_id).ok_or_else(|| {
+            PureException::from(PureRuntimeError::EvaluationError(format!(
+                "getAll(Class, Date): class '{}' is not milestoned",
+                crate::model_utils::build_element_path(ctx.model(), class_id, "::", false)
+            )))
+        })?;
+        let date_property = match stereo {
+            legend_pure_parser_pure::milestoning::MilestoningStereotype::BusinessTemporal => {
+                legend_pure_parser_pure::milestoning::BUSINESS_DATE_PROPERTY
+            }
+            legend_pure_parser_pure::milestoning::MilestoningStereotype::ProcessingTemporal => {
+                legend_pure_parser_pure::milestoning::PROCESSING_DATE_PROPERTY
+            }
+            legend_pure_parser_pure::milestoning::MilestoningStereotype::Bitemporal => {
+                return Err(PureException::from(PureRuntimeError::EvaluationError(
+                    "getAll(Class, Date) does not apply to a bitemporal class; \
+                     use getAll(Class, processingDate, businessDate) instead"
+                        .into(),
+                )));
+            }
+        };
+        let instances = gather_all_instances(ctx, class_id)?;
+        let filtered: Vec<Value> = instances
+            .into_iter()
+            .filter(|v| instance_property_matches_date(v, date_property, &date))
+            .collect();
+        Ok(Evaluated::new(Value::from_vec(filtered)))
     }
 
     fn signature(&self) -> &'static str {
-        "getAll(class:Class<T>[1]):T[*]"
+        "getAll(class:Class<T>[1], milestoningDate:Date[1]):T[*]"
+    }
+}
+
+/// Pure `getAll<T>(Class<T>[1], Date[1], Date[1]): T[*]` — bitemporal
+/// filter (`processingDate`, `businessDate`).
+///
+/// Only applies to `bitemporal` classes; errors otherwise. Java parity:
+/// bitemporal `getAll` template filters by both date properties.
+#[derive(Debug)]
+pub struct GetAllBitemporal;
+
+impl NativeFunction for GetAllBitemporal {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("getAll", &values, 3)?;
+        let class_id = crate::native::meta::as_element_id(&values[0])?;
+        let processing = require_date(&values[1], "getAll")?;
+        let business = require_date(&values[2], "getAll")?;
+        let stereo = milestoning_kind(ctx.model(), class_id);
+        if stereo != Some(legend_pure_parser_pure::milestoning::MilestoningStereotype::Bitemporal) {
+            return Err(PureException::from(PureRuntimeError::EvaluationError(format!(
+                "getAll(Class, processingDate, businessDate): class '{}' is not bitemporal",
+                crate::model_utils::build_element_path(ctx.model(), class_id, "::", false)
+            ))));
+        }
+        let instances = gather_all_instances(ctx, class_id)?;
+        let filtered: Vec<Value> = instances
+            .into_iter()
+            .filter(|v| {
+                instance_property_matches_date(
+                    v,
+                    legend_pure_parser_pure::milestoning::PROCESSING_DATE_PROPERTY,
+                    &processing,
+                ) && instance_property_matches_date(
+                    v,
+                    legend_pure_parser_pure::milestoning::BUSINESS_DATE_PROPERTY,
+                    &business,
+                )
+            })
+            .collect();
+        Ok(Evaluated::new(Value::from_vec(filtered)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "getAll(class:Class<T>[1], processingDate:Date[1], businessDate:Date[1]):T[*]"
+    }
+}
+
+/// Pure `getAllVersionsInRange<T>(Class<T>[1], Date[1], Date[1]): T[*]`.
+///
+/// Returns instances of the milestoned class whose milestoning date falls
+/// in the inclusive range `[start, end]`. For `businesstemporal` /
+/// `processingtemporal` classes, "milestoning date" is the corresponding
+/// single date property. For `bitemporal` classes, range filtering applies
+/// to `businessDate` (matches Java's bitemporal range template). Errors
+/// when the class isn't milestoned.
+#[derive(Debug)]
+pub struct GetAllVersionsInRange;
+
+impl NativeFunction for GetAllVersionsInRange {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("getAllVersionsInRange", &values, 3)?;
+        let class_id = crate::native::meta::as_element_id(&values[0])?;
+        let start = require_date(&values[1], "getAllVersionsInRange")?;
+        let end = require_date(&values[2], "getAllVersionsInRange")?;
+        let stereo = milestoning_kind(ctx.model(), class_id).ok_or_else(|| {
+            PureException::from(PureRuntimeError::EvaluationError(format!(
+                "getAllVersionsInRange: class '{}' is not milestoned",
+                crate::model_utils::build_element_path(ctx.model(), class_id, "::", false)
+            )))
+        })?;
+        let date_property = match stereo {
+            legend_pure_parser_pure::milestoning::MilestoningStereotype::BusinessTemporal
+            | legend_pure_parser_pure::milestoning::MilestoningStereotype::Bitemporal => {
+                legend_pure_parser_pure::milestoning::BUSINESS_DATE_PROPERTY
+            }
+            legend_pure_parser_pure::milestoning::MilestoningStereotype::ProcessingTemporal => {
+                legend_pure_parser_pure::milestoning::PROCESSING_DATE_PROPERTY
+            }
+        };
+        let instances = gather_all_instances(ctx, class_id)?;
+        let filtered: Vec<Value> = instances
+            .into_iter()
+            .filter(|v| instance_property_date_in_range(v, date_property, &start, &end))
+            .collect();
+        Ok(Evaluated::new(Value::from_vec(filtered)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "getAllVersionsInRange(class:Class<T>[1], start:Date[1], end:Date[1]):T[*]"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Milestoning native helpers
+// ---------------------------------------------------------------------------
+
+fn require_date(value: &Value, native: &'static str) -> Result<Value, PureException> {
+    match value {
+        Value::Date(_) => Ok(value.clone()),
+        other => Err(PureException::from(PureRuntimeError::EvaluationError(
+            format!("{native}: expected Date[1], got {other:?}"),
+        ))),
+    }
+}
+
+/// Resolve the temporal stereotype of `class_id` by walking direct
+/// stereotypes plus generalizations (matches Java's
+/// `MilestoningFunctions.getTemporalStereoTypesFromTopMostNonTopTypeGeneralizations`).
+/// Returns `None` when the class is non-milestoned or when the platform's
+/// `temporal` profile isn't loaded.
+fn milestoning_kind(
+    model: &legend_pure_parser_pure::model::PureModel,
+    class_id: ElementId,
+) -> Option<legend_pure_parser_pure::milestoning::MilestoningStereotype> {
+    let profile = legend_pure_parser_pure::milestoning::resolve_temporal_profile(model)?;
+    legend_pure_parser_pure::milestoning::inherited_temporal_stereotype(model, class_id, profile)
+}
+
+/// Check whether an instance's `date_property` value matches `date`.
+///
+/// `Value::Object` instances read the property from their heap entry.
+/// `Value::Element` instances (metamodel rows) carry no user date properties
+/// so they're always filtered out — milestoning only applies to data
+/// instances, not metamodel rows.
+fn instance_property_matches_date(value: &Value, date_property: &str, date: &Value) -> bool {
+    match value {
+        Value::Object(handle) => {
+            let entry = handle.borrow();
+            entry
+                .get_property_values(date_property)
+                .iter()
+                .any(|v| matches!((v, date), (Value::Date(a), Value::Date(b)) if a == b))
+        }
+        _ => false,
+    }
+}
+
+/// Check whether an instance's `date_property` value falls in
+/// `[start, end]` inclusive.
+fn instance_property_date_in_range(
+    value: &Value,
+    date_property: &str,
+    start: &Value,
+    end: &Value,
+) -> bool {
+    match value {
+        Value::Object(handle) => {
+            let entry = handle.borrow();
+            entry.get_property_values(date_property).iter().any(|v| {
+                crate::native::comparison::compare_values(v, start) >= 0
+                    && crate::native::comparison::compare_values(v, end) <= 0
+            })
+        }
+        _ => false,
     }
 }
 
@@ -2444,6 +2683,15 @@ pub fn register(registry: &mut NativeRegistry) {
     registry.register("if_Boolean_1__Function_1__Function_1__T_m_", If);
     registry.register("print_Any_MANY__Integer_1__Nil_0_", Print);
     registry.register("getAll_Class_1__T_MANY_", GetAll);
+    // Milestoning overloads — single-date (business or processing
+    // temporal), bitemporal three-arg, and range query. Mangled keys
+    // match the platform's `milestoning.pure` declarations.
+    registry.register("getAll_Class_1__Date_1__T_MANY_", GetAllWithDate);
+    registry.register("getAll_Class_1__Date_1__Date_1__T_MANY_", GetAllBitemporal);
+    registry.register(
+        "getAllVersionsInRange_Class_1__Date_1__Date_1__T_MANY_",
+        GetAllVersionsInRange,
+    );
     // `new` is split across two natives by call shape:
     //
     // - `New` handles the compiler-emitted `^Class<T>(prop=val, …)`

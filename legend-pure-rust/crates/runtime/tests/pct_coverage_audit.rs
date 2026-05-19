@@ -55,28 +55,29 @@ use legend_pure_store_relational_runtime::RelationalStoreExtension as _;
 /// `NativeRegistry::discovered()`. These are the "the runtime can't
 /// possibly call this" gaps that Stream 2b drives down.
 ///
-/// **Baseline measured 2026-05-18 (post 2b fourth batch):** 2 Missing
-/// after `replaceTreeNode` landed. The remaining 2 are both
-/// milestoning (`getAllVersions`, `getAllVersionsInRange`) — needs
-/// the bitemporal-version subsystem, not aliasing. Ceiling sits at
-/// 5 — ~3 of headroom. **Do not raise** — a regression means a
-/// native got dropped from the registry or a new platform declaration
-/// landed without an impl.
-const MISSING_CEILING: usize = 5;
+/// **Baseline measured 2026-05-19 (post milestoning Phase B-1):** 1
+/// Missing after `getAllVersionsInRange` landed alongside the two
+/// `getAll(Class, Date[, Date])` overloads. The remaining 1 is
+/// `getAllVersions(Class)` — the no-date "edge-point" variant; it
+/// belongs with the milestoning property-rewrite QPs and lands when
+/// Phase B's QP body population materialises the AllVersions accessor
+/// at runtime. Ceiling sits at 3 — ~2 of headroom. **Do not raise**
+/// — a regression means a native got dropped from the registry or a
+/// new platform declaration landed without an impl.
+const MISSING_CEILING: usize = 3;
 
 /// Ceiling on [`GapKind::SignatureMismatch`] findings — natives that
 /// exist but whose registered key doesn't exactly match the platform's
 /// mangled FQN. Dispatch survives today via `find_by_prefix`, but Java
 /// parity requires exact-FQN match.
 ///
-/// **Baseline measured 2026-05-18 (post 2b second batch):** 2 Mismatch
-/// after the bulk-alias commit aligned 17 keys. The remaining 2 are
-/// the milestoning `getAll(Class, Date)` and `getAll(Class, Date, Date)`
-/// overloads — `GetAll::execute` rejects Date args by arity, so an
-/// alias would silently route to a runtime-error path. Those belong
-/// with the milestoning implementation work, not the aliasing batch.
-/// Ceiling sits at 5 — ~3 of headroom.
-const MISMATCH_CEILING: usize = 5;
+/// **Baseline measured 2026-05-19 (post milestoning Phase B-1):** 0
+/// Mismatch after the milestoning overloads landed at their correct
+/// mangled-FQN keys (`getAll_Class_1__Date_1__T_MANY_`,
+/// `getAll_Class_1__Date_1__Date_1__T_MANY_`). Ceiling tightened from
+/// 5 to 2 — keeping a small buffer for the next batch of unrelated
+/// aliasing work.
+const MISMATCH_CEILING: usize = 2;
 
 /// Severity for an audit finding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
