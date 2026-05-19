@@ -100,11 +100,18 @@ pub(super) fn lower_member_access(
     }
 }
 
-/// Rewrite `target.all` / `target.all()` → `FunctionCall("getAll", [target])`.
+/// Rewrite milestoning grammar shortcuts on a class reference:
 ///
-/// Returns `Some(value_spec)` when the rewrite fires; `None` for everything
-/// else so the regular member-access lowering runs unchanged. The qualified
-/// call form rejects extra arguments — `getAll` is unary.
+/// - `Class.all` / `Class.all()` → `getAll(Class)`
+/// - `Class.all($d)` → `getAll(Class, $d)` (single-temporal milestoning)
+/// - `Class.all($pd, $bd)` → `getAll(Class, $pd, $bd)` (bitemporal)
+/// - `Class.allVersions()` → `getAllVersions(Class)` (every version, no filter)
+/// - `Class.allVersionsInRange($s, $e)` → `getAllVersionsInRange(Class, $s, $e)`
+///
+/// Returns `Some(value_spec)` when a shortcut fires; `None` for everything
+/// else so the regular member-access lowering runs unchanged. Java parity:
+/// `AntlrContextToM3CoreInstance.allOrFunction` plus the milestoning
+/// grammar block in the same file.
 fn desugar_all_to_getall(
     e: &ast_expr::MemberAccess,
     ctx: &mut ResolutionContext<'_>,
@@ -117,33 +124,65 @@ fn desugar_all_to_getall(
             (&q.target, &q.member, &q.source_info, q.arguments.as_slice())
         }
     };
-    if member.as_str() != "all" {
-        return None;
-    }
-    if !extra_args.is_empty() {
+
+    // Map shortcut name → desugared native name + acceptable arity range
+    // (counting the receiver as arg 0). The receiver is always the class
+    // reference; user-supplied args go after.
+    let (native_name, expected_user_args): (&'static str, &[usize]) = match member.as_str() {
+        // `.all` covers `getAll(Class)`, `getAll(Class, Date)`, and
+        // `getAll(Class, Date, Date)`. Accept 0, 1, or 2 user args.
+        "all" => ("getAll", &[0, 1, 2]),
+        // `.allVersions()` — no args; returns every version.
+        "allVersions" => ("getAllVersions", &[0]),
+        // `.allVersionsInRange(start, end)` — exactly 2 user args.
+        "allVersionsInRange" => ("getAllVersionsInRange", &[2]),
+        _ => return None,
+    };
+
+    if !expected_user_args.contains(&extra_args.len()) {
         errors.push(CompilationError {
-            message: "all() takes no arguments — use ::getAll(Class) for the function form"
-                .to_string(),
+            message: format!(
+                "{}() does not accept {} argument(s); expected one of {:?}",
+                member.as_str(),
+                extra_args.len(),
+                expected_user_args,
+            ),
             source_info: source_info.clone(),
             kind: crate::error::CompilationErrorKind::UnsupportedExpression {
-                kind: SmolStr::new_static("MemberAccess::Qualified(\"all\", args)"),
+                kind: SmolStr::new(format!(
+                    "MemberAccess::Qualified(\"{}\", {} args)",
+                    member.as_str(),
+                    extra_args.len()
+                )),
             },
         });
         return None;
     }
+
     let target_val = lower_expression(target_ast, ctx, errors)?;
-    let arguments = vec![target_val];
-    let ptr = operator::synthetic_unqualified_ptr("getAll", source_info);
+    let mut arguments = vec![target_val];
+    for a in extra_args {
+        let lowered = lower_expression(a, ctx, errors)?;
+        arguments.push(lowered);
+    }
+    let arity = arguments.len();
+    let ptr = operator::synthetic_unqualified_ptr(native_name, source_info);
     let mut scratch_errors: Vec<CompilationError> = Vec::new();
-    let function_id =
-        resolve::resolve_function_call(&ptr, 1, &arguments, source_info, ctx, &mut scratch_errors);
+    let function_id = resolve::resolve_function_call(
+        &ptr,
+        arity,
+        &arguments,
+        source_info,
+        ctx,
+        &mut scratch_errors,
+    );
     if function_id.is_some() {
         errors.extend(scratch_errors);
     }
     Some(untyped(
         ExprKind::FunctionCall(FunctionCallData {
             function: function_id,
-            function_name: SmolStr::new_static("getAll"),
+            function_name: SmolStr::new_static(native_name),
             arguments,
         }),
         source_info.clone(),

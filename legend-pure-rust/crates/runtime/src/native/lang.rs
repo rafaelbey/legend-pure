@@ -2326,6 +2326,39 @@ pub(crate) fn gather_all_instances(
 }
 
 // ---------------------------------------------------------------------------
+// getAllVersions(Class) — no-date "all versions" accessor
+// ---------------------------------------------------------------------------
+
+/// Pure `getAllVersions<T>(Class<T>[1]): T[*]` — returns every instance
+/// of the class regardless of milestoning date. Equivalent to `getAll`
+/// for non-milestoned classes; for milestoned classes it returns the
+/// edge-point collection (all versions across all dates).
+///
+/// Used as the desugared form of `Class.allVersions()` from the
+/// milestoning grammar block. Java parity: the platform's
+/// `getAllVersions` native declaration.
+#[derive(Debug)]
+pub struct GetAllVersions;
+
+impl NativeFunction for GetAllVersions {
+    fn execute(
+        &self,
+        args: &[ValueSpec],
+        ctx: &mut dyn EvalContextTrait,
+    ) -> Result<Evaluated, PureException> {
+        let values = force_all(args, ctx)?;
+        expect_args("getAllVersions", &values, 1)?;
+        let class_id = crate::native::meta::as_element_id(&values[0])?;
+        let instances = gather_all_instances(ctx, class_id)?;
+        Ok(Evaluated::new(Value::from_vec(instances)))
+    }
+
+    fn signature(&self) -> &'static str {
+        "getAllVersions(class:Class<T>[1]):T[*]"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Milestoning natives — getAll(Class, Date) / getAll(Class, Date, Date) /
 // getAllVersionsInRange(Class, Date, Date)
 // ---------------------------------------------------------------------------
@@ -2689,6 +2722,7 @@ pub fn register(registry: &mut NativeRegistry) {
     // Milestoning overloads — single-date (business or processing
     // temporal), bitemporal three-arg, and range query. Mangled keys
     // match the platform's `milestoning.pure` declarations.
+    registry.register("getAllVersions_Class_1__T_MANY_", GetAllVersions);
     registry.register("getAll_Class_1__Date_1__T_MANY_", GetAllWithDate);
     registry.register("getAll_Class_1__Date_1__Date_1__T_MANY_", GetAllBitemporal);
     registry.register(
