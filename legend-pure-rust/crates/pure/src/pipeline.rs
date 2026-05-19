@@ -426,6 +426,16 @@ pub fn finalize_model(
     // ---- Pass 2.5: Type Inference ----
     pass_infer(model, &mut errors, None);
 
+    // ---- Pass 2.5b: Milestoning Date Propagation ----
+    // Rewrites `$x.address` (where address is a milestoned-target
+    // property on Phase A's `original_milestoned_properties` slot)
+    // into `$x.address($contextDate)` based on the in-scope milestoning
+    // date. Runs post-inference so the rewriter reads resolved
+    // `type_info` directly; pre-validation so leftover dateless
+    // milestoned-target calls can be surfaced as validator errors
+    // (B-4 follow-up).
+    crate::milestoning::propagation::propagate_dates(model, &mut errors);
+
     // ---- Pass 3: Validation ----
     errors.extend(crate::validate::validate(model, None));
 

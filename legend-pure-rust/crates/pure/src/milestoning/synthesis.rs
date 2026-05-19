@@ -463,8 +463,11 @@ fn apply_property_rewrites(
         .filter(|(i, _)| !moved_indices.contains(i))
         .map(|(_, p)| p.name.clone())
         .collect();
-    let survivor_qp_names: Vec<SmolStr> =
-        class.qualified_properties.iter().map(|q| q.name.clone()).collect();
+    let survivor_qp_names: Vec<SmolStr> = class
+        .qualified_properties
+        .iter()
+        .map(|q| q.name.clone())
+        .collect();
 
     for plan in &plans {
         let original = class.properties[plan.original_index].clone();
@@ -518,8 +521,11 @@ fn apply_property_rewrites_assoc(
         .filter(|(i, _)| !moved_indices.contains(i))
         .map(|(_, p)| p.name.clone())
         .collect();
-    let survivor_qp_names: Vec<SmolStr> =
-        assoc.qualified_properties.iter().map(|q| q.name.clone()).collect();
+    let survivor_qp_names: Vec<SmolStr> = assoc
+        .qualified_properties
+        .iter()
+        .map(|q| q.name.clone())
+        .collect();
     for plan in &plans {
         let original = assoc.properties[plan.original_index].clone();
         synthesize_for_property(

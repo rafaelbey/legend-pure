@@ -56,6 +56,7 @@ fn categorize_platform_errors_detailed() {
                     legend_pure_parser_pure::error::CompilationErrorKind::MilestoningReservedPropertyName { .. } => "MilestoningReservedPropertyName",
                     legend_pure_parser_pure::error::CompilationErrorKind::MilestoningHierarchyMismatch { .. } => "MilestoningHierarchyMismatch",
                     legend_pure_parser_pure::error::CompilationErrorKind::MilestoningEdgePointCollision { .. } => "MilestoningEdgePointCollision",
+                    legend_pure_parser_pure::error::CompilationErrorKind::MilestoningMissingDateContext { .. } => "MilestoningMissingDateContext",
                 };
                 *by_kind.entry(kind_str.to_string()).or_default() += 1;
 

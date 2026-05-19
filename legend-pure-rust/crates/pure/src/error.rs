@@ -407,6 +407,23 @@ pub enum CompilationErrorKind {
         /// Temporal stereotype value name carried by the ancestor.
         super_stereotype: SmolStr,
     },
+    /// A user code reference to a milestoned-target property couldn't
+    /// be supplied a date by the propagation pass — the call survives
+    /// without any date in scope. The user must either supply the date
+    /// explicitly (`$x.prop($d)`) or wrap the access in a milestoning
+    /// context (`Class.getAll($d)->map(c | $c.prop)`). Java parity:
+    /// `MilestoningFunctionExpressionValidator.validateMissingMilestoningDateArguments`.
+    MilestoningMissingDateContext {
+        /// `::`-joined FQN of the receiver class declaring the
+        /// milestoned-target property.
+        class_name: SmolStr,
+        /// Property name that was accessed without a date.
+        property_name: SmolStr,
+        /// Number of date arguments the property expects (1 for
+        /// `businesstemporal` / `processingtemporal`, 2 for
+        /// `bitemporal`).
+        expected_dates: u8,
+    },
     /// A user-declared property collides with a name milestoning synthesis
     /// would claim (`pAllVersions` / `pAllVersionsInRange`). Surfaced from
     /// inside the synthesis pass when the candidate name matches an existing

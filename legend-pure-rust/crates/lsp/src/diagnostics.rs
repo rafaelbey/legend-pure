@@ -103,5 +103,8 @@ pub fn error_code(kind: &CompilationErrorKind) -> &'static str {
         CompilationErrorKind::MilestoningEdgePointCollision { .. } => {
             "milestoningEdgePointCollision"
         }
+        CompilationErrorKind::MilestoningMissingDateContext { .. } => {
+            "milestoningMissingDateContext"
+        }
     }
 }

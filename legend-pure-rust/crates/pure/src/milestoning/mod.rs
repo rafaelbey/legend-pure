@@ -45,6 +45,8 @@ use crate::annotations::StereotypeRef;
 use crate::ids::ElementId;
 use crate::model::{Element, PureModel};
 
+pub mod dates;
+pub mod propagation;
 pub mod synthesis;
 pub mod validate;
 
