@@ -58,6 +58,15 @@ pub struct ParseArgs {
     /// Show source code snippets for errors with line numbers and carets.
     #[arg(long)]
     show_source: bool,
+
+    /// Run the compiler over the parsed AST and patch the output with
+    /// metadata only the compiled model carries (today: milestoning
+    /// `originalMilestonedProperties` on Class / Association). Default
+    /// `legend parse` is pure AST→Protocol — exactly what the user
+    /// wrote. With `--compile`, the JSON also reflects compile-time
+    /// synthesis like milestoning property rewrites.
+    #[arg(long)]
+    compile: bool,
 }
 
 /// Execute the `legend parse` command.
@@ -88,6 +97,7 @@ pub fn run(args: ParseArgs) -> Result<(), CliError> {
 
     // -- Sequential reporting + collection --
     let mut all_elements = Vec::new();
+    let mut all_source_files = Vec::new();
     let mut errors = Vec::new();
 
     for (path, output) in files.iter().zip(outputs) {
@@ -96,6 +106,9 @@ pub fn run(args: ParseArgs) -> Result<(), CliError> {
                 let pmcd =
                     legend_pure_parser_protocol::v1::convert::convert_source_file(&source_file)?;
                 all_elements.extend(pmcd.elements);
+                if args.compile {
+                    all_source_files.push(source_file);
+                }
                 eprintln!("  {} {}", "✓".green(), path.display().dimmed());
             }
             legend_pure_parser_parser::ParseOutcome::Partial(partial) => {
@@ -104,6 +117,9 @@ pub fn run(args: ParseArgs) -> Result<(), CliError> {
                     &partial.source_file,
                 )?;
                 all_elements.extend(pmcd.elements);
+                if args.compile {
+                    all_source_files.push(partial.source_file);
+                }
                 for e in &partial.errors {
                     eprintln!(
                         "  {} {} — {}",
@@ -126,6 +142,19 @@ pub fn run(args: ParseArgs) -> Result<(), CliError> {
                 });
             }
         }
+    }
+
+    // -- Optional compile pass to enrich Class/Association elements --
+    if args.compile && !all_source_files.is_empty() {
+        let _ = super::parse_compiled::patch_with_milestoning(
+            &all_source_files,
+            &mut all_elements,
+        );
+        eprintln!(
+            "  {} {} (patched milestoning metadata)",
+            "Compiled".green().bold(),
+            "✓".green()
+        );
     }
 
     if !errors.is_empty() {

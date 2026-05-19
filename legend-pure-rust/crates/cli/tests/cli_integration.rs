@@ -62,6 +62,86 @@ fn test_parse_valid_file() {
 }
 
 #[test]
+fn test_parse_compile_flag_emits_original_milestoned_properties() {
+    // `legend parse --compile` should run the compile pass and emit
+    // `originalMilestonedProperties` for a milestoned class. The bare
+    // `legend parse` (no `--compile`) is AST-only and emits an empty
+    // array for that field — milestoning synthesis only happens at
+    // compile time.
+    let temp_dir = TempDir::new().unwrap();
+    let file_path = temp_dir.path().join("model.pure");
+    // The bare `legend parse --compile` doesn't load the platform —
+    // we declare the milestoning metamodel inline so the synthesis
+    // pass has the profile + carrier classes to resolve.
+    let source = "\
+Profile meta::pure::profiles::temporal
+{
+    stereotypes: [bitemporal, businesstemporal, processingtemporal];
+}
+
+Profile meta::pure::profiles::milestoning
+{
+    stereotypes: [generatedmilestoningproperty, generatedmilestoningdateproperty];
+}
+
+Class meta::pure::milestoning::DateMilestoning {}
+Class meta::pure::milestoning::BusinessDateMilestoning extends meta::pure::milestoning::DateMilestoning
+{
+   from : Date[1];
+   thru : Date[1];
+}
+
+Class <<meta::pure::profiles::temporal.businesstemporal>> demo::Address
+{
+    line: String[1];
+}
+
+Class demo::Customer
+{
+    address: demo::Address[1];
+}
+";
+    std::fs::write(&file_path, source).unwrap();
+
+    // Without --compile: originalMilestonedProperties is empty.
+    let mut cmd = Command::cargo_bin("legend").unwrap();
+    cmd.env("NO_COLOR", "1");
+    let assert_no_compile = cmd
+        .arg("parse")
+        .arg(&file_path)
+        .assert()
+        .success();
+    let out_no_compile =
+        String::from_utf8_lossy(&assert_no_compile.get_output().stdout).to_string();
+    // Customer is the milestoned-target referrer; its
+    // originalMilestonedProperties is `[]` without --compile.
+    assert!(out_no_compile.contains("demo::Customer"));
+
+    // With --compile: originalMilestonedProperties on Customer
+    // contains `address`.
+    let mut cmd = Command::cargo_bin("legend").unwrap();
+    cmd.env("NO_COLOR", "1");
+    let assert_compile = cmd
+        .arg("parse")
+        .arg("--compile")
+        .arg(&file_path)
+        .assert()
+        .success();
+    let out_compile = String::from_utf8_lossy(&assert_compile.get_output().stdout).to_string();
+
+    // Find the Customer class output and check originalMilestonedProperties.
+    assert!(out_compile.contains("\"originalMilestonedProperties\""));
+    // The patched output should mention the moved-aside `address` property
+    // by name. Use a simple substring check — the JSON layout depends on
+    // serde's serialization order which is stable for `serde_derive`.
+    assert!(
+        out_compile.contains("\"name\": \"address\"")
+            || out_compile.contains("\"name\":\"address\""),
+        "--compile output should mention the moved-aside `address` property; got:\n{out_compile}"
+    );
+}
+
+#[test]
 fn test_parse_file_not_found() {
     let mut cmd = Command::cargo_bin("legend").unwrap();
     cmd.env("NO_COLOR", "1");

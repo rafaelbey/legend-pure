@@ -31,6 +31,7 @@ pub mod java_bindings;
 pub mod lsp;
 pub mod mcp;
 pub mod parse;
+pub mod parse_compiled;
 pub mod repl;
 pub mod run;
 pub mod snapshot;
