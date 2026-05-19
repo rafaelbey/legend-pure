@@ -239,22 +239,60 @@ pub(crate) fn bind_from_lambda_body(
     // produce a TypeExpr (rare; e.g. a Lambda body whose last expression
     // is itself an unresolved kind), so existing call sites keep their
     // behaviour.
-    let body_te = match resolve::infer_typeexpr_from_valuespec(last_expr, model, &extended) {
-        Some(te) => te,
-        None => {
-            let Some(body_eid) = resolve::infer_type_from_valuespec(last_expr, model, &extended)
-            else {
-                return;
-            };
-            TypeExpr::Named {
-                element: body_eid,
-                type_arguments: vec![],
-                multiplicity_arguments: Vec::new(),
-                value_arguments: vec![],
-                source_info: None,
+    //
+    // **Re-infer fresh, ignoring cached `type_info`.** The lambda
+    // body's `type_info` was set at lower-time, when sibling-arg
+    // generics (like reduce's V) hadn't yet bound — so the cached
+    // dispatch result may be Any. Re-running inference here with the
+    // freshly-extended `var_types` (where lambda params now carry the
+    // substituted FT-param types) recovers the correct body type.
+    // The cache is for downstream consumers that don't have a richer
+    // extended scope; this code path *does* have one.
+    // Resolve unresolved FunctionCalls in the lambda body. Lower-time
+    // dispatch may have left `function = None` when a sibling arg read
+    // `TypeExpr::Unresolved` (a lambda param whose type wasn't yet
+    // inferrable). Now that `extended` carries the freshly-bound
+    // lambda-param types from the surrounding FT slot, we can re-narrow.
+    // Recursively walk the lambda body cloning the IR so the patched
+    // copy carries the resolved `function` ids for downstream
+    // `infer_typeexpr_from_valuespec_fresh`.
+    let patched_last = redispatch_unresolved_calls(last_expr, model, &extended);
+    let patched_last_ref = patched_last.as_ref().unwrap_or(last_expr);
+    let body_te =
+        match resolve::infer_typeexpr_from_valuespec_fresh(patched_last_ref, model, &extended) {
+            Some(te) => te,
+            None => {
+                let Some(body_eid) =
+                    resolve::infer_type_from_valuespec(patched_last_ref, model, &extended)
+                else {
+                    return;
+                };
+                TypeExpr::Named {
+                    element: body_eid,
+                    type_arguments: vec![],
+                    multiplicity_arguments: Vec::new(),
+                    value_arguments: vec![],
+                    source_info: None,
+                }
             }
-        }
-    };
+        };
+    // **Override-on-narrow.** Pass-1's bare-FT-vs-Named<Function>
+    // bridge in `bind_type_with_mode` already bound this return-slot
+    // generic from the *lower-time* lambda-body type_info — which is
+    // often `Any` when dispatch couldn't pick a unique candidate
+    // (e.g. agg-lambda body `$y->average()` when the FT's V wasn't yet
+    // bound from a sibling arg). LUB-merging the freshly re-inferred
+    // `body_te` against that pessimistic Any keeps the binding at Any.
+    // For lambda-body-driven bindings, pass-2 IS the authoritative
+    // source — clear the affected Generic-key entries first so the
+    // subsequent `bind_type` writes the concrete value rather than
+    // LUB-widening into oblivion. Java parity: TypeInference treats
+    // the lambda body as the V/U source after later passes resolve
+    // sibling-arg generics; we approximate by giving pass-2 priority
+    // for those keys.
+    collect_generic_names_in_typeexpr(return_type, &mut |name| {
+        bindings.ty.remove(name);
+    });
     resolve::bind_type(return_type, &body_te, &mut bindings.ty, model);
 
     // The lambda body's actual multiplicity is intentionally NOT
@@ -268,4 +306,142 @@ pub(crate) fn bind_from_lambda_body(
     // permissive `Variable(_)` arm handles the rest.
     let _ = ft_return_mult;
     let _ = last_expr;
+}
+
+/// Walks a `TypeExpr` collecting every `Generic(name)` it carries (at
+/// the top level, inside `Named.type_arguments`, inside
+/// `FunctionType.parameters` / `return_type`, inside
+/// `AlgebraUnion`, inside `Relation` column types). Invokes `sink` once
+/// per name.
+fn collect_generic_names_in_typeexpr<F: FnMut(&smol_str::SmolStr)>(
+    te: &crate::types::TypeExpr,
+    sink: &mut F,
+) {
+    use crate::types::TypeExpr;
+    match te {
+        TypeExpr::Generic(name) => sink(name),
+        TypeExpr::Named { type_arguments, .. } => {
+            for ta in type_arguments {
+                collect_generic_names_in_typeexpr(ta, sink);
+            }
+        }
+        TypeExpr::FunctionType {
+            parameters,
+            return_type,
+            ..
+        } => {
+            for (t, _) in parameters {
+                collect_generic_names_in_typeexpr(t, sink);
+            }
+            collect_generic_names_in_typeexpr(return_type, sink);
+        }
+        TypeExpr::AlgebraUnion(left, right) => {
+            collect_generic_names_in_typeexpr(left, sink);
+            collect_generic_names_in_typeexpr(right, sink);
+        }
+        TypeExpr::Relation(cols) => {
+            for c in cols {
+                collect_generic_names_in_typeexpr(&c.type_expr, sink);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Walks a lambda-body expression and patches `FunctionCall.function`
+/// fields that lower-time dispatch couldn't resolve. The freshly-extended
+/// `var_types` (carrying the bound lambda-param types pulled from the
+/// surrounding `Function<{T->V}>` slot) may now allow narrowing to
+/// pick a unique candidate.
+///
+/// Returns `Some(patched_clone)` when at least one FunctionCall was
+/// re-narrowed to a unique candidate; `None` when nothing changed
+/// (caller can keep using the original `last_expr` without paying a
+/// clone). Recursive — handles nested calls (`$y->plus(1)->times(2)`).
+///
+/// Global-by-name lookup is intentional. The original import scope
+/// isn't reachable from `bind_from_lambda_body`; falling back to a
+/// model-wide walk gives the right answer for the platform's
+/// canonical overload sets (where simple names like `average` /
+/// `sort` / `sum` collide across at most one or two packages, and the
+/// narrower picks by type). Documented O(model size) for one
+/// expression; if a future profile shows this in the hot path we can
+/// add a simple-name index alongside `Element::Function`.
+fn redispatch_unresolved_calls(
+    vs: &ValueSpec,
+    model: &crate::model::PureModel,
+    var_types: &VarTypes,
+) -> Option<ValueSpec> {
+    use crate::types::{ExprKind, FunctionCallData};
+    let ExprKind::FunctionCall(data) = vs.kind.as_ref() else {
+        return None;
+    };
+    // Recursively patch nested calls first — `$x->f()->g()` lowers to
+    // `g(f(x))`, and our caller hands us the outer (g). If `f`'s
+    // function id is unresolved, we need to patch it before re-narrowing
+    // `g` (which inspects arg types).
+    let mut new_args: Vec<ValueSpec> = Vec::with_capacity(data.arguments.len());
+    let mut any_changed = false;
+    for a in &data.arguments {
+        if let Some(patched) = redispatch_unresolved_calls(a, model, var_types) {
+            new_args.push(patched);
+            any_changed = true;
+        } else {
+            new_args.push(a.clone());
+        }
+    }
+    // If the outer call already resolved, propagate any inner patches and stop.
+    if data.function.is_some() {
+        if !any_changed {
+            return None;
+        }
+        let new_data = FunctionCallData {
+            function: data.function,
+            function_name: data.function_name.clone(),
+            arguments: new_args,
+        };
+        return Some(ValueSpec {
+            kind: Box::new(ExprKind::FunctionCall(new_data)),
+            source_info: vs.source_info.clone(),
+            type_info: vs.type_info.clone(),
+        });
+    }
+    // function is None — try to re-narrow with extended var_types.
+    let candidates: Vec<_> = model
+        .resolve_functions_by_simple_name_globally(&data.function_name)
+        .into_iter()
+        .filter(|&eid| {
+            if let crate::model::Element::Function(f) = model.get_element(eid) {
+                f.parameters.len() == new_args.len()
+            } else {
+                false
+            }
+        })
+        .collect();
+    let narrowed = resolve::narrow_candidates_by_type(&candidates, &new_args, model, var_types);
+    if narrowed.len() == 1 {
+        let new_data = FunctionCallData {
+            function: Some(narrowed[0]),
+            function_name: data.function_name.clone(),
+            arguments: new_args,
+        };
+        Some(ValueSpec {
+            kind: Box::new(ExprKind::FunctionCall(new_data)),
+            source_info: vs.source_info.clone(),
+            type_info: vs.type_info.clone(),
+        })
+    } else if any_changed {
+        let new_data = FunctionCallData {
+            function: data.function,
+            function_name: data.function_name.clone(),
+            arguments: new_args,
+        };
+        Some(ValueSpec {
+            kind: Box::new(ExprKind::FunctionCall(new_data)),
+            source_info: vs.source_info.clone(),
+            type_info: vs.type_info.clone(),
+        })
+    } else {
+        None
+    }
 }

@@ -685,6 +685,34 @@ impl PureModel {
             .collect()
     }
 
+    /// Walks every package in the model and returns every function
+    /// whose `function_name` matches `name`. Used at infer-time as a
+    /// fallback when lower-time dispatch couldn't pick a unique
+    /// candidate (e.g. lambda body referenced a function while the
+    /// receiver/arg was still typed `TypeExpr::Unresolved`) and a
+    /// later binding pass needs to re-narrow with the freshly bound
+    /// generics — see [`crate::inference::lambda::bind_from_lambda_body`].
+    ///
+    /// O(model size). Cheap enough for the redispatch path (one walk
+    /// per Unresolved-cause FunctionCall encountered during a single
+    /// lambda body's pass-2 binding); if the call volume grows we can
+    /// add a per-simple-name index, but the current count is in the
+    /// low dozens per platform compile.
+    #[must_use]
+    pub fn resolve_functions_by_simple_name_globally(&self, name: &SmolStr) -> Vec<ElementId> {
+        let mut out: Vec<ElementId> = Vec::new();
+        for (_, pkg) in self.global_packages.iter() {
+            for &eid in &pkg.children_elements {
+                if let Element::Function(f) = self.get_element(eid)
+                    && f.function_name == *name
+                {
+                    out.push(eid);
+                }
+            }
+        }
+        out
+    }
+
     /// Resolves a function by its simple name within a package path.
     ///
     /// After Pass 2.1 (name mangling), function element names are mangled FQNs

@@ -146,7 +146,8 @@ impl GenericBindings {
         // disambiguator; they must never escape into a returned
         // `TypeExpr` (lowered ValueSpec `type_info`, serialized
         // blobs, error messages, …).
-        let (inv_type, inv_mult) = invert_callee_rename(&self.callee_rename, &self.callee_mult_rename);
+        let (inv_type, inv_mult) =
+            invert_callee_rename(&self.callee_rename, &self.callee_mult_rename);
         crate::resolve::rename_callee_typeexpr(&substituted, &inv_type, &inv_mult)
     }
 
@@ -214,7 +215,8 @@ impl GenericBindings {
             &self.callee_mult_rename,
         );
         let substituted = crate::resolve::substitute_type(&renamed, &merged);
-        let (inv_type, inv_mult) = invert_callee_rename(&self.callee_rename, &self.callee_mult_rename);
+        let (inv_type, inv_mult) =
+            invert_callee_rename(&self.callee_rename, &self.callee_mult_rename);
         crate::resolve::rename_callee_typeexpr(&substituted, &inv_type, &inv_mult)
     }
 }

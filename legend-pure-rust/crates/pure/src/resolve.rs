@@ -175,8 +175,30 @@ pub(crate) fn resolve_type_ref(
     // `ColSpec<(?:Z)⊆T>`). Resolve to a generic placeholder; the
     // narrower / type-checker treats `Generic`-typed positions as
     // permissive so the wildcard doesn't restrict overload matching.
+    //
+    // **Column-shaped wildcard.** When the parser sees `(?:Z)` inside a
+    // type-arg position like `ColSpec<(?:Z)⊆T>`, it pushes a synthetic
+    // `TypeReference{name="?", type_arguments=[Z]}`. Stripping that to
+    // a bare `Generic("?")` would discard `Z` — and downstream dispatch
+    // would never extract `Z := Number` from an arg-side
+    // `ColSpec<(?:Number)⊆T>`, leaving every `eval<Z,T>(ColSpec<…>,
+    // T):Z[0..1]` call's `Z` permanently Generic. Wrap the inner type
+    // in a single-column `TypeExpr::Relation` so the
+    // `bind_type_with_mode` Relation arm walks column-pair structural
+    // bindings (`Z` ↔ `Number`). Naming/multiplicity stay placeholders
+    // — the parser already discards them at this position.
     if type_ref.name.as_str() == "?" {
-        return Some(TypeExpr::Generic(SmolStr::new("?")));
+        if type_ref.type_arguments.is_empty() {
+            return Some(TypeExpr::Generic(SmolStr::new("?")));
+        }
+        let inner = resolve_type_ref(&type_ref.type_arguments[0], ctx, errors)?;
+        return Some(TypeExpr::Relation(vec![
+            crate::types::RelationColumnTypeExpr {
+                name: SmolStr::new("?"),
+                type_expr: inner,
+                multiplicity: Multiplicity::PureOne,
+            },
+        ]));
     }
 
     let element_id = if let Some(pkg) = &type_ref.package {
@@ -1570,6 +1592,29 @@ pub(crate) fn infer_typeexpr_from_valuespec(
     model: &crate::model::PureModel,
     var_types: &VarTypes,
 ) -> Option<crate::types::TypeExpr> {
+    infer_typeexpr_from_valuespec_impl(vs, model, var_types, /* fresh = */ false)
+}
+
+/// `infer_typeexpr_from_valuespec` variant that **ignores** any pre-set
+/// `vs.type_info`. Used by [`crate::inference::lambda::bind_from_lambda_body`]
+/// where the lambda body's cached `type_info` may have been computed at
+/// lower-time before sibling-arg generics bound (so dispatch on body
+/// expressions may have returned `Any` for what should now resolve
+/// concretely via the freshly-extended `var_types`).
+pub(crate) fn infer_typeexpr_from_valuespec_fresh(
+    vs: &crate::types::ValueSpec,
+    model: &crate::model::PureModel,
+    var_types: &VarTypes,
+) -> Option<crate::types::TypeExpr> {
+    infer_typeexpr_from_valuespec_impl(vs, model, var_types, /* fresh = */ true)
+}
+
+fn infer_typeexpr_from_valuespec_impl(
+    vs: &crate::types::ValueSpec,
+    model: &crate::model::PureModel,
+    var_types: &VarTypes,
+    fresh: bool,
+) -> Option<crate::types::TypeExpr> {
     use crate::types::{ExprKind, TypeExpr};
     let bare = |eid: ElementId| TypeExpr::Named {
         element: eid,
@@ -1586,7 +1631,12 @@ pub(crate) fn infer_typeexpr_from_valuespec(
     // need `Class<P>` parametric capture) both populate this slot;
     // reading it before kind-based inference avoids re-deriving what
     // the AST layer already knows.
-    if let Some(rt) = vs.type_info.as_deref() {
+    //
+    // `fresh=true` skips the cache so callers with a freshly-extended
+    // `var_types` scope (see [`infer_typeexpr_from_valuespec_fresh`])
+    // can recover the body type when lower-time inference was
+    // pessimistic because sibling-arg generics hadn't yet bound.
+    if !fresh && let Some(rt) = vs.type_info.as_deref() {
         return Some(rt.type_expr.clone());
     }
     match vs.kind.as_ref() {
@@ -1603,8 +1653,8 @@ pub(crate) fn infer_typeexpr_from_valuespec(
         // `class<T>(T[*]):Class<T>[1]` to a `Class<List<String>>` result.
         ExprKind::FunctionCall(FunctionCallData {
             function,
+            function_name: _,
             arguments,
-            ..
         }) => {
             let fid = (*function)?;
             let crate::model::Element::Function(f) = model.get_element(fid) else {
@@ -2723,8 +2773,27 @@ pub(crate) fn infer_generic_bindings(
     // `Named<Function>{[]}`, losing the inner). `ty_auth` only
     // accumulates structural-slot bindings, which are Pure-invariant
     // and stay intact.
-    for (param, arg) in params.iter().zip(args.iter()) {
+    let trace_avg = params.len() == 5
+        && args.last().is_some_and(|a| {
+            a.source_info.source.contains("average.pure") && a.source_info.start_line == 34
+        });
+    if trace_avg {
+        eprintln!(
+            "DIAG reduce pass-2 in average.pure body, ty_auth keys={:?}",
+            ctx.bindings.ty_auth.keys().collect::<Vec<_>>()
+        );
+    }
+    for (i, (param, arg)) in params.iter().zip(args.iter()).enumerate() {
         let substituted = substitute_type(&param.type_expr, &ctx.bindings.ty_auth);
+        if trace_avg {
+            eprintln!(
+                "  DIAG pass-2 i={} arg.kind={:?} param.type={:?} substituted={:?}",
+                i,
+                std::mem::discriminant(arg.kind.as_ref()),
+                param.type_expr,
+                substituted
+            );
+        }
         // The param type may be FunctionType directly, or Named<Function>[FunctionType]
         // (the common `Function<{T[1]->V[*]}>` spelling). After substitution,
         // a bound `T[n]` may resolve to either of these shapes.
@@ -2812,10 +2881,7 @@ pub(crate) fn infer_generic_bindings(
 /// callees).
 fn build_callee_rename(
     params: &[crate::types::Parameter],
-) -> (
-    HashMap<SmolStr, SmolStr>,
-    HashMap<SmolStr, SmolStr>,
-) {
+) -> (HashMap<SmolStr, SmolStr>, HashMap<SmolStr, SmolStr>) {
     use std::sync::atomic::{AtomicU64, Ordering};
     static CALLSITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -2892,6 +2958,14 @@ fn collect_generic_names_in_typeexpr(
             collect_generic_names_in_typeexpr(left, type_names, mult_names);
             collect_generic_names_in_typeexpr(right, type_names, mult_names);
         }
+        TypeExpr::Relation(cols) => {
+            for c in cols {
+                collect_generic_names_in_typeexpr(&c.type_expr, type_names, mult_names);
+                if let Multiplicity::Variable(n) = &c.multiplicity {
+                    mult_names.insert(n.clone());
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -2950,12 +3024,25 @@ pub(crate) fn rename_callee_typeexpr(
                     )
                 })
                 .collect(),
-            return_type: Box::new(rename_callee_typeexpr(return_type, type_rename, mult_rename)),
+            return_type: Box::new(rename_callee_typeexpr(
+                return_type,
+                type_rename,
+                mult_rename,
+            )),
             return_multiplicity: rename_callee_multiplicity(return_multiplicity, mult_rename),
         },
         TypeExpr::AlgebraUnion(left, right) => TypeExpr::AlgebraUnion(
             Box::new(rename_callee_typeexpr(left, type_rename, mult_rename)),
             Box::new(rename_callee_typeexpr(right, type_rename, mult_rename)),
+        ),
+        TypeExpr::Relation(cols) => TypeExpr::Relation(
+            cols.iter()
+                .map(|c| crate::types::RelationColumnTypeExpr {
+                    name: c.name.clone(),
+                    type_expr: rename_callee_typeexpr(&c.type_expr, type_rename, mult_rename),
+                    multiplicity: rename_callee_multiplicity(&c.multiplicity, mult_rename),
+                })
+                .collect(),
         ),
         _ => te.clone(),
     }
