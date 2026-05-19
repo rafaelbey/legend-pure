@@ -402,6 +402,7 @@ pub(crate) fn pure_to_string(
         // Date/DateTime: no `%` prefix (PureDate's Display already
         // formats with TZ for time-precision dates).
         Value::Date(d) => Ok(d.to_string()),
+        Value::Latest => Ok("%latest".to_string()),
         Value::StrictTime(t) => Ok(t.to_string()),
         Value::Unit => Ok(String::new()),
         Value::Collection(items) => {

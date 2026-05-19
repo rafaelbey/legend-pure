@@ -99,6 +99,18 @@ pub enum Value {
     /// stored as UTC. Timezone conversion is done at format-time only.
     Date(PureDate),
 
+    /// The `%latest` milestoning sentinel — distinct from every concrete
+    /// `Date` value. Used in milestoning dispatch to mean "the latest
+    /// available version" (i.e. disable the date filter on the relevant
+    /// axis). In `compare_values` ordering it ranks greater than every
+    /// concrete `Date`. In equality (`Value == Value` / `values_equal`)
+    /// it is reflexive — `%latest == %latest` — and unequal to any
+    /// concrete date.
+    ///
+    /// Java parity: the `latestDate` instance form recognised by
+    /// `MilestoningFunctionExpressionValidator`.
+    Latest,
+
     /// Pure `StrictTime` — time of day without date.
     ///
     /// Uses `jiff::civil::Time` (`Copy`, nanosecond precision).
@@ -581,6 +593,7 @@ impl Value {
             Self::Decimal(_) => "Decimal",
             Self::String(_) => "String",
             Self::Date(_) => "Date",
+            Self::Latest => "Date",
             Self::StrictTime(_) => "StrictTime",
             Self::Object(_) => "Object",
             Self::Collection(_) => "Collection",
@@ -752,6 +765,7 @@ impl fmt::Display for Value {
             Self::Decimal(d) => write!(f, "{d}"),
             Self::String(s) => write!(f, "'{s}'"),
             Self::Date(d) => write!(f, "%{d}"),
+            Self::Latest => write!(f, "%latest"),
             Self::StrictTime(t) => write!(f, "%{t}"),
             Self::Object(handle) => write!(
                 f,

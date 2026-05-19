@@ -407,6 +407,25 @@ pub enum CompilationErrorKind {
         /// Temporal stereotype value name carried by the ancestor.
         super_stereotype: SmolStr,
     },
+    /// A `%latest` sentinel appears outside any milestoning context.
+    /// `%latest` is only valid as an argument to `getAll(Class, …)`, to
+    /// a generated milestoning qualified-property call (`$x.address(%latest)`),
+    /// or to `getAll`'s related overloads. Java parity:
+    /// `MilestoningFunctionExpressionValidator.validateLatestDateUsage`
+    /// (the positive-context check).
+    MilestoningLatestOutsideMilestoningContext {
+        /// Free-form description of where the `%latest` literal was
+        /// found (e.g. function name + position, or `"top-level"`).
+        context: SmolStr,
+    },
+    /// `%latest` is supplied as an argument to `getAllVersionsInRange`.
+    /// Java parity:
+    /// `MilestoningFunctionExpressionValidator.validateLatestDateUsage`
+    /// (the negative path): range queries require concrete bounds.
+    MilestoningLatestNotAllowedInRange {
+        /// Which arg position carried `%latest` (1 = start, 2 = end).
+        arg_position: u8,
+    },
     /// A user code reference to a milestoned-target property couldn't
     /// be supplied a date by the propagation pass — the call survives
     /// without any date in scope. The user must either supply the date

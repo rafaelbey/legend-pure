@@ -2527,7 +2527,10 @@ impl NativeFunction for GetAllVersionsInRange {
 
 fn require_date(value: &Value, native: &'static str) -> Result<Value, PureException> {
     match value {
-        Value::Date(_) => Ok(value.clone()),
+        // Accept both concrete dates and the `%latest` sentinel — the
+        // milestoning natives treat `%latest` as a wildcard on the
+        // relevant date axis (see `instance_property_matches_date`).
+        Value::Date(_) | Value::Latest => Ok(value.clone()),
         other => Err(PureException::from(PureRuntimeError::EvaluationError(
             format!("{native}: expected Date[1], got {other:?}"),
         ))),
@@ -2554,6 +2557,11 @@ fn milestoning_kind(
 /// so they're always filtered out — milestoning only applies to data
 /// instances, not metamodel rows.
 ///
+/// **`%latest` semantics.** When `date` is [`Value::Latest`], any instance
+/// whose `date_property` is populated (with any concrete date) matches —
+/// mirroring Java's wildcard behaviour where `%latest` disables the date
+/// filter on the relevant axis.
+///
 /// Shared by the natives in this module and by the milestoning QP
 /// runtime dispatch in [`crate::milestoning`].
 pub(crate) fn instance_property_matches_date(
@@ -2561,16 +2569,17 @@ pub(crate) fn instance_property_matches_date(
     date_property: &str,
     date: &Value,
 ) -> bool {
-    match value {
-        Value::Object(handle) => {
-            let entry = handle.borrow();
-            entry
-                .get_property_values(date_property)
-                .iter()
-                .any(|v| matches!((v, date), (Value::Date(a), Value::Date(b)) if a == b))
-        }
-        _ => false,
+    let Value::Object(handle) = value else {
+        return false;
+    };
+    let entry = handle.borrow();
+    let prop_values = entry.get_property_values(date_property);
+    if matches!(date, Value::Latest) {
+        return !prop_values.is_empty();
     }
+    prop_values
+        .iter()
+        .any(|v| matches!((v, date), (Value::Date(a), Value::Date(b)) if a == b))
 }
 
 /// Check whether an instance's `date_property` value falls in

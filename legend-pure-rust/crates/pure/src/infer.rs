@@ -2190,6 +2190,11 @@ fn date_literal_type(dv: &DateValue) -> ResolvedType {
         DateValue::StrictDate { .. } => primitive(bootstrap::STRICT_DATE_ID),
         DateValue::DateTime { .. } => primitive(bootstrap::DATE_TIME_ID),
         DateValue::StrictTime { .. } => primitive(bootstrap::STRICT_TIME_ID),
+        // `%latest` is a milestoning sentinel — typed as the abstract
+        // `Date` so it's accepted anywhere a date is expected. Concrete-
+        // valued `StrictDate` / `DateTime` literals keep their precise
+        // primitive type; only `%latest` widens.
+        DateValue::Latest => primitive(bootstrap::DATE_ID),
     }
 }
 

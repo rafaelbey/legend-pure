@@ -106,5 +106,11 @@ pub fn error_code(kind: &CompilationErrorKind) -> &'static str {
         CompilationErrorKind::MilestoningMissingDateContext { .. } => {
             "milestoningMissingDateContext"
         }
+        CompilationErrorKind::MilestoningLatestOutsideMilestoningContext { .. } => {
+            "milestoningLatestOutsideMilestoningContext"
+        }
+        CompilationErrorKind::MilestoningLatestNotAllowedInRange { .. } => {
+            "milestoningLatestNotAllowedInRange"
+        }
     }
 }

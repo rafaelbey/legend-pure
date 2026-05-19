@@ -1339,6 +1339,9 @@ pub(crate) fn infer_type_from_valuespec(
                 DateValue::StrictDate { .. } => Some(bootstrap::STRICT_DATE_ID),
                 DateValue::DateTime { .. } => Some(bootstrap::DATE_TIME_ID),
                 DateValue::StrictTime { .. } => Some(bootstrap::STRICT_TIME_ID),
+                // `%latest` widens to the abstract `Date` so it's accepted
+                // anywhere a Date is expected by the dispatcher.
+                DateValue::Latest => Some(bootstrap::DATE_ID),
             }
         }
         ExprKind::TypeReference { type_expr } => {

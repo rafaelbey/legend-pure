@@ -162,6 +162,157 @@ pub fn validate_temporal_hierarchy_consistency(
     }
 }
 
+/// **B-4.1 / B-4.3** — `%latest` usage validator. Walks every expression
+/// body in the model after [`crate::milestoning::propagation::propagate_dates`]
+/// has finished and emits diagnostics for two conditions:
+///
+/// - **B-4.1** — `%latest` appears outside a milestoning context. The
+///   sentinel is only valid as an argument to `getAll(Class, …)`, to
+///   a generated milestoning qualified-property call (`$x.address(%latest)`),
+///   or to `getAllVersionsInRange` *as long as B-4.3 doesn't flag it
+///   there too*. Anywhere else (e.g. `let d = %latest; …`) is a hard
+///   error. Java parity:
+///   `MilestoningFunctionExpressionValidator.validateLatestDateUsage`
+///   (positive-context check).
+///
+/// - **B-4.3** — `%latest` supplied to `getAllVersionsInRange` is
+///   forbidden because the range query needs concrete bounds.
+pub fn validate_latest_usage(
+    model: &crate::model::PureModel,
+    errors: &mut Vec<CompilationError>,
+) {
+    use crate::model::Element;
+
+    for chunk in &model.chunks {
+        for (local_idx, element) in chunk.elements.iter() {
+            match element {
+                Element::Function(func) => {
+                    let owner_name = chunk.nodes.get(local_idx).name.clone();
+                    for expr in func.body.iter() {
+                        walk_for_latest_validation(expr, &owner_name, false, errors);
+                    }
+                }
+                Element::Class(class) => {
+                    for qp in &class.qualified_properties {
+                        if qp.body.is_empty() {
+                            continue;
+                        }
+                        let ctx_name = qp.name.clone();
+                        for expr in qp.body.iter() {
+                            walk_for_latest_validation(expr, &ctx_name, false, errors);
+                        }
+                    }
+                    for con in &class.constraints {
+                        let ctx_name = con
+                            .name
+                            .clone()
+                            .unwrap_or_else(|| SmolStr::new_static("constraint"));
+                        walk_for_latest_validation(&con.function, &ctx_name, false, errors);
+                        if let Some(msg) = &con.message {
+                            walk_for_latest_validation(msg, &ctx_name, false, errors);
+                        }
+                    }
+                    for prop in &class.properties {
+                        if let Some(dv) = &prop.default_value {
+                            walk_for_latest_validation(dv, &prop.name, false, errors);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Walk an expression looking for `%latest` literals and emitting a
+/// diagnostic for each that lands in a non-milestoning position.
+///
+/// `in_milestoning_arg_slot` is true when we're inside an argument to a
+/// recognised milestoning host — `getAll` / `getAllVersions` /
+/// generated milestoning QP — where `%latest` is permitted.
+fn walk_for_latest_validation(
+    expr: &crate::types::ValueSpec,
+    context: &SmolStr,
+    in_milestoning_arg_slot: bool,
+    errors: &mut Vec<CompilationError>,
+) {
+    use crate::types::{DateValue, ExprKind};
+    match expr.kind.as_ref() {
+        ExprKind::DateLiteral(DateValue::Latest) => {
+            if !in_milestoning_arg_slot {
+                errors.push(CompilationError {
+                    message: format!(
+                        "`%latest` may only appear as an argument to a milestoning \
+                         function (`getAll`, `getAllVersionsInRange`) or a generated \
+                         milestoning qualified property; found in '{context}'."
+                    ),
+                    source_info: expr.source_info.clone(),
+                    kind: CompilationErrorKind::MilestoningLatestOutsideMilestoningContext {
+                        context: context.clone(),
+                    },
+                });
+            }
+        }
+        ExprKind::FunctionCall(data) => {
+            let is_getall = matches!(data.function_name.as_str(), "getAll" | "getAllVersions");
+            let is_range = data.function_name.as_str() == "getAllVersionsInRange";
+            for (i, arg) in data.arguments.iter().enumerate() {
+                if is_range && i > 0 {
+                    // B-4.3 — `%latest` is forbidden in either bound.
+                    if matches!(arg.kind.as_ref(), ExprKind::DateLiteral(DateValue::Latest)) {
+                        let position = u8::try_from(i).unwrap_or(0);
+                        errors.push(CompilationError {
+                            message: format!(
+                                "`%latest` is not allowed as the {} bound of \
+                                 `getAllVersionsInRange`; supply a concrete date.",
+                                if i == 1 { "start" } else { "end" }
+                            ),
+                            source_info: arg.source_info.clone(),
+                            kind: CompilationErrorKind::MilestoningLatestNotAllowedInRange {
+                                arg_position: position,
+                            },
+                        });
+                    }
+                    walk_for_latest_validation(arg, context, false, errors);
+                } else if is_getall && i > 0 {
+                    walk_for_latest_validation(arg, context, true, errors);
+                } else {
+                    walk_for_latest_validation(arg, context, false, errors);
+                }
+            }
+        }
+        ExprKind::QualifiedPropertyCall(data) => {
+            // Generated milestoning QPs accept `%latest` in their date
+            // slots (slots 1..). Static detection of "is this QP a
+            // milestoning one?" would need a cross-class lookup; the
+            // looser rule "every QP non-receiver arg is a milestoning
+            // slot" is precise enough — non-milestoning QPs don't
+            // typically take `%latest` anyway, and a misuse there
+            // surfaces as a Pure-level type error.
+            for (i, arg) in data.arguments.iter().enumerate() {
+                let milestoning_slot = i > 0;
+                walk_for_latest_validation(arg, context, milestoning_slot, errors);
+            }
+        }
+        ExprKind::PropertyCall(data) => {
+            for arg in &data.arguments {
+                walk_for_latest_validation(arg, context, false, errors);
+            }
+        }
+        ExprKind::Lambda { body, .. } => {
+            for e in body {
+                walk_for_latest_validation(e, context, in_milestoning_arg_slot, errors);
+            }
+        }
+        ExprKind::Collection { elements } => {
+            for e in elements {
+                walk_for_latest_validation(e, context, false, errors);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// **A4.4** — Edge-point name collision. Fires from inside the synthesis
 /// pass when a candidate `pAllVersions` / `pAllVersionsInRange` name
 /// matches a user-declared property already on the class. Java doesn't

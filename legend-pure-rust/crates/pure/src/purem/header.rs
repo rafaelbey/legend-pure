@@ -74,7 +74,7 @@ const SCHEMA_FINGERPRINT_TYPES: &str = concat!(
     "ConstValue{Integer,String}",
     "Multiplicity{PureOne,ZeroOrOne,ZeroOrMany,OneOrMany,Range,Variable}",
     "Parameter{name,type_expr,multiplicity,source_info}",
-    "DateValue{StrictDate,DateTime,StrictTime}",
+    "DateValue{StrictDate,DateTime,StrictTime,Latest}",
     "ResolvedType{type_expr,multiplicity}",
     "ValueSpec{kind,source_info,type_info}",
     "FunctionCallData{function,function_name,arguments}",

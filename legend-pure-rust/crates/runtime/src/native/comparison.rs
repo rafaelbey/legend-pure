@@ -234,6 +234,10 @@ pub fn compare_values(a: &Value, b: &Value) -> i64 {
         (Value::Boolean(a), Value::Boolean(b)) => a.cmp(b),
         (Value::String(a), Value::String(b)) => a.cmp(b),
         (Value::Date(a), Value::Date(b)) => a.cmp(b),
+        // `%latest` is greater than every concrete Date.
+        (Value::Latest, Value::Latest) => Ordering::Equal,
+        (Value::Latest, Value::Date(_)) => Ordering::Greater,
+        (Value::Date(_), Value::Latest) => Ordering::Less,
         (Value::StrictTime(a), Value::StrictTime(b)) => a.cmp(b),
         // Heap objects: compare by allocation order. Stable but
         // semantically arbitrary — the only meaningful contract is
@@ -289,6 +293,10 @@ fn type_ordinal(v: &Value) -> u8 {
         Value::Decimal(_) => 3,
         Value::String(_) => 4,
         Value::Date(_) => 5,
+        // `%latest` ranks just above every concrete `Date`. Sharing the
+        // Date ordinal would collapse the strict ordering; using a
+        // distinct higher ordinal keeps `%latest > every Date` total.
+        Value::Latest => 5,
         Value::StrictTime(_) => 6,
         Value::EnumValue { .. } => 7,
         Value::UnitInstance { .. } => 8,

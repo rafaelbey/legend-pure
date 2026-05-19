@@ -433,8 +433,16 @@ pub fn finalize_model(
     // date. Runs post-inference so the rewriter reads resolved
     // `type_info` directly; pre-validation so leftover dateless
     // milestoned-target calls can be surfaced as validator errors
-    // (B-4 follow-up).
+    // (B-4.2 fires inside the pass itself).
     crate::milestoning::propagation::propagate_dates(model, &mut errors);
+
+    // ---- Pass 2.5c: Milestoning `%latest` usage validation ----
+    // B-4.1 (`%latest` only in milestoning context) and B-4.3
+    // (`%latest` forbidden in `getAllVersionsInRange`) fire here over
+    // the post-propagation expression tree. Runs separately from the
+    // propagation pass so the validator stays a pure walk — no
+    // rewriting — and errors surface in a stable order.
+    crate::milestoning::validate::validate_latest_usage(model, &mut errors);
 
     // ---- Pass 3: Validation ----
     errors.extend(crate::validate::validate(model, None));

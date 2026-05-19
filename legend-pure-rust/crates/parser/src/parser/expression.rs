@@ -323,6 +323,20 @@ impl Parser {
             TokenKind::DateLiteral => {
                 let tok = self.cursor.advance().clone();
                 let raw = tok.text.trim_start_matches('%');
+                // `%latest` — the milestoning sentinel. Carried as a
+                // StrictDateLiteral with the keyword value preserved so
+                // the existing protocol-side handling (`from_protocol.rs`
+                // already emits `value: "%latest"`) round-trips cleanly.
+                // The lowerer detects this special value and produces
+                // `DateValue::Latest` in the IR.
+                if raw == "latest" {
+                    return Ok(Expression::Literal(Literal::StrictDate(
+                        StrictDateLiteral {
+                            value: "%latest".to_string(),
+                            source_info: si,
+                        },
+                    )));
+                }
                 // Classify: DateTime (has 'T'), StrictDate (year-only or
                 // `YYYY`-prefixed, possibly `YYYY-MM` or `YYYY-MM-DD`),
                 // StrictTime (everything else — `HH:MM:SS`-shaped).

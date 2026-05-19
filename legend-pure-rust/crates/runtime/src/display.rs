@@ -558,6 +558,7 @@ fn type_label_for(model: &PureModel, _heap: &RuntimeHeap, value: &Value) -> Opti
         Value::Decimal(_) => "Decimal".to_string(),
         Value::String(_) => "String".to_string(),
         Value::Date(_) => "Date".to_string(),
+        Value::Latest => "Date".to_string(),
         Value::StrictTime(_) => "StrictTime".to_string(),
         Value::EnumValue { enum_id, .. } => {
             crate::model_utils::build_element_path(model, *enum_id, "::", false)
@@ -622,6 +623,7 @@ fn simple_type_tag(value: &Value) -> Option<&'static str> {
         Value::Decimal(_) => "Decimal",
         Value::String(_) => "String",
         Value::Date(_) => "Date",
+        Value::Latest => "Date",
         Value::StrictTime(_) => "StrictTime",
         Value::EnumValue { .. } => "Enum",
         Value::Element(_) => "Element",

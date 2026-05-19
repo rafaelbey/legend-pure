@@ -864,6 +864,7 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                     })?;
                 Ok(Value::StrictTime(time))
             }
+            DateValue::Latest => Ok(Value::Latest),
         }
     }
 

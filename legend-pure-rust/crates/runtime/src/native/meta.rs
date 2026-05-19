@@ -1515,6 +1515,8 @@ fn resolve_value_type(
             // the abstract `Date`.
             _ => bootstrap::DATE_ID,
         }),
+        // `%latest` is the abstract Date sentinel — no precision attached.
+        Value::Latest => Ok(bootstrap::DATE_ID),
         Value::StrictTime(_) => Ok(bootstrap::STRICT_TIME_ID),
         Value::Element(id) => {
             // The runtime type of an element reference is its metaclass
@@ -1668,6 +1670,7 @@ fn render_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -
         Value::Float(f) => render_float_repr(*f),
         Value::Decimal(d) => d.to_string(),
         Value::Date(d) => format!("%{d}"),
+        Value::Latest => "%latest".to_string(),
         Value::StrictTime(t) => format!("%{t}"),
         Value::Element(id) => render_element_representation(model, *id),
         Value::Object(obj_id) => {

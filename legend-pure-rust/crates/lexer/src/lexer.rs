@@ -453,7 +453,22 @@ impl<'a> Lexer<'a> {
     fn lex_date_or_percent(&mut self, _start_line: u32, _start_col: u32) -> TokenKind {
         // Date literal: %YYYY-MM-DD or %HH:MM:SS or %YYYY-MM-DDTHH:MM:SS
         // Also: %-YYYY-MM-DD for negative (BCE) years
-        // If no digit/minus follows %, it's just a percent operator
+        // Also: %latest — the milestoning sentinel for "the latest version"
+        // If no digit/minus/`latest` follows %, it's just a percent operator
+        let rest = &self.source[self.pos..];
+        if rest.starts_with("latest")
+            && rest
+                .as_bytes()
+                .get(6)
+                .is_none_or(|c| !c.is_ascii_alphanumeric() && *c != b'_')
+        {
+            // Consume the 6 chars of "latest" so the lexed token text
+            // round-trips as `%latest`. Use char advance for span/col tracking.
+            for _ in 0..6 {
+                self.advance();
+            }
+            return TokenKind::DateLiteral;
+        }
         let starts_date = self.peek().is_some_and(|c| c.is_ascii_digit())
             || (self.peek() == Some('-')
                 && self.source[self.pos..]

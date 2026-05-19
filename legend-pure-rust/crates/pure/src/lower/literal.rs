@@ -90,10 +90,16 @@ pub(super) fn lower_variable(var: &ast_expr::Variable) -> ValueSpec {
 // Date / time literal parsing
 // ---------------------------------------------------------------------------
 
-/// Parses `"2024-01-15"`, `"2024-01"`, or `"2024"` →
+/// Parses `"2024-01-15"`, `"2024-01"`, `"2024"`, or `"%latest"` →
 /// `DateValue::StrictDate` with appropriate precision (`month` / `day`
-/// are `None` when the corresponding segment is missing).
+/// are `None` when the corresponding segment is missing) or
+/// `DateValue::Latest` for the milestoning sentinel.
 fn parse_strict_date(s: &str) -> Option<DateValue> {
+    // %latest sentinel — recognise either with or without the leading `%`
+    // so this is robust to whichever spelling the AST node carries.
+    if s == "%latest" || s == "latest" {
+        return Some(DateValue::Latest);
+    }
     let s = s.strip_prefix('%').unwrap_or(s);
     let parts: Vec<&str> = s.split('-').collect();
     match parts.len() {

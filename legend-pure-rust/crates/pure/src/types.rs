@@ -315,6 +315,19 @@ pub enum DateValue {
         /// with (1–9). `0` means no fractional part.
         subsecond_digits: u8,
     },
+    /// `%latest` — the milestoning sentinel for "the latest version".
+    ///
+    /// Distinct from concrete `StrictDate` values. Lowered from the
+    /// parser's `StrictDateLiteral { value: "%latest" }` AST node. At
+    /// runtime it materialises as [`crate::types::Value::Latest`] (the
+    /// runtime equivalent — defined in `legend-pure-runtime`).
+    /// Comparison-wise it's greater than every concrete date; in
+    /// milestoning dispatch it acts as a wildcard that disables the
+    /// date filter on the relevant axis.
+    ///
+    /// Java parity: the `latestDate` instance form recognised by
+    /// `MilestoningFunctionExpressionValidator`.
+    Latest,
 }
 
 // ---------------------------------------------------------------------------
