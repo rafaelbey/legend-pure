@@ -1989,6 +1989,16 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 for arg in arguments {
                     args_v.push(self.eval(arg)?);
                 }
+                // Milestoning-synthesised QPs carry the
+                // `<<milestoning.generatedmilestoningproperty>>` stereotype
+                // and have an empty body — dispatch via the runtime
+                // helper instead of `eval_body([])` which would return
+                // an empty collection.
+                if let Some(result) = crate::milestoning::try_eval_synthesized_qp(
+                    self.model, qp, &obj_id, &args_v, &self.heap,
+                ) {
+                    return result;
+                }
                 self.context.push_scope();
                 self.context
                     .set(SmolStr::new("this"), Value::Object(obj_id));

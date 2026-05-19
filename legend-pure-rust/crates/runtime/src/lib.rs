@@ -70,6 +70,7 @@ pub mod extensions;
 pub mod heap;
 pub mod hooks;
 pub mod m3_paths;
+pub mod milestoning;
 pub mod model_utils;
 pub mod native;
 pub mod pct;

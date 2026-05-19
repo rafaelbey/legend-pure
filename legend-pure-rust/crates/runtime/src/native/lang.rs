@@ -2039,13 +2039,7 @@ fn evaluate_class_constraints(
     type_var_values: &[Value],
 ) -> Result<(), PureException> {
     let mut visited: std::collections::HashSet<ElementId> = std::collections::HashSet::new();
-    evaluate_class_constraints_with_inheritance(
-        ctx,
-        class_id,
-        obj,
-        type_var_values,
-        &mut visited,
-    )
+    evaluate_class_constraints_with_inheritance(ctx, class_id, obj, type_var_values, &mut visited)
 }
 
 #[allow(clippy::result_large_err)]
@@ -2258,14 +2252,14 @@ pub(crate) fn gather_all_instances(
     let target_path = crate::model_utils::build_element_path(ctx.model(), class_id, "::", false);
 
     // Two sources, deduped by Rc::as_ptr:
-        //   1. Metamodel arena — every bootstrapped element row whose
-        //      classifier matches. Covers the common case `Class.all()`,
-        //      `ConcreteFunctionDefinition.all()`, etc. in O(metamodel).
-        //   2. Reachability walk from the current variable context.
-        //      Covers user-class queries like `Trade.all()` against
-        //      instances reachable from the live evaluator state. No
-        //      global registry — once a binding drops, the instance is
-        //      no longer reachable and is correctly excluded.
+    //   1. Metamodel arena — every bootstrapped element row whose
+    //      classifier matches. Covers the common case `Class.all()`,
+    //      `ConcreteFunctionDefinition.all()`, etc. in O(metamodel).
+    //   2. Reachability walk from the current variable context.
+    //      Covers user-class queries like `Trade.all()` against
+    //      instances reachable from the live evaluator state. No
+    //      global registry — once a binding drops, the instance is
+    //      no longer reachable and is correctly excluded.
     let mut seen: std::collections::HashSet<*const std::cell::RefCell<crate::heap::HeapEntry>> =
         std::collections::HashSet::new();
     let mut projected: Vec<Value> = Vec::new();
@@ -2414,10 +2408,12 @@ impl NativeFunction for GetAllBitemporal {
         let business = require_date(&values[2], "getAll")?;
         let stereo = milestoning_kind(ctx.model(), class_id);
         if stereo != Some(legend_pure_parser_pure::milestoning::MilestoningStereotype::Bitemporal) {
-            return Err(PureException::from(PureRuntimeError::EvaluationError(format!(
-                "getAll(Class, processingDate, businessDate): class '{}' is not bitemporal",
-                crate::model_utils::build_element_path(ctx.model(), class_id, "::", false)
-            ))));
+            return Err(PureException::from(PureRuntimeError::EvaluationError(
+                format!(
+                    "getAll(Class, processingDate, businessDate): class '{}' is not bitemporal",
+                    crate::model_utils::build_element_path(ctx.model(), class_id, "::", false)
+                ),
+            )));
         }
         let instances = gather_all_instances(ctx, class_id)?;
         let filtered: Vec<Value> = instances
@@ -2524,7 +2520,14 @@ fn milestoning_kind(
 /// `Value::Element` instances (metamodel rows) carry no user date properties
 /// so they're always filtered out — milestoning only applies to data
 /// instances, not metamodel rows.
-fn instance_property_matches_date(value: &Value, date_property: &str, date: &Value) -> bool {
+///
+/// Shared by the natives in this module and by the milestoning QP
+/// runtime dispatch in [`crate::milestoning`].
+pub(crate) fn instance_property_matches_date(
+    value: &Value,
+    date_property: &str,
+    date: &Value,
+) -> bool {
     match value {
         Value::Object(handle) => {
             let entry = handle.borrow();
@@ -2539,7 +2542,7 @@ fn instance_property_matches_date(value: &Value, date_property: &str, date: &Val
 
 /// Check whether an instance's `date_property` value falls in
 /// `[start, end]` inclusive.
-fn instance_property_date_in_range(
+pub(crate) fn instance_property_date_in_range(
     value: &Value,
     date_property: &str,
     start: &Value,
@@ -2793,8 +2796,5 @@ pub fn register(registry: &mut NativeRegistry) {
 
     // Reflective property / override management.
     registry.register("removeOverride_T_1__T_1_", RemoveOverride);
-    registry.register(
-        "rawEvalProperty_Property_1__Any_1__V_m_",
-        RawEvalProperty,
-    );
+    registry.register("rawEvalProperty_Property_1__Any_1__V_m_", RawEvalProperty);
 }

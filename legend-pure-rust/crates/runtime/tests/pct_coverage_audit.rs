@@ -172,7 +172,10 @@ fn pct_native_coverage_audit_under_ceiling() {
 
     let total_gaps = gaps.len();
     let missing_count = gaps.iter().filter(|g| g.kind == GapKind::Missing).count();
-    let mismatch_count = gaps.iter().filter(|g| g.kind == GapKind::SignatureMismatch).count();
+    let mismatch_count = gaps
+        .iter()
+        .filter(|g| g.kind == GapKind::SignatureMismatch)
+        .count();
     let coverage_pct = if total_natives == 0 {
         100.0
     } else {
@@ -227,7 +230,8 @@ fn pct_native_coverage_audit_under_ceiling() {
 
     if total_gaps == 0 {
         report.push_str("All platform native declarations are backed by registered ");
-        report.push_str("`NativeFunction` impls under the exact mangled key — nothing to attack.\n");
+        report
+            .push_str("`NativeFunction` impls under the exact mangled key — nothing to attack.\n");
     } else {
         report.push_str("## Gaps by package\n\n");
         report.push_str("Largest groups first. **Missing** rows (`M`) are the priority — ");
@@ -253,7 +257,10 @@ fn pct_native_coverage_audit_under_ceiling() {
                 package.clone()
             };
             let m = group.iter().filter(|g| g.kind == GapKind::Missing).count();
-            let s = group.iter().filter(|g| g.kind == GapKind::SignatureMismatch).count();
+            let s = group
+                .iter()
+                .filter(|g| g.kind == GapKind::SignatureMismatch)
+                .count();
             writeln!(report, "### `{label}` (M:{m} S:{s})").ok();
             report.push('\n');
             report.push_str("| Kind | Pure FQN | Mangled key |\n|---|---|---|\n");
@@ -372,4 +379,3 @@ fn report_path() -> PathBuf {
         .join("test-output")
         .join("pct_native_gaps.md")
 }
-
