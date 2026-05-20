@@ -154,6 +154,56 @@ Class demo::Customer
 }
 
 #[test]
+fn test_parse_compile_does_not_emit_unsupported_colspec_or_relation() {
+    // ColSpec / ColSpecArray / RelationLiteral literals appearing
+    // anywhere in the source must NOT surface as `@unsupported:<kind>`
+    // placeholders in the JSON output. Function bodies today flow
+    // through AST→Protocol (which already emits `classInstance("colSpec",
+    // ...)` for these), so this assertion primarily acts as a
+    // regression guard — the Pure→Protocol converter in
+    // `parse_compiled.rs` must already render the same shape, ready
+    // for when the broader path takes over function-body emission.
+    let temp_dir = TempDir::new().unwrap();
+    let file_path = temp_dir.path().join("relations.pure");
+    let source = "\
+function demo::pickColSpec(): meta::pure::metamodel::relation::ColSpec<Any>[1]
+{
+    ~name
+}
+
+function demo::pickColSpecArray(): meta::pure::metamodel::relation::ColSpecArray<Any>[1]
+{
+    ~[a, b]
+}
+";
+    std::fs::write(&file_path, source).unwrap();
+
+    let mut cmd = Command::cargo_bin("legend").unwrap();
+    cmd.env("NO_COLOR", "1");
+    let assert = cmd
+        .arg("parse")
+        .arg("--compile")
+        .arg(&file_path)
+        .assert()
+        .success();
+    let out = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+
+    assert!(
+        !out.contains("@unsupported:RelationLiteral")
+            && !out.contains("@unsupported:ColSpecLiteral")
+            && !out.contains("@unsupported:ColSpecArrayLiteral"),
+        "RelationLiteral / ColSpec* must not fall back to the @unsupported placeholder; got:\n{out}"
+    );
+    // The AST path already emits `classInstance("colSpec", ...)` for
+    // these — confirm that the shape is preserved through `--compile`
+    // (i.e. nothing in the patch step disturbs it).
+    assert!(
+        out.contains("classInstance"),
+        "expected at least one classInstance in output; got:\n{out}"
+    );
+}
+
+#[test]
 fn test_parse_compile_does_not_fall_back_to_path_literal_placeholder() {
     // A function body containing a navigation path literal `#/Customer/name#`
     // must under `--compile` continue to emit the protocol

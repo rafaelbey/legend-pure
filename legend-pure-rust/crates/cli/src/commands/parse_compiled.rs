@@ -370,12 +370,12 @@ fn pure_constraint_to_protocol(
         name: con
             .name
             .as_ref()
-            .map_or_else(|| "constraint".to_string(), |s| s.to_string()),
+            .map_or_else(|| "constraint".to_string(), ToString::to_string),
         owner: None,
         function_definition: fn_def,
         source_information: Some(source_info_to_protocol(&con.source_info)),
         external_id: con.external_id.clone(),
-        enforcement_level: con.enforcement_level.as_ref().map(|s| s.to_string()),
+        enforcement_level: con.enforcement_level.as_ref().map(ToString::to_string),
         message_function: msg_fn,
     }
 }
@@ -528,22 +528,128 @@ fn value_spec_to_protocol(
             steps,
             name,
         } => path_literal_to_protocol(start_type, steps, name.as_ref(), model, src),
+        ExprKind::RelationLiteral { columns } => relation_literal_to_protocol(columns, model, src),
+        ExprKind::ColSpecArrayLiteral { columns, kind } => {
+            col_spec_to_protocol(columns, *kind, /* is_array */ true, model, src)
+        }
+        ExprKind::ColSpecLiteral { column, kind } => {
+            col_spec_to_protocol(std::slice::from_ref(column), *kind, false, model, src)
+        }
         // Variants that don't yet have a clean protocol mapping. Emit a
         // placeholder Var so the JSON stays well-formed; downstream
         // consumers that hit one of these for real should ask for the
         // specific variant to be wired up.
-        ExprKind::TypeReference { .. }
-        | ExprKind::MultiplicityReference { .. }
-        | ExprKind::RelationLiteral { .. }
-        | ExprKind::ColSpecArrayLiteral { .. }
-        | ExprKind::ColSpecLiteral { .. } => ValueSpecification::Var(Variable {
-            name: format!("@unsupported:{}", expr_kind_tag(vs.kind.as_ref())),
-            generic_type: None,
-            multiplicity: None,
-            supports_stream: None,
-            source_information: src,
-        }),
+        ExprKind::TypeReference { .. } | ExprKind::MultiplicityReference { .. } => {
+            ValueSpecification::Var(Variable {
+                name: format!("@unsupported:{}", expr_kind_tag(vs.kind.as_ref())),
+                generic_type: None,
+                multiplicity: None,
+                supports_stream: None,
+                source_information: src,
+            })
+        }
     }
+}
+
+/// Convert a lowered `RelationLiteral` (`@(name:Type[mult], …)`) to the
+/// protocol `classInstance("relationType", { columns: [...] })` shape.
+/// Each column emits as `{ name, type, multiplicity }`. Mirrors the
+/// Java engine's `RelationType` heap-object materialisation that the
+/// runtime evaluator builds at this expression position.
+fn relation_literal_to_protocol(
+    columns: &[legend_pure_parser_pure::types::RelationColumnLowered],
+    model: &PureModel,
+    src: Option<v1::source_info::SourceInformation>,
+) -> v1::value_spec::ValueSpecification {
+    use v1::value_spec::{ClassInstance, ValueSpecification};
+    let col_values: Vec<serde_json::Value> = columns
+        .iter()
+        .map(|col| render_relation_column(col, model))
+        .collect();
+    let mut value_map = serde_json::Map::new();
+    value_map.insert(
+        "columns".to_string(),
+        serde_json::Value::Array(col_values),
+    );
+    ValueSpecification::ClassInstance(ClassInstance {
+        type_name: "relationType".to_string(),
+        value: serde_json::Value::Object(value_map),
+        source_information: src,
+    })
+}
+
+/// Convert a lowered `ColSpecLiteral` or `ColSpecArrayLiteral` to a
+/// `classInstance("colSpec"|"colSpecArray"|"funcColSpec"|"funcColSpecArray"|
+/// "aggColSpec"|"aggColSpecArray", …)` per the kind discriminator.
+///
+/// Java parity: the platform's `colSpec` (`~name`), `colSpecArray`
+/// (`~[name1, …]`), and the `func`/`agg` lambda-bearing variants get
+/// distinct `_type` tags downstream so dispatch + reflective access
+/// pick the right metaclass.
+fn col_spec_to_protocol(
+    columns: &[legend_pure_parser_pure::types::RelationColumnLowered],
+    kind: legend_pure_parser_pure::types::ColSpecLiteralKind,
+    is_array: bool,
+    model: &PureModel,
+    src: Option<v1::source_info::SourceInformation>,
+) -> v1::value_spec::ValueSpecification {
+    use legend_pure_parser_pure::types::ColSpecLiteralKind;
+    use v1::value_spec::{ClassInstance, ValueSpecification};
+
+    let type_name = match (is_array, kind) {
+        (false, ColSpecLiteralKind::Plain) => "colSpec",
+        (false, ColSpecLiteralKind::Func) => "funcColSpec",
+        (false, ColSpecLiteralKind::Agg) => "aggColSpec",
+        (true, ColSpecLiteralKind::Plain) => "colSpecArray",
+        (true, ColSpecLiteralKind::Func) => "funcColSpecArray",
+        (true, ColSpecLiteralKind::Agg) => "aggColSpecArray",
+    };
+
+    let mut value_map = serde_json::Map::new();
+    if is_array {
+        // Array form: list every column.
+        let col_values: Vec<serde_json::Value> = columns
+            .iter()
+            .map(|col| render_relation_column(col, model))
+            .collect();
+        value_map.insert(
+            "columns".to_string(),
+            serde_json::Value::Array(col_values),
+        );
+    } else {
+        // Single-column form: inline the column's fields directly into
+        // the value map. Matches the AST→Protocol single-column shape
+        // emitted by `convert_column` (`{ name, type }` plus any
+        // function payload), so downstream consumers see the same
+        // wire form via either path.
+        if let Some(col) = columns.first() {
+            for (k, v) in render_relation_column(col, model)
+                .as_object()
+                .into_iter()
+                .flat_map(|m| m.iter())
+            {
+                value_map.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    ValueSpecification::ClassInstance(ClassInstance {
+        type_name: type_name.to_string(),
+        value: serde_json::Value::Object(value_map),
+        source_information: src,
+    })
+}
+
+/// Render a single relation column as `{ name, type, multiplicity }` JSON.
+fn render_relation_column(
+    col: &legend_pure_parser_pure::types::RelationColumnLowered,
+    model: &PureModel,
+) -> serde_json::Value {
+    let multiplicity = render_multiplicity(&col.multiplicity);
+    serde_json::json!({
+        "name": col.name.to_string(),
+        "type": element_full_path(model, col.type_element),
+        "multiplicity": multiplicity,
+    })
 }
 
 /// Convert a lowered `PathLiteral` to the protocol
