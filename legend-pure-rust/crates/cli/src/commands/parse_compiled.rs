@@ -523,6 +523,11 @@ fn value_spec_to_protocol(
                 source_information: src,
             })
         }
+        ExprKind::PathLiteral {
+            start_type,
+            steps,
+            name,
+        } => path_literal_to_protocol(start_type, steps, name.as_ref(), model, src),
         // Variants that don't yet have a clean protocol mapping. Emit a
         // placeholder Var so the JSON stays well-formed; downstream
         // consumers that hit one of these for real should ask for the
@@ -531,8 +536,7 @@ fn value_spec_to_protocol(
         | ExprKind::MultiplicityReference { .. }
         | ExprKind::RelationLiteral { .. }
         | ExprKind::ColSpecArrayLiteral { .. }
-        | ExprKind::ColSpecLiteral { .. }
-        | ExprKind::PathLiteral { .. } => ValueSpecification::Var(Variable {
+        | ExprKind::ColSpecLiteral { .. } => ValueSpecification::Var(Variable {
             name: format!("@unsupported:{}", expr_kind_tag(vs.kind.as_ref())),
             generic_type: None,
             multiplicity: None,
@@ -540,6 +544,64 @@ fn value_spec_to_protocol(
             source_information: src,
         }),
     }
+}
+
+/// Convert a lowered `PathLiteral` to the protocol
+/// `classInstance("path", { startType, path: [propertyPathElement…], name? })`
+/// shape, mirroring the AST→Protocol path converter
+/// (`convert_navigation_path`).
+fn path_literal_to_protocol(
+    start_type: &TypeExpr,
+    steps: &[legend_pure_parser_pure::types::PathStepLowered],
+    name: Option<&smol_str::SmolStr>,
+    model: &PureModel,
+    src: Option<v1::source_info::SourceInformation>,
+) -> v1::value_spec::ValueSpecification {
+    use v1::value_spec::{ClassInstance, ValueSpecification};
+
+    let start_type_str = match start_type {
+        TypeExpr::Named { element, .. } => element_full_path(model, *element),
+        TypeExpr::Generic(n) => n.to_string(),
+        _ => "meta::pure::metamodel::type::Any".to_string(),
+    };
+
+    let path_steps: Vec<serde_json::Value> = steps
+        .iter()
+        .map(|step| {
+            let params: Vec<serde_json::Value> = step
+                .parameters
+                .iter()
+                .map(|p| {
+                    serde_json::to_value(value_spec_to_protocol(p, model))
+                        .unwrap_or(serde_json::Value::Null)
+                })
+                .collect();
+            serde_json::json!({
+                "_type": "propertyPathElement",
+                "property": step.property_name.to_string(),
+                "parameters": params,
+            })
+        })
+        .collect();
+
+    let mut value_map = serde_json::Map::new();
+    value_map.insert(
+        "startType".to_string(),
+        serde_json::Value::String(start_type_str),
+    );
+    value_map.insert("path".to_string(), serde_json::Value::Array(path_steps));
+    if let Some(alias) = name {
+        value_map.insert(
+            "name".to_string(),
+            serde_json::Value::String(alias.to_string()),
+        );
+    }
+
+    ValueSpecification::ClassInstance(ClassInstance {
+        type_name: "path".to_string(),
+        value: serde_json::Value::Object(value_map),
+        source_information: src,
+    })
 }
 
 fn date_value_to_protocol(

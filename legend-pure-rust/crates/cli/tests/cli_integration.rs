@@ -154,6 +154,60 @@ Class demo::Customer
 }
 
 #[test]
+fn test_parse_compile_does_not_fall_back_to_path_literal_placeholder() {
+    // A function body containing a navigation path literal `#/Customer/name#`
+    // must under `--compile` continue to emit the protocol
+    // `classInstance("path", ...)` shape — never the
+    // `@unsupported:PathLiteral` placeholder. Function bodies today
+    // flow through the AST→Protocol path, so this test primarily acts
+    // as a regression guard: if the Pure→Protocol path ever takes over
+    // function-body emission (a planned follow-up), the PathLiteral
+    // converter in `parse_compiled.rs` must already render the same
+    // shape. The lowered-IR variant is structurally identical to the
+    // AST variant for path literals (start type + steps + optional
+    // alias), and the converter mirrors the AST converter (see
+    // `crates/protocol/src/v1/convert.rs::convert_navigation_path`).
+    let temp_dir = TempDir::new().unwrap();
+    let file_path = temp_dir.path().join("paths.pure");
+    let source = "\
+Class demo::Customer
+{
+    name: String[1];
+}
+
+function demo::pickName(): meta::pure::metamodel::path::Path<demo::Customer, String|1>[1]
+{
+    #/demo::Customer/name#
+}
+";
+    std::fs::write(&file_path, source).unwrap();
+
+    let mut cmd = Command::cargo_bin("legend").unwrap();
+    cmd.env("NO_COLOR", "1");
+    let assert = cmd
+        .arg("parse")
+        .arg("--compile")
+        .arg(&file_path)
+        .assert()
+        .success();
+    let out = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+
+    assert!(
+        out.contains("\"_type\": \"classInstance\"")
+            || out.contains("\"_type\":\"classInstance\""),
+        "expected path literal to render as classInstance; got:\n{out}"
+    );
+    assert!(
+        out.contains("\"propertyPathElement\""),
+        "expected propertyPathElement step in path output; got:\n{out}"
+    );
+    assert!(
+        !out.contains("@unsupported:PathLiteral"),
+        "PathLiteral should NOT fall back to the @unsupported placeholder; got:\n{out}"
+    );
+}
+
+#[test]
 fn test_parse_file_not_found() {
     let mut cmd = Command::cargo_bin("legend").unwrap();
     cmd.env("NO_COLOR", "1");
