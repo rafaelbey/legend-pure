@@ -3966,25 +3966,48 @@ pub(crate) fn narrow_candidates_by_type(
                 continue;
             };
             // Check if fj's params are ALL supertypes of (or same as) fi's params
-            // → fi is more specific, so fj is dominated
-            let fj_dominated = fi
-                .parameters
-                .iter()
-                .zip(fj.parameters.iter())
-                .all(|(pi, pj)| {
-                    let i_eid = match &pi.type_expr {
-                        crate::types::TypeExpr::Named { element, .. } => Some(*element),
-                        _ => None,
-                    };
-                    let j_eid = match &pj.type_expr {
-                        crate::types::TypeExpr::Named { element, .. } => Some(*element),
-                        _ => None,
-                    };
-                    match (i_eid, j_eid) {
-                        (Some(i_e), Some(j_e)) => i_e == j_e || is_subtype(i_e, j_e, model),
-                        _ => true, // can't compare generics — don't eliminate
-                    }
-                });
+            // → fi is more specific, so fj is dominated.
+            //
+            // Generic vs Named handling: a `TypeExpr::Generic(_)` param
+            // is effectively the top type (≈ Any). So:
+            //   pi=Named, pj=Named  — true iff pi is equal to or a
+            //                         subtype of pj (unchanged).
+            //   pi=Named, pj=Generic — true. Named is strictly more
+            //                         specific than a Generic; fi
+            //                         dominates fj at this position.
+            //   pi=Generic, pj=Named — false. Generic is strictly less
+            //                         specific than Named; fi does NOT
+            //                         dominate fj. Returning true here
+            //                         would let a Generic-param overload
+            //                         silently dominate a Named-param
+            //                         overload — the original
+            //                         legend-engine port bug for
+            //                         `$res->map(...)` where
+            //                         `collection::map(value:T[m], ...)`
+            //                         dominated
+            //                         `relation::map(rel:Relation<T>[1], ...)`.
+            //   pi=Generic, pj=Generic — true. Two equally-non-specific
+            //                         positions; keep the prior
+            //                         "don't eliminate" behaviour.
+            let fj_dominated =
+                fi.parameters
+                    .iter()
+                    .zip(fj.parameters.iter())
+                    .all(|(pi, pj)| match (&pi.type_expr, &pj.type_expr) {
+                        (
+                            crate::types::TypeExpr::Named { element: a, .. },
+                            crate::types::TypeExpr::Named { element: b, .. },
+                        ) => *a == *b || is_subtype(*a, *b, model),
+                        (
+                            crate::types::TypeExpr::Named { .. },
+                            crate::types::TypeExpr::Generic(_),
+                        ) => true,
+                        (
+                            crate::types::TypeExpr::Generic(_),
+                            crate::types::TypeExpr::Named { .. },
+                        ) => false,
+                        _ => true,
+                    });
             if fj_dominated {
                 dominated[j] = true;
             }
@@ -4323,5 +4346,143 @@ mod tests {
         );
         assert_eq!(resolved2, Some(root_foo_id));
         assert!(errors2.is_empty());
+    }
+
+    /// Phase-3 (parameter-domination tiebreaker) must treat a `Named`
+    /// param as strictly more specific than a `Generic` one. Otherwise a
+    /// Generic-T overload silently dominates a Named-Integer overload —
+    /// the exact failure mode the legend-engine port surveyed for
+    /// `$res->map(x|$x.id)` (collection::map's `value:T[m]` dominating
+    /// relation::map's `rel:Relation<T>[1]`).
+    ///
+    /// Synthetic minimal repro: two functions sharing the same simple
+    /// name, identical arity and return type, differing only at param 0:
+    ///
+    /// - `fnA<T>(value:T[1])` — `TypeExpr::Generic("T")`
+    /// - `fnB(value:Integer[1])` — `TypeExpr::Named { element: Integer, … }`
+    ///
+    /// To exercise Phase-3 specifically — not Phase 2's type-score
+    /// tiebreaker — the argument must produce `arg_type = None`. A bare
+    /// `Variable("x")` with no `var_types` binding qualifies: Phase 1
+    /// `is_type_compatible(None, _)` permits both candidates, and Phase
+    /// 2's type-scoring block at `resolve.rs:3877` is gated on `Some`
+    /// arg type, so both candidates score 0 for type — leaving Phase 3
+    /// to break the tie. Before the Phase-3 fix the `_ => true` blanket
+    /// at the Generic/Named compare arm let `fnA` dominate `fnB`, so
+    /// the dispatcher wrongly returned `[fnA]`.
+    #[test]
+    fn phase3_named_param_dominates_generic_param() {
+        use crate::ids::ElementId;
+        use crate::model::{Element as ModelElement, ElementNode, ModelChunk, PureModel};
+        use crate::nodes::function::Function;
+        use crate::types::{ExprKind, Multiplicity, Parameter, TypeExpr, ValueSpec};
+        use std::sync::Arc;
+
+        let mut model = PureModel::new();
+        let bootstrap = crate::bootstrap::create_bootstrap_chunk(model.root_package);
+        model.chunks.push(bootstrap);
+
+        let pkg = model.get_or_create_package(&[SmolStr::new("test"), SmolStr::new("pkg")]);
+        let chunk_id: u16 = 1;
+        let mut chunk = ModelChunk::new(chunk_id);
+        let si = SourceInfo::new("synth.pure", 1, 1, 1, 1);
+
+        // Named(Integer) — the concrete, more-specific param shape.
+        let named_int_te = TypeExpr::Named {
+            element: crate::bootstrap::INTEGER_ID,
+            type_arguments: Vec::new(),
+            multiplicity_arguments: Vec::new(),
+            value_arguments: Vec::new(),
+            source_info: None,
+        };
+        // Generic("T") — the unbound type variable shape.
+        let generic_t_te = TypeExpr::Generic(SmolStr::new("T"));
+
+        // fnA: Generic param. Mangled name must reflect the Generic shape so
+        // the ElementNode names are distinct (required by the chunk's name
+        // index even though we look up by ElementId).
+        let fn_a_idx = chunk.alloc_element(
+            ElementNode {
+                name: SmolStr::new("myFn_T_1__T_1_"),
+                source_info: si.clone(),
+                name_source_info: si.clone(),
+                parent_package: pkg,
+            },
+            ModelElement::Function(Function {
+                function_name: SmolStr::new("myFn"),
+                is_native: true,
+                parameters: Arc::from(vec![Parameter {
+                    name: SmolStr::new("value"),
+                    type_expr: generic_t_te.clone(),
+                    multiplicity: Multiplicity::PureOne,
+                    source_info: si.clone(),
+                }]),
+                return_type: generic_t_te,
+                return_multiplicity: Multiplicity::PureOne,
+                body: Arc::from(Vec::new()),
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+            }),
+        );
+        let fn_a_id = ElementId::InstanceId {
+            chunk_id,
+            local_idx: fn_a_idx,
+        };
+
+        // fnB: Named(Integer) param — strictly more specific than fnA.
+        let fn_b_idx = chunk.alloc_element(
+            ElementNode {
+                name: SmolStr::new("myFn_Integer_1__Integer_1_"),
+                source_info: si.clone(),
+                name_source_info: si.clone(),
+                parent_package: pkg,
+            },
+            ModelElement::Function(Function {
+                function_name: SmolStr::new("myFn"),
+                is_native: true,
+                parameters: Arc::from(vec![Parameter {
+                    name: SmolStr::new("value"),
+                    type_expr: named_int_te.clone(),
+                    multiplicity: Multiplicity::PureOne,
+                    source_info: si.clone(),
+                }]),
+                return_type: named_int_te,
+                return_multiplicity: Multiplicity::PureOne,
+                body: Arc::from(Vec::new()),
+                stereotypes: Vec::new(),
+                tagged_values: Vec::new(),
+            }),
+        );
+        let fn_b_id = ElementId::InstanceId {
+            chunk_id,
+            local_idx: fn_b_idx,
+        };
+
+        model.chunks.push(chunk);
+        model.register_element(pkg, fn_a_id);
+        model.register_element(pkg, fn_b_id);
+
+        // Variable argument with no binding — inference returns None so
+        // Phase 2 can't break the tie via type score. This forces the
+        // narrower into Phase 3.
+        let arg_si = SourceInfo::new("call.pure", 1, 1, 1, 2);
+        let var_arg = ValueSpec {
+            kind: Box::new(ExprKind::Variable {
+                name: SmolStr::new("x"),
+            }),
+            source_info: arg_si,
+            type_info: None,
+        };
+
+        let var_types: VarTypes = HashMap::new();
+        let candidates = [fn_a_id, fn_b_id];
+
+        // Phase-3 must keep fnB (Named/Integer) and drop fnA (Generic).
+        let narrowed = narrow_candidates_by_type(&candidates, &[var_arg], &model, &var_types);
+        assert_eq!(
+            narrowed,
+            vec![fn_b_id],
+            "Named-param overload (fnB) must dominate Generic-param overload (fnA) when Phase 2 ties",
+        );
     }
 }
