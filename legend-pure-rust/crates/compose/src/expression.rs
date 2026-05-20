@@ -768,6 +768,31 @@ mod tests {
         assert_eq!(get_composed(&c), "~col");
     }
 
+    /// A `ColumnSpec` whose `name` carries whitespace (or any other
+    /// non-identifier character) must round-trip back to the quoted
+    /// `~'col name'` form. Pair with the parser-side test
+    /// `column_spec_with_quoted_name_strips_quotes` — together they
+    /// pin a stable round-trip across the unquote/requote boundary.
+    #[test]
+    fn test_compose_column_requotes_name_with_whitespace() {
+        use legend_pure_parser_ast::expression::{ColumnBuilderExpr, ColumnSpec};
+
+        let c = Expression::Column(ColumnBuilderExpr {
+            columns: vec![ColumnSpec {
+                stereotypes: vec![],
+                tagged_values: vec![],
+                name: "col name".into(),
+                type_spec: None,
+                extra_function: None,
+                source_info: si(),
+            }],
+            is_array: false,
+            source_info: si(),
+        });
+
+        assert_eq!(get_composed(&c), "~'col name'");
+    }
+
     #[test]
     fn compose_date_literals() {
         let d = Expression::Literal(Literal::DateTime(

@@ -182,3 +182,46 @@ function my::test(): my::Color[1]
     );
     insta::assert_debug_snapshot!(file);
 }
+
+/// `~'col name'` must lower as a column spec whose `name` field holds the
+/// bare text `col name` — without the surrounding `'`. Java strips the
+/// quotes once at AST→M3 conversion (`AntlrContextToM3CoreInstance.java:
+/// 950`); the Rust parser must do the same so downstream consumers
+/// (`alloc_col_spec_literal`, name-based column lookups) see the canonical
+/// identifier instead of `'col name'` (which never matches a real column).
+#[test]
+fn column_spec_with_quoted_name_strips_quotes() {
+    use legend_pure_parser_ast::element::Element;
+    use legend_pure_parser_ast::expression::Expression;
+
+    let file = parse_ok(
+        r"###Pure
+function my::test(): Any[*]
+{
+    ~'col name'
+}",
+    );
+
+    let func = file
+        .all_elements()
+        .find_map(|e| match e {
+            Element::Function(f) => Some(f),
+            _ => None,
+        })
+        .expect("parsed function");
+    let col = func
+        .body
+        .iter()
+        .find_map(|expr| match expr {
+            Expression::Column(c) => Some(c),
+            _ => None,
+        })
+        .expect("column builder in body");
+    assert_eq!(col.columns.len(), 1);
+    assert_eq!(
+        col.columns[0].name.as_str(),
+        "col name",
+        "quotes must be stripped from ~'col name'",
+    );
+    assert!(!col.is_array, "~name is the single-column ColSpec shape");
+}

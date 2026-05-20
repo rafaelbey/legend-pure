@@ -1190,7 +1190,20 @@ impl Parser {
         let si = self.cursor.current_source_info();
         let stereotypes = self.parse_stereotypes()?;
         let tagged_values = self.parse_tagged_values()?;
-        let (name, _) = self.cursor.expect_identifier_or_keyword()?;
+        // `columnName: identifier | STRING` (M3CoreParser.g4:184). When the
+        // name arrives as a single-quoted string literal (e.g. `~'col name'`),
+        // strip the quotes here so the AST carries the canonical identifier —
+        // matching `AntlrContextToM3CoreInstance.java:950` which calls
+        // `removeQuotes` then `StringEscape.unescape` once at AST→M3
+        // conversion. Compose's `maybe_quote` re-emits the quotes when the
+        // bare name needs them.
+        let is_quoted = self.cursor.peek_kind() == TokenKind::StringLiteral;
+        let (raw_name, _) = self.cursor.expect_identifier_or_keyword()?;
+        let name = if is_quoted {
+            SmolStr::from(unquote_string(&raw_name))
+        } else {
+            raw_name
+        };
 
         let mut type_spec = None;
         let mut extra_function = None;
