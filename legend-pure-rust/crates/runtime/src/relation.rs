@@ -263,11 +263,33 @@ pub fn alloc_col_spec_array_literal(
 
 /// Allocate the single-column `ColSpec` literal heap shape produced
 /// by `~name` source syntax. Mirrors the platform's
-/// `meta::pure::functions::relation::colSpec(s, cl):ColSpec<T>[1]`
-/// shape: a `ColSpec` heap object whose `name:String[1]` slot holds
-/// the column name and whose `classifierGenericType` chain points at
-/// an inner `Column` (with the type / multiplicity metadata) the way
-/// reflective walks expect.
+/// `meta::pure::metamodel::relation::ColSpec<T>` shape per
+/// `platform/pure/relation.pure:17`, where the comment *"T is of type
+/// **RelationType**"* declares the runtime invariant: a ColSpec's
+/// `classifierGenericType.typeArguments[0].rawType` is a `RelationType`
+/// with the column as one entry in its `columns` slot.
+///
+/// Concretely the chain is:
+///
+/// ```text
+/// ColSpec
+///   ├─ name: String[1]            -- the column name
+///   └─ classifierGenericType: GenericType
+///        ├─ rawType: ColSpec
+///        └─ typeArguments[0]: GenericType
+///             └─ rawType: RelationType        ← the inner shape
+///                  └─ columns: Column[*]      ← navigable per `relation.pure`
+/// ```
+///
+/// This mirrors `alloc_col_spec_array_literal`'s structure so that a
+/// `~name` (ColSpec) and a `~[name1, name2]` (ColSpecArray) literal
+/// expose the same reflective shape — both reachable via
+/// `cs.classifierGenericType.typeArguments[0].rawType.columns`. Earlier
+/// the inner `rawType` slot held a bare `Column`, which had no
+/// `columns` slot and broke the Pure body for
+/// `reduce(rel, win, row, x|eval(colSpec, x), …)` and any other
+/// reflective walk that expected a `RelationType` per the platform
+/// comment.
 ///
 /// # Errors
 /// Returns `PureException` if any underlying heap allocation fails.
@@ -277,15 +299,16 @@ pub fn alloc_col_spec_literal(
     model: &PureModel,
     column: &RelationColumnLowered,
 ) -> Result<ObjectHandle, PureException> {
-    // Column heap object — captures the column's typed shape.
-    let column_obj = alloc_column(heap, model, column)?;
+    // Single-column RelationType captures the column's typed shape —
+    // matches the platform's "T is of type RelationType" invariant.
+    let inner_relation = alloc_relation_literal(heap, model, std::slice::from_ref(column))?;
 
-    // Inner GenericType wraps the Column.
+    // Inner GenericType wraps the RelationType.
     let inner_gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
-    heap.mutate_add(&inner_gt, "rawType", &[Value::Object(column_obj)])
+    heap.mutate_add(&inner_gt, "rawType", &[Value::Object(inner_relation)])
         .map_err(PureException::from)?;
 
-    // ColSpec's classifierGenericType points at the Column GenericType.
+    // ColSpec's classifierGenericType points at the RelationType GenericType.
     let outer_gt = heap.alloc_dynamic(m3_paths::GENERIC_TYPE);
     let cs_raw_type =
         m3_paths::resolve(model, m3_paths::COL_SPEC).map_or(Value::Unit, Value::Element);
@@ -300,4 +323,127 @@ pub fn alloc_col_spec_literal(
     heap.mutate_add(&cs, "classifierGenericType", &[Value::Object(outer_gt)])
         .map_err(PureException::from)?;
     Ok(cs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::heap::RuntimeHeap;
+    use legend_pure_parser_pure::bootstrap;
+    use legend_pure_parser_pure::types::Multiplicity;
+    use smol_str::SmolStr;
+
+    fn bootstrap_model() -> PureModel {
+        let mut model = PureModel::new();
+        let chunk = bootstrap::create_bootstrap_chunk(model.root_package);
+        model.chunks.push(chunk);
+        model
+    }
+
+    /// `alloc_col_spec_literal` must place a single-column
+    /// `RelationType` in its inner `classifierGenericType.typeArguments
+    /// [0].rawType` slot — never a bare `Column` — so that
+    /// `colSpec.classifierGenericType.typeArguments[0].rawType.columns`
+    /// resolves to a one-Column list per the platform `relation.pure`
+    /// spec. Before the fix the slot held a bare `Column` and `.columns`
+    /// returned empty.
+    #[test]
+    fn col_spec_literal_inner_raw_type_is_relation_type_with_one_column() {
+        let model = bootstrap_model();
+        let mut heap = RuntimeHeap::new();
+
+        let column = RelationColumnLowered {
+            name: SmolStr::new("col name"),
+            type_element: bootstrap::INTEGER_ID,
+            multiplicity: Multiplicity::PureOne,
+        };
+
+        let cs = alloc_col_spec_literal(&mut heap, &model, &column)
+            .expect("alloc must succeed against the bootstrap model");
+
+        // cs.classifierGenericType → outer GT
+        let cgt_values = heap
+            .get_property_values(&cs, "classifierGenericType")
+            .expect("ColSpec has a classifierGenericType slot");
+        let outer_gt = cgt_values
+            .iter()
+            .find_map(|v| match v {
+                Value::Object(o) => Some(o.clone()),
+                _ => None,
+            })
+            .expect("classifierGenericType is an Object");
+
+        // outer_gt.typeArguments[0] → inner GT
+        let ta = heap
+            .get_property_values(&outer_gt, "typeArguments")
+            .expect("outer GT has a typeArguments slot");
+        let inner_gt = ta
+            .iter()
+            .find_map(|v| match v {
+                Value::Object(o) => Some(o.clone()),
+                _ => None,
+            })
+            .expect("typeArguments[0] is an Object");
+
+        // inner_gt.rawType → must be a RelationType, not a Column.
+        let raw_type_values = heap
+            .get_property_values(&inner_gt, "rawType")
+            .expect("inner GT has a rawType slot");
+        let inner_raw = raw_type_values
+            .iter()
+            .find_map(|v| match v {
+                Value::Object(o) => Some(o.clone()),
+                _ => None,
+            })
+            .expect("inner GT rawType is an Object");
+
+        // Classifier must be RelationType.
+        let classifier = heap
+            .classifier(&inner_raw)
+            .expect("inner_raw has a classifier");
+        assert_eq!(
+            classifier.as_str(),
+            m3_paths::RELATION_TYPE,
+            "ColSpec's inner classifierGenericType.typeArguments[0].rawType must be a \
+             RelationType (per `platform/pure/relation.pure:17`, not a bare Column)",
+        );
+
+        // RelationType.columns must hold exactly one Column with the
+        // canonical (unquoted) name.
+        let columns = heap
+            .get_property_values(&inner_raw, "columns")
+            .expect("inner RelationType has a columns slot");
+        assert_eq!(
+            columns.len(),
+            1,
+            "single-column ColSpec must materialise one Column in the inner RelationType"
+        );
+        let col_obj = match &columns[0] {
+            Value::Object(o) => o.clone(),
+            other => panic!("expected Column object, got {other:?}"),
+        };
+        let col_name = heap
+            .get_property_values(&col_obj, "name")
+            .expect("Column.name slot");
+        let actual_name = col_name
+            .iter()
+            .find_map(|v| match v {
+                Value::String(s) => Some(s.clone()),
+                _ => None,
+            })
+            .expect("Column.name is a String");
+        assert_eq!(actual_name.as_str(), "col name");
+
+        // The outer ColSpec.name slot also still carries the column name
+        // (unchanged contract used by `select` / `rename` natives).
+        let cs_name_values = heap.get_property_values(&cs, "name").expect("ColSpec.name");
+        let cs_name = cs_name_values
+            .iter()
+            .find_map(|v| match v {
+                Value::String(s) => Some(s.clone()),
+                _ => None,
+            })
+            .expect("ColSpec.name is a String");
+        assert_eq!(cs_name.as_str(), "col name");
+    }
 }
