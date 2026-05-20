@@ -201,6 +201,56 @@ function demo::pickAll(): Any[*]
 }
 
 #[test]
+fn test_parse_compile_function_body_uses_lowered_form() {
+    // With `--compile`, function bodies flow through Pure→Protocol
+    // and emit the lowered (post-inference) view: function calls
+    // carry their full resolved-name shape (`func` with the operator's
+    // canonical name like `plus`), instead of the AST's arithmetic
+    // operator desugaring path.
+    let temp_dir = TempDir::new().unwrap();
+    let file_path = temp_dir.path().join("compute.pure");
+    let source = "\
+function demo::addPair(a: Integer[1], b: Integer[1]): Integer[1]
+{
+    $a + $b
+}
+";
+    std::fs::write(&file_path, source).unwrap();
+
+    let mut cmd = Command::cargo_bin("legend").unwrap();
+    cmd.env("NO_COLOR", "1");
+    let assert = cmd
+        .arg("parse")
+        .arg("--compile")
+        .arg(&file_path)
+        .assert()
+        .success();
+    let out = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+
+    // The body should include a `func` ValueSpecification with
+    // `function: "plus"` — the lowered IR's operator-name shape.
+    assert!(
+        out.contains("\"_type\": \"func\"")
+            || out.contains("\"_type\":\"func\""),
+        "expected `func` value-spec in function body; got:\n{out}"
+    );
+    assert!(
+        out.contains("\"function\": \"plus\"")
+            || out.contains("\"function\":\"plus\""),
+        "expected `plus` as the function name in the body; got:\n{out}"
+    );
+    // Variable references should be present too.
+    assert!(
+        out.contains("\"name\": \"a\""),
+        "expected variable `a` in body; got:\n{out}"
+    );
+    assert!(
+        out.contains("\"name\": \"b\""),
+        "expected variable `b` in body; got:\n{out}"
+    );
+}
+
+#[test]
 fn test_parse_emits_multiplicity_literal_wire_form() {
     // Multiplicity literals in expression position (`@[1]`, `@[*]`,
     // `@[m]`) must emit:

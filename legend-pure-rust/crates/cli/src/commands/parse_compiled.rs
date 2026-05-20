@@ -76,6 +76,9 @@ pub fn patch_with_milestoning(
             v1::element::PackageableElement::Association(a) => {
                 replace_association_from_compiled(a, &model);
             }
+            v1::element::PackageableElement::Function(f) => {
+                replace_function_from_compiled(f, &model);
+            }
             _ => {}
         }
     }
@@ -129,6 +132,85 @@ fn replace_class_from_compiled(c: &mut v1::element::ProtocolClass, model: &PureM
         .iter()
         .map(|tv| tagged_value_to_protocol(tv, model))
         .collect();
+}
+
+/// Replace the AST-shape protocol Function with the compiled view —
+/// resolved parameter and return types, lowered body, resolved
+/// stereotype + tagged-value references.
+///
+/// Function FQNs in Pure include the mangled signature, so look up by
+/// the function's simple name plus its package: `convert_function`
+/// (AST→Protocol) emits the simple name in `ProtocolFunction.name`,
+/// but the compiled model registers under the mangled FQN. We walk
+/// every Function element in the model under the matching package
+/// and pick the one whose `function_name` matches.
+fn replace_function_from_compiled(f: &mut v1::element::ProtocolFunction, model: &PureModel) {
+    // Pure registers functions under their mangled FQN (e.g.
+    // `myFn_String_1__Integer_1_`), while the protocol element's
+    // `name` is the simple Pure name (`myFn`). Walk the matching
+    // package's children to find the one whose compiled
+    // `function_name` matches.
+    let Some(func) = find_function_in_package(model, &f.package_path, &f.name) else {
+        return;
+    };
+
+    f.parameters = func
+        .parameters
+        .iter()
+        .map(|p| pure_param_to_variable(p, model))
+        .collect();
+    f.return_generic_type = render_type_expr_as_generic_type(&func.return_type, model);
+    f.return_multiplicity = render_multiplicity(&func.return_multiplicity);
+    // Native functions have an empty body in the IR (parity with how
+    // `native function …` declarations parse). For non-native
+    // functions, an empty compiled body is the signature of a failed
+    // body lowering — keep the AST-emitted body intact in that case
+    // rather than replacing it with `[]`. This makes `--compile`
+    // graceful when the source references platform symbols that
+    // aren't loaded (the AST path emits the user-written shape just
+    // fine; only the post-inference enrichment is lost).
+    if func.is_native || !func.body.is_empty() || f.body.is_empty() {
+        f.body = func
+            .body
+            .iter()
+            .map(|e| value_spec_to_protocol(e, model))
+            .collect();
+    }
+    f.stereotypes = func
+        .stereotypes
+        .iter()
+        .map(|s| stereotype_to_protocol(s, model))
+        .collect();
+    f.tagged_values = func
+        .tagged_values
+        .iter()
+        .map(|tv| tagged_value_to_protocol(tv, model))
+        .collect();
+}
+
+fn find_function_in_package<'m>(
+    model: &'m PureModel,
+    package_path: &str,
+    simple_name: &str,
+) -> Option<&'m legend_pure_parser_pure::nodes::function::Function> {
+    // Walk the package tree by segments.
+    let mut current = model.root_package;
+    if !package_path.is_empty() {
+        for segment in package_path.split("::") {
+            let pkg = model.get_package(current);
+            current = *pkg
+                .children_packages
+                .iter()
+                .find(|&&child_id| model.get_package(child_id).name.as_str() == segment)?;
+        }
+    }
+    let pkg = model.get_package(current);
+    pkg.children_elements
+        .iter()
+        .find_map(|&eid| match model.get_element(eid) {
+            Element::Function(func) if func.function_name.as_str() == simple_name => Some(func),
+            _ => None,
+        })
 }
 
 fn replace_association_from_compiled(
