@@ -117,8 +117,11 @@ Class demo::Customer
     // originalMilestonedProperties is `[]` without --compile.
     assert!(out_no_compile.contains("demo::Customer"));
 
-    // With --compile: originalMilestonedProperties on Customer
-    // contains `address`.
+    // With --compile: the output reflects the compiled, post-synthesis
+    // view: originalMilestonedProperties is populated AND the
+    // synthesised `addressAllVersions` edge-point + `address(td)` /
+    // `addressAllVersionsInRange` qualified-property signatures appear
+    // in `properties` / `qualifiedProperties`.
     let mut cmd = Command::cargo_bin("legend").unwrap();
     cmd.env("NO_COLOR", "1");
     let assert_compile = cmd
@@ -129,15 +132,24 @@ Class demo::Customer
         .success();
     let out_compile = String::from_utf8_lossy(&assert_compile.get_output().stdout).to_string();
 
-    // Find the Customer class output and check originalMilestonedProperties.
     assert!(out_compile.contains("\"originalMilestonedProperties\""));
     // The patched output should mention the moved-aside `address` property
-    // by name. Use a simple substring check — the JSON layout depends on
-    // serde's serialization order which is stable for `serde_derive`.
+    // by name (under originalMilestonedProperties).
     assert!(
         out_compile.contains("\"name\": \"address\"")
             || out_compile.contains("\"name\":\"address\""),
         "--compile output should mention the moved-aside `address` property; got:\n{out_compile}"
+    );
+    // Post-synthesis: the synthesised edge-point property
+    // `addressAllVersions` and the synthesised qualified property
+    // `addressAllVersionsInRange` should both surface in the output.
+    assert!(
+        out_compile.contains("addressAllVersions"),
+        "--compile should emit the synthesised `addressAllVersions` edge-point; got:\n{out_compile}"
+    );
+    assert!(
+        out_compile.contains("addressAllVersionsInRange"),
+        "--compile should emit the synthesised range QP; got:\n{out_compile}"
     );
 }
 
