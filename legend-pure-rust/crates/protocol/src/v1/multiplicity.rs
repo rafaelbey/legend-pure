@@ -73,6 +73,30 @@ impl Multiplicity {
         upper_bound: None,
     };
 
+    /// The fully-qualified path of the well-known M3 multiplicity
+    /// instance corresponding to this concrete bound pair, if one
+    /// exists. Java parity: the predefined
+    /// `meta::pure::metamodel::multiplicity::{PureOne, ZeroOne,
+    /// ZeroMany, OneMany}` `PackageableMultiplicity` instances.
+    /// Returns `None` for arbitrary ranges (e.g. `2..5`) that need a
+    /// fresh `MultiplicityInstance` instead.
+    ///
+    /// Used by the multiplicity-literal protocol wire form
+    /// (`@[m]` value specifications): a literal whose bounds match
+    /// one of the four well-known instances emits as
+    /// `packageableElementPtr`; everything else emits as
+    /// `classInstance("multiplicity", { lowerBound, upperBound? })`.
+    #[must_use]
+    pub fn well_known_path(&self) -> Option<&'static str> {
+        match (self.lower_bound, self.upper_bound) {
+            (1, Some(1)) => Some("meta::pure::metamodel::multiplicity::PureOne"),
+            (0, Some(1)) => Some("meta::pure::metamodel::multiplicity::ZeroOne"),
+            (0, None) => Some("meta::pure::metamodel::multiplicity::ZeroMany"),
+            (1, None) => Some("meta::pure::metamodel::multiplicity::OneMany"),
+            _ => None,
+        }
+    }
+
     /// Returns `true` if unbounded (upper bound is `*`).
     #[must_use]
     pub fn is_infinite(&self) -> bool {

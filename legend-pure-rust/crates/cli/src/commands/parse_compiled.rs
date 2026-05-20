@@ -535,20 +535,49 @@ fn value_spec_to_protocol(
         ExprKind::ColSpecLiteral { column, kind } => {
             col_spec_to_protocol(std::slice::from_ref(column), *kind, false, model, src)
         }
+        ExprKind::MultiplicityReference { multiplicity } => {
+            // Lowered Multiplicity → settled multiplicity-literal wire
+            // form. `render_multiplicity` flattens `Variable(n)` to
+            // ZeroOrMany so the variable identity would be lost; branch
+            // on it explicitly and call the variable helper.
+            if let PureMultiplicity::Variable(name) = multiplicity {
+                multiplicity_variable_value_spec(name.as_str(), src)
+            } else {
+                let pm = render_multiplicity(multiplicity);
+                legend_pure_parser_protocol::v1::convert::protocol_multiplicity_to_value_spec(
+                    &pm, src,
+                )
+            }
+        }
         // Variants that don't yet have a clean protocol mapping. Emit a
         // placeholder Var so the JSON stays well-formed; downstream
         // consumers that hit one of these for real should ask for the
         // specific variant to be wired up.
-        ExprKind::TypeReference { .. } | ExprKind::MultiplicityReference { .. } => {
-            ValueSpecification::Var(Variable {
-                name: format!("@unsupported:{}", expr_kind_tag(vs.kind.as_ref())),
-                generic_type: None,
-                multiplicity: None,
-                supports_stream: None,
-                source_information: src,
-            })
-        }
+        ExprKind::TypeReference { .. } => ValueSpecification::Var(Variable {
+            name: format!("@unsupported:{}", expr_kind_tag(vs.kind.as_ref())),
+            generic_type: None,
+            multiplicity: None,
+            supports_stream: None,
+            source_information: src,
+        }),
     }
+}
+
+fn multiplicity_variable_value_spec(
+    name: &str,
+    source_information: Option<v1::source_info::SourceInformation>,
+) -> v1::value_spec::ValueSpecification {
+    use v1::value_spec::{ClassInstance, ValueSpecification};
+    let mut value_map = serde_json::Map::new();
+    value_map.insert(
+        "multiplicityParameter".to_string(),
+        serde_json::Value::String(name.to_string()),
+    );
+    ValueSpecification::ClassInstance(ClassInstance {
+        type_name: "multiplicity".to_string(),
+        value: serde_json::Value::Object(value_map),
+        source_information,
+    })
 }
 
 /// Convert a lowered `RelationLiteral` (`@(name:Type[mult], …)`) to the

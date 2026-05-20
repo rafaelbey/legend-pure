@@ -448,29 +448,22 @@ pub fn convert_expression_typed(
             })
         }
 
-        // -- Multiplicity reference: `@[m]` → placeholder shape ---------
+        // -- Multiplicity reference: `@[m]` --------------------------
         //
-        // TODO(protocol-multiplicity-literal): upstream Java protocol-v1
-        // doesn't define a dedicated value-spec shape for bare-multiplicity
-        // literals (the Java parser elaborates `@[m]` to a `Multiplicity`
-        // instance via `MultiplicityInstance.createPersistent`, then the
-        // serializer encodes it depending on context). Until we settle on
-        // a faithful shape, emit a `Var` named `@[<m>]` so the JSON is
-        // structurally valid and protocol→AST round-tripping (if attempted)
-        // fails loudly rather than silently corrupting. Compose-side
-        // round-trip (Pure → AST → Pure) is unaffected — it doesn't go
-        // through this conversion.
+        // Settled wire form (mirrors what Java's `MultiplicityInstance`
+        // round-trips to at the metamodel level):
+        //
+        // - Well-known multiplicities (`@[1]`, `@[0..1]`, `@[*]`,
+        //   `@[1..*]`) → `packageableElementPtr` pointing at the
+        //   corresponding `meta::pure::metamodel::multiplicity::{PureOne,
+        //   ZeroOne, ZeroMany, OneMany}` `PackageableMultiplicity`
+        //   instance.
+        // - Arbitrary ranges (`@[2..5]`) → `classInstance("multiplicity",
+        //   { lowerBound, upperBound? })`.
+        // - Parameter variables (`@[m]`) → `classInstance("multiplicity",
+        //   { multiplicityParameter })`.
         Expression::MultiplicityReferenceExpr(e) => {
-            // `MultiplicityArgument`'s Display emits "1", "0..1", "*", or
-            // the parameter name — no surrounding brackets, so we wrap
-            // them here.
-            ValueSpecification::Var(Variable {
-                name: format!("@[{}]", e.multiplicity),
-                generic_type: None,
-                multiplicity: None,
-                supports_stream: None,
-                source_information: source_information(&e.source_info),
-            })
+            multiplicity_arg_to_value_spec(&e.multiplicity, source_information(&e.source_info))
         }
 
         // -- Lambda --
@@ -1068,6 +1061,125 @@ fn convert_unit(
         super_types: vec![measure_fqn],
         source_information: source_information(&unit.source_info),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Multiplicity-literal value-spec wire form (`@[m]` expressions)
+// ---------------------------------------------------------------------------
+
+/// Convert an AST `MultiplicityArgument` (the `@[m]` / `@[1..*]` /
+/// `@[*]` form in expression position) to a protocol
+/// `ValueSpecification`. Settled wire form:
+///
+/// - Well-known multiplicities (`@[1]`, `@[0..1]`, `@[*]`, `@[1..*]`)
+///   → `packageableElementPtr` pointing at
+///   `meta::pure::metamodel::multiplicity::{PureOne, ZeroOne,
+///   ZeroMany, OneMany}`.
+/// - Arbitrary ranges (`@[2..5]`) → `classInstance("multiplicity",
+///   { lowerBound, upperBound? })`.
+/// - Parameter variables (`@[m]`) → `classInstance("multiplicity",
+///   { multiplicityParameter })`.
+///
+/// Mirrors what Java's `MultiplicityInstance.createPersistent` builds
+/// at the metamodel level — the engine then serialises that instance
+/// to the same JSON shape.
+#[must_use]
+pub fn multiplicity_arg_to_value_spec(
+    arg: &ast::type_ref::MultiplicityArgument,
+    source_information: Option<v1::source_info::SourceInformation>,
+) -> v1::value_spec::ValueSpecification {
+    use ast::type_ref::MultiplicityArgument;
+    match arg {
+        MultiplicityArgument::Identifier(name, _) => {
+            multiplicity_variable_value_spec(name.as_str(), source_information)
+        }
+        MultiplicityArgument::Concrete(m, _) => {
+            multiplicity_to_value_spec(m, source_information)
+        }
+    }
+}
+
+/// Convert an AST `Multiplicity` (concrete bounds, no variable case)
+/// to a protocol `ValueSpecification` using the same wire form as
+/// [`multiplicity_arg_to_value_spec`].
+#[must_use]
+pub fn multiplicity_to_value_spec(
+    m: &ast::type_ref::Multiplicity,
+    source_information: Option<v1::source_info::SourceInformation>,
+) -> v1::value_spec::ValueSpecification {
+    use ast::type_ref::Multiplicity as AM;
+    use v1::multiplicity::Multiplicity as PM;
+    let pm = match m {
+        AM::PureOne => PM::PURE_ONE,
+        AM::ZeroOrOne => PM::ZERO_ONE,
+        AM::ZeroOrMany => PM::ZERO_MANY,
+        AM::OneOrMany => PM::ONE_MANY,
+        AM::Range {
+            lower,
+            upper: Some(u),
+        } => PM {
+            lower_bound: *lower,
+            upper_bound: Some(*u),
+        },
+        AM::Range { lower, upper: None } => PM {
+            lower_bound: *lower,
+            upper_bound: None,
+        },
+        AM::Variable(name) => return multiplicity_variable_value_spec(name, source_information),
+    };
+    protocol_multiplicity_to_value_spec(&pm, source_information)
+}
+
+/// Convert a protocol `Multiplicity` directly to its `ValueSpecification`
+/// representation. Used by callers that already have the resolved
+/// bounds in protocol form (e.g. the Pure→Protocol path in the CLI
+/// crate, which renders lowered `Multiplicity` through
+/// `crate::commands::parse_compiled::render_multiplicity`).
+#[must_use]
+pub fn protocol_multiplicity_to_value_spec(
+    m: &v1::multiplicity::Multiplicity,
+    source_information: Option<v1::source_info::SourceInformation>,
+) -> v1::value_spec::ValueSpecification {
+    use v1::value_spec::{ClassInstance, ProtocolPackageableElementPtr, ValueSpecification};
+    if let Some(path) = m.well_known_path() {
+        return ValueSpecification::PackageableElementPtr(ProtocolPackageableElementPtr {
+            full_path: path.to_string(),
+            source_information,
+        });
+    }
+    let mut value_map = serde_json::Map::new();
+    value_map.insert(
+        "lowerBound".to_string(),
+        serde_json::Value::Number(m.lower_bound.into()),
+    );
+    if let Some(u) = m.upper_bound {
+        value_map.insert(
+            "upperBound".to_string(),
+            serde_json::Value::Number(u.into()),
+        );
+    }
+    ValueSpecification::ClassInstance(ClassInstance {
+        type_name: "multiplicity".to_string(),
+        value: serde_json::Value::Object(value_map),
+        source_information,
+    })
+}
+
+fn multiplicity_variable_value_spec(
+    name: &str,
+    source_information: Option<v1::source_info::SourceInformation>,
+) -> v1::value_spec::ValueSpecification {
+    use v1::value_spec::{ClassInstance, ValueSpecification};
+    let mut value_map = serde_json::Map::new();
+    value_map.insert(
+        "multiplicityParameter".to_string(),
+        serde_json::Value::String(name.to_string()),
+    );
+    ValueSpecification::ClassInstance(ClassInstance {
+        type_name: "multiplicity".to_string(),
+        value: serde_json::Value::Object(value_map),
+        source_information,
+    })
 }
 
 // ---------------------------------------------------------------------------

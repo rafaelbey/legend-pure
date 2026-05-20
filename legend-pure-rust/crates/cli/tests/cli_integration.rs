@@ -154,6 +154,54 @@ Class demo::Customer
 }
 
 #[test]
+fn test_parse_emits_multiplicity_literal_wire_form() {
+    // Multiplicity literals in expression position (`@[1]`, `@[*]`,
+    // `@[m]`) must emit:
+    //   - Well-known multiplicities → `packageableElementPtr`
+    //     pointing at `meta::pure::metamodel::multiplicity::{PureOne,
+    //     ZeroOne, ZeroMany, OneMany}`.
+    //   - Parameter variables → `classInstance("multiplicity",
+    //     { multiplicityParameter: <name> })`.
+    // No `@[*]`-named `Var` placeholder remains anywhere in the
+    // output.
+    let temp_dir = TempDir::new().unwrap();
+    let file_path = temp_dir.path().join("mults.pure");
+    let source = "\
+function demo::pickOne(): meta::pure::metamodel::multiplicity::Multiplicity[1]
+{
+    @[1]
+}
+
+function demo::pickMany(): meta::pure::metamodel::multiplicity::Multiplicity[1]
+{
+    @[*]
+}
+";
+    std::fs::write(&file_path, source).unwrap();
+
+    let mut cmd = Command::cargo_bin("legend").unwrap();
+    cmd.env("NO_COLOR", "1");
+    let assert = cmd.arg("parse").arg(&file_path).assert().success();
+    let out = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+
+    // The legacy `@[…]` placeholder Var should never appear.
+    assert!(
+        !out.contains("\"name\": \"@[")
+            && !out.contains("\"name\":\"@["),
+        "`@[…]` Var placeholder must not appear in output; got:\n{out}"
+    );
+    // Well-known multiplicities surface as packageableElementPtr.
+    assert!(
+        out.contains("meta::pure::metamodel::multiplicity::PureOne"),
+        "expected PureOne packageableElementPtr in output; got:\n{out}"
+    );
+    assert!(
+        out.contains("meta::pure::metamodel::multiplicity::ZeroMany"),
+        "expected ZeroMany packageableElementPtr in output; got:\n{out}"
+    );
+}
+
+#[test]
 fn test_parse_compile_does_not_emit_unsupported_colspec_or_relation() {
     // ColSpec / ColSpecArray / RelationLiteral literals appearing
     // anywhere in the source must NOT surface as `@unsupported:<kind>`
