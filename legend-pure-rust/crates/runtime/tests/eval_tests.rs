@@ -978,6 +978,63 @@ fn eval_addition() {
     assert_eq!(result, Value::Integer(3));
 }
 
+/// `'a' + 1->toString()` must concatenate as `String + String` and evaluate
+/// to `"a1"`. `->` is the highest-precedence postfix operator (binds tighter
+/// than `+`), so the parser must produce `Plus('a', ArrowFunction(1,
+/// toString))` and the dispatcher must pick the String overload of `plus`
+/// — `meta::pure::functions::string::plus(strings:String[*]):String[1]` —
+/// rather than the numeric one.
+///
+/// Regression guard against a port-to-Rust report that the dispatcher saw
+/// `String + Integer` at `plus` because the arrow target's String return
+/// wasn't reaching `narrow_candidates_by_type`.
+#[test]
+fn eval_string_plus_int_arrow_to_string() {
+    let result = eval_pure(
+        "function test::f(): String[1] { 'a' + 1->toString() }",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("a1".into()));
+}
+
+/// Sibling repros for the `+`-vs-`->` precedence area. If any of these
+/// fails while the literal form above passes, the dispatcher gap lives in
+/// the non-literal arrow-target path (variable receiver / function-call
+/// receiver / chained arrows) — pin the layer from the failure.
+#[test]
+fn eval_string_plus_var_arrow_to_string() {
+    let result = eval_pure(
+        "function test::f(): String[1] { let x = 1; 'a' + $x->toString() }",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("a1".into()));
+}
+
+#[test]
+fn eval_string_plus_arrow_chain() {
+    let result = eval_pure(
+        "function test::f(): String[1] { 'a' + 1->toString() + 'b' }",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("a1b".into()));
+}
+
+#[test]
+fn eval_string_plus_arrow_qualified_function() {
+    // `1->toString()` resolves to `meta::pure::functions::lang::toString`;
+    // exercise the case where the arrow target's name is unqualified but
+    // the dispatcher must walk the import scopes. If `function_name` ever
+    // got stored as the FQN (`meta::pure::functions::lang::toString`)
+    // rather than the unqualified `toString`, the well-known-name table
+    // at `resolve.rs:1446` would miss and the inference would fall
+    // through to None.
+    let result = eval_pure(
+        "function test::f(): String[1] { 'a' + (1 + 2)->toString() }",
+        "f__String_1_",
+    );
+    assert_eq!(result, Value::String("a3".into()));
+}
+
 #[test]
 fn eval_subtraction() {
     let result = eval_pure("function test::f(): Integer[1] { 10 - 3 }", "f__Integer_1_");
