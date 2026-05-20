@@ -41,7 +41,6 @@
 
 use legend_pure_parser_ast::section::SourceFile;
 use legend_pure_parser_protocol::v1;
-use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
 use legend_pure_parser_pure::nodes::class::{
     Constraint as PureConstraint, Property as PureProperty, QualifiedProperty as PureQP,
@@ -511,12 +510,9 @@ fn value_spec_to_protocol(
                 source_information: src,
             })
         }
-        ExprKind::TypeReference {
-            type_expr: TypeExpr::Named { element, .. },
-        } => ValueSpecification::PackageableElementPtr(ProtocolPackageableElementPtr {
-            full_path: element_full_path(model, *element),
-            source_information: src,
-        }),
+        ExprKind::TypeReference { type_expr } => {
+            type_reference_to_protocol(type_expr, model, src)
+        }
         ExprKind::PackageableElementRef { element } => {
             ValueSpecification::PackageableElementPtr(ProtocolPackageableElementPtr {
                 full_path: element_full_path(model, *element),
@@ -549,17 +545,140 @@ fn value_spec_to_protocol(
                 )
             }
         }
-        // Variants that don't yet have a clean protocol mapping. Emit a
-        // placeholder Var so the JSON stays well-formed; downstream
-        // consumers that hit one of these for real should ask for the
-        // specific variant to be wired up.
-        ExprKind::TypeReference { .. } => ValueSpecification::Var(Variable {
-            name: format!("@unsupported:{}", expr_kind_tag(vs.kind.as_ref())),
-            generic_type: None,
-            multiplicity: None,
-            supports_stream: None,
-            source_information: src,
-        }),
+    }
+}
+
+/// Render an `@<type>` type reference at expression position. The four
+/// structural variants (`FunctionType`, `Relation`, `Generic`,
+/// `AlgebraUnion`) map onto `classInstance` payloads whose `_type`
+/// names mirror the M3 metamodel class they materialise. Java parity:
+/// at the metamodel level Java materialises a fresh `GenericType` /
+/// `FunctionType` / `RelationType` instance; the wire shape carries
+/// the same structural data the engine would deserialise back into one.
+fn type_reference_to_protocol(
+    type_expr: &TypeExpr,
+    model: &PureModel,
+    src: Option<v1::source_info::SourceInformation>,
+) -> v1::value_spec::ValueSpecification {
+    use v1::value_spec::{ClassInstance, ProtocolPackageableElementPtr, ValueSpecification};
+    match type_expr {
+        TypeExpr::Named { element, .. } => {
+            ValueSpecification::PackageableElementPtr(ProtocolPackageableElementPtr {
+                full_path: element_full_path(model, *element),
+                source_information: src,
+            })
+        }
+        TypeExpr::FunctionType {
+            parameters,
+            return_type,
+            return_multiplicity,
+        } => {
+            let params: Vec<serde_json::Value> = parameters
+                .iter()
+                .map(|(ty, mult)| {
+                    serde_json::json!({
+                        "type": render_type_expr_path(ty, model),
+                        "multiplicity": render_multiplicity(mult),
+                    })
+                })
+                .collect();
+            let mut value = serde_json::Map::new();
+            value.insert("parameters".to_string(), serde_json::Value::Array(params));
+            value.insert(
+                "returnType".to_string(),
+                serde_json::Value::String(render_type_expr_path(return_type, model)),
+            );
+            value.insert(
+                "returnMultiplicity".to_string(),
+                serde_json::to_value(render_multiplicity(return_multiplicity))
+                    .unwrap_or(serde_json::Value::Null),
+            );
+            ValueSpecification::ClassInstance(ClassInstance {
+                type_name: "functionType".to_string(),
+                value: serde_json::Value::Object(value),
+                source_information: src,
+            })
+        }
+        TypeExpr::Relation(columns) => {
+            let cols: Vec<serde_json::Value> = columns
+                .iter()
+                .map(|col| {
+                    serde_json::json!({
+                        "name": col.name.to_string(),
+                        "type": render_type_expr_path(&col.type_expr, model),
+                        "multiplicity": render_multiplicity(&col.multiplicity),
+                    })
+                })
+                .collect();
+            let mut value = serde_json::Map::new();
+            value.insert("columns".to_string(), serde_json::Value::Array(cols));
+            ValueSpecification::ClassInstance(ClassInstance {
+                type_name: "relationType".to_string(),
+                value: serde_json::Value::Object(value),
+                source_information: src,
+            })
+        }
+        TypeExpr::Generic(name) => {
+            // A type-parameter reference at expression position
+            // materialises as a `GenericType` whose `typeParameter`
+            // slot carries the name. Encode it as a classInstance
+            // tagged `genericType` to mirror the Java metamodel shape.
+            let mut value = serde_json::Map::new();
+            value.insert(
+                "typeParameter".to_string(),
+                serde_json::Value::String(name.to_string()),
+            );
+            ValueSpecification::ClassInstance(ClassInstance {
+                type_name: "genericType".to_string(),
+                value: serde_json::Value::Object(value),
+                source_information: src,
+            })
+        }
+        TypeExpr::AlgebraUnion(left, right) => {
+            let mut value = serde_json::Map::new();
+            value.insert(
+                "left".to_string(),
+                serde_json::Value::String(render_type_expr_path(left, model)),
+            );
+            value.insert(
+                "right".to_string(),
+                serde_json::Value::String(render_type_expr_path(right, model)),
+            );
+            ValueSpecification::ClassInstance(ClassInstance {
+                type_name: "algebraUnion".to_string(),
+                value: serde_json::Value::Object(value),
+                source_information: src,
+            })
+        }
+        TypeExpr::Unresolved => {
+            // True compile-time hole — should not appear in a clean
+            // model. Emit a sentinel so it's visible in the JSON and
+            // doesn't silently round-trip back to something else.
+            ValueSpecification::Var(v1::value_spec::Variable {
+                name: "@unresolved".to_string(),
+                generic_type: None,
+                multiplicity: None,
+                supports_stream: None,
+                source_information: src,
+            })
+        }
+    }
+}
+
+/// Render a `TypeExpr` to its full-path string for use inside
+/// classInstance payloads (where the protocol slot expects a string
+/// rather than a structural object). For non-Named shapes, falls back
+/// to the same sentinel strings the AST path uses (`<FunctionType>`,
+/// `<RelationType>`) so the wire form stays consistent across the two
+/// converters.
+fn render_type_expr_path(ty: &TypeExpr, model: &PureModel) -> String {
+    match ty {
+        TypeExpr::Named { element, .. } => element_full_path(model, *element),
+        TypeExpr::Generic(name) => name.to_string(),
+        TypeExpr::FunctionType { .. } => "<FunctionType>".to_string(),
+        TypeExpr::Relation(_) => "<RelationType>".to_string(),
+        TypeExpr::AlgebraUnion(_, _) => "<AlgebraUnion>".to_string(),
+        TypeExpr::Unresolved => "<Unresolved>".to_string(),
     }
 }
 
@@ -793,35 +912,3 @@ fn elements_multiplicity(n: usize) -> v1::multiplicity::Multiplicity {
     }
 }
 
-fn expr_kind_tag(k: &ExprKind) -> &'static str {
-    match k {
-        ExprKind::IntegerLiteral(_) => "Integer",
-        ExprKind::FloatLiteral(_) => "Float",
-        ExprKind::DecimalLiteral(_) => "Decimal",
-        ExprKind::StringLiteral(_) => "String",
-        ExprKind::BooleanLiteral(_) => "Boolean",
-        ExprKind::DateLiteral(_) => "Date",
-        ExprKind::Variable { .. } => "Variable",
-        ExprKind::FunctionCall(_) => "FunctionCall",
-        ExprKind::PropertyCall(_) => "PropertyCall",
-        ExprKind::QualifiedPropertyCall(_) => "QualifiedPropertyCall",
-        ExprKind::EnumValue { .. } => "EnumValue",
-        ExprKind::Lambda { .. } => "Lambda",
-        ExprKind::Collection { .. } => "Collection",
-        ExprKind::TypeReference { .. } => "TypeReference",
-        ExprKind::MultiplicityReference { .. } => "MultiplicityReference",
-        ExprKind::PackageableElementRef { .. } => "PackageableElementRef",
-        ExprKind::RelationLiteral { .. } => "RelationLiteral",
-        ExprKind::ColSpecArrayLiteral { .. } => "ColSpecArrayLiteral",
-        ExprKind::ColSpecLiteral { .. } => "ColSpecLiteral",
-        ExprKind::PathLiteral { .. } => "PathLiteral",
-    }
-}
-
-#[allow(dead_code)]
-fn assert_element_exists(model: &PureModel, id: ElementId) {
-    // Compile-time sanity hook; used only when debugging cross-element
-    // references during patch development. Left in place so future
-    // additions can flip it on without re-deriving the helper.
-    let _ = model.try_get_element(id);
-}

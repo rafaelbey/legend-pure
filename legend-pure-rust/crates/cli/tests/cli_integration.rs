@@ -154,6 +154,53 @@ Class demo::Customer
 }
 
 #[test]
+fn test_parse_compile_emits_no_unsupported_placeholders() {
+    // After Phase F + the multiplicity / TypeReference wire-form
+    // wiring, no expression variant in the milestoning-typical body
+    // surface should fall back to `@unsupported:<kind>`. The
+    // assertion scans a Class body containing path / colspec /
+    // relation / multiplicity literals — none should appear as a
+    // placeholder.
+    let temp_dir = TempDir::new().unwrap();
+    let file_path = temp_dir.path().join("variants.pure");
+    let source = "\
+Class demo::Customer
+{
+    name: String[1];
+}
+
+function demo::pickAll(): Any[*]
+{
+    [
+        @demo::Customer,
+        #/demo::Customer/name#,
+        ~name,
+        ~[a, b],
+        @(label: String[1]),
+        @[1],
+        @[*]
+    ]
+}
+";
+    std::fs::write(&file_path, source).unwrap();
+
+    let mut cmd = Command::cargo_bin("legend").unwrap();
+    cmd.env("NO_COLOR", "1");
+    let assert = cmd
+        .arg("parse")
+        .arg("--compile")
+        .arg(&file_path)
+        .assert()
+        .success();
+    let out = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
+    // The substring `@unsupported:` should not appear anywhere.
+    assert!(
+        !out.contains("@unsupported:"),
+        "no expression body should fall back to @unsupported:<kind>; got:\n{out}"
+    );
+}
+
+#[test]
 fn test_parse_emits_multiplicity_literal_wire_form() {
     // Multiplicity literals in expression position (`@[1]`, `@[*]`,
     // `@[m]`) must emit:
