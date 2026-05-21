@@ -2975,7 +2975,7 @@ mod tests {
 
     fn test_model() -> PureModel {
         let mut model = PureModel::new();
-        let bootstrap_chunk = bootstrap::create_bootstrap_chunk(model.root_package);
+        let (bootstrap_chunk, _) = bootstrap::create_bootstrap_chunk(model.root_package);
         model.chunks.push(bootstrap_chunk);
         model
     }

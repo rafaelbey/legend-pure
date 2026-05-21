@@ -932,7 +932,7 @@ mod tests {
     #[test]
     fn model_with_bootstrap_chunk() {
         let mut model = PureModel::new();
-        let bootstrap = crate::bootstrap::create_bootstrap_chunk(model.root_package);
+        let (bootstrap, _) = crate::bootstrap::create_bootstrap_chunk(model.root_package);
         model.chunks.push(bootstrap);
 
         // Verify we can look up primitives by well-known IDs

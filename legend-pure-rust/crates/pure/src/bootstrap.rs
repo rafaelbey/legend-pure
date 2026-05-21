@@ -18,6 +18,13 @@
 //! contains the primitive types, `Any`, and `Nil`. These have deterministic
 //! `ElementId`s that can be used as compile-time constants.
 //!
+//! The full chunk contents — the 13 root-level entries plus the M3 metamodel
+//! parsed from `m3.pure` — are built **once per process** into a
+//! [`OnceLock`]-cached template; each `create_bootstrap_chunk` call then
+//! clones the template arenas. The first call pays the parse cost; every
+//! subsequent call is a pair of arena clones (linear in element count, no
+//! lexer / parser work).
+//!
 //! # Usage
 //!
 //! ```
@@ -28,7 +35,7 @@
 //! let _ = bootstrap::STRING_ID;
 //! ```
 
-use std::cell::RefCell;
+use std::sync::OnceLock;
 
 use legend_pure_parser_ast::SourceInfo;
 use smol_str::SmolStr;
@@ -39,12 +46,6 @@ use crate::m3_parser::M3Registration;
 use crate::model::{Element, ElementNode, ModelChunk};
 use crate::nodes::class::Class;
 use crate::types::PrimitiveType;
-
-thread_local! {
-    /// Side-channel for M3 registration data produced by `create_bootstrap_chunk`
-    /// and consumed by `register_m3_packages`.
-    static M3_REGISTRATIONS: RefCell<Vec<M3Registration>> = const { RefCell::new(Vec::new()) };
-}
 
 // ---------------------------------------------------------------------------
 // Well-known ElementIds (deterministic, compile-time constants)
@@ -138,7 +139,7 @@ pub const DATE_TIME_ID: ElementId = ElementId::InstanceId {
 ///
 /// **Important:** `Any` and `Nil` are NOT in this list — they are `Class`
 /// instances in the M3 metamodel, not `PrimitiveType` instances.
-/// They are allocated separately in [`create_bootstrap_chunk`].
+/// They are allocated separately in [`build_template`].
 ///
 /// The inheritance hierarchy mirrors the Java M3:
 ///
@@ -176,7 +177,8 @@ pub(crate) const BOOTSTRAP_PRIMITIVES: &[(&str, ElementId, ElementId)] = &[
 ];
 
 // ---------------------------------------------------------------------------
-// M3 metamodel — parsed from m3.pure at runtime
+// M3 metamodel — parsed from m3.pure at compile time (file embed) and
+// then parsed at runtime on first `create_bootstrap_chunk` call.
 // ---------------------------------------------------------------------------
 
 /// The actual M3 metamodel source, loaded at compile time.
@@ -194,30 +196,32 @@ const M3_ALIASES: &[(ElementId, &[&str])] = &[
 ];
 
 // ---------------------------------------------------------------------------
-// Bootstrap chunk construction
+// Cached template — built once per process, cloned per call.
 // ---------------------------------------------------------------------------
 
-/// Creates the bootstrap `ModelChunk` (`chunk_id` = 0) containing all
-/// well-known types: `Any` (top class), `Nil` (bottom class), the
-/// 11 primitive types, and M3 metamodel elements parsed from `m3.pure`.
+/// The cached chunk-0 template — built from `m3.pure` on first access.
 ///
-/// The M3 elements are created with the correct `Element` variant matching
-/// their M3 classifier, with fully populated content (properties, inheritance,
-/// stereotypes, enum values, etc.).
-///
-/// The `root_package` is used as the parent package for the root-level
-/// bootstrap elements. M3 elements get their actual package assignment
-/// during [`register_m3_packages`].
-#[must_use]
-pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
+/// `parent_package` on every node is baked to `PackageId(0)` (the always-zero
+/// root package id, since `PureModel::new` allocates the root package as
+/// its first arena entry). `create_bootstrap_chunk` overwrites this field
+/// only if its `root_package` argument differs.
+struct BootstrapTemplate {
+    nodes: Arena<ElementNode>,
+    elements: Arena<Element>,
+    registrations: Vec<M3Registration>,
+}
+
+static TEMPLATE: OnceLock<BootstrapTemplate> = OnceLock::new();
+
+fn build_template() -> BootstrapTemplate {
     let mut nodes = Arena::with_capacity(256);
     let mut elements = Arena::with_capacity(256);
 
     let synthetic_source = SourceInfo::new("<bootstrap>", 0, 0, 0, 0);
+    let root_package = PackageId(0);
 
-    // Helper to build an ElementNode.
-    let mut alloc_node = |name: &str| {
-        nodes.alloc(ElementNode {
+    let alloc_node = |arena: &mut Arena<ElementNode>, name: &str| {
+        arena.alloc(ElementNode {
             name: SmolStr::new(name),
             source_info: synthetic_source.clone(),
             name_source_info: synthetic_source.clone(),
@@ -226,12 +230,12 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
     };
 
     // -- Slot 0: Any (Class, top type) --
-    let any_node = alloc_node("Any");
+    let any_node = alloc_node(&mut nodes, "Any");
     let any_elem = elements.alloc(Element::Class(Class {
         type_parameters: vec![],
         multiplicity_parameters: Vec::new(),
         type_variable_parameters: vec![],
-        super_types: vec![], // Any has no supertype
+        super_types: vec![],
         properties: vec![],
         qualified_properties: vec![],
         constraints: vec![],
@@ -243,12 +247,12 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
     debug_assert_eq!(any_elem, ANY_ID.local_idx());
 
     // -- Slot 1: Nil (Class, bottom type) --
-    let nil_node = alloc_node("Nil");
+    let nil_node = alloc_node(&mut nodes, "Nil");
     let nil_elem = elements.alloc(Element::Class(Class {
         type_parameters: vec![],
         multiplicity_parameters: Vec::new(),
         type_variable_parameters: vec![],
-        super_types: vec![], // Nil's subtype-of-all is handled by type checker
+        super_types: vec![],
         properties: vec![],
         qualified_properties: vec![],
         constraints: vec![],
@@ -261,33 +265,68 @@ pub fn create_bootstrap_chunk(root_package: PackageId) -> ModelChunk {
 
     // -- Slots 2..12: Primitive types --
     for &(name, expected_id, super_type) in BOOTSTRAP_PRIMITIVES {
-        let actual_idx = alloc_node(name);
+        let actual_idx = alloc_node(&mut nodes, name);
         let elem_idx = elements.alloc(Element::PrimitiveType(PrimitiveType {
             super_type: Some(super_type),
             super_type_value_arguments: Vec::new(),
             type_variable_parameters: Vec::new(),
             constraints: Vec::new(),
         }));
-
         debug_assert_eq!(actual_idx, expected_id.local_idx());
         debug_assert_eq!(elem_idx, expected_id.local_idx());
     }
 
     // -- M3 metamodel elements (slots 13..): parsed from m3.pure --
-    let m3_registrations =
-        crate::m3_parser::parse_m3_into_chunk(M3_SOURCE, &mut nodes, &mut elements);
+    let registrations = crate::m3_parser::parse_m3_into_chunk(M3_SOURCE, &mut nodes, &mut elements);
 
-    // Store the registrations for later use by register_m3_packages.
-    // We stash them on the chunk via a side-channel (thread-local).
-    M3_REGISTRATIONS.with(|cell| {
-        cell.replace(m3_registrations);
-    });
-
-    ModelChunk {
-        chunk_id: BOOTSTRAP_CHUNK_ID,
+    BootstrapTemplate {
         nodes,
         elements,
+        registrations,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Bootstrap chunk construction
+// ---------------------------------------------------------------------------
+
+/// Creates the bootstrap `ModelChunk` (`chunk_id` = 0) containing all
+/// well-known types: `Any` (top class), `Nil` (bottom class), the
+/// 11 primitive types, and M3 metamodel elements parsed from `m3.pure`.
+///
+/// First call parses `m3.pure` into a process-wide cached template. Every
+/// subsequent call clones the template arenas — no lexer / parser work.
+///
+/// Returns `(chunk, registrations)`:
+/// - `chunk` is appended to `model.chunks` as chunk 0.
+/// - `registrations` describes how each parsed M3 element should be wired
+///   into its M3 package; pass it to [`register_m3_packages`] after the
+///   chunk is in the model.
+///
+/// The `root_package` argument sets `parent_package` on every node. In
+/// practice this is always `PackageId(0)` (the root allocated first by
+/// `PureModel::new`), so a clone of the cached template suffices; if a
+/// caller passes a different value the patched field is rewritten over
+/// the cloned arena.
+#[must_use]
+pub fn create_bootstrap_chunk(root_package: PackageId) -> (ModelChunk, Vec<M3Registration>) {
+    let template = TEMPLATE.get_or_init(build_template);
+
+    let mut nodes = template.nodes.clone();
+    if root_package != PackageId(0) {
+        for idx in 0..nodes.len() {
+            nodes.get_mut(idx).parent_package = root_package;
+        }
+    }
+
+    (
+        ModelChunk {
+            chunk_id: BOOTSTRAP_CHUNK_ID,
+            nodes,
+            elements: template.elements.clone(),
+        },
+        template.registrations.clone(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -353,7 +392,7 @@ pub fn metatype_of(model: &crate::model::PureModel, element: &Element) -> Option
 /// Registers M3 metamodel elements in their canonical packages.
 ///
 /// After bootstrap chunk creation, this function:
-/// 1. Consumes the `M3Registration` list produced by `create_bootstrap_chunk`
+/// 1. Walks the `M3Registration` list produced by `create_bootstrap_chunk`
 /// 2. Creates the M3 package hierarchy (`meta::pure::metamodel::*`)
 /// 3. Registers each parsed M3 element in its correct package
 /// 4. Registers existing bootstrap elements (`Any`, `Nil`) as aliases
@@ -361,11 +400,8 @@ pub fn metatype_of(model: &crate::model::PureModel, element: &Element) -> Option
 ///
 /// Call this in the compilation pipeline after `create_bootstrap_chunk()`
 /// and before Pass 1.
-pub fn register_m3_packages(model: &mut crate::model::PureModel) {
-    // Take the registrations produced by create_bootstrap_chunk
-    let registrations = M3_REGISTRATIONS.with(std::cell::RefCell::take);
-
-    for reg in &registrations {
+pub fn register_m3_packages(model: &mut crate::model::PureModel, registrations: &[M3Registration]) {
+    for reg in registrations {
         let package_id = model.get_or_create_package(&reg.package_segments);
         model.register_element(package_id, reg.element_id);
     }
@@ -388,7 +424,7 @@ mod tests {
 
     #[test]
     fn bootstrap_chunk_has_correct_count() {
-        let chunk = create_bootstrap_chunk(PackageId(0));
+        let (chunk, _) = create_bootstrap_chunk(PackageId(0));
         assert_eq!(chunk.chunk_id, 0);
         // 13 primitives + all M3 elements parsed from m3.pure
         // The count should be > 13 (at least the primitives + parsed M3 elements)
@@ -402,7 +438,7 @@ mod tests {
 
     #[test]
     fn bootstrap_ids_match_names() {
-        let chunk = create_bootstrap_chunk(PackageId(0));
+        let (chunk, _) = create_bootstrap_chunk(PackageId(0));
         assert_eq!(chunk.nodes.get(ANY_ID.local_idx()).name, "Any");
         assert_eq!(chunk.nodes.get(NIL_ID.local_idx()).name, "Nil");
         assert_eq!(chunk.nodes.get(STRING_ID.local_idx()).name, "String");
@@ -426,7 +462,7 @@ mod tests {
 
     #[test]
     fn any_and_nil_are_classes() {
-        let chunk = create_bootstrap_chunk(PackageId(0));
+        let (chunk, _) = create_bootstrap_chunk(PackageId(0));
         assert!(matches!(
             chunk.elements.get(ANY_ID.local_idx()),
             Element::Class(_)
@@ -439,7 +475,7 @@ mod tests {
 
     #[test]
     fn primitives_are_primitive_type() {
-        let chunk = create_bootstrap_chunk(PackageId(0));
+        let (chunk, _) = create_bootstrap_chunk(PackageId(0));
         for &(_, id, _) in BOOTSTRAP_PRIMITIVES {
             assert!(
                 matches!(
@@ -454,7 +490,7 @@ mod tests {
 
     #[test]
     fn bootstrap_inheritance_edges() {
-        let chunk = create_bootstrap_chunk(PackageId(0));
+        let (chunk, _) = create_bootstrap_chunk(PackageId(0));
 
         // Any is a Class with no supertypes
         match chunk.elements.get(ANY_ID.local_idx()) {
@@ -498,9 +534,37 @@ mod tests {
 
     #[test]
     fn bootstrap_source_info_is_synthetic() {
-        let chunk = create_bootstrap_chunk(PackageId(0));
+        let (chunk, _) = create_bootstrap_chunk(PackageId(0));
         let node = chunk.nodes.get(STRING_ID.local_idx());
         assert_eq!(node.source_info.source.as_str(), "<bootstrap>");
         assert_eq!(node.source_info.start_line, 0);
+    }
+
+    #[test]
+    fn template_is_cached_across_calls() {
+        // The template instance pointer must stabilize after the first call;
+        // each subsequent call sees the same OnceLock-stored value.
+        let _ = create_bootstrap_chunk(PackageId(0));
+        let first_ptr = std::ptr::addr_of!(*TEMPLATE.get().expect("set on first call"));
+        let _ = create_bootstrap_chunk(PackageId(0));
+        let second_ptr = std::ptr::addr_of!(*TEMPLATE.get().expect("still set"));
+        assert_eq!(
+            first_ptr, second_ptr,
+            "OnceLock should serve the same template on every call"
+        );
+    }
+
+    #[test]
+    fn parent_package_override_takes_effect() {
+        // Caller-supplied non-zero root_package must be reflected on every
+        // cloned node (the cached template bakes PackageId(0)).
+        let (chunk, _) = create_bootstrap_chunk(PackageId(7));
+        for idx in 0..chunk.nodes.len() {
+            assert_eq!(
+                chunk.nodes.get(idx).parent_package,
+                PackageId(7),
+                "node {idx} should reflect caller's root_package"
+            );
+        }
     }
 }

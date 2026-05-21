@@ -4379,7 +4379,7 @@ mod tests {
         use std::sync::Arc;
 
         let mut model = PureModel::new();
-        let bootstrap = crate::bootstrap::create_bootstrap_chunk(model.root_package);
+        let (bootstrap, _) = crate::bootstrap::create_bootstrap_chunk(model.root_package);
         model.chunks.push(bootstrap);
 
         let pkg = model.get_or_create_package(&[SmolStr::new("test"), SmolStr::new("pkg")]);

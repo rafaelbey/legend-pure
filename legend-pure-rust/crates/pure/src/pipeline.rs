@@ -198,7 +198,7 @@ pub fn init_bootstrap_model() -> PureModel {
     let mut model = PureModel::new();
 
     // Chunk 0 — bootstrap primitives
-    let bootstrap_chunk = bootstrap::create_bootstrap_chunk(model.root_package);
+    let (bootstrap_chunk, m3_registrations) = bootstrap::create_bootstrap_chunk(model.root_package);
     model.chunks.push(bootstrap_chunk);
 
     // Register bootstrap elements in the root package
@@ -212,7 +212,7 @@ pub fn init_bootstrap_model() -> PureModel {
 
     // Register M3 metamodel stubs in their canonical packages
     // (e.g., Function → meta::pure::metamodel::function::Function)
-    bootstrap::register_m3_packages(&mut model);
+    bootstrap::register_m3_packages(&mut model, &m3_registrations);
 
     // Resolve M3 supertype strings to actual ElementIds.
     // After M3 parsing, supertypes are stored as TypeExpr::Generic("ClassName").

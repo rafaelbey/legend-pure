@@ -42,7 +42,7 @@ fn untyped(kind: ExprKind) -> ValueSpec {
 
 fn bootstrap_model() -> PureModel {
     let mut model = PureModel::new();
-    let chunk = bootstrap::create_bootstrap_chunk(model.root_package);
+    let (chunk, _) = bootstrap::create_bootstrap_chunk(model.root_package);
     model.chunks.push(chunk);
     model
 }
