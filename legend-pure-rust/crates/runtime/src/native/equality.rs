@@ -26,88 +26,81 @@
 //! `eq` / `is` stay strictly identity-based — those Pure natives do
 //! *not* route through here.
 
-// `objects_equal` takes both handles by value for symmetry; each is an
-// O(1) Rc clone bump.
-#![allow(clippy::needless_pass_by_value)]
-
 use legend_pure_parser_pure::annotations::StereotypeRef;
 use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::model::{Element, PureModel};
 use smol_str::SmolStr;
 
-use std::cell::Cell;
+use std::cell::RefCell;
+use std::collections::HashSet;
 
-use crate::heap::ObjectHandle;
+use crate::heap::{HeapEntry, ObjectHandle};
 use crate::native::EvalContextTrait;
 use crate::value::Value;
 
-thread_local! {
-    /// Recursion depth for `values_equal` / `objects_equal`. Mutual
-    /// recursion across collection elements + `<<equality.Key>>`
-    /// properties has no inherent bound today; pathological inputs
-    /// (deeply nested `List<List<…>>`, an equality-keyed self-
-    /// referential class) would blow the Rust stack — default 8 MB
-    /// on the main thread but as little as 512 KB on spawned threads.
-    /// This stopgap converts the segfault-class bug into a Pure-level
-    /// "not equal" answer: if recursion exceeds [`MAX_EQUALITY_DEPTH`]
-    /// we return `false` (best-effort: an actually-equal pair past
-    /// the limit reads as unequal, but the alternative is process
-    /// abort). The proper fix is an explicit work-stack with a
-    /// visited-set cycle guard — tracked in BACKLOG.
-    static EQ_DEPTH: Cell<usize> = const { Cell::new(0) };
-}
+/// Stable handle-pair key used by the cycle guard.
+///
+/// `ObjectHandle = Rc<RefCell<HeapEntry>>`; two handles point at the
+/// same heap entry iff their raw pointers match. Pairs are stored
+/// canonically (smaller pointer first) so `(A, B)` and `(B, A)` map
+/// to the same key.
+type HandlePtr = *const RefCell<HeapEntry>;
 
-/// Maximum mutual recursion depth before [`values_equal`] / [`objects_equal`]
-/// short-circuit to `false`. 1000 frames is well above the deepest legitimate
-/// Pure value graph we've seen; pathological cycles or overly nested data
-/// hit the limit instead of overflowing the Rust stack.
-const MAX_EQUALITY_DEPTH: usize = 1000;
-
-/// RAII guard that bumps [`EQ_DEPTH`] on construction and decrements on
-/// drop. Returns `None` once the depth limit is reached so the caller
-/// can short-circuit without entering another recursive frame.
-struct DepthGuard;
-
-impl DepthGuard {
-    fn enter() -> Option<Self> {
-        EQ_DEPTH.with(|d| {
-            let cur = d.get();
-            if cur >= MAX_EQUALITY_DEPTH {
-                None
-            } else {
-                d.set(cur + 1);
-                Some(Self)
-            }
-        })
-    }
-}
-
-impl Drop for DepthGuard {
-    fn drop(&mut self) {
-        EQ_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
-    }
-}
-
-/// Structural value equality, heap-aware.
+/// Structural value equality, heap-aware. Iterative implementation —
+/// uses an explicit work-stack instead of mutual recursion so deep
+/// inputs (`List<List<…>>` chains, equality-keyed self-references,
+/// long `Pair<U, Pair<…>>` walks) can't overflow the Rust stack.
+/// Pathological depths just allocate more entries in the work-stack
+/// `Vec` instead.
 ///
 /// Primitives compare by value (delegating to `PartialEq for Value`).
 /// Collections compare length then element-wise.
 /// Heap objects compare via `<<equality.Key>>` stereotype if the class
 /// declares any; otherwise fall back to `ObjectHandle` identity.
+///
+/// **Cycle handling.** A `<<equality.Key>>` property whose value
+/// transitively references its owner produces an infinite walk under
+/// naive recursion. The cycle guard records every object-pair we've
+/// already started comparing; re-encountering the same pair short-
+/// circuits to `true` — the standard "assume equal in cycles, fail on
+/// concrete mismatches" semantics Java's `equals` uses on cyclic
+/// graphs.
 #[must_use]
 pub fn values_equal(ctx: &dyn EvalContextTrait, a: &Value, b: &Value) -> bool {
-    let Some(_guard) = DepthGuard::enter() else {
-        return false;
-    };
+    let mut work: Vec<(Value, Value)> = vec![(a.clone(), b.clone())];
+    let mut seen: HashSet<(HandlePtr, HandlePtr)> = HashSet::new();
+    while let Some((x, y)) = work.pop() {
+        if !step_value_equal(ctx, &x, &y, &mut work, &mut seen) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Single comparison step. Pushes child pairs onto `work` instead of
+/// recursing. Returns `false` on a definite mismatch; returns `true` to
+/// mean "this step doesn't disprove equality — keep popping the
+/// work-stack."
+fn step_value_equal(
+    ctx: &dyn EvalContextTrait,
+    a: &Value,
+    b: &Value,
+    work: &mut Vec<(Value, Value)>,
+    seen: &mut HashSet<(HandlePtr, HandlePtr)>,
+) -> bool {
     match (a, b) {
         (Value::Collection(xs), Value::Collection(ys)) => {
-            xs.len() == ys.len()
-                && xs
-                    .iter()
-                    .zip(ys.iter())
-                    .all(|(x, y)| values_equal(ctx, x, y))
+            if xs.len() != ys.len() {
+                return false;
+            }
+            for (x, y) in xs.iter().zip(ys.iter()) {
+                work.push((x.clone(), y.clone()));
+            }
+            true
         }
-        (Value::Object(oa), Value::Object(ob)) => objects_equal(ctx, oa.clone(), ob.clone()),
+        (Value::Object(oa), Value::Object(ob)) => {
+            push_object_key_pairs(ctx, oa.clone(), ob.clone(), work, seen)
+        }
         // Cross-variant equality for metamodel references — when one
         // side is `Element(eid)` / `Function(Compiled(eid))` and the
         // other is the heap row produced by `bootstrap_metamodel`,
@@ -126,7 +119,7 @@ pub fn values_equal(ctx: &dyn EvalContextTrait, a: &Value, b: &Value) -> bool {
             let ob = b.as_object_handle(ctx.heap());
             match (oa, ob) {
                 (Some(la), Some(lb)) if std::rc::Rc::ptr_eq(&la, &lb) => true,
-                (Some(la), Some(lb)) => objects_equal(ctx, la, lb),
+                (Some(la), Some(lb)) => push_object_key_pairs(ctx, la, lb, work, seen),
                 _ => a == b,
             }
         }
@@ -140,7 +133,8 @@ pub fn values_equal(ctx: &dyn EvalContextTrait, a: &Value, b: &Value) -> bool {
         // `$f2.expressionSequence` (bare Function) would compare unequal
         // even though Pure considers them the same value.
         (Value::Collection(xs), other) | (other, Value::Collection(xs)) if xs.len() == 1 => {
-            values_equal(ctx, &xs[0], other)
+            work.push((xs[0].clone(), other.clone()));
+            true
         }
         // Empty collection equals `Unit` — same multiplicity coercion
         // applied at the zero end. `from_vec(Vec::new())` produces
@@ -155,13 +149,41 @@ pub fn values_equal(ctx: &dyn EvalContextTrait, a: &Value, b: &Value) -> bool {
     }
 }
 
-/// Heap-object structural equality. Walks the classifier, gathers every
-/// `<<equality.Key>>`-annotated property, and recurses. No keys
-/// annotated ⇒ identity equality.
-fn objects_equal(ctx: &dyn EvalContextTrait, a: ObjectHandle, b: ObjectHandle) -> bool {
+/// Heap-object comparison step — walks the classifier, fetches the
+/// `<<equality.Key>>`-annotated properties, and pushes each
+/// per-property pair onto `work` for the outer loop to compare.
+/// Returns `false` immediately on classifier mismatch / unresolved
+/// classifier / no equality keys; returns `true` to mean "every key
+/// pair has been queued — keep iterating."
+///
+/// Cycle guard records the (smaller-pointer, larger-pointer) pair so a
+/// re-encounter short-circuits to `true` without re-pushing. Without
+/// it, an `<<equality.Key>>` cycle (e.g. mutually-keyed self-references)
+/// would re-push pairs forever.
+fn push_object_key_pairs(
+    ctx: &dyn EvalContextTrait,
+    a: ObjectHandle,
+    b: ObjectHandle,
+    work: &mut Vec<(Value, Value)>,
+    seen: &mut HashSet<(HandlePtr, HandlePtr)>,
+) -> bool {
     if std::rc::Rc::ptr_eq(&a, &b) {
         return true;
     }
+
+    // Canonical ordering: smaller pointer first, so (A,B) and (B,A) map
+    // to the same key — equality is symmetric, so we should never
+    // re-enter a comparison whose mirror was already in flight.
+    let pa = std::rc::Rc::as_ptr(&a);
+    let pb = std::rc::Rc::as_ptr(&b);
+    let cycle_key = if pa <= pb { (pa, pb) } else { (pb, pa) };
+    if !seen.insert(cycle_key) {
+        // Already in the comparison frontier — assume equal so the
+        // cycle resolves without infinite work. Concrete mismatches
+        // elsewhere in the graph still surface via the outer loop.
+        return true;
+    }
+
     let Ok(a_classifier) = ctx.heap().classifier(&a) else {
         return false;
     };
@@ -188,12 +210,8 @@ fn objects_equal(ctx: &dyn EvalContextTrait, a: ObjectHandle, b: ObjectHandle) -
         if av.len() != bv.len() {
             return false;
         }
-        if !av
-            .iter()
-            .zip(bv.iter())
-            .all(|(x, y)| values_equal(ctx, x, y))
-        {
-            return false;
+        for (x, y) in av.iter().zip(bv.iter()) {
+            work.push((x.clone(), y.clone()));
         }
     }
     true
@@ -265,4 +283,78 @@ pub fn equality_key_properties(model: &PureModel, class_id: ElementId) -> Vec<Sm
 #[must_use]
 pub fn is_equality_key_stereotype(stereo: &StereotypeRef, equality_profile: ElementId) -> bool {
     stereo.profile == equality_profile && stereo.value.as_str() == "Key"
+}
+
+// ---------------------------------------------------------------------------
+// Tests — iterative depth + cycle behaviour
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::MockCtx;
+    use im_rc::Vector;
+
+    /// Build `Collection(Collection(... Integer(leaf) ...))` `depth`
+    /// levels deep.
+    fn deep_nested_collection(depth: usize, leaf: i64) -> Value {
+        let mut v = Value::Integer(leaf);
+        for _ in 0..depth {
+            let mut inner = Vector::new();
+            inner.push_back(v);
+            v = Value::Collection(Box::new(inner));
+        }
+        v
+    }
+
+    /// Locks the bug the iterative rewrite fixes: the old recursive
+    /// implementation hit `MAX_EQUALITY_DEPTH = 1000` and silently
+    /// returned `false` for depths beyond that. Depth 1500 is
+    /// comfortably past the old cap (which would have returned
+    /// `false` — the wrong answer) and well below the depth at which
+    /// `Value::Drop` recursion on `Box<PVector<Value>>` would itself
+    /// overflow the test thread's stack (`Value::Drop` is a separate
+    /// recursion source — tracked in BACKLOG, not addressed here).
+    #[test]
+    fn deeply_nested_collections_compare_equal_past_old_recursion_cap() {
+        let a = deep_nested_collection(1500, 42);
+        let b = deep_nested_collection(1500, 42);
+        let ctx = MockCtx;
+        assert!(values_equal(&ctx, &a, &b));
+    }
+
+    /// Same depth but the leaf differs — must still terminate (no
+    /// overflow) and return `false`.
+    #[test]
+    fn deeply_nested_collections_compare_unequal_at_leaf() {
+        let a = deep_nested_collection(1500, 1);
+        let b = deep_nested_collection(1500, 2);
+        let ctx = MockCtx;
+        assert!(!values_equal(&ctx, &a, &b));
+    }
+
+    /// Multiplicity coercion (`[x] == x`) still works through the new
+    /// iterative path. Locks one of the trickier branches of the
+    /// dispatch that the old recursive form encoded inline.
+    #[test]
+    fn singleton_collection_equals_scalar() {
+        let mut single = Vector::new();
+        single.push_back(Value::Integer(7));
+        let a = Value::Collection(Box::new(single));
+        let b = Value::Integer(7);
+        let ctx = MockCtx;
+        assert!(values_equal(&ctx, &a, &b));
+        assert!(values_equal(&ctx, &b, &a)); // symmetric
+    }
+
+    /// Empty collection equals `Unit`. Same multiplicity-coercion
+    /// branch, zero-end.
+    #[test]
+    fn empty_collection_equals_unit() {
+        let empty = Value::Collection(Box::new(Vector::new()));
+        let unit = Value::Unit;
+        let ctx = MockCtx;
+        assert!(values_equal(&ctx, &empty, &unit));
+        assert!(values_equal(&ctx, &unit, &empty));
+    }
 }
