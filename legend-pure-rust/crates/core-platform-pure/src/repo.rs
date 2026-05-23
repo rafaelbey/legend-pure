@@ -762,6 +762,7 @@ pub fn load_from_parsed(
     let mut model = init_bootstrap_model();
     populate_repo_visibility(&mut model, repos);
     let mut errors: Vec<CompilationError> = Vec::new();
+    errors.extend(populate_repo_patterns(&mut model, repos));
 
     // Map each topo-sorted &Repo to its index in the original `repos`
     // slice. `parsed` is parallel to `repos`, so this gives O(1) lookup
@@ -938,6 +939,51 @@ fn populate_repo_visibility(model: &mut PureModel, repos: &[Repo]) {
             .repo_visibility
             .insert(SmolStr::new(meta.name), visible);
     }
+}
+
+/// Compile each repo's `meta.pattern` and store it on
+/// `model.repo_patterns`, so [`legend_pure_parser_pure::validate`] gates
+/// every declared element against the repo's allowed-package regex.
+///
+/// Parity with `snapshot-builder::populate_repo_patterns`. Without this,
+/// any caller that goes through [`load_from_parsed`] (LSP, `legend
+/// check`, `legend compile`) sees `model.repo_patterns` empty, and
+/// `validate_repo_pattern_membership` short-circuits — so a `.pure`
+/// file declaring an out-of-pattern package would compile clean.
+///
+/// Returns a synthetic [`CompilationError`] per descriptor whose
+/// `pattern` is not a valid regex, so the surfaced error tells the user
+/// which repo descriptor is broken instead of silently dropping the
+/// rule (which would re-create the no-op bug for that repo).
+fn populate_repo_patterns(model: &mut PureModel, repos: &[Repo]) -> Vec<CompilationError> {
+    use legend_pure_parser_pure::visibility::{RepoPattern, compile_repo_pattern};
+    let mut errors = Vec::new();
+    for repo in repos {
+        let Some(meta) = repo.meta() else {
+            continue;
+        };
+        match compile_repo_pattern(meta.pattern) {
+            Ok(compiled) => {
+                model.repo_patterns.insert(
+                    SmolStr::new(meta.name),
+                    RepoPattern {
+                        source: SmolStr::new(meta.pattern),
+                        compiled,
+                    },
+                );
+            }
+            Err(e) => {
+                errors.push(mk_synthetic_error(
+                    &format!("<descriptor:{}>", meta.name),
+                    format!(
+                        "invalid repo pattern regex {pattern:?}: {e}",
+                        pattern = meta.pattern,
+                    ),
+                ));
+            }
+        }
+    }
+    errors
 }
 
 fn mk_synthetic_error(source: &str, message: String) -> CompilationError {
