@@ -106,11 +106,7 @@ Class demo::Customer
     // Without --compile: originalMilestonedProperties is empty.
     let mut cmd = Command::cargo_bin("legend").unwrap();
     cmd.env("NO_COLOR", "1");
-    let assert_no_compile = cmd
-        .arg("parse")
-        .arg(&file_path)
-        .assert()
-        .success();
+    let assert_no_compile = cmd.arg("parse").arg(&file_path).assert().success();
     let out_no_compile =
         String::from_utf8_lossy(&assert_no_compile.get_output().stdout).to_string();
     // Customer is the milestoned-target referrer; its
@@ -230,13 +226,11 @@ function demo::addPair(a: Integer[1], b: Integer[1]): Integer[1]
     // The body should include a `func` ValueSpecification with
     // `function: "plus"` — the lowered IR's operator-name shape.
     assert!(
-        out.contains("\"_type\": \"func\"")
-            || out.contains("\"_type\":\"func\""),
+        out.contains("\"_type\": \"func\"") || out.contains("\"_type\":\"func\""),
         "expected `func` value-spec in function body; got:\n{out}"
     );
     assert!(
-        out.contains("\"function\": \"plus\"")
-            || out.contains("\"function\":\"plus\""),
+        out.contains("\"function\": \"plus\"") || out.contains("\"function\":\"plus\""),
         "expected `plus` as the function name in the body; got:\n{out}"
     );
     // Variable references should be present too.
@@ -283,8 +277,7 @@ function demo::pickMany(): meta::pure::metamodel::multiplicity::Multiplicity[1]
 
     // The legacy `@[…]` placeholder Var should never appear.
     assert!(
-        !out.contains("\"name\": \"@[")
-            && !out.contains("\"name\":\"@["),
+        !out.contains("\"name\": \"@[") && !out.contains("\"name\":\"@["),
         "`@[…]` Var placeholder must not appear in output; got:\n{out}"
     );
     // Well-known multiplicities surface as packageableElementPtr.
@@ -388,8 +381,7 @@ function demo::pickName(): meta::pure::metamodel::path::Path<demo::Customer, Str
     let out = String::from_utf8_lossy(&assert.get_output().stdout).to_string();
 
     assert!(
-        out.contains("\"_type\": \"classInstance\"")
-            || out.contains("\"_type\":\"classInstance\""),
+        out.contains("\"_type\": \"classInstance\"") || out.contains("\"_type\":\"classInstance\""),
         "expected path literal to render as classInstance; got:\n{out}"
     );
     assert!(

@@ -177,10 +177,7 @@ pub fn validate_temporal_hierarchy_consistency(
 ///
 /// - **B-4.3** — `%latest` supplied to `getAllVersionsInRange` is
 ///   forbidden because the range query needs concrete bounds.
-pub fn validate_latest_usage(
-    model: &crate::model::PureModel,
-    errors: &mut Vec<CompilationError>,
-) {
+pub fn validate_latest_usage(model: &crate::model::PureModel, errors: &mut Vec<CompilationError>) {
     use crate::model::Element;
 
     for chunk in &model.chunks {

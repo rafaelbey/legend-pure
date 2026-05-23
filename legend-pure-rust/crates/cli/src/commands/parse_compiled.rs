@@ -213,10 +213,7 @@ fn find_function_in_package<'m>(
         })
 }
 
-fn replace_association_from_compiled(
-    a: &mut v1::element::ProtocolAssociation,
-    model: &PureModel,
-) {
+fn replace_association_from_compiled(a: &mut v1::element::ProtocolAssociation, model: &PureModel) {
     let fqn = full_path(&a.package_path, &a.name);
     let Some(id) = model.resolve_fqn_str(&fqn) else {
         return;
@@ -504,10 +501,7 @@ fn tagged_value_to_protocol(
 /// (`PathLiteral`, `RelationLiteral`, `ColSpec*`, `MultiplicityReference`)
 /// emit a placeholder `Var` named after the shape so the JSON stays
 /// well-formed.
-fn value_spec_to_protocol(
-    vs: &ValueSpec,
-    model: &PureModel,
-) -> v1::value_spec::ValueSpecification {
+fn value_spec_to_protocol(vs: &ValueSpec, model: &PureModel) -> v1::value_spec::ValueSpecification {
     use v1::value_spec::{
         AppliedFunction, AppliedProperty, CBoolean, CDecimal, CFloat, CInteger, CString,
         LambdaFunction, ProtocolCollection, ProtocolEnumValue, ProtocolPackageableElementPtr,
@@ -574,7 +568,10 @@ fn value_spec_to_protocol(
             source_information: src,
         }),
         ExprKind::Lambda { parameters, body } => ValueSpecification::Lambda(LambdaFunction {
-            body: body.iter().map(|e| value_spec_to_protocol(e, model)).collect(),
+            body: body
+                .iter()
+                .map(|e| value_spec_to_protocol(e, model))
+                .collect(),
             parameters: parameters
                 .iter()
                 .map(|p| pure_param_to_variable(p, model))
@@ -592,9 +589,7 @@ fn value_spec_to_protocol(
                 source_information: src,
             })
         }
-        ExprKind::TypeReference { type_expr } => {
-            type_reference_to_protocol(type_expr, model, src)
-        }
+        ExprKind::TypeReference { type_expr } => type_reference_to_protocol(type_expr, model, src),
         ExprKind::PackageableElementRef { element } => {
             ValueSpecification::PackageableElementPtr(ProtocolPackageableElementPtr {
                 full_path: element_full_path(model, *element),
@@ -797,10 +792,7 @@ fn relation_literal_to_protocol(
         .map(|col| render_relation_column(col, model))
         .collect();
     let mut value_map = serde_json::Map::new();
-    value_map.insert(
-        "columns".to_string(),
-        serde_json::Value::Array(col_values),
-    );
+    value_map.insert("columns".to_string(), serde_json::Value::Array(col_values));
     ValueSpecification::ClassInstance(ClassInstance {
         type_name: "relationType".to_string(),
         value: serde_json::Value::Object(value_map),
@@ -842,10 +834,7 @@ fn col_spec_to_protocol(
             .iter()
             .map(|col| render_relation_column(col, model))
             .collect();
-        value_map.insert(
-            "columns".to_string(),
-            serde_json::Value::Array(col_values),
-        );
+        value_map.insert("columns".to_string(), serde_json::Value::Array(col_values));
     } else {
         // Single-column form: inline the column's fields directly into
         // the value map. Matches the AST→Protocol single-column shape
@@ -966,9 +955,7 @@ fn date_value_to_protocol(
             second,
             ..
         } => ValueSpecification::DateTime(CDateTime {
-            value: format!(
-                "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}"
-            ),
+            value: format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}"),
             source_information: src,
         }),
         DateValue::StrictTime {
@@ -993,4 +980,3 @@ fn elements_multiplicity(n: usize) -> v1::multiplicity::Multiplicity {
         upper_bound: Some(n_u32),
     }
 }
-

@@ -353,9 +353,7 @@ function test::pickAddress(d: Date[1]): test::Address[*]
     let model = compile_with_platform(source);
     let body = function_body(&model, "pickAddress_Date_1__Address_MANY_");
     let address_arity = find_qp_call(&body, "address").unwrap_or_else(|| {
-        panic!(
-            "expected AutoMap propagation to produce QP 'address'; body: {body:?}"
-        )
+        panic!("expected AutoMap propagation to produce QP 'address'; body: {body:?}")
     });
     assert_eq!(
         address_arity, 2,
@@ -398,9 +396,7 @@ function test::nestedAccess(): test::Street[*]
     let body = function_body(&model, "nestedAccess__Street_MANY_");
     // Look for the inner QP `street` — it should have receiver + 1 date arg.
     let street_arity = find_qp_call(&body, "street").unwrap_or_else(|| {
-        panic!(
-            "expected propagation to rewrite nested `.street` access; body: {body:?}"
-        )
+        panic!("expected propagation to rewrite nested `.street` access; body: {body:?}")
     });
     assert_eq!(
         street_arity, 2,

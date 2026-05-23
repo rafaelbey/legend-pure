@@ -129,10 +129,7 @@ impl RuntimeExtension for RelationalStoreExtension {
         // `logActivities` lives in `platform_store_relational/runtimeLogging.pure`
         // — declared in the relational repo, so registration belongs in
         // this extension rather than the core runtime.
-        r.register(
-            "logActivities_Activity_MANY__Nil_0_",
-            LogActivities,
-        );
+        r.register("logActivities_Activity_MANY__Nil_0_", LogActivities);
     }
 }
 

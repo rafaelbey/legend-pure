@@ -97,9 +97,7 @@ pub fn error_code(kind: &CompilationErrorKind) -> &'static str {
         CompilationErrorKind::MilestoningReservedPropertyName { .. } => {
             "milestoningReservedPropertyName"
         }
-        CompilationErrorKind::MilestoningHierarchyMismatch { .. } => {
-            "milestoningHierarchyMismatch"
-        }
+        CompilationErrorKind::MilestoningHierarchyMismatch { .. } => "milestoningHierarchyMismatch",
         CompilationErrorKind::MilestoningEdgePointCollision { .. } => {
             "milestoningEdgePointCollision"
         }

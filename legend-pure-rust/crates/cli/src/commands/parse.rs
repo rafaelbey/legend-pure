@@ -146,10 +146,7 @@ pub fn run(args: ParseArgs) -> Result<(), CliError> {
 
     // -- Optional compile pass to enrich Class/Association elements --
     if args.compile && !all_source_files.is_empty() {
-        let _ = super::parse_compiled::patch_with_milestoning(
-            &all_source_files,
-            &mut all_elements,
-        );
+        let _ = super::parse_compiled::patch_with_milestoning(&all_source_files, &mut all_elements);
         eprintln!(
             "  {} {} (patched milestoning metadata)",
             "Compiled".green().bold(),

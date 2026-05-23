@@ -85,9 +85,8 @@ pub fn pure_exception_to_payload(exc: &PureException) -> ExceptionPayload {
             // exactly. Keep that string on `getMessage()` for backwards
             // compatibility; the structured fields (kind, constraint_id,
             // owner_fqn) carry the same info in a programmatic form.
-            let mut composed = format!(
-                "Constraint :[{constraint_id}] violated in the Class {owner}"
-            );
+            let mut composed =
+                format!("Constraint :[{constraint_id}] violated in the Class {owner}");
             if let Some(m) = message {
                 composed.push_str(", Message: ");
                 composed.push_str(m);

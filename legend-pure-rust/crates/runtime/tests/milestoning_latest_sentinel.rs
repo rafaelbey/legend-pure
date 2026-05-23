@@ -201,7 +201,11 @@ function test::badRange(): Integer[1]
     assert!(
         found.is_some(),
         "expected MilestoningLatestNotAllowedInRange, got: {:?}",
-        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        partial
+            .errors
+            .iter()
+            .map(|e| &e.message)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -229,6 +233,10 @@ function test::misuseLatest(): Boolean[1]
     assert!(
         found.is_some(),
         "expected MilestoningLatestOutsideMilestoningContext, got: {:?}",
-        partial.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        partial
+            .errors
+            .iter()
+            .map(|e| &e.message)
+            .collect::<Vec<_>>()
     );
 }

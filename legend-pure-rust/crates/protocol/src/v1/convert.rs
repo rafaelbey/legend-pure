@@ -1093,9 +1093,7 @@ pub fn multiplicity_arg_to_value_spec(
         MultiplicityArgument::Identifier(name, _) => {
             multiplicity_variable_value_spec(name.as_str(), source_information)
         }
-        MultiplicityArgument::Concrete(m, _) => {
-            multiplicity_to_value_spec(m, source_information)
-        }
+        MultiplicityArgument::Concrete(m, _) => multiplicity_to_value_spec(m, source_information),
     }
 }
 
