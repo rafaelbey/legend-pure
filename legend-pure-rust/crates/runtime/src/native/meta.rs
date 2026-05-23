@@ -1662,7 +1662,62 @@ fn render_element_representation(model: &PureModel, id: ElementId) -> String {
 
 /// Render a value as a Pure-source-like debug representation —
 /// powers the `toRepresentation` native.
+///
+/// Iterative explicit-frame DFS so deep `Collection(Collection(...))`
+/// and `UnitInstance` chains can't overflow the Rust thread stack.
+/// The naive recursion was unbounded in syntactic nesting; the
+/// iterative form scales with heap allocations only. Matches the
+/// shape of the iterative `Value::Clone` and `Value::Drop` in
+/// `crates/runtime/src/value.rs`.
 fn render_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -> String {
+    enum Op<'a> {
+        Visit(&'a Value),
+        AssembleCollection(usize),
+        AssembleUnitInstance(ElementId),
+    }
+
+    let mut ops: Vec<Op<'_>> = vec![Op::Visit(value)];
+    let mut built: Vec<String> = Vec::new();
+
+    while let Some(op) = ops.pop() {
+        match op {
+            Op::Visit(v) => match v {
+                Value::Collection(items) => {
+                    ops.push(Op::AssembleCollection(items.len()));
+                    for item in items.iter().rev() {
+                        ops.push(Op::Visit(item));
+                    }
+                }
+                Value::UnitInstance { unit_id, inner } => {
+                    ops.push(Op::AssembleUnitInstance(*unit_id));
+                    ops.push(Op::Visit(inner));
+                }
+                leaf => built.push(render_leaf_representation(leaf, model, heap)),
+            },
+            Op::AssembleCollection(len) => {
+                let start = built.len() - len;
+                let parts: Vec<String> = built.drain(start..).collect();
+                built.push(format!("[{}]", parts.join(", ")));
+            }
+            Op::AssembleUnitInstance(unit_id) => {
+                let inner_repr = built
+                    .pop()
+                    .expect("AssembleUnitInstance reached with empty built stack");
+                built.push(format_unit_instance(unit_id, &inner_repr, model));
+            }
+        }
+    }
+
+    built
+        .pop()
+        .expect("render_representation: built stack empty after traversal")
+}
+
+/// Renders a non-recursive (`Collection` / `UnitInstance` excluded)
+/// `Value` to its `toRepresentation` text form. The full driver is
+/// `render_representation`; this helper handles only the leaf
+/// variants so the driver's match can stay tight.
+fn render_leaf_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -> String {
     match value {
         Value::String(s) => format!("'{}'", escape_string_repr(s)),
         Value::Boolean(b) => b.to_string(),
@@ -1681,13 +1736,6 @@ fn render_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -
             let _ = heap;
             format!("<Anonymous_{:p}>", std::rc::Rc::as_ptr(obj_id))
         }
-        Value::Collection(v) => {
-            let parts: Vec<String> = v
-                .iter()
-                .map(|item| render_representation(item, model, heap))
-                .collect();
-            format!("[{}]", parts.join(", "))
-        }
         Value::Unit => "[]".to_string(),
         Value::Map(m) => format!("<Map size={}>", m.borrow().entries.len()),
         Value::Function(fv) => match fv.as_ref() {
@@ -1702,25 +1750,30 @@ fn render_representation(value: &Value, model: &PureModel, heap: &RuntimeHeap) -
         Value::EnumValue { enum_id, member } => {
             format!("{}.{member}", model.element_name(*enum_id))
         }
-        // Pure source form: `<inner> <Measure>~<Unit>` — e.g. `5
-        // RomanLength~Pes`. The `Unit` element's parent_package is the
-        // `Measure` so we climb one level to compose the pretty name.
-        Value::UnitInstance { unit_id, inner } => {
-            let unit_name = model.element_name(*unit_id);
-            let measure_name = match unit_id {
-                legend_pure_parser_pure::ids::ElementId::InstanceId { .. } => {
-                    let parent_pkg = model.get_node(*unit_id).parent_package;
-                    model.get_package(parent_pkg).name.clone()
-                }
-                legend_pure_parser_pure::ids::ElementId::Package(_) => smol_str::SmolStr::new(""),
-            };
-            let inner_repr = render_representation(inner, model, heap);
-            if measure_name.is_empty() {
-                format!("{inner_repr} {unit_name}")
-            } else {
-                format!("{inner_repr} {measure_name}~{unit_name}")
-            }
+        // Recursive variants are driven by `render_representation`'s
+        // work-stack; reaching them here means the dispatch went wrong.
+        Value::Collection(_) | Value::UnitInstance { .. } => unreachable!(
+            "render_leaf_representation called on recursive Value variant; the iterative driver should have queued these"
+        ),
+    }
+}
+
+/// Format a `UnitInstance` in Pure source form: `<inner> <Measure>~<Unit>`
+/// (e.g. `5 RomanLength~Pes`). The `Unit` element's `parent_package` is
+/// the `Measure`, so we climb one level for the pretty composite name.
+fn format_unit_instance(unit_id: ElementId, inner_repr: &str, model: &PureModel) -> String {
+    let unit_name = model.element_name(unit_id);
+    let measure_name = match unit_id {
+        legend_pure_parser_pure::ids::ElementId::InstanceId { .. } => {
+            let parent_pkg = model.get_node(unit_id).parent_package;
+            model.get_package(parent_pkg).name.clone()
         }
+        legend_pure_parser_pure::ids::ElementId::Package(_) => smol_str::SmolStr::new(""),
+    };
+    if measure_name.is_empty() {
+        format!("{inner_repr} {unit_name}")
+    } else {
+        format!("{inner_repr} {measure_name}~{unit_name}")
     }
 }
 
@@ -3363,4 +3416,63 @@ fn expect_profile_arg(
         .into());
     }
     Ok((id, build_element_path(model, id, "::", false)))
+}
+
+// ---------------------------------------------------------------------------
+// Tests — render_representation iterative-depth contract
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod render_tests {
+    use super::render_representation;
+    use crate::heap::RuntimeHeap;
+    use crate::value::Value;
+    use im_rc::Vector as PVector;
+    use legend_pure_parser_pure::model::PureModel;
+
+    /// Build `Collection(Collection(... Integer(0) ...))` `depth`
+    /// levels deep, leaving primitive leaves so the renderer never
+    /// needs to consult the model.
+    fn deep_nested_collection(depth: usize) -> Value {
+        let mut v = Value::Integer(0);
+        for _ in 0..depth {
+            let mut inner = PVector::new();
+            inner.push_back(v);
+            v = Value::Collection(Box::new(inner));
+        }
+        v
+    }
+
+    /// Locks the iterative `render_representation` contract: rendering
+    /// a 10 000-level-deep `Collection(...)` chain must not overflow
+    /// the Rust thread stack. The previous recursive implementation
+    /// overflowed under the same conditions that the auto-derived
+    /// `Value::Drop` / `Value::Clone` did (~3 000–5 000 levels).
+    #[test]
+    fn render_representation_deep_collection_no_overflow() {
+        let v = deep_nested_collection(10_000);
+        let model = PureModel::new();
+        let heap = RuntimeHeap::new();
+        let s = render_representation(&v, &model, &heap);
+        // 10 000 opening `[`s, then `0`, then 10 000 closing `]`s.
+        // Verify the bracket count rather than building the whole
+        // expected string (10 000 chars × 2 + slop).
+        assert_eq!(s.matches('[').count(), 10_000);
+        assert_eq!(s.matches(']').count(), 10_000);
+        assert!(s.contains('0'));
+    }
+
+    /// Sanity: shape produced for a small list matches Pure source
+    /// form (`[1, 2, 3]`).
+    #[test]
+    fn render_representation_shallow_collection_shape() {
+        let mut pv = PVector::new();
+        pv.push_back(Value::Integer(1));
+        pv.push_back(Value::Integer(2));
+        pv.push_back(Value::Integer(3));
+        let v = Value::Collection(Box::new(pv));
+        let model = PureModel::new();
+        let heap = RuntimeHeap::new();
+        assert_eq!(render_representation(&v, &model, &heap), "[1, 2, 3]");
+    }
 }

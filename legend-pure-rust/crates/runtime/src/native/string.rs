@@ -17,6 +17,7 @@
 //! `trim`, `ltrim`, `rtrim`, `reverseString`, `replace`, `joinStrings`,
 //! `toString`, `format`.
 
+use legend_pure_parser_pure::ids::ElementId;
 use legend_pure_parser_pure::types::ValueSpec;
 use smol_str::SmolStr;
 
@@ -384,11 +385,134 @@ pub(crate) fn pure_to_string(
     value: &Value,
     ctx: &mut dyn EvalContextTrait,
 ) -> Result<String, PureException> {
+    // Iterative explicit-frame DFS so deep `Collection(Collection(...))`
+    // and `UnitInstance` chains can't overflow the Rust thread stack.
+    // The naive recursion was unbounded in syntactic nesting; the
+    // iterative form scales with heap allocations only. Mirrors the
+    // shape of `render_representation` and the iterative `Value::Clone`
+    // / `Value::Drop` in `crates/runtime/src/value.rs`.
+    //
+    // `Value::Object` still dispatches through
+    // `ctx.invoke_qualified_property("toString", …)` and recurses on
+    // the returned value via a *normal* `pure_to_string` call. That
+    // recursion is bounded by user-defined `toString` chains rather
+    // than by raw data depth, and folding it into the work-stack would
+    // mean carrying the `ctx` borrow across frames — the borrow
+    // checker won't let us reuse `&mut dyn EvalContextTrait` between
+    // an outer `Visit` arm and a pending `Assemble` frame. Keeping
+    // the QP-recursion separate gives us the deep-data fix without
+    // an `unsafe`-or-rebuild dance.
+    enum Op<'a> {
+        Visit(&'a Value),
+        // Arc<Value> lets the loop carry an owned reference to the
+        // QP result — the borrow of `value` is too short to use
+        // directly in `Op::Visit(&Value)`, and recomputing the
+        // borrow at the `Visit` arm would require holding `ctx`
+        // immutably while the caller is `&mut`. Using an owned
+        // handle on a thread-local `Rc` sidesteps both.
+        VisitOwned(Rc<Value>),
+        AssembleCollection(usize),
+        AssembleUnitInstance(ElementId),
+    }
+
+    use std::rc::Rc;
+
+    let mut ops: Vec<Op<'_>> = vec![Op::Visit(value)];
+    let mut built: Vec<String> = Vec::new();
+
+    while let Some(op) = ops.pop() {
+        match op {
+            Op::Visit(v) => match v {
+                Value::Collection(items) => {
+                    ops.push(Op::AssembleCollection(items.len()));
+                    for item in items.iter().rev() {
+                        ops.push(Op::Visit(item));
+                    }
+                }
+                Value::UnitInstance { unit_id, inner } => {
+                    ops.push(Op::AssembleUnitInstance(*unit_id));
+                    ops.push(Op::Visit(inner));
+                }
+                Value::Object(obj_id) => {
+                    let invoked = ctx.invoke_qualified_property(v, "toString", &[])?;
+                    match &invoked {
+                        Some(Value::String(s)) => built.push(s.to_string()),
+                        Some(_) => {
+                            // Other shapes must go through the same
+                            // iterative driver so a QP that returns a
+                            // nested Collection / UnitInstance / Object
+                            // doesn't escape the work-stack.
+                            let owned = invoked.expect("matched Some above; unreachable otherwise");
+                            ops.push(Op::VisitOwned(Rc::new(owned)));
+                        }
+                        None => {
+                            built.push(format!("Anonymous_{:p}", std::rc::Rc::as_ptr(obj_id)));
+                        }
+                    }
+                }
+                leaf => built.push(pure_to_string_leaf(leaf, ctx)),
+            },
+            Op::VisitOwned(owned) => match owned.as_ref() {
+                Value::Collection(items) => {
+                    ops.push(Op::AssembleCollection(items.len()));
+                    // Carry the owned root with each child so the
+                    // `&Value` references stay valid until the
+                    // assemble frame fires. Each child clone is a
+                    // shared `Rc` bump; the deep data inside is not
+                    // re-cloned thanks to iterative `Value::Clone`.
+                    for item in items.iter().rev() {
+                        ops.push(Op::VisitOwned(Rc::new(item.clone())));
+                    }
+                }
+                Value::UnitInstance { unit_id, inner } => {
+                    ops.push(Op::AssembleUnitInstance(*unit_id));
+                    ops.push(Op::VisitOwned(Rc::new((**inner).clone())));
+                }
+                Value::Object(obj_id) => {
+                    let invoked = ctx.invoke_qualified_property(owned.as_ref(), "toString", &[])?;
+                    match &invoked {
+                        Some(Value::String(s)) => built.push(s.to_string()),
+                        Some(_) => {
+                            let owned_v =
+                                invoked.expect("matched Some above; unreachable otherwise");
+                            ops.push(Op::VisitOwned(Rc::new(owned_v)));
+                        }
+                        None => {
+                            built.push(format!("Anonymous_{:p}", std::rc::Rc::as_ptr(obj_id)));
+                        }
+                    }
+                }
+                leaf => built.push(pure_to_string_leaf(leaf, ctx)),
+            },
+            Op::AssembleCollection(len) => {
+                let start = built.len() - len;
+                let parts: Vec<String> = built.drain(start..).collect();
+                built.push(format!("[{}]", parts.join(", ")));
+            }
+            Op::AssembleUnitInstance(unit_id) => {
+                let inner_s = built
+                    .pop()
+                    .expect("pure_to_string: AssembleUnitInstance with empty built");
+                let unit_name = ctx.model().element_name(unit_id).to_string();
+                built.push(format!("{inner_s} {unit_name}"));
+            }
+        }
+    }
+
+    Ok(built
+        .pop()
+        .expect("pure_to_string: built stack empty after traversal"))
+}
+
+/// `toString` rendering for the non-recursive (`Collection` / `UnitInstance` /
+/// `Object` excluded) `Value` variants. The full driver is `pure_to_string`;
+/// this helper handles only leaves so the driver's match can stay tight.
+fn pure_to_string_leaf(value: &Value, ctx: &dyn EvalContextTrait) -> String {
     use crate::value::FunctionValue;
     match value {
-        Value::String(s) => Ok(s.to_string()),
-        Value::Boolean(b) => Ok(b.to_string()),
-        Value::Integer(i) => Ok(i.to_string()),
+        Value::String(s) => s.to_string(),
+        Value::Boolean(b) => b.to_string(),
+        Value::Integer(i) => i.to_string(),
         // Float: route through the Java-style formatter so
         // integer-valued doubles render with the trailing `.0`
         // platform tests pin (testFloatToStringWithExcessTrailingZeros,
@@ -397,63 +521,38 @@ pub(crate) fn pure_to_string(
         // (including the avoidance of E-notation for normal-range
         // values, and 0.000000013421-style expanded form for very
         // small values) already matches Java's expected output.
-        Value::Float(_) => Ok(crate::native::math::java_number_string(value)),
-        Value::Decimal(d) => Ok(d.to_string()),
+        Value::Float(_) => crate::native::math::java_number_string(value),
+        Value::Decimal(d) => d.to_string(),
         // Date/DateTime: no `%` prefix (PureDate's Display already
         // formats with TZ for time-precision dates).
-        Value::Date(d) => Ok(d.to_string()),
-        Value::Latest => Ok("%latest".to_string()),
-        Value::StrictTime(t) => Ok(t.to_string()),
-        Value::Unit => Ok(String::new()),
-        Value::Collection(items) => {
-            let mut parts = Vec::with_capacity(items.len());
-            for item in items.iter() {
-                parts.push(pure_to_string(item, ctx)?);
-            }
-            Ok(format!("[{}]", parts.join(", ")))
-        }
-        // Heap object: dispatch through the receiver's `toString()`
-        // qualified property if one is defined on the class hierarchy.
-        // Pair / List / user classes all flow through this path —
-        // their `toString()` lives in platform `.pure` source, so the
-        // runtime never needs to hardcode classifier names.
-        Value::Object(obj_id) => {
-            let invoked = ctx.invoke_qualified_property(value, "toString", &[])?;
-            match invoked.as_ref() {
-                Some(Value::String(s)) => Ok(s.to_string()),
-                Some(other) => pure_to_string(other, ctx),
-                None => Ok(format!("Anonymous_{:p}", std::rc::Rc::as_ptr(obj_id))),
-            }
-        }
+        Value::Date(d) => d.to_string(),
+        Value::Latest => "%latest".to_string(),
+        Value::StrictTime(t) => t.to_string(),
+        Value::Unit => String::new(),
         // Element ref (Class, Function, Enumeration, …): simple-leaf
         // name. testClassToString and testEnumerationToString assert
         // `STR_Person->toString() == 'STR_Person'`.
-        Value::Element(id) => {
-            Ok(crate::model_utils::element_simple_name(ctx.model(), *id).to_string())
-        }
+        Value::Element(id) => crate::model_utils::element_simple_name(ctx.model(), *id).to_string(),
         // Enum value: just the member (Java parity — `CITY` not
         // `STR_GeographicEntityType.CITY`).
-        Value::EnumValue { member, .. } => Ok(member.to_string()),
+        Value::EnumValue { member, .. } => member.to_string(),
         Value::Function(fv) => match fv.as_ref() {
-            FunctionValue::Lambda(_) => Ok("<Lambda>".to_string()),
+            FunctionValue::Lambda(_) => "<Lambda>".to_string(),
             FunctionValue::Compiled(id) => {
-                Ok(crate::model_utils::element_simple_name(ctx.model(), *id).to_string())
+                crate::model_utils::element_simple_name(ctx.model(), *id).to_string()
             }
-            FunctionValue::Path(p) => Ok(format!(
+            FunctionValue::Path(p) => format!(
                 "<Path:{}{}>",
                 p.steps.len(),
                 p.name.as_ref().map(|n| format!("!{n}")).unwrap_or_default()
-            )),
+            ),
         },
-        Value::Map(m) => Ok(format!("<Map size={}>", m.borrow().entries.len())),
-        Value::UnitInstance { unit_id, inner } => {
-            // Pure source form is "{n} {Measure}~{Unit}"; toString-
-            // friendly subset just reuses the inner-value string with
-            // the local unit name appended.
-            let unit_name = ctx.model().element_name(*unit_id).to_string();
-            let inner_s = pure_to_string(inner, ctx)?;
-            Ok(format!("{inner_s} {unit_name}"))
-        }
+        Value::Map(m) => format!("<Map size={}>", m.borrow().entries.len()),
+        // Recursive variants are driven by the iterative loop;
+        // reaching them here means the dispatch went wrong.
+        Value::Collection(_) | Value::UnitInstance { .. } | Value::Object(_) => unreachable!(
+            "pure_to_string_leaf called on recursive Value variant; the iterative driver should have queued these"
+        ),
     }
 }
 
@@ -1652,6 +1751,52 @@ mod tests {
             JoinStrings
                 .execute(&[coll, lit_str(",")], &mut MockCtx)
                 .is_err()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // pure_to_string iterative-depth contract
+    // -----------------------------------------------------------------------
+
+    /// Build `Collection(Collection(... Integer(0) ...))` `depth`
+    /// levels deep. Primitive leaves keep the renderer off any code
+    /// paths that would need a real model.
+    fn deep_nested_collection(depth: usize) -> Value {
+        let mut v = Value::Integer(0);
+        for _ in 0..depth {
+            let mut inner = im_rc::Vector::new();
+            inner.push_back(v);
+            v = Value::Collection(Box::new(inner));
+        }
+        v
+    }
+
+    /// Locks the iterative `pure_to_string` contract: rendering a
+    /// 10 000-level-deep `Collection(...)` chain must not overflow
+    /// the Rust thread stack. The previous recursive implementation
+    /// overflowed in the same `Collection`-nesting band as
+    /// `render_representation` did.
+    #[test]
+    fn pure_to_string_deep_collection_no_overflow() {
+        let v = deep_nested_collection(10_000);
+        let s = super::pure_to_string(&v, &mut MockCtx).expect("render must succeed");
+        assert_eq!(s.matches('[').count(), 10_000);
+        assert_eq!(s.matches(']').count(), 10_000);
+        assert!(s.contains('0'));
+    }
+
+    /// Sanity: shape produced for a small list matches `toString`
+    /// form (`[1, 2, 3]`, no quotes around integers).
+    #[test]
+    fn pure_to_string_shallow_collection_shape() {
+        let mut pv = im_rc::Vector::new();
+        pv.push_back(Value::Integer(1));
+        pv.push_back(Value::Integer(2));
+        pv.push_back(Value::Integer(3));
+        let v = Value::Collection(Box::new(pv));
+        assert_eq!(
+            super::pure_to_string(&v, &mut MockCtx).unwrap(),
+            "[1, 2, 3]"
         );
     }
 }
