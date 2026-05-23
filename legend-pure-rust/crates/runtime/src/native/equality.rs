@@ -307,20 +307,28 @@ mod tests {
         v
     }
 
-    /// Locks the bug the iterative rewrite fixes: the old recursive
-    /// implementation hit `MAX_EQUALITY_DEPTH = 1000` and silently
-    /// returned `false` for depths beyond that. Depth 1 500 is
-    /// comfortably past the old cap (which would have returned
-    /// `false` — the wrong answer) and below the next limiter:
-    /// `values_equal` clones each child pair onto the work-stack via
-    /// `Value::clone()`, which is `#[derive(Clone)]` and recurses
-    /// through nested `Collection`s. Bumping past ~2 500 here
-    /// overflows in `Value::clone`, not in the equality loop itself
-    /// — the iterative-`Clone` follow-up tracks that.
+    /// Locks the iterative-equality + iterative-`Drop` +
+    /// iterative-`Clone` triple. The old recursive `values_equal`
+    /// hit `MAX_EQUALITY_DEPTH = 1000` and silently returned `false`;
+    /// the auto-derived `Drop` overflowed around 3 000–5 000; the
+    /// derived `Clone` (used to seed `work` from `(a.clone(),
+    /// b.clone())` and re-clone children on every push) overflowed at
+    /// the same level. All three are now bounded by heap allocations,
+    /// not Rust frames.
+    ///
+    /// Depth 3 000 is comfortably past every previous overflow point
+    /// while keeping the test under a couple of seconds — the
+    /// iterative equality clones each child pair onto the work-stack
+    /// via the new iterative `Value::Clone`, so this is `O(depth²)`
+    /// total work (~9 million ops at 3 000; depth 10 000 would be
+    /// ~100 million → 30+ s in debug builds). The "no overflow at
+    /// all" leg of the contract is locked separately and cheaply by
+    /// `value::tests::deep_nested_collection_{drops,clones}_without_overflow`
+    /// at depth 10 000.
     #[test]
     fn deeply_nested_collections_compare_equal_past_old_recursion_cap() {
-        let a = deep_nested_collection(1500, 42);
-        let b = deep_nested_collection(1500, 42);
+        let a = deep_nested_collection(3_000, 42);
+        let b = deep_nested_collection(3_000, 42);
         let ctx = MockCtx;
         assert!(values_equal(&ctx, &a, &b));
     }
@@ -329,8 +337,8 @@ mod tests {
     /// overflow) and return `false`.
     #[test]
     fn deeply_nested_collections_compare_unequal_at_leaf() {
-        let a = deep_nested_collection(1500, 1);
-        let b = deep_nested_collection(1500, 2);
+        let a = deep_nested_collection(3_000, 1);
+        let b = deep_nested_collection(3_000, 2);
         let ctx = MockCtx;
         assert!(!values_equal(&ctx, &a, &b));
     }

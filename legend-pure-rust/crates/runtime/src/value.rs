@@ -71,7 +71,7 @@ pub struct MapState {
 /// - Strings use `SmolStr` (inline for short strings, shared heap for longer)
 /// - Collections use `im_rc` persistent structures for structural sharing
 /// - Objects are handles (`ObjectId`) into the `RuntimeHeap`, not direct pointers
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Value {
     /// Pure `Boolean` — stored inline.
     Boolean(bool),
@@ -753,6 +753,135 @@ impl Value {
 }
 
 // ---------------------------------------------------------------------------
+// Value — iterative Clone
+// ---------------------------------------------------------------------------
+
+impl Clone for Value {
+    /// Iterative clone for `Value`, scaling with heap allocations
+    /// instead of Rust thread-stack frames.
+    ///
+    /// The auto-derived `#[derive(Clone)]` expansion recurses one
+    /// frame per nesting level for `Collection(Box<PVector<Value>>)`:
+    /// `Value::clone` → `Box::clone` → `PVector::clone` → (per-element)
+    /// `Value::clone` → … . `im_rc::Vector::clone` is `O(1)` for the
+    /// fully-shared tree representation but **clones each element by
+    /// value** when the vector is small enough to stay inline in a
+    /// single chunk (`CHUNK_SIZE = 64`). Every level in our test
+    /// fixtures is a 1-element vector → always inline → always
+    /// per-element clone → 10 000 levels = 10 000 Rust frames =
+    /// stack overflow.
+    ///
+    /// This impl drives the work through an explicit-frame DFS. Each
+    /// recursive variant pushes an `Assemble` marker after queueing
+    /// its child visits; the `built` stack then carries the cloned
+    /// children in source order until the marker fires and pops them
+    /// into a fresh parent. Non-recursive variants are cloned in
+    /// place — they can't grow the work-stack indefinitely.
+    fn clone(&self) -> Self {
+        deep_clone_iter(self)
+    }
+}
+
+/// Bottom-up iterative clone of an arbitrarily nested `Value`.
+///
+/// Two work-stacks:
+/// - `ops`: the DFS frontier; mixes `Visit(&Value)` (descend) and
+///   `Assemble(spec)` (collect built children into a parent).
+/// - `built`: cloned children waiting to be consumed by the next
+///   `Assemble` frame. Order matches source order — children are
+///   visited in reverse so that popping gives the original sequence.
+fn deep_clone_iter(root: &Value) -> Value {
+    enum Op<'a> {
+        Visit(&'a Value),
+        AssembleCollection(usize),
+        AssembleUnitInstance(ElementId),
+    }
+
+    let mut ops: Vec<Op<'_>> = vec![Op::Visit(root)];
+    let mut built: Vec<Value> = Vec::new();
+
+    while let Some(op) = ops.pop() {
+        match op {
+            Op::Visit(v) => match v {
+                Value::Collection(boxed) => {
+                    let pvec: &PVector<Value> = boxed;
+                    ops.push(Op::AssembleCollection(pvec.len()));
+                    for child in pvec.iter().rev() {
+                        ops.push(Op::Visit(child));
+                    }
+                }
+                Value::UnitInstance { unit_id, inner } => {
+                    ops.push(Op::AssembleUnitInstance(*unit_id));
+                    ops.push(Op::Visit(inner));
+                }
+                // Non-recursive variants — cloned in place. No
+                // sub-`Value` field, so no work-stack growth.
+                other => built.push(clone_leaf(other)),
+            },
+            Op::AssembleCollection(len) => {
+                // Pop `len` items off `built` in source order. They
+                // were pushed in source order because we queued
+                // children in reverse, so a straight `drain` reads
+                // them as written.
+                let start = built.len() - len;
+                let items: PVector<Value> = built.drain(start..).collect();
+                built.push(Value::Collection(Box::new(items)));
+            }
+            Op::AssembleUnitInstance(unit_id) => {
+                // Safe: every UnitInstance visit pushes exactly one
+                // child `Visit` *and* this `Assemble` marker — so
+                // `built` has at least one entry when we pop.
+                let inner = built
+                    .pop()
+                    .expect("deep_clone_iter: AssembleUnitInstance reached with empty built stack");
+                built.push(Value::UnitInstance {
+                    unit_id,
+                    inner: Box::new(inner),
+                });
+            }
+        }
+    }
+
+    built
+        .pop()
+        .expect("deep_clone_iter: built stack empty after traversal")
+}
+
+/// Clone every non-recursive `Value` variant. Recursive variants
+/// (`Collection`, `UnitInstance`) are not handled here — they go
+/// through `deep_clone_iter`'s work-stack instead and never reach
+/// this function. The structure mirrors the derived `Clone` we
+/// removed; each variant just copies its fields (with the standard
+/// `Rc`/`SmolStr`/`Box<FunctionValue>` `.clone()`s those types
+/// implement).
+fn clone_leaf(v: &Value) -> Value {
+    match v {
+        Value::Boolean(b) => Value::Boolean(*b),
+        Value::Integer(i) => Value::Integer(*i),
+        Value::Float(f) => Value::Float(*f),
+        Value::Decimal(d) => Value::Decimal(*d),
+        Value::String(s) => Value::String(s.clone()),
+        Value::Date(d) => Value::Date(*d),
+        Value::Latest => Value::Latest,
+        Value::StrictTime(t) => Value::StrictTime(*t),
+        Value::Object(h) => Value::Object(h.clone()),
+        Value::Map(m) => Value::Map(m.clone()),
+        Value::Function(fv) => Value::Function(fv.clone()),
+        Value::Element(e) => Value::Element(*e),
+        Value::EnumValue { enum_id, member } => Value::EnumValue {
+            enum_id: *enum_id,
+            member: member.clone(),
+        },
+        Value::Unit => Value::Unit,
+        // Recursive variants are handled by `deep_clone_iter`; the
+        // contract is that they never reach this leaf helper.
+        Value::Collection(_) | Value::UnitInstance { .. } => {
+            unreachable!("deep_clone_iter must not delegate recursive variants to clone_leaf")
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Value — iterative Drop
 // ---------------------------------------------------------------------------
 
@@ -1159,6 +1288,18 @@ mod tests {
     #[test]
     fn deep_nested_collection_drops_without_overflow() {
         let v = deep_nested_collection(10_000);
+        drop(v);
+    }
+
+    /// Probe: does cloning a deep-nested Value overflow? If `Value::Clone`
+    /// derived expansion is O(depth) recursive (advisor's hypothesis),
+    /// this overflows at 10 000. If it's O(1) per level because im_rc
+    /// shares structurally, this completes. Once locked, this is the
+    /// contract for the iterative-Clone follow-up.
+    #[test]
+    fn deep_nested_collection_clones_without_overflow() {
+        let v = deep_nested_collection(10_000);
+        let _ = v.clone();
         drop(v);
     }
 }
