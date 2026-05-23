@@ -104,6 +104,89 @@ pub struct ListTestsArgs {
     pub package_prefix: Option<String>,
 }
 
+/// Input shape for [`LegendMcpServer::apply_edit`].
+///
+/// `edits` mirrors the LSP `TextDocumentEdit.edits` JSON shape
+/// (`[{range: {start: {line, character}, end: {...}}, newText:
+/// "..."}]`) so future code-action wiring is a straight pass-through.
+///
+/// Uses local wire structs ([`WireTextEdit`] / [`WireRange`] /
+/// [`WirePosition`]) rather than re-exporting the core types because
+/// the rmcp `#[tool]` macro requires [`schemars::JsonSchema`] (v1.x,
+/// re-exported through `rmcp::schemars`), and adding schemars 1.x to
+/// `core-platform-pure` would inflate that crate's dep graph for a
+/// single MCP integration concern.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ApplyEditArgs {
+    /// Canonical source path (`/myproj/foo.pure`) **or** absolute
+    /// disk path of the file to edit. The file must already exist
+    /// in a `Repo::Filesystem` repo in the configured classpath —
+    /// `apply_edit` does not create new files.
+    pub file: String,
+    /// LSP-style ranged text edits. Each carries a half-open range
+    /// (UTF-16 character positions, 0-indexed lines) and the
+    /// replacement text. Edits must not overlap; they are applied
+    /// in descending-start order so earlier-byte offsets remain
+    /// valid.
+    pub edits: Vec<WireTextEdit>,
+}
+
+/// JSON-schema-friendly wire shape for one ranged text edit. Maps
+/// to [`legend_pure_core_platform::edit::TextEdit`] via
+/// [`WireTextEdit::into_core`].
+///
+/// `Serialize` is derived alongside `Deserialize` so tests and
+/// snapshot fixtures can round-trip the exact JSON the IDE sees
+/// without reaching for the core type's serializer (which writes
+/// `new_text` in snake-case rather than the LSP-spec `newText`).
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WireTextEdit {
+    /// Range of text in the source file to replace.
+    pub range: WireRange,
+    /// New text to insert. Empty string deletes the range.
+    #[serde(rename = "newText")]
+    pub new_text: String,
+}
+
+/// JSON-schema-friendly wire shape for an LSP range.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WireRange {
+    /// Inclusive start position.
+    pub start: WirePosition,
+    /// Exclusive end position.
+    pub end: WirePosition,
+}
+
+/// JSON-schema-friendly wire shape for an LSP position. `character`
+/// counts UTF-16 code units per LSP spec.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WirePosition {
+    /// 0-indexed line number.
+    pub line: u32,
+    /// 0-indexed UTF-16 code-unit offset within the line.
+    pub character: u32,
+}
+
+impl WireTextEdit {
+    /// Convert into the canonical core type used by
+    /// [`legend_pure_core_platform::edit::apply_text_edits`].
+    fn into_core(self) -> legend_pure_core_platform::edit::TextEdit {
+        legend_pure_core_platform::edit::TextEdit {
+            range: legend_pure_core_platform::edit::Range {
+                start: legend_pure_core_platform::edit::Position {
+                    line: self.range.start.line,
+                    character: self.range.start.character,
+                },
+                end: legend_pure_core_platform::edit::Position {
+                    line: self.range.end.line,
+                    character: self.range.end.character,
+                },
+            },
+            new_text: self.new_text,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tool result types — produced by the read/introspect tools.
 // Execute tools serialize the runner's own typed results directly.
@@ -173,6 +256,22 @@ pub struct TestEntry {
     pub tags: Vec<String>,
 }
 
+/// Response shape for [`LegendMcpServer::apply_edit`].
+///
+/// `status` carries the freshly-recompiled snapshot's metadata so
+/// the caller can confirm a new `compiled_at`. `diagnostics`
+/// surfaces post-edit errors restricted to the file that was just
+/// modified — workspace-wide diagnostics are still available via
+/// `get_diagnostics { file: None }`.
+#[derive(Debug, Serialize)]
+pub struct ApplyEditResult {
+    /// Post-edit workspace status (new `compiled_at`, error counts).
+    pub status: WorkspaceStatus,
+    /// Diagnostics restricted to the edited file. Empty when the
+    /// recompile produced no errors for that file.
+    pub diagnostics: Vec<DiagnosticRow>,
+}
+
 /// Status of the current workspace snapshot. Returned by
 /// [`LegendMcpServer::workspace_status`] and (after recompilation)
 /// by [`LegendMcpServer::reload_workspace`].
@@ -205,12 +304,19 @@ pub struct WorkspaceStatus {
 /// in-flight read. Read tools clone the inner `Arc` and drop the
 /// lock immediately — no lock is ever held across an `await`.
 ///
+/// `repos` lives behind `Arc<Mutex<Vec<Repo>>>` so the
+/// [`LegendMcpServer::apply_edit`] tool can mutate the matching
+/// `Repo::Filesystem` file entry before re-compiling. Everywhere
+/// that reads the repos clones the inner `Vec<Repo>` out of the
+/// lock and drops the guard before any `.await`, so the std mutex
+/// never extends across a yield point.
+///
 /// `repos` + `auto_imports` are kept outside the snapshot so reload
 /// can recompile against the same input set as startup.
 #[derive(Clone)]
 pub struct LegendMcpServer {
     current: Arc<Mutex<Arc<WorkspaceSnapshot>>>,
-    repos: Arc<Vec<Repo>>,
+    repos: Arc<Mutex<Vec<Repo>>>,
     auto_imports: Arc<Vec<SmolStr>>,
     // Stored on the struct because rmcp's `#[tool_handler]` macro
     // expects a `tool_router` field on `Self`. Rust's dead-code
@@ -227,7 +333,7 @@ impl LegendMcpServer {
     #[must_use]
     pub fn new(
         initial: Arc<WorkspaceSnapshot>,
-        repos: Arc<Vec<Repo>>,
+        repos: Arc<Mutex<Vec<Repo>>>,
         auto_imports: Arc<Vec<SmolStr>>,
     ) -> Self {
         Self {
@@ -243,6 +349,27 @@ impl LegendMcpServer {
     /// contention.
     fn snapshot(&self) -> Arc<WorkspaceSnapshot> {
         let guard = self.current.lock().unwrap_or_else(|p| p.into_inner());
+        guard.clone()
+    }
+
+    /// Snapshot the current repo count without holding the lock
+    /// across an await. Returns 0 for a poisoned mutex.
+    fn repo_count(&self) -> usize {
+        let guard = self
+            .repos
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.len()
+    }
+
+    /// Clone the current `Vec<Repo>` out of the lock and drop the
+    /// guard. Caller owns the clone, so subsequent `.await` calls
+    /// are safe.
+    fn repos_clone(&self) -> Vec<Repo> {
+        let guard = self
+            .repos
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.clone()
     }
 }
@@ -480,9 +607,9 @@ impl LegendMcpServer {
     #[tool(
         description = "Return the current workspace snapshot's compiled-at timestamp (RFC 3339), error count, chunk count, and repo count. Agents can compare `compiled_at` against external file mtimes to decide whether to call reload_workspace."
     )]
-    async fn workspace_status(&self) -> Result<CallToolResult, McpError> {
+    pub async fn workspace_status(&self) -> Result<CallToolResult, McpError> {
         let snapshot = self.snapshot();
-        let repo_count = self.repos.len();
+        let repo_count = self.repo_count();
         json_result(&status_from(&snapshot, repo_count))
     }
 
@@ -492,7 +619,11 @@ impl LegendMcpServer {
         description = "Recompile the workspace from disk and swap the in-memory snapshot. Uses the same classpath / auto-imports the server was started with. Returns the new workspace_status. Call this after editing .pure files so subsequent tool calls see the updated model."
     )]
     async fn reload_workspace(&self) -> Result<CallToolResult, McpError> {
-        let repos = self.repos.clone();
+        // Clone the repo vec OUT of the std Mutex BEFORE crossing the
+        // .await on `spawn_blocking` — the std Mutex must never be
+        // held across an await, and the compile takes `&[Repo]`
+        // anyway. Captured into the blocking closure by ownership.
+        let repos = self.repos_clone();
         let auto_imports = self.auto_imports.clone();
         let new_snapshot: Arc<WorkspaceSnapshot> = tokio::task::spawn_blocking(move || {
             Arc::new(WorkspaceSnapshot::compile(&repos, &auto_imports))
@@ -512,8 +643,94 @@ impl LegendMcpServer {
             compiled_at = %new_snapshot.compiled_at,
             "workspace reloaded",
         );
-        let repo_count = self.repos.len();
+        let repo_count = self.repo_count();
         json_result(&status_from(&new_snapshot, repo_count))
+    }
+
+    /// Apply LSP-style ranged text edits to one `.pure` file owned
+    /// by a Filesystem repo in the workspace, persist to disk, then
+    /// recompile and return file-scoped diagnostics for the edited
+    /// file.
+    #[tool(
+        description = "Apply LSP-style ranged text edits to a single `.pure` file in a Filesystem repo, then recompile the workspace and return file-scoped diagnostics. The file must already exist in the workspace (no file creation). Edits must not overlap."
+    )]
+    pub async fn apply_edit(
+        &self,
+        Parameters(args): Parameters<ApplyEditArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        use legend_pure_core_platform::edit;
+
+        // Translate the JSON-schema wire shapes into the core
+        // [`edit::TextEdit`] values that `apply_text_edits` consumes.
+        let core_edits: Vec<edit::TextEdit> = args
+            .edits
+            .into_iter()
+            .map(WireTextEdit::into_core)
+            .collect();
+
+        // 1) Mutate the in-memory repo list under the std mutex.
+        //    Scoped tight so the guard drops before any other call
+        //    — disk write and recompile both run with the lock free
+        //    so concurrent `workspace_status` / `reload_workspace` /
+        //    `apply_edit` reads don't serialize behind us.
+        let applied = {
+            let mut guard = self
+                .repos
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            edit::apply_text_edits(&mut guard, &args.file, &core_edits)
+                .map_err(|e| McpError::invalid_params(format!("apply_edit: {e}"), None))?
+        };
+
+        // 2) Persist to disk outside the lock. Synchronous fs::write
+        //    on a single .pure file is microseconds in practice; if
+        //    we ever start editing multi-megabyte sources, wrap this
+        //    in `spawn_blocking` to free the tokio executor thread.
+        edit::write_to_disk(&applied)
+            .map_err(|e| McpError::internal_error(format!("write_to_disk: {e}"), None))?;
+
+        // 3) Snapshot the now-mutated repo list and recompile on
+        //    the blocking pool. The compile takes `&[Repo]`, so we
+        //    move the clone into the closure.
+        let repos = self.repos_clone();
+        let auto_imports = self.auto_imports.clone();
+        let new_snapshot: Arc<WorkspaceSnapshot> = tokio::task::spawn_blocking(move || {
+            Arc::new(WorkspaceSnapshot::compile(&repos, &auto_imports))
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("join error: {e}"), None))?;
+
+        // 4) Swap snapshot under the current-snapshot mutex.
+        {
+            let mut guard = self
+                .current
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *guard = new_snapshot.clone();
+        }
+
+        // 5) Build a file-scoped diagnostic view from the new
+        //    snapshot.
+        let canonical = applied.canonical_path.as_str();
+        let diagnostics: Vec<DiagnosticRow> = new_snapshot
+            .diagnostics
+            .get(canonical)
+            .map(|errs| errs.iter().map(diagnostic_row).collect())
+            .unwrap_or_default();
+
+        let repo_count = self.repo_count();
+        tracing::info!(
+            file = canonical,
+            error_count = new_snapshot.error_count,
+            file_error_count = diagnostics.len(),
+            compiled_at = %new_snapshot.compiled_at,
+            "apply_edit applied + recompiled",
+        );
+
+        json_result(&ApplyEditResult {
+            status: status_from(&new_snapshot, repo_count),
+            diagnostics,
+        })
     }
 }
 

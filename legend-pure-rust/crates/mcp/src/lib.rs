@@ -85,7 +85,14 @@
 
 mod config;
 mod error;
-mod server;
+/// Public-but-low-traffic surface for the MCP tool argument /
+/// result types so integration tests and downstream consumers can
+/// call the `#[tool]`-decorated async methods directly without
+/// going through the rmcp transport. The bulk of the module is
+/// `pub(crate)`-shaped — only the wire types and the
+/// [`LegendMcpServer`] re-exported below are intended for external
+/// use.
+pub mod server;
 mod state;
 
 pub use config::McpConfig;
@@ -93,7 +100,7 @@ pub use error::McpError;
 pub use server::LegendMcpServer;
 pub use state::WorkspaceSnapshot;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;
@@ -113,9 +120,20 @@ pub fn run(config: McpConfig) -> Result<(), McpError> {
         .enable_all()
         .build()?;
     runtime.block_on(async move {
-        let repos = Arc::new(config.repos);
+        // Wrap repos in a `Mutex` so the `apply_edit` tool can
+        // mutate the in-memory `Repo::Filesystem.files[i].content`
+        // before recompiling. Reads (snapshot, reload, status)
+        // clone the inner `Vec<Repo>` out of the lock and drop the
+        // guard before any await — see `LegendMcpServer.repos_clone`.
+        let repos = Arc::new(Mutex::new(config.repos));
         let auto_imports = Arc::new(config.auto_imports);
-        let snapshot = Arc::new(WorkspaceSnapshot::compile(&repos, &auto_imports));
+        let snapshot = {
+            let initial_repos = repos
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            Arc::new(WorkspaceSnapshot::compile(&initial_repos, &auto_imports))
+        };
         tracing::info!(
             error_count = snapshot.error_count,
             chunks = snapshot.model.chunks.len(),

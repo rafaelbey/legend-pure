@@ -47,6 +47,7 @@
 //! from its own `build.rs`.
 
 pub mod classpath;
+pub mod edit;
 pub mod platform;
 pub mod repo;
 pub mod sources;

@@ -19,6 +19,40 @@ use tower_lsp_server::ls_types::{Diagnostic, NumberOrString};
 
 use crate::convert;
 
+/// Lightweight, JSON-friendly view of a [`CompilationError`] that the
+/// `legend.applyEdit` execute-command embeds in its
+/// [`crate::handlers::ApplyEditResult`] response. Keeping the wire
+/// shape independent of the LSP [`Diagnostic`] type lets agents
+/// consume the result over the executeCommand return value without
+/// pulling in the LSP types package.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DiagnosticRow {
+    /// Canonical source path the diagnostic refers to.
+    pub source: String,
+    /// 1-based start line of the diagnostic span.
+    pub line: u32,
+    /// 1-based start column of the diagnostic span.
+    pub column: u32,
+    /// Severity (`error` / `warning`).
+    pub severity: String,
+    /// Diagnostic message.
+    pub message: String,
+}
+
+impl DiagnosticRow {
+    /// Build a [`DiagnosticRow`] from a [`CompilationError`].
+    #[must_use]
+    pub fn from_error(err: &CompilationError) -> Self {
+        Self {
+            source: err.source_info.source.to_string(),
+            line: err.source_info.start_line,
+            column: err.source_info.start_column,
+            severity: "error".to_string(),
+            message: err.message.clone(),
+        }
+    }
+}
+
 /// Static source identifier published with every diagnostic — surfaces
 /// in IDEs as the "source" tag (e.g. `legend-pure (E0001)`).
 pub const DIAGNOSTIC_SOURCE: &str = "legend-pure";

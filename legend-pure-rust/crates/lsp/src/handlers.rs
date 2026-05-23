@@ -1233,6 +1233,82 @@ fn build_extras(stdout: &str, failures: Option<serde_json::Value>) -> Option<ser
     Some(serde_json::Value::Object(map))
 }
 
+// ---------------------------------------------------------------------------
+// legend.applyEdit
+// ---------------------------------------------------------------------------
+
+/// Apply LSP-style ranged text edits to a single `.pure` file owned by
+/// a [`legend_pure_core_platform::repo::Repo::Filesystem`] entry in the
+/// workspace's [`Workspace::base_repos`], persist the result to disk,
+/// and mark the canonical path dirty so the next compile picks it up
+/// via the incremental path.
+///
+/// Returns the [`AppliedEdit`] for the caller to use when building the
+/// response payload. The caller is responsible for releasing the
+/// workspace lock before triggering the recompile so notifications
+/// don't deadlock.
+///
+/// # Errors
+///
+/// Forwards every variant of
+/// [`legend_pure_core_platform::edit::EditError`] — file-not-found,
+/// embedded/purem rejection, missing-source-root, overlap,
+/// out-of-range, and disk I/O failures.
+pub fn apply_edit_through_workspace(
+    ws: &mut Workspace,
+    file: &str,
+    edits: &[legend_pure_core_platform::edit::TextEdit],
+) -> Result<legend_pure_core_platform::edit::AppliedEdit, legend_pure_core_platform::edit::EditError>
+{
+    let applied =
+        legend_pure_core_platform::edit::apply_text_edits(&mut ws.base_repos, file, edits)?;
+    legend_pure_core_platform::edit::write_to_disk(&applied)?;
+    ws.dirty_files.insert(applied.canonical_path.clone());
+
+    // Reconcile the open-buffer overlay. `Workspace::snapshot_repos`
+    // (workspace.rs:160-183) re-applies every `open_buffers` entry on
+    // top of `base_repos` at compile time — so without this update,
+    // an IDE that already opened the edited file would silently
+    // clobber the new content back to the stale `didOpen` snapshot
+    // on the very next recompile, leaving the returned diagnostics
+    // describing pre-edit source. The IDE's filesystem watcher will
+    // eventually push a `didChange` that overwrites this entry, but
+    // we can't wait for that round-trip before publishing.
+    let canonical_tail = applied.canonical_path.trim_start_matches('/');
+    for (uri, content) in &mut ws.open_buffers {
+        if let Some(disk_path) = uri.to_file_path()
+            && disk_path.ends_with(canonical_tail)
+        {
+            content.clone_from(&applied.new_content);
+        }
+    }
+
+    Ok(applied)
+}
+
+/// JSON-serializable response payload returned by the
+/// `legend.applyEdit` execute-command. The IDE / agent reads this to
+/// decide whether the edit succeeded and how many post-edit
+/// diagnostics the file carries.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ApplyEditResult {
+    /// `true` iff the edit applied AND was persisted to disk.
+    pub ok: bool,
+    /// Canonical source path of the file that was edited (or the
+    /// caller-supplied path if the edit failed before resolution).
+    pub file: String,
+    /// Compile-error count restricted to the edited file after the
+    /// recompile (`0` on success, omitted-as-`0` if the edit itself
+    /// failed pre-compile).
+    pub error_count_for_file: usize,
+    /// Diagnostics for the edited file only, after the recompile.
+    /// Empty on success.
+    pub diagnostics: Vec<crate::diagnostics::DiagnosticRow>,
+    /// Error message when `ok=false`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub error: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

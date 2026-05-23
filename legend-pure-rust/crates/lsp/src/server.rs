@@ -146,6 +146,13 @@ impl LanguageServer for Backend {
                         // fqn}]` from the compiled model. Backs
                         // the PCT-adapter popup.
                         "legend.listPctAdapters".into(),
+                        // Apply LSP-style ranged text edits to one
+                        // file in a Filesystem repo, then recompile
+                        // and publish diagnostics. Args:
+                        // `[file: String,
+                        //   {"edits": [{"range": {...},
+                        //                "newText": "..."}, ...]}]`.
+                        "legend.applyEdit".into(),
                     ],
                     work_done_progress_options: Default::default(),
                 }),
@@ -401,6 +408,16 @@ impl LanguageServer for Backend {
             arg_count = params.arguments.len(),
             "workspace/executeCommand",
         );
+        // `legend.applyEdit` mutates the workspace and is shaped
+        // differently from the runner commands (different result
+        // payload, different lifecycle: edit -> compile -> diagnostics
+        // snapshot). Dispatch it directly instead of through
+        // `execute_legend_command`, which is tuned to runner output
+        // (`ExecuteCommandResult`).
+        if command.as_str() == "legend.applyEdit" {
+            let value = self.execute_apply_edit(&params.arguments).await;
+            return Ok(Some(value));
+        }
         // Run in the LSP's own runtime, against the workspace's
         // compiled `PureModel`. This is what lets the gutter ▶
         // icon see user-defined functions in the configured
@@ -426,6 +443,125 @@ impl LanguageServer for Backend {
             serde_json::to_value(&result).unwrap_or(serde_json::Value::Null),
         ))
     }
+}
+
+impl Backend {
+    /// Decode the `legend.applyEdit` arguments, mutate the workspace,
+    /// recompile, and build the response payload. Held on `Backend`
+    /// (not in `handlers`) because it needs to drop the workspace
+    /// lock between the mutation step and the
+    /// [`Backend::recompile_and_publish`] call, then re-acquire it to
+    /// snapshot the post-compile diagnostics.
+    async fn execute_apply_edit(&self, arguments: &[serde_json::Value]) -> LSPAny {
+        use legend_pure_core_platform::edit::TextEdit;
+
+        // Arg 0: file (canonical or absolute path). Arg 1: payload
+        // `{"edits": [TextEdit]}` matching the LSP `TextDocumentEdit`
+        // shape.
+        let Some(file) = arguments.first().and_then(|v| v.as_str().map(String::from)) else {
+            return apply_edit_value_or_error(handlers::ApplyEditResult {
+                ok: false,
+                file: String::new(),
+                error_count_for_file: 0,
+                diagnostics: Vec::new(),
+                error: Some("legend.applyEdit: missing argument 0 (file path)".to_string()),
+            });
+        };
+
+        let payload = arguments.get(1).cloned().unwrap_or(serde_json::Value::Null);
+        let edits: Vec<TextEdit> = match payload.get("edits") {
+            Some(raw) => match serde_json::from_value::<Vec<TextEdit>>(raw.clone()) {
+                Ok(e) => e,
+                Err(err) => {
+                    return apply_edit_value_or_error(handlers::ApplyEditResult {
+                        ok: false,
+                        file,
+                        error_count_for_file: 0,
+                        diagnostics: Vec::new(),
+                        error: Some(format!(
+                            "legend.applyEdit: malformed `edits` payload: {err}"
+                        )),
+                    });
+                }
+            },
+            None => {
+                return apply_edit_value_or_error(handlers::ApplyEditResult {
+                    ok: false,
+                    file,
+                    error_count_for_file: 0,
+                    diagnostics: Vec::new(),
+                    error: Some(
+                        "legend.applyEdit: argument 1 must be `{\"edits\": [...]}`".to_string(),
+                    ),
+                });
+            }
+        };
+
+        // 1) Mutation + disk write under the workspace lock.
+        let applied = {
+            let mut ws = self.workspace.lock().await;
+            handlers::apply_edit_through_workspace(&mut ws, &file, &edits)
+        };
+        let applied = match applied {
+            Ok(a) => a,
+            Err(e) => {
+                return apply_edit_value_or_error(handlers::ApplyEditResult {
+                    ok: false,
+                    file,
+                    error_count_for_file: 0,
+                    diagnostics: Vec::new(),
+                    error: Some(e.to_string()),
+                });
+            }
+        };
+
+        // 2) Recompile + publish diagnostics through the existing
+        //    Backend pathway. This drops + re-takes locks internally;
+        //    we MUST NOT be holding the workspace lock here.
+        self.recompile_and_publish().await;
+
+        // 3) Snapshot file-scoped diagnostics under a fresh lock.
+        let canonical = applied.canonical_path.as_str().to_string();
+        let diagnostics: Vec<crate::diagnostics::DiagnosticRow> = {
+            let ws = self.workspace.lock().await;
+            ws.diagnostics
+                .get(canonical.as_str())
+                .map(|errs| {
+                    errs.iter()
+                        .map(crate::diagnostics::DiagnosticRow::from_error)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let error_count_for_file = diagnostics.len();
+
+        apply_edit_value_or_error(handlers::ApplyEditResult {
+            ok: true,
+            file: canonical,
+            error_count_for_file,
+            diagnostics,
+            error: None,
+        })
+    }
+}
+
+/// Serialize an [`handlers::ApplyEditResult`] for the
+/// `workspace/executeCommand` response. Falls back to a hand-built
+/// JSON object on the (unreachable) serialize failure so the client
+/// always receives a parseable payload — a `Value::Null` would leave
+/// the IDE / agent with nothing to dispatch on.
+fn apply_edit_value_or_error(result: handlers::ApplyEditResult) -> serde_json::Value {
+    serde_json::to_value(&result).unwrap_or_else(|err| {
+        serde_json::json!({
+            "ok": false,
+            "file": result.file,
+            "error_count_for_file": 0,
+            "diagnostics": [],
+            "error": format!(
+                "legend.applyEdit: internal: failed to serialize ApplyEditResult: {err}"
+            ),
+        })
+    })
 }
 
 // Compile-time assertion that the `Backend` is `Send + Sync` — the

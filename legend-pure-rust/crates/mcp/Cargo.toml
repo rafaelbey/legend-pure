@@ -66,3 +66,10 @@ tracing = { workspace = true }
 # RFC 3339 timestamps for `workspace_status` / `reload_workspace`.
 # Already a workspace dep via `legend-pure-runtime`.
 jiff = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+# `apply_edit` is async; the integration test invokes it directly on
+# the server struct, which means the test driver needs a tokio
+# runtime. Use the multi-thread flavor + `macros` for `#[tokio::test]`.
+tokio = { workspace = true, features = ["macros"] }
