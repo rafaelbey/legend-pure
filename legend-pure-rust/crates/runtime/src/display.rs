@@ -832,6 +832,18 @@ mod tests {
             Ok(None)
         }
 
+        fn invoke_qualified_property_found(
+            &mut self,
+            _receiver: &Value,
+            _found: &crate::eval::FoundQp,
+            _args: &[Value],
+        ) -> Result<Value, crate::error::PureException> {
+            unreachable!(
+                "display::tests::MockCtx::invoke_qualified_property_found is never reached: \
+                 the companion lookup-and-invoke returns None for this mock"
+            )
+        }
+
         fn model(&self) -> &PureModel {
             self.model
         }

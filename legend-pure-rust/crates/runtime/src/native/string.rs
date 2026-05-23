@@ -367,16 +367,44 @@ impl NativeFunction for ToString {
     }
 }
 
+/// Locate the `toString()` qualified property on the receiver's class
+/// (walking generalizations) via the same `find_qp_with_generalization`
+/// the evaluator uses for dispatch. Returns the [`FoundQp`] so callers
+/// can hand it back to
+/// [`EvalContextTrait::invoke_qualified_property_found`] without a
+/// second lookup.
+fn lookup_to_string_qp(
+    ctx: &dyn EvalContextTrait,
+    obj_id: &crate::heap::ObjectHandle,
+) -> Option<crate::eval::FoundQp> {
+    let classifier = ctx.heap().classifier(obj_id).ok()?;
+    let class_id = ctx.model().resolve_fqn_str(classifier.as_str())?;
+    crate::eval::find_qp_with_generalization(ctx.model(), class_id, "toString", 0)
+}
+
+/// `true` iff the QP's declared return is exactly `String[1]`. Pure's
+/// `toString()` contract requires this; any other declared shape is
+/// treated as a malformed QP and skipped.
+fn qp_returns_string_one(found: &crate::eval::FoundQp) -> bool {
+    use legend_pure_parser_pure::bootstrap::STRING_ID;
+    use legend_pure_parser_pure::types::{Multiplicity, TypeExpr};
+    matches!(
+        (&found.return_type, &found.return_multiplicity),
+        (TypeExpr::Named { element, .. }, Multiplicity::PureOne)
+            if *element == STRING_ID
+    )
+}
+
 /// Render a value to its Pure-toString form.
 ///
 /// For primitives, this returns the literal source form (mirrors Java
 /// Pure's `value.getName()` for primitive types). For heap objects this
 /// invokes any `toString()` qualified property visible on the receiver's
-/// class (with generalization walk) via
-/// [`EvalContextTrait::invoke_qualified_property`]; if no such QP
-/// exists, the value formats as `Anonymous_<id>` — exactly how Java's
-/// `ToString.execute` falls back when `findBestToStringFunction`
-/// returns null.
+/// class (with generalization walk) — *but only if the declared return
+/// is `String[1]`*; malformed QPs are skipped via
+/// [`to_string_qp_returns_string_one`], and the value formats as
+/// `Anonymous_<id>` (exactly how Java's `ToString.execute` falls back
+/// when `findBestToStringFunction` returns null).
 ///
 /// # Errors
 /// Propagates any [`PureException`] raised while evaluating a class's
@@ -392,30 +420,22 @@ pub(crate) fn pure_to_string(
     // shape of `render_representation` and the iterative `Value::Clone`
     // / `Value::Drop` in `crates/runtime/src/value.rs`.
     //
-    // `Value::Object` still dispatches through
-    // `ctx.invoke_qualified_property("toString", …)` and recurses on
-    // the returned value via a *normal* `pure_to_string` call. That
-    // recursion is bounded by user-defined `toString` chains rather
-    // than by raw data depth, and folding it into the work-stack would
-    // mean carrying the `ctx` borrow across frames — the borrow
-    // checker won't let us reuse `&mut dyn EvalContextTrait` between
-    // an outer `Visit` arm and a pending `Assemble` frame. Keeping
-    // the QP-recursion separate gives us the deep-data fix without
-    // an `unsafe`-or-rebuild dance.
+    // `Value::Object` dispatches through
+    // `ctx.invoke_qualified_property("toString", …)`. A user-defined
+    // `toString` is required by Pure's contract to return `String[1]`,
+    // so we **gate the invocation on the declared signature**: query
+    // `qualified_property_signature` first and skip the invoke entirely
+    // when the declared return isn't `String[1]`. Avoids running a
+    // malformed `toString` body that happens to be expensive or
+    // side-effectful before discovering the shape mismatch.
+    //
+    // The fallback for "no String[1] QP" matches Java Pure's
+    // `ToString.execute` path: render as `Anonymous_<id>`.
     enum Op<'a> {
         Visit(&'a Value),
-        // Arc<Value> lets the loop carry an owned reference to the
-        // QP result — the borrow of `value` is too short to use
-        // directly in `Op::Visit(&Value)`, and recomputing the
-        // borrow at the `Visit` arm would require holding `ctx`
-        // immutably while the caller is `&mut`. Using an owned
-        // handle on a thread-local `Rc` sidesteps both.
-        VisitOwned(Rc<Value>),
         AssembleCollection(usize),
         AssembleUnitInstance(ElementId),
     }
-
-    use std::rc::Rc;
 
     let mut ops: Vec<Op<'_>> = vec![Op::Visit(value)];
     let mut built: Vec<String> = Vec::new();
@@ -434,52 +454,21 @@ pub(crate) fn pure_to_string(
                     ops.push(Op::Visit(inner));
                 }
                 Value::Object(obj_id) => {
-                    let invoked = ctx.invoke_qualified_property(v, "toString", &[])?;
-                    match &invoked {
+                    // Find the `toString()` QP *once* via the same model
+                    // walk the evaluator uses for dispatch, gate on the
+                    // declared `String[1]` return, then invoke the
+                    // already-found QP directly so the trait doesn't
+                    // redo the classifier → class → QP lookup.
+                    let invoked = lookup_to_string_qp(ctx, obj_id)
+                        .filter(qp_returns_string_one)
+                        .map(|found| ctx.invoke_qualified_property_found(v, &found, &[]))
+                        .transpose()?;
+                    match invoked.as_ref() {
                         Some(Value::String(s)) => built.push(s.to_string()),
-                        Some(_) => {
-                            // Other shapes must go through the same
-                            // iterative driver so a QP that returns a
-                            // nested Collection / UnitInstance / Object
-                            // doesn't escape the work-stack.
-                            let owned = invoked.expect("matched Some above; unreachable otherwise");
-                            ops.push(Op::VisitOwned(Rc::new(owned)));
-                        }
-                        None => {
-                            built.push(format!("Anonymous_{:p}", std::rc::Rc::as_ptr(obj_id)));
-                        }
-                    }
-                }
-                leaf => built.push(pure_to_string_leaf(leaf, ctx)),
-            },
-            Op::VisitOwned(owned) => match owned.as_ref() {
-                Value::Collection(items) => {
-                    ops.push(Op::AssembleCollection(items.len()));
-                    // Carry the owned root with each child so the
-                    // `&Value` references stay valid until the
-                    // assemble frame fires. Each child clone is a
-                    // shared `Rc` bump; the deep data inside is not
-                    // re-cloned thanks to iterative `Value::Clone`.
-                    for item in items.iter().rev() {
-                        ops.push(Op::VisitOwned(Rc::new(item.clone())));
-                    }
-                }
-                Value::UnitInstance { unit_id, inner } => {
-                    ops.push(Op::AssembleUnitInstance(*unit_id));
-                    ops.push(Op::VisitOwned(Rc::new((**inner).clone())));
-                }
-                Value::Object(obj_id) => {
-                    let invoked = ctx.invoke_qualified_property(owned.as_ref(), "toString", &[])?;
-                    match &invoked {
-                        Some(Value::String(s)) => built.push(s.to_string()),
-                        Some(_) => {
-                            let owned_v =
-                                invoked.expect("matched Some above; unreachable otherwise");
-                            ops.push(Op::VisitOwned(Rc::new(owned_v)));
-                        }
-                        None => {
-                            built.push(format!("Anonymous_{:p}", std::rc::Rc::as_ptr(obj_id)));
-                        }
+                        // No QP, declared return wasn't `String[1]`, or
+                        // the body diverged from its declared shape —
+                        // all collapse to the Java-Pure fallback form.
+                        _ => built.push(format!("Anonymous_{:p}", std::rc::Rc::as_ptr(obj_id))),
                     }
                 }
                 leaf => built.push(pure_to_string_leaf(leaf, ctx)),

@@ -217,6 +217,29 @@ pub trait EvalContextTrait {
         args: &[Value],
     ) -> Result<Option<Value>, PureException>;
 
+    /// Invoke a *pre-found* qualified property on `receiver`. Pairs with
+    /// [`crate::eval::find_qp_with_generalization`] so callers that need
+    /// to inspect the QP before deciding to invoke (e.g. `pure_to_string`
+    /// gates `toString()` on a declared `String[1]` return) can do the
+    /// hierarchy walk **once** and hand the result through here without a
+    /// second lookup.
+    ///
+    /// `receiver` must be a `Value::Object` whose class is the same one
+    /// the `FoundQp` was located on (or one of its generalizations). The
+    /// runtime impl panics with a clean error if a non-Object is passed.
+    /// `args` is bound positionally onto `found.parameters`; type-variable
+    /// parameters are recovered from the receiver's `__typeVariableValues`
+    /// heap slot.
+    ///
+    /// # Errors
+    /// Propagates any `PureException` raised while evaluating the QP body.
+    fn invoke_qualified_property_found(
+        &mut self,
+        receiver: &Value,
+        found: &crate::eval::FoundQp,
+        args: &[Value],
+    ) -> Result<Value, PureException>;
+
     /// Access the compiled Pure model (element lookup, type resolution).
     fn model(&self) -> &PureModel;
 
@@ -854,6 +877,23 @@ impl EvalContextTrait for MockCtx {
         // the structural answer is "no such QP". Real-evaluator-backed
         // tests live in eval_tests.rs and exercise the full dispatch.
         Ok(None)
+    }
+    fn invoke_qualified_property_found(
+        &mut self,
+        _receiver: &Value,
+        _found: &crate::eval::FoundQp,
+        _args: &[Value],
+    ) -> Result<Value, PureException> {
+        // The companion lookup-and-invoke method returns `None`, so no
+        // `FoundQp` is ever produced inside a MockCtx-only test. If a
+        // caller manages to fabricate one (e.g. by calling the
+        // free-function `find_qp_with_generalization` with a model that
+        // came from elsewhere), there's still no evaluator behind this
+        // mock to run the body — fail loudly.
+        unreachable!(
+            "MockCtx::invoke_qualified_property_found should never be called in simple native tests; \
+             move this test to eval_tests.rs"
+        )
     }
     fn model(&self) -> &PureModel {
         unreachable!("MockCtx::model should never be called in simple native tests")

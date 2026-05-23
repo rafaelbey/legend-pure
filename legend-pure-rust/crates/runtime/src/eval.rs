@@ -2632,11 +2632,10 @@ impl<H: EvalHooks> crate::native::EvalContextTrait for EvalContext<'_, '_, H> {
         let Value::Object(obj_id) = receiver else {
             return Ok(None);
         };
-        let obj_id = obj_id.clone();
         let classifier = self
             .evaluator
             .heap
-            .classifier(&obj_id)
+            .classifier(obj_id)
             .map_err(PureException::from)?
             .clone();
         let Some(class_id) = self.evaluator.model.resolve_fqn_str(classifier.as_str()) else {
@@ -2647,10 +2646,30 @@ impl<H: EvalHooks> crate::native::EvalContextTrait for EvalContext<'_, '_, H> {
         else {
             return Ok(None);
         };
+        self.invoke_qualified_property_found(receiver, &found, args)
+            .map(Some)
+    }
+
+    fn invoke_qualified_property_found(
+        &mut self,
+        receiver: &Value,
+        found: &FoundQp,
+        args: &[Value],
+    ) -> Result<Value, PureException> {
+        // Caller is responsible for receiver-shape: a non-`Value::Object`
+        // here means the lookup-and-invoke contract was bypassed. The
+        // existing `invoke_qualified_property` ensures only `Object`
+        // receivers reach this method.
+        let Value::Object(obj_id) = receiver else {
+            return Err(PureException::from(PureRuntimeError::EvaluationError(
+                "invoke_qualified_property_found: receiver is not a Value::Object".to_string(),
+            )));
+        };
+        let obj_id = obj_id.clone();
         // Detach owned copies before re-borrowing self mutably for eval.
-        let params = found.parameters;
-        let body = found.body;
-        let type_var_param_names = found.type_var_param_names;
+        let params = std::sync::Arc::clone(&found.parameters);
+        let body = std::sync::Arc::clone(&found.body);
+        let type_var_param_names = found.type_var_param_names.clone();
         let type_var_values: Vec<Value> = if type_var_param_names.is_empty() {
             Vec::new()
         } else {
@@ -2672,7 +2691,7 @@ impl<H: EvalHooks> crate::native::EvalContextTrait for EvalContext<'_, '_, H> {
         }
         let result = self.evaluator.eval_body(&body);
         self.evaluator.context.pop_scope();
-        result.map(Some)
+        result
     }
 }
 
@@ -2688,15 +2707,43 @@ impl<H: EvalHooks> std::fmt::Debug for Evaluator<'_, H> {
 /// Owned snapshot of a qualified-property definition that survives a
 /// later `&mut self` borrow on the evaluator. Returned by
 /// [`find_qp_with_generalization`] so the caller can drop the
-/// model-borrow before calling `eval_body` on the cloned body.
+/// model-borrow before calling `eval_body` on the cloned body — and
+/// also drives dispatch-time gating that needs the QP's declared
+/// signature (e.g. `pure_to_string` only invokes a `toString()` QP
+/// whose declared return is `String[1]`).
 ///
 /// `parameters` and `body` are `Arc<[T]>` clones of the QP's compiled
 /// fields — O(1) refcount bumps, not deep copies. (Arc rather than
 /// Rc: matches the LSP-driven `PureModel: Send + Sync` constraint.)
-struct FoundQp {
-    parameters: std::sync::Arc<[legend_pure_parser_pure::types::Parameter]>,
-    body: std::sync::Arc<[ValueSpec]>,
-    type_var_param_names: Vec<SmolStr>,
+/// `return_type` and `return_multiplicity` are owned clones since
+/// they're small enums/wrappers, not deep trees.
+///
+/// Exposed at module visibility (`pub`) so callers that pre-fetch a
+/// QP — e.g. `pure_to_string` checking the declared signature before
+/// committing to an invocation — can hand the same value through to
+/// [`EvalContextTrait::invoke_qualified_property_found`] without a
+/// second `find_qp_with_generalization` walk.
+pub struct FoundQp {
+    /// Declared parameters of the QP — shared with the compiled
+    /// model (Arc) so the snapshot is an O(1) refcount bump.
+    pub parameters: std::sync::Arc<[legend_pure_parser_pure::types::Parameter]>,
+    /// Lowered body expressions of the QP — shared with the compiled
+    /// model (Arc); the caller evaluates these under a scope with
+    /// `$this` and the parameter bindings pre-set.
+    pub body: std::sync::Arc<[ValueSpec]>,
+    /// Type-variable parameter *names* declared on the **owning
+    /// class** (not the receiver's class — same contract as
+    /// `eval_qualified_property`). Used to bind type-variable values
+    /// pulled from the receiver's `__typeVariableValues` slot before
+    /// invoking the body.
+    pub type_var_param_names: Vec<SmolStr>,
+    /// Declared return type of the QP. Used by callers that gate
+    /// invocation on the signature, e.g. `pure_to_string` only
+    /// honours a `toString()` QP whose declared return is `String[1]`.
+    pub return_type: legend_pure_parser_pure::types::TypeExpr,
+    /// Declared return multiplicity of the QP. Paired with
+    /// [`Self::return_type`] for signature gating.
+    pub return_multiplicity: legend_pure_parser_pure::types::Multiplicity,
 }
 
 /// Locate a qualified property by `name` and `arity` on `class_id` or any
@@ -2710,7 +2757,7 @@ struct FoundQp {
 /// names are captured from the **declaring** class (the one that owns
 /// the QP), not the receiver's class — same contract as
 /// `eval_qualified_property`.
-fn find_qp_with_generalization(
+pub fn find_qp_with_generalization(
     model: &legend_pure_parser_pure::model::PureModel,
     class_id: ElementId,
     name: &str,
@@ -2737,6 +2784,8 @@ fn find_qp_with_generalization(
                     .iter()
                     .map(|p| p.name.clone())
                     .collect(),
+                return_type: qp.return_type.clone(),
+                return_multiplicity: qp.return_multiplicity.clone(),
             });
         }
         for super_ty in &class.super_types {
