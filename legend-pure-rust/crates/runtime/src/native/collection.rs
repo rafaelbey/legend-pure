@@ -511,14 +511,15 @@ impl NativeFunction for Map {
         // access sees scalars, not nested collections.
         let mut results: Vec<Value> = Vec::with_capacity(source.len());
         for item in &source {
-            match ctx.call_function(&lambda_val, std::slice::from_ref(item))? {
+            let called = ctx.call_function(&lambda_val, std::slice::from_ref(item))?;
+            match &called {
                 Value::Collection(inner) => {
                     for v in inner.iter() {
                         results.push(v.clone());
                     }
                 }
                 Value::Unit => {}
-                other => results.push(other),
+                _ => results.push(called),
             }
         }
 
@@ -2887,7 +2888,7 @@ mod tests {
             )
             .unwrap()
             .into_value();
-        let Value::Collection(c) = r else {
+        let Value::Collection(c) = &r else {
             panic!("expected Collection, got {r:?}");
         };
         // Integer's type ordinal (1) is less than String's (4), so the

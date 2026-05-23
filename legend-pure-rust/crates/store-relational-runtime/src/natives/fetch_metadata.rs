@@ -311,7 +311,7 @@ impl NativeFunction for FetchDbImportedKeysMetaData {
 /// Extract a `[0..1]` `String` pattern. `Value::Unit`, empty collection,
 /// and an absent slot all yield `None`.
 fn optional_string(v: Value) -> Result<Option<String>, PureException> {
-    match v {
+    match &v {
         Value::Unit => Ok(None),
         Value::String(s) => Ok(Some(s.to_string())),
         Value::Collection(items) => match items.front() {

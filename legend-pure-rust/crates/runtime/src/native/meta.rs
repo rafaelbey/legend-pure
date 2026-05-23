@@ -456,7 +456,7 @@ fn evaluate_primitive_constraints(
                 }
             }
             let message = match constraint.message.as_ref().map(|m| ctx.evaluate(m)) {
-                Some(Ok(eval)) => match eval.into_value() {
+                Some(Ok(eval)) => match &eval.into_value() {
                     Value::String(s) => Some(s.to_string()),
                     _ => None,
                 },
@@ -2015,7 +2015,7 @@ impl NativeFunction for EvaluateAndDeactivate {
         // breaking `parameters->evaluateAndDeactivate()->map(v |
         // $v.name)` style chains used by e.g.
         // `testEvaluateAndDeactivate`.
-        if let Value::Collection(items) = value.clone() {
+        if let Value::Collection(items) = &value {
             let mut out: Vec<Value> = Vec::with_capacity(items.len());
             for v in items.iter() {
                 if is_already_deactivated(ctx, v) {
@@ -2070,10 +2070,10 @@ fn instance_value_wrap(v: Value, ctx: &mut dyn EvalContextTrait) -> Result<Value
     let obj = ctx
         .heap_mut()
         .alloc_dynamic(crate::m3_paths::INSTANCE_VALUE);
-    let values: Vec<Value> = match v {
+    let values: Vec<Value> = match &v {
         Value::Collection(coll) => coll.iter().cloned().collect(),
         Value::Unit => Vec::new(),
-        other => vec![other],
+        _ => vec![v],
     };
     // Populate `.multiplicity` from the value's runtime cardinality.
     // This is correct for InstanceValues created from already-evaluated
@@ -2349,10 +2349,10 @@ fn deactivate_spec(
             let obj = ctx
                 .heap_mut()
                 .alloc_dynamic(crate::m3_paths::INSTANCE_VALUE);
-            let values: Vec<Value> = match v {
+            let values: Vec<Value> = match &v {
                 Value::Collection(coll) => coll.iter().cloned().collect(),
                 Value::Unit => Vec::new(),
-                other => vec![other],
+                _ => vec![v],
             };
             ctx.heap_mut().mutate_add(&obj, "values", &values)?;
             if let Some(type_id) = runtime_type {
@@ -2931,14 +2931,14 @@ fn reactivate_instance_value(
     let mut out: Vec<Value> = Vec::with_capacity(raw.len());
     for v in raw {
         let reactivated = reactivate_value(&v, vars, ctx)?;
-        match reactivated {
+        match &reactivated {
             Value::Collection(coll) => {
                 for inner in coll.iter() {
                     out.push(inner.clone());
                 }
             }
             Value::Unit => {}
-            other => out.push(other),
+            _ => out.push(reactivated),
         }
     }
     Ok(Value::from_vec(out))
@@ -3010,7 +3010,11 @@ fn reactivate_function_expression(
         return ctx.call_function(&func_val.clone(), &reactivated_params);
     }
     let name_vals = ctx.heap().get_property_values(&obj_id, "functionName")?;
-    if let Some(Value::String(name)) = name_vals.iter().next().cloned()
+    let name_opt: Option<smol_str::SmolStr> = match name_vals.iter().next() {
+        Some(Value::String(s)) => Some(s.clone()),
+        _ => None,
+    };
+    if let Some(name) = name_opt
         && let Some(fn_id) =
             find_function_by_simple_name(ctx.model(), &name, reactivated_params.len())
     {

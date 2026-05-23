@@ -1033,7 +1033,7 @@ mod tests {
         let mut ctx = MockCtx;
         let spec = lit_collection(vec![lit_int(1), lit_int(2), lit_int(3)]);
         let v = ctx.evaluate(&spec).unwrap().into_value();
-        match v {
+        match &v {
             Value::Collection(pv) => {
                 assert_eq!(pv.len(), 3);
                 assert_eq!(pv[0], Value::Integer(1));

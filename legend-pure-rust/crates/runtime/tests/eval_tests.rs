@@ -1182,7 +1182,7 @@ fn eval_collection_literal() {
         "function test::f(): Integer[*] { [1, 2, 3] }",
         "f__Integer_MANY_",
     );
-    match result {
+    match &result {
         Value::Collection(v) => {
             assert_eq!(v.len(), 3);
             assert_eq!(v[0], Value::Integer(1));
@@ -1233,7 +1233,7 @@ fn eval_map_lambda() {
         "function test::f(): Integer[*] { [1, 2, 3]->map(x | $x * 2) }",
         "f__Integer_MANY_",
     );
-    match result {
+    match &result {
         Value::Collection(v) => {
             assert_eq!(v.len(), 3);
             assert_eq!(v[0], Value::Integer(2));
@@ -1250,7 +1250,7 @@ fn eval_filter_lambda() {
         "function test::f(): Integer[*] { [1, 2, 3, 4, 5]->filter(x | $x > 3) }",
         "f__Integer_MANY_",
     );
-    match result {
+    match &result {
         Value::Collection(v) => {
             assert_eq!(v.len(), 2);
             assert_eq!(v[0], Value::Integer(4));
@@ -1307,7 +1307,7 @@ fn eval_lambda_let_shadows_outer_let() {
         ",
         "f__Integer_MANY_",
     );
-    match result {
+    match &result {
         Value::Collection(v) => {
             assert_eq!(v.len(), 3);
             assert_eq!(v[0], Value::Integer(21));
@@ -1330,7 +1330,7 @@ fn eval_variable_shadowing_lambda() {
         ",
         "f__Integer_MANY_",
     );
-    match result {
+    match &result {
         Value::Collection(v) => {
             assert_eq!(v.len(), 3);
             assert_eq!(v[0], Value::Integer(2));
@@ -1353,7 +1353,7 @@ fn eval_closure_captures_outer_scope() {
         ",
         "f__Integer_MANY_",
     );
-    match result {
+    match &result {
         Value::Collection(v) => {
             assert_eq!(v.len(), 3);
             assert_eq!(v[0], Value::Integer(15));
@@ -1378,7 +1378,7 @@ fn eval_closure_captures_and_binds_inner_let() {
         ",
         "f__Integer_MANY_",
     );
-    match result {
+    match &result {
         Value::Collection(v) => {
             assert_eq!(v.len(), 2);
             assert_eq!(v[0], Value::Integer(101));
@@ -1432,7 +1432,7 @@ fn eval_element_name_package() {
         "f__String_MANY_",
     );
     // Check that we got either a single-value or a collection containing 'pure'.
-    match result {
+    match &result {
         Value::String(s) => assert_eq!(s.as_str(), "pure"),
         Value::Collection(v) => {
             assert_eq!(v.len(), 1, "expected 1 element, got {}", v.len());
@@ -1454,8 +1454,8 @@ fn eval_package_children_includes_sub_packages() {
         ",
         "f__Integer_1_",
     );
-    match result {
-        Value::Integer(n) => assert!(n > 0, "expected non-empty children, got {n}"),
+    match &result {
+        Value::Integer(n) => assert!(*n > 0, "expected non-empty children, got {n}"),
         other => panic!("Expected Integer, got {other:?}"),
     }
 }
@@ -1476,7 +1476,7 @@ fn eval_package_children_excludes_units() {
         ",
         "f__Boolean_1_",
     );
-    match result {
+    match &result {
         Value::Boolean(true) => {}
         other => panic!("expected true (no Unit in children), got {other:?}"),
     }
@@ -1537,8 +1537,8 @@ fn eval_surveyor_entry_point_runs_to_completion() {
         )
         .expect("surveyor should return a TestReport");
 
-    let report_id = match report {
-        Value::Object(id) => id,
+    let report_id = match &report {
+        Value::Object(id) => id.clone(),
         other => panic!("surveyor returned non-object: {other:?}"),
     };
 
@@ -1833,7 +1833,7 @@ fn eval_enum_values_expands_to_each_member() {
         ",
         "f__Color_MANY_",
     );
-    match result {
+    match &result {
         Value::Collection(v) => {
             assert_eq!(v.len(), 3);
             let members: Vec<(SmolStr, SmolStr)> = v
@@ -2672,7 +2672,7 @@ fn eval_pct_load_manifest_essential_resolves() {
         .next()
         .cloned()
         .expect("exclusions populated");
-    let Value::Map(state) = exclusions else {
+    let Value::Map(state) = &exclusions else {
         panic!("exclusions slot not Map: {exclusions:?}");
     };
     assert!(
@@ -3741,7 +3741,7 @@ fn dump_non_pass_results(
             .get_property_values(rid, "fqn")
             .ok()
             .and_then(|v| v.iter().next().cloned())
-            .and_then(|v| match v {
+            .and_then(|v| match &v {
                 Value::String(s) => Some(s.to_string()),
                 _ => None,
             })
@@ -3751,7 +3751,7 @@ fn dump_non_pass_results(
             .get_property_values(rid, "message")
             .ok()
             .and_then(|v| v.iter().next().cloned())
-            .and_then(|v| match v {
+            .and_then(|v| match &v {
                 Value::String(s) => Some(s.to_string()),
                 _ => None,
             })
@@ -3966,7 +3966,7 @@ fn get_all_class_metamodel_finds_user_classes() {
     let result = evaluator
         .call("my::pkg::namesOfClasses", &[])
         .expect("namesOfClasses should evaluate");
-    let names: Vec<String> = match result {
+    let names: Vec<String> = match &result {
         Value::Collection(items) => items
             .iter()
             .filter_map(|v| match v {
@@ -4151,7 +4151,7 @@ fn precise_primitives_cast_numeric_within_precision() {
         ",
         "f__Decimal_1_",
     );
-    match result {
+    match &result {
         Value::Decimal(_) => {}
         other => panic!("expected Decimal value, got {other:?}"),
     }

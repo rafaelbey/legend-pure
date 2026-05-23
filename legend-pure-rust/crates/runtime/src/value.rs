@@ -753,6 +753,82 @@ impl Value {
 }
 
 // ---------------------------------------------------------------------------
+// Value — iterative Drop
+// ---------------------------------------------------------------------------
+
+impl Drop for Value {
+    /// Iterative drop for `Value`, scaling with heap allocations instead
+    /// of Rust thread-stack frames.
+    ///
+    /// `Value::Collection(Box<PVector<Value>>)` nests arbitrarily — the
+    /// auto-derived drop chain (`Box::drop` → `PVector::drop` →
+    /// `Value::drop` → `Box::drop` → …) recurses one stack frame per
+    /// nesting level and overflows somewhere between ~3 000 and ~5 000
+    /// levels on a default 8 MiB thread (Phase M's equality test had
+    /// to clamp depth to 1 500 specifically because of this).
+    ///
+    /// This impl drains the recursive variants into a `Vec<Value>`
+    /// work-stack: extract `Collection`'s inner `PVector` (and
+    /// `UnitInstance`'s inner `Value`), push children onto the stack,
+    /// then pop and dismantle each in turn. Each `Drop` call enters
+    /// only one layer of `match`; pathological depths just allocate
+    /// more entries in the heap-resident work-stack.
+    ///
+    /// `Object`, `Map`, `Function`, and similar `Rc`-wrapped variants
+    /// are left to their natural drop: their recursive structure is
+    /// bounded by the heap-cycle's reference count, not by syntactic
+    /// nesting, and unwrapping them here would require interfering
+    /// with shared ownership. If those variants point at deeply
+    /// nested `Collection`s, dropping the last reference will still
+    /// hit this iterative path on each owned `Value::Collection`
+    /// inside the entry.
+    fn drop(&mut self) {
+        // Extract the immediate recursive children of `self` without
+        // letting the natural drop chain recurse. We replace `self`'s
+        // inner state with empty placeholders so when `self` goes out
+        // of scope after this fn returns, the auto-derived drop on the
+        // remaining fields is a no-op (empty `PVector`, empty `Value::Unit`).
+        let mut stack: Vec<Value> = Vec::new();
+        match self {
+            Value::Collection(boxed) => {
+                let pvec = std::mem::take(&mut **boxed);
+                stack.extend(pvec);
+            }
+            Value::UnitInstance { inner, .. } => {
+                let inner_val = std::mem::replace(&mut **inner, Value::Unit);
+                stack.push(inner_val);
+            }
+            _ => {}
+        }
+
+        // Drain the stack iteratively. Each popped `Value` enters only
+        // one layer of dispatch — no recursion into Rust frames.
+        while let Some(mut v) = stack.pop() {
+            // Drop `v` manually: we can't `match v` and move out of
+            // its fields (since `Value` itself has `Drop`), so we
+            // mutate-in-place through `&mut v`, extract the recursive
+            // payload into the work-stack, and then let `v` go out
+            // of scope with empty inner state.
+            match &mut v {
+                Value::Collection(boxed) => {
+                    let pvec = std::mem::take(&mut **boxed);
+                    stack.extend(pvec);
+                }
+                Value::UnitInstance { inner, .. } => {
+                    let inner_val = std::mem::replace(&mut **inner, Value::Unit);
+                    stack.push(inner_val);
+                }
+                _ => {}
+            }
+            // `v` drops here. For Collection / UnitInstance the inner
+            // is now empty, so the natural drop is a no-op. Other
+            // variants drop normally (single-ownership transfer of an
+            // `Rc` is bounded by reference count, not depth).
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Value — Display
 // ---------------------------------------------------------------------------
 
@@ -1051,5 +1127,38 @@ mod tests {
         let mut pv = PVector::new();
         pv.push_back(Value::Integer(1));
         assert!(!Value::Collection(Box::new(pv)).is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Deeply-nested Collection drop — pins the iterative Drop contract
+    // -----------------------------------------------------------------------
+
+    /// Build `Collection(Collection(... Integer(0) ...))` `depth` levels
+    /// deep. Returns the outermost value.
+    fn deep_nested_collection(depth: usize) -> Value {
+        let mut v = Value::Integer(0);
+        for _ in 0..depth {
+            let mut inner = PVector::new();
+            inner.push_back(v);
+            v = Value::Collection(Box::new(inner));
+        }
+        v
+    }
+
+    /// Locks the iterative `Value::Drop` contract: constructing a 10 000-
+    /// level-deep `Collection(Collection(...))` chain and letting it go
+    /// out of scope must not overflow the thread stack.
+    ///
+    /// The naive auto-derived `Drop` chain on `Box<PVector<Value>>`
+    /// recurses one Rust stack frame per nesting level. On a default
+    /// 8 MiB thread stack this used to overflow somewhere between 3 000
+    /// and 5 000 levels deep (Phase M had to clamp its equality test
+    /// to 1 500 specifically because of this). The iterative drop
+    /// scales with heap allocations only, so 10 000 — and beyond —
+    /// completes cleanly.
+    #[test]
+    fn deep_nested_collection_drops_without_overflow() {
+        let v = deep_nested_collection(10_000);
+        drop(v);
     }
 }

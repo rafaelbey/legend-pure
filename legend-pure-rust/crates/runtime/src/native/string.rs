@@ -417,11 +417,14 @@ pub(crate) fn pure_to_string(
         // Pair / List / user classes all flow through this path —
         // their `toString()` lives in platform `.pure` source, so the
         // runtime never needs to hardcode classifier names.
-        Value::Object(obj_id) => match ctx.invoke_qualified_property(value, "toString", &[])? {
-            Some(Value::String(s)) => Ok(s.to_string()),
-            Some(other) => pure_to_string(&other, ctx),
-            None => Ok(format!("Anonymous_{:p}", std::rc::Rc::as_ptr(obj_id))),
-        },
+        Value::Object(obj_id) => {
+            let invoked = ctx.invoke_qualified_property(value, "toString", &[])?;
+            match invoked.as_ref() {
+                Some(Value::String(s)) => Ok(s.to_string()),
+                Some(other) => pure_to_string(other, ctx),
+                None => Ok(format!("Anonymous_{:p}", std::rc::Rc::as_ptr(obj_id))),
+            }
+        }
         // Element ref (Class, Function, Enumeration, …): simple-leaf
         // name. testClassToString and testEnumerationToString assert
         // `STR_Person->toString() == 'STR_Person'`.

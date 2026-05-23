@@ -309,12 +309,14 @@ mod tests {
 
     /// Locks the bug the iterative rewrite fixes: the old recursive
     /// implementation hit `MAX_EQUALITY_DEPTH = 1000` and silently
-    /// returned `false` for depths beyond that. Depth 1500 is
+    /// returned `false` for depths beyond that. Depth 1 500 is
     /// comfortably past the old cap (which would have returned
-    /// `false` — the wrong answer) and well below the depth at which
-    /// `Value::Drop` recursion on `Box<PVector<Value>>` would itself
-    /// overflow the test thread's stack (`Value::Drop` is a separate
-    /// recursion source — tracked in BACKLOG, not addressed here).
+    /// `false` — the wrong answer) and below the next limiter:
+    /// `values_equal` clones each child pair onto the work-stack via
+    /// `Value::clone()`, which is `#[derive(Clone)]` and recurses
+    /// through nested `Collection`s. Bumping past ~2 500 here
+    /// overflows in `Value::clone`, not in the equality loop itself
+    /// — the iterative-`Clone` follow-up tracks that.
     #[test]
     fn deeply_nested_collections_compare_equal_past_old_recursion_cap() {
         let a = deep_nested_collection(1500, 42);

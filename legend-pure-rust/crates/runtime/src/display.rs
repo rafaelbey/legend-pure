@@ -276,8 +276,10 @@ impl Renderer<'_, '_> {
             .ctx
             .call_function(&callable, std::slice::from_ref(value))
         {
-            Ok(Value::String(s)) => s.to_string(),
-            Ok(other) => fallback_render(&other),
+            Ok(ref v) => match v {
+                Value::String(s) => s.to_string(),
+                other => fallback_render(other),
+            },
             Err(_) => fallback_render(value),
         }
     }
@@ -386,9 +388,9 @@ impl Renderer<'_, '_> {
         // single property → bare `Value::Object`; otherwise
         // `Value::Collection`.
         let mut out: Vec<SmolStr> = Vec::new();
-        match props_v {
+        match &props_v {
             Value::Object(prop_handle) => {
-                if let Some(name) = read_prop_name(&prop_handle) {
+                if let Some(name) = read_prop_name(prop_handle) {
                     out.push(name);
                 }
             }

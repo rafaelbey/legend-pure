@@ -101,9 +101,9 @@ fn find_mapping_handle<'m, H: legend_pure_runtime::hooks::EvalHooks>(
 
 fn first_object(handle: &ObjectHandle, prop: &str) -> Option<ObjectHandle> {
     let values = handle.borrow().get_property_values(prop);
-    let first = values.iter().next().cloned()?;
+    let first = values.iter().next()?;
     if let Value::Object(h) = first {
-        Some(h)
+        Some(h.clone())
     } else {
         None
     }
@@ -111,7 +111,7 @@ fn first_object(handle: &ObjectHandle, prop: &str) -> Option<ObjectHandle> {
 
 fn name_of(handle: &ObjectHandle) -> Option<String> {
     let values = handle.borrow().get_property_values("name");
-    let first = values.iter().next().cloned()?;
+    let first = values.iter().next()?;
     if let Value::String(s) = first {
         Some(s.to_string())
     } else {

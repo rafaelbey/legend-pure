@@ -430,10 +430,11 @@ fn build_body(let_bindings: &[String], current: &str) -> String {
 fn print_value(value: &Value, evaluator: &mut Evaluator) {
     let format_clean = |v: &Value, eval: &mut Evaluator| -> String {
         if matches!(v, Value::Object(_) | Value::Element(_))
-            && let Ok(Value::String(s)) = eval.call(
+            && let Ok(ref called) = eval.call(
                 "meta::pure::functions::string::__repl_toString_Any_1__String_1_",
                 std::slice::from_ref(v),
             )
+            && let Value::String(s) = called
         {
             return s.to_string();
         }

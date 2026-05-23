@@ -1237,14 +1237,14 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 let mut out: Vec<Value> = Vec::new();
                 for item in items.iter() {
                     let v = self.property_access_on_value(item, property)?;
-                    match v {
+                    match &v {
                         Value::Unit => {}
                         Value::Collection(inner) => {
                             for x in inner.iter() {
                                 out.push(x.clone());
                             }
                         }
-                        other => out.push(other),
+                        _ => out.push(v),
                     }
                 }
                 Ok(Value::from_vec(out))
@@ -1289,8 +1289,9 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
             .heap
             .get_property_values(&instance_id, "elementOverride")
             .map_err(PureException::from)?;
-        let Some(Value::Object(override_id)) = override_vals.iter().next().cloned() else {
-            return Ok(Value::Unit);
+        let override_id = match override_vals.iter().next() {
+            Some(Value::Object(h)) => h.clone(),
+            _ => return Ok(Value::Unit),
         };
         // Locate the property's declared multiplicity on the
         // instance's classifier so we know which override to call.
@@ -1406,14 +1407,14 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
                 let mut out: Vec<Value> = Vec::new();
                 for item in items.iter() {
                     let v = self.property_access_on_value(item, property)?;
-                    match v {
+                    match &v {
                         Value::Unit => {}
                         Value::Collection(inner) => {
                             for x in inner.iter() {
                                 out.push(x.clone());
                             }
                         }
-                        other => out.push(other),
+                        _ => out.push(v),
                     }
                 }
                 Ok(Value::from_vec(out))
@@ -1951,7 +1952,8 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         // Resolve the instance's classifier → Class → `qualified_properties`
         // entry matching `property`, then evaluate the QP body with `this`
         // bound to the instance and positional params bound from `arguments`.
-        if let Value::Object(obj_id) = target_val {
+        if let Value::Object(obj_id) = &target_val {
+            let obj_id = obj_id.clone();
             let classifier = self
                 .heap
                 .classifier(&obj_id)
@@ -2073,14 +2075,14 @@ impl<'model, H: EvalHooks> Evaluator<'model, H> {
         for elem in elements {
             let val = self.eval(elem)?;
             // Flatten nested collections (Pure semantics: no nested collections)
-            match val {
+            match &val {
                 Value::Collection(inner) => {
                     for v in inner.iter() {
                         values.push_back(v.clone());
                     }
                 }
                 Value::Unit => {} // Skip unit values
-                other => values.push_back(other),
+                _ => values.push_back(val),
             }
         }
 
@@ -3114,7 +3116,8 @@ mod tests {
                 make_expr(ExprKind::IntegerLiteral(3)),
             ],
         });
-        match eval.eval(&expr).unwrap() {
+        let evaluated = eval.eval(&expr).unwrap();
+        match &evaluated {
             Value::Collection(v) => {
                 assert_eq!(v.len(), 3);
                 assert_eq!(v[0], Value::Integer(1));
@@ -3143,8 +3146,9 @@ mod tests {
             parameters: vec![],
             body: vec![make_expr(ExprKind::IntegerLiteral(42))],
         });
-        match eval.eval(&expr).unwrap() {
-            Value::Function(fv) => match *fv {
+        let evaluated = eval.eval(&expr).unwrap();
+        match &evaluated {
+            Value::Function(fv) => match fv.as_ref() {
                 FunctionValue::Lambda(lc) => {
                     assert_eq!(lc.parameters.len(), 0);
                     assert_eq!(lc.body.len(), 1);

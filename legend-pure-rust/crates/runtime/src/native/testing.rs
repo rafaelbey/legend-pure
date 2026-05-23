@@ -385,7 +385,7 @@ impl NativeFunction for AssertError {
         }
         let func_val = ctx.evaluate(&args[0])?.into_value();
         let expected = ctx.evaluate(&args[1])?.into_value();
-        let expected_msg = match expected {
+        let expected_msg = match &expected {
             Value::String(s) => s.to_string(),
             other => {
                 return Err(PureRuntimeError::EvaluationError(format!(
@@ -559,7 +559,7 @@ impl NativeFunction for LoadPCTManifest {
     ) -> Result<Evaluated, PureException> {
         expect_args("loadPCTManifest", args, 1)?;
         let path_val = ctx.evaluate(&args[0])?.into_value();
-        let path = match path_val {
+        let path = match &path_val {
             Value::String(s) => s.to_string(),
             other => {
                 return Err(PureRuntimeError::EvaluationError(format!(

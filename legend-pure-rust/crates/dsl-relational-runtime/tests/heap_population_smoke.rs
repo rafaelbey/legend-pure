@@ -100,7 +100,7 @@ fn name_of(value: &Value) -> Option<String> {
     };
     let entry = handle.borrow();
     let values = entry.get_property_values("name");
-    let first = values.iter().next()?.clone();
+    let first = values.iter().next()?;
     if let Value::String(s) = first {
         Some(s.to_string())
     } else {

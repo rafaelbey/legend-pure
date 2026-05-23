@@ -620,10 +620,10 @@ fn triples_from_flat_kv_stream(
         let key = kvs[i].as_string()?.clone();
         let value = kvs[i + 1].clone();
         let augmented = matches!(&kvs[i + 2], Value::Boolean(true));
-        let values = match value {
+        let values = match &value {
             Value::Collection(coll) => coll.iter().cloned().collect(),
             Value::Unit => Vec::new(),
-            other => vec![other],
+            _ => vec![value],
         };
         out.push((key, values, augmented));
         i += 3;
@@ -975,10 +975,10 @@ fn apply_property_defaults(
     };
     for (name, spec) in default_specs {
         let v = ctx.evaluate(&spec)?.into_value();
-        let flat: Vec<Value> = match v {
+        let flat: Vec<Value> = match &v {
             Value::Collection(coll) => coll.iter().cloned().collect(),
             Value::Unit => Vec::new(),
-            other => vec![other],
+            _ => vec![v],
         };
         ctx.heap_mut().mutate_set(obj, name.as_str(), &flat)?;
     }
@@ -1684,10 +1684,10 @@ fn hydrate_element_to_heap(
             Ok(v) => v.into_value(),
             Err(_) => continue,
         };
-        let values: Vec<Value> = match value {
+        let values: Vec<Value> = match &value {
             Value::Unit => continue,
             Value::Collection(coll) => coll.iter().cloned().collect(),
-            other => vec![other],
+            _ => vec![value],
         };
         if values.is_empty() {
             continue;
@@ -1725,10 +1725,10 @@ fn apply_key_value_triples(
         let key = kvs[i].as_string()?.clone();
         let value = kvs[i + 1].clone();
         let augmented = matches!(&kvs[i + 2], Value::Boolean(true));
-        let values: Vec<Value> = match value {
+        let values: Vec<Value> = match &value {
             Value::Collection(coll) => coll.iter().cloned().collect(),
             Value::Unit => Vec::new(),
-            other => vec![other],
+            _ => vec![value],
         };
         if augmented {
             ctx.heap_mut().mutate_add(&obj, key.as_str(), &values)?;
@@ -2122,7 +2122,7 @@ fn evaluate_class_constraints_at_level(
             }
         }
         let message = match constraint.message.as_ref().map(|m| ctx.evaluate(m)) {
-            Some(Ok(eval)) => match eval.into_value() {
+            Some(Ok(eval)) => match &eval.into_value() {
                 Value::String(s) => Some(s.to_string()),
                 _ => None,
             },
@@ -2284,9 +2284,9 @@ pub(crate) fn gather_all_instances(
     let roots: Vec<Value> = ctx.context().iter_values().cloned().collect();
     let mut worklist: Vec<Value> = roots;
     while let Some(value) = worklist.pop() {
-        match value {
+        match &value {
             Value::Object(handle) => {
-                let key = std::rc::Rc::as_ptr(&handle);
+                let key = std::rc::Rc::as_ptr(handle);
                 if !seen.insert(key) {
                     continue;
                 }
@@ -2300,11 +2300,11 @@ pub(crate) fn gather_all_instances(
                         .collect();
                     (cls, prop_values)
                 };
-                if cls.as_str() == target_path && RuntimeHeap::element_for_object(&handle).is_none()
+                if cls.as_str() == target_path && RuntimeHeap::element_for_object(handle).is_none()
                 {
                     // Only emit user-allocated objects here; metamodel
                     // rows were emitted in Source 1.
-                    projected.push(Value::Object(handle));
+                    projected.push(value);
                 }
                 worklist.extend(prop_values);
             }

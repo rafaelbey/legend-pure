@@ -121,8 +121,8 @@ fn eval_returning_csv(source: &str, fqn: &str) -> SmolStr {
     let result = eval
         .call_user_function_by_id(fn_id)
         .unwrap_or_else(|e| panic!("Evaluation error: {e}"));
-    match result {
-        Value::String(s) => s,
+    match &result {
+        Value::String(s) => s.clone(),
         other => panic!("expected Value::String from {fqn}, got {other:?}"),
     }
 }

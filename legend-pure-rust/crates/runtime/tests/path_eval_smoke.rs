@@ -106,7 +106,7 @@ function test::run(): String[1]
 }",
         "run__String_1_",
     );
-    match result {
+    match &result {
         Value::String(s) => assert_eq!(s.as_str(), "Bob"),
         other => panic!("Expected String('Bob'), got {other:?}"),
     }
@@ -136,7 +136,7 @@ function test::run2(): String[1]
 }",
         "run2__String_1_",
     );
-    match result {
+    match &result {
         Value::String(s) => assert_eq!(s.as_str(), "Main St"),
         other => panic!("Expected String('Main St'), got {other:?}"),
     }
@@ -163,8 +163,8 @@ function test::run3(): Integer[1]
 }",
         "run3__Integer_1_",
     );
-    match result {
-        Value::Integer(n) => assert_eq!(n, 42),
+    match &result {
+        Value::Integer(n) => assert_eq!(*n, 42),
         other => panic!("Expected Integer(42), got {other:?}"),
     }
 }

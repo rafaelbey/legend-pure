@@ -334,7 +334,7 @@ fn find_class_mapping_row(
             continue;
         };
         let id_values = h.borrow().get_property_values("id");
-        let Some(Value::String(s)) = id_values.iter().next().cloned() else {
+        let Some(Value::String(s)) = id_values.iter().next() else {
             continue;
         };
         if s.as_str() == class_mapping_id {
@@ -359,7 +359,7 @@ fn find_table_row(
             continue;
         };
         let s_name = s_handle.borrow().get_property_values("name");
-        let Some(Value::String(s_name_str)) = s_name.iter().next().cloned() else {
+        let Some(Value::String(s_name_str)) = s_name.iter().next() else {
             continue;
         };
         if s_name_str.as_str() != schema_name {
@@ -371,7 +371,7 @@ fn find_table_row(
                 continue;
             };
             let t_name = t_handle.borrow().get_property_values("name");
-            let Some(Value::String(t_name_str)) = t_name.iter().next().cloned() else {
+            let Some(Value::String(t_name_str)) = t_name.iter().next() else {
                 continue;
             };
             if t_name_str.as_str() == table_name {
