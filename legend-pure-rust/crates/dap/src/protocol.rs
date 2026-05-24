@@ -39,10 +39,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-// ---------------------------------------------------------------------------
-// Envelope
-// ---------------------------------------------------------------------------
-
 /// Generic protocol envelope dispatched by `type`. Requests are
 /// the only shape we act on — DAP defines reverse-direction
 /// messages (`runInTerminal`, `startDebugging`) where the client
@@ -100,10 +96,6 @@ pub struct Event {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<Value>,
 }
-
-// ---------------------------------------------------------------------------
-// Request bodies
-// ---------------------------------------------------------------------------
 
 /// DAP request/response/event bodies use camelCase on the wire
 /// for every multi-word field except `Response.request_seq` (see
@@ -198,10 +190,6 @@ pub struct ContinueArguments {
 pub struct NextArguments {
     pub thread_id: i64,
 }
-
-// ---------------------------------------------------------------------------
-// Response bodies
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -347,10 +335,6 @@ pub struct ContinueResponse {
     /// threaded so trivially `true`.
     pub all_threads_continued: bool,
 }
-
-// ---------------------------------------------------------------------------
-// Event bodies
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
