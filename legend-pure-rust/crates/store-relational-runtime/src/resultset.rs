@@ -506,10 +506,6 @@ mod tests {
         });
     }
 
-    // ---------------------------------------------------------------------
-    // PG simple-query text cell recognition (H2 path)
-    // ---------------------------------------------------------------------
-
     #[test]
     fn pg_text_integer_and_string() {
         let null = Value::String(SmolStr::new("<SQLNull>"));

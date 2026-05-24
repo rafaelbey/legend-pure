@@ -226,10 +226,6 @@ pub fn resolve_backend(
     }
 }
 
-// ---------------------------------------------------------------------
-// Shared SQL helpers (used by trait impls)
-// ---------------------------------------------------------------------
-
 /// Double-quote an identifier, escaping embedded quotes by doubling.
 /// Both DuckDB and H2 accept this form.
 pub(crate) fn quote_ident(s: &str) -> String {

@@ -33,10 +33,6 @@ use std::fmt::Write;
 
 use crate::dispatch::resolve_backend;
 
-// ---------------------------------------------------------------------
-// fetchDbTablesMetaData
-// ---------------------------------------------------------------------
-
 /// `fetchDbTablesMetaData(dbConn, schemaPattern[0..1], tablePattern[0..1]) -> ResultSet`.
 #[derive(Debug)]
 pub struct FetchDbTablesMetaData;
@@ -76,10 +72,6 @@ impl NativeFunction for FetchDbTablesMetaData {
         Ok(Evaluated::new(rs))
     }
 }
-
-// ---------------------------------------------------------------------
-// fetchDbColumnsMetaData
-// ---------------------------------------------------------------------
 
 /// `fetchDbColumnsMetaData(dbConn, schemaPattern[0..1], tablePattern[0..1], columnPattern[0..1]) -> ResultSet`.
 #[derive(Debug)]
@@ -129,10 +121,6 @@ impl NativeFunction for FetchDbColumnsMetaData {
     }
 }
 
-// ---------------------------------------------------------------------
-// fetchDbSchemasMetaData
-// ---------------------------------------------------------------------
-
 /// `fetchDbSchemasMetaData(dbConn, schemaPattern[0..1]) -> ResultSet`.
 #[derive(Debug)]
 pub struct FetchDbSchemasMetaData;
@@ -165,10 +153,6 @@ impl NativeFunction for FetchDbSchemasMetaData {
         Ok(Evaluated::new(rs))
     }
 }
-
-// ---------------------------------------------------------------------
-// fetchDbPrimaryKeysMetaData
-// ---------------------------------------------------------------------
 
 /// `fetchDbPrimaryKeysMetaData(dbConn, schemaPattern[0..1], tableName) -> ResultSet`.
 #[derive(Debug)]
@@ -221,10 +205,6 @@ impl NativeFunction for FetchDbPrimaryKeysMetaData {
         Ok(Evaluated::new(rs))
     }
 }
-
-// ---------------------------------------------------------------------
-// fetchDbImportedKeysMetaData
-// ---------------------------------------------------------------------
 
 /// `fetchDbImportedKeysMetaData(dbConn, schemaPattern[0..1], tableName) -> ResultSet`.
 ///
@@ -283,10 +263,6 @@ impl NativeFunction for FetchDbImportedKeysMetaData {
         Ok(Evaluated::new(rs))
     }
 }
-
-// ---------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------
 
 /// Extract a `[0..1]` `String` pattern. `Value::Unit`, empty collection,
 /// and an absent slot all yield `None`.
