@@ -18,6 +18,8 @@
 //! - A `*Args` struct for clap argument parsing
 //! - A `run()` function that executes the command
 
+pub mod build;
+pub mod build_cache;
 pub mod check;
 pub mod compile;
 pub mod completions;

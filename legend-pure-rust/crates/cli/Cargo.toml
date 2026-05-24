@@ -52,6 +52,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = "0.8"
 
+# Build-cache fingerprints
+blake3 = { workspace = true }
+
 # Diagnostics & output
 miette = { workspace = true }
 owo-colors = { workspace = true }

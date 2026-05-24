@@ -75,8 +75,4 @@ impl NativeFunction for Drop {
             .map_err(PureException::from)?;
         Ok(Evaluated::new(Value::Object(tds_handle)))
     }
-
-    fn signature(&self) -> &'static str {
-        "drop(Relation<T>[1], Integer[1]):Relation<T>[1]"
-    }
 }

@@ -56,10 +56,6 @@ impl NativeFunction for LoadCsvToDbTable {
         backend.execute_batch(ctx, &sql)?;
         Ok(Evaluated::new(Value::Unit))
     }
-
-    fn signature(&self) -> &'static str {
-        "loadCsvToDbTable(String[1], Table[1], DatabaseConnection[1], Integer[0..1]): Nil[0]"
-    }
 }
 
 /// Pull the table's `name` slot off a `Table` heap object.

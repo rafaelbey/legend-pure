@@ -82,6 +82,10 @@ enum Commands {
     /// Convert Protocol JSON back to Pure grammar
     Emit(commands::emit::EmitArgs),
 
+    /// One-shot incremental build: parse + compile + test + emit `.purem`
+    /// for every filesystem repo in the classpath, in dependency order
+    Build(commands::build::BuildArgs),
+
     /// Compile Pure files (parse + semantic analysis)
     Compile(commands::compile::CompileArgs),
 
@@ -146,6 +150,7 @@ pub fn main_entry() {
     let result = match cli.command {
         Commands::Parse(args) => commands::parse::run(args),
         Commands::Emit(args) => commands::emit::run(args),
+        Commands::Build(args) => commands::build::run(args, classpath),
         Commands::Compile(args) => commands::compile::run(args),
         Commands::Check(args) => commands::check::run(args),
         Commands::Lsp(args) => commands::lsp::run(args, classpath),

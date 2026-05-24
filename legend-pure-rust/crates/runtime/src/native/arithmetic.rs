@@ -103,10 +103,6 @@ impl NativeFunction for Plus {
         let items: Vec<Value> = values[0].to_collection().iter().cloned().collect();
         Ok(Evaluated::new(plus_fold(items)?))
     }
-
-    fn signature(&self) -> &'static str {
-        "plus(Number[*]): Number[1]"
-    }
 }
 
 /// Pairwise `plus` — promotes operands via [`promote_pair`] then
@@ -161,10 +157,6 @@ impl NativeFunction for Minus {
         expect_args("minus", &values, 1)?;
         let items: Vec<Value> = values[0].to_collection().iter().cloned().collect();
         Ok(Evaluated::new(minus_fold(items)?))
-    }
-
-    fn signature(&self) -> &'static str {
-        "minus(Number[*]): Number[1]"
     }
 }
 
@@ -244,10 +236,6 @@ impl NativeFunction for Times {
         expect_args("times", &values, 1)?;
         let items: Vec<Value> = values[0].to_collection().iter().cloned().collect();
         Ok(Evaluated::new(times_fold(items)?))
-    }
-
-    fn signature(&self) -> &'static str {
-        "times(Number[*]): Number[1]"
     }
 }
 
@@ -367,10 +355,6 @@ impl NativeFunction for Divide {
             .into()),
         }
     }
-
-    fn signature(&self) -> &'static str {
-        "divide(Number[1], Number[1]): Float[1] | divide(Decimal[1], Decimal[1], Integer[1]): Decimal[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -397,10 +381,6 @@ impl NativeFunction for Abs {
         };
         Ok(Evaluated::new(v))
     }
-
-    fn signature(&self) -> &'static str {
-        "abs(Number[1]): Number[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -425,10 +405,6 @@ impl NativeFunction for Mod {
             return Err(PureRuntimeError::DivisionByZero.into());
         }
         Ok(Evaluated::new(Value::Integer(a.rem_euclid(b))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "mod(Integer[1], Integer[1]): Integer[1]"
     }
 }
 
@@ -487,10 +463,6 @@ impl NativeFunction for Rem {
             _ => unreachable!("promote_pair returns matched types"),
         };
         Ok(Evaluated::new(v))
-    }
-
-    fn signature(&self) -> &'static str {
-        "rem(Number[1], Number[1]): Number[1]"
     }
 }
 

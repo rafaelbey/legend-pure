@@ -57,10 +57,6 @@ impl NativeFunction for StringPlus {
         }
         Ok(Evaluated::new(Value::String(SmolStr::new(&out))))
     }
-
-    fn signature(&self) -> &'static str {
-        "plus(String[*]): String[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -82,10 +78,6 @@ impl NativeFunction for Length {
         let s = values[0].as_string()?;
         #[allow(clippy::cast_possible_wrap)]
         Ok(Evaluated::new(Value::Integer(s.len() as i64)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "length(String[1]): Integer[1]"
     }
 }
 
@@ -134,10 +126,6 @@ impl NativeFunction for Substring {
         let start = start.min(end);
         Ok(Evaluated::new(Value::String(SmolStr::new(&s[start..end]))))
     }
-
-    fn signature(&self) -> &'static str {
-        "substring(String[1], Integer[1] [, Integer[1]]): String[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -160,10 +148,6 @@ impl NativeFunction for Contains {
         let sub = values[1].as_string()?;
         Ok(Evaluated::new(Value::Boolean(s.contains(sub.as_str()))))
     }
-
-    fn signature(&self) -> &'static str {
-        "contains(String[1], String[1]): Boolean[1]"
-    }
 }
 
 /// Pure `startsWith(String[1], String[1]): Boolean[1]`
@@ -184,10 +168,6 @@ impl NativeFunction for StartsWith {
             s.starts_with(prefix.as_str()),
         )))
     }
-
-    fn signature(&self) -> &'static str {
-        "startsWith(String[1], String[1]): Boolean[1]"
-    }
 }
 
 /// Pure `endsWith(String[1], String[1]): Boolean[1]`
@@ -205,10 +185,6 @@ impl NativeFunction for EndsWith {
         let s = values[0].as_string()?;
         let suffix = values[1].as_string()?;
         Ok(Evaluated::new(Value::Boolean(s.ends_with(suffix.as_str()))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "endsWith(String[1], String[1]): Boolean[1]"
     }
 }
 
@@ -252,10 +228,6 @@ impl NativeFunction for IndexOf {
             .map_or(-1, |i| (i + from) as i64);
         Ok(Evaluated::new(Value::Integer(idx)))
     }
-
-    fn signature(&self) -> &'static str {
-        "indexOf(String[1], String[1] [, Integer[1]]): Integer[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -279,10 +251,6 @@ impl NativeFunction for ToLower {
             s.to_lowercase(),
         ))))
     }
-
-    fn signature(&self) -> &'static str {
-        "toLower(String[1]): String[1]"
-    }
 }
 
 /// Pure `toUpper(String[1]): String[1]`
@@ -302,10 +270,6 @@ impl NativeFunction for ToUpper {
             s.to_uppercase(),
         ))))
     }
-
-    fn signature(&self) -> &'static str {
-        "toUpper(String[1]): String[1]"
-    }
 }
 
 /// Pure `trim(String[1]): String[1]`
@@ -322,10 +286,6 @@ impl NativeFunction for Trim {
         expect_args("trim", &values, 1)?;
         let s = values[0].as_string()?;
         Ok(Evaluated::new(Value::String(SmolStr::new(s.trim()))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "trim(String[1]): String[1]"
     }
 }
 
@@ -360,10 +320,6 @@ impl NativeFunction for ToString {
         expect_args("toString", &values, 1)?;
         let s = pure_to_string(&values[0], ctx)?;
         Ok(Evaluated::new(Value::String(SmolStr::new(s))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "toString(Any[1]): String[1]"
     }
 }
 
@@ -784,10 +740,6 @@ impl NativeFunction for Format {
 
         Ok(Evaluated::new(Value::String(SmolStr::new(result))))
     }
-
-    fn signature(&self) -> &'static str {
-        "format(String[1], Any[*]): String[1]"
-    }
 }
 
 /// Format a [`PureDate`] with a Java-SimpleDateFormat-like pattern.
@@ -940,10 +892,6 @@ impl NativeFunction for Ltrim {
         let s = values[0].as_string()?;
         Ok(Evaluated::new(Value::String(SmolStr::new(s.trim_start()))))
     }
-
-    fn signature(&self) -> &'static str {
-        "ltrim(String[1]): String[1]"
-    }
 }
 
 /// Pure `rtrim(String[1]): String[1]` — remove trailing whitespace.
@@ -960,10 +908,6 @@ impl NativeFunction for Rtrim {
         expect_args("rtrim", &values, 1)?;
         let s = values[0].as_string()?;
         Ok(Evaluated::new(Value::String(SmolStr::new(s.trim_end()))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "rtrim(String[1]): String[1]"
     }
 }
 
@@ -988,10 +932,6 @@ impl NativeFunction for ReverseString {
         let s = values[0].as_string()?;
         let reversed: String = s.chars().rev().collect();
         Ok(Evaluated::new(Value::String(SmolStr::new(reversed))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "reverseString(String[1]): String[1]"
     }
 }
 
@@ -1019,10 +959,6 @@ impl NativeFunction for Replace {
             .as_str()
             .replace(target.as_str(), replacement.as_str());
         Ok(Evaluated::new(Value::String(SmolStr::new(out))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "replace(String[1], String[1], String[1]): String[1]"
     }
 }
 
@@ -1089,10 +1025,6 @@ impl NativeFunction for JoinStrings {
         };
         Ok(Evaluated::new(Value::String(SmolStr::new(result))))
     }
-
-    fn signature(&self) -> &'static str {
-        "joinStrings(String[*], String[1]): String[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1123,10 +1055,6 @@ impl NativeFunction for Split {
             .map(|p| Value::String(SmolStr::new(p)))
             .collect();
         Ok(Evaluated::new(Value::from_vec(parts)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "split(String[1], String[1]):String[*]"
     }
 }
 
@@ -1200,10 +1128,6 @@ impl NativeFunction for ParseDecimal {
             ))
             .into()),
         }
-    }
-
-    fn signature(&self) -> &'static str {
-        "parseDecimal(String[1], Integer[0..1], Integer[0..1]):Decimal[1]"
     }
 }
 

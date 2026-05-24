@@ -324,11 +324,6 @@ pub trait NativeFunction: fmt::Debug {
         args: &[ValueSpec],
         ctx: &mut dyn EvalContextTrait,
     ) -> Result<Evaluated, PureException>;
-
-    /// The Pure function signature, for documentation and error messages.
-    ///
-    /// Example: `"plus(Integer[1], Integer[1]): Integer[1]"`
-    fn signature(&self) -> &'static str;
 }
 
 // ---------------------------------------------------------------------------
@@ -929,10 +924,6 @@ mod tests {
             _ctx: &mut dyn EvalContextTrait,
         ) -> Result<Evaluated, PureException> {
             Ok(Evaluated::new(self.0.clone()))
-        }
-
-        fn signature(&self) -> &'static str {
-            "constant(): Any[1]"
         }
     }
 

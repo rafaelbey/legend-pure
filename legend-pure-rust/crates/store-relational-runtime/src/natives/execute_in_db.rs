@@ -50,8 +50,4 @@ impl NativeFunction for ExecuteInDb {
         let rs = backend.run_sql_to_result_set(ctx, &sql)?;
         Ok(Evaluated::new(rs))
     }
-
-    fn signature(&self) -> &'static str {
-        "executeInDb(String[1], DatabaseConnection[1], Integer[1], Integer[1]): ResultSet[1]"
-    }
 }

@@ -45,8 +45,4 @@ impl NativeFunction for Descending {
             ctx, args, "DESC",
         )?)))
     }
-
-    fn signature(&self) -> &'static str {
-        "descending(ColSpec<T>[1]):SortInfo<T>[1]"
-    }
 }

@@ -77,10 +77,6 @@ impl NativeFunction for LoadValuesToDbTable {
         backend.execute_batch(ctx, &sql)?;
         Ok(Evaluated::new(Value::Unit))
     }
-
-    fn signature(&self) -> &'static str {
-        "loadValuesToDbTable(List<List<Any>>[*|1], Table[1], DatabaseConnection[1]): Nil[0]"
-    }
 }
 
 /// Read the `name` property off a `Table` heap row.

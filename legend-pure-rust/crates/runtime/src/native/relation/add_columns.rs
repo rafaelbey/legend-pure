@@ -125,8 +125,4 @@ impl NativeFunction for AddColumns {
         }
         Ok(Evaluated::new(Value::Object(new_rt)))
     }
-
-    fn signature(&self) -> &'static str {
-        "addColumns(RelationType<Any>[1], ColSpecArray<Any>[1]):RelationType<Any>[1]"
-    }
 }

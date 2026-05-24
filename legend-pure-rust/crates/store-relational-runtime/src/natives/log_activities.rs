@@ -56,8 +56,4 @@ impl NativeFunction for LogActivities {
         // `Nil[0]` is the empty collection.
         Ok(Evaluated::new(Value::from_vec(Vec::new())))
     }
-
-    fn signature(&self) -> &'static str {
-        "logActivities(Activity[*]):Nil[0]"
-    }
 }

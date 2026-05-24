@@ -61,10 +61,6 @@ impl NativeFunction for Assert {
             Err(PureRuntimeError::AssertionFailed(msg).into())
         }
     }
-
-    fn signature(&self) -> &'static str {
-        "assert(Boolean[1], Function<{->String[1]}>[1]): Boolean[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -101,10 +97,6 @@ impl NativeFunction for ExecuteTest {
 
         let (status, message) = classify_outcome(result);
         build_test_result(ctx, fqn, status, elapsed, message)
-    }
-
-    fn signature(&self) -> &'static str {
-        "executeTest(testFn:Function<{->Any[*]}>[1]): TestResult[1]"
     }
 }
 
@@ -158,10 +150,6 @@ impl NativeFunction for ExecutePCTTest {
         let (status, message) = classify_outcome(result);
         let (final_status, final_message) = apply_exclusion(&fqn, status, message, &exclusions_val);
         build_test_result(ctx, fqn, final_status, elapsed, final_message)
-    }
-
-    fn signature(&self) -> &'static str {
-        "executePCTTest(testFn:Function<Any>[1], adapter:Function<Any>[1], exclusions:Map<Function<Any>,String>[1]): TestResult[1]"
     }
 }
 
@@ -445,10 +433,6 @@ impl NativeFunction for AssertError {
             }
         }
     }
-
-    fn signature(&self) -> &'static str {
-        "assertError(f:Function<{->Any[*]}>[1], message:String[1], line:Integer[0..1], column:Integer[0..1]):Boolean[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -576,10 +560,6 @@ impl NativeFunction for LoadPCTManifest {
             ))
         })?;
         build_pct_manifest(ctx, &path, &parsed)
-    }
-
-    fn signature(&self) -> &'static str {
-        "loadPCTManifest(manifestPath:String[1]):PCTManifest[1]"
     }
 }
 

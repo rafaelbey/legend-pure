@@ -111,10 +111,6 @@ impl NativeFunction for Rename {
             .map_err(PureException::from)?;
         Ok(Evaluated::new(Value::Object(tds_handle)))
     }
-
-    fn signature(&self) -> &'static str {
-        "rename(Relation<T>[1], ColSpec<Z>[1], ColSpec<V>[1]):Relation<T-Z+V>[1]"
-    }
 }
 
 /// Read a single-column `ColSpec`'s `name:String[1]` slot. The runtime

@@ -58,10 +58,6 @@ impl NativeFunction for CreateTempTable {
         let db_conn = ctx.evaluate(&args[3])?.into_value();
         do_create_temp_table(name, cols, sql_lambda, db_conn, false, ctx)
     }
-
-    fn signature(&self) -> &'static str {
-        "createTempTable(String[1], Column[*], Function[1], DatabaseConnection[1]): Nil[0]"
-    }
 }
 
 /// `createTempTable(name, cols, sqlBuilder, relyOnFinally, dbConn) -> Nil`.
@@ -95,10 +91,6 @@ impl NativeFunction for CreateTempTableWithFinally {
         let db_conn = ctx.evaluate(&args[4])?.into_value();
         do_create_temp_table(name, cols, sql_lambda, db_conn, rely_on_finally, ctx)
     }
-
-    fn signature(&self) -> &'static str {
-        "createTempTable(String[1], Column[*], Function[1], Boolean[1], DatabaseConnection[1]): Nil[0]"
-    }
 }
 
 /// `dropTempTable(name, dbConn) -> Nil`.
@@ -123,10 +115,6 @@ impl NativeFunction for DropTempTable {
         let sql = format!("DROP TABLE {}", quote_ident(&name));
         backend.execute_batch(ctx, &sql)?;
         Ok(Evaluated::new(Value::Unit))
-    }
-
-    fn signature(&self) -> &'static str {
-        "dropTempTable(String[1], DatabaseConnection[1]): Nil[0]"
     }
 }
 

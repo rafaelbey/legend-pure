@@ -75,10 +75,6 @@ impl NativeFunction for FetchDbTablesMetaData {
         let rs = backend.run_sql_to_result_set(ctx, &sql)?;
         Ok(Evaluated::new(rs))
     }
-
-    fn signature(&self) -> &'static str {
-        "fetchDbTablesMetaData(DatabaseConnection[1], String[0..1], String[0..1]): ResultSet[1]"
-    }
 }
 
 // ---------------------------------------------------------------------
@@ -131,10 +127,6 @@ impl NativeFunction for FetchDbColumnsMetaData {
         let rs = backend.run_sql_to_result_set(ctx, &sql)?;
         Ok(Evaluated::new(rs))
     }
-
-    fn signature(&self) -> &'static str {
-        "fetchDbColumnsMetaData(DatabaseConnection[1], String[0..1], String[0..1], String[0..1]): ResultSet[1]"
-    }
 }
 
 // ---------------------------------------------------------------------
@@ -171,10 +163,6 @@ impl NativeFunction for FetchDbSchemasMetaData {
         let backend = resolve_backend("fetchDbSchemasMetaData", &db_conn, ctx)?;
         let rs = backend.run_sql_to_result_set(ctx, &sql)?;
         Ok(Evaluated::new(rs))
-    }
-
-    fn signature(&self) -> &'static str {
-        "fetchDbSchemasMetaData(DatabaseConnection[1], String[0..1]): ResultSet[1]"
     }
 }
 
@@ -231,10 +219,6 @@ impl NativeFunction for FetchDbPrimaryKeysMetaData {
         let backend = resolve_backend("fetchDbPrimaryKeysMetaData", &db_conn, ctx)?;
         let rs = backend.run_sql_to_result_set(ctx, &sql)?;
         Ok(Evaluated::new(rs))
-    }
-
-    fn signature(&self) -> &'static str {
-        "fetchDbPrimaryKeysMetaData(DatabaseConnection[1], String[0..1], String[1]): ResultSet[1]"
     }
 }
 
@@ -297,10 +281,6 @@ impl NativeFunction for FetchDbImportedKeysMetaData {
         let backend = resolve_backend("fetchDbImportedKeysMetaData", &db_conn, ctx)?;
         let rs = backend.run_sql_to_result_set(ctx, &sql)?;
         Ok(Evaluated::new(rs))
-    }
-
-    fn signature(&self) -> &'static str {
-        "fetchDbImportedKeysMetaData(DatabaseConnection[1], String[0..1], String[1]): ResultSet[1]"
     }
 }
 

@@ -50,10 +50,6 @@ impl NativeFunction for And {
         let rhs = ctx.evaluate(&args[1])?.as_boolean()?;
         Ok(Evaluated::new(Value::Boolean(rhs)))
     }
-
-    fn signature(&self) -> &'static str {
-        "and(Boolean[1], Boolean[1]): Boolean[1]"
-    }
 }
 
 /// Pure `or(Boolean[1], Boolean[1]): Boolean[1]` — short-circuit.
@@ -76,10 +72,6 @@ impl NativeFunction for Or {
         let rhs = ctx.evaluate(&args[1])?.as_boolean()?;
         Ok(Evaluated::new(Value::Boolean(rhs)))
     }
-
-    fn signature(&self) -> &'static str {
-        "or(Boolean[1], Boolean[1]): Boolean[1]"
-    }
 }
 
 /// Pure `not(Boolean[1]): Boolean[1]`
@@ -95,10 +87,6 @@ impl NativeFunction for Not {
         expect_args("not", args, 1)?;
         let a = ctx.evaluate(&args[0])?.as_boolean()?;
         Ok(Evaluated::new(Value::Boolean(!a)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "not(Boolean[1]): Boolean[1]"
     }
 }
 

@@ -93,10 +93,6 @@ impl NativeFunction for Sort {
             .map_err(PureException::from)?;
         Ok(Evaluated::new(Value::Object(tds_handle)))
     }
-
-    fn signature(&self) -> &'static str {
-        "sort(Relation<T>[1], SortInfo<T>[*]):Relation<T>[1]"
-    }
 }
 
 /// One sort key resolved against the source TDS: the column's index in

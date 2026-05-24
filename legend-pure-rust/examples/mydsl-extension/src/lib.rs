@@ -63,10 +63,6 @@ impl NativeFunction for GreetNative {
             format!("hello, {name}").into(),
         )))
     }
-
-    fn signature(&self) -> &'static str {
-        "greet(String[1]): String[1]"
-    }
 }
 
 /// Native-function provider — self-registered via the

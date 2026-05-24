@@ -42,10 +42,6 @@ impl NativeFunction for ConstantNative {
     ) -> Result<Evaluated, PureException> {
         Ok(Evaluated::new(Value::Integer(self.0)))
     }
-
-    fn signature(&self) -> &'static str {
-        "ext_constant__Integer_1_"
-    }
 }
 
 /// A test extension that contributes one native under a unique key.
@@ -124,14 +120,12 @@ fn later_extension_overrides_earlier() {
     }
 
     // Both extensions register under "shared_key__Integer_1_"; ExtB lands second.
-    let registry = NativeRegistry::with_extensions(&[&ExtA, &ExtB]);
-    let func = registry
-        .get("shared_key__Integer_1_")
-        .expect("shared key should be registered");
-    // Signature is the same for both ConstantNative instances; we can't
-    // distinguish which native won via the signature alone. The
-    // last-wins semantic is enforced at the HashMap layer (insert
+    // The last-wins semantic is enforced at the HashMap layer (insert
     // overwrites) and locked by the `register` contract; this test
     // confirms the SPI doesn't panic or duplicate on key collision.
-    assert_eq!(func.signature(), "ext_constant__Integer_1_");
+    let registry = NativeRegistry::with_extensions(&[&ExtA, &ExtB]);
+    assert!(
+        registry.get("shared_key__Integer_1_").is_some(),
+        "shared key should be registered after collision"
+    );
 }

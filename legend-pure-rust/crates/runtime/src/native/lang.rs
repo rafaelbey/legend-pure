@@ -63,10 +63,6 @@ impl NativeFunction for LetFunction {
         ctx.context_mut().set(name.clone(), value.clone());
         Ok(Evaluated::new(value))
     }
-
-    fn signature(&self) -> &'static str {
-        "letFunction(String[1], T[m]): T[m]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -94,10 +90,6 @@ impl NativeFunction for If {
         // as zero-parameter `Lambda` wrappers. `force_thunk` unwraps that so
         // the caller gets the branch's value, not the closure itself.
         crate::native::force_thunk(branch, ctx)
-    }
-
-    fn signature(&self) -> &'static str {
-        "if(Boolean[1], Function<{->T[m]}>[1], Function<{->T[m]}>[1]): T[m]"
     }
 }
 
@@ -129,10 +121,6 @@ impl NativeFunction for Eval {
         let func = &values[0];
         let params = &values[1..];
         Ok(Evaluated::new(ctx.call_function(func, params)?))
-    }
-
-    fn signature(&self) -> &'static str {
-        "eval(Function[1], ...): Any[*]"
     }
 }
 
@@ -186,10 +174,6 @@ impl NativeFunction for Evaluate {
             }
         }
         Ok(Evaluated::new(ctx.call_function(&func, &params)?))
-    }
-
-    fn signature(&self) -> &'static str {
-        "evaluate(func:Function<Any>[1], params:List<Any>[*]):Any[*]"
     }
 }
 
@@ -255,10 +239,6 @@ impl NativeFunction for Print {
             other => ctx.console_output(&render_for_print(other)),
         }
         Ok(Evaluated::new(Value::Unit))
-    }
-
-    fn signature(&self) -> &'static str {
-        "print(param:Any[*], max:Integer[1]):Nil[0]"
     }
 }
 
@@ -390,10 +370,6 @@ impl NativeFunction for New {
         ConstructionFrame::drain_if_outermost(ctx)?;
         Ok(result)
     }
-
-    fn signature(&self) -> &'static str {
-        "new<T>(class:Class<T>[1], id:String[1], keyExpressions:KeyExpression[*]):T[1]"
-    }
 }
 
 /// Pure
@@ -467,10 +443,6 @@ impl NativeFunction for NewWithKeyExpressions {
         )?;
         ConstructionFrame::drain_if_outermost(ctx)?;
         Ok(result)
-    }
-
-    fn signature(&self) -> &'static str {
-        "new<T>(class:Class<T>[1], id:String[1], keyExpressions:KeyExpression[*]):T[1]"
     }
 }
 
@@ -1186,10 +1158,6 @@ impl NativeFunction for Copy {
 
         Ok(Evaluated::new(Value::Object(obj)))
     }
-
-    fn signature(&self) -> &'static str {
-        "copy<T>(source:T[1], keyExpressions:KeyExpression[*]):T[1]"
-    }
 }
 
 /// Pure
@@ -1408,10 +1376,6 @@ impl NativeFunction for DynamicNew {
         ConstructionFrame::drain_if_outermost(ctx)?;
 
         Ok(Evaluated::new(result_value))
-    }
-
-    fn signature(&self) -> &'static str {
-        "dynamicNew(class:Class[1]|GenericType[1], kvs:KeyValue[*]):Any[1]"
     }
 }
 
@@ -2222,10 +2186,6 @@ impl NativeFunction for GetAll {
         let instances = gather_all_instances(ctx, class_id)?;
         Ok(Evaluated::new(Value::from_vec(instances)))
     }
-
-    fn signature(&self) -> &'static str {
-        "getAll(class:Class<T>[1]):T[*]"
-    }
 }
 
 /// Gather every live instance whose classifier matches `class_id`.
@@ -2352,10 +2312,6 @@ impl NativeFunction for GetAllVersions {
         let instances = gather_all_instances(ctx, class_id)?;
         Ok(Evaluated::new(Value::from_vec(instances)))
     }
-
-    fn signature(&self) -> &'static str {
-        "getAllVersions(class:Class<T>[1]):T[*]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2414,10 +2370,6 @@ impl NativeFunction for GetAllWithDate {
             .collect();
         Ok(Evaluated::new(Value::from_vec(filtered)))
     }
-
-    fn signature(&self) -> &'static str {
-        "getAll(class:Class<T>[1], milestoningDate:Date[1]):T[*]"
-    }
 }
 
 /// Pure `getAll<T>(Class<T>[1], Date[1], Date[1]): T[*]` — bitemporal
@@ -2465,10 +2417,6 @@ impl NativeFunction for GetAllBitemporal {
             .collect();
         Ok(Evaluated::new(Value::from_vec(filtered)))
     }
-
-    fn signature(&self) -> &'static str {
-        "getAll(class:Class<T>[1], processingDate:Date[1], businessDate:Date[1]):T[*]"
-    }
 }
 
 /// Pure `getAllVersionsInRange<T>(Class<T>[1], Date[1], Date[1]): T[*]`.
@@ -2514,10 +2462,6 @@ impl NativeFunction for GetAllVersionsInRange {
             .filter(|v| instance_property_date_in_range(v, date_property, &start, &end))
             .collect();
         Ok(Evaluated::new(Value::from_vec(filtered)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "getAllVersionsInRange(class:Class<T>[1], start:Date[1], end:Date[1]):T[*]"
     }
 }
 
@@ -2637,10 +2581,6 @@ impl NativeFunction for RemoveOverride {
         }
         Ok(Evaluated::new(values[0].clone()))
     }
-
-    fn signature(&self) -> &'static str {
-        "removeOverride(T[1]):T[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2711,10 +2651,6 @@ impl NativeFunction for RawEvalProperty {
         }
         let collected: Vec<Value> = target_values.iter().cloned().collect();
         Ok(Evaluated::new(Value::from_vec(collected)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "rawEvalProperty(Property<Nil,V|m>[1], Any[1]):V[m]"
     }
 }
 

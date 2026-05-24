@@ -153,10 +153,6 @@ impl NativeFunction for Now {
         .map(Value::Date)?;
         Ok(Evaluated::new(result))
     }
-
-    fn signature(&self) -> &'static str {
-        "now(): DateTime[1]"
-    }
 }
 
 /// Pure `today(): StrictDate[1]` — today's calendar date, UTC.
@@ -179,10 +175,6 @@ impl NativeFunction for Today {
         let result = PureDate::strict_date(d.year(), d.month(), d.day()).map(Value::Date)?;
         Ok(Evaluated::new(result))
     }
-
-    fn signature(&self) -> &'static str {
-        "today(): StrictDate[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -203,10 +195,6 @@ impl NativeFunction for Year {
         expect_args("year", &values, 1)?;
         let d = values[0].as_date()?;
         Ok(Evaluated::new(Value::Integer(i64::from(d.get_year()))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "year(Date[1]): Integer[1]"
     }
 }
 
@@ -230,10 +218,6 @@ impl NativeFunction for MonthNumber {
             )
             .into()),
         }
-    }
-
-    fn signature(&self) -> &'static str {
-        "monthNumber(Date[1]): Integer[1]"
     }
 }
 
@@ -263,10 +247,6 @@ impl NativeFunction for DayOfMonth {
             .into()),
         }
     }
-
-    fn signature(&self) -> &'static str {
-        "dayOfMonth(Date[1]): Integer[1]"
-    }
 }
 
 /// Pure `hour(DateTime[1]): Integer[1]`. Throws "Cannot get hour for
@@ -289,10 +269,6 @@ impl NativeFunction for Hour {
                 Err(PureRuntimeError::EvaluationError(format!("Cannot get hour for {d}")).into())
             }
         }
-    }
-
-    fn signature(&self) -> &'static str {
-        "hour(DateTime[1]): Integer[1]"
     }
 }
 
@@ -317,10 +293,6 @@ impl NativeFunction for Minute {
             }
         }
     }
-
-    fn signature(&self) -> &'static str {
-        "minute(DateTime[1]): Integer[1]"
-    }
 }
 
 /// Pure `second(DateTime[1]): Integer[1]`. Throws "Cannot get second
@@ -343,10 +315,6 @@ impl NativeFunction for Second {
                 Err(PureRuntimeError::EvaluationError(format!("Cannot get second for {d}")).into())
             }
         }
-    }
-
-    fn signature(&self) -> &'static str {
-        "second(DateTime[1]): Integer[1]"
     }
 }
 
@@ -384,10 +352,6 @@ impl NativeFunction for DatePart {
         let year = d.get_year();
         let result = PureDate::strict_date(year, month, day).map(Value::Date)?;
         Ok(Evaluated::new(result))
-    }
-
-    fn signature(&self) -> &'static str {
-        "datePart(Date[1]): StrictDate[1]"
     }
 }
 
@@ -553,10 +517,6 @@ impl NativeFunction for DateDiff {
             Ok(Evaluated::new(Value::Integer(v)))
         }
     }
-
-    fn signature(&self) -> &'static str {
-        "dateDiff(Date[1], Date[1], DurationUnit[1]): Integer[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -598,10 +558,6 @@ impl NativeFunction for Adjust {
         }?;
         Ok(Evaluated::new(Value::Date(new_date)))
     }
-
-    fn signature(&self) -> &'static str {
-        "adjust(Date[1], Integer[1], DurationUnit[1]): Date[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -641,10 +597,6 @@ impl NativeFunction for HasMonth {
             DatePrecision::Month,
         ))))
     }
-
-    fn signature(&self) -> &'static str {
-        "hasMonth(Date[1]): Boolean[1]"
-    }
 }
 
 /// Pure `hasDay(Date[1]): Boolean[1]`.
@@ -665,10 +617,6 @@ impl NativeFunction for HasDay {
             DatePrecision::Day,
         ))))
     }
-
-    fn signature(&self) -> &'static str {
-        "hasDay(Date[1]): Boolean[1]"
-    }
 }
 
 /// Pure `hasHour(Date[1]): Boolean[1]`.
@@ -685,10 +633,6 @@ impl NativeFunction for HasHour {
         expect_args("hasHour", &values, 1)?;
         let d = values[0].as_date()?;
         Ok(Evaluated::new(Value::Boolean(d.has_time())))
-    }
-
-    fn signature(&self) -> &'static str {
-        "hasHour(Date[1]): Boolean[1]"
     }
 }
 
@@ -710,10 +654,6 @@ impl NativeFunction for HasMinute {
             DatePrecision::Time(tp) if tp >= TimePrecision::Minute
         ))))
     }
-
-    fn signature(&self) -> &'static str {
-        "hasMinute(Date[1]): Boolean[1]"
-    }
 }
 
 /// Pure `hasSecond(Date[1]): Boolean[1]`.
@@ -734,10 +674,6 @@ impl NativeFunction for HasSecond {
             DatePrecision::Time(tp) if tp >= TimePrecision::Second
         ))))
     }
-
-    fn signature(&self) -> &'static str {
-        "hasSecond(Date[1]): Boolean[1]"
-    }
 }
 
 /// Pure `hasSubsecond(Date[1]): Boolean[1]`.
@@ -757,10 +693,6 @@ impl NativeFunction for HasSubsecond {
             d.precision(),
             DatePrecision::Time(TimePrecision::Subsecond(_))
         ))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "hasSubsecond(Date[1]): Boolean[1]"
     }
 }
 
@@ -787,10 +719,6 @@ impl NativeFunction for HasSubsecondWithAtLeastPrecision {
             _ => return Ok(Evaluated::new(Value::Boolean(false))),
         };
         Ok(Evaluated::new(Value::Boolean(have >= required)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "hasSubsecondWithAtLeastPrecision(Date[1], Integer[1]): Boolean[1]"
     }
 }
 
@@ -827,10 +755,6 @@ impl NativeFunction for ParseDate {
             PureRuntimeError::EvaluationError(format!("parseDate: invalid date string {s:?}"))
         })?;
         Ok(Evaluated::new(Value::Date(date)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "parseDate(String[1]): Date[1]"
     }
 }
 
@@ -1197,10 +1121,6 @@ impl NativeFunction for DateConstruct {
         .map(Value::Date)
         .map(Evaluated::new)
         .map_err(|e| translate_date_error(e, &values).into())
-    }
-
-    fn signature(&self) -> &'static str {
-        "date(Integer[1], ...): Date[1]"
     }
 }
 

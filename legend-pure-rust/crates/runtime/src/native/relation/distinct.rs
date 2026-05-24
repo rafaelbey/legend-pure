@@ -75,8 +75,4 @@ impl NativeFunction for Distinct {
             .map_err(PureException::from)?;
         Ok(Evaluated::new(Value::Object(tds_handle)))
     }
-
-    fn signature(&self) -> &'static str {
-        "distinct(Relation<T>[1]):Relation<T>[1]"
-    }
 }

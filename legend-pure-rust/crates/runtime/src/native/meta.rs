@@ -69,10 +69,6 @@ impl NativeFunction for PathToElement {
             .into()),
         }
     }
-
-    fn signature(&self) -> &'static str {
-        "pathToElement(path:String[1], separator:String[1]):PackageableElement[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -100,10 +96,6 @@ impl NativeFunction for LenientPathToElement {
             Some(id) => Ok(Evaluated::new(Value::Element(id))),
             None => Ok(Evaluated::new(Value::Unit)),
         }
-    }
-
-    fn signature(&self) -> &'static str {
-        "lenientPathToElement(path:String[1], separator:String[1]):PackageableElement[0..1]"
     }
 }
 
@@ -146,10 +138,6 @@ impl NativeFunction for ElementToPath {
             }
         };
         Ok(Evaluated::new(Value::String(SmolStr::new(path))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "elementToPath(element:PackageableElement[1], separator:String[1], includeRoot:Boolean[1]):String[1]"
     }
 }
 
@@ -240,10 +228,6 @@ impl NativeFunction for SourceInformation {
         )?;
         Ok(Evaluated::new(Value::Object(obj)))
     }
-
-    fn signature(&self) -> &'static str {
-        "sourceInformation(node:Any[1]):SourceInformation[0..1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -273,10 +257,6 @@ impl NativeFunction for InstanceOf {
             type_id,
             ctx.heap(),
         ))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "instanceOf(Any[1], Type[1]):Boolean[1]"
     }
 }
 
@@ -351,10 +331,6 @@ impl NativeFunction for Cast {
             evaluate_primitive_constraints(ctx, type_id, v, &type_value_args)?;
         }
         Ok(Evaluated::new(subject))
-    }
-
-    fn signature(&self) -> &'static str {
-        "cast<V|m>(p:Any[m], typ:V[1]):V[m]"
     }
 }
 
@@ -598,10 +574,6 @@ impl NativeFunction for Match {
         ))
         .into())
     }
-
-    fn signature(&self) -> &'static str {
-        "match<T,P|m,n,o>(var:Any[*], functions:Function<{Nil[n] [, P[o]] -> T[m]}>[1..*] [, with:P[o]]):T[m]"
-    }
 }
 
 /// Decode a [`Multiplicity`] into concrete `[lower, upper]` bounds.
@@ -644,10 +616,6 @@ impl NativeFunction for Id {
         let s = render_id(&values[0], ctx.model());
         Ok(Evaluated::new(Value::String(SmolStr::new(s))))
     }
-
-    fn signature(&self) -> &'static str {
-        "id(Any[1]):String[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -674,10 +642,6 @@ impl NativeFunction for TypeOf {
         expect_args("type", &values, 1)?;
         let type_id = resolve_value_type(&values[0], ctx.model(), ctx.heap())?;
         Ok(Evaluated::new(Value::Element(type_id)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "type(Any[1]):Type[1]"
     }
 }
 
@@ -798,10 +762,6 @@ impl NativeFunction for GenericTypeOf {
                 .mutate_add(&obj, "typeArguments", &[Value::Object(arg_gt)])?;
         }
         Ok(Evaluated::new(Value::Object(obj)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "genericType(Any[1]):GenericType[1]"
     }
 }
 
@@ -968,10 +928,6 @@ impl NativeFunction for RawType {
             None => Ok(Evaluated::new(Value::Unit)),
         }
     }
-
-    fn signature(&self) -> &'static str {
-        "rawType(GenericType[1]):Type[0..1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1002,10 +958,6 @@ impl NativeFunction for EnumName {
             ))),
             _ => Err(PureRuntimeError::type_mismatch("Enumeration", &values[0]).into()),
         }
-    }
-
-    fn signature(&self) -> &'static str {
-        "enumName(Enumeration<Any>[1]):String[1]"
     }
 }
 
@@ -1044,10 +996,6 @@ impl NativeFunction for EnumValues {
             .collect();
         Ok(Evaluated::new(Value::from_vec(enum_values)))
     }
-
-    fn signature(&self) -> &'static str {
-        "enumValues<T>(Enumeration<T>[1]):T[*]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1075,10 +1023,6 @@ impl NativeFunction for ToRepresentation {
         expect_args("toRepresentation", &values, 1)?;
         let s = render_representation(&values[0], ctx.model(), ctx.heap());
         Ok(Evaluated::new(Value::String(SmolStr::new(s))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "toRepresentation(Any[1]):String[1]"
     }
 }
 
@@ -1112,10 +1056,6 @@ impl NativeFunction for SubTypeOf {
             parent,
             ctx.model(),
         ))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "subTypeOf(Type[1], Type[1]):Boolean[1]"
     }
 }
 
@@ -1897,10 +1837,6 @@ impl NativeFunction for Generalizations {
             chain.into_iter().map(Value::Element).collect(),
         )))
     }
-
-    fn signature(&self) -> &'static str {
-        "generalizations(class:Type[1]):Type[1..*]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1942,10 +1878,6 @@ impl NativeFunction for ExtractEnumValue {
             member: SmolStr::new(name),
         }))
     }
-
-    fn signature(&self) -> &'static str {
-        "extractEnumValue(Enumeration[1], String[1]):T[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1985,10 +1917,6 @@ impl NativeFunction for CanReactivateDynamically {
         let values = force_all(args, ctx)?;
         expect_args("canReactivateDynamically", &values, 1)?;
         Ok(Evaluated::new(Value::Boolean(true)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "canReactivateDynamically(vs:ValueSpecification[1]):Boolean[1]"
     }
 }
 
@@ -2094,10 +2022,6 @@ impl NativeFunction for EvaluateAndDeactivate {
             return Ok(Evaluated::new(value));
         }
         Ok(Evaluated::new(instance_value_wrap(value, ctx)?))
-    }
-
-    fn signature(&self) -> &'static str {
-        "evaluateAndDeactivate<T|m>(var:T[m]):T[m]"
     }
 }
 
@@ -2261,10 +2185,6 @@ impl NativeFunction for Deactivate {
             .into());
         }
         Ok(Evaluated::new(deactivate_spec(&args[0], ctx)?))
-    }
-
-    fn signature(&self) -> &'static str {
-        "deactivate(var:Any[*]):ValueSpecification[1]"
     }
 }
 
@@ -2613,10 +2533,6 @@ impl NativeFunction for OpenVariableValues {
             }),
         ))))
     }
-
-    fn signature(&self) -> &'static str {
-        "openVariableValues(f:Function<Any>[1]):Map<String, List<Any>>[1]"
-    }
 }
 
 /// Pure `genericTypeClass(g:GenericType[1]):Class<Any>[0..1]`
@@ -2657,10 +2573,6 @@ impl NativeFunction for GenericTypeClass {
             Element::Class(_) => Ok(Evaluated::new(Value::Element(id))),
             _ => Ok(Evaluated::new(Value::Unit)),
         }
-    }
-
-    fn signature(&self) -> &'static str {
-        "genericTypeClass(g:GenericType[1]):Class<Any>[0..1]"
     }
 }
 
@@ -2767,10 +2679,6 @@ impl NativeFunction for ElementPath {
         let items: Vec<Value> = chain.into_iter().map(Value::Element).collect();
         Ok(Evaluated::new(Value::from_vec(items)))
     }
-
-    fn signature(&self) -> &'static str {
-        "elementPath(element:PackageableElement[1]):PackageableElement[1..*]"
-    }
 }
 
 /// Pure `reactivate(vs:ValueSpecification[1], vars:Map<String, List<Any>>[1]):Any[*]`
@@ -2808,10 +2716,6 @@ impl NativeFunction for Reactivate {
         let spec = values[0].clone();
         let vars = build_vars_from_pure_map(&values[1], ctx)?;
         Ok(Evaluated::new(reactivate_value(&spec, &vars, ctx)?))
-    }
-
-    fn signature(&self) -> &'static str {
-        "reactivate(vs:ValueSpecification[1], vars:Map<String, List<Any>>[1]):Any[*]"
     }
 }
 
@@ -3261,10 +3165,6 @@ impl NativeFunction for NewUnit {
             inner: Box::new(values[1].clone()),
         }))
     }
-
-    fn signature(&self) -> &'static str {
-        "newUnit(type:Unit[1], value:Number[1]):Any[1]"
-    }
 }
 
 /// Pure `getUnitValue(unit:Any[1]):Number[1]`
@@ -3290,10 +3190,6 @@ impl NativeFunction for GetUnitValue {
             ))
             .into()),
         }
-    }
-
-    fn signature(&self) -> &'static str {
-        "getUnitValue(unit:Any[1]):Number[1]"
     }
 }
 
@@ -3422,10 +3318,6 @@ impl NativeFunction for StereotypeLookup {
             .mutate_add(&obj, "profile", &[Value::Element(profile_id)])?;
         Ok(Evaluated::new(Value::Object(obj)))
     }
-
-    fn signature(&self) -> &'static str {
-        "stereotype(Profile[1], String[1]):Stereotype[1]"
-    }
 }
 
 /// Pure `tag(profile:Profile[1], str:String[1]):Tag[1]`.
@@ -3464,10 +3356,6 @@ impl NativeFunction for TagLookup {
         ctx.heap_mut()
             .mutate_add(&obj, "profile", &[Value::Element(profile_id)])?;
         Ok(Evaluated::new(Value::Object(obj)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "tag(Profile[1], String[1]):Tag[1]"
     }
 }
 

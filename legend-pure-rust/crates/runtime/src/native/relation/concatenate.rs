@@ -107,8 +107,4 @@ impl NativeFunction for Concatenate {
             .map_err(PureException::from)?;
         Ok(Evaluated::new(Value::Object(tds_handle)))
     }
-
-    fn signature(&self) -> &'static str {
-        "concatenate(Relation<T>[1], Relation<T>[1]):Relation<T>[1]"
-    }
 }

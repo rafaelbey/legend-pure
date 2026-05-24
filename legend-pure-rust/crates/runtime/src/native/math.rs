@@ -110,10 +110,6 @@ impl NativeFunction for Floor {
         #[allow(clippy::cast_possible_truncation)]
         Ok(Evaluated::new(Value::Integer(x.floor() as i64)))
     }
-
-    fn signature(&self) -> &'static str {
-        "floor(Number[1]):Integer[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -135,10 +131,6 @@ impl NativeFunction for Ceiling {
         let x = number_to_f64("ceiling", &values[0])?;
         #[allow(clippy::cast_possible_truncation)]
         Ok(Evaluated::new(Value::Integer(x.ceil() as i64)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "ceiling(Number[1]):Integer[1]"
     }
 }
 
@@ -211,10 +203,6 @@ impl NativeFunction for Round {
             .into()),
         }
     }
-
-    fn signature(&self) -> &'static str {
-        "round(Number[1] [, scale:Integer[1]]) — Integer[1] / Decimal[1] / Float[1]"
-    }
 }
 
 fn scale_arg(v: &Value) -> Result<u32, PureException> {
@@ -256,10 +244,6 @@ impl NativeFunction for Sign {
         };
         Ok(Evaluated::new(Value::Integer(s)))
     }
-
-    fn signature(&self) -> &'static str {
-        "sign(Number[1]):Integer[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -295,10 +279,6 @@ impl NativeFunction for Sqrt {
         }
         Ok(Evaluated::new(Value::Float(r)))
     }
-
-    fn signature(&self) -> &'static str {
-        "sqrt(Number[1]):Float[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -320,10 +300,6 @@ impl NativeFunction for Cbrt {
         let x = number_to_f64("cbrt", &values[0])?;
         Ok(Evaluated::new(Value::Float(x.cbrt())))
     }
-
-    fn signature(&self) -> &'static str {
-        "cbrt(Number[1]):Float[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -344,10 +320,6 @@ impl NativeFunction for Exp {
         expect_args("exp", &values, 1)?;
         let x = number_to_f64("exp", &values[0])?;
         Ok(Evaluated::new(Value::Float(x.exp())))
-    }
-
-    fn signature(&self) -> &'static str {
-        "exp(Number[1]):Float[1]"
     }
 }
 
@@ -372,10 +344,6 @@ impl NativeFunction for Log {
         let x = number_to_f64("log", &values[0])?;
         Ok(Evaluated::new(Value::Float(x.ln())))
     }
-
-    fn signature(&self) -> &'static str {
-        "log(Number[1]):Float[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -396,10 +364,6 @@ impl NativeFunction for Log10 {
         expect_args("log10", &values, 1)?;
         let x = number_to_f64("log10", &values[0])?;
         Ok(Evaluated::new(Value::Float(x.log10())))
-    }
-
-    fn signature(&self) -> &'static str {
-        "log10(Number[1]):Float[1]"
     }
 }
 
@@ -423,10 +387,6 @@ impl NativeFunction for Pow {
         let exp = number_to_f64("pow", &values[1])?;
         Ok(Evaluated::new(Value::Float(base.powf(exp))))
     }
-
-    fn signature(&self) -> &'static str {
-        "pow(Number[1], Number[1]):Float[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -448,10 +408,6 @@ impl NativeFunction for Sin {
         let x = number_to_f64("sin", &values[0])?;
         Ok(Evaluated::new(Value::Float(x.sin())))
     }
-
-    fn signature(&self) -> &'static str {
-        "sin(Number[1]):Float[1]"
-    }
 }
 
 /// Pure `cos(Number[1]):Float[1]` — cosine of `x` in radians.
@@ -468,10 +424,6 @@ impl NativeFunction for Cos {
         expect_args("cos", &values, 1)?;
         let x = number_to_f64("cos", &values[0])?;
         Ok(Evaluated::new(Value::Float(x.cos())))
-    }
-
-    fn signature(&self) -> &'static str {
-        "cos(Number[1]):Float[1]"
     }
 }
 
@@ -490,10 +442,6 @@ impl NativeFunction for Tan {
         let x = number_to_f64("tan", &values[0])?;
         Ok(Evaluated::new(Value::Float(x.tan())))
     }
-
-    fn signature(&self) -> &'static str {
-        "tan(Number[1]):Float[1]"
-    }
 }
 
 /// Pure `cot(Number[1]):Float[1]` — cotangent (`1 / tan(x)`) of `x` in radians.
@@ -510,10 +458,6 @@ impl NativeFunction for Cot {
         expect_args("cot", &values, 1)?;
         let x = number_to_f64("cot", &values[0])?;
         Ok(Evaluated::new(Value::Float(1.0 / x.tan())))
-    }
-
-    fn signature(&self) -> &'static str {
-        "cot(Number[1]):Float[1]"
     }
 }
 
@@ -546,10 +490,6 @@ impl NativeFunction for Asin {
         }
         Ok(Evaluated::new(Value::Float(r)))
     }
-
-    fn signature(&self) -> &'static str {
-        "asin(Number[1]):Float[1]"
-    }
 }
 
 /// Pure `acos(Number[1]):Float[1]` — inverse cosine (radians). Inputs
@@ -577,10 +517,6 @@ impl NativeFunction for Acos {
         }
         Ok(Evaluated::new(Value::Float(r)))
     }
-
-    fn signature(&self) -> &'static str {
-        "acos(Number[1]):Float[1]"
-    }
 }
 
 /// Pure `atan(Number[1]):Float[1]` — inverse tangent (radians).
@@ -597,10 +533,6 @@ impl NativeFunction for Atan {
         expect_args("atan", &values, 1)?;
         let x = number_to_f64("atan", &values[0])?;
         Ok(Evaluated::new(Value::Float(x.atan())))
-    }
-
-    fn signature(&self) -> &'static str {
-        "atan(Number[1]):Float[1]"
     }
 }
 
@@ -620,10 +552,6 @@ impl NativeFunction for Atan2 {
         let y = number_to_f64("atan2", &values[0])?;
         let x = number_to_f64("atan2", &values[1])?;
         Ok(Evaluated::new(Value::Float(y.atan2(x))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "atan2(Number[1], Number[1]):Float[1]"
     }
 }
 
@@ -645,10 +573,6 @@ impl NativeFunction for ToFloat {
         expect_args("toFloat", &values, 1)?;
         let x = number_to_f64("toFloat", &values[0])?;
         Ok(Evaluated::new(Value::Float(x)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "toFloat(Number[1]):Float[1]"
     }
 }
 
@@ -691,10 +615,6 @@ impl NativeFunction for ToDecimal {
         }?;
         Ok(Evaluated::new(v))
     }
-
-    fn signature(&self) -> &'static str {
-        "toDecimal(Number[1]):Decimal[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -721,10 +641,6 @@ impl NativeFunction for ParseInteger {
         })?;
         Ok(Evaluated::new(Value::Integer(n)))
     }
-
-    fn signature(&self) -> &'static str {
-        "parseInteger(String[1]):Integer[1]"
-    }
 }
 
 /// Pure `parseFloat(String[1]):Float[1]` — decimal string → `Float`.
@@ -746,10 +662,6 @@ impl NativeFunction for ParseFloat {
             PureRuntimeError::EvaluationError(format!("parseFloat: cannot parse {s:?}: {e}"))
         })?;
         Ok(Evaluated::new(Value::Float(f)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "parseFloat(String[1]):Float[1]"
     }
 }
 
@@ -773,10 +685,6 @@ impl NativeFunction for Random {
     ) -> Result<Evaluated, PureException> {
         expect_args("random", args, 0)?;
         Ok(Evaluated::new(Value::Float(rand::random::<f64>())))
-    }
-
-    fn signature(&self) -> &'static str {
-        "random():Float[1]"
     }
 }
 
@@ -809,10 +717,6 @@ impl NativeFunction for ParseBoolean {
             ))),
         }?;
         Ok(Evaluated::new(Value::Boolean(b)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "parseBoolean(String[1]):Boolean[1]"
     }
 }
 

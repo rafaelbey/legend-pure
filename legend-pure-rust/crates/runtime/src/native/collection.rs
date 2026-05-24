@@ -46,10 +46,6 @@ impl NativeFunction for Size {
         #[allow(clippy::cast_possible_wrap)]
         Ok(Evaluated::new(Value::Integer(coll.len() as i64)))
     }
-
-    fn signature(&self) -> &'static str {
-        "size(Any[*]): Integer[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -69,10 +65,6 @@ impl NativeFunction for IsEmpty {
         let values = force_all(args, ctx)?;
         expect_args("isEmpty", &values, 1)?;
         Ok(Evaluated::new(Value::Boolean(values[0].is_empty())))
-    }
-
-    fn signature(&self) -> &'static str {
-        "isEmpty(Any[*]): Boolean[1]"
     }
 }
 
@@ -116,10 +108,6 @@ impl NativeFunction for At {
             .into()
         })
     }
-
-    fn signature(&self) -> &'static str {
-        "at(Any[*], Integer[1]): Any[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -145,10 +133,6 @@ impl NativeFunction for First {
         };
         Ok(Evaluated::new(result))
     }
-
-    fn signature(&self) -> &'static str {
-        "first(Any[*]): Any[0..1]"
-    }
 }
 
 /// Pure `last(Any[*]): Any[0..1]` — last element or Unit.
@@ -169,10 +153,6 @@ impl NativeFunction for Last {
             other => other.clone(),
         };
         Ok(Evaluated::new(result))
-    }
-
-    fn signature(&self) -> &'static str {
-        "last(Any[*]): Any[0..1]"
     }
 }
 
@@ -209,10 +189,6 @@ impl NativeFunction for Init {
             _ => Value::Unit,
         };
         Ok(Evaluated::new(result))
-    }
-
-    fn signature(&self) -> &'static str {
-        "init<T>(set:T[*]):T[*]"
     }
 }
 
@@ -251,10 +227,6 @@ impl NativeFunction for Tail {
         };
         Ok(Evaluated::new(result))
     }
-
-    fn signature(&self) -> &'static str {
-        "tail<T>(set:T[*]):T[*]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -290,10 +262,6 @@ impl NativeFunction for Zip {
             out.push(Value::Object(obj));
         }
         Ok(Evaluated::new(Value::from_vec(out)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "zip<T,U>(set1:T[*], set2:U[*]):Pair<T,U>[*]"
     }
 }
 
@@ -335,10 +303,6 @@ impl NativeFunction for Values {
             state.entries.values().cloned().collect()
         };
         Ok(Evaluated::new(Value::from_vec(snapshot)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "values<U,V>(m:Map<U,V>[1]):V[*]"
     }
 }
 
@@ -400,10 +364,6 @@ impl NativeFunction for Range {
         }
         Ok(Evaluated::new(Value::Collection(Box::new(result))))
     }
-
-    fn signature(&self) -> &'static str {
-        "range(Integer[1] [, Integer[1] [, Integer[1]]]): Integer[*]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -428,10 +388,6 @@ impl NativeFunction for Take {
         let n = n.min(coll.len());
         Ok(Evaluated::new(Value::Collection(Box::new(coll.take(n)))))
     }
-
-    fn signature(&self) -> &'static str {
-        "take(Any[*], Integer[1]): Any[*]"
-    }
 }
 
 /// Pure `drop(Any[*], Integer[1]): Any[*]` — all elements after first N.
@@ -451,10 +407,6 @@ impl NativeFunction for Drop {
         let n = values[1].as_integer()?.max(0) as usize;
         let n = n.min(coll.len());
         Ok(Evaluated::new(Value::Collection(Box::new(coll.skip(n)))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "drop(Any[*], Integer[1]): Any[*]"
     }
 }
 
@@ -478,10 +430,6 @@ impl NativeFunction for Concatenate {
         let b = values[1].to_collection();
         a.append(b);
         Ok(Evaluated::new(Value::Collection(Box::new(a))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "concatenate(Any[*], Any[*]): Any[*]"
     }
 }
 
@@ -525,10 +473,6 @@ impl NativeFunction for Map {
 
         Ok(Evaluated::new(Value::from_vec(results)))
     }
-
-    fn signature(&self) -> &'static str {
-        "map(T[*], Function<{T[1]->V[1]}>[1]): V[*]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -561,10 +505,6 @@ impl NativeFunction for Filter {
 
         Ok(Evaluated::new(Value::from_vec(results)))
     }
-
-    fn signature(&self) -> &'static str {
-        "filter(T[*], Function<{T[1]->Boolean[1]}>[1]): T[*]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -593,10 +533,6 @@ impl NativeFunction for Fold {
         }
 
         Ok(Evaluated::new(accumulator))
-    }
-
-    fn signature(&self) -> &'static str {
-        "fold(T[*], Function<{T[1],V[m]->V[m]}>[1], V[m]): V[m]"
     }
 }
 
@@ -630,10 +566,6 @@ impl NativeFunction for Exists {
 
         Ok(Evaluated::new(Value::Boolean(false)))
     }
-
-    fn signature(&self) -> &'static str {
-        "exists(T[*], Function<{T[1]->Boolean[1]}>[1]): Boolean[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -665,10 +597,6 @@ impl NativeFunction for ForAll {
         }
 
         Ok(Evaluated::new(Value::Boolean(true)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "forAll(T[*], Function<{T[1]->Boolean[1]}>[1]): Boolean[1]"
     }
 }
 
@@ -754,10 +682,6 @@ impl NativeFunction for RemoveDuplicates {
         let out: Vec<Value> = kept.iter().map(|&i| source[i].clone()).collect();
         Ok(Evaluated::new(Value::from_vec(out)))
     }
-
-    fn signature(&self) -> &'static str {
-        "removeDuplicates(T[*], key:Function[0..1], eql:Function[0..1]): T[*]"
-    }
 }
 
 /// Whether a `Value` should be treated as an absent optional argument
@@ -803,10 +727,6 @@ impl NativeFunction for ToOne {
         }
         Ok(Evaluated::new(values[0].to_one()?.clone()))
     }
-
-    fn signature(&self) -> &'static str {
-        "toOne(T[*]): T[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -848,10 +768,6 @@ impl NativeFunction for ToOneMany {
         // / scalar / single-element wrapper. The cast to [1..*] is purely a
         // multiplicity-typing assertion; the value shape doesn't change.
         Ok(Evaluated::new(values[0].clone()))
-    }
-
-    fn signature(&self) -> &'static str {
-        "toOneMany(T[*]): T[1..*]"
     }
 }
 
@@ -904,10 +820,6 @@ impl NativeFunction for ToMultiplicity {
             .into());
         }
         Ok(Evaluated::new(values[0].clone()))
-    }
-
-    fn signature(&self) -> &'static str {
-        "toMultiplicity<T|z>(source:T[*], object:Any[z]):T[z]"
     }
 }
 
@@ -983,10 +895,6 @@ impl NativeFunction for IsNotEmpty {
         expect_args("isNotEmpty", &values, 1)?;
         Ok(Evaluated::new(Value::Boolean(!values[0].is_empty())))
     }
-
-    fn signature(&self) -> &'static str {
-        "isNotEmpty(Any[*]): Boolean[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1016,10 +924,6 @@ impl NativeFunction for Contains {
             crate::native::equality::values_equal(ctx_ref, v, needle)
         }))))
     }
-
-    fn signature(&self) -> &'static str {
-        "contains(T[*], Any[1]): Boolean[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1045,10 +949,6 @@ impl NativeFunction for Reverse {
         let source = values[0].to_collection();
         let reversed: Vec<Value> = source.iter().rev().cloned().collect();
         Ok(Evaluated::new(Value::from_vec(reversed)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "reverse(T[m]): T[m]"
     }
 }
 
@@ -1084,10 +984,6 @@ impl NativeFunction for IndexOf {
         };
         Ok(Evaluated::new(result))
     }
-
-    fn signature(&self) -> &'static str {
-        "indexOf(T[*], T[1]): Integer[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1119,10 +1015,6 @@ impl NativeFunction for Find {
         }
 
         Ok(Evaluated::new(Value::Unit))
-    }
-
-    fn signature(&self) -> &'static str {
-        "find(T[*], Function<{T[1]->Boolean[1]}>[1]): T[0..1]"
     }
 }
 
@@ -1168,10 +1060,6 @@ impl NativeFunction for Add {
             ))
             .into()),
         }
-    }
-
-    fn signature(&self) -> &'static str {
-        "add(T[m], Integer[0..1], T[1]): T[$1_MANY$]"
     }
 }
 
@@ -1232,10 +1120,6 @@ impl NativeFunction for Slice {
             .cloned()
             .collect();
         Ok(Evaluated::new(Value::from_vec(out)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "slice(T[*], Integer[1], Integer[1]): T[*]"
     }
 }
 
@@ -1327,10 +1211,6 @@ impl NativeFunction for Sort {
         let sorted: Vec<Value> = indices.into_iter().map(|i| items[i].clone()).collect();
         Ok(Evaluated::new(Value::from_vec(sorted)))
     }
-
-    fn signature(&self) -> &'static str {
-        "sort<T,U|m>(T[m], Function<{T[1]->U[1]}>[0..1], Function<{U[1],U[1]->Integer[1]}>[0..1]): T[m]"
-    }
 }
 
 /// Extract a `&Value::Function` from a lambda-valued argument, or `None` if
@@ -1379,10 +1259,6 @@ impl NativeFunction for RemoveAllOptimized {
             .cloned()
             .collect();
         Ok(Evaluated::new(Value::from_vec(out)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "removeAllOptimized(T[*], T[*]): T[*]"
     }
 }
 
@@ -1541,10 +1417,6 @@ impl NativeFunction for NewMap {
         }
         Ok(Evaluated::new(Value::Map(new_map_cell(entries, 0))))
     }
-
-    fn signature(&self) -> &'static str {
-        "newMap<U,V>(pairs:Pair<U,V>[*]):Map<U,V>[1]"
-    }
 }
 
 /// Wrap a freshly-built [`MapState`] in the `Rc<RefCell<…>>` cell that
@@ -1586,10 +1458,6 @@ impl NativeFunction for Get {
             None => Ok(Evaluated::new(Value::Unit)),
         }
     }
-
-    fn signature(&self) -> &'static str {
-        "get<U,V>(m:Map<U,V>[1], key:U[1]):V[0..1]"
-    }
 }
 
 /// Pure `put<U,V>(m:Map<U,V>[1], key:U[1], value:V[1]):Map<U,V>[1]`
@@ -1629,10 +1497,6 @@ impl NativeFunction for Put {
         updated.insert(key, values[2].clone());
         Ok(Evaluated::new(Value::Map(new_map_cell(updated, 0))))
     }
-
-    fn signature(&self) -> &'static str {
-        "put<U,V>(m:Map<U,V>[1], key:U[1], value:V[1]):Map<U,V>[1]"
-    }
 }
 
 /// Pure `keys<U,V>(m:Map<U,V>[1]):U[*]`
@@ -1658,10 +1522,6 @@ impl NativeFunction for Keys {
         let state = m.borrow();
         let items: Vec<Value> = state.entries.keys().map(key_to_value).collect();
         Ok(Evaluated::new(Value::from_vec(items)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "keys<U,V>(m:Map<U,V>[1]):U[*]"
     }
 }
 
@@ -1706,10 +1566,6 @@ impl NativeFunction for KeyValues {
             items.push(Value::Object(obj));
         }
         Ok(Evaluated::new(Value::from_vec(items)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "keyValues<U,V>(m:Map<U,V>[1]):Pair<U,V>[*]"
     }
 }
 
@@ -1759,10 +1615,6 @@ impl NativeFunction for PutAll {
         }
         Ok(Evaluated::new(Value::Map(new_map_cell(updated, 0))))
     }
-
-    fn signature(&self) -> &'static str {
-        "putAll<U,V>(m:Map<U,V>[1], entries:(Pair<U,V>[*]|Map<U,V>[1])):Map<U,V>[1]"
-    }
 }
 
 /// Pure `replaceAll<U,V>(m:Map<U,V>[1], pairs:Pair<U,V>[*]):Map<U,V>[1]`
@@ -1792,10 +1644,6 @@ impl NativeFunction for ReplaceAll {
             updated.insert(value_to_key(&k, ctx)?, v);
         }
         Ok(Evaluated::new(Value::Map(new_map_cell(updated, 0))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "replaceAll<U,V>(m:Map<U,V>[1], pairs:Pair<U,V>[*]):Map<U,V>[1]"
     }
 }
 
@@ -1868,10 +1716,6 @@ impl NativeFunction for GetIfAbsentPutWithKey {
 
         Ok(Evaluated::new(result))
     }
-
-    fn signature(&self) -> &'static str {
-        "getIfAbsentPutWithKey<U,V>(m:Map<U,V>[1], key:U[1], func:Function<{U[1]->V[0..1]}>[1]):V[0..1]"
-    }
 }
 
 /// Pure `getMapStats<U,V>(m:Map<U,V>[1]):MapStats[0..1]`
@@ -1908,10 +1752,6 @@ impl NativeFunction for GetMapStats {
         ctx.heap_mut()
             .mutate_add(&obj, "size", &[Value::Integer(size)])?;
         Ok(Evaluated::new(Value::Object(obj)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "getMapStats<U,V>(m:Map<U,V>[1]):MapStats[0..1]"
     }
 }
 
@@ -1968,10 +1808,6 @@ impl NativeFunction for GroupBy {
             map.insert(key, Value::Object(list_obj));
         }
         Ok(Evaluated::new(Value::Map(new_map_cell(map, 0))))
-    }
-
-    fn signature(&self) -> &'static str {
-        "groupBy<X,K>(xs:X[*], f:Function<{X[1]->K[1]}>[1]):Map<K,List<X>>[1]"
     }
 }
 
@@ -2062,10 +1898,6 @@ impl NativeFunction for ReplaceTreeNode {
             .into());
         }
         Ok(Evaluated::new(Value::Object(new_root)))
-    }
-
-    fn signature(&self) -> &'static str {
-        "replaceTreeNode(TreeNode[1], TreeNode[1], TreeNode[1]):TreeNode[1]"
     }
 }
 

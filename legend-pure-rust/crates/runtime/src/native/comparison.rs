@@ -81,10 +81,6 @@ impl NativeFunction for Eq {
         expect_args("eq", &values, 2)?;
         Ok(Evaluated::new(Value::Boolean(values[0] == values[1])))
     }
-
-    fn signature(&self) -> &'static str {
-        "eq(Any[1], Any[1]): Boolean[1]"
-    }
 }
 
 /// Pure `equal(Any[*], Any[*]): Boolean[1]` — structural / value equality.
@@ -108,10 +104,6 @@ impl NativeFunction for Equal {
         let result = crate::native::equality::values_equal(ctx, &values[0], &values[1]);
         Ok(Evaluated::new(Value::Boolean(result)))
     }
-
-    fn signature(&self) -> &'static str {
-        "equal(Any[*], Any[*]): Boolean[1]"
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -134,10 +126,6 @@ impl NativeFunction for LessThan {
             numeric_cmp(&values[0], &values[1])?.is_lt(),
         )))
     }
-
-    fn signature(&self) -> &'static str {
-        "lessThan(Number[1], Number[1]): Boolean[1]"
-    }
 }
 
 /// Pure `lessThanEqual(Number[1], Number[1]): Boolean[1]`
@@ -156,10 +144,6 @@ impl NativeFunction for LessThanEqual {
             !numeric_cmp(&values[0], &values[1])?.is_gt(),
         )))
     }
-
-    fn signature(&self) -> &'static str {
-        "lessThanEqual(Number[1], Number[1]): Boolean[1]"
-    }
 }
 
 /// Pure `greaterThan(Number[1], Number[1]): Boolean[1]`
@@ -177,10 +161,6 @@ impl NativeFunction for GreaterThan {
         Ok(Evaluated::new(Value::Boolean(
             numeric_cmp(&values[0], &values[1])?.is_gt(),
         )))
-    }
-
-    fn signature(&self) -> &'static str {
-        "greaterThan(Number[1], Number[1]): Boolean[1]"
     }
 }
 
@@ -335,10 +315,6 @@ impl NativeFunction for Compare {
             &values[0], &values[1],
         ))))
     }
-
-    fn signature(&self) -> &'static str {
-        "compare<T>(a:T[1], b:T[1]): Integer[1]"
-    }
 }
 
 /// Pure `greaterThanEqual(Number[1], Number[1]): Boolean[1]`
@@ -356,10 +332,6 @@ impl NativeFunction for GreaterThanEqual {
         Ok(Evaluated::new(Value::Boolean(
             !numeric_cmp(&values[0], &values[1])?.is_lt(),
         )))
-    }
-
-    fn signature(&self) -> &'static str {
-        "greaterThanEqual(Number[1], Number[1]): Boolean[1]"
     }
 }
 

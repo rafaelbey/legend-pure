@@ -68,8 +68,4 @@ impl NativeFunction for StringToTDS {
             .map_err(PureException::from)?;
         Ok(Evaluated::new(Value::Object(tds_handle)))
     }
-
-    fn signature(&self) -> &'static str {
-        "stringToTDS(String[1]):TDS<Any>[1]"
-    }
 }

@@ -51,8 +51,4 @@ impl NativeFunction for Size {
         let n = i64::try_from(parsed.rows.len()).unwrap_or(i64::MAX);
         Ok(Evaluated::new(Value::Integer(n)))
     }
-
-    fn signature(&self) -> &'static str {
-        "size(Relation<Any>[1]):Integer[1]"
-    }
 }

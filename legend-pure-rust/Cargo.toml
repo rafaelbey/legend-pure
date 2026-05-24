@@ -84,6 +84,9 @@ jni = "0.21"
 # Plugins
 linkme = "0.3"
 
+# Hashing (build-cache fingerprints)
+blake3 = "1"
+
 # Testing
 criterion = { version = "0.5", features = ["html_reports"] }
 insta = { version = "1", features = ["json"] }

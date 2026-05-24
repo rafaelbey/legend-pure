@@ -99,10 +99,6 @@ impl NativeFunction for Filter {
             .map_err(PureException::from)?;
         Ok(Evaluated::new(Value::Object(new_tds)))
     }
-
-    fn signature(&self) -> &'static str {
-        "filter(Relation<T>[1], Function<{T[1]->Boolean[1]}>[1]):Relation<T>[1]"
-    }
 }
 
 /// Slice the original CSV body to retain only the header line plus

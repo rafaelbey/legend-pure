@@ -443,6 +443,85 @@ fn run_once(
     }
 }
 
+/// Result counters from a `runTestsFromPath` invocation. Exposed for
+/// `legend build` so the orchestrator can decide pass/fail per repo
+/// without duplicating the surveyor wiring.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BuildTestSummary {
+    pub pass: i64,
+    pub fail: i64,
+    pub error: i64,
+    pub skip: i64,
+    pub elapsed_ms: i64,
+}
+
+impl BuildTestSummary {
+    pub fn has_failures(self) -> bool {
+        self.fail + self.error > 0
+    }
+}
+
+/// Run normal tests against a pre-built model. Wraps the same surveyor
+/// call `legend test` uses but takes a `PureModel` directly instead of
+/// loading one from classpath; `legend build` calls this after its
+/// per-repo compile loop has materialized the final model.
+///
+/// Renders results in the requested format (pretty → stderr, json →
+/// stdout NDJSON), and returns the summary counters so the caller can
+/// decide success / failure and stamp per-repo `last_test_result`.
+///
+/// # Errors
+///
+/// Returns [`CliError`] if the surveyor call fails or its report
+/// object can't be decoded.
+pub(crate) fn run_build_tests(
+    model: &PureModel,
+    extension_configs: &std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, toml::Value>,
+    >,
+    package: &str,
+    filter: &str,
+    format: TestFormat,
+    show_detail: bool,
+) -> Result<BuildTestSummary, CliError> {
+    let registry = NativeRegistry::discovered();
+    let populators = legend_pure_runtime::dsl::discovered_populators();
+    let mut evaluator = Evaluator::new(model, &registry);
+    evaluator.set_extension_configs(extension_configs.clone());
+    legend_pure_runtime::dsl::run_populators(model, evaluator.heap_mut(), &populators);
+
+    let result = evaluator
+        .call(
+            "meta::pure::test::surveyor::runTestsFromPath",
+            &[
+                Value::String(package.into()),
+                Value::String(filter.into()),
+            ],
+        )
+        .map_err(|e| CliError::Custom(format!("Test execution failed: {e}")))?;
+
+    let Value::Object(ref report_id) = result else {
+        return Err(CliError::Custom(format!(
+            "Test surveyor returned non-Object: {result:?}"
+        )));
+    };
+    let report = TestReport::read(evaluator.heap(), report_id)?;
+
+    match format {
+        TestFormat::Pretty => report.render(model, show_detail),
+        TestFormat::Json => report.render_json(model),
+    }
+
+    Ok(BuildTestSummary {
+        pass: report.pass_count,
+        fail: report.fail_count,
+        error: report.error_count,
+        skip: report.skip_count,
+        elapsed_ms: report.total_elapsed_ms,
+    })
+}
+
 /// Common test execution logic — generic over hooks so both production
 /// and coverage paths share the same code.
 fn run_tests<'m, H: EvalHooks>(

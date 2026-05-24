@@ -68,8 +68,4 @@ impl NativeFunction for Columns {
         }
         Ok(Evaluated::new(Value::Collection(Box::new(out))))
     }
-
-    fn signature(&self) -> &'static str {
-        "columns(Relation<T>[1]):Column<T>[*]"
-    }
 }
