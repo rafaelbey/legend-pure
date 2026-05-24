@@ -50,10 +50,6 @@ use smol_str::SmolStr;
 /// Section kind string this DSL claims (`###Mapping`).
 pub const SECTION_KIND: &str = "Mapping";
 
-// ---------------------------------------------------------------------------
-// MappingDef
-// ---------------------------------------------------------------------------
-
 /// A `Mapping` definition: `Mapping pkg::M ( includes* classMappings* )`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MappingDef {
@@ -112,10 +108,6 @@ impl DSLElement for MappingDef {
     }
 }
 
-// ---------------------------------------------------------------------------
-// MappingInclude
-// ---------------------------------------------------------------------------
-
 /// `include pkg::OtherMapping [storeSubstitutions?]`.
 ///
 /// The optional bracket clause is reserved for store-substitution
@@ -143,10 +135,6 @@ pub struct StoreSubstitution {
     /// Span of the `src -> dst` pair.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// ClassMapping
-// ---------------------------------------------------------------------------
 
 /// One class mapping inside a [`MappingDef`].
 ///
@@ -241,10 +229,6 @@ pub enum ClassMappingBody {
     Foreign(Box<dyn ForeignClassMappingBody>),
 }
 
-// ---------------------------------------------------------------------------
-// ForeignClassMappingBody — plug-in trait for store-DSL bodies
-// ---------------------------------------------------------------------------
-
 /// Plug-in trait for class-mapping body sub-grammars contributed by
 /// store DSLs (e.g. Relational's `: Relational { … }`,
 /// future BigQuery / Delta / etc.).
@@ -313,10 +297,6 @@ impl PartialEq for Box<dyn ForeignClassMappingBody> {
         self.eq_content(other.as_ref())
     }
 }
-
-// ---------------------------------------------------------------------------
-// PureClassMappingBody — the only Stage-2 body variant
-// ---------------------------------------------------------------------------
 
 /// Body of a `Pure` (model-to-model) class mapping.
 ///
@@ -395,10 +375,6 @@ pub struct LocalPropertyDecl {
     pub source_info: SourceInfo,
 }
 
-// ---------------------------------------------------------------------------
-// EnumerationClassMappingBody — Stage 4
-// ---------------------------------------------------------------------------
-
 /// Body of an `EnumerationMapping` class mapping.
 ///
 /// Shape:
@@ -432,10 +408,6 @@ pub struct EnumValueMapping {
     /// Span of the entire `enumValueName : …` entry.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// OperationClassMappingBody — Stage 5
-// ---------------------------------------------------------------------------
 
 /// Body of an `Operation` class mapping.
 ///
@@ -493,10 +465,6 @@ pub struct OperationParameter {
     /// diagnostics back to source.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// RelationFunctionClassMappingBody — Stage 8
-// ---------------------------------------------------------------------------
 
 /// Body of a `: Relation { … }` class mapping.
 ///
@@ -582,10 +550,6 @@ pub struct BindingTransformer {
     /// Span covering the `Binding pkg::SomeBinding` prefix.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// AggregationAwareClassMappingBody — Stage 6
-// ---------------------------------------------------------------------------
 
 /// Body of an `AggregationAware` class mapping.
 ///
@@ -689,10 +653,6 @@ pub struct NestedClassMapping {
     /// `~aggregateMapping : <parserName> { … }`) clause.
     pub source_info: SourceInfo,
 }
-
-// ---------------------------------------------------------------------------
-// XStoreClassMappingBody — Stage 7
-// ---------------------------------------------------------------------------
 
 /// Body of an `XStore` association mapping.
 ///

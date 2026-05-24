@@ -159,10 +159,6 @@ impl SectionParser for MappingSectionParser {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Mapping
-// ---------------------------------------------------------------------------
-
 fn parse_mapping(
     ctx: &mut ParserContext<'_>,
     foreign_parsers: &[Box<dyn ClassMappingBodyParser>],
@@ -206,10 +202,6 @@ fn is_include_keyword(cursor: &Cursor) -> bool {
     cursor.check(TokenKind::Identifier) && cursor.peek().text == "include"
 }
 
-// ---------------------------------------------------------------------------
-// MappingInclude
-// ---------------------------------------------------------------------------
-
 fn parse_include(ctx: &mut ParserContext<'_>) -> Result<MappingInclude, ParseError> {
     let kw = ctx.cursor().expect(TokenKind::Identifier)?; // "include"
     let start = kw.source_info.clone();
@@ -249,10 +241,6 @@ fn parse_store_substitution(ctx: &mut ParserContext<'_>) -> Result<StoreSubstitu
         source_info: si,
     })
 }
-
-// ---------------------------------------------------------------------------
-// ClassMapping
-// ---------------------------------------------------------------------------
 
 fn parse_class_mapping(
     ctx: &mut ParserContext<'_>,
@@ -353,10 +341,6 @@ fn parse_class_mapping_body(
         }
     })
 }
-
-// ---------------------------------------------------------------------------
-// PureClassMappingBody — the Stage-2 body grammar
-// ---------------------------------------------------------------------------
 
 fn parse_pure_body(ctx: &mut ParserContext<'_>) -> Result<PureClassMappingBody, ParseError> {
     ctx.cursor().expect(TokenKind::LBrace)?;
@@ -492,10 +476,6 @@ fn parse_pure_body(ctx: &mut ParserContext<'_>) -> Result<PureClassMappingBody, 
     })
 }
 
-// ---------------------------------------------------------------------------
-// EnumerationClassMappingBody — Stage 4
-// ---------------------------------------------------------------------------
-
 fn parse_enumeration_body(
     ctx: &mut ParserContext<'_>,
 ) -> Result<EnumerationClassMappingBody, ParseError> {
@@ -595,10 +575,6 @@ fn parse_enum_source_value(ctx: &mut ParserContext<'_>) -> Result<EnumSourceValu
     }
 }
 
-// ---------------------------------------------------------------------------
-// OperationClassMappingBody — Stage 5 (simple parameters form)
-// ---------------------------------------------------------------------------
-
 fn parse_operation_body(
     ctx: &mut ParserContext<'_>,
 ) -> Result<OperationClassMappingBody, ParseError> {
@@ -661,10 +637,6 @@ fn parse_operation_body(
         validation_function,
     })
 }
-
-// ---------------------------------------------------------------------------
-// AggregationAwareClassMappingBody — Stage 6
-// ---------------------------------------------------------------------------
 
 fn parse_aggregation_aware_body(
     ctx: &mut ParserContext<'_>,
@@ -883,10 +855,6 @@ fn expect_tilde_keyword(ctx: &mut ParserContext<'_>, expected: &str) -> Result<(
     ctx.cursor().expect(TokenKind::Tilde)?;
     expect_keyword(ctx, expected)
 }
-
-// ---------------------------------------------------------------------------
-// XStoreClassMappingBody — Stage 7
-// ---------------------------------------------------------------------------
 
 fn parse_xstore_body(ctx: &mut ParserContext<'_>) -> Result<XStoreClassMappingBody, ParseError> {
     ctx.cursor().expect(TokenKind::LBrace)?;
@@ -1154,10 +1122,6 @@ fn parse_relation_function_property_mapping(
         source_info: merge_si(&start_si, &end_si),
     })
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 fn parse_packageable_ptr(ctx: &mut ParserContext<'_>) -> Result<PackageableElementPtr, ParseError> {
     let (package, name, si) = ctx.parse_qualified_name()?;

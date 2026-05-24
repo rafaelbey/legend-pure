@@ -517,10 +517,6 @@ fn push_element_ref(
     });
 }
 
-// ---------------------------------------------------------------------------
-// Per-mapping validation
-// ---------------------------------------------------------------------------
-
 fn validate_mapping(
     m: &MappingDef,
     registry: &HashMap<SmolStr, RegisteredMapping>,
@@ -1096,10 +1092,6 @@ fn validate_property_mapping(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Visible class-mapping IDs (current mapping + transitively included)
-// ---------------------------------------------------------------------------
-
 fn visible_class_mapping_ids(
     m: &MappingDef,
     registry: &HashMap<SmolStr, RegisteredMapping>,
@@ -1241,10 +1233,6 @@ fn visible_enum_mapping_targets(
     out
 }
 
-// ---------------------------------------------------------------------------
-// Mapping include DAG (cycle detection — Kahn's algorithm)
-// ---------------------------------------------------------------------------
-
 fn check_include_dag(
     registry: &HashMap<SmolStr, RegisteredMapping>,
     errors: &mut Vec<CompilationError>,
@@ -1304,10 +1292,6 @@ fn check_include_dag(
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Stage-4 — Enumeration body validation
-// ---------------------------------------------------------------------------
 
 fn validate_enumeration_body(
     body: &EnumerationClassMappingBody,
@@ -1465,10 +1449,6 @@ fn enumeration_value_names(model: &PureModel, enum_id: ElementId) -> HashSet<Str
     e.values.iter().map(|v| v.name.to_string()).collect()
 }
 
-// ---------------------------------------------------------------------------
-// Stage-5 — Operation body validation
-// ---------------------------------------------------------------------------
-
 fn validate_operation_body(
     body: &OperationClassMappingBody,
     visible_ids: &HashSet<SmolStr>,
@@ -1544,10 +1524,6 @@ fn validate_operation_body(
         let _ = lower_and_infer_expression(model, auto_imports, lambda, &[], errors);
     }
 }
-
-// ---------------------------------------------------------------------------
-// Stage-6 — AggregationAware body validation
-// ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
 fn validate_aggregation_aware_body(
@@ -1819,10 +1795,6 @@ fn is_data_type(model: &PureModel, ty: &ResolvedType) -> bool {
         ModelElement::PrimitiveType(_) | ModelElement::Enumeration(_)
     )
 }
-
-// ---------------------------------------------------------------------------
-// Stage-7 — XStore body validation
-// ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
 fn validate_xstore_body(
@@ -2217,10 +2189,6 @@ fn resolve_association(model: &PureModel, fqn: &str) -> Option<ElementId> {
     matches!(model.get_element(id), ModelElement::Association(_)).then_some(id)
 }
 
-// ---------------------------------------------------------------------------
-// Class / Enumeration / property lookup
-// ---------------------------------------------------------------------------
-
 fn resolve_class(model: &PureModel, fqn: &str) -> Option<ElementId> {
     let segments: Vec<SmolStr> = fqn.split("::").map(SmolStr::new).collect();
     if segments.is_empty() || segments.iter().any(smol_str::SmolStr::is_empty) {
@@ -2319,10 +2287,6 @@ fn find_property_type(
     None
 }
 
-// ---------------------------------------------------------------------------
-// Type / multiplicity diagnostics
-// ---------------------------------------------------------------------------
-
 fn is_boolean_one(model: &PureModel, ty: &ResolvedType) -> bool {
     if ty.multiplicity != Multiplicity::PureOne {
         return false;
@@ -2371,10 +2335,6 @@ fn describe_multiplicity(m: &Multiplicity) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FQN helpers
-// ---------------------------------------------------------------------------
-
 fn build_fqn(m: &MappingDef) -> SmolStr {
     if let Some(pkg) = m.package() {
         SmolStr::new(format!("{pkg}::{}", m.name.value))
@@ -2399,10 +2359,6 @@ fn ptr_fqn(p: &PackageableElementPtr) -> SmolStr {
         p.name.clone()
     }
 }
-
-// ---------------------------------------------------------------------------
-// Phase E1 — substitution endpoint FQN resolution
-// ---------------------------------------------------------------------------
 
 /// Walk every `MappingInclude.store_substitutions` across all
 /// registered mappings; both endpoints (`source` / `target`) must
@@ -2450,10 +2406,6 @@ fn check_substitution_endpoint(
         kind: CompilationErrorKind::UnresolvedElement { path: fqn },
     });
 }
-
-// ---------------------------------------------------------------------------
-// Phase E2 — substitution-chain cycle detector
-// ---------------------------------------------------------------------------
 
 /// For each registered mapping, walk its include closure to gather
 /// the union of all `(source → target)` substitution edges visible
@@ -2575,10 +2527,6 @@ fn collect_substitution_edges(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Phase E3 — substitution source must be a store used by the included mapping
-// ---------------------------------------------------------------------------
-
 /// For each `MappingInclude` in every mapping, every substitution
 /// `(source → target)` must satisfy: the `source` store is actually
 /// referenced by the included mapping or by its transitive
@@ -2683,10 +2631,6 @@ fn collect_mapping_stores(
     }
     out
 }
-
-// ---------------------------------------------------------------------------
-// Phase 2: repo-boundary visibility for dsl-mapping
-// ---------------------------------------------------------------------------
 
 /// Walks every cross-element reference inside every registered
 /// mapping and emits `NotVisible` for refs whose target home repo

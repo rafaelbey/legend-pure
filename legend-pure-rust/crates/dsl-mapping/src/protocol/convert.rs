@@ -630,10 +630,6 @@ fn merge_operation_from_body(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
 fn ptr_to_fqn(p: &PackageableElementPtr) -> String {
     if let Some(pkg) = &p.package {
         format!("{pkg}::{}", p.name)
