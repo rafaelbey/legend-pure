@@ -79,8 +79,6 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    // -- Cursor helpers -------------------------------------------------------
-
     /// Returns the current byte without advancing, or `None` at EOF.
     fn peek(&self) -> Option<char> {
         self.source[self.pos..].chars().next()
@@ -129,8 +127,6 @@ impl<'a> Lexer<'a> {
     fn text_from(&self, start_pos: usize) -> SmolStr {
         SmolStr::new(&self.source[start_pos..self.pos])
     }
-
-    // -- Skip helpers ---------------------------------------------------------
 
     fn skip_whitespace(&mut self) {
         while let Some(ch) = self.peek() {
@@ -193,8 +189,6 @@ impl<'a> Lexer<'a> {
         }
         Ok(())
     }
-
-    // -- Token production -----------------------------------------------------
 
     /// Produces the next token, skipping whitespace and comments.
     #[allow(clippy::too_many_lines)]
@@ -425,8 +419,6 @@ impl<'a> Lexer<'a> {
         })
     }
 
-    // -- Complex token lexers -------------------------------------------------
-
     fn lex_string(
         &mut self,
         start_line: u32,
@@ -579,10 +571,6 @@ fn is_ident_start(ch: char) -> bool {
 fn is_ident_continue(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
