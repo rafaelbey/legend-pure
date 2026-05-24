@@ -544,10 +544,6 @@ pub struct CompileOutcome {
     pub error_count: usize,
 }
 
-// ---------------------------------------------------------------------------
-// Incremental compile helpers (T-20260513-01 Phase 1)
-// ---------------------------------------------------------------------------
-
 /// Clone the parse result's source files into a `HashMap` keyed by
 /// canonical source path, for seeding `Workspace.parsed_files` after a
 /// full compile.

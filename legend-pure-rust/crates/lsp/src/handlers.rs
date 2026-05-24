@@ -1233,10 +1233,6 @@ fn build_extras(stdout: &str, failures: Option<serde_json::Value>) -> Option<ser
     Some(serde_json::Value::Object(map))
 }
 
-// ---------------------------------------------------------------------------
-// legend.applyEdit
-// ---------------------------------------------------------------------------
-
 /// Apply LSP-style ranged text edits to a single `.pure` file owned by
 /// a [`legend_pure_core_platform::repo::Repo::Filesystem`] entry in the
 /// workspace's [`Workspace::base_repos`], persist the result to disk,
@@ -1846,10 +1842,6 @@ Class test::Person
             );
         }
     }
-
-    // ---------------------------------------------------------------
-    // textDocument/references — T-20260511-07
-    // ---------------------------------------------------------------
 
     /// Build the reverse-index for a one-file fixture. Same helper
     /// pattern as the existing `definition_resolves_variable_…` test.
