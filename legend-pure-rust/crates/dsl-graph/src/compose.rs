@@ -57,10 +57,6 @@ pub fn default_island_composers() -> Vec<Box<dyn IslandComposer>> {
     vec![Box::new(GraphFetchIslandComposer)]
 }
 
-// ---------------------------------------------------------------------------
-// Implementation
-// ---------------------------------------------------------------------------
-
 fn compose_graph_fetch_tree(w: &mut IndentWriter, tree: &RootGraphFetchTree) {
     w.write_line("#{");
     w.push_indent();

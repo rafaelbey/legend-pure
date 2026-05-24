@@ -58,10 +58,6 @@ pub fn default_island_parsers() -> Vec<Box<dyn IslandParser>> {
     vec![Box::new(GraphFetchIslandParser)]
 }
 
-// ---------------------------------------------------------------------------
-// Implementation
-// ---------------------------------------------------------------------------
-
 fn parse_graph_fetch_tree(ctx: &mut ParserContext<'_>) -> Result<RootGraphFetchTree, ParseError> {
     let si = ctx.cursor().current_source_info();
     let path = ctx.parse_package_path()?;

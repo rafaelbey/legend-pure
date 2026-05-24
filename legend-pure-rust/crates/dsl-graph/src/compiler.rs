@@ -65,10 +65,6 @@ impl CompilerExtension for GraphFetchExtension {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FQN resolution
-// ---------------------------------------------------------------------------
-
 fn ptr_segments(ptr: &PackageableElementPtr) -> Vec<SmolStr> {
     let mut segs: Vec<SmolStr> = ptr
         .package
@@ -88,10 +84,6 @@ fn resolve_class(model: &PureModel, ptr: &PackageableElementPtr) -> Option<Eleme
     let id = model.resolve_by_path(&segs)?;
     matches!(model.get_element(id), ModelElement::Class(_)).then_some(id)
 }
-
-// ---------------------------------------------------------------------------
-// Property lookup (declared + qualified, walking supertypes)
-// ---------------------------------------------------------------------------
 
 /// Whether `class_id` (or any of its transitive supertypes) declares
 /// a property named `prop_name` — either a regular `Property` or a
@@ -167,10 +159,6 @@ fn class_property_type_id(
     }
     None
 }
-
-// ---------------------------------------------------------------------------
-// Source-file traversal
-// ---------------------------------------------------------------------------
 
 fn walk_source_file(sf: &SourceFile, model: &PureModel, errors: &mut Vec<CompilationError>) {
     for elem in sf.all_elements() {
@@ -271,10 +259,6 @@ fn walk_expression(expr: &Expression, model: &PureModel, errors: &mut Vec<Compil
         | Expression::Literal(_) => {}
     }
 }
-
-// ---------------------------------------------------------------------------
-// Graph-fetch validation
-// ---------------------------------------------------------------------------
 
 fn validate_island(isl: &IslandExpression, model: &PureModel, errors: &mut Vec<CompilationError>) {
     let Some(root) = isl.content.as_any().downcast_ref::<RootGraphFetchTree>() else {
