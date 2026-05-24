@@ -514,6 +514,7 @@ fn push_element_ref(
         kind,
         target_element: Some(target_id),
         target_property: None,
+        target_local: None,
         target,
     });
 }

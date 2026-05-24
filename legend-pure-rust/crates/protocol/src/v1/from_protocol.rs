@@ -673,8 +673,15 @@ fn convert_applied_function(
         && let v1::value_spec::ValueSpecification::String(name_cs) = &f.parameters[0]
     {
         let value = convert_value_spec_to_expression(&f.parameters[1])?;
+        // Protocol JSON doesn't carry a per-identifier span for the
+        // binding name; fall back to the full let-expression span.
+        // The find-usages walker still operates on the resulting
+        // ValueSpec, but the binding's clickable region collapses
+        // to the broader span when the AST was reconstructed from
+        // protocol input.
         return Ok(Expression::Let(LetExpr {
             name: SmolStr::new(&name_cs.value),
+            name_source_info: si.clone(),
             value: Box::new(value),
             source_info: si,
         }));

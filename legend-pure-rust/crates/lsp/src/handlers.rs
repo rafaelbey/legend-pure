@@ -323,11 +323,10 @@ fn resolve_value_spec_target(vs: &legend_pure_parser_pure::types::ValueSpec) -> 
 /// on-disk source (embedded / `.purem`), and an LSP client can't
 /// navigate to a file that doesn't exist.
 ///
-/// V1 limitation that remains: local variables bound by `let` carry
-/// no reverse-index entry. Parameters work (cursor on
-/// `$paramName` → goto-def to the parameter) but find-usages of
-/// parameters is not yet populated. Property and qualified-property
-/// references **are** now reversed.
+/// Parameter find-usages still aren't reverse-indexed (cursor on
+/// `$paramName` resolves to the parameter declaration but the
+/// reverse list is empty); everything else — elements, properties,
+/// and let-bound locals — is now indexed.
 #[must_use]
 pub fn references_for_position(
     model: &PureModel,
@@ -356,6 +355,7 @@ pub fn references_for_position(
     let usages = references.and_then(|idx| match &target {
         RefTarget::Element(id) => idx.usages_of(*id),
         RefTarget::Property(owner, name) => idx.usages_of_property(*owner, name.as_str()),
+        RefTarget::Local(binding) => idx.usages_of_local(binding),
     });
     let mut out: Vec<Location> = usages
         .map(|locs| {
@@ -381,6 +381,9 @@ pub fn references_for_position(
                 legend_pure_ide::property_decl_span_on_class(model, *owner, name.as_str())
                     .and_then(|span| location_for_span(&span, file_uri, uri_for_canonical))
             }
+            // Local bindings already carry their own span as the
+            // identifier — just turn it into a Location.
+            RefTarget::Local(binding) => location_for_span(binding, file_uri, uri_for_canonical),
         }
     {
         out.push(decl_loc);
@@ -388,13 +391,16 @@ pub fn references_for_position(
     out
 }
 
-/// What the cursor resolves to: either a first-class element or a
-/// property on a class. Drives the `usages_of` /
-/// `usages_of_property` dispatch in [`references_for_position`].
+/// What the cursor resolves to: a first-class element, a property
+/// on a class, or a let-bound local binding (identified by its
+/// declaration name span). Drives the `usages_of` /
+/// `usages_of_property` / `usages_of_local` dispatch in
+/// [`references_for_position`].
 #[derive(Debug)]
 enum RefTarget {
     Element(ElementId),
     Property(ElementId, smol_str::SmolStr),
+    Local(legend_pure_parser_ast::SourceInfo),
 }
 
 fn resolve_reference_target(
@@ -404,9 +410,10 @@ fn resolve_reference_target(
     line: u32,
     column: u32,
 ) -> Option<RefTarget> {
-    // Tier 1: the index already classifies every reference site. A
-    // PropertyCall / QualifiedPropertyCall ref carries
-    // `target_property`; everything else carries `target_element`.
+    // Tier 1: the index already classifies every reference site.
+    // PropertyCall / QualifiedPropertyCall carry `target_property`;
+    // let-bound variables and let-declaration markers carry
+    // `target_local`; everything else carries `target_element`.
     if let Some(idx) = references
         && let Some(r) = idx.find_at(canonical_path, line, column)
     {
@@ -415,6 +422,9 @@ fn resolve_reference_target(
         }
         if let Some((owner, name)) = r.target_property.clone() {
             return Some(RefTarget::Property(owner, name));
+        }
+        if let Some(binding) = r.target_local.clone() {
+            return Some(RefTarget::Local(binding));
         }
     }
 
@@ -2293,6 +2303,243 @@ function test::g(p: test::Person[1]): String[1]
         );
     }
 
+    #[test]
+    fn references_let_binding_cursor_on_use_returns_all_uses() {
+        // `let x = 'hello';` on line 3, used in two subsequent lets.
+        // No platform functions involved — type checker is happy
+        // assigning `$x` (String[1]) to another let. Cursor on one
+        // `$x` returns both use sites (LSP convention: the current
+        // site counts as a reference too).
+        let src = "\
+function test::f(): String[1]
+{
+  let x = 'hello';
+  let y = $x;
+  let z = $x;
+  $z
+}
+";
+        let model = compile_fixture("fixture.pure", src);
+        let index = refs_for(&model);
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
+        // Cursor on the `$` in `$x` on line 4 (1-indexed col 11) →
+        // 0-indexed (3, 10). The Variable reference's source span
+        // is just the `$` token, so cursor must land on it.
+        let locs = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(3, 10),
+            false,
+            &uri,
+            no_cross_file,
+        );
+        // LSP returns every use site, including the one the cursor
+        // sits on (callers filter the current span themselves if
+        // they want "other usages"). Two uses on lines 4 and 5
+        // (0-indexed 3 and 4).
+        assert_eq!(locs.len(), 2, "expected both use sites; got: {locs:?}");
+        let mut lines: Vec<u32> = locs.iter().map(|l| l.range.start.line).collect();
+        lines.sort_unstable();
+        assert_eq!(lines, vec![3, 4]);
+    }
+
+    #[test]
+    fn references_let_binding_cursor_on_decl_returns_uses() {
+        // Cursor on the `x` in `let x = ...` returns both use sites.
+        // Exercises the Tier-1 declaration-marker emitted by the
+        // walker.
+        let src = "\
+function test::f(): String[1]
+{
+  let x = 'hello';
+  let y = $x;
+  let z = $x;
+  $z
+}
+";
+        let model = compile_fixture("fixture.pure", src);
+        let index = refs_for(&model);
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
+        // Cursor on the `x` in the let declaration (line 3 col 7) →
+        // 0-indexed (2, 6).
+        let locs = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(2, 6),
+            false,
+            &uri,
+            no_cross_file,
+        );
+        assert_eq!(
+            locs.len(),
+            2,
+            "expected two use sites for the let-binding; got: {locs:?}"
+        );
+        // The two use lines are 4 and 5 (0-indexed 3 and 4).
+        let mut lines: Vec<u32> = locs.iter().map(|l| l.range.start.line).collect();
+        lines.sort_unstable();
+        assert_eq!(lines, vec![3, 4]);
+    }
+
+    #[test]
+    fn references_let_binding_include_declaration_appends_decl() {
+        // include_declaration on a let-binding cursor appends the
+        // binding's own name span as the trailing Location.
+        let src = "\
+function test::f(): String[1]
+{
+  let x = 'hello';
+  $x
+}
+";
+        let model = compile_fixture("fixture.pure", src);
+        let index = refs_for(&model);
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
+        // Cursor on the `$` in `$x` (line 4 col 3) → 0-indexed (3, 2).
+        let without = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(3, 2),
+            false,
+            &uri,
+            no_cross_file,
+        );
+        let with = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(3, 2),
+            true,
+            &uri,
+            no_cross_file,
+        );
+        assert_eq!(
+            with.len(),
+            without.len() + 1,
+            "include_declaration=true should add exactly one Location; got: {with:?}"
+        );
+        // Decl is the `x` on line 3 (0-indexed 2).
+        let decl_range = with.last().expect("decl present").range;
+        assert_eq!(decl_range.start.line, 2);
+    }
+
+    #[test]
+    fn references_let_binding_per_function_scope() {
+        // Two functions share a binding name `x`. The walker's
+        // scope stack is rebuilt per function, so `outer`'s `let x`
+        // is invisible to `inner` and vice versa. Cursor on each
+        // function's let returns exactly its own use site.
+        let src = "\
+function test::outer(): String[1]
+{
+  let x = 'outer';
+  $x
+}
+function test::inner(): String[1]
+{
+  let x = 'inner';
+  $x
+}
+";
+        let model = compile_fixture("fixture.pure", src);
+        let index = refs_for(&model);
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
+        let outer = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(2, 6),
+            false,
+            &uri,
+            no_cross_file,
+        );
+        assert_eq!(
+            outer.len(),
+            1,
+            "outer's `let x` has exactly one use — its own $x; got: {outer:?}"
+        );
+        assert_eq!(outer[0].range.start.line, 3);
+        let inner = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(7, 6),
+            false,
+            &uri,
+            no_cross_file,
+        );
+        assert_eq!(
+            inner.len(),
+            1,
+            "inner's `let x` has exactly one use — its own $x; got: {inner:?}"
+        );
+        assert_eq!(inner[0].range.start.line, 8);
+    }
+
+    #[test]
+    fn references_let_binding_lambda_inner_shadows_outer() {
+        // True nested-scope shadow test. A lambda body contains
+        // its own `let x`, which shadows the enclosing function's
+        // `let x`. Cursor on the outer `let x` decl returns zero
+        // usages — the only `$x` in the body is inside the lambda,
+        // bound to the inner let.
+        //
+        // The lambda is returned (not invoked) to avoid pulling in
+        // platform functions like `eval` or `map`.
+        let src = "\
+function test::f(): meta::pure::metamodel::function::LambdaFunction<{String[1]->String[1]}>[1]
+{
+  let x = 'outer';
+  {s: String[1] | let x = $s; $x}
+}
+";
+        let model = compile_fixture("fixture.pure", src);
+        let index = refs_for(&model);
+        let uri = "file:///fixture.pure".parse::<Uri>().unwrap();
+        let no_cross_file: &dyn Fn(&str) -> Option<Uri> = &|_| None;
+        // Cursor on the OUTER `let x` decl (line 3 col 7) →
+        // 0-indexed (2, 6). The inner lambda has its own `let x`
+        // shadowing this; the outer binding has zero usages.
+        let outer = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(2, 6),
+            false,
+            &uri,
+            no_cross_file,
+        );
+        assert!(
+            outer.is_empty(),
+            "outer `let x` is shadowed by the lambda's inner `let x`; got: {outer:?}"
+        );
+        // Sanity: the inner `let x` inside the lambda still has
+        // its use (the trailing `$x`). Cursor on the inner decl
+        // (line 4 col 23) → 0-indexed (3, 22).
+        let inner = references_for_position(
+            &model,
+            Some(&index),
+            "fixture.pure",
+            pos(3, 22),
+            false,
+            &uri,
+            no_cross_file,
+        );
+        assert_eq!(
+            inner.len(),
+            1,
+            "inner lambda `let x` has one use (the trailing $x); got: {inner:?}"
+        );
+        assert_eq!(inner[0].range.start.line, 3);
+    }
+
     /// Cross-file branch: hand-built model with two chunks — chunk 0
     /// has a class declared in `lib.pure`, chunk 1 has another class
     /// extending it from `app.pure`. Verifies that the resolver is
@@ -2357,6 +2604,7 @@ function test::g(p: test::Person[1]): String[1]
             kind: RefKind::TypeRef,
             target_element: Some(class_id),
             target_property: None,
+            target_local: None,
             target: class_name_si.clone(),
         });
         index.finalize();

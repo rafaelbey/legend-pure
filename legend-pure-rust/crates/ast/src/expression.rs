@@ -565,9 +565,18 @@ pub struct Lambda {
 pub struct LetExpr {
     /// Variable name being bound.
     pub name: Identifier,
+    /// Source span of just the **name** identifier (not the full
+    /// `let x = expr` line). Drives IDE find-usages and goto-def for
+    /// let-bound locals: the walker uses this as the navigation
+    /// target and as the reverse-index key in `by_local`.
+    ///
+    /// Falls back to a copy of [`Self::source_info`] when the AST
+    /// was reconstructed from a protocol JSON payload that doesn't
+    /// carry per-identifier spans.
+    pub name_source_info: SourceInfo,
     /// The expression being assigned.
     pub value: Box<Expression>,
-    /// Source location.
+    /// Source location of the whole `let x = expr` line.
     pub source_info: SourceInfo,
 }
 

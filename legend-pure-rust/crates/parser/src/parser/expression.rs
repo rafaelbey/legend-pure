@@ -396,11 +396,12 @@ impl Parser {
             // let binding
             TokenKind::Let => {
                 self.cursor.advance();
-                let (name, _) = self.cursor.expect_identifier_or_keyword()?;
+                let (name, name_source_info) = self.cursor.expect_identifier_or_keyword()?;
                 self.cursor.expect(TokenKind::Equals)?;
                 let value = self.parse_expression()?;
                 Ok(Expression::Let(LetExpr {
                     name,
+                    name_source_info,
                     value: Box::new(value),
                     source_info: si,
                 }))

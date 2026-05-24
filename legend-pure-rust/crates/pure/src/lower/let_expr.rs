@@ -50,10 +50,17 @@ pub(super) fn lower_let(
         ExprKind::FunctionCall(FunctionCallData {
             function: None,
             function_name: SmolStr::new_static("letFunction"),
+            // First argument is the binding NAME as a string literal.
+            // We deliberately set its `source_info` to the **name**
+            // span (`name_source_info`), not the broader let span,
+            // so the IDE walker can read it as the binding's
+            // clickable region and reverse-index key. The whole
+            // `let x = expr` line is still captured on the outer
+            // ValueSpec's `source_info`.
             arguments: vec![
                 untyped(
                     ExprKind::StringLiteral(SmolStr::new(e.name.as_str())),
-                    e.source_info.clone(),
+                    e.name_source_info.clone(),
                 ),
                 value,
             ],

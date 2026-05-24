@@ -58,6 +58,13 @@ SourceFile {
                             Let(
                                 LetExpr {
                                     name: "x",
+                                    name_source_info: SourceInfo {
+                                        source: "test.pure",
+                                        start_line: 4,
+                                        start_column: 9,
+                                        end_line: 4,
+                                        end_column: 9,
+                                    },
                                     value: Literal(
                                         String(
                                             StringLiteral {

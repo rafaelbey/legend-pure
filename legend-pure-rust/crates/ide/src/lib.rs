@@ -101,6 +101,20 @@ pub struct Reference {
     /// property roll up under the class that actually declares it.
     #[serde(default)]
     pub target_property: Option<(ElementId, SmolStr)>,
+    /// Target local binding identified by the **binding name's
+    /// source span**. Set on `Variable` references that resolve to a
+    /// let-bound local (parameters still set
+    /// `target_element: None` and rely on positional `target` only;
+    /// they aren't reverse-indexed here). The span is the declaration
+    /// site — the same `SourceInfo` the walker emitted as a
+    /// declaration marker — so `usages_of_local` can return every
+    /// `$x` referencing this binding.
+    ///
+    /// Coexists with [`Self::target_element`] and
+    /// [`Self::target_property`]: at most one of the three is `Some`
+    /// per reference.
+    #[serde(default)]
+    pub target_local: Option<SourceInfo>,
     /// Where the IDE should navigate to. Often the
     /// `name_source_info` of the target element; for variables it's
     /// the parameter's source range.
@@ -131,6 +145,17 @@ pub struct ReferenceIndex {
     /// property find-usages.
     #[serde(default)]
     pub by_property: HashMap<(ElementId, SmolStr), Vec<RefLocation>>,
+    /// References keyed by the binding's **name span** — the
+    /// reverse index for let-bound locals. Each binding's name span
+    /// is unique within a file (and globally, when canonical paths
+    /// differ), so the `SourceInfo` itself is a stable identifier.
+    /// Populated by [`Self::push`] from any reference carrying
+    /// [`Reference::target_local`] — except the declaration marker
+    /// itself (range == target_local), which only lives in
+    /// `by_file` so cursor lookup works but the declaration doesn't
+    /// appear as a usage of itself.
+    #[serde(default)]
+    pub by_local: HashMap<SourceInfo, Vec<RefLocation>>,
 }
 
 /// A reverse-index entry: where a target is referenced from.
@@ -147,7 +172,15 @@ pub struct RefLocation {
 impl ReferenceIndex {
     /// Add a reference to the per-file index and, when the reference
     /// carries a target identifier, the matching reverse index
-    /// (`by_target` for elements, `by_property` for properties).
+    /// (`by_target` for elements, `by_property` for properties,
+    /// `by_local` for let-bound locals).
+    ///
+    /// A reference whose `target_local` equals its own `range` is a
+    /// **declaration marker** — it makes the binding's name span
+    /// findable via [`Self::find_at`] but is intentionally NOT
+    /// pushed into `by_local`, so the declaration doesn't show up
+    /// as a usage of itself (LSP's `include_declaration` re-adds
+    /// it explicitly when requested).
     pub fn push(&mut self, reference: Reference) {
         let canonical = reference.range.source.clone();
         if let Some(target) = reference.target_element {
@@ -166,6 +199,15 @@ impl ReferenceIndex {
                     range: reference.range.clone(),
                     kind: reference.kind,
                 });
+        }
+        if let Some(binding) = reference.target_local.clone()
+            && binding != reference.range
+        {
+            self.by_local.entry(binding).or_default().push(RefLocation {
+                canonical_path: canonical.clone(),
+                range: reference.range.clone(),
+                kind: reference.kind,
+            });
         }
         self.by_file.entry(canonical).or_default().push(reference);
     }
@@ -225,6 +267,16 @@ impl ReferenceIndex {
         self.by_property
             .get(&(owner, SmolStr::new(name)))
             .map(Vec::as_slice)
+    }
+
+    /// All references targeting the let-binding identified by its
+    /// **declaration name span**. `None` when the binding has no
+    /// usages (only its declaration). The declaration itself is
+    /// never in this list — [`Self::push`] skips the self-reference
+    /// case.
+    #[must_use]
+    pub fn usages_of_local(&self, binding: &SourceInfo) -> Option<&[RefLocation]> {
+        self.by_local.get(binding).map(Vec::as_slice)
     }
 }
 
@@ -316,12 +368,11 @@ fn walk_element_references(
                 walk_type_expr(model, &p.type_expr, visit);
             }
             walk_type_expr(model, &f.return_type, visit);
-            // Body expressions get the function's parameters as the
-            // outermost scope so `$paramName` references can resolve.
-            let scope: [&[Parameter]; 1] = [f.parameters.as_ref()];
-            for expr in f.body.iter() {
-                walk_value_spec_in_scope(model, expr, &scope, visit);
-            }
+            // Function body — parameters are the outermost scope.
+            // `walk_body` threads let-bindings sequentially as it
+            // walks the statement list.
+            let mut scope: Vec<LocalScope<'_>> = Vec::new();
+            walk_body(model, &f.body, f.parameters.as_ref(), &mut scope, visit);
         }
         Element::Class(c) => {
             walk_stereotypes(model, &c.stereotypes, visit);
@@ -344,10 +395,8 @@ fn walk_element_references(
                     walk_type_expr(model, &p.type_expr, visit);
                 }
                 walk_type_expr(model, &qp.return_type, visit);
-                let scope: [&[Parameter]; 1] = [qp.parameters.as_ref()];
-                for expr in qp.body.iter() {
-                    walk_value_spec_in_scope(model, expr, &scope, visit);
-                }
+                let mut scope: Vec<LocalScope<'_>> = Vec::new();
+                walk_body(model, &qp.body, qp.parameters.as_ref(), &mut scope, visit);
             }
             for con in &c.constraints {
                 walk_value_spec_references(model, &con.function, visit);
@@ -371,10 +420,8 @@ fn walk_element_references(
                     walk_type_expr(model, &p.type_expr, visit);
                 }
                 walk_type_expr(model, &qp.return_type, visit);
-                let scope: [&[Parameter]; 1] = [qp.parameters.as_ref()];
-                for expr in qp.body.iter() {
-                    walk_value_spec_in_scope(model, expr, &scope, visit);
-                }
+                let mut scope: Vec<LocalScope<'_>> = Vec::new();
+                walk_body(model, &qp.body, qp.parameters.as_ref(), &mut scope, visit);
             }
         }
         Element::Enumeration(e) => {
@@ -414,6 +461,7 @@ fn walk_stereotypes(
             kind: RefKind::StereotypeRef,
             target_element: Some(st.profile),
             target_property: None,
+            target_local: None,
             target,
         });
     }
@@ -460,15 +508,106 @@ fn walk_tagged_values(
             kind: RefKind::TaggedValueRef,
             target_element: Some(tv.profile),
             target_property: None,
+            target_local: None,
             target,
         });
     }
 }
 
+/// One frame of the walker's local-scope stack. Each frame
+/// represents a body context (function / lambda / QP) and carries:
+///
+/// - **Parameters** — the static signature of the body context.
+/// - **Let-bindings** — `(name, name_source_info)` pairs accumulated
+///   sequentially as [`walk_body`] iterates the statement list.
+///
+/// Variable lookup walks the scope stack innermost-first; within
+/// each frame, let-bindings are checked first (innermost let wins
+/// for shadowing) and then parameters.
+struct LocalScope<'a> {
+    parameters: &'a [Parameter],
+    let_bindings: Vec<(SmolStr, SourceInfo)>,
+}
+
 /// Convenience entry-point used by call sites that don't have a
 /// scope stack handy (default-value expressions, constraints).
 fn walk_value_spec_references(model: &PureModel, vs: &ValueSpec, visit: &mut dyn FnMut(Reference)) {
-    walk_value_spec_in_scope(model, vs, &[], visit);
+    let mut scope: Vec<LocalScope<'_>> = Vec::new();
+    walk_value_spec_in_scope(model, vs, &mut scope, visit);
+}
+
+/// Walk a body (a `[ValueSpec]` statement list) with let-binding
+/// scoping. Pushes a fresh [`LocalScope`] for the body's
+/// parameters, iterates statements sequentially, detects
+/// `let x = expr` statements (lowered as
+/// `FunctionCall("letFunction", [StringLit, value])`), and grows
+/// the innermost scope's `let_bindings` so subsequent statements
+/// see the binding.
+///
+/// For each let-statement the walker also emits a **declaration
+/// marker** [`Reference`] at the binding's name span. The marker
+/// has `target_local: Some(name_span)` and `range == name_span` —
+/// `ReferenceIndex::push` recognises the self-reference and
+/// inserts it into `by_file` only, not `by_local`, so the
+/// declaration is findable by cursor lookup but doesn't appear as
+/// its own usage.
+fn walk_body<'a>(
+    model: &PureModel,
+    body: &'a [ValueSpec],
+    parameters: &'a [Parameter],
+    scope: &mut Vec<LocalScope<'a>>,
+    visit: &mut dyn FnMut(Reference),
+) {
+    scope.push(LocalScope {
+        parameters,
+        let_bindings: Vec::new(),
+    });
+    for stmt in body {
+        if let Some((name, name_si, value)) = extract_let_statement(stmt) {
+            // The let-binding is NOT visible to its own value
+            // expression — walk the value with the current scope
+            // first.
+            walk_value_spec_in_scope(model, value, scope, visit);
+            // Emit a declaration marker so cursor on the binding
+            // name resolves to itself; `ReferenceIndex::push` keeps
+            // this out of `by_local` (range == target_local).
+            visit(Reference {
+                range: name_si.clone(),
+                kind: RefKind::Variable,
+                target_element: None,
+                target_property: None,
+                target_local: Some(name_si.clone()),
+                target: name_si.clone(),
+            });
+            // Extend the innermost scope so subsequent statements
+            // see the binding.
+            if let Some(frame) = scope.last_mut() {
+                frame.let_bindings.push((name, name_si));
+            }
+        } else {
+            walk_value_spec_in_scope(model, stmt, scope, visit);
+        }
+    }
+    scope.pop();
+}
+
+/// Detect a `letFunction("name", value)` desugared let-statement.
+/// Returns `(name, name_source_info, value_value_spec)` on match,
+/// `None` otherwise. The name span comes from the StringLiteral
+/// argument's `source_info`, which lowering deliberately set to
+/// the binding **name** span (see `crates/pure/src/lower/let_expr.rs`).
+fn extract_let_statement(vs: &ValueSpec) -> Option<(SmolStr, SourceInfo, &ValueSpec)> {
+    let ExprKind::FunctionCall(d) = vs.kind.as_ref() else {
+        return None;
+    };
+    if d.function_name.as_str() != "letFunction" || d.arguments.len() != 2 {
+        return None;
+    }
+    let name_arg = &d.arguments[0];
+    let ExprKind::StringLiteral(name) = name_arg.kind.as_ref() else {
+        return None;
+    };
+    Some((name.clone(), name_arg.source_info.clone(), &d.arguments[1]))
 }
 
 /// Recursively walk a [`ValueSpec`] tree and emit one [`Reference`]
@@ -476,17 +615,16 @@ fn walk_value_spec_references(model: &PureModel, vs: &ValueSpec, visit: &mut dyn
 /// [`ExprKind`] variant — adding a new "this expression points at
 /// element X" rule = one push call here.
 ///
-/// `scope` is a stack of parameter slices, innermost last. Each
-/// nested [`ExprKind::Lambda`] pushes its parameters; each
-/// [`ExprKind::Variable`] reads from the stack innermost-first to
-/// find the binding parameter (function / QP / lambda). Let-binding
-/// scope (the `letFunction("name", value)` desugar) is not yet
-/// resolved by the index — those Variables fall through to the
-/// locate-based handler.
-fn walk_value_spec_in_scope(
+/// `scope` is a stack of [`LocalScope`] frames, innermost last.
+/// Each nested [`ExprKind::Lambda`] pushes its parameters via
+/// [`walk_body`]; let-statements at body level extend the
+/// innermost frame's `let_bindings`. [`ExprKind::Variable`] reads
+/// from the stack innermost-first, checking let-bindings first
+/// (shadowing) then parameters.
+fn walk_value_spec_in_scope<'a>(
     model: &PureModel,
-    vs: &ValueSpec,
-    scope: &[&[Parameter]],
+    vs: &'a ValueSpec,
+    scope: &mut Vec<LocalScope<'a>>,
     visit: &mut dyn FnMut(Reference),
 ) {
     match &*vs.kind {
@@ -501,6 +639,7 @@ fn walk_value_spec_in_scope(
                     kind: RefKind::FunctionCall,
                     target_element: Some(target_element),
                     target_property: None,
+                    target_local: None,
                     target,
                 });
             }
@@ -539,6 +678,7 @@ fn walk_value_spec_in_scope(
                         kind: RefKind::PropertyCall,
                         target_element: None,
                         target_property: Some((owner, d.function_name.clone())),
+                        target_local: None,
                         target,
                     });
                 } else if let Some(target) = enum_value_decl_span(model, receiver, &d.function_name)
@@ -552,6 +692,7 @@ fn walk_value_spec_in_scope(
                         kind: RefKind::PropertyCall,
                         target_element: None,
                         target_property: None,
+                        target_local: None,
                         target,
                     });
                 }
@@ -570,6 +711,7 @@ fn walk_value_spec_in_scope(
                     kind: RefKind::QualifiedPropertyCall,
                     target_element: None,
                     target_property: Some((owner, d.function_name.clone())),
+                    target_local: None,
                     target: qp_target,
                 });
             }
@@ -578,22 +720,43 @@ fn walk_value_spec_in_scope(
             }
         }
         ExprKind::Variable { name } => {
-            // Search the scope stack innermost-first.
-            for params in scope.iter().rev() {
-                if let Some(p) = params.iter().find(|p| &p.name == name) {
+            // Search the scope stack innermost-first. Within each
+            // frame, let-bindings shadow parameters (later let wins
+            // over earlier let; any let in the same frame wins over
+            // the frame's parameters).
+            for frame in scope.iter().rev() {
+                if let Some((_, binding_si)) =
+                    frame.let_bindings.iter().rev().find(|(n, _)| n == name)
+                {
+                    // Let-bound local. Reverse-indexed via
+                    // `target_local`; navigation goes to the
+                    // binding name span.
                     visit(Reference {
                         range: vs.source_info.clone(),
                         kind: RefKind::Variable,
                         target_element: None,
                         target_property: None,
+                        target_local: Some(binding_si.clone()),
+                        target: binding_si.clone(),
+                    });
+                    return;
+                }
+                if let Some(p) = frame.parameters.iter().find(|p| &p.name == name) {
+                    // Parameter. Not yet reverse-indexed — goto-def
+                    // still works via `target`.
+                    visit(Reference {
+                        range: vs.source_info.clone(),
+                        kind: RefKind::Variable,
+                        target_element: None,
+                        target_property: None,
+                        target_local: None,
                         target: p.source_info.clone(),
                     });
                     return;
                 }
             }
-            // Unbound variable — likely a let-binding the index
-            // doesn't yet resolve. Locate-based fallback may pick it
-            // up, but emit nothing here.
+            // Unbound variable — Pure parse / typecheck would already
+            // have rejected this. Emit nothing.
         }
         ExprKind::PackageableElementRef { element } => {
             if let Some(target) = element_target_span(model, *element) {
@@ -602,6 +765,7 @@ fn walk_value_spec_in_scope(
                     kind: RefKind::TypeRef,
                     target_element: Some(*element),
                     target_property: None,
+                    target_local: None,
                     target,
                 });
             }
@@ -613,6 +777,7 @@ fn walk_value_spec_in_scope(
                     kind: RefKind::EnumValue,
                     target_element: Some(*enum_element),
                     target_property: None,
+                    target_local: None,
                     target,
                 });
             }
@@ -626,18 +791,16 @@ fn walk_value_spec_in_scope(
                     kind: RefKind::TypeRef,
                     target_element: Some(*element),
                     target_property: None,
+                    target_local: None,
                     target,
                 });
             }
         }
         ExprKind::Lambda { parameters, body } => {
-            // Push the lambda's parameters onto the scope stack for
-            // the body walk; pop on return.
-            let mut nested: Vec<&[Parameter]> = scope.to_vec();
-            nested.push(parameters);
-            for expr in body {
-                walk_value_spec_in_scope(model, expr, &nested, visit);
-            }
+            // Lambda body is itself a `[ValueSpec]` statement list;
+            // `walk_body` handles its let-detection and pushes a
+            // fresh scope frame for the lambda's parameters.
+            walk_body(model, body, parameters.as_ref(), scope, visit);
         }
         ExprKind::Collection { elements } => {
             for el in elements {
@@ -882,6 +1045,7 @@ fn walk_type_expr(model: &PureModel, ty: &TypeExpr, visit: &mut dyn FnMut(Refere
                     kind: RefKind::TypeRef,
                     target_element: Some(*element),
                     target_property: None,
+                    target_local: None,
                     target,
                 });
             }
