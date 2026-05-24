@@ -15,7 +15,7 @@
 //! Pass 2.5b — Milestoning date-context propagation.
 //!
 //! Java parity: `MilestoningDatesPropagationFunctions` +
-//! `MilestoningDateSourceType`. Runs in [`finalize_model`] between Pass 2.5
+//! `MilestoningDateSourceType`. Runs in `finalize_model` between Pass 2.5
 //! (type inference) and Pass 3 (validation).
 //!
 //! Without this pass, user code that writes `$customer.address` on a

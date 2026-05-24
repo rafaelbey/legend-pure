@@ -543,7 +543,7 @@ pub struct SynthesizedMilestoningMapping {
 
 /// Per-database resolved snapshot produced by [`process_database`].
 ///
-/// Lives in extension state, not on the [`PureModel`]. Consumers
+/// Lives in extension state, not on the `PureModel`. Consumers
 /// retrieve it via [`crate::compiler::RelationalExtension::resolved_databases`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedDatabase {

@@ -29,7 +29,7 @@
 //! processingDate; a `bitemporal` source's args are `[processingDate,
 //! businessDate]`.
 //!
-//! Consumption: [`Self::for_target_stereotype`] produces the *injection*
+//! Consumption: `Self::for_target_stereotype` produces the *injection*
 //! arg list to splice into a milestoned-property call, ordered for the
 //! target class's stereotype. A bitemporal source narrowing to a
 //! businesstemporal target drops the processingDate; a bitemporal source

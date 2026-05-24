@@ -17,7 +17,7 @@
 //! Used by [`super::slice::slice_by_repo`] to translate cross-repo
 //! references into FQN-indexed sentinels, and by
 //! [`super::slice::merge_slice`] to do the reverse rewrite when a slice
-//! lands in a fresh [`PureModel`].
+//! lands in a fresh `PureModel`.
 //!
 //! The visitor is mutable: the closure receives `&mut ElementId` so it can
 //! patch references in place. There are no fallible code paths — the
@@ -254,7 +254,7 @@ fn walk_multiplicity(_m: &mut Multiplicity, _visit: &mut dyn FnMut(&mut ElementI
 /// Walk every [`ElementId`] inside a [`TypeExpr`] tree.
 ///
 /// Public so DSL extensions can reuse the same recursion when they
-/// register their own [`crate::purem::extension::PuremExtension`] payloads.
+/// register their own `crate::purem::extension::PuremExtension` payloads.
 pub fn walk_type(ty: &mut TypeExpr, visit: &mut dyn FnMut(&mut ElementId)) {
     match ty {
         TypeExpr::Named {

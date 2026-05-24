@@ -90,7 +90,7 @@ pub fn run_sql_to_result_set_duckdb(
 /// VARCHAR/CHAR/TEXT result through binary mode errors out with
 /// `"output binary format is undefined"`. Simple-protocol text mode
 /// works for every type H2 produces; we parse the text representation
-/// per column type in [`cell_to_value_pg_text`].
+/// per column type in `cell_to_value_pg_text`.
 ///
 /// # Errors
 /// Propagates H2 (PG-wire) errors mapped to [`PureException`] via

@@ -23,10 +23,10 @@
 //!   `classifierGenericType` → GenericType{rawType=Column,
 //!   typeArguments=[null, `GT(rawType=type_element)`],
 //!   multiplicityArguments=[Multiplicity]}
-//! - **`RelationType`** — `columns` (Column[*])
-//! - **`ColSpecArray`** — `names` (String[*]) plus `classifierGenericType` →
+//! - **`RelationType`** — `columns` (`Column[*]`)
+//! - **`ColSpecArray`** — `names` (`String[*]`) plus `classifierGenericType` →
 //!   GenericType{rawType=ColSpecArray,
-//!   typeArguments=[GT(rawType=<inner RelationType>)]}, so the addColumns
+//!   typeArguments=`[GT(rawType=<inner RelationType>)]`}, so the addColumns
 //!   native can navigate
 //!   `csa.classifierGenericType.typeArguments[0].rawType.columns` per Java.
 

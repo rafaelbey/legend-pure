@@ -150,7 +150,7 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeI
     }
 }
 
-/// Initializes a [`JniContext`] from a classpath TOML supplied as a
+/// Initializes a `JniContext` from a classpath TOML supplied as a
 /// byte array.
 ///
 /// Java reads the classpath TOML from JAR resources — typically via
@@ -166,8 +166,8 @@ pub extern "system" fn Java_org_finos_legend_pure_rust_PureRustEvaluator_nativeI
 /// [`legend_pure_core_platform::classpath::compile_classpath_bytes`]
 /// for the full contract.
 ///
-/// This entry point uses [`crate::context::JniContext::new_with_configs`].
-/// Both this and the parameterless [`Java_*_nativeInitContext`] route
+/// This entry point uses `crate::context::JniContext::new_with_configs`.
+/// Both this and the parameterless `Java_*_nativeInitContext` route
 /// through `discovered()` for the native registry — so distributed-
 /// slice extensions linked into the cdylib are active regardless of
 /// which init path Java picks. The bytes-mode path additionally

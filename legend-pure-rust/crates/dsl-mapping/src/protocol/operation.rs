@@ -81,7 +81,7 @@ impl MappingOperation {
 /// Protocol shape for an `: Operation { … }` class mapping body.
 ///
 /// Mirrors Java's `OperationClassMapping` extending `ClassMapping`:
-/// flattens the header alongside `parameters` (List<String>) and
+/// flattens the header alongside `parameters` (`List<String>`) and
 /// `operation` (MappingOperation enum, nullable).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

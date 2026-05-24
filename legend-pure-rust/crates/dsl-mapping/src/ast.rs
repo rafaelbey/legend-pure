@@ -218,9 +218,9 @@ pub enum ClassMappingBody {
     /// grammar at
     /// `legend-engine-language-pure-grammar/.../mapping/relationFunctionMapping/RelationFunctionMappingParserGrammar.g4`.
     RelationFunction(Box<RelationFunctionClassMappingBody>),
-    /// Body produced by a foreign [`ClassMappingBodyParser`] —
+    /// Body produced by a foreign `ClassMappingBodyParser` —
     /// e.g. Relational's `: Relational { ~mainTable [db]schema.tbl … }`
-    /// shape — registered with [`MappingSectionParser`] via
+    /// shape — registered with `MappingSectionParser` via
     /// [`with_body_parsers`](crate::parser::MappingSectionParser::with_body_parsers).
     /// dsl-mapping never inspects the inner content; the foreign DSL's
     /// own [`CompilerExtension`](legend_pure_parser_pure::extension::CompilerExtension)

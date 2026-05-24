@@ -23,12 +23,12 @@
 //!    machinery handles it just like any `Class` or `Function`). The
 //!    payload is a Postcard-encoded [`DiagramSnapshot`] keyed by the
 //!    `"Diagram"` DSL name.
-//! 2. **Extension-owned state** (the legacy [`Self::diagrams`]
+//! 2. **Extension-owned state** (the legacy `Self::diagrams`
 //!    `RefCell<HashMap>`) — kept for now so existing in-process
 //!    consumers (tests, codegen, validate pass) keep working without
-//!    a forced migration. Reads via [`Self::diagrams`] return whatever
+//!    a forced migration. Reads via `Self::diagrams` return whatever
 //!    the in-process compile registered; reads via
-//!    [`Self::diagrams_from_model`] decode from the graph and survive
+//!    `Self::diagrams_from_model` decode from the graph and survive
 //!    `.purem` round-trips.
 //!
 //! The dual-write keeps validate-pass logic intact (it still walks
@@ -63,7 +63,7 @@ pub const DIAGRAM_CLASSIFIER_FQN: &str = "meta::pure::diagram::Diagram";
 /// Compiler extension for the Diagram DSL.
 ///
 /// Stateless unit struct — per-compile data lives in
-/// [`DiagramCompileState`] stashed in `ctx.scope`. Lets the
+/// `DiagramCompileState` stashed in `ctx.scope`. Lets the
 /// extension self-register via the
 /// [`COMPILER_EXTENSIONS`] distributed slice so any binary that
 /// depends on `legend-pure-dsl-diagram` picks it up automatically.

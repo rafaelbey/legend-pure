@@ -22,7 +22,7 @@
 //! 1–6 Integer overloads), `datePart`, `parseDate`, `dateDiff`, and
 //! `adjust`.
 //!
-//! All arithmetic and precision rules flow through [`PureDate`] — we do
+//! All arithmetic and precision rules flow through `PureDate` — we do
 //! not reach into `date.rs` to add new methods. `DurationUnit` values
 //! arrive as `Value::String("DurationUnit.DAYS")` (the evaluator's
 //! enum-value shape) and are parsed by their suffix.
@@ -234,7 +234,7 @@ impl NativeFunction for DayOfMonth {
 }
 
 /// Pure `hour(DateTime[1]): Integer[1]`. Throws "Cannot get hour for
-/// <date>" when no time component present (`testHourError`).
+/// `<date>`" when no time component present (`testHourError`).
 #[derive(Debug)]
 pub struct Hour;
 
@@ -257,7 +257,7 @@ impl NativeFunction for Hour {
 }
 
 /// Pure `minute(DateTime[1]): Integer[1]`. Throws "Cannot get minute
-/// for <date>" when no minute component (`testMinuteError`).
+/// for `<date>`" when no minute component (`testMinuteError`).
 #[derive(Debug)]
 pub struct Minute;
 
@@ -280,7 +280,7 @@ impl NativeFunction for Minute {
 }
 
 /// Pure `second(DateTime[1]): Integer[1]`. Throws "Cannot get second
-/// for <date>" when no second component (`testSecondError`).
+/// for `<date>`" when no second component (`testSecondError`).
 #[derive(Debug)]
 pub struct Second;
 

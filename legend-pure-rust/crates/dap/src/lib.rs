@@ -16,8 +16,8 @@
 //!
 //! Mirrors [`legend-pure-lsp`](../legend_pure_lsp/index.html) one
 //! protocol layer over: the same `Repo` cascade compiles a fresh
-//! `PureModel` at launch, and the runtime [`Evaluator`] runs the
-//! target function with a [`DapHooks`](crate::hooks::DapHooks)
+//! `PureModel` at launch, and the runtime `Evaluator` runs the
+//! target function with a `DapHooks`
 //! instance instead of the LSP's `CapturingHooks`.
 //!
 //! Transport: stdio with `Content-Length:` framing, same as LSP.

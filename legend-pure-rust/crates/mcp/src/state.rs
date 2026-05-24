@@ -59,7 +59,7 @@ pub struct WorkspaceSnapshot {
     /// Wall-clock time the snapshot was produced. Surfaced by
     /// [`workspace_status`](crate::LegendMcpServer::workspace_status)
     /// so agents can decide whether to call
-    /// [`reload_workspace`](crate::LegendMcpServer::reload_workspace).
+    /// `reload_workspace`.
     pub compiled_at: jiff::Timestamp,
     /// Reverse-references index over the model. Drives the
     /// `find_references` tool: given an [`ElementId`], list every

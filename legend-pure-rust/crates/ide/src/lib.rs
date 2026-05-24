@@ -887,7 +887,7 @@ fn tag_decl_span(profile_element: &Element, name: &SmolStr) -> Option<SourceInfo
 
 /// Look up the source span of property (or qualified-property)
 /// `name` on `class_id` or any of its supertypes. Public sibling to
-/// [`property_decl_target`] for callers that already have the
+/// `property_decl_target` for callers that already have the
 /// declaring class id directly (LSP `references_for_position`
 /// when `include_declaration` is set, and any cursor-on-property
 /// path that doesn't run through a `ValueSpec` receiver).
@@ -1146,7 +1146,7 @@ where
 /// Walks the core model first, then asks each discovered
 /// [`IdeExtension`] to contribute its own reference sites. Same
 /// shape as
-/// [`build_reference_index_with_extensions`](self::build_reference_index_with_extensions)
+/// `build_reference_index_with_extensions`
 /// (which routes through the legacy `CompilerExtension::walk_references`
 /// hook); the two will collapse to a single entry point in Phase 2
 /// once all in-tree DSLs migrate their walk_references impls onto the

@@ -277,7 +277,7 @@ pub trait EvalContextTrait {
     /// that case.
     ///
     /// The default impl returns `None` so test stubs (e.g.
-    /// [`crate::native::MockCtx`]) and embedders that don't care
+    /// `crate::native::MockCtx`) and embedders that don't care
     /// about classpath configuration don't have to override it.
     fn config_for(&self, _name: &str) -> Option<&HashMap<String, toml::Value>> {
         None

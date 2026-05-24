@@ -27,7 +27,7 @@
 //!    across threads via `Arc`.
 //!
 //! 2. **Runtime Heap** — Mutable storage for runtime object instances.
-//!    Each object is identified by an [`ObjectId`](heap::ObjectId) and stores
+//!    Each object is identified by an `ObjectId` and stores
 //!    properties as `im_rc::Vector<Value>`. Supports `mutateAdd` for in-place mutation.
 //!
 //! 3. **Value Stack** — Scoped variable bindings for expression evaluation.

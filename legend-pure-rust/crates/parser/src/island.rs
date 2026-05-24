@@ -38,7 +38,7 @@
 //! In practice, this means your implementation:
 //! - **Must not** use `Rc`, `Cell`, `RefCell`, or other non-thread-safe types
 //! - **Must not** hold mutable state between `parse()` calls
-//! - **Should** be stateless (zero-sized structs are ideal, like [`GraphFetchIslandParser`](graph_fetch::GraphFetchIslandParser))
+//! - **Should** be stateless (zero-sized structs are ideal, like `GraphFetchIslandParser`)
 //! - If state is required, use `Arc<Mutex<...>>` or atomics
 //!
 //! The same requirement applies to [`IslandContent`] (the AST output), which
@@ -109,7 +109,7 @@ pub trait IslandParser: Send + Sync {
 ///
 /// Empty by default — DSL crates that own island grammars (`dsl-graph`,
 /// `dsl-store`, `dsl-tds`) export their own helpers (e.g.
-/// [`legend_pure_dsl_graph::parser::default_island_parsers`]) which
+/// `legend_pure_dsl_graph::parser::default_island_parsers`) which
 /// callers concatenate into the slice they pass to
 /// [`crate::parse_with_islands`]. Core carries no DSL-specific
 /// island parsers.

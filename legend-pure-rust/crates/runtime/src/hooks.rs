@@ -78,7 +78,7 @@ pub trait EvalHooks {
         context: &crate::context::VariableContext,
     ) -> bool;
 
-    /// Called by the evaluator after [`before_eval`] returned `true`,
+    /// Called by the evaluator after `before_eval` returned `true`,
     /// with a fully-rendered variable snapshot.
     ///
     /// Debug implementations store the tree (so the DAP `variables`
@@ -86,7 +86,7 @@ pub trait EvalHooks {
     /// eval thread until the client resumes. The default
     /// implementation is a no-op so existing hooks that never request
     /// snapshots (i.e. those returning `false` from
-    /// [`before_eval`]) don't need to override.
+    /// `before_eval`) don't need to override.
     fn pause_with_snapshot(&mut self, _source: &SourceInfo, _tree: DisplayTree) {}
 
     /// Called after evaluating an expression, with the result.

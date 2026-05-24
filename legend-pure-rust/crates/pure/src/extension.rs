@@ -98,7 +98,7 @@ use crate::types::{Multiplicity, Parameter, ResolvedType, TypeExpr};
 ///
 ///     fn validate(&self, ctx: &mut ValidateCtx<'_>) {
 ///         let Some(state) = ctx.scope.get::<DiagramCompileState>() else { return };
-///         for (fqn, reg) in &state.diagrams { … }
+///         for (fqn, reg) in &state.diagrams { /* … */ }
 ///     }
 /// }
 /// ```

@@ -54,7 +54,7 @@ pub type RepoVisibilityMap = HashMap<SmolStr, BTreeSet<SmolStr>>;
 ///
 /// `compiled` is the result of [`compile_repo_pattern`]: the source
 /// wrapped in `^(?:…)$` so Rust's [`regex::Regex::is_match`] (unanchored
-/// by default) matches Java's [`java.util.regex.Matcher::matches`]
+/// by default) matches Java's `java.util.regex.Matcher::matches`
 /// (fully anchored).
 #[derive(Debug, Clone)]
 pub struct RepoPattern {

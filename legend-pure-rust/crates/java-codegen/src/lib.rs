@@ -14,7 +14,7 @@
 
 //! Java wrapper code generator for the JNI evaluator.
 //!
-//! Given a [`PureModel`](legend_pure_parser_pure::PureModel) and a list of
+//! Given a `PureModel` and a list of
 //! Pure function FQNs, produces a set of [`JavaFile`]s implementing typed
 //! Java static-method facades plus interfaces for every reachable user
 //! `Class`/`Enumeration` in the property graph. The generated code targets

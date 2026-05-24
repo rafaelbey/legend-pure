@@ -504,8 +504,8 @@ pub struct RelationType {
 ///
 /// # Examples
 ///
-/// - `{->String[1]}` — no parameters, returns String[1]
-/// - `{Integer[1]->Boolean[1]}` — takes Integer[1], returns Boolean[1]
+/// - `{->String[1]}` — no parameters, returns `String[1]`
+/// - `{Integer[1]->Boolean[1]}` — takes `Integer[1]`, returns `Boolean[1]`
 /// - `{String[1], Integer[1]->Boolean[1]}` — two parameters
 #[derive(Debug, Clone, PartialEq, crate::Spanned)]
 pub struct FunctionType {

@@ -59,7 +59,7 @@
 //!      column-type lookup) since full DynaFunction → Pure-function
 //!      lowering is RT-1 / INT-1 territory.
 //!
-//! See [`crates/dsl-mapping/src/compiler.rs`] for the trait-shape
+//! See `crates/dsl-mapping/src/compiler.rs` for the trait-shape
 //! template these validators follow.
 
 use std::collections::{HashMap, HashSet};

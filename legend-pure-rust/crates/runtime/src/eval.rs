@@ -2677,7 +2677,7 @@ impl<H: EvalHooks> std::fmt::Debug for Evaluator<'_, H> {
 /// Exposed at module visibility (`pub`) so callers that pre-fetch a
 /// QP — e.g. `pure_to_string` checking the declared signature before
 /// committing to an invocation — can hand the same value through to
-/// [`EvalContextTrait::invoke_qualified_property_found`] without a
+/// `EvalContextTrait::invoke_qualified_property_found` without a
 /// second `find_qp_with_generalization` walk.
 pub struct FoundQp {
     /// Declared parameters of the QP — shared with the compiled

@@ -14,7 +14,7 @@
 
 //! High-level entry points for running a single Pure function, a
 //! `<<test::Test>>`-tagged test, or a PCT test against the current
-//! [`PureModel`](legend_pure_parser_pure::model::PureModel).
+//! [`PureModel`].
 //!
 //! This module exists so the LSP (`workspace/executeCommand`), the
 //! MCP server (`tools/call run_function` / `run_test` / `run_pct` /
@@ -38,7 +38,7 @@
 //! `stdout` field rather than written to the process's actual
 //! stdout. Embedders that want a different hook strategy (live
 //! streaming, debugger, …) can build their own
-//! [`Evaluator`](crate::eval::Evaluator) and call
+//! [`Evaluator`] and call
 //! [`Evaluator::call`](crate::eval::Evaluator::call) directly.
 
 mod exception;

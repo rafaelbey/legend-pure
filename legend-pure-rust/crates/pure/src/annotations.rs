@@ -34,7 +34,7 @@ pub struct StereotypeRef {
     /// The stereotype name within the profile.
     pub value: SmolStr,
     /// Source range covering the entire `profile.value` reference inside
-    /// the surrounding `<<...>>`. Populated by [`crate::resolve::resolve_stereotypes`]
+    /// the surrounding `<<...>>`. Populated by `crate::resolve::resolve_stereotypes`
     /// from the AST. `None` for synthetic refs constructed by tests or
     /// loaded from purem snapshots that don't carry source info.
     /// Used by IDE goto / hover to know which source range is clickable.

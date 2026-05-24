@@ -69,7 +69,7 @@ fn err_unexpected(expected: &str, found: &str, source_info: SourceInfo) -> Parse
 /// `parserName` token in `Class : <parserName> { … }` and whose
 /// [`parse()`](Self::parse) consumes the surrounding braces and body
 /// content, returning a [`ForeignClassMappingBody`] trait object that
-/// lands in [`ClassMappingBody::Foreign`](crate::ast::ClassMappingBody::Foreign).
+/// lands in [`ClassMappingBody::Foreign`].
 ///
 /// Implementations must be `Send + Sync` so they can be shared across
 /// parallel file parsers.

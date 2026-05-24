@@ -1041,7 +1041,7 @@ fn cmp_values(a: &Value, b: &Value) -> std::cmp::Ordering {
 /// ordering — values stay associated with their original element. When
 /// `comp` is provided, it returns an `Integer` (negative/zero/positive)
 /// to order two items; otherwise, primitive natural order via
-/// [`cmp_values`] is used. Both `key` and `comp` may independently be
+/// `cmp_values` is used. Both `key` and `comp` may independently be
 /// `Unit` / `[]` to mean "not provided".
 #[derive(Debug)]
 pub struct Sort;

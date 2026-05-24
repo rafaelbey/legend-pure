@@ -303,7 +303,7 @@ pub enum DateValue {
     ///
     /// Distinct from concrete `StrictDate` values. Lowered from the
     /// parser's `StrictDateLiteral { value: "%latest" }` AST node. At
-    /// runtime it materialises as [`crate::types::Value::Latest`] (the
+    /// runtime it materialises as `crate::types::Value::Latest` (the
     /// runtime equivalent — defined in `legend-pure-runtime`).
     /// Comparison-wise it's greater than every concrete date; in
     /// milestoning dispatch it acts as a wildcard that disables the

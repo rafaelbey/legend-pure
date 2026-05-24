@@ -37,7 +37,7 @@ pub trait IslandComposer {
 ///
 /// Empty by default — DSL crates that own island grammars
 /// (`dsl-graph`, `dsl-store`, `dsl-tds`) export their own helpers
-/// (e.g. [`legend_pure_dsl_graph::compose::default_island_composers`])
+/// (e.g. `legend_pure_dsl_graph::compose::default_island_composers`)
 /// which callers concatenate into the slice they pass to
 /// [`compose_island_with`]. Core carries no DSL-specific composers.
 #[must_use]

@@ -100,7 +100,7 @@ impl NativeFunction for ExecuteTest {
 ///
 /// The Pure-level type is `Map<Function<Any>, String>` — keyed by the
 /// failing test function, valued by the *expected* error message. Java
-/// Pure keys by Function identity; here we key by rendered FQN ([`function_fqn`])
+/// Pure keys by Function identity; here we key by rendered FQN (`function_fqn`)
 /// since [`crate::value::ValueKey`] has no `Function` variant. Manifests
 /// loaded via [`LoadPCTManifest`] use the same FQN-keyed shape, so the
 /// two sides agree.
@@ -110,7 +110,7 @@ impl NativeFunction for ExecuteTest {
 ///   (expected failure tolerated).
 /// - Test fails AND its FQN is in `exclusions` but the messages diverge
 ///   → keep the original FAIL/ERROR but rewrite the message to "PCT
-///   exclusion mismatch: expected '<expected>' got '<actual>'" so a
+///   exclusion mismatch: expected '`<expected>`' got '`<actual>`'" so a
 ///   stale exclusion shows up as a real failure rather than silently
 ///   absorbing a different bug.
 /// - Test passes AND its FQN is in `exclusions` → flip to **FAIL** with
@@ -497,10 +497,10 @@ pub fn find_pct_adapter(
 ///
 /// # Map representation
 ///
-/// The Pure-level type is `Map<Function<Any>, String>` but [`ValueKey`] has
+/// The Pure-level type is `Map<Function<Any>, String>` but `ValueKey` has
 /// no `Function` variant — `executePCTTest` looks up exclusions by the
 /// rendered FQN of the test function, so the map keys are
-/// [`ValueKey::String`]`(test_fqn)` and values are [`Value::String`]`(expected_message)`.
+/// `ValueKey::String``(test_fqn)` and values are [`Value::String`]`(expected_message)`.
 /// Each exclusion's `test` field is also resolved against the model so a
 /// typo in the manifest fails fast at load time rather than silently
 /// missing every lookup later.

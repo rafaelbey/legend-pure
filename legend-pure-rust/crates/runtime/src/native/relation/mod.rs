@@ -30,7 +30,7 @@
 //! (`legend-engine-rust/crates/natives-functions-relation`).
 //!
 //! Shared row-tuple, CSV, and heap-walk helpers stay in this crate's
-//! [`shared`] module (publicly exposed) so the engine extension can
+//! `shared` module (publicly exposed) so the engine extension can
 //! reuse them.
 //!
 //! All M3 identification is by ElementId (`m3_paths::resolve`), never

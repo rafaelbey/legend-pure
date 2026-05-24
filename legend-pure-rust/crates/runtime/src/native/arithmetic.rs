@@ -382,7 +382,7 @@ impl NativeFunction for Mod {
 
 /// Pure `rem(Number[1], Number[1]): Number[1]` — remainder (preserves sign of dividend).
 ///
-/// Promotes via [`promote_pair`] so mixed-type calls like `rem(7.5, 2)`
+/// Promotes via `promote_pair` so mixed-type calls like `rem(7.5, 2)`
 /// or `rem(7d, 2)` work without the caller having to coerce. Empty
 /// remainder for `Decimal` uses `Decimal::checked_rem` which returns
 /// `None` only on division-by-zero (already trapped above).

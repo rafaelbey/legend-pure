@@ -20,7 +20,7 @@
 //! argument so lambdas can branch on engine-specific syntax (e.g.
 //! DuckDB's `CREATE TABLE` vs H2's `CREATE LOCAL TEMPORARY TABLE`).
 //!
-//! Two overloads share one body via [`do_create_temp_table`]:
+//! Two overloads share one body via `do_create_temp_table`:
 //!  * `(name, cols, sql, dbConn)`            — 4 args
 //!  * `(name, cols, sql, relyOnFinally, dbConn)` — 5 args; the boolean
 //!    is accepted for signature parity but not yet acted on (auto-

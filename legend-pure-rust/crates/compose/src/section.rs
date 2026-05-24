@@ -29,7 +29,7 @@ use crate::writer::IndentWriter;
 /// (`#{ … }#`, `#>{ … }#`, `#TDS\n…\n#`) that need a registered
 /// composer to round-trip cleanly. DSL crates export
 /// `default_island_composers()` helpers (e.g.
-/// [`legend_pure_dsl_graph::compose::default_island_composers`])
+/// `legend_pure_dsl_graph::compose::default_island_composers`)
 /// which callers concatenate into the slice they pass here.
 #[must_use]
 pub fn compose_source_file_with(

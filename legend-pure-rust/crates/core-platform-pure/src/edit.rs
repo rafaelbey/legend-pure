@@ -23,7 +23,7 @@
 //! - UTF-16 code-unit → byte-offset translation,
 //! - non-overlapping-edit validation,
 //! - the in-memory mutation of [`Repo::Filesystem`]'s
-//!   [`OwnedSourceFile.content`].
+//!   `OwnedSourceFile.content`.
 //!
 //! Callers are responsible for persisting the result to disk via
 //! [`write_to_disk`] and for invalidating any downstream caches
@@ -76,7 +76,7 @@ pub struct TextEdit {
 #[derive(Debug, Clone)]
 pub struct AppliedEdit {
     /// The full post-edit file content. The in-memory
-    /// [`OwnedSourceFile.content`] has already been overwritten with
+    /// `OwnedSourceFile.content` has already been overwritten with
     /// this value.
     pub new_content: String,
     /// Absolute on-disk path the [`Repo::Filesystem`] resolves the
@@ -138,7 +138,7 @@ pub enum EditError {
 
 /// Apply LSP-style ranged text edits to a single file in `repos`,
 /// mutating the matching [`Repo::Filesystem`] entry's
-/// [`OwnedSourceFile.content`] in place.
+/// `OwnedSourceFile.content` in place.
 ///
 /// `file` is matched against the canonical URL prefix (e.g.
 /// `/myproj/foo.pure`) **or** an absolute disk path whose tail

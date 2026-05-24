@@ -94,7 +94,7 @@ use crate::ast::{
 /// Compiler extension for the `###Mapping` DSL.
 ///
 /// Stateless unit struct — per-compile data lives in
-/// [`MappingCompileState`] stashed in `ctx.scope` (and read back
+/// `MappingCompileState` stashed in `ctx.scope` (and read back
 /// from `model.compile_scope` by `walk_references` post-compile).
 /// Lets the extension self-register via the
 /// [`COMPILER_EXTENSIONS`] distributed slice so any binary that
@@ -434,7 +434,7 @@ impl CompilerExtension for MappingExtension {
 
 /// IDE-side reference contributor for the Mapping DSL.
 ///
-/// Self-registers via [`IDE_EXTENSIONS`]; picked up automatically by
+/// Self-registers via `IDE_EXTENSIONS`; picked up automatically by
 /// [`legend_pure_ide::build_reference_index`] when the
 /// `dsl-mapping` crate is link-forced into the consumer binary.
 /// Surfaces:

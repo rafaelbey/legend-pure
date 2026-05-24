@@ -146,7 +146,7 @@ pub enum ClasspathError {
         /// Requested kind.
         kind: String,
     },
-    /// Compiling the resolved repo set into a [`PureModel`] produced
+    /// Compiling the resolved repo set into a `PureModel` produced
     /// errors. Carries the partial model's error count so JNI / CLI
     /// callers can surface it without depending on `PartialPureModel`'s
     /// shape directly.
@@ -275,7 +275,7 @@ pub fn merge_with_embedded(cp: Classpath, source: Option<PathBuf>) -> ResolvedCl
     }
 }
 
-/// Compile a TOML byte slice straight into a [`crate::repo::PureModel`].
+/// Compile a TOML byte slice straight into a `crate::repo::PureModel`.
 ///
 /// One-call entry point for the JNI bridge: Java reads the classpath
 /// TOML from JAR resources (e.g.

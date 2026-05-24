@@ -21,7 +21,7 @@
 //!     ->cast(@meta::pure::metamodel::relation::TDS<(col1:T1[m1], col2:T2[m2], ...)>)
 //! ```
 //!
-//! The runtime native [`stringToTDS`] (in `legend-pure-runtime`)
+//! The runtime native `stringToTDS` (in `legend-pure-runtime`)
 //! consumes the CSV string and produces the same `ParsedTDS`-bearing
 //! TDS instance. The cast supplies the compile-time `T` parameter
 //! (a relation type with per-column types/multiplicities inferred or

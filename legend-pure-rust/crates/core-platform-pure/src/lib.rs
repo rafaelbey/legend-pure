@@ -42,7 +42,7 @@
 //!
 //! # Embedding utility
 //!
-//! The build-time work is done by [`legend_pure_build`], a
+//! The build-time work is done by `legend_pure_build`, a
 //! standalone crate that any Rust crate owning Pure repos can use
 //! from its own `build.rs`.
 

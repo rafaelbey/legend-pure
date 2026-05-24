@@ -59,7 +59,7 @@ pub struct DispatchedBindings {
 /// One imported manifest reference. Surfaced by [`parse_manifest`] so
 /// the caller (typically an annotation processor) can resolve the
 /// `path` against its own classpath/filesystem and merge the imported
-/// FQNs into [`Options::external_bindings`].
+/// FQNs into `Options::external_bindings`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestImport {
     /// Resource path as written in the `@import` directive — the

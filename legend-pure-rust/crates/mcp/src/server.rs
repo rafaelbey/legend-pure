@@ -57,7 +57,7 @@ pub struct SearchSymbolsArgs {
     pub limit: Option<u32>,
 }
 
-/// Input shape for [`LegendMcpServer::get_diagnostics`].
+/// Input shape for `LegendMcpServer::get_diagnostics`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetDiagnosticsArgs {
     /// Canonical source path (e.g. `/myproj/foo.pure`). If omitted,
@@ -86,17 +86,17 @@ pub struct FindReferencesArgs {
     pub fqn: String,
 }
 
-/// Input shape for [`LegendMcpServer::run_pct`].
+/// Input shape for `LegendMcpServer::run_pct`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RunPctArgs {
     /// FQN of the `<<PCT.test>>`-tagged function.
     pub test_fqn: String,
     /// FQN of the adapter to run the test against. Discoverable via
-    /// [`LegendMcpServer::list_pct_adapters`].
+    /// `LegendMcpServer::list_pct_adapters`.
     pub adapter_fqn: String,
 }
 
-/// Input shape for [`LegendMcpServer::list_packages`].
+/// Input shape for `LegendMcpServer::list_packages`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListPackagesArgs {
     /// Optional FQN prefix filter (e.g. `meta::pure`). If omitted,
@@ -105,7 +105,7 @@ pub struct ListPackagesArgs {
     pub prefix: Option<String>,
 }
 
-/// Input shape for [`LegendMcpServer::list_tests`].
+/// Input shape for `LegendMcpServer::list_tests`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListTestsArgs {
     /// Optional package-FQN prefix to narrow the search (e.g.
@@ -168,7 +168,7 @@ pub struct ApplyEditArgs {
 
 /// JSON-schema-friendly wire shape for one ranged text edit. Maps
 /// to [`legend_pure_core_platform::edit::TextEdit`] via
-/// [`WireTextEdit::into_core`].
+/// `WireTextEdit::into_core`.
 ///
 /// `Serialize` is derived alongside `Deserialize` so tests and
 /// snapshot fixtures can round-trip the exact JSON the IDE sees
@@ -244,7 +244,7 @@ pub struct SymbolHit {
     pub column: u32,
 }
 
-/// One row of the [`LegendMcpServer::get_diagnostics`] response.
+/// One row of the `LegendMcpServer::get_diagnostics` response.
 #[derive(Debug, Serialize)]
 pub struct DiagnosticRow {
     /// Canonical source path the diagnostic refers to.
@@ -261,7 +261,7 @@ pub struct DiagnosticRow {
 }
 
 /// Detailed view of one element returned by
-/// [`LegendMcpServer::read_element`].
+/// `LegendMcpServer::read_element`.
 #[derive(Debug, Serialize)]
 pub struct ElementInfo {
     /// Fully-qualified name.
@@ -288,7 +288,7 @@ pub struct ReferenceLocation {
     pub column: u32,
 }
 
-/// One test-function entry in the [`LegendMcpServer::list_tests`]
+/// One test-function entry in the `LegendMcpServer::list_tests`
 /// response.
 #[derive(Debug, Serialize)]
 pub struct TestEntry {
@@ -464,7 +464,7 @@ pub struct ApplyEditResult {
 
 /// Status of the current workspace snapshot. Returned by
 /// [`LegendMcpServer::workspace_status`] and (after recompilation)
-/// by [`LegendMcpServer::reload_workspace`].
+/// by `LegendMcpServer::reload_workspace`.
 #[derive(Debug, Serialize)]
 pub struct WorkspaceStatus {
     /// Wall-clock time the current snapshot was compiled, formatted

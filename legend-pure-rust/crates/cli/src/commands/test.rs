@@ -446,6 +446,9 @@ fn run_once(
 /// Result counters from a `runTestsFromPath` invocation. Exposed for
 /// `legend build` so the orchestrator can decide pass/fail per repo
 /// without duplicating the surveyor wiring.
+// `fail`/`error` drive `has_failures`; the remaining counters are
+// carried for completeness (logging/future reporting) and not all read.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BuildTestSummary {
     pub pass: i64,

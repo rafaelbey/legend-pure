@@ -14,7 +14,7 @@
 
 //! Embedded Pure source files.
 //!
-//! [`legend_pure_build`] (used by this crate's `build.rs`) reads
+//! `legend_pure_build` (used by this crate's `build.rs`) reads
 //! `[[package.metadata.legend-pure.repos]]` from `Cargo.toml`,
 //! deserializes each Java descriptor JSON, and emits one
 //! `REPO_<NAME>_FILES` array + `REPO_<NAME>_META` constant per repo —

@@ -18,7 +18,7 @@
 //! the base [`Repo`] list, patches in-flight buffer content into any
 //! matching [`Repo::Filesystem`] file (URL-tail match against canonical
 //! paths), and calls [`legend_pure_core_platform::repo::load`] to
-//! produce a fresh [`PureModel`] (or [`PartialPureModel`]).
+//! produce a fresh [`PureModel`] (or `PartialPureModel`).
 //!
 //! `.purem` repos are cloned by `Arc<[u8]>` reference and never
 //! recompiled — a key cost-of-edit constraint that keeps tier-1 LSP

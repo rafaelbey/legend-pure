@@ -29,7 +29,7 @@
 //!
 //! # Parallel Parsing
 //!
-//! For multi-file workloads, use [`parse_many`] with [`SourceProvider`](source::SourceProvider)
+//! For multi-file workloads, use [`parse_many`] with [`SourceProvider`]
 //! implementations to parse files concurrently across all available CPU cores:
 //!
 //! ```
@@ -101,7 +101,7 @@ impl std::fmt::Display for PartialSourceFile {
 /// Parse Pure source text into an AST [`SourceFile`].
 ///
 /// Threads every [`IslandParser`] and [`SectionParser`] discovered via
-/// the [`crate::island::ISLAND_PARSERS`] / [`crate::SECTION_PARSERS`]
+/// the [`crate::island::ISLAND_PARSERS`] / `crate::SECTION_PARSERS`
 /// distributed slices into the parser. This is the production default —
 /// each linked DSL crate self-registers its parsers, and the binary
 /// inherits them with no per-call wiring.

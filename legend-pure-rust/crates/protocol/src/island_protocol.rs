@@ -24,7 +24,7 @@
 //! `dsl-store`, `dsl-tds`) implements [`IslandProtocol`] keyed on
 //! the same tag the parser/composer use, and converts the typed
 //! [`IslandContent`] into the protocol's
-//! [`ValueSpecification`](crate::v1::value_spec::ValueSpecification).
+//! [`ValueSpecification`].
 //!
 //! The current `convert_island_expression` path (in `v1::convert`)
 //! still performs a hardcoded downcast to graph-fetch types as a

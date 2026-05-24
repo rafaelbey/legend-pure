@@ -24,7 +24,7 @@
 //! for structural sharing — this transforms fold+put patterns from
 //! O(N²) to O(N log N).
 //!
-//! Object references use [`ObjectId`] handles into the [`RuntimeHeap`](super::heap::RuntimeHeap),
+//! Object references use `ObjectId` handles into the [`RuntimeHeap`](super::heap::RuntimeHeap),
 //! providing identity-preserving semantics for `mutateAdd`.
 
 use std::cell::RefCell;
@@ -180,7 +180,7 @@ pub enum Value {
     /// and denormalising it would split identity from presentation and
     /// invite drift. Renderers that need the pretty `EnumName.MEMBER`
     /// form (`render_representation`, `render_id`) already have model
-    /// access; the [`Display`] impl prints just the `member`, mirroring
+    /// access; the `Display` impl prints just the `member`, mirroring
     /// how [`Value::Object`] prints the id without the classifier.
     EnumValue {
         /// The owning [`Enumeration`](legend_pure_parser_pure::model::Element::Enumeration) element.

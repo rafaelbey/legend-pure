@@ -227,7 +227,7 @@ pub struct CoverageMap {
     /// Function tracking data.
     pub functions: FunctionTracker,
     /// Known test function FQNs (functions with `<<test.Test>>` or `<<PCT.test>>`).
-    /// Populated by [`populate_coverable`] during model pre-scan.
+    /// Populated by `populate_coverable` during model pre-scan.
     pub test_fqns: HashSet<SmolStr>,
     /// Per-test coverage attribution: test FQN → set of `(source_file, line)`.
     /// Populated at runtime when `current_test` is active in [`CoverageHooks`].
@@ -483,7 +483,7 @@ impl CoverageMap {
 /// - A `BTreeMap` entry increment per spanned line (hot path)
 /// - A single `HashMap::get` for branch arm detection
 ///
-/// This adds ~5-15% overhead compared to [`NoOpHooks`](super::hooks::NoOpHooks).
+/// This adds ~5-15% overhead compared to `NoOpHooks`.
 /// Coverage mode is explicitly opt-in (`--coverage` flag).
 pub struct CoverageHooks {
     map: CoverageMap,

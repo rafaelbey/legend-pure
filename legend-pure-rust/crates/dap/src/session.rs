@@ -118,6 +118,9 @@ pub struct PauseSnapshot {
 pub struct FrameInfo {
     pub name: String,
     pub source: SourceInfo,
+    /// Frame depth in the call stack. Captured for parity with the
+    /// runtime `Frame`; not yet surfaced in the `stackTrace` response.
+    #[allow(dead_code)]
     pub depth: usize,
 }
 

@@ -691,7 +691,7 @@ impl PureModel {
     /// candidate (e.g. lambda body referenced a function while the
     /// receiver/arg was still typed `TypeExpr::Unresolved`) and a
     /// later binding pass needs to re-narrow with the freshly bound
-    /// generics — see [`crate::inference::lambda::bind_from_lambda_body`].
+    /// generics — see `crate::inference::lambda::bind_from_lambda_body`.
     ///
     /// O(model size). Cheap enough for the redispatch path (one walk
     /// per Unresolved-cause FunctionCall encountered during a single

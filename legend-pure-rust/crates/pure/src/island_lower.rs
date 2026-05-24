@@ -17,7 +17,7 @@
 //! Each DSL crate that owns an island grammar (today: `dsl-tds`, with
 //! `dsl-graph` and `dsl-store` as future candidates) supplies an
 //! [`IslandLowerer`] implementation. The lowerer in
-//! [`crate::lower`] dispatches by tag and recurses into the resulting
+//! `crate::lower` dispatches by tag and recurses into the resulting
 //! synthetic AST — keeping the `pure` crate ignorant of any DSL's
 //! content shape.
 //!
@@ -50,14 +50,14 @@ use legend_pure_parser_ast::island::{IslandContent, IslandExpression};
 use legend_pure_parser_ast::source_info::SourceInfo;
 
 /// Lower one island grammar's [`IslandContent`] to a synthetic AST
-/// expression that the main [`crate::lower::lower_expression`] should
+/// expression that the main `crate::lower::lower_expression` should
 /// process in place of the island.
 ///
 /// # Thread safety
 ///
 /// `Send + Sync` — implementations must be stateless or use
 /// thread-safe interior mutability, mirroring the same constraint on
-/// [`legend_pure_parser_parser::IslandParser`]. The CLI parallelises
+/// `legend_pure_parser_parser::IslandParser`. The CLI parallelises
 /// compilation across files.
 pub trait IslandLowerer: Send + Sync {
     /// The island tag this lowerer handles. Must match the

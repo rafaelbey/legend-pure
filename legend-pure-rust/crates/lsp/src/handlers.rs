@@ -278,26 +278,6 @@ pub fn definition_for_position(
     })
 }
 
-/// If a [`ValueSpec`] kind directly references a resolved element,
-/// return that element's `ElementId`. None for variables (need
-/// scope tracking), literals, lambdas, etc.
-#[allow(clippy::match_same_arms)] // patterns intentionally distinct — each variant carries a different field binding even when the result shape coincides
-fn resolve_value_spec_target(vs: &legend_pure_parser_pure::types::ValueSpec) -> Option<ElementId> {
-    use legend_pure_parser_pure::types::ExprKind;
-    match &*vs.kind {
-        ExprKind::FunctionCall(d) | ExprKind::QualifiedPropertyCall(d) => d.function,
-        // PropertyCall's `function_name` is the property name, not a
-        // resolved element — finding the declaring class needs more
-        // context, deferred.
-        ExprKind::PackageableElementRef { element } => Some(*element),
-        ExprKind::EnumValue { enum_element, .. } => Some(*enum_element),
-        ExprKind::TypeReference {
-            type_expr: legend_pure_parser_pure::types::TypeExpr::Named { element, .. },
-        } => Some(*element),
-        _ => None,
-    }
-}
-
 /// Resolve every workspace reference to whatever symbol sits under
 /// the cursor, returning LSP-shaped [`Location`]s.
 ///
@@ -1331,7 +1311,7 @@ fn build_extras(stdout: &str, failures: Option<serde_json::Value>) -> Option<ser
 /// and mark the canonical path dirty so the next compile picks it up
 /// via the incremental path.
 ///
-/// Returns the [`AppliedEdit`] for the caller to use when building the
+/// Returns the `AppliedEdit` for the caller to use when building the
 /// response payload. The caller is responsible for releasing the
 /// workspace lock before triggering the recompile so notifications
 /// don't deadlock.
@@ -1533,8 +1513,8 @@ function test::nameOf(p: test::Person[1]): String[1]
         // `compile_fixture` produces a partial model without bodies
         // lowered to typed ValueSpecs, so this integration test is
         // *correctly* expected to return None today: the property-call
-        // ValueSpec exists but its receiver lacks `type_info`, so we
-        // fall through every resolve_value_spec_target case.
+        // ValueSpec exists but its receiver lacks `type_info`, so no
+        // direct-reference case resolves a target.
         //
         // Previously this test was a "soft pass" because the handler
         // had a fallback that navigated whitespace clicks to the

@@ -107,7 +107,7 @@ pub fn compile(
     compile_with_extensions(source_files, auto_imports, &discovered)
 }
 
-/// Compiles with a slice of [`CompilerExtension`]s. Extensions plug
+/// Compiles with a slice of `CompilerExtension`s. Extensions plug
 /// into each pipeline phase after the M3 work for that phase is done.
 ///
 /// The 0-extension call is identical to [`compile`]. The intent of the
@@ -130,7 +130,7 @@ pub fn compile_with_extensions(
     compile_with_extensions_and_islands(source_files, auto_imports, extensions, &[])
 }
 
-/// Compiles with both [`CompilerExtension`]s and inline-island
+/// Compiles with both `CompilerExtension`s and inline-island
 /// lowerers ([`crate::island_lower::IslandLowerer`]).
 ///
 /// Each DSL crate that owns an island grammar (today: `dsl-tds`)
@@ -500,7 +500,7 @@ pub struct IncrementalOutcome {
 /// 1. Tombstoning prior `(chunk_id, _)` entries from every package's
 ///    `children_elements` list (keeps the package tree consistent
 ///    with the freshly re-declared element set).
-/// 2. Running Pass 1 ([`pass_declare_into`]) → Pass 1.5 (topo) →
+/// 2. Running Pass 1 (`pass_declare_into`) → Pass 1.5 (topo) →
 ///    Pass 2a (signatures) → Pass 2b (function bodies) → Pass 2b'
 ///    (class bodies) — the same passes [`compile_repo_slice_with_islands`]
 ///    runs, scoped to one chunk's source files. Extension `declare` /
@@ -513,8 +513,8 @@ pub struct IncrementalOutcome {
 ///    guarantees this.
 ///
 /// After all rerun chunks are rebuilt, `rebuild_derived_indexes`
-/// runs whole-model (cheap), then Pass 2.5 ([`pass_infer`]) and
-/// Pass 3 ([`crate::validate::validate`]) run bounded to the rerun
+/// runs whole-model (cheap), then Pass 2.5 (`pass_infer`) and
+/// Pass 3 (`crate::validate::validate`) run bounded to the rerun
 /// set, and extension `validate` hooks run whole-model (their
 /// `RefCell` scratch state is rebuilt per compile anyway).
 ///

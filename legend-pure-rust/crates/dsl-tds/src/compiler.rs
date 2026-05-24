@@ -25,7 +25,7 @@
 //!    [`PureModel`].
 //!
 //! Lowering into a [`PureModel`] value lives in `crate::lower::TDSIslandLowerer`,
-//! which the core lowering pass dispatches via the [`IslandLowerer`]
+//! which the core lowering pass dispatches via the `IslandLowerer`
 //! plug-in registry (`crate::lower::default_island_lowerers`). This
 //! `compiler` module handles validation only; the lowering pair-trip is
 //! covered by `crate::lower`.

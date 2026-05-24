@@ -33,13 +33,13 @@
 //! # Adding a new DSL section
 //!
 //! 1. Define your AST types implementing
-//!    [`DSLElement`](legend_pure_parser_ast::dsl::DSLElement).
+//!    [`DSLElement`].
 //! 2. Implement [`SectionParser`] for your DSL.
 //! 3. Pass it via [`parse_with_sections`](crate::parse_with_sections).
 //!
 //! # Thread-safety
 //!
-//! Implementations must be `Send + Sync` (matching [`IslandParser`])
+//! Implementations must be `Send + Sync` (matching `IslandParser`)
 //! because the CLI parallelises file parsing via Rayon.
 
 use std::collections::HashSet;

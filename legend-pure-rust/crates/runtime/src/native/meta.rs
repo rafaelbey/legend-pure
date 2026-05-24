@@ -588,7 +588,7 @@ impl NativeFunction for Id {
 
 /// Pure `type(Any[1]):Type[1]`
 ///
-/// Returns the metamodel [`Type`] element describing `value`'s runtime class.
+/// Returns the metamodel `Type` element describing `value`'s runtime class.
 /// Primitives resolve to their well-known bootstrap IDs (`Integer`, `Float`,
 /// `String`, ...). Heap objects resolve by their stored classifier FQN.
 /// Model-element references report themselves — the compiled metaclass is
@@ -917,7 +917,7 @@ impl NativeFunction for EnumName {
 ///
 /// Expands an enumeration element to the collection of its member values —
 /// each member encoded as `"<EnumSimpleName>.<MemberName>"` to match the
-/// string representation produced by [`Evaluator::eval_enum_value`] and
+/// string representation produced by `Evaluator::eval_enum_value` and
 /// consumed by the equality machinery that `match`/`instanceOf` rely on.
 #[derive(Debug)]
 pub struct EnumValues;

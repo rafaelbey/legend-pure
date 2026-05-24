@@ -34,7 +34,11 @@
 //! enough to maintain inline; we'll re-evaluate when stretch features
 //! land.
 
-#![allow(missing_docs)] // protocol DTOs — DAP spec is the contract
+#![allow(missing_docs)]
+// protocol DTOs — DAP spec is the contract
+// DTO fields/variants are populated by serde `Deserialize` and exist for
+// protocol completeness; rustc's dead_code lint can't see serde usage.
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

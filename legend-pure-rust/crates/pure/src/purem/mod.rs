@@ -18,7 +18,7 @@
 //!
 //! # Layered API
 //!
-//! - [`slice`] — [`PureModelSlice`] + `slice_by_repo` / `merge_slice`. The
+//! - [`slice`](mod@slice) — [`PureModelSlice`] + `slice_by_repo` / `merge_slice`. The
 //!   in-memory partition primitive.
 //! - [`header`] — magic / version / schema_hash header, hand-rolled.
 //! - [`writer`] / [`reader`] — wire format. v0 uses hand-rolled header +
